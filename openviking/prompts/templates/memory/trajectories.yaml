@@ -37,68 +37,74 @@ fields:
   - name: retrieval_anchor
     type: string
     description: |
-      Positive semantic retrieval text for this record, written for embedding rather than display.
-      Format: "Stage: <opening|after_read|before_write|after_write|terminal_handoff|final_response>; Boundary: <verified reusable condition>; Capability: <operation, check, handoff, or response this record can guide>; Target: <primary object or sub-object>."
+      Positive semantic retrieval text for this rollout analysis, written for embedding rather than display.
+      Format: "Stage: <opening|after_read|before_write|after_write|terminal_handoff|final_response|evaluation_failure|evaluation_success>; Failure mode: <none, missing expected action, wrong target, wrong args, premature handoff/done, policy mismatch, or other>; Capability: <future operation/check this record should guide>; Target: <primary object or write/read boundary>."
 
       Rules:
       - Keep it shorter and more retrieval-focused than content.
-      - Describe when the record should be retrieved using positive applies-when language only.
-      - Do not write negative examples, nearby intents, unrelated alternative requests, or broad exclusions here; keep those in Negative Applicability inside content.
+      - Describe when this analysis should be retrieved using positive applies-when language only.
+      - Include the decisive failure/success mode and target boundary, not raw case identifiers.
       - Do not copy the opening request when the reusable lesson only becomes valid after reads, verification, failure, or a terminal boundary; anchor on the condition that was actually established.
-      - Generalize identifiers, names, numbers, dates, places, amounts, and raw tool payloads as strictly as content.
+      - Generalize identifiers, names, exact numbers, dates, places, amounts, and raw tool payloads as strictly as content unless the value is a stable policy constant or tool name.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
-      Procedure-like operation contract in EXACTLY this format:
+      Eval-oriented rollout trajectory analysis in EXACTLY this format. Prefer {{ language }} for prose, while keeping the section titles exactly as written below.
 
-      # <trajectory_name>
-      - Domain: <task domain, execution area, or system area>
-      - Trigger: <the reusable user intent or task situation — one sentence>
-      - Operation Intent:
-        - Family: <exactly one of read_verify_only, create_new_object, update_existing_object, close_or_deactivate_object, replace_existing_object, attribute_append_remove, corrective_adjustment, handoff_after_verification, final_response_only>
-        - Primary object: <the narrowest object or sub-object whose state, membership, or lifecycle this record changes, verifies, creates, closes/deactivates, replaces, hands off, or reports>
-        - Target object/lifecycle: <the single intended final state, lifecycle transition, handoff target, or read result for that primary object>
-      - Preconditions:
-        1. <state, identity, policy, tool-observation, or confirmation prerequisite>
-        2. <...>
-      - Immutable Object Boundary:
-        - <object fields, lifecycle state, policy facts, permissions, or ownership facts that must be read/verified and not inferred or overwritten>
-      - Procedure:
-        1. <future-agent instruction for the first decision/action step; include key tool names when useful>
-        2. <future-agent instruction for the next decision/action step>
-        3. <continue until the write/confirmation/final-response boundary is clear>
-      - Write Field Provenance:
-        - <write-relevant field family>: <allowed source such as latest user request, explicit confirmation, fresh tool observation, computed policy result, stable policy, or current object state>
-      - Anti-patterns:
-        - <mistake, missing check, wrong ordering, over-broad action, or failed attempt to avoid>
-      - Applicability Boundary:
-        - <when this memory applies>
-        - <when this memory should not be used>
-      - Negative Applicability:
-        - <nearby intent, object lifecycle, policy state, permission state, or target object where this memory must not be applied>
-      - Result: <final outcome and important side effects — one sentence>
-      - Evidence: <brief generalized source note from this session, including success/failure/partial status, without digits, raw identifiers, personal names, contact values, exact amounts, exact counts, exact dates, locations, paths, or other instance-local values>
+      # 结论
+      <one concise sentence explaining the core success/failure/partial outcome. For failures, name the missed expected action, wrong object binding, wrong parameter, premature handoff/termination, or other primary failure.>
+
+      # Evaluation 信号
+      - Outcome: <success|failure|partial|unfinished|unknown>.
+      - Reward: <visible reward/score/pass status if available; otherwise say evaluation not visible>.
+      - DB/Communicate: <visible db_check, communicate reward, or other evaluation breakdown if available>.
+      - Failed expected action: <the most important failed action_check, missing write, wrong args, or none/unknown>.
+
+      # Expected vs Actual
+      - Expected: <evaluation/action_checks expected tool/action sequence and key parameters, generalized when instance-local>.
+      - Actual: <actual tool/action sequence and key parameters from the trajectory>.
+      - Delta: <missing action, wrong target object, wrong amount/count/status, extra action, premature transfer/done, or no material delta>.
+
+      # 事实链
+      - User/task intent: <what the user was trying to accomplish>.
+      - Candidate objects: <important retrieved objects and their decisive fields, such as status, count, membership, insurance, lifecycle state, ownership, or policy eligibility>.
+      - Correct target: <object/action that best matches evaluation and verified tool facts>.
+      - Wrong target or rejected path: <object/action the agent incorrectly followed, if any>.
+
+      # 实际轨迹偏离
+      1. <chronological step showing the agent's first relevant read/decision/action>
+      2. <first key divergence from the verified/evaluation-aligned path>
+      3. <consequence that caused the final reward or task outcome>
+
+      # 根因
+      - Category: <one or more of object_binding_error, insufficient_retrieval, policy_misread, wrong_parameter_calculation, missing_tool_call, premature_handoff_or_done, user_misled_agent, environment_or_evaluation_mismatch, other>.
+      - Explanation: <why that category explains the outcome, grounded in evaluation and tool facts>.
+
+      # 正确做法
+      1. <correct next read/verification step, if needed>
+      2. <correct interpretation of misleading user claims versus tool facts>
+      3. <correct final tool/action call or final response boundary, including key generalized parameters>
+
+      # 泛化规则
+      - <reusable rule for future agents that would prevent this failure or preserve this success>
+      - <second rule when useful>
+      - <third rule when useful>
 
       Rules:
-      - Write for future agent execution. Capture the reusable contract: trigger -> prerequisites -> read/verify -> confirm if needed -> one primary write, handoff, or final response -> verify/communicate result.
-      - Extract one record per reusable operation boundary: one primary user intent, one primary tool-effect target, and one lifecycle or reporting boundary. The boundary is narrower than the Family enum: two actions with the same Family still need separate records when they affect different sub-objects, collections, lifecycle states, write-field provenance, or continuation policies.
-      - Split separable intents, pivots, follow-ups, prerequisite-only reads, state-changing actions, and final user-visible responses when they are independently reusable; omit low-value side work. The split rule is structural: separate by target, effect, provenance, lifecycle, and continuation boundary, not by any domain-specific workflow name.
-      - Do not create an additional umbrella record that summarizes multiple separately reusable operations from the same session. If a session contains several independent tool-effect targets, output the separate target-level records and omit the broad whole-session summary.
-      - Do not combine multiple state-changing tool effects in one record when they affect different primary targets, sub-objects, collections, lifecycle transitions, write-field provenance scopes, or continuation policies. Mention cross-boundary ordering only as prerequisite, boundary, or negative applicability.
-      - A coordinated multi-target request is not one reusable procedure record. Output target-level records and put shared confirmation, dependency, or ordering constraints only in Preconditions, Applicability Boundary, Anti-patterns, or Negative Applicability.
-      - Use replace_existing_object only for an atomic replacement operation on one primary object boundary. If the session implements replacement through separate tool effects that close/deactivate one object and create another object, emit separate close/deactivate and create records; do not set Primary object to a joined source-and-target phrase.
-      - Family must be exactly one listed enum value. Do not invent compound labels. Use handoff_after_verification when the reusable path ends in handoff after verification.
-      - Procedure must describe only the primary operation in this record. Mention other operations only as prerequisites, consequences, boundaries, or negative applicability.
-      - Stop each record at its family boundary: update_existing_object stops after update verification, close_or_deactivate_object after closure/deactivation verification, create_new_object after creation verification, replace_existing_object after replacement verification, handoff_after_verification after handoff verification.
-      - Do not include a second lifecycle-changing write in the Procedure, Target, Result, or Evidence of the same record, even when that later write happened immediately after the first one.
-      - Do not let a later operation in the same session rename, narrow, or extend this record's Trigger, Target, Procedure, Result, or Evidence. Put the later operation in a separate record.
-      - Put immutable facts and write/user-visible field sources in their dedicated sections. Do not copy fields from a previous/source object into a new/replacement object without current user request or explicit confirmation.
-      - Keep blocked actions and failed lessons in Anti-patterns / Negative Applicability / Evidence, not as positive procedure steps. Do not invent a corrected path when the session did not demonstrate one.
-      - Keep retrieval-specific wording out of content. Use retrieval_anchor for positive indexed text, and keep nearby non-applicable intents only in Negative Applicability.
-      - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts/counts, exact locations/paths, product names, and raw tool payloads. Use semantic placeholders such as requested quantity, selected object, calculated amount, source object, target object, or applicable policy instead of copying concrete values. Keep tool names only when they are part of the reusable path. Evidence must also stay generalized and should not contain digits; do not use it to preserve instance-local ids, names, counts, amounts, locations, or dates.
-      - Use exactly the title, Domain line, and 11 labels above in this exact order.
-      - Trigger, Result, and Evidence are ONE sentence each.
-      - No extra headings, free paragraphs, or closing remarks.
+      - This trajectory is an evidence-driven benchmark rollout analysis, not a generic conversation summary and not a broad umbrella memory.
+      - Treat evaluation feedback/action_checks as the strongest oracle when visible. Then use tool calls/tool outputs, then system policy, then user self-report.
+      - The model may not see CaseSpec/rubric. Do not rely on CaseSpec unless it is present in the archived messages; evaluation feedback is sufficient to infer expected actions.
+      - Always align expected vs actual actions. If action_match is false, check whether the tool was missing, used on the wrong object, had wrong arguments, or was preempted by transfer/done.
+      - Reconstruct the factual chain from tool outputs before judging policy or user intent. User claims are clues only and must not override fresh tool observations.
+      - Find the first key divergence, not merely the last failed message.
+      - For failures involving state-changing tools, explicitly identify the missed or wrong write operation and its key parameter family.
+      - For success trajectories, still record the decisive verification path and why it avoided likely traps.
+      - If evaluation and policy appear to conflict, analyze the failure against evaluation first and note the conflict in 根因 or 正确做法.
+      - Keep the output dense and diagnostic. Avoid long narrative retellings, apology text, or customer-facing phrasing.
+      - Extract one record per rollout-level task outcome. Do not split every individual tool call into separate records unless there are truly independent task outcomes in the same session.
+      - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts/counts, exact locations/paths, product names, and raw tool payloads unless the value is a stable policy constant or a tool/action name required for the reusable lesson. Use semantic placeholders such as expected write, target reservation, delayed segment, verified passenger count, policy amount, or computed amount.
+      - Tool names, evaluation field names, action category names, and policy constants may remain exact when they are needed for future retrieval and execution.
+      - Use exactly the seven headings above in this exact order. No extra headings, free paragraphs outside sections, or closing remarks.
     merge_op: patch
