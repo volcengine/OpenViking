@@ -41,12 +41,13 @@ fields:
     description: |
       Positive semantic retrieval text for this rollout analysis, written for embedding rather than display.
       Use Chinese (中文) for natural-language portions, while keeping the fixed labels, enum values, tool names, and evaluation field names unchanged.
-      Format: "Stage: <opening|after_read|before_write|after_write|terminal_handoff|final_response|evaluation_failure|evaluation_success>; Failure mode: <none, missing expected action, wrong target, wrong args, premature handoff/done, policy mismatch, or other>; Capability: <future operation/check this record should guide>; Target: <primary object or write/read boundary>."
+      Format: "Intent: <booking|modification|cancellation|baggage|upgrade|refund_compensation|lookup|transfer|multi_intent|other>; Stage: <opening|after_read|before_write|after_write|terminal_handoff|final_response|evaluation_failure|evaluation_success>; Terminal action: <required final tool family or none>; Forbidden substitute: <tool/action that must not replace the terminal action or none>; Policy gates: <eligibility/confirmation/object-binding checks>; Failure mode: <none, missing expected action, wrong target, wrong args, premature handoff/done, policy mismatch, or other>; Target: <primary object or write/read boundary>."
 
       Rules:
       - Keep it shorter and more retrieval-focused than content.
       - Describe when this analysis should be retrieved using positive applies-when language only.
-      - Include the decisive failure/success mode and target boundary, not raw case identifiers.
+      - Include the decisive user intent, terminal tool family, policy gate, failure/success mode, and target boundary, not raw case identifiers.
+      - Use "Forbidden substitute" to mark harmful near-miss workflows, such as cancel_reservation+book_reservation replacing update_reservation_flights, transfer_to_human_agents replacing an in-scope tool flow, or communicate/done replacing a required state-changing action.
       - Do not copy the opening request when the reusable lesson only becomes valid after reads, verification, failure, or a terminal boundary; anchor on the condition that was actually established.
       - Generalize identifiers, names, exact numbers, dates, places, amounts, and raw tool payloads as strictly as content unless the value is a stable policy constant or tool name.
     merge_op: immutable
@@ -57,7 +58,7 @@ fields:
       Eval-oriented rollout trajectory analysis in EXACTLY this format. Use Chinese (中文) for all natural-language prose, while keeping the section titles exactly as written below.
 
       # 结论
-      <one concise sentence explaining the core success/failure/partial outcome. For failures, name the missed expected action, wrong object binding, wrong parameter, premature handoff/termination, or other primary failure.>
+      <one concise sentence explaining the core success/failure/partial outcome. Start with the intent family, required terminal action, key policy gate, and forbidden substitute action when relevant. For failures, name the missed expected action, wrong object binding, wrong parameter, premature handoff/termination, or other primary failure.>
 
       # Evaluation 信号
       - Outcome: <success|failure|partial|unfinished|unknown>.
@@ -75,6 +76,7 @@ fields:
       - Candidate objects: <important retrieved objects and their decisive fields, such as status, count, membership, insurance, lifecycle state, ownership, or policy eligibility>.
       - Correct target: <object/action that best matches evaluation and verified tool facts>.
       - Wrong target or rejected path: <object/action the agent incorrectly followed, if any>.
+      - Policy gates and terminal action: <policy eligibility, required confirmation, allowed terminal tool, and forbidden substitute tool/action>.
 
       # 实际轨迹偏离
       1. <chronological step showing the agent's first relevant read/decision/action>
@@ -88,7 +90,7 @@ fields:
       # 正确做法
       1. <correct next read/verification step, if needed>
       2. <correct interpretation of misleading user claims versus tool facts>
-      3. <correct final tool/action call or final response boundary, including key generalized parameters>
+      3. <correct final tool/action call or final response boundary, including key generalized parameters, and explicit note when cancel/book/transfer/done must NOT substitute for the expected terminal action>
 
       # 泛化规则
       - <reusable rule for future agents that would prevent this failure or preserve this success>
@@ -98,6 +100,7 @@ fields:
       Rules:
       - This trajectory is an evidence-driven benchmark rollout analysis, not a generic conversation summary and not a broad umbrella memory.
       - Treat evaluation feedback/action_checks as the strongest oracle when visible. Then use tool calls/tool outputs, then system policy, then user self-report.
+      - For trajectory diagnosis, evaluation is the oracle; for later experience generalization, mark any evaluation-vs-policy conflict as non-generalizable or guardrail-only rather than converting it into a positive workflow.
       - The model may not see CaseSpec/rubric. Do not rely on CaseSpec unless it is present in the archived messages; evaluation feedback is sufficient to infer expected actions.
       - Always align expected vs actual actions. If action_match is false, check whether the tool was missing, used on the wrong object, had wrong arguments, or was preempted by transfer/done.
       - Reconstruct the factual chain from tool outputs before judging policy or user intent. User claims are clues only and must not override fresh tool observations.
@@ -107,6 +110,9 @@ fields:
       - If evaluation and policy appear to conflict, analyze the failure against evaluation first and note the conflict in 根因 or 正确做法.
       - Keep the output dense and diagnostic. Avoid long narrative retellings, apology text, or customer-facing phrasing.
       - Extract one record per rollout-level task outcome. Do not split every individual tool call into separate records unless there are truly independent task outcomes in the same session.
+      - Do not collapse independent intents into a broad reusable workflow in 泛化规则. Prefer narrow rules tied to one intent, one target boundary, one policy gate, and one terminal tool family.
+      - When the failure is premature done/transfer or a missing state-changing tool, 泛化规则 must state the required terminal action and the forbidden substitute.
+      - When the actual trajectory used cancel_reservation plus book_reservation, explicitly distinguish whether that path is policy-eligible and user-confirmed; otherwise mark it as a rejected path, not a reusable positive workflow.
       - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts/counts, exact locations/paths, product names, and raw tool payloads unless the value is a stable policy constant or a tool/action name required for the reusable lesson. Use semantic placeholders such as expected write, target reservation, delayed segment, verified passenger count, policy amount, or computed amount.
       - Tool names, evaluation field names, action category names, and policy constants may remain exact when they are needed for future retrieval and execution.
       - Use exactly the seven headings above in this exact order. No extra headings, free paragraphs outside sections, or closing remarks.

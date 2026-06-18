@@ -16,7 +16,8 @@ fields:
     type: string
     description: |
       Name the generalizable pattern, not the specific instance.
-      Must be written in Chinese (中文), regardless of {{ language }}.
+      Must be written in Chinese (中文), regardless of {{ language }}, for newly created experiences.
+      If updating a candidate existing experience with the exact same user intent, policy gates, and terminal tool family, reuse the existing experience_name exactly even when it is not Chinese; prefer updating over creating a translated duplicate.
       Use a concise Chinese noun phrase, max 15 Chinese characters.
       Good: "重复预订处理", "异步测试挂起修复", "补偿对象校验".
     merge_op: immutable
@@ -24,13 +25,13 @@ fields:
   - name: content
     type: string
     description: |
-      Structured experience extraction in EXACTLY this 3-section format. Use Chinese (中文) for all natural-language prose while keeping the section titles exactly as written below. This output will be injected directly into an autonomous agent's system prompt, so it MUST be written as strict, executable machine instructions:
+      Structured experience extraction in EXACTLY this 3-section format. Use Chinese (中文) for all natural-language prose while keeping the section titles exactly as written below. This output will be injected directly into an autonomous agent's system prompt, so it MUST be scoped, policy-gated, executable machine instructions:
 
       ## Situation
-      <markdown bullets: Entry Conditions. Describe the generalized context, user intent, or overarching scenario that dictates when this entire rule block becomes relevant>
+      <markdown bullets: Entry Conditions and applicability boundaries. MUST include applies-only conditions, does-not-apply conditions, required policy gates, allowed terminal tool family, and forbidden substitute actions. Describe the generalized context and user intent that dictates when this entire rule block becomes relevant.>
 
       ## Approach
-      <markdown bullets: Active Execution Logic (The "DOs"). The step-by-step optimized path to success. Use direct imperative commands and explicit IF/THEN/ELSE statements for conditional execution. Do NOT place negative constraints or failure warnings here.>
+      <markdown bullets: Active Execution Logic (The "DOs"). The step-by-step optimized path to success. Use direct imperative commands and explicit IF/THEN/ELSE statements for conditional execution. Include the final terminal tool call when the task requires a state-changing action, and include its prerequisites. Do NOT place negative constraints or failure warnings here.>
 
       ## Reflect
       <markdown bullets: Hard Guardrails & Principles (The "DON'Ts"). Strict negative rules (e.g., "NEVER do Z"), boundary conditions, and failure-prevention heuristics to avoid past mistakes.>
@@ -40,10 +41,15 @@ fields:
       - OPTIMIZED EXECUTION PATH: You MUST critically analyze the original trajectory and aggressively trim away conversational noise, redundant retry loops, false starts, and irrelevant setup actions. Outline only the essential, efficient path in 'Approach'.
       - MACHINE READABILITY (IMPERATIVE VOICE): Address the future agent directly using commanding imperatives (e.g., "Ask the user for X", "Call tool Y").
       - ABSTRACTION MANDATE: Strip away specific entities, IDs, user names, or raw text from the past trajectory. Use generalized abstract descriptions so the rule applies universally.
-      - FAILURE INTEGRATION: Translate past mistakes into strict negative constraints. These MUST be placed exclusively in the 'Reflect' section.
+      - FAILURE INTEGRATION: Translate past mistakes into strict negative constraints. These MUST be placed exclusively in the 'Reflect' section. If the source trajectory outcome is failure/partial/unfinished, do NOT create or broaden a positive 'Approach' workflow unless the corrected action is supported by both evaluation feedback and system policy. When policy support is uncertain, output only narrow guardrails in 'Reflect' or skip the experience.
       - EXECUTION-FIRST PRINCIPLE: 'Approach' steps MUST describe direct tool invocations only. Strip all "I will now do X" / "I have completed X" communication steps.
       - CONDITIONAL BRANCH PRESERVATION: Capture full decision trees as explicit IF/THEN/ELSE branches. NEVER collapse divergent user-driven branches into a single terminal action.
-      - ATOMIC SCOPE: Each experience MUST cover exactly ONE user intent and its associated tool-invocation sequence. Multiple distinct user intents → SEPARATE experiences. A 'Situation' listing more than one user goal is a violation: split immediately. Hard limit: if 'Approach' would exceed 8 bullets, STOP and split.
+      - ATOMIC SCOPE: Each experience MUST cover exactly ONE user intent and ONE terminal tool family (for example book_reservation OR update_reservation_flights OR update_reservation_baggages OR cancel_reservation OR transfer_to_human_agents). Multiple distinct user intents or multiple unrelated terminal actions → SEPARATE experiences. Broad meta-workflows such as "multi-request handling", "task wrap-up checking", or generic "modification workflow" are violations unless tied to one concrete terminal tool family. Hard limit: if 'Approach' would exceed 8 bullets, STOP and split.
+      - APPLICABILITY GATING: The 'Situation' section MUST explicitly include bullets equivalent to "仅适用于...", "不适用于...", "必须先满足的政策条件...", "允许的终态工具...", and "禁止替代动作...". If these cannot be stated precisely, skip the experience instead of creating a broad memory.
+      - STATE-CHANGE SAFETY: NEVER write an 'Approach' that calls state-changing tools as probes. Tools such as cancel_reservation, book_reservation, update_reservation_flights, update_reservation_baggages, or passenger/profile update tools require verified policy eligibility, correct target binding, and explicit user confirmation before invocation.
+      - NO SUBSTITUTE WORKFLOWS: Do NOT generalize a cancel-and-rebook path as a substitute for a valid modification/update path. Cancel-and-rebook experiences apply only when the original reservation is cancellation-eligible, the requested change cannot be handled by the permitted update tool, and the user explicitly chooses cancellation plus a new booking.
+      - TERMINAL ACTION COMPLETENESS: If the successful path requires a state-changing action after confirmation, 'Approach' MUST include that terminal tool call and must not end at search, calculation, option presentation, or user communication.
+      - RETRIEVAL PRECISION: Include the decisive intent, required tool family, and policy gates in 'Situation'. Avoid generic nouns that cause unrelated booking, modification, cancellation, upgrade, baggage, and transfer tasks to retrieve the same memory.
       - STRICT FORMATTING: Use exactly the 3 headings above in this order. Use concise markdown bullets (-) for every section. No numbered lists, no introductory sentences, no conversational filler, and no closing paragraphs. Token efficiency is critical.
 
     merge_op: replace
