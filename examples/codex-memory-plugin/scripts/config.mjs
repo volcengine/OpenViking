@@ -26,6 +26,7 @@
  * Connection / identity env vars:
  *   OPENVIKING_URL / OPENVIKING_BASE_URL
  *   OPENVIKING_API_KEY / OPENVIKING_BEARER_TOKEN
+ *   OPENVIKING_AUTH_MODE
  *   OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
  *
  * Misc env vars:
@@ -67,12 +68,23 @@ function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj || {}, key);
 }
 
+function normalizeAuthMode(val) {
+  const mode = str(val, "").toLowerCase();
+  return ["trusted", "api_key"].includes(mode) ? mode : "";
+}
+
 export function loadConfig() {
   const creds = resolveOpenVikingCredentials();
   const { cliPath, ovFile, ovPath } = creds;
   const configPath = cliPath || ovPath || null;
 
   const cx = ovFile.codex || {};
+  const server = ovFile.server || {};
+  const explicitAuthMode = normalizeAuthMode(process.env.OPENVIKING_AUTH_MODE)
+    || normalizeAuthMode(cx.authMode)
+    || normalizeAuthMode(cx.auth_mode)
+    || normalizeAuthMode(server.auth_mode);
+  const authMode = explicitAuthMode || ((creds.account || creds.user) ? "trusted" : "api_key");
 
   const debug = envBool("OPENVIKING_DEBUG") ?? (cx.debug === true);
   const defaultLogPath = join(homedir(), ".openviking", "logs", "codex-hooks.log");
@@ -116,6 +128,8 @@ export function loadConfig() {
     ovConfigPath: ovPath,
     credentialSource: creds.credentialSource,
     baseUrl: creds.baseUrl,
+    authMode,
+    sendIdentityHeaders: authMode === "trusted",
     apiKey: creds.apiKey,
     account: creds.account,
     user: creds.user,
