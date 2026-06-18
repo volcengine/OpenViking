@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +17,7 @@ from typing import Any
 import uvicorn
 
 DEFAULT_NATIVE_THREAD_WORKERS = 128
+TAU2_SERVICE_LOG_LEVEL = "WARNING"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
@@ -28,6 +30,18 @@ from benchmark.tau2.train.rollout_executor import (
     normalize_tau2_rollout_backend,
 )
 from openviking.session.train.components.dataset_service import create_dataset_service_app
+
+
+def configure_tau2_service_logging() -> None:
+    """Keep third-party tau2/loguru service output at warning and above."""
+    logging.getLogger("tau2").setLevel(logging.WARNING)
+    try:
+        from loguru import logger as loguru_logger
+    except Exception:
+        return
+
+    loguru_logger.remove()
+    loguru_logger.add(sys.stderr, level=TAU2_SERVICE_LOG_LEVEL)
 
 
 def create_app(
@@ -142,6 +156,7 @@ class Tau2ServiceServer(uvicorn.Server):
 def main() -> None:
     args = parse_args()
 
+    configure_tau2_service_logging()
     app = create_app(
         data_root=args.data_root,
         config_path=args.config,
@@ -153,6 +168,7 @@ def main() -> None:
         host=args.host,
         port=args.port,
         access_log=False,
+        log_level="warning",
     )
     server = Tau2ServiceServer(config, native_thread_workers=args.native_thread_workers)
     server.run()

@@ -4,6 +4,30 @@
 from __future__ import annotations
 
 
+def test_tau2_service_configures_tau2_loguru_at_warning(monkeypatch):
+    import benchmark.tau2.train.service_app as service_app
+
+    calls = []
+
+    class FakeLoguruLogger:
+        def remove(self):
+            calls.append(("remove",))
+
+        def add(self, sink, *, level):
+            del sink
+            calls.append(("add", level))
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "loguru",
+        type("FakeLoguruModule", (), {"logger": FakeLoguruLogger()})(),
+    )
+
+    service_app.configure_tau2_service_logging()
+
+    assert calls == [("remove",), ("add", "WARNING")]
+
+
 def test_tau2_service_disables_rollout_progress_by_default(monkeypatch):
     import benchmark.tau2.train.service_app as service_app
 
