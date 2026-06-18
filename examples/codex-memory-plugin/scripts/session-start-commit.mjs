@@ -35,12 +35,7 @@
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
-import {
-  clearState,
-  deriveOvSessionId,
-  listStates,
-  loadState,
-} from "./session-state.mjs";
+import { clearState, deriveOvSessionId, listStates, loadState } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("session-start");

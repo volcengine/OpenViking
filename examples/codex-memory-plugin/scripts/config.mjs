@@ -26,13 +26,13 @@
  * Connection / identity env vars:
  *   OPENVIKING_URL / OPENVIKING_BASE_URL
  *   OPENVIKING_API_KEY / OPENVIKING_BEARER_TOKEN
- *   OPENVIKING_AUTH_MODE, OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
+ *   OPENVIKING_AUTH_MODE
+ *   OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
  *
  * Misc env vars:
  *   OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
- *   OPENVIKING_CAPTURE_BATCH_SIZE
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
  */
@@ -80,12 +80,10 @@ export function loadConfig() {
 
   const cx = ovFile.codex || {};
   const server = ovFile.server || {};
-
-  const explicitAuthMode =
-    normalizeAuthMode(process.env.OPENVIKING_AUTH_MODE) ||
-    normalizeAuthMode(cx.authMode) ||
-    normalizeAuthMode(cx.auth_mode) ||
-    normalizeAuthMode(server.auth_mode);
+  const explicitAuthMode = normalizeAuthMode(process.env.OPENVIKING_AUTH_MODE)
+    || normalizeAuthMode(cx.authMode)
+    || normalizeAuthMode(cx.auth_mode)
+    || normalizeAuthMode(server.auth_mode);
   const authMode = explicitAuthMode || ((creds.account || creds.user) ? "trusted" : "api_key");
 
   const debug = envBool("OPENVIKING_DEBUG") ?? (cx.debug === true);
@@ -184,10 +182,10 @@ export function loadConfig() {
       process.env.OPENVIKING_CAPTURE_MAX_LENGTH,
       num(cx.captureMaxLength, 24000),
     ))),
-    captureBatchSize: Math.min(100, Math.max(1, Math.floor(num(
-      process.env.OPENVIKING_CAPTURE_BATCH_SIZE,
-      num(cx.captureBatchSize, 100),
-    )))),
+    captureMaxTurnsPerStop: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP,
+      num(cx.captureMaxTurnsPerStop, 8),
+    ))),
     captureTimeoutMs,
     captureToolMaxChars: Math.max(200, Math.floor(num(
       process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS,

@@ -47,38 +47,12 @@ or append-only.
 
 ### 1. `PreCompact` — deterministic, current session
 
-Codex fires `PreCompact` before summarizing, then immediately rewrites or
-truncates `transcript_path` to replace the pre-compact turns with a model
-summary. The hook must capture the pre-compact state before that rewrite
-happens.
-
-The hook runs inline:
-
-1. Append every pending turn to the live OV session in batches of
-   `OPENVIKING_CAPTURE_BATCH_SIZE` (default 100, server cap) via
-   `POST /api/v1/sessions/{id}/messages/batch`. State is persisted after
-   each successful batch for crash safety.
-2. Call `/commit` inline. The server's commit Phase 1
-   (snapshot + clear live + write archive) runs synchronously before
-   HTTP 200; Phase 2 (memory extraction) runs in the background. So
-   HTTP 200 is the "live cleared, archive ready" fence we need — no
-   detached worker, no session-id rotate.
-3. On success clear `state.ovSessionId = null`. On failure preserve
-   state so the next sweep retries.
-
-Because `add_message` is replaced by `add_messages` (atomic batch of
-≤ 100), even thousands of pending turns finish in a few seconds — well
-before codex's transcript rewrite begins, and well within the hook
-budget. The inline commit itself depends only on Phase 1 IO (rename +
-write archive) and is similarly bounded.
-
-If `transcript_path` is missing but a live OV session exists, the hook
-calls `/commit` inline (no append needed).
-
-Inline-path failure (network drop mid-batch, OV unreachable) leaves the
-live session open server-side and `state.ovSessionId` still set locally.
-The next Stop continues appending; the next PreCompact or SessionStart
-commit picks up the still-open server session.
+Codex fires `PreCompact` before summarizing. We catch up with any
+unappended turns from the transcript, commit the OV session for this codex
+`session_id`, and clear `ovSessionId` so the next `Stop` re-derives the
+same `cx-<codex-session-id>` OV session id for the post-compact half.
+`capturedTurnCount` is preserved unless the transcript was truncated by
+compaction (see "Post-compact transcript shrink" below).
 
 ### 2. `SessionStart` source=`clear` — heuristic, same shape as `startup`
 
@@ -166,17 +140,9 @@ forever. Accepted. Future work could add an MCP tool
 
 Every `Stop` reads `transcript_path`, slices to `[capturedTurnCount, end)`,
 and appends each new user/assistant turn to the OV session for this codex
-`session_id` via `POST /api/v1/sessions/{id}/messages/batch` in chunks of
-`OPENVIKING_CAPTURE_BATCH_SIZE` (default 100, server cap). The endpoint
-auto-creates the OV session on first append. State is updated after each
-successful batch:
+`session_id` (the `/messages` endpoint auto-creates it on first append).
+State is updated:
 `{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`. Never commits.
-
-There is no per-Stop turn cap and no first-run "background capture"
-fallback. With batch upload, even a multi-thousand-turn first-time
-backlog drains inline well within the hook budget under one
-`cx-<codex-session-id>` OV session — so memory continuity is preserved
-and the extractor sees a single transcript.
 
 ## Injected context boundary
 
@@ -259,8 +225,6 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_CODEX_STATE_DIR` | `~/.openviking/codex-plugin-state` | state file dir |
 | `OPENVIKING_CODEX_ACTIVE_WINDOW_MS` | `120000` (2 min) | rule-3 active window |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` (30 min) | idle sweep TTL |
-| `OPENVIKING_AUTH_MODE` | inferred | `trusted` sends `X-OpenViking-Account/User`; `api_key` does not |
-| `OPENVIKING_CAPTURE_BATCH_SIZE` | `100` | messages per `/messages/batch` request (server cap is 100) |
 | `OPENVIKING_RECALL_TIMEOUT_MS` | `120000` (2 min) | whole UserPromptSubmit auto-recall deadline |
 | `OPENVIKING_RECALL_COMPRESS` | `1` | set `0` / `off` to skip `codex exec` compression |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | custom first-choice compressor model; `off` disables compression |
@@ -330,19 +294,6 @@ Configured `off` (`OPENVIKING_RECALL_COMPRESS=0`, model `off`, or thinking
   `session-start-commit.mjs` (not every `Stop`). Default TTL 30 min.
 - `auto-capture.mjs` Stop hook guards against post-compact transcript
   shrink (resets `capturedTurnCount` to 0 if `allTurns.length` < cached).
-- Stop and PreCompact upload via `POST /messages/batch` (atomic, ≤ 100
-  per request, configurable via `OPENVIKING_CAPTURE_BATCH_SIZE`). State
-  is persisted after each successful batch. The previous per-turn POST
-  loop, the `OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP` cap on Stop, the
-  `OPENVIKING_INITIAL_BACKLOG_LIMIT` first-run background-capture path,
-  the PreCompact snapshot+detached-worker async path, and
-  `capture-transcript-worker.mjs` are all removed — batch upload is fast
-  enough to do everything inline. The oversize-OV-session commit-budget
-  rotate path (PreCompact + SessionStart spawning `commit-session.mjs`
-  and rotating `ovSessionId`) was also removed: the server's `/commit`
-  Phase 1 (snapshot + clear live + write archive) is synchronous before
-  HTTP 200 and Phase 2 (memory extraction) runs in the background, so
-  inline `/commit` is bounded and safe at every size.
 - Capture parsing shared by Stop and PreCompact now filters obvious hook
   noise, strips deterministic OpenViking context wrappers, and compresses
   tool calls/results instead of dropping them or storing full blobs.

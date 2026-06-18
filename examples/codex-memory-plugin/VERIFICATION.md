@@ -8,8 +8,8 @@ extractor (~30–60 s).
 
 - `ov` CLI installed and reachable
 - `~/.openviking/ovcli.conf` (or a per-tenant variant like `ovcli.conf.bob`)
-  pointing at the OV server you want to write to. The plugin sends bearer auth
-  from this file and sends `X-OpenViking-Account/User` only in trusted auth mode.
+  pointing at the OV server you want to write to. The plugin sends
+  `X-API-Key`, `X-OpenViking-Account`, `X-OpenViking-User` from this file.
 - Node.js 22+
 
 ```bash
@@ -17,7 +17,6 @@ export OV_CONF=$HOME/.openviking/ovcli.conf.bob   # or whichever tenant
 export PLUGIN=/path/to/OpenViking/examples/codex-memory-plugin
 export STATE_DIR=/tmp/codex-plugin-verify
 rm -rf "$STATE_DIR" && mkdir -p "$STATE_DIR"
-export OPENVIKING_AUTH_MODE=trusted               # use api_key for non-trusted servers
 ```
 
 ## 1. Stop hook — first turn appends
@@ -39,7 +38,6 @@ Expect: `{"systemMessage":"appended 2 turn(s) to OpenViking session cx-verify-se
 
 State file:
 ```bash
-ls $STATE_DIR/state/verify-sess.json
 cat $STATE_DIR/state/verify-sess.json
 # {"codexSessionId":"verify-sess","ovSessionId":"cx-verify-sess","capturedTurnCount":2,...}
 ```
@@ -82,13 +80,7 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
 Expect: `appended 2 turn(s)` (only the new ones). Re-read
 `viking://user/sessions/cx-verify-sess/messages.jsonl` — 4 records now.
 
-## 4. PreCompact — inline batch append + commit
-
-PreCompact appends every pending turn via `/messages/batch` (chunks of
-`OPENVIKING_CAPTURE_BATCH_SIZE`, default 100), then commits inline. The
-server's `/commit` returns HTTP 200 once Phase 1 (snapshot + clear live +
-write archive) is done; Phase 2 (memory extraction) runs in the
-background, so inline commit is bounded at every size.
+## 4. PreCompact — commit + reset
 
 ```bash
 echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl","trigger":"manual"}' \
@@ -98,12 +90,11 @@ echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.j
     node $PLUGIN/scripts/pre-compact-capture.mjs
 ```
 
-Expect: `{"systemMessage":"OpenViking session cx-verify-sess is committed"}`.
+Expect: `OpenViking session cx-verify-sess is committed`.
 
-State file: `ovSessionId` is now `null`, `capturedTurnCount` reflects every
-turn in the transcript.
+State file: `ovSessionId` is now `null`, `capturedTurnCount` stays at 4.
 
-OV side (synchronous — already archived by the time the hook returns):
+OV side:
 ```bash
 OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://user/sessions/cx-verify-sess
 # messages.jsonl is now size 0 (archived)
@@ -245,8 +236,8 @@ echo '{"session_id":"any","source":"startup","cwd":"/tmp","model":"x","permissio
 Wait ~60 s for OV's extractor, then:
 
 ```bash
-OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://user/memories/
-OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/memories/profile.md
+OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://user/<your-user>/memories/
+OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/<your-user>/memories/profile.md
 ```
 
 Expect new entries describing the captured preferences (favorite color,
@@ -263,56 +254,6 @@ codex                                                                 # interact
 
 Verify with steps 4 + 7 above.
 
-## 9. Large first-run backlog drains inline via batch upload
-
-```bash
-rm -rf "$STATE_DIR/state"
-mkdir -p "$STATE_DIR/state"
-seq 1 250 | awk '{print "{\"payload\":{\"role\":\"user\",\"content\":\"historical turn "$1"\"}}"}' > "$STATE_DIR/large.jsonl"
-
-echo '{"session_id":"large-sess","transcript_path":"'"$STATE_DIR"'/large.jsonl"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
-    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
-    CODEX_PLUGIN_ROOT=$PLUGIN \
-    node $PLUGIN/scripts/auto-capture.mjs
-```
-
-Expect: `appended 250 turn(s) to OpenViking session cx-large-sess`. State
-`capturedTurnCount` is 250. The hook completes in a few seconds — three
-`/messages/batch` round-trips at the default `OPENVIKING_CAPTURE_BATCH_SIZE=100`
-(100 + 100 + 50). No background worker, no `*-background` ovSessionId
-suffix; historical and live capture share `cx-large-sess`.
-
-To force a smaller batch and watch progress in the debug log:
-```bash
-OPENVIKING_CAPTURE_BATCH_SIZE=25 OPENVIKING_DEBUG=1 \
-  echo '{"session_id":"large-sess","transcript_path":"'"$STATE_DIR"'/large.jsonl"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
-    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
-    CODEX_PLUGIN_ROOT=$PLUGIN \
-    node $PLUGIN/scripts/auto-capture.mjs
-# tail -f ~/.openviking/logs/codex-hooks.log | grep auto-capture
-```
-
-## 10. Oversized commits run inline
-
-Large live OV sessions are no longer special-cased. Inline `/commit`
-returns HTTP 200 after Phase 1 (snapshot + clear live + write archive),
-with Phase 2 (memory extraction) running in the background. Re-run
-`pre-compact-capture.mjs` against the large transcript from §9 to confirm:
-
-```bash
-echo '{"session_id":"large-sess","transcript_path":"'"$STATE_DIR"'/large.jsonl","trigger":"manual"}' \
-  | OPENVIKING_CONFIG_FILE=$OV_CONF \
-    OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
-    CODEX_PLUGIN_ROOT=$PLUGIN \
-    node $PLUGIN/scripts/pre-compact-capture.mjs
-```
-
-Expect: `OpenViking session cx-large-sess is committed`. State
-`ovSessionId` is `null`. The hook completes within a few seconds — no
-detached worker, no rotate, no `*-part-<ts>` session id.
-
 ---
 
-**Cleanup**: `rm -rf $STATE_DIR && rm -f ~/.openviking/codex-plugin-state/verify-sess.json`
+**Cleanup**: `rm -rf $STATE_DIR && rm -rf ~/.openviking/codex-plugin-state/verify-sess.json`

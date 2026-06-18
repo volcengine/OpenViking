@@ -20,7 +20,7 @@
  * Stop output schema accepts {} as a no-op.
  *
  * Note: we deliberately do NOT run an idle-TTL sweep here. State-write-on-
- * every-batch already gives us the freshness signal we need; running the
+ * every-turn already gives us the freshness signal we need; running the
  * sweep once per session start (in session-start-commit.mjs) is the right
  * cadence. See DESIGN.md §5 ("Sweep trigger").
  */
@@ -119,22 +119,27 @@ async function readTranscriptTurns(transcriptPath) {
   }
 }
 
+function selectStopTurns(state, turns) {
+  const limit = cfg.captureMaxTurnsPerStop;
+  if (turns.length <= limit) return turns;
+  const skipped = turns.length - limit;
+  state.capturedTurnCount += skipped;
+  log("backlog_trimmed", { newTurns: turns.length, skipped, selected: limit });
+  return turns.slice(-limit);
+}
+
 async function appendTurns(ovSessionId, turns, state) {
   let appended = 0;
-  for (let i = 0; i < turns.length; i += cfg.captureBatchSize) {
-    const chunk = turns.slice(i, i + cfg.captureBatchSize);
-    const messages = chunk.map((turn) => {
-      const msg = { role: turn.role, content: turn.text };
-      if (cfg.peerId) msg.peer_id = cfg.peerId;
-      return msg;
+  for (const turn of turns) {
+    const body = { role: turn.role, content: turn.text };
+    if (cfg.peerId) body.peer_id = cfg.peerId;
+    const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify(body),
     });
-    const result = await fetchJSON(
-      `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages/batch`,
-      { method: "POST", body: JSON.stringify({ messages }) },
-    );
     if (!result) break;
-    appended += chunk.length;
-    state.capturedTurnCount += chunk.length;
+    appended += 1;
+    state.capturedTurnCount += 1;
     await saveState(state);
   }
   return appended;
@@ -189,10 +194,6 @@ async function main() {
     state.capturedTurnCount = 0;
   }
 
-  if (state.capturedTurnCount === 0) {
-    log("initial_capture", { totalTurns: allTurns.length });
-  }
-
   const newTurns = allTurns.slice(state.capturedTurnCount);
 
   log("transcript_parse", {
@@ -214,8 +215,9 @@ async function main() {
     if (!ovSessionId) {
       logError("resolve_ov_session", "failed to derive OV session id");
     } else {
+      const turnsToAppend = selectStopTurns(state, newTurns);
       await saveState(state);
-      added = await appendTurns(ovSessionId, newTurns, state);
+      added = await appendTurns(ovSessionId, turnsToAppend, state);
       log("appended", { ovSessionId, added });
     }
   }
