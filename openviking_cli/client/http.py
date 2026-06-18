@@ -151,6 +151,8 @@ class AsyncHTTPClient(BaseClient):
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
+        sudo: bool = False,
+        root_api_key: Optional[str] = None,
     ):
         """Initialize AsyncHTTPClient.
 
@@ -164,6 +166,12 @@ class AsyncHTTPClient(BaseClient):
             agent_id: Legacy alias for actor_peer_id.
             timeout: HTTP request timeout in seconds. Default 60.0.
             extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
+            sudo: When True, send ``root_api_key`` (from arg or ovcli.conf) as
+                ``X-API-Key`` instead of ``api_key``. Mirrors the ``ov --sudo``
+                flag for ROOT-only operations such as ``reindex`` in trusted
+                mode. Falls back to ``api_key`` if ``root_api_key`` is unset.
+            root_api_key: Optional explicit root API key. If not provided and
+                ``sudo`` is True, reads from ``ovcli.conf``.
         """
         effective_user = user if user is not None else user_id
         profile_load_requested = profile_enabled is None
@@ -175,6 +183,7 @@ class AsyncHTTPClient(BaseClient):
             or (actor_peer_id is None and agent_id is None)
             or timeout == 60.0
             or extra_headers is None
+            or (sudo and root_api_key is None)
         )
         cli_config = None
         if should_load_cli_config:
@@ -191,6 +200,8 @@ class AsyncHTTPClient(BaseClient):
                     timeout = cli_config.timeout
                 if extra_headers is None:
                     extra_headers = cli_config.extra_headers
+                if sudo and root_api_key is None:
+                    root_api_key = cli_config.root_api_key
         if profile_load_requested:
             if cli_config is None:
                 cli_config = load_ovcli_config()
@@ -202,7 +213,12 @@ class AsyncHTTPClient(BaseClient):
                 '~/.openviking/ovcli.conf (key: "url").'
             )
         self._url = url.rstrip("/")
-        self._api_key = api_key
+        # In sudo mode, prefer root_api_key when present; otherwise fall back
+        # to api_key so the existing key-only flows keep working unchanged.
+        if sudo and root_api_key:
+            self._api_key = root_api_key
+        else:
+            self._api_key = api_key
         self._account = account
         self._user_id = effective_user
         if actor_peer_id and agent_id:
