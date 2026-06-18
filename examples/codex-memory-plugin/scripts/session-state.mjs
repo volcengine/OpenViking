@@ -28,24 +28,6 @@ export function deriveOvSessionId(codexSessionId) {
   return `cx-${safeId(codexSessionId || "unknown")}`;
 }
 
-export function rotateOvSessionId(state, blockedSession = null) {
-  if (!state) return null;
-  const oldOvSessionId = state.ovSessionId;
-  if (oldOvSessionId && blockedSession) {
-    const blocked = Array.isArray(state.blockedOvSessions) ? state.blockedOvSessions : [];
-    state.blockedOvSessions = [
-      ...blocked,
-      {
-        ovSessionId: oldOvSessionId,
-        blockedAt: Date.now(),
-        ...blockedSession,
-      },
-    ].slice(-20);
-  }
-  state.ovSessionId = `${deriveOvSessionId(state.codexSessionId)}-part-${Date.now().toString(36)}`;
-  return state.ovSessionId;
-}
-
 export function resolveOvSessionId(state) {
   // Keep legacy persisted UUIDs so already-captured turns are not orphaned
   // before their next commit. Fresh or cleared state derives the cx-* id.
@@ -63,7 +45,6 @@ function defaultState(codexSessionId) {
   return {
     codexSessionId,
     ovSessionId: null,
-    blockedOvSessions: [],
     capturedTurnCount: 0,
     createdAt: now,
     lastUpdatedAt: now,

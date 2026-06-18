@@ -11,19 +11,18 @@
  * Inline behavior:
  *   1. Append every pending turn to the live OV session in batches via
  *      `/messages/batch` (atomic per chunk, capped by `captureBatchSize`).
- *   2. Check OV session size. If it exceeds the commit budget, spawn
- *      `commit-session.mjs` and rotate `ovSessionId` to a `cx-...-part-<ts>`
- *      so the hook returns quickly without blocking codex.
- *   3. Otherwise inline `/commit`. On success clear `state.ovSessionId`.
+ *   2. Inline `POST /commit`. The server's commit Phase 1 (snapshot + clear
+ *      live + write archive) runs synchronously before HTTP 200; Phase 2
+ *      (memory extraction) runs in the background. So HTTP 200 is the
+ *      "live cleared, archive ready" fence we need — no rotate, no
+ *      detached worker.
+ *   3. On 200, clear `state.ovSessionId`. The post-compact Stop re-derives
+ *      the same `cx-<codex-session-id>` and starts a new live session on
+ *      the server (POST /messages auto-creates).
  *
- * The post-compact Stop re-derives `cx-<codex-session-id>` and starts a new
- * live session on the server (POST /messages auto-creates).
- *
- * If `transcript_path` is missing but a live OV session exists, the hook
- * spawns `commit-session.mjs` (commit-only path — no append needed).
- *
- * Inline-path failure: state preserved; the next PreCompact or SessionStart
- * commit picks up the still-open server session.
+ * Inline-path failure: state preserved (incl. ovSessionId) and
+ * lastUpdatedAt bumped via saveState; the next PreCompact or
+ * SessionStart sweep retries.
  *
  * PreCompact output schema accepts {} as a no-op.
  */
@@ -35,15 +34,9 @@ import {
   normalizeCaptureRole,
   shouldCaptureText,
 } from "./capture-utils.mjs";
-import { startDetachedScript } from "./background-jobs.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import {
-  loadState,
-  resolveOvSessionId,
-  rotateOvSessionId,
-  saveState,
-} from "./session-state.mjs";
+import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact");
@@ -109,21 +102,6 @@ async function commitOvSession(ovSessionId) {
   );
 }
 
-async function getOvSessionMeta(ovSessionId) {
-  if (!ovSessionId) return null;
-  return fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
-}
-
-function sessionExceedsCommitBudget(meta) {
-  if (!meta) return false;
-  const messageCount = Number(meta.message_count || 0);
-  const pendingTokens = Number(meta.pending_tokens || 0);
-  return (
-    messageCount > cfg.maxLiveMessagesOnCompact ||
-    pendingTokens > cfg.maxPendingTokensOnCompact
-  );
-}
-
 function parseTranscript(content) {
   try {
     const data = JSON.parse(content);
@@ -181,44 +159,21 @@ async function runInlinePath({ sessionId, state, ovSessionId, newTurns, allTurns
         ovSessionId,
         capturedTurnCount: state.capturedTurnCount,
       });
-      noop();
+      await saveState(state);
+      noop(`pre-compact catch-up append incomplete for ${ovSessionId}; state preserved for retry`);
       return;
     }
   }
 
-  const sessionMeta = await getOvSessionMeta(ovSessionId);
-  if (sessionExceedsCommitBudget(sessionMeta)) {
-    const messageCount = Number(sessionMeta.message_count || 0);
-    const pendingTokens = Number(sessionMeta.pending_tokens || 0);
-    const pid = startDetachedScript("commit-session.mjs", [
-      "--ov-session-id", ovSessionId,
-      "--reason", "precompact_oversize_inline",
-    ]);
-    const nextOvSessionId = rotateOvSessionId(state, {
-      reason: "precompact_commit_budget",
-      messageCount,
-      pendingTokens,
-      maxLiveMessagesOnCompact: cfg.maxLiveMessagesOnCompact,
-      maxPendingTokensOnCompact: cfg.maxPendingTokensOnCompact,
-      backgroundPid: pid,
-    });
-    await saveState(state);
-    log("inline_background_commit_started", {
-      sessionId,
-      ovSessionId,
-      nextOvSessionId,
-      messageCount,
-      pendingTokens,
-      pid,
-    });
-    noop(`OpenViking commit scheduled for ${ovSessionId} (pid ${pid ?? "?"}); next session ${nextOvSessionId}`);
-    return;
-  }
-
   const commit = await commitOvSession(ovSessionId);
   if (!commit) {
+    // Commit failure handling (see DESIGN.md "Commit failure"): if /commit
+    // fails (server unreachable, non-2xx, timeout) we MUST NOT reset
+    // ovSessionId — keep state intact so the next sweep / SessionStart can
+    // retry. A transient OV outage shouldn't lose a session's memory.
     logError("inline_commit_failed_keep_state", { sessionId, ovSessionId });
-    noop();
+    await saveState(state); // bumps lastUpdatedAt only, keeps ovSessionId
+    noop(`pre-compact commit attempted on ${ovSessionId}; result unavailable (state preserved for retry)`);
     return;
   }
   state.ovSessionId = null;
@@ -292,16 +247,26 @@ async function main() {
   }
 
   if (!transcriptPath) {
-    // No transcript to read, but a live OV session exists.
-    // Schedule a commit-only worker.
-    const pid = startDetachedScript("commit-session.mjs", [
-      "--ov-session-id", ovSessionId,
-      "--reason", "precompact_no_transcript",
-    ]);
+    // No transcript to read, but a live OV session exists — commit it inline.
+    // Server `/commit` Phase 1 (snapshot + clear live + write archive) is
+    // synchronous before HTTP 200, so this is bounded.
+    const commit = await commitOvSession(ovSessionId);
+    if (!commit) {
+      logError("commit_no_transcript_failed_keep_state", { sessionId, ovSessionId });
+      await saveState(state);
+      noop(`pre-compact commit attempted on ${ovSessionId}; result unavailable (state preserved for retry)`);
+      return;
+    }
     state.ovSessionId = null;
     await saveState(state);
-    log("commit_only_scheduled", { ovSessionId, pid });
-    noop(`OpenViking commit scheduled for ${ovSessionId} (pid ${pid ?? "?"})`);
+    log("commit_no_transcript", {
+      sessionId,
+      ovSessionId,
+      archived: commit.archived ?? false,
+      taskId: commit.task_id,
+      status: commit.status,
+    });
+    noop(`OpenViking session ${ovSessionId} is committed`);
     return;
   }
 

@@ -85,10 +85,10 @@ Expect: `appended 2 turn(s)` (only the new ones). Re-read
 ## 4. PreCompact — inline batch append + commit
 
 PreCompact appends every pending turn via `/messages/batch` (chunks of
-`OPENVIKING_CAPTURE_BATCH_SIZE`, default 100), then either commits inline
-or — if the OV session exceeds the commit budget — spawns
-`commit-session.mjs` detached and rotates to a fresh `cx-...-part-<ts>`
-session id.
+`OPENVIKING_CAPTURE_BATCH_SIZE`, default 100), then commits inline. The
+server's `/commit` returns HTTP 200 once Phase 1 (snapshot + clear live +
+write archive) is done; Phase 2 (memory extraction) runs in the
+background, so inline commit is bounded at every size.
 
 ```bash
 echo '{"session_id":"verify-sess","transcript_path":"'"$STATE_DIR"'/transcript.jsonl","trigger":"manual"}' \
@@ -294,24 +294,24 @@ OPENVIKING_CAPTURE_BATCH_SIZE=25 OPENVIKING_DEBUG=1 \
 # tail -f ~/.openviking/logs/codex-hooks.log | grep auto-capture
 ```
 
-## 10. Oversized live session schedules detached commit (SessionStart path)
+## 10. Oversized commits run inline
 
-After step 9, `large-sess` has a live OV session with 250 messages. Fire a
-fresh `SessionStart` with `OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT` set
-below that count so the heuristic commits the orphan via the detached
-path:
+Large live OV sessions are no longer special-cased. Inline `/commit`
+returns HTTP 200 after Phase 1 (snapshot + clear live + write archive),
+with Phase 2 (memory extraction) running in the background. Re-run
+`pre-compact-capture.mjs` against the large transcript from §9 to confirm:
 
 ```bash
-echo '{"session_id":"fresh-after-large","source":"startup","cwd":"/tmp","model":"x","permission_mode":"default","transcript_path":null,"hook_event_name":"SessionStart"}' \
+echo '{"session_id":"large-sess","transcript_path":"'"$STATE_DIR"'/large.jsonl","trigger":"manual"}' \
   | OPENVIKING_CONFIG_FILE=$OV_CONF \
     OPENVIKING_CODEX_STATE_DIR=$STATE_DIR/state \
-    OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT=1 \
     CODEX_PLUGIN_ROOT=$PLUGIN \
-    node $PLUGIN/scripts/session-start-commit.mjs
+    node $PLUGIN/scripts/pre-compact-capture.mjs
 ```
 
-Expect: stdout reports a background commit was scheduled and the state
-records the old session in `blockedOvSessions`.
+Expect: `OpenViking session cx-large-sess is committed`. State
+`ovSessionId` is `null`. The hook completes within a few seconds — no
+detached worker, no rotate, no `*-part-<ts>` session id.
 
 ---
 

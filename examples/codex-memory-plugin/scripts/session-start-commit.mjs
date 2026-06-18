@@ -35,14 +35,11 @@
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
-import { startDetachedScript } from "./background-jobs.mjs";
 import {
   clearState,
   deriveOvSessionId,
   listStates,
   loadState,
-  rotateOvSessionId,
-  saveState,
 } from "./session-state.mjs";
 
 const cfg = loadConfig();
@@ -113,21 +110,6 @@ async function commitOvSession(ovSessionId) {
   return fetchJSON(
     `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
     { method: "POST", body: JSON.stringify({}) },
-  );
-}
-
-async function getOvSessionMeta(ovSessionId) {
-  if (!ovSessionId) return null;
-  return fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
-}
-
-function sessionExceedsCommitBudget(meta) {
-  if (!meta) return false;
-  const messageCount = Number(meta.message_count || 0);
-  const pendingTokens = Number(meta.pending_tokens || 0);
-  return (
-    messageCount > cfg.maxLiveMessagesOnCompact ||
-    pendingTokens > cfg.maxPendingTokensOnCompact
   );
 }
 
@@ -209,36 +191,6 @@ async function injectResumeArchive(newSessionId) {
 async function commitAndClear(state, reason) {
   if (state.ovSessionId) {
     const ovSessionId = state.ovSessionId;
-    const sessionMeta = await getOvSessionMeta(ovSessionId);
-    if (sessionExceedsCommitBudget(sessionMeta)) {
-      const messageCount = Number(sessionMeta.message_count || 0);
-      const pendingTokens = Number(sessionMeta.pending_tokens || 0);
-      const pid = startDetachedScript("commit-session.mjs", [
-        "--ov-session-id", ovSessionId,
-        "--reason", reason,
-      ]);
-      const nextOvSessionId = rotateOvSessionId(state, {
-        reason: "session_start_commit_budget",
-        trigger: reason,
-        messageCount,
-        pendingTokens,
-        maxLiveMessagesOnCompact: cfg.maxLiveMessagesOnCompact,
-        maxPendingTokensOnCompact: cfg.maxPendingTokensOnCompact,
-        backgroundPid: pid,
-      });
-      await saveState(state);
-      log("background_commit_started", {
-        reason,
-        codexSessionId: state.codexSessionId,
-        ovSessionId,
-        nextOvSessionId,
-        pid,
-        messageCount,
-        pendingTokens,
-      });
-      return { committed: false, ovSessionId: null };
-    }
-
     const commit = await commitOvSession(state.ovSessionId);
     if (!commit) {
       logError("commit_failed_keep_state", {

@@ -33,8 +33,6 @@
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
  *   OPENVIKING_CAPTURE_BATCH_SIZE
- *   OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT
- *   OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
  */
@@ -190,14 +188,6 @@ export function loadConfig() {
       process.env.OPENVIKING_CAPTURE_BATCH_SIZE,
       num(cx.captureBatchSize, 100),
     )))),
-    maxLiveMessagesOnCompact: Math.max(1, Math.floor(num(
-      process.env.OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT,
-      num(cx.maxLiveMessagesOnCompact, 200),
-    ))),
-    maxPendingTokensOnCompact: Math.max(1, Math.floor(num(
-      process.env.OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT,
-      num(cx.maxPendingTokensOnCompact, 60000),
-    ))),
     captureTimeoutMs,
     captureToolMaxChars: Math.max(200, Math.floor(num(
       process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS,

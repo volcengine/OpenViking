@@ -8,7 +8,7 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. No commit per turn.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` never commits or sweeps; if the live OV session was already committed, it may inject the latest archive summary for continuity. See `DESIGN.md` for the full decision tree.
-- **Bounded hook work**: large first-run transcripts are captured by a detached worker, and oversized live OV sessions are committed by a detached worker, so Codex hooks return within their timeout budget.
+- **Inline hook work**: capture and commit run inline within hooks. `/messages/batch` (atomic, ≤100 per request) drains even multi-thousand-turn backlogs in a single hook invocation, and OpenViking's `/commit` returns HTTP 200 once Phase 1 (snapshot + clear live + write archive) is done while Phase 2 (memory extraction) runs in the background — so inline `/commit` is bounded at every size.
 
 It also wires Codex up to OpenViking's native `/mcp` endpoint (streamable HTTP, Bearer auth), so the model has direct access to the `search`, `store`, `read`, `list`, `grep`, `glob`, `forget`, `add_resource`, and `health` tools — no local MCP server process to maintain.
 
@@ -87,8 +87,6 @@ export OPENVIKING_RECALL_COMPRESS_THINKING=default
 export OPENVIKING_RECALL_TIMEOUT_MS=120000
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
 export OPENVIKING_CAPTURE_BATCH_SIZE=100
-export OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT=200
-export OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT=60000
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
 export OPENVIKING_DEBUG=1
 ```
@@ -195,9 +193,8 @@ Even a multi-thousand-turn first-run backlog drains inline within a single Stop 
 `pre-compact-capture.mjs`:
 
 1. Catch-up append for any turns Stop hasn't captured yet (race-safe via `capturedTurnCount`), uploaded via `/messages/batch` so even a large catch-up finishes inline
-2. Commit the long-lived OV session so the extractor runs against the full pre-compact transcript
-3. If the live OV session exceeds `OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT` or `OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT`, schedule detached background commit and rotate to a fresh OV session id for future turns
-4. Reset `ovSessionId` to `null` after a synchronous successful commit so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
+2. Commit the long-lived OV session inline so the extractor runs against the full pre-compact transcript. Phase 1 (snapshot + clear live + write archive) runs synchronously before HTTP 200; Phase 2 (memory extraction) runs in the background, so inline commit is bounded at every size
+3. Reset `ovSessionId` to `null` after the successful commit so the next `Stop` re-derives the same `cx-<safe-session-id>` and appends the post-compact half under that deterministic OV session id
 
 ### Known gap: SIGTERM / Ctrl+C / `/exit` are silent
 
@@ -235,8 +232,6 @@ codex-memory-plugin/
 │   ├── debug-log.mjs            # Structured JSONL logger
 │   ├── recall-compressor-profile.mjs # Compressor profile detection/cache
 │   ├── session-state.mjs        # Per-codex-session OV session state
-│   ├── background-jobs.mjs      # Detached worker launcher for slow jobs
-│   ├── commit-session.mjs       # Detached OV session commit worker
 │   ├── auto-recall.mjs          # UserPromptSubmit hook (REST /search/find)
 │   ├── auto-capture.mjs         # Stop hook (REST /sessions/{id}/messages/batch)
 │   ├── session-start-commit.mjs # SessionStart hook (active-window + idle TTL)

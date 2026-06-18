@@ -17,7 +17,7 @@ events imply "context for a particular codex `session_id` is gone".
   memory extractor) at session-end-equivalent moments. `/messages`
   auto-creates the OV session, so the plugin does not call session create.
 - **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.json`,
-  shape `{ codexSessionId, ovSessionId, blockedOvSessions, capturedTurnCount, createdAt, lastUpdatedAt }`.
+  shape `{ codexSessionId, ovSessionId, capturedTurnCount, createdAt, lastUpdatedAt }`.
 - **Active window** — state files whose `lastUpdatedAt` is within
   `ACTIVE_WINDOW_MS` (default 2 min) of "now". Used to detect "the codex
   session that just ended".
@@ -58,21 +58,22 @@ The hook runs inline:
    `OPENVIKING_CAPTURE_BATCH_SIZE` (default 100, server cap) via
    `POST /api/v1/sessions/{id}/messages/batch`. State is persisted after
    each successful batch for crash safety.
-2. Check OV session size against `OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT`
-   / `OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT`. If oversize, spawn
-   `commit-session.mjs` and `rotateOvSessionId` to a `cx-...-part-<ts>`
-   value (old id saved in `blockedOvSessions` for observability). The
-   hook returns immediately without inline `/commit`.
-3. Otherwise call `/commit` inline. On success clear `state.ovSessionId =
-   null`. On failure preserve state so the next sweep retries.
+2. Call `/commit` inline. The server's commit Phase 1
+   (snapshot + clear live + write archive) runs synchronously before
+   HTTP 200; Phase 2 (memory extraction) runs in the background. So
+   HTTP 200 is the "live cleared, archive ready" fence we need — no
+   detached worker, no session-id rotate.
+3. On success clear `state.ovSessionId = null`. On failure preserve
+   state so the next sweep retries.
 
 Because `add_message` is replaced by `add_messages` (atomic batch of
 ≤ 100), even thousands of pending turns finish in a few seconds — well
 before codex's transcript rewrite begins, and well within the hook
-budget.
+budget. The inline commit itself depends only on Phase 1 IO (rename +
+write archive) and is similarly bounded.
 
 If `transcript_path` is missing but a live OV session exists, the hook
-spawns `commit-session.mjs` instead — commit-only async, no append needed.
+calls `/commit` inline (no append needed).
 
 Inline-path failure (network drop mid-batch, OV unreachable) leaves the
 live session open server-side and `state.ovSessionId` still set locally.
@@ -215,18 +216,6 @@ the result as null. We must NOT call `clearState` on failure — keep the
 state file so the next sweep / SessionStart can retry. A transient OV
 outage shouldn't lose a session's worth of memory.
 
-### Oversized commit budget (inline commit paths)
-
-Two callers go through the same oversize-budget check before running
-`/commit` inline: `pre-compact-capture.mjs` (after batch append) and
-`session-start-commit.mjs` (heuristic + idle-TTL sweep). When
-`message_count > OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT` or
-`pending_tokens > OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT`, the caller does
-not run `/commit` inline. It starts detached `commit-session.mjs`, rotates
-`ovSessionId` to a new `cx-...-part-...` value, and stores the old session
-in `blockedOvSessions` for observability. This keeps Codex responsive while
-OpenViking extracts memory in the background.
-
 ### Race: SIGTERM before Stop completes
 
 Codex's tokio runtime cancels in-flight async tasks on SIGTERM, so the last
@@ -249,7 +238,6 @@ OV session id, while commits create additional archives under that session.
 {
   "codexSessionId": "0193af...",   // codex thread id
   "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop"
-  "blockedOvSessions": [],
   "capturedTurnCount": 7,            // turns from transcript already appended
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
@@ -273,8 +261,6 @@ Env var overrides for tuning without rebuilding:
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` (30 min) | idle sweep TTL |
 | `OPENVIKING_AUTH_MODE` | inferred | `trusted` sends `X-OpenViking-Account/User`; `api_key` does not |
 | `OPENVIKING_CAPTURE_BATCH_SIZE` | `100` | messages per `/messages/batch` request (server cap is 100) |
-| `OPENVIKING_MAX_LIVE_MESSAGES_ON_COMPACT` | `200` | inline-commit budget by live session message count (PreCompact + SessionStart) |
-| `OPENVIKING_MAX_PENDING_TOKENS_ON_COMPACT` | `60000` | inline-commit budget by pending token estimate (PreCompact + SessionStart) |
 | `OPENVIKING_RECALL_TIMEOUT_MS` | `120000` (2 min) | whole UserPromptSubmit auto-recall deadline |
 | `OPENVIKING_RECALL_COMPRESS` | `1` | set `0` / `off` to skip `codex exec` compression |
 | `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | custom first-choice compressor model; `off` disables compression |
@@ -352,7 +338,11 @@ Configured `off` (`OPENVIKING_RECALL_COMPRESS=0`, model `off`, or thinking
   the PreCompact snapshot+detached-worker async path, and
   `capture-transcript-worker.mjs` are all removed — batch upload is fast
   enough to do everything inline. The oversize-OV-session commit-budget
-  rotate (PreCompact + SessionStart) is unchanged.
+  rotate path (PreCompact + SessionStart spawning `commit-session.mjs`
+  and rotating `ovSessionId`) was also removed: the server's `/commit`
+  Phase 1 (snapshot + clear live + write archive) is synchronous before
+  HTTP 200 and Phase 2 (memory extraction) runs in the background, so
+  inline `/commit` is bounded and safe at every size.
 - Capture parsing shared by Stop and PreCompact now filters obvious hook
   noise, strips deterministic OpenViking context wrappers, and compresses
   tool calls/results instead of dropping them or storing full blobs.
