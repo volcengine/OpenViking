@@ -427,7 +427,6 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
-        peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let mut body = serde_json::json!({
             "query": query,
@@ -440,7 +439,6 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
             "tags": tags,
-            "peer_id": peer_id,
         });
         self.attach_legacy_agent_scope(&mut body);
         self.post("/api/v1/search/find", &body).await
@@ -459,7 +457,6 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
-        peer_id: Option<String>,
     ) -> Result<serde_json::Value> {
         let mut body = serde_json::json!({
             "query": query,
@@ -473,7 +470,6 @@ impl HttpClient {
             "level": level,
             "context_type": context_type,
             "tags": tags,
-            "peer_id": peer_id,
         });
         self.attach_legacy_agent_scope(&mut body);
         self.post("/api/v1/search/search", &body).await

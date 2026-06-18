@@ -598,9 +598,6 @@ enum Commands {
         /// Only include results matching any of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
-        /// Limit memory retrieval to this peer plus the current user memory
-        #[arg(long = "peer-id", value_name = "id", help_heading = "Advanced options")]
-        peer_id: Option<String>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -662,9 +659,6 @@ enum Commands {
         /// Only include results matching any of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
-        /// Limit memory retrieval to this peer plus the current user memory
-        #[arg(long = "peer-id", value_name = "id", help_heading = "Advanced options")]
-        peer_id: Option<String>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -2922,7 +2916,6 @@ async fn main() {
             level,
             context_type,
             tags,
-            peer_id,
         } => {
             handlers::handle_find(
                 query,
@@ -2934,7 +2927,6 @@ async fn main() {
                 level,
                 context_type,
                 tags,
-                peer_id,
                 ctx,
             )
             .await
@@ -2950,7 +2942,6 @@ async fn main() {
             level,
             context_type,
             tags,
-            peer_id,
         } => {
             handlers::handle_search(
                 query,
@@ -2963,7 +2954,6 @@ async fn main() {
                 level,
                 context_type,
                 tags,
-                peer_id,
                 ctx,
             )
             .await
@@ -3095,6 +3085,14 @@ mod tests {
             }
             _ => panic!("expected search command"),
         }
+    }
+
+    #[test]
+    fn cli_find_and_search_reject_removed_peer_id_flag() {
+        assert!(Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "peer-a"]).is_err());
+        assert!(
+            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "peer-a"]).is_err()
+        );
     }
 
     #[test]

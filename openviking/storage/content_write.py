@@ -466,7 +466,6 @@ class ContentWriteCoordinator:
             recursive=recursive,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            peer_id=ctx.user.user_id,
             role=ctx.role.value,
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
@@ -476,7 +475,6 @@ class ContentWriteCoordinator:
                     uri=root_uri,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
-                    peer_id=ctx.user.user_id,
                 )
                 if context_type in {"resource", "skill"}
                 else ""

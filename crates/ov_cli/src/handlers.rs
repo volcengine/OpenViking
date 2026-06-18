@@ -1247,7 +1247,6 @@ pub async fn handle_find(
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
-    peer_id: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1285,7 +1284,6 @@ pub async fn handle_find(
         level,
         context_type,
         tags,
-        peer_id.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
@@ -1303,7 +1301,6 @@ pub async fn handle_search(
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
-    peer_id: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1345,7 +1342,6 @@ pub async fn handle_search(
         level,
         context_type,
         tags,
-        peer_id.as_deref(),
         ctx.output_format,
         ctx.compact,
     )

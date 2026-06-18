@@ -56,7 +56,6 @@ pub async fn find(
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
-    peer_id: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -72,7 +71,6 @@ pub async fn find(
             level,
             context_type,
             tags,
-            peer_id.map(|s| s.to_string()),
         )
         .await?;
     output_search_results(
@@ -97,7 +95,6 @@ pub async fn search(
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
-    peer_id: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -114,7 +111,6 @@ pub async fn search(
             level,
             context_type,
             tags,
-            peer_id.map(|s| s.to_string()),
         )
         .await?;
     output_search_results(
