@@ -108,7 +108,7 @@ embedding_template: |-
 overview_template: |-
   # Events Overview
   {% for item in items %}
-  - [{{ item.file_content.overview_title }}](./{{ item.file_name }})
+  - [{{ item.file_content.summary|default(item.file_name, true) }}](./{{ item.file_name }})
   {% endfor %}
 
 fields:

@@ -1228,12 +1228,6 @@ class MemoryUpdater:
                 # Extract filename from path
                 filename = file_path.split("/")[-1]
                 metadata = mf.to_metadata()
-                self._fill_overview_fallback_fields(
-                    memory_type=memory_type,
-                    directory=directory,
-                    filename=filename,
-                    metadata=metadata,
-                )
 
                 items.append(
                     {
@@ -1251,6 +1245,7 @@ class MemoryUpdater:
 
         overview_context = {
             "memory_type": memory_type,
+            "directory_name": directory.rstrip("/").split("/")[-1],
             "items": items,
         }
 
@@ -1271,29 +1266,3 @@ class MemoryUpdater:
             await viking_fs.write_file(overview_path, rendered, ctx=ctx)
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")
-
-    @staticmethod
-    def _fill_overview_fallback_fields(
-        *,
-        memory_type: str,
-        directory: str,
-        filename: str,
-        metadata: Dict[str, Any],
-    ) -> None:
-        stem = filename.removesuffix(".md")
-        parent_name = directory.rstrip("/").split("/")[-1]
-        if memory_type == "entities":
-            metadata.setdefault("category", parent_name)
-            metadata.setdefault("name", stem)
-        elif memory_type == "preferences":
-            metadata.setdefault("user", parent_name)
-            metadata.setdefault("topic", stem)
-        elif memory_type == "events":
-            metadata["overview_title"] = MemoryUpdater._event_overview_title(metadata, stem)
-
-    @staticmethod
-    def _event_overview_title(metadata: Dict[str, Any], fallback_name: str) -> str:
-        summary = metadata.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            return summary.strip()
-        return fallback_name
