@@ -35,7 +35,7 @@ from openviking_cli.utils import get_logger
 
 # Mirrors auth.py:_ROLE_RANK; duplicated here to avoid the import cycle
 # (auth.py already depends on this module via the Provider Protocol).
-_ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
+_ROLE_RANK = {Role.READONLY: -1, Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
 
 logger = get_logger(__name__)
 

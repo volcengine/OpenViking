@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, require_write_access
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.local_input_guard import require_remote_resource_source
@@ -127,7 +127,7 @@ async def temp_upload(
     file: UploadFile = File(...),
     telemetry: bool = Form(False),
     upload_mode: str = Form("local"),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Upload a temporary file for add_resource or import_ovpack."""
 
@@ -192,7 +192,7 @@ async def temp_upload_signed(
 async def add_resource(
     http_request: Request,
     request: AddResourceRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Add resource to OpenViking."""
     service = get_service()
@@ -273,7 +273,7 @@ async def add_resource(
 async def add_skill(
     http_request: Request,
     request: AddSkillRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Add skill to OpenViking."""
     service = get_service()

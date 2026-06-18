@@ -26,7 +26,7 @@ from openviking_cli.session.user_id import UserIdentifier
 # rank ⇒ more privilege. Used to compare an OAuth token's embedded role
 # against the user's current role: a token whose role outranks the current
 # role is a stale token from before a `set_role` demotion and must be rejected.
-_ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
+_ROLE_RANK = {Role.READONLY: -1, Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
 
 
 _TRUSTED_RELAXED_IDENTITY_PREFIXES = ("/api/v1/admin",)
@@ -420,6 +420,19 @@ def require_role(*allowed_roles: Role):
 require_root = require_role(Role.ROOT)
 require_admin = require_role(Role.ADMIN)
 require_user = require_role(Role.USER)
+
+
+def require_write_access(ctx: RequestContext = Depends(get_request_context)) -> RequestContext:
+    """Block readonly callers from mutating shared/public workspace resources.
+
+    Routes that touch the caller's own session/memory namespace MUST NOT use
+    this guard — readonly users are still allowed to write there.
+    """
+    if ctx.role == Role.READONLY:
+        raise PermissionDeniedError(
+            "readonly role cannot perform write operations on shared workspace resources"
+        )
+    return ctx
 
 
 _DEV_MODE_ADMIN_API_MESSAGE = (

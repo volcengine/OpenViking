@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, require_write_access
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
@@ -54,7 +54,7 @@ async def relations(
 @router.post("/link")
 async def link(
     request: LinkRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Create link between resources."""
     service = get_service()
@@ -67,7 +67,7 @@ async def link(
 @router.delete("/link")
 async def unlink(
     request: UnlinkRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Remove link between resources."""
     service = get_service()
@@ -87,7 +87,7 @@ class BuildGraphRequest(BaseModel):
 @router.post("/build_graph")
 async def build_graph(
     request: BuildGraphRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Generate a self-contained HTML graph from multiple memory roots into one output file."""
     from openviking.session.memory.graph_view import MemoryGraph

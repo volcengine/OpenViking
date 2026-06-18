@@ -1427,7 +1427,7 @@ enum AdminCommands {
         /// User ID to register
         #[arg(value_name = "user-id")]
         user_id: String,
-        /// Role: admin or user
+        /// Role: admin, user, or readonly
         #[arg(long, default_value = "user", value_name = "role")]
         role: String,
     },
@@ -1463,7 +1463,7 @@ enum AdminCommands {
         /// User ID
         #[arg(value_name = "user-id")]
         user_id: String,
-        /// New role: admin or user
+        /// New role: admin, user, or readonly
         #[arg(value_name = "role")]
         role: String,
     },

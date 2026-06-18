@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, require_write_access
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
@@ -129,7 +129,7 @@ class MkdirRequest(BaseModel):
 @router.post("/mkdir")
 async def mkdir(
     request: MkdirRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Create directory."""
     service = get_service()
@@ -151,7 +151,7 @@ async def rm(
     recursive: bool = Query(False, description="Remove recursively"),
     wait: bool = Query(False, description="Wait for semantic refresh to complete"),
     timeout: Optional[float] = Query(None, description="Wait timeout in seconds"),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Remove resource."""
     service = get_service()
@@ -196,7 +196,7 @@ class MvRequest(BaseModel):
 @router.post("/mv")
 async def mv(
     request: MvRequest,
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(require_write_access),
 ):
     """Move resource."""
     service = get_service()

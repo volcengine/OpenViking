@@ -1342,3 +1342,101 @@ async def test_trusted_mode_admin_api_http_route_without_identity():
     assert response.json()["result"]["role"] == "root"
     assert response.json()["result"]["account_id"] == "trusted"
     assert response.json()["result"]["user_id"] == "trusted"
+
+
+# ---- Role.READONLY tests (issue #1668) ----
+
+
+def _build_readonly_test_app(identity: ResolvedIdentity) -> FastAPI:
+    """Test app exposing one mutating route guarded by require_write_access
+    and one route under /api/v1/sessions which must remain open to readonly.
+    """
+    from openviking.server.auth import require_write_access
+
+    app = _build_auth_http_test_app(identity=identity, auth_enabled=True)
+
+    @app.post("/api/v1/resources")
+    async def add_resource(ctx=Depends(require_write_access)):
+        return {"status": "ok", "result": {"role": ctx.role.value}}
+
+    @app.delete("/api/v1/fs")
+    async def fs_rm(ctx=Depends(require_write_access)):
+        return {"status": "ok"}
+
+    @app.post("/api/v1/sessions")
+    async def create_session(ctx=Depends(get_request_context)):
+        # Sessions/memories are the user's own namespace — no write gate.
+        return {"status": "ok", "result": {"role": ctx.role.value}}
+
+    @app.post("/api/v1/search/find")
+    async def search_find(ctx=Depends(get_request_context)):
+        return {"status": "ok", "result": {"role": ctx.role.value}}
+
+    return app
+
+
+async def test_readonly_role_blocks_post_resources():
+    """POST /api/v1/resources must 403 for readonly users."""
+    identity = ResolvedIdentity(role=Role.READONLY, account_id="acme", user_id="ro")
+    app = _build_readonly_test_app(identity)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/v1/resources", json={})
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert "readonly" in body["error"]["message"].lower()
+
+
+async def test_readonly_role_blocks_delete_resource():
+    """DELETE under /api/v1/fs (used for resource removal) must 403 for readonly."""
+    identity = ResolvedIdentity(role=Role.READONLY, account_id="acme", user_id="ro")
+    app = _build_readonly_test_app(identity)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.delete("/api/v1/fs?uri=viking://resources/x")
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
+
+
+async def test_readonly_role_allows_read_endpoints():
+    """Read-style endpoints must remain accessible for readonly users."""
+    identity = ResolvedIdentity(role=Role.READONLY, account_id="acme", user_id="ro")
+    app = _build_readonly_test_app(identity)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        ls_resp = await client.get("/api/v1/fs/ls")
+        find_resp = await client.post("/api/v1/search/find", json={"query": "x"})
+    assert ls_resp.status_code == 200
+    assert ls_resp.json()["result"]["account_id"] == "acme"
+    assert find_resp.status_code == 200
+    assert find_resp.json()["result"]["role"] == "readonly"
+
+
+async def test_readonly_role_allows_session_writes():
+    """Sessions/memories are the user's own namespace — readonly must still write there."""
+    identity = ResolvedIdentity(role=Role.READONLY, account_id="acme", user_id="ro")
+    app = _build_readonly_test_app(identity)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/v1/sessions", json={})
+    assert resp.status_code == 200
+    assert resp.json()["result"]["role"] == "readonly"
+
+
+async def test_readonly_role_round_trips_through_role_enum():
+    """The string 'readonly' must round-trip through Role(...) for persistence."""
+    assert Role("readonly") is Role.READONLY
+    assert Role.READONLY.value == "readonly"
+
+
+async def test_require_write_access_allows_user_role():
+    """USER role must still be able to write — guard is readonly-specific."""
+    identity = ResolvedIdentity(role=Role.USER, account_id="acme", user_id="alice")
+    app = _build_readonly_test_app(identity)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/api/v1/resources", json={})
+    assert resp.status_code == 200
+    assert resp.json()["result"]["role"] == "user"
