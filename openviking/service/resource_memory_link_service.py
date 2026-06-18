@@ -9,6 +9,7 @@ files' MEMORY_FIELDS metadata.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
@@ -467,40 +468,128 @@ class ResourceMemoryLinkService:
         resource_uri: str,
         recursive: bool,
     ) -> List[_MemoryRefMatch]:
+        candidate_uris = await self._grep_candidate_memory_uris(
+            ctx=ctx,
+            resource_uri=resource_uri,
+        )
+        if candidate_uris is None:
+            candidate_uris = await self._tree_candidate_memory_uris(
+                ctx=ctx,
+                resource_uri=resource_uri,
+            )
+        return await self._read_referencing_memory_matches(
+            candidate_uris,
+            ctx=ctx,
+            resource_uri=resource_uri,
+            recursive=recursive,
+        )
+
+    async def _grep_candidate_memory_uris(
+        self,
+        *,
+        ctx: RequestContext,
+        resource_uri: str,
+    ) -> Optional[List[str]]:
+        """Use backend grep to avoid reading every memory file when supported."""
         viking_fs = self._get_viking_fs()
-        matches: List[_MemoryRefMatch] = []
-        entries: List[Dict[str, Any]] = []
+        if not hasattr(viking_fs, "grep"):
+            return None
+
+        search_needle = self._resource_uri_search_needle(resource_uri)
+        if not search_needle:
+            return []
+
+        candidate_uris: List[str] = []
         for memory_root in _memory_roots_for_resource_refs(ctx, resource_uri):
             try:
-                entries.extend(
-                    await viking_fs.tree(
-                        memory_root,
-                        ctx=ctx,
-                        node_limit=1000000,
-                        level_limit=None,
-                    )
+                result = await viking_fs.grep(
+                    memory_root,
+                    pattern=re.escape(search_needle),
+                    ctx=ctx,
+                    node_limit=None,
+                    level_limit=None,
+                )
+            except (NotFoundError, FileNotFoundError):
+                continue
+            except Exception as exc:
+                logger.debug(
+                    "Resource memory grep failed for %s, falling back to tree scan: %s",
+                    memory_root,
+                    exc,
+                )
+                return None
+
+            for match in result.get("matches", []):
+                uri = match.get("uri", "")
+                if self._is_memory_markdown_file(uri):
+                    candidate_uris.append(uri)
+
+        return list(dict.fromkeys(candidate_uris))
+
+    async def _tree_candidate_memory_uris(
+        self,
+        *,
+        ctx: RequestContext,
+        resource_uri: str,
+    ) -> List[str]:
+        viking_fs = self._get_viking_fs()
+        candidate_uris: List[str] = []
+        for memory_root in _memory_roots_for_resource_refs(ctx, resource_uri):
+            try:
+                entries = await viking_fs.tree(
+                    memory_root,
+                    ctx=ctx,
+                    node_limit=1000000,
+                    level_limit=None,
                 )
             except Exception:
                 continue
 
-        for entry in entries:
-            uri = entry.get("uri", "")
-            rel_path = entry.get("rel_path", "")
-            if entry.get("isDir") or not uri.endswith(".md"):
-                continue
-            if rel_path.endswith("/.abstract.md") or rel_path.endswith("/.overview.md"):
-                continue
+            for entry in entries:
+                uri = entry.get("uri", "")
+                rel_path = entry.get("rel_path", "")
+                if entry.get("isDir") or not self._is_memory_markdown_file(uri):
+                    continue
+                if rel_path.endswith("/.abstract.md") or rel_path.endswith("/.overview.md"):
+                    continue
+                candidate_uris.append(uri)
+
+        return list(dict.fromkeys(candidate_uris))
+
+    async def _read_referencing_memory_matches(
+        self,
+        candidate_uris: Sequence[str],
+        *,
+        ctx: RequestContext,
+        resource_uri: str,
+        recursive: bool,
+    ) -> List[_MemoryRefMatch]:
+        viking_fs = self._get_viking_fs()
+        matches: List[_MemoryRefMatch] = []
+        search_needle = self._resource_uri_search_needle(resource_uri)
+        for uri in candidate_uris:
             try:
                 raw = await viking_fs.read_file(uri, ctx=ctx)
-                mf = MemoryFileUtils.read(raw, uri=uri)
+                raw_text = raw if isinstance(raw, str) else str(raw or "")
             except Exception:
                 continue
+            if search_needle and search_needle not in raw_text:
+                continue
+
+            try:
+                mf = MemoryFileUtils.read(raw_text, uri=uri)
+            except Exception:
+                continue
+
+            matched = False
             for ref in self._coerce_resource_refs(mf.extra_fields.get("resource_refs")):
                 if self._resource_ref_matches(ref.get("resource_uri"), resource_uri, recursive):
                     matches.append(_MemoryRefMatch(uri, mf, ref))
-            if not any(
-                match.memory_uri == uri for match in matches
-            ) and content_references_resource(
+                    matched = True
+            if matched:
+                continue
+
+            if content_references_resource(
                 mf.content,
                 resource_uri,
                 recursive=recursive,
@@ -524,6 +613,19 @@ class ResourceMemoryLinkService:
                     )
                 )
         return matches
+
+    @staticmethod
+    def _resource_uri_search_needle(resource_uri: str) -> str:
+        return (resource_uri or "").strip().rstrip("/")
+
+    @staticmethod
+    def _is_memory_markdown_file(uri: str) -> bool:
+        return (
+            isinstance(uri, str)
+            and uri.endswith(".md")
+            and not uri.endswith("/.abstract.md")
+            and not uri.endswith("/.overview.md")
+        )
 
     async def _read_resource_directory_abstract(
         self,

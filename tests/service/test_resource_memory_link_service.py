@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for resource-memory linking service."""
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -20,8 +21,11 @@ class _FakeVikingFS:
     def __init__(self, store):
         self.store = store
         self.rm_calls = []
+        self.read_calls = []
+        self.tree_calls = []
 
     async def read_file(self, uri, ctx=None):
+        self.read_calls.append(uri)
         return self.store[uri]
 
     async def write_file(self, uri, content, ctx=None):
@@ -32,6 +36,13 @@ class _FakeVikingFS:
         self.store.pop(uri, None)
 
     async def tree(self, uri, ctx=None, node_limit=None, level_limit=None):
+        self.tree_calls.append(
+            {
+                "uri": uri,
+                "node_limit": node_limit,
+                "level_limit": level_limit,
+            }
+        )
         prefix = uri.rstrip("/") + "/"
         return [
             {
@@ -42,6 +53,50 @@ class _FakeVikingFS:
             for item_uri in self.store
             if item_uri.startswith(prefix)
         ]
+
+
+class _FakeGrepVikingFS(_FakeVikingFS):
+    def __init__(self, store, grep_uris):
+        super().__init__(store)
+        self.grep_uris = grep_uris
+        self.grep_calls = []
+
+    async def grep(
+        self,
+        uri,
+        pattern,
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=None,
+        level_limit=None,
+        ctx=None,
+    ):
+        self.grep_calls.append(
+            {
+                "uri": uri,
+                "pattern": pattern,
+                "exclude_uri": exclude_uri,
+                "case_insensitive": case_insensitive,
+                "node_limit": node_limit,
+                "level_limit": level_limit,
+            }
+        )
+        return {
+            "matches": [
+                {
+                    "uri": match_uri,
+                    "line": 1,
+                    "content": self.store.get(match_uri, ""),
+                }
+                for match_uri in self.grep_uris
+            ],
+            "count": len(self.grep_uris),
+            "match_count": len(self.grep_uris),
+            "files_scanned": len(self.store),
+        }
+
+    async def tree(self, uri, ctx=None, node_limit=None, level_limit=None):
+        raise AssertionError("grep path should not fall back to tree")
 
 
 class _ReadFailVikingFS:
@@ -368,6 +423,59 @@ async def test_find_referencing_memories_uses_memory_refs(request_context):
     assert len(matches) == 1
     assert matches[0].memory_uri == memory_uri
     assert matches[0].resource_ref["resource_uri"] == resource_uri
+
+
+@pytest.mark.asyncio
+async def test_find_referencing_memories_uses_grep_candidates_without_tree_scan(request_context):
+    memory_uri = "viking://user/alice/memories/entities/wang.md"
+    unrelated_uri = "viking://user/alice/memories/entities/unrelated.md"
+    overview_uri = "viking://user/alice/memories/entities/.overview.md"
+    resource_uri = "viking://resources/docs/id_card.pdf"
+    raw = MemoryFileUtils.write(
+        MemoryFile(
+            uri=memory_uri,
+            content="王大锤资料。",
+            extra_fields={
+                "resource_refs": [
+                    {
+                        "resource_uri": resource_uri,
+                        "reason": "这是王大锤的身份证",
+                    }
+                ]
+            },
+        )
+    )
+    store = {
+        memory_uri: raw,
+        unrelated_uri: "不会命中的普通记忆",
+        overview_uri: f"- [王大锤]({memory_uri})",
+    }
+    viking_fs = _FakeGrepVikingFS(
+        store,
+        grep_uris=[memory_uri, memory_uri, overview_uri],
+    )
+    service = ResourceMemoryLinkService(viking_fs=viking_fs)
+
+    matches = await service._find_referencing_memories(
+        ctx=request_context,
+        resource_uri=resource_uri,
+        recursive=False,
+    )
+
+    assert len(matches) == 1
+    assert matches[0].memory_uri == memory_uri
+    assert viking_fs.grep_calls == [
+        {
+            "uri": "viking://user/alice/memories",
+            "pattern": re.escape(resource_uri),
+            "exclude_uri": None,
+            "case_insensitive": False,
+            "node_limit": None,
+            "level_limit": None,
+        }
+    ]
+    assert viking_fs.read_calls == [memory_uri]
+    assert viking_fs.tree_calls == []
 
 
 @pytest.mark.asyncio
