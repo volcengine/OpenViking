@@ -157,6 +157,42 @@ class NewAPIKeyManager:
         # Fall back to legacy resolver for legacy keys
         return self._legacy.resolve(api_key)
 
+    async def resolve_with_refresh(self, api_key: str) -> ResolvedIdentity:
+        """Resolve an API key, reloading from AGFS on cache miss / TTL expiry.
+
+        See ``LegacyAPIKeyManager.resolve_with_refresh`` for the policy. The
+        new-format fast path goes through the same ``resolve`` body, so
+        cache-miss reload behaves identically for new and legacy keys.
+        """
+        import time as _time
+
+        if not api_key:
+            raise UnauthenticatedError("Missing API Key")
+
+        if self._legacy._cache_is_stale():
+            await self._legacy._reload_locked(force=False)
+
+        try:
+            return self.resolve(api_key)
+        except UnauthenticatedError:
+            pass
+
+        if self._legacy._should_skip_unknown_key_reload(api_key):
+            raise UnauthenticatedError("Invalid API Key")
+
+        observed_loaded_at = self._legacy._loaded_at
+        await self._legacy._reload_locked(force=True)
+        try:
+            return self.resolve(api_key)
+        except UnauthenticatedError:
+            if self._legacy._loaded_at != observed_loaded_at:
+                self._legacy._unknown_key_reload_at[api_key] = _time.monotonic()
+            raise
+
+    def invalidate_cache(self) -> None:
+        """Proxy to ``LegacyAPIKeyManager.invalidate_cache``."""
+        self._legacy.invalidate_cache()
+
     async def create_account(
         self,
         account_id: str,
@@ -233,6 +269,7 @@ class NewAPIKeyManager:
         except Exception:
             await self._legacy._rollback_create_account(account_id)
             raise
+        self._legacy.invalidate_cache()
         return key
 
     async def delete_account(self, account_id: str) -> None:
@@ -292,6 +329,7 @@ class NewAPIKeyManager:
             self._legacy._prefix_index[key_prefix].append(entry)
 
         await self._legacy._save_users_json(account_id)
+        self._legacy.invalidate_cache()
         return key
 
     async def remove_user(self, account_id: str, user_id: str) -> None:
@@ -366,6 +404,7 @@ class NewAPIKeyManager:
             self._legacy._prefix_index[new_key_prefix].append(entry)
 
         await self._legacy._save_users_json(account_id)
+        self._legacy.invalidate_cache()
         return new_key
 
     async def set_role(self, account_id: str, user_id: str, role: str) -> None:
