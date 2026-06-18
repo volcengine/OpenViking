@@ -777,11 +777,36 @@ class VikingVectorIndexBackend:
             if not record or not record.get("id"):
                 return []
 
-            updated_record = dict(record)
-            if mode == "append":
-                updated_record["search_tags"] = merge_search_tags(record.get("search_tags"), tags)
-            else:
-                updated_record["search_tags"] = list(tags)
+            full_records = await self.get([str(record["id"])], ctx=ctx)
+            if not full_records:
+                logger.warning(
+                    "update_search_tags failed to fetch full exact record uri=%s account_id=%s id=%s",
+                    canonical_uri,
+                    ctx.account_id,
+                    record.get("id"),
+                )
+                return []
+
+            updated_record = dict(full_records[0])
+            try:
+                if mode == "append":
+                    updated_record["search_tags"] = merge_search_tags(
+                        updated_record.get("search_tags"), tags
+                    )
+                else:
+                    updated_record["search_tags"] = list(tags)
+            except Exception as exc:
+                logger.warning(
+                    "update_search_tags failed to merge exact record tags uri=%s "
+                    "account_id=%s existing_tags=%s incoming_tags=%s error=%s",
+                    canonical_uri,
+                    ctx.account_id,
+                    updated_record.get("search_tags"),
+                    tags,
+                    exc,
+                )
+                return []
+
             if await self.upsert(updated_record, ctx=ctx):
                 return [updated_record]
             return []
@@ -795,15 +820,48 @@ class VikingVectorIndexBackend:
         if not records:
             return []
 
+        record_ids = [str(record["id"]) for record in records if record.get("id")]
+        if not record_ids:
+            return []
+        full_records = await self.get(record_ids, ctx=ctx)
+        full_records_by_id = {
+            str(record["id"]): record for record in full_records if record.get("id") is not None
+        }
+
         updated_records: List[Dict[str, Any]] = []
         for record in records:
             if not record or not record.get("id"):
                 continue
-            updated_record = dict(record)
-            if mode == "append":
-                updated_record["search_tags"] = merge_search_tags(record.get("search_tags"), tags)
-            else:
-                updated_record["search_tags"] = list(tags)
+            full_record = full_records_by_id.get(str(record["id"]))
+            if not full_record:
+                logger.warning(
+                    "update_search_tags failed to fetch full leveled record uri=%s account_id=%s level=%s id=%s",
+                    canonical_uri,
+                    ctx.account_id,
+                    record.get("level"),
+                    record.get("id"),
+                )
+                continue
+            updated_record = dict(full_record)
+            try:
+                if mode == "append":
+                    updated_record["search_tags"] = merge_search_tags(
+                        updated_record.get("search_tags"), tags
+                    )
+                else:
+                    updated_record["search_tags"] = list(tags)
+            except Exception as exc:
+                logger.warning(
+                    "update_search_tags failed to merge leveled record tags uri=%s "
+                    "account_id=%s level=%s existing_tags=%s incoming_tags=%s error=%s",
+                    canonical_uri,
+                    ctx.account_id,
+                    updated_record.get("level"),
+                    updated_record.get("search_tags"),
+                    tags,
+                    exc,
+                )
+                return []
             if await self.upsert(updated_record, ctx=ctx):
                 updated_records.append(updated_record)
         return updated_records

@@ -1103,6 +1103,40 @@ async def test_set_tags_user_scope_resource_leaf_returns_parent_root_uri(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_set_tags_derived_abstract_maps_to_parent_level_zero(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md/.abstract.md"
+    root_uri = "viking://resources/demo"
+    updated_uri = "viking://resources/demo/doc.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        def __init__(self):
+            self.update_calls = []
+
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            del ctx
+            self.update_calls.append((uri, list(tags), mode, levels))
+            return [{"uri": uri}]
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+
+    result = await coordinator.set_tags(
+        uri=file_uri,
+        tags=["team=test"],
+        mode="replace",
+        ctx=ctx,
+    )
+
+    assert result["success_count"] == 1
+    assert result["skipped_count"] == 0
+    assert result["updated_uris"] == [updated_uri]
+    assert fake_store.update_calls == [(updated_uri, ["team=test"], "replace", [0])]
+
+
+@pytest.mark.asyncio
 async def test_set_tags_append_merges_existing_tags(monkeypatch):
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
@@ -1194,9 +1228,9 @@ async def test_set_tags_recursive_directory_updates_descendants(monkeypatch):
             del ctx
             if levels is None:
                 self.update_calls.append((uri, list(tags), mode))
-                return [{"uri": uri}] if uri != nested_overview_uri else []
+                return [{"uri": uri}]
             self.directory_update_calls.append((uri, list(tags), mode, list(levels)))
-            return []
+            return [{"uri": uri}]
 
     fake_store = _FakeVectorStore()
     fake_vfs.vector_store = fake_store
@@ -1210,28 +1244,25 @@ async def test_set_tags_recursive_directory_updates_descendants(monkeypatch):
 
     assert result["mode"] == "append"
     assert "recursive" not in result
-    assert result["success_count"] == 5
-    assert result["skipped_count"] == 2
+    assert result["success_count"] == 4
+    assert result["skipped_count"] == 0
     assert result["failed_count"] == 0
     assert set(result["updated_uris"]) == {
-        abstract_uri,
-        overview_uri,
+        root_uri,
         file_uri,
-        nested_abstract_uri,
+        nested_dir_uri,
         nested_file_uri,
     }
     assert sorted(fake_store.update_calls) == sorted(
+        [(file_uri, ["env=prod"], "append"), (nested_file_uri, ["env=prod"], "append")]
+    )
+    assert sorted(fake_store.directory_update_calls) == sorted(
         [
-            (abstract_uri, ["env=prod"], "append"),
-            (overview_uri, ["env=prod"], "append"),
-            (file_uri, ["env=prod"], "append"),
-            (nested_abstract_uri, ["env=prod"], "append"),
-            (nested_overview_uri, ["env=prod"], "append"),
-            (nested_file_uri, ["env=prod"], "append"),
+            (root_uri, ["env=prod"], "append", [0, 1]),
+            (nested_dir_uri, ["env=prod"], "append", [0, 1]),
         ]
     )
-    assert fake_store.directory_update_calls == [(nested_dir_uri, ["env=prod"], "append", [0, 1])]
-    assert nested_overview_uri not in result["updated_uris"]
+    assert nested_dir_uri in result["updated_uris"]
 
 
 @pytest.mark.asyncio

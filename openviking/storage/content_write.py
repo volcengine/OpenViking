@@ -618,7 +618,25 @@ class ContentWriteCoordinator:
         del recursive
         context_type = context_type_for_uri(uri)
         root_uri = await self._resolve_root_uri(uri, ctx=ctx)
-        updated_uris = await self._upsert_uri_tags(uri=uri, tags=tags, mode=mode, ctx=ctx)
+        target_uri = uri
+        levels: list[int] | None = None
+        if uri.endswith("/.abstract.md"):
+            parent = VikingURI(uri).parent
+            if parent is not None:
+                target_uri = parent.uri.rstrip("/")
+                levels = [0]
+        elif uri.endswith("/.overview.md"):
+            parent = VikingURI(uri).parent
+            if parent is not None:
+                target_uri = parent.uri.rstrip("/")
+                levels = [1]
+        updated_uris = await self._upsert_uri_tags(
+            uri=target_uri,
+            tags=tags,
+            mode=mode,
+            ctx=ctx,
+            levels=levels,
+        )
         if not updated_uris:
             return self._build_tags_result(
                 uri=uri,
@@ -703,6 +721,7 @@ class ContentWriteCoordinator:
 
         deduped: list[dict[str, object]] = []
         seen: set[str] = set()
+        directory_levels: dict[str, set[int]] = {}
         for entry in entries:
             entry_uri = entry.get("uri", "")
             if not entry_uri or is_watch_task_control_uri(entry_uri):
@@ -713,9 +732,19 @@ class ContentWriteCoordinator:
                 continue
             seen.add(dedupe_key)
             if entry.get("isDir"):
-                deduped.append({"uri": normalized_uri, "levels": [0, 1]})
+                directory_levels.setdefault(normalized_uri, set()).update({0, 1})
+            elif normalized_uri.endswith("/.abstract.md"):
+                parent = VikingURI(normalized_uri).parent
+                if parent is not None:
+                    directory_levels.setdefault(parent.uri.rstrip("/"), set()).add(0)
+            elif normalized_uri.endswith("/.overview.md"):
+                parent = VikingURI(normalized_uri).parent
+                if parent is not None:
+                    directory_levels.setdefault(parent.uri.rstrip("/"), set()).add(1)
             else:
                 deduped.append({"uri": normalized_uri})
+        for directory_uri, levels in directory_levels.items():
+            deduped.append({"uri": directory_uri, "levels": sorted(levels)})
         return deduped
 
     async def _upsert_uri_tags(
