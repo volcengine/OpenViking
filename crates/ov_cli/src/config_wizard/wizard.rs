@@ -26,9 +26,9 @@ use serde_json::Value;
 
 use super::store::{
     ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore, IdentityField,
-    OPENVIKING_SERVICE_URL, build_config, custom_allows_empty_api_key, validate_candidate_config,
-    validate_candidate_config_with_role, validate_config, validate_config_name,
-    validate_identity_value, validation_error_copy,
+    OPENVIKING_SERVICE_URL, build_config, custom_allows_empty_api_key, normalize_custom_url,
+    validate_candidate_config, validate_candidate_config_with_role, validate_config,
+    validate_config_name, validate_identity_value, validation_error_copy,
 };
 
 const OPENVIKING_SERVICE_API_KEY_URL: &str =
@@ -126,6 +126,11 @@ async fn run_config_wizard_with_store(store: ConfigStore) -> Result<()> {
             }
             PromptResult::Value(3) => {
                 if run_delete_config(&store, &mut ui)? {
+                    return Ok(());
+                }
+            }
+            PromptResult::Value(4) => {
+                if run_user_management(&store, &mut ui).await? {
                     return Ok(());
                 }
             }
@@ -313,6 +318,14 @@ fn section_delete() -> &'static str {
         Language::current(),
         "Delete a saved config.",
         "删除已保存的配置。",
+    )
+}
+
+fn section_user_management() -> &'static str {
+    copy(
+        Language::current(),
+        "Manage account and user credentials.",
+        "管理账户和用户凭证。",
     )
 }
 
@@ -514,19 +527,20 @@ fn has_normal_user_key(api_key: Option<&str>, root_api_key: Option<&str>) -> boo
         .is_none_or(|root_api_key| root_api_key != api_key)
 }
 
-pub(crate) fn main_action_labels() -> [&'static str; 4] {
+pub(crate) fn main_action_labels() -> [&'static str; 5] {
     [
         "Add Config",
         "Switch Config",
         "Edit Config",
         "Delete Config",
+        "User Management",
     ]
 }
 
-fn main_action_labels_for_language(language: Language) -> [&'static str; 4] {
+fn main_action_labels_for_language(language: Language) -> [&'static str; 5] {
     match language {
         Language::En => main_action_labels(),
-        Language::ZhCn => ["添加配置", "切换配置", "编辑配置", "删除配置"],
+        Language::ZhCn => ["添加配置", "切换配置", "编辑配置", "删除配置", "用户管理"],
     }
 }
 
@@ -1753,7 +1767,8 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
     let mut stage = Stage::Kind;
     let mut kind = ConfigKind::Custom;
     let mut name: Option<String> = None;
-    let mut url = DEFAULT_CUSTOM_URL.to_string();
+    let default_server_url = current_server_url_default(store)?;
+    let mut url = default_server_url.clone();
     let mut api_key: Option<String> = None;
     let mut root_api_key: Option<String> = None;
     let mut account: Option<String> = None;
@@ -1789,7 +1804,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 }
                 PromptResult::Value(1) => {
                     kind = ConfigKind::Custom;
-                    url = DEFAULT_CUSTOM_URL.to_string();
+                    url = default_server_url.clone();
                     name = None;
                     api_key = None;
                     root_api_key = None;
@@ -1807,7 +1822,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 PromptResult::Value(_) => unreachable!("selection is constrained by kind list"),
             },
             Stage::Name => {
-                match prompt_add_config_name(ui, section_add(), add_config_name_label())? {
+                match prompt_add_config_name(ui, section_add(), add_config_name_label(), store)? {
                     PromptResult::Value(value) => {
                         name = value;
                         stage = if kind == ConfigKind::OpenVikingService {
@@ -1824,7 +1839,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                         user = None;
                         identity_mode = None;
                         key_mode = None;
-                        url = DEFAULT_CUSTOM_URL.to_string();
+                        url = default_server_url.clone();
                         stage = Stage::Kind;
                     }
                     PromptResult::Quit => {
@@ -2005,10 +2020,39 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 };
                 match validate_draft(ui, section_add(), &draft).await {
                     Ok(ValidatedConfig {
-                        config,
-                        api_key_role,
+                        mut config,
+                        mut api_key_role,
                         root_api_key_role,
                     }) => {
+                        if root_key_used_for_normal_commands(&config) {
+                            let root_key = config.root_api_key.clone().unwrap_or_default();
+                            match select_user_with_root_key(ui, section_add(), &config, &root_key)
+                                .await?
+                            {
+                                PromptResult::Value(updated_config) => {
+                                    config = updated_config;
+                                    api_key = config.api_key.clone();
+                                    root_api_key = config.root_api_key.clone();
+                                    account = config.account.clone();
+                                    user = config.user.clone();
+                                    identity_mode = None;
+                                    key_mode = Some(CustomKeyMode::UserKey);
+                                    api_key_role = Some(ApiKeyRole::Regular);
+                                }
+                                PromptResult::Back => {
+                                    stage = if kind == ConfigKind::Custom {
+                                        Stage::KeyMode
+                                    } else {
+                                        Stage::ApiKey
+                                    };
+                                    continue;
+                                }
+                                PromptResult::Quit => {
+                                    print_cancelled(ui)?;
+                                    return Ok(true);
+                                }
+                            }
+                        }
                         if should_confirm_detected_root_key(kind, key_mode, api_key_role) {
                             match prompt_select(
                                 ui,
@@ -2094,6 +2138,24 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                             stage = Stage::Account;
                             continue;
                         }
+                        let save_name =
+                            match ensure_add_config_save_name(store, ui, &mut name, &draft_name)? {
+                                PromptResult::Value(name) => name,
+                                PromptResult::Back => {
+                                    stage = if identity_mode.is_some() {
+                                        Stage::User
+                                    } else if kind == ConfigKind::Custom {
+                                        Stage::KeyMode
+                                    } else {
+                                        Stage::ApiKey
+                                    };
+                                    continue;
+                                }
+                                PromptResult::Quit => {
+                                    print_cancelled(ui)?;
+                                    return Ok(true);
+                                }
+                            };
                         match prompt_save_action(
                             ui,
                             section_add(),
@@ -2103,12 +2165,12 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                         )? {
                             PromptResult::Value(SaveAction::SaveAndActivate) => {
                                 ui.clear()?;
-                                save_config(store, &draft_name, &config, true)?;
+                                save_config(store, &save_name, &config, true)?;
                                 return Ok(true);
                             }
                             PromptResult::Value(SaveAction::SaveOnly) => {
                                 ui.clear()?;
-                                save_config(store, &draft_name, &config, false)?;
+                                save_config(store, &save_name, &config, false)?;
                                 return Ok(true);
                             }
                             PromptResult::Value(SaveAction::Cancel) => {
@@ -2288,11 +2350,13 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 }
             },
             Stage::Name => {
+                let original_name = configs[selected].name.clone();
                 match prompt_config_name(
                     ui,
                     section_edit(),
                     copy(Language::current(), "Config name", "配置名称"),
                     Some(&name),
+                    |value| validate_config_name_change(store, &original_name, value),
                 )? {
                     PromptResult::Value(value) => {
                         name = value;
@@ -2658,10 +2722,37 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 };
                 match validate_draft(ui, section_edit(), &draft).await {
                     Ok(ValidatedConfig {
-                        config,
-                        api_key_role,
+                        mut config,
+                        mut api_key_role,
                         root_api_key_role,
                     }) => {
+                        if root_key_used_for_normal_commands(&config) {
+                            let root_key = config.root_api_key.clone().unwrap_or_default();
+                            match select_user_with_root_key(ui, section_edit(), &config, &root_key)
+                                .await?
+                            {
+                                PromptResult::Value(updated_config) => {
+                                    config = updated_config;
+                                    api_key = config.api_key.clone();
+                                    root_api_key = config.root_api_key.clone();
+                                    account = config.account.clone();
+                                    user = config.user.clone();
+                                    identity_mode = None;
+                                    key_mode = Some(CustomKeyMode::UserKey);
+                                    key_edit_action = Some(CustomEditKeyAction::SetUserKey);
+                                    api_key_was_entered = true;
+                                    api_key_role = Some(ApiKeyRole::Regular);
+                                }
+                                PromptResult::Back => {
+                                    stage = Stage::ApiKeyChoice;
+                                    continue;
+                                }
+                                PromptResult::Quit => {
+                                    print_cancelled(ui)?;
+                                    return Ok(true);
+                                }
+                            }
+                        }
                         if should_confirm_detected_root_key(kind, key_mode, api_key_role) {
                             match prompt_select(
                                 ui,
@@ -3114,6 +3205,1699 @@ async fn run_switch_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<b
     }
 }
 
+async fn run_user_management(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool> {
+    let UserManagementContext {
+        config_name,
+        mut config,
+    } = match user_management_config_context(store)? {
+        Some(context) => context,
+        None => match prompt_user_management_server_url(store, ui)? {
+            PromptResult::Value(context) => context,
+            PromptResult::Back => return Ok(false),
+            PromptResult::Quit => {
+                print_cancelled(ui)?;
+                return Ok(true);
+            }
+        },
+    };
+
+    let current_root_api_key = config.root_api_key.as_deref().and_then(non_empty_str);
+    let root_api_key = match prompt_text(
+        ui,
+        section_user_management(),
+        copy(Language::current(), "Root API key", "Root API Key"),
+        current_root_api_key,
+        current_root_api_key.map(|_| InputValueLabel::Current),
+        false,
+        true,
+        &root_api_key_helper_lines(&config.url),
+    )? {
+        PromptResult::Value(value) => value,
+        PromptResult::Back => return Ok(false),
+        PromptResult::Quit => {
+            print_cancelled(ui)?;
+            return Ok(true);
+        }
+    };
+    config.root_api_key = Some(root_api_key.clone());
+
+    let mut config_name = config_name;
+    run_user_management_menu(store, ui, &mut config_name, &mut config, &root_api_key).await
+}
+
+struct UserManagementContext {
+    config_name: Option<String>,
+    config: Config,
+}
+
+fn user_management_config_context(store: &ConfigStore) -> Result<Option<UserManagementContext>> {
+    let configs = store.list_configs()?;
+    if let Some(index) = active_config_index(&configs) {
+        let entry = &configs[index];
+        let config_name = if is_legacy_user_management_config_name(&entry.name) {
+            None
+        } else {
+            Some(entry.name.clone())
+        };
+        return Ok(Some(UserManagementContext {
+            config_name,
+            config: entry.config.clone(),
+        }));
+    }
+
+    if let Some(config) = store.load_active()? {
+        return Ok(Some(UserManagementContext {
+            config_name: None,
+            config,
+        }));
+    }
+
+    Ok(None)
+}
+
+fn prompt_user_management_config_name(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    current_name: Option<&str>,
+    config: &Config,
+) -> Result<PromptResult<String>> {
+    let default_name = match current_name {
+        Some(name) => name.to_string(),
+        None => allocate_config_name(store, ConfigKind::from_config(config))?,
+    };
+    let labels = user_management_config_name_choice_labels(current_name, &default_name);
+    match prompt_select(
+        ui,
+        section_user_management(),
+        copy(
+            Language::current(),
+            "Save managed config name",
+            "保存管理配置名称",
+        ),
+        &labels,
+        0,
+        &user_management_config_name_helper_lines(current_name),
+    )? {
+        PromptResult::Value(0) => prompt_unique_config_name(
+            ui,
+            section_user_management(),
+            store,
+            &default_name,
+            current_name,
+        ),
+        PromptResult::Value(1) => Ok(PromptResult::Value(default_name)),
+        PromptResult::Value(_) | PromptResult::Back => Ok(PromptResult::Back),
+        PromptResult::Quit => Ok(PromptResult::Quit),
+    }
+}
+
+fn ensure_add_config_save_name(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    name: &mut Option<String>,
+    generated_name: &str,
+) -> Result<PromptResult<String>> {
+    if let Some(name) = name.as_deref() {
+        return Ok(PromptResult::Value(name.to_string()));
+    }
+
+    match prompt_custom_or_generated_config_name(
+        store,
+        ui,
+        section_add(),
+        copy(
+            Language::current(),
+            "Save local config name",
+            "保存本地配置名称",
+        ),
+        generated_name,
+        &add_generated_config_name_helper_lines(),
+    )? {
+        PromptResult::Value(value) => {
+            *name = Some(value.clone());
+            Ok(PromptResult::Value(value))
+        }
+        PromptResult::Back => Ok(PromptResult::Back),
+        PromptResult::Quit => Ok(PromptResult::Quit),
+    }
+}
+
+fn prompt_custom_or_generated_config_name(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    section: &str,
+    prompt: &str,
+    generated_name: &str,
+    helper_lines: &[String],
+) -> Result<PromptResult<String>> {
+    let labels = local_config_name_choice_labels(generated_name);
+    match prompt_select(ui, section, prompt, &labels, 0, helper_lines)? {
+        PromptResult::Value(0) => {
+            prompt_unique_config_name(ui, section, store, generated_name, None)
+        }
+        PromptResult::Value(1) => Ok(PromptResult::Value(generated_name.to_string())),
+        PromptResult::Value(_) | PromptResult::Back => Ok(PromptResult::Back),
+        PromptResult::Quit => Ok(PromptResult::Quit),
+    }
+}
+
+fn prompt_unique_config_name(
+    ui: &mut LiveRegion,
+    section: &str,
+    store: &ConfigStore,
+    default: &str,
+    current_name: Option<&str>,
+) -> Result<PromptResult<String>> {
+    let mut error: Option<String> = None;
+    loop {
+        let mut helper_lines = unique_config_name_helper_lines();
+        if let Some(value) = error.as_ref() {
+            helper_lines.push(theme::error(value).to_string());
+        }
+        match prompt_text(
+            ui,
+            section,
+            copy(Language::current(), "Saved config name", "保存配置名称"),
+            Some(default),
+            Some(InputValueLabel::Default),
+            false,
+            false,
+            &helper_lines,
+        )? {
+            PromptResult::Value(value) => match match current_name {
+                Some(current_name) => validate_config_name_change(store, current_name, &value),
+                None => validate_new_config_name(store, &value),
+            } {
+                Ok(()) => return Ok(PromptResult::Value(value)),
+                Err(next_error) => error = Some(prompt_validation_error(next_error)),
+            },
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        }
+    }
+}
+
+pub(crate) fn validate_new_config_name(store: &ConfigStore, name: &str) -> Result<()> {
+    validate_config_name(name)?;
+    if is_legacy_user_management_config_name(name) {
+        return Err(Error::Config(reserved_user_management_config_name_error(
+            name,
+        )));
+    }
+    if config_name_exists(store, name)? {
+        return Err(Error::Config(config_name_exists_error(name)));
+    }
+    Ok(())
+}
+
+fn validate_config_name_change(
+    store: &ConfigStore,
+    original_name: &str,
+    candidate_name: &str,
+) -> Result<()> {
+    validate_config_name(candidate_name)?;
+    if candidate_name == original_name {
+        return Ok(());
+    }
+    validate_new_config_name(store, candidate_name)
+}
+
+fn config_name_exists(store: &ConfigStore, name: &str) -> Result<bool> {
+    let path = store.saved_config_path(name)?;
+    path.try_exists()
+        .map_err(|error| Error::Config(format!("Failed to inspect config '{name}': {error}")))
+}
+
+fn prompt_validation_error(error: Error) -> String {
+    match error {
+        Error::Config(message) => message,
+        other => other.to_string(),
+    }
+}
+
+fn prompt_user_management_server_url(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+) -> Result<PromptResult<UserManagementContext>> {
+    let default = current_server_url_default(store)?;
+    let mut error: Option<String> = None;
+    loop {
+        let mut helper_lines = user_management_server_url_helper_lines();
+        if let Some(value) = error.as_ref() {
+            helper_lines.push(theme::error(value).to_string());
+        }
+        match prompt_text(
+            ui,
+            section_user_management(),
+            copy(Language::current(), "Server URL", "服务器 URL"),
+            Some(&default),
+            Some(InputValueLabel::Default),
+            false,
+            false,
+            &helper_lines,
+        )? {
+            PromptResult::Value(value) => match user_management_config_from_server_url(&value) {
+                Ok(config) => {
+                    return Ok(PromptResult::Value(UserManagementContext {
+                        config_name: None,
+                        config,
+                    }));
+                }
+                Err(next_error) => error = Some(prompt_validation_error(next_error)),
+            },
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        }
+    }
+}
+
+fn user_management_config_from_server_url(value: &str) -> Result<Config> {
+    let url = normalize_custom_url(value);
+    if url.trim().is_empty() {
+        return Err(Error::Config("Server URL cannot be empty.".to_string()));
+    }
+    Ok(Config {
+        url: url.trim_end_matches('/').to_string(),
+        ..Config::default()
+    })
+}
+
+async fn run_user_management_menu(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    config_name: &mut Option<String>,
+    config: &mut Config,
+    root_api_key: &str,
+) -> Result<bool> {
+    let mut notice: Option<String> = None;
+
+    loop {
+        let client = root_admin_client(config, root_api_key);
+        ui.render(&status_live_lines(
+            section_user_management(),
+            copy(
+                Language::current(),
+                "Loading accounts...",
+                "正在加载账户...",
+            ),
+        ))?;
+        let accounts = list_root_accounts(&client).await?;
+
+        let mut labels = account_tree_labels(&accounts);
+        labels.push(add_account_label());
+        labels.push(back_label());
+        let helper_lines =
+            user_management_menu_helper_lines(config_name.as_deref(), config, notice.as_deref());
+        notice = None;
+
+        let account_index = match prompt_select(
+            ui,
+            section_user_management(),
+            copy(
+                Language::current(),
+                "Select account or action",
+                "选择账户或操作",
+            ),
+            &labels,
+            0,
+            &helper_lines,
+        )? {
+            PromptResult::Value(index) => index,
+            PromptResult::Back => return Ok(false),
+            PromptResult::Quit => {
+                print_cancelled(ui)?;
+                return Ok(true);
+            }
+        };
+
+        if account_index == accounts.len() {
+            match create_account_and_user(
+                ui,
+                section_user_management(),
+                config,
+                root_api_key,
+                &client,
+            )
+            .await?
+            {
+                PromptResult::Value(updated) => {
+                    notice = created_identity_notice(&updated);
+                }
+                PromptResult::Back => continue,
+                PromptResult::Quit => {
+                    print_cancelled(ui)?;
+                    return Ok(true);
+                }
+            }
+            continue;
+        }
+
+        if account_index == accounts.len() + 1 {
+            return Ok(false);
+        }
+
+        if run_account_management_menu(
+            store,
+            ui,
+            config_name,
+            config,
+            root_api_key,
+            &accounts[account_index],
+            &mut notice,
+        )
+        .await?
+        {
+            return Ok(true);
+        }
+    }
+}
+
+async fn run_account_management_menu(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    config_name: &mut Option<String>,
+    config: &mut Config,
+    root_api_key: &str,
+    account: &RootAccountSummary,
+    account_list_notice: &mut Option<String>,
+) -> Result<bool> {
+    let mut notice: Option<String> = None;
+
+    loop {
+        let client = root_admin_client(config, root_api_key);
+        ui.render(&status_live_lines(
+            section_user_management(),
+            copy(Language::current(), "Loading users...", "正在加载用户..."),
+        ))?;
+        let users = list_root_users(&client, &account.account_id).await?;
+
+        let mut labels = user_tree_labels(&account.account_id, &users);
+        labels.push(add_user_label(&account.account_id));
+        labels.push(delete_account_label(&account.account_id));
+        labels.push(back_label());
+        let helper_lines = account_management_menu_helper_lines(
+            config_name.as_deref(),
+            config,
+            &account.account_id,
+            notice.as_deref(),
+        );
+        notice = None;
+
+        let selected = match prompt_select(
+            ui,
+            section_user_management(),
+            &manage_account_prompt(&account.account_id),
+            &labels,
+            0,
+            &helper_lines,
+        )? {
+            PromptResult::Value(index) => index,
+            PromptResult::Back => return Ok(false),
+            PromptResult::Quit => {
+                print_cancelled(ui)?;
+                return Ok(true);
+            }
+        };
+
+        if selected < users.len() {
+            if run_user_action_menu(
+                store,
+                ui,
+                config_name,
+                config,
+                root_api_key,
+                &account.account_id,
+                &users[selected],
+                &mut notice,
+            )
+            .await?
+            {
+                return Ok(true);
+            }
+            continue;
+        }
+
+        let add_user_index = users.len();
+        let delete_account_index = users.len() + 1;
+        let back_index = users.len() + 2;
+
+        if selected == add_user_index {
+            match create_user_in_account(
+                ui,
+                section_user_management(),
+                config,
+                root_api_key,
+                &client,
+                &account.account_id,
+                &users,
+            )
+            .await?
+            {
+                PromptResult::Value(updated) => {
+                    notice = created_identity_notice(&updated);
+                }
+                PromptResult::Back => continue,
+                PromptResult::Quit => {
+                    print_cancelled(ui)?;
+                    return Ok(true);
+                }
+            }
+            continue;
+        }
+
+        if selected == delete_account_index {
+            match confirm(
+                ui,
+                section_user_management(),
+                &delete_account_prompt(&account.account_id),
+                false,
+            )? {
+                PromptResult::Value(true) => {
+                    ui.render(&status_live_lines(
+                        section_user_management(),
+                        copy(
+                            Language::current(),
+                            "Deleting account...",
+                            "正在删除账户...",
+                        ),
+                    ))?;
+                    delete_root_account(&client, &account.account_id).await?;
+                    if clear_config_account_selection(config, root_api_key, &account.account_id) {
+                        save_user_management_local_config(store, config_name.as_deref(), config)?;
+                    }
+                    *account_list_notice = Some(deleted_account_notice(&account.account_id));
+                    return Ok(false);
+                }
+                PromptResult::Value(false) | PromptResult::Back => continue,
+                PromptResult::Quit => {
+                    print_cancelled(ui)?;
+                    return Ok(true);
+                }
+            }
+        }
+
+        if selected == back_index {
+            return Ok(false);
+        }
+    }
+}
+
+async fn run_user_action_menu(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    config_name: &mut Option<String>,
+    config: &mut Config,
+    root_api_key: &str,
+    account_id: &str,
+    user: &RootUserSummary,
+    account_notice: &mut Option<String>,
+) -> Result<bool> {
+    #[derive(Clone, Copy)]
+    enum UserAction {
+        UseExisting,
+        RegenerateAndUse,
+        Delete,
+        Back,
+    }
+
+    loop {
+        let mut actions = Vec::new();
+        let mut labels = Vec::new();
+        if user.api_key.as_deref().and_then(non_empty_string).is_some() {
+            actions.push(UserAction::UseExisting);
+            labels.push(use_user_label());
+        }
+        actions.push(UserAction::RegenerateAndUse);
+        labels.push(regenerate_and_use_user_label());
+        actions.push(UserAction::Delete);
+        labels.push(delete_user_label(account_id, &user.user_id));
+        actions.push(UserAction::Back);
+        labels.push(back_label());
+
+        let helper_lines =
+            user_action_menu_helper_lines(config_name.as_deref(), config, account_id, user);
+        let selected = match prompt_select(
+            ui,
+            section_user_management(),
+            &manage_user_prompt(account_id, &user.user_id),
+            &labels,
+            0,
+            &helper_lines,
+        )? {
+            PromptResult::Value(index) => actions[index],
+            PromptResult::Back => return Ok(false),
+            PromptResult::Quit => {
+                print_cancelled(ui)?;
+                return Ok(true);
+            }
+        };
+
+        let (user_key, save_action) = match selected {
+            UserAction::UseExisting => (
+                user.api_key
+                    .as_deref()
+                    .and_then(non_empty_string)
+                    .ok_or_else(|| {
+                        Error::Config(
+                            "Server did not return a user API key for the selected user."
+                                .to_string(),
+                        )
+                    })?,
+                UserKeySaveAction::Selected,
+            ),
+            UserAction::RegenerateAndUse => {
+                let client = root_admin_client(config, root_api_key);
+                ui.render(&status_live_lines(
+                    section_user_management(),
+                    copy(
+                        Language::current(),
+                        "Generating user API key...",
+                        "正在生成用户 API Key...",
+                    ),
+                ))?;
+                let response = regenerate_user_key(&client, account_id, &user.user_id).await?;
+                let user_key = user_key_from_response(&response).ok_or_else(|| {
+                    Error::Config(
+                        "Server did not return a user API key for the selected user.".to_string(),
+                    )
+                })?;
+                (user_key, UserKeySaveAction::Regenerated)
+            }
+            UserAction::Delete => match confirm(
+                ui,
+                section_user_management(),
+                &delete_user_prompt(account_id, &user.user_id),
+                false,
+            )? {
+                PromptResult::Value(true) => {
+                    let client = root_admin_client(config, root_api_key);
+                    ui.render(&status_live_lines(
+                        section_user_management(),
+                        copy(Language::current(), "Deleting user...", "正在删除用户..."),
+                    ))?;
+                    delete_root_user(&client, account_id, &user.user_id).await?;
+                    if clear_config_user_selection(config, root_api_key, account_id, &user.user_id)
+                    {
+                        save_user_management_local_config(store, config_name.as_deref(), config)?;
+                    }
+                    *account_notice = Some(deleted_user_notice(account_id, &user.user_id));
+                    return Ok(false);
+                }
+                PromptResult::Value(false) | PromptResult::Back => continue,
+                PromptResult::Quit => {
+                    print_cancelled(ui)?;
+                    return Ok(true);
+                }
+            },
+            UserAction::Back => return Ok(false),
+        };
+
+        let updated =
+            config_with_selected_user(config, root_api_key, account_id, &user.user_id, &user_key);
+        let saved_name = match save_selected_user_to_config(
+            store,
+            ui,
+            section_user_management(),
+            config_name,
+            &updated,
+        )
+        .await?
+        {
+            PromptResult::Value(name) => name,
+            PromptResult::Back => continue,
+            PromptResult::Quit => {
+                print_cancelled(ui)?;
+                return Ok(true);
+            }
+        };
+        *account_notice = selected_user_notice(&saved_name, &updated, save_action);
+        *config = updated;
+        return Ok(false);
+    }
+}
+
+async fn save_selected_user_to_config(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    section: &str,
+    config_name: &mut Option<String>,
+    config: &Config,
+) -> Result<PromptResult<String>> {
+    ui.render(&status_live_lines(
+        section,
+        copy(
+            Language::current(),
+            "Validating selected user...",
+            "正在验证所选用户...",
+        ),
+    ))?;
+    validate_config(config).await?;
+    let config_name = match ensure_user_management_config_name(store, ui, config_name, config)? {
+        PromptResult::Value(name) => name,
+        PromptResult::Back => return Ok(PromptResult::Back),
+        PromptResult::Quit => return Ok(PromptResult::Quit),
+    };
+    ui.render(&status_live_lines(
+        section,
+        copy(
+            Language::current(),
+            "Saving user selection...",
+            "正在保存用户选择...",
+        ),
+    ))?;
+    store.save_and_activate(&config_name, config)?;
+    Ok(PromptResult::Value(config_name))
+}
+
+fn ensure_user_management_config_name(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    config_name: &mut Option<String>,
+    config: &Config,
+) -> Result<PromptResult<String>> {
+    match prompt_user_management_config_name(store, ui, config_name.as_deref(), config)? {
+        PromptResult::Value(name) => {
+            *config_name = Some(name.clone());
+            Ok(PromptResult::Value(name))
+        }
+        PromptResult::Back => Ok(PromptResult::Back),
+        PromptResult::Quit => Ok(PromptResult::Quit),
+    }
+}
+
+fn save_user_management_local_config(
+    store: &ConfigStore,
+    config_name: Option<&str>,
+    config: &Config,
+) -> Result<()> {
+    if let Some(name) = config_name {
+        store.save_and_activate(name, config)
+    } else {
+        store.save_active_config(config)
+    }
+}
+
+fn clear_config_account_selection(
+    config: &mut Config,
+    root_api_key: &str,
+    account_id: &str,
+) -> bool {
+    if config.account.as_deref() != Some(account_id) {
+        return false;
+    }
+    clear_config_user_fields(config, root_api_key);
+    true
+}
+
+fn clear_config_user_selection(
+    config: &mut Config,
+    root_api_key: &str,
+    account_id: &str,
+    user_id: &str,
+) -> bool {
+    if config.account.as_deref() != Some(account_id) || config.user.as_deref() != Some(user_id) {
+        return false;
+    }
+    clear_config_user_fields(config, root_api_key);
+    true
+}
+
+fn clear_config_user_fields(config: &mut Config, root_api_key: &str) {
+    config.root_api_key = Some(root_api_key.to_string());
+    config.api_key = None;
+    config.account = None;
+    config.user = None;
+}
+
+fn user_management_menu_helper_lines(
+    config_name: Option<&str>,
+    config: &Config,
+    notice: Option<&str>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    push_notice_helper_line(&mut lines, notice);
+    push_config_context_helper_lines(&mut lines, config_name, config);
+    lines.push(
+        theme::muted(copy(
+            Language::current(),
+            "Select an account to manage its users.",
+            "选择账户以管理其用户。",
+        ))
+        .to_string(),
+    );
+    lines
+}
+
+fn account_management_menu_helper_lines(
+    config_name: Option<&str>,
+    config: &Config,
+    account_id: &str,
+    notice: Option<&str>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    push_notice_helper_line(&mut lines, notice);
+    push_config_context_helper_lines(&mut lines, config_name, config);
+    lines.push(format!(
+        "{} {}",
+        theme::muted(copy(Language::current(), "Account:", "账户：")),
+        theme::value(account_id).bold()
+    ));
+    lines
+}
+
+fn user_action_menu_helper_lines(
+    config_name: Option<&str>,
+    config: &Config,
+    account_id: &str,
+    user: &RootUserSummary,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    push_config_context_helper_lines(&mut lines, config_name, config);
+    lines.push(format!(
+        "{} {}",
+        theme::muted(copy(Language::current(), "User:", "用户：")),
+        theme::value(format!("{account_id}/{}", user.user_id)).bold()
+    ));
+    if let Some(prefix) = user.key_prefix.as_deref().and_then(non_empty_string) {
+        lines.push(format!(
+            "{} {}",
+            theme::muted(copy(
+                Language::current(),
+                "Current key prefix:",
+                "当前 Key 前缀："
+            )),
+            theme::value(prefix).bold()
+        ));
+    }
+    lines.push(
+        theme::warning(copy(
+            Language::current(),
+            "Regenerating a user key invalidates the old key immediately.",
+            "重新生成用户 Key 会立即使旧 Key 失效。",
+        ))
+        .to_string(),
+    );
+    lines
+}
+
+fn push_notice_helper_line(lines: &mut Vec<String>, notice: Option<&str>) {
+    if let Some(notice) = notice {
+        lines.push(format!(
+            "{} {}",
+            theme::success("✓"),
+            theme::success(notice).bold()
+        ));
+    }
+}
+
+fn push_config_context_helper_lines(
+    lines: &mut Vec<String>,
+    config_name: Option<&str>,
+    config: &Config,
+) {
+    let config_name = config_name
+        .map(ToString::to_string)
+        .unwrap_or_else(|| unnamed_active_config_label().to_string());
+    lines.push(format!(
+        "{} {}",
+        theme::muted(copy(Language::current(), "Config:", "配置：")),
+        theme::value(config_name).bold()
+    ));
+    lines.push(format!(
+        "{} {}",
+        theme::muted(copy(Language::current(), "Server:", "服务端：")),
+        theme::value(config.url.as_str()).bold()
+    ));
+    if let (Some(account), Some(user)) = (
+        config.account.as_deref().and_then(non_empty_str),
+        config.user.as_deref().and_then(non_empty_str),
+    ) {
+        lines.push(format!(
+            "{} {}",
+            theme::muted(copy(Language::current(), "Selected user:", "已选用户：")),
+            theme::value(format!("{account}/{user}")).bold()
+        ));
+    }
+}
+
+fn unnamed_active_config_label() -> &'static str {
+    copy(
+        Language::current(),
+        "unnamed active config",
+        "未命名当前配置",
+    )
+}
+
+fn created_identity_notice(config: &Config) -> Option<String> {
+    let account = config.account.as_deref().and_then(non_empty_str)?;
+    let user = config.user.as_deref().and_then(non_empty_str)?;
+    Some(match Language::current() {
+        Language::En => {
+            format!("Created {account}/{user}. Choose that user and use it to save CLI config.")
+        }
+        Language::ZhCn => {
+            format!("已创建 {account}/{user}。选择该用户并使用它，才会保存 CLI 配置。")
+        }
+    })
+}
+
+#[derive(Clone, Copy)]
+enum UserKeySaveAction {
+    Selected,
+    Regenerated,
+}
+
+fn selected_user_notice(
+    config_name: &str,
+    config: &Config,
+    action: UserKeySaveAction,
+) -> Option<String> {
+    let account = config.account.as_deref().and_then(non_empty_str)?;
+    let user = config.user.as_deref().and_then(non_empty_str)?;
+    let target = user_management_save_target(config_name);
+    Some(match (Language::current(), action) {
+        (Language::En, UserKeySaveAction::Selected) => {
+            format!("Selected {account}/{user}; saved user key to {target}.")
+        }
+        (Language::En, UserKeySaveAction::Regenerated) => {
+            format!("Regenerated key for {account}/{user}; saved new key to {target}.")
+        }
+        (Language::ZhCn, UserKeySaveAction::Selected) => {
+            format!("已选择 {account}/{user}；用户 Key 已保存到 {target}。")
+        }
+        (Language::ZhCn, UserKeySaveAction::Regenerated) => {
+            format!("已为 {account}/{user} 重新生成 Key；新 Key 已保存到 {target}。")
+        }
+    })
+}
+
+fn user_management_save_target(config_name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("ovcli.conf and ovcli.conf.{config_name}"),
+        Language::ZhCn => format!("ovcli.conf 和 ovcli.conf.{config_name}"),
+    }
+}
+
+fn deleted_account_notice(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Deleted account {account_id}/."),
+        Language::ZhCn => format!("已删除账户 {account_id}/。"),
+    }
+}
+
+fn deleted_user_notice(account_id: &str, user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Deleted user {account_id}/{user_id}."),
+        Language::ZhCn => format!("已删除用户 {account_id}/{user_id}。"),
+    }
+}
+
+fn add_account_label() -> String {
+    match Language::current() {
+        Language::En => "+ Add account",
+        Language::ZhCn => "+ 添加账户",
+    }
+    .to_string()
+}
+
+fn add_user_label(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("+ Add user in {account_id}/"),
+        Language::ZhCn => format!("+ 在 {account_id}/ 下添加用户"),
+    }
+}
+
+fn local_config_name_choice_labels(generated_name: &str) -> Vec<String> {
+    match Language::current() {
+        Language::En => vec![
+            "Set custom local name".to_string(),
+            format!("Use generated name ({generated_name})"),
+            "Back".to_string(),
+        ],
+        Language::ZhCn => vec![
+            "设置自定义本地名称".to_string(),
+            format!("使用生成名称（{generated_name}）"),
+            "返回".to_string(),
+        ],
+    }
+}
+
+fn user_management_config_name_choice_labels(
+    current_name: Option<&str>,
+    default_name: &str,
+) -> Vec<String> {
+    if let Some(name) = current_name {
+        return match Language::current() {
+            Language::En => vec![
+                "Set custom local name".to_string(),
+                format!("Use current name ({name})"),
+                "Back".to_string(),
+            ],
+            Language::ZhCn => vec![
+                "设置自定义本地名称".to_string(),
+                format!("使用当前名称（{name}）"),
+                "返回".to_string(),
+            ],
+        };
+    }
+    local_config_name_choice_labels(default_name)
+}
+
+fn user_management_config_name_helper_lines(current_name: Option<&str>) -> Vec<String> {
+    let mut lines = Vec::new();
+    if current_name.is_none() {
+        lines.push(
+            theme::warning(copy(
+                Language::current(),
+                "The active config needs a saved profile name.",
+                "当前配置需要一个保存配置名称。",
+            ))
+            .to_string(),
+        );
+    }
+    lines.push(
+        theme::muted(copy(
+            Language::current(),
+            "User Management saves both ovcli.conf and ovcli.conf.<name>; 'active' is reserved.",
+            "用户管理会同时保存 ovcli.conf 和 ovcli.conf.<name>；'active' 已保留。",
+        ))
+        .to_string(),
+    );
+    lines
+}
+
+fn unique_config_name_helper_lines() -> Vec<String> {
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "Press Enter to use the default name, or type a custom one.",
+            "按 Enter 使用默认名称，或输入自定义名称。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn add_generated_config_name_helper_lines() -> Vec<String> {
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "Choose how to name this local CLI config.",
+            "选择这个本地 CLI 配置的名称。",
+        ))
+        .to_string(),
+        theme::muted(copy(
+            Language::current(),
+            "Saved as ovcli.conf.<name>; the active config is ovcli.conf.",
+            "保存为 ovcli.conf.<name>；当前配置为 ovcli.conf。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn config_name_exists_error(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Config '{name}' already exists. Enter another name."),
+        Language::ZhCn => format!("配置 '{name}' 已存在。请输入另一个名称。"),
+    }
+}
+
+fn reserved_user_management_config_name_error(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Config name '{name}' is reserved. Enter another name."),
+        Language::ZhCn => format!("配置名称 '{name}' 已保留。请输入另一个名称。"),
+    }
+}
+
+fn is_legacy_user_management_config_name(name: &str) -> bool {
+    name == "active"
+}
+
+fn delete_account_label(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("- Delete {account_id}/"),
+        Language::ZhCn => format!("- 删除 {account_id}/"),
+    }
+}
+
+fn delete_user_label(account_id: &str, user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("- Delete {account_id}/{user_id}"),
+        Language::ZhCn => format!("- 删除 {account_id}/{user_id}"),
+    }
+}
+
+fn use_user_label() -> String {
+    match Language::current() {
+        Language::En => "Use this user",
+        Language::ZhCn => "使用该用户",
+    }
+    .to_string()
+}
+
+fn regenerate_and_use_user_label() -> String {
+    match Language::current() {
+        Language::En => "Regenerate key and use this user",
+        Language::ZhCn => "重新生成 Key 并使用该用户",
+    }
+    .to_string()
+}
+
+fn back_label() -> String {
+    match Language::current() {
+        Language::En => "Back",
+        Language::ZhCn => "返回",
+    }
+    .to_string()
+}
+
+fn manage_account_prompt(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Manage {account_id}/"),
+        Language::ZhCn => format!("管理 {account_id}/"),
+    }
+}
+
+fn manage_user_prompt(account_id: &str, user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Manage {account_id}/{user_id}"),
+        Language::ZhCn => format!("管理 {account_id}/{user_id}"),
+    }
+}
+
+fn delete_account_prompt(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Delete account {account_id}/ and all of its users?"),
+        Language::ZhCn => format!("删除账户 {account_id}/ 及其所有用户？"),
+    }
+}
+
+fn delete_user_prompt(account_id: &str, user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Delete user {account_id}/{user_id}?"),
+        Language::ZhCn => format!("删除用户 {account_id}/{user_id}？"),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RootAccountSummary {
+    account_id: String,
+    user_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RootUserSummary {
+    user_id: String,
+    role: String,
+    api_key: Option<String>,
+    key_prefix: Option<String>,
+}
+
+async fn select_user_with_root_key(
+    ui: &mut LiveRegion,
+    section: &str,
+    config: &Config,
+    root_api_key: &str,
+) -> Result<PromptResult<Config>> {
+    let client = root_admin_client(config, root_api_key);
+
+    loop {
+        ui.render(&status_live_lines(
+            section,
+            copy(
+                Language::current(),
+                "Loading accounts...",
+                "正在加载账户...",
+            ),
+        ))?;
+        let accounts = list_root_accounts(&client).await?;
+
+        if accounts.is_empty() {
+            match confirm(
+                ui,
+                section,
+                copy(
+                    Language::current(),
+                    "No accounts found. Create an account and first user?",
+                    "未找到任何账户。是否创建账户和首个用户？",
+                ),
+                true,
+            )? {
+                PromptResult::Value(true) => {
+                    return create_account_and_user(ui, section, config, root_api_key, &client)
+                        .await;
+                }
+                PromptResult::Value(false) | PromptResult::Back => return Ok(PromptResult::Back),
+                PromptResult::Quit => return Ok(PromptResult::Quit),
+            }
+        }
+
+        let labels = root_key_account_selection_labels(&accounts);
+        let account_index = match prompt_select(
+            ui,
+            section,
+            copy(Language::current(), "Choose account", "选择账户"),
+            &labels,
+            0,
+            &account_select_helper_lines(),
+        )? {
+            PromptResult::Value(index) => index,
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        };
+
+        if account_index == accounts.len() {
+            return create_account_and_user(ui, section, config, root_api_key, &client).await;
+        }
+
+        let account = accounts[account_index].clone();
+        match select_user_in_account(ui, section, config, root_api_key, &client, &account).await? {
+            PromptResult::Value(config) => return Ok(PromptResult::Value(config)),
+            PromptResult::Back => continue,
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        }
+    }
+}
+
+async fn select_user_in_account(
+    ui: &mut LiveRegion,
+    section: &str,
+    config: &Config,
+    root_api_key: &str,
+    client: &BaseClient,
+    account: &RootAccountSummary,
+) -> Result<PromptResult<Config>> {
+    loop {
+        ui.render(&status_live_lines(
+            section,
+            copy(Language::current(), "Loading users...", "正在加载用户..."),
+        ))?;
+        let users = list_root_users(client, &account.account_id).await?;
+
+        if users.is_empty() {
+            match confirm(
+                ui,
+                section,
+                &empty_account_create_user_prompt(&account.account_id),
+                true,
+            )? {
+                PromptResult::Value(true) => {
+                    return create_user_in_account(
+                        ui,
+                        section,
+                        config,
+                        root_api_key,
+                        client,
+                        &account.account_id,
+                        &users,
+                    )
+                    .await;
+                }
+                PromptResult::Value(false) | PromptResult::Back => return Ok(PromptResult::Back),
+                PromptResult::Quit => return Ok(PromptResult::Quit),
+            }
+        }
+
+        let labels = root_key_user_selection_labels(&account.account_id, &users);
+        let user_index = match prompt_select(
+            ui,
+            section,
+            &choose_user_prompt(&account.account_id),
+            &labels,
+            0,
+            &user_select_helper_lines(),
+        )? {
+            PromptResult::Value(index) => index,
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        };
+
+        if user_index == users.len() {
+            return create_user_in_account(
+                ui,
+                section,
+                config,
+                root_api_key,
+                client,
+                &account.account_id,
+                &users,
+            )
+            .await;
+        }
+
+        let user = users[user_index].clone();
+        let user_key = match user.api_key.as_deref().and_then(non_empty_string) {
+            Some(key) => key,
+            None => {
+                let mut helper_lines = regenerate_user_key_helper_lines();
+                if let Some(prefix) = user.key_prefix.as_deref().and_then(non_empty_string) {
+                    helper_lines.push(format!(
+                        "{} {}",
+                        theme::muted(copy(
+                            Language::current(),
+                            "Current key prefix:",
+                            "当前 Key 前缀："
+                        )),
+                        theme::value(prefix).bold()
+                    ));
+                }
+                match prompt_select(
+                    ui,
+                    section,
+                    &regenerate_user_key_prompt(&account.account_id, &user.user_id),
+                    &regenerate_user_key_labels(),
+                    1,
+                    &helper_lines,
+                )? {
+                    PromptResult::Value(0) => {
+                        ui.render(&status_live_lines(
+                            section,
+                            copy(
+                                Language::current(),
+                                "Generating user API key...",
+                                "正在生成用户 API Key...",
+                            ),
+                        ))?;
+                        let response =
+                            regenerate_user_key(client, &account.account_id, &user.user_id).await?;
+                        user_key_from_response(&response).ok_or_else(|| {
+                            Error::Config(
+                                "Server did not return a user API key for the selected user."
+                                    .to_string(),
+                            )
+                        })?
+                    }
+                    PromptResult::Value(_) | PromptResult::Back => continue,
+                    PromptResult::Quit => return Ok(PromptResult::Quit),
+                }
+            }
+        };
+
+        return Ok(PromptResult::Value(config_with_selected_user(
+            config,
+            root_api_key,
+            &account.account_id,
+            &user.user_id,
+            &user_key,
+        )));
+    }
+}
+
+async fn create_account_and_user(
+    ui: &mut LiveRegion,
+    section: &str,
+    config: &Config,
+    root_api_key: &str,
+    client: &BaseClient,
+) -> Result<PromptResult<Config>> {
+    let account_id = match prompt_identity_value(
+        ui,
+        section,
+        copy(Language::current(), "New account ID", "新账户 ID"),
+        IdentityField::Account,
+        IdentityMode::RootKey,
+    )? {
+        PromptResult::Value(value) => value,
+        PromptResult::Back => return Ok(PromptResult::Back),
+        PromptResult::Quit => return Ok(PromptResult::Quit),
+    };
+    let user_id = match prompt_identity_value(
+        ui,
+        section,
+        copy(
+            Language::current(),
+            "First admin user ID",
+            "首个管理员用户 ID",
+        ),
+        IdentityField::User,
+        IdentityMode::RootKey,
+    )? {
+        PromptResult::Value(value) => value,
+        PromptResult::Back => return Ok(PromptResult::Back),
+        PromptResult::Quit => return Ok(PromptResult::Quit),
+    };
+
+    ui.render(&status_live_lines(
+        section,
+        copy(
+            Language::current(),
+            "Creating account and user...",
+            "正在创建账户和用户...",
+        ),
+    ))?;
+    let response = create_root_account(client, &account_id, &user_id).await?;
+    let user_key = user_key_from_response(&response).ok_or_else(|| {
+        Error::Config("Server did not return a user API key for the new account.".to_string())
+    })?;
+    Ok(PromptResult::Value(config_with_selected_user(
+        config,
+        root_api_key,
+        &account_id,
+        &user_id,
+        &user_key,
+    )))
+}
+
+async fn create_user_in_account(
+    ui: &mut LiveRegion,
+    section: &str,
+    config: &Config,
+    root_api_key: &str,
+    client: &BaseClient,
+    account_id: &str,
+    existing_users: &[RootUserSummary],
+) -> Result<PromptResult<Config>> {
+    let user_id = match prompt_new_user_id(
+        ui,
+        section,
+        copy(Language::current(), "New user ID", "新用户 ID"),
+        existing_users,
+    )? {
+        PromptResult::Value(value) => value,
+        PromptResult::Back => return Ok(PromptResult::Back),
+        PromptResult::Quit => return Ok(PromptResult::Quit),
+    };
+
+    ui.render(&status_live_lines(
+        section,
+        copy(Language::current(), "Creating user...", "正在创建用户..."),
+    ))?;
+    let response = create_root_user(client, account_id, &user_id).await?;
+    let user_key = user_key_from_response(&response).ok_or_else(|| {
+        Error::Config("Server did not return a user API key for the new user.".to_string())
+    })?;
+    Ok(PromptResult::Value(config_with_selected_user(
+        config,
+        root_api_key,
+        account_id,
+        &user_id,
+        &user_key,
+    )))
+}
+
+fn root_admin_client(config: &Config, root_api_key: &str) -> BaseClient {
+    BaseClient::new(
+        &config.url,
+        Some(root_api_key.to_string()),
+        None,
+        None,
+        None,
+        config.timeout.clamp(1.0, 60.0),
+        config.profile,
+        config.extra_headers.clone(),
+    )
+}
+
+async fn list_root_accounts(client: &BaseClient) -> Result<Vec<RootAccountSummary>> {
+    let value: Value = client.get("/api/v1/admin/accounts", &[]).await?;
+    Ok(root_accounts_from_value(&value))
+}
+
+async fn list_root_users(client: &BaseClient, account_id: &str) -> Result<Vec<RootUserSummary>> {
+    let path = format!("/api/v1/admin/accounts/{account_id}/users");
+    let value: Value = client
+        .get(&path, &[("limit".to_string(), "1000".to_string())])
+        .await?;
+    Ok(root_users_from_value(&value))
+}
+
+async fn create_root_account(
+    client: &BaseClient,
+    account_id: &str,
+    admin_user_id: &str,
+) -> Result<Value> {
+    client
+        .post(
+            "/api/v1/admin/accounts",
+            &serde_json::json!({
+                "account_id": account_id,
+                "admin_user_id": admin_user_id,
+            }),
+        )
+        .await
+}
+
+async fn create_root_user(client: &BaseClient, account_id: &str, user_id: &str) -> Result<Value> {
+    let path = format!("/api/v1/admin/accounts/{account_id}/users");
+    client
+        .post(
+            &path,
+            &serde_json::json!({
+                "user_id": user_id,
+                "role": "user",
+            }),
+        )
+        .await
+}
+
+async fn delete_root_account(client: &BaseClient, account_id: &str) -> Result<()> {
+    let path = format!("/api/v1/admin/accounts/{account_id}");
+    let _: Value = client.delete(&path, &[]).await?;
+    Ok(())
+}
+
+async fn delete_root_user(client: &BaseClient, account_id: &str, user_id: &str) -> Result<()> {
+    let path = format!("/api/v1/admin/accounts/{account_id}/users/{user_id}");
+    let _: Value = client.delete(&path, &[]).await?;
+    Ok(())
+}
+
+async fn regenerate_user_key(
+    client: &BaseClient,
+    account_id: &str,
+    user_id: &str,
+) -> Result<Value> {
+    let path = format!("/api/v1/admin/accounts/{account_id}/users/{user_id}/key");
+    client.post(&path, &serde_json::json!({})).await
+}
+
+fn root_accounts_from_value(value: &Value) -> Vec<RootAccountSummary> {
+    let mut accounts = value
+        .as_array()
+        .into_iter()
+        .flat_map(|items| items.iter())
+        .filter_map(|item| {
+            let account_id = item.get("account_id")?.as_str()?.trim();
+            if account_id.is_empty() {
+                return None;
+            }
+            Some(RootAccountSummary {
+                account_id: account_id.to_string(),
+                user_count: item.get("user_count").and_then(Value::as_u64).unwrap_or(0),
+            })
+        })
+        .collect::<Vec<_>>();
+    accounts.sort_by(|left, right| left.account_id.cmp(&right.account_id));
+    accounts
+}
+
+fn root_users_from_value(value: &Value) -> Vec<RootUserSummary> {
+    let mut users = value
+        .as_array()
+        .into_iter()
+        .flat_map(|items| items.iter())
+        .filter_map(|item| {
+            let user_id = item.get("user_id")?.as_str()?.trim();
+            if user_id.is_empty() {
+                return None;
+            }
+            Some(RootUserSummary {
+                user_id: user_id.to_string(),
+                role: item
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("user")
+                    .to_string(),
+                api_key: item
+                    .get("api_key")
+                    .and_then(Value::as_str)
+                    .and_then(non_empty_string),
+                key_prefix: item
+                    .get("key_prefix")
+                    .and_then(Value::as_str)
+                    .and_then(non_empty_string),
+            })
+        })
+        .collect::<Vec<_>>();
+    users.sort_by(|left, right| left.user_id.cmp(&right.user_id));
+    users
+}
+
+fn user_key_from_response(value: &Value) -> Option<String> {
+    ["user_key", "api_key"]
+        .iter()
+        .find_map(|field| {
+            value
+                .get(field)
+                .and_then(Value::as_str)
+                .and_then(non_empty_string)
+        })
+        .or_else(|| value.get("result").and_then(user_key_from_response))
+}
+
+fn config_with_selected_user(
+    config: &Config,
+    root_api_key: &str,
+    account_id: &str,
+    user_id: &str,
+    user_key: &str,
+) -> Config {
+    let mut updated = config.clone();
+    updated.root_api_key = Some(root_api_key.to_string());
+    updated.api_key = Some(user_key.to_string());
+    updated.account = Some(account_id.to_string());
+    updated.user = Some(user_id.to_string());
+    updated
+}
+
+fn account_tree_labels(accounts: &[RootAccountSummary]) -> Vec<String> {
+    accounts
+        .iter()
+        .map(|account| {
+            format!(
+                "{}/  {}",
+                account.account_id,
+                user_count_label(account.user_count)
+            )
+        })
+        .collect()
+}
+
+fn user_tree_labels(account_id: &str, users: &[RootUserSummary]) -> Vec<String> {
+    users
+        .iter()
+        .map(|user| format!("{account_id}/{}  {}", user.user_id, user.role))
+        .collect()
+}
+
+fn root_key_account_selection_labels(accounts: &[RootAccountSummary]) -> Vec<String> {
+    let mut labels = account_tree_labels(accounts);
+    labels.push(create_account_label());
+    labels
+}
+
+fn root_key_user_selection_labels(account_id: &str, users: &[RootUserSummary]) -> Vec<String> {
+    let mut labels = user_tree_labels(account_id, users);
+    labels.push(create_user_label(account_id));
+    labels
+}
+
+fn user_count_label(count: u64) -> String {
+    match (Language::current(), count) {
+        (Language::En, 1) => "1 user".to_string(),
+        (Language::En, _) => format!("{count} users"),
+        (Language::ZhCn, _) => format!("{count} 个用户"),
+    }
+}
+
+fn create_account_label() -> String {
+    match Language::current() {
+        Language::En => "+ Create new account",
+        Language::ZhCn => "+ 创建新账户",
+    }
+    .to_string()
+}
+
+fn create_user_label(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("+ Create new user in {account_id}/"),
+        Language::ZhCn => format!("+ 在 {account_id}/ 下创建新用户"),
+    }
+}
+
+fn root_api_key_helper_lines(server_url: &str) -> Vec<String> {
+    vec![
+        format!(
+            "{} {}",
+            theme::muted(copy(Language::current(), "Server URL:", "服务器 URL：")),
+            theme::value(server_url).bold()
+        ),
+        theme::muted(copy(
+            Language::current(),
+            "Used only to list or create accounts/users and store a normal user key.",
+            "仅用于列出或创建账户/用户，并保存普通用户 Key。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn user_management_server_url_helper_lines() -> Vec<String> {
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "User Management only needs the server URL and a Root API key.",
+            "用户管理只需要服务器 URL 和 Root API Key。",
+        ))
+        .to_string(),
+        theme::muted(copy(
+            Language::current(),
+            "Press Enter to use the local server default.",
+            "按 Enter 使用本地服务默认地址。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn account_select_helper_lines() -> Vec<String> {
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "Accounts are shown like directories.",
+            "账户以类似目录的方式展示。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn user_select_helper_lines() -> Vec<String> {
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "Pick the user normal commands should run as.",
+            "选择常规命令要使用的用户身份。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn regenerate_user_key_labels() -> [&'static str; 2] {
+    match Language::current() {
+        Language::En => ["Regenerate and use this user", "Back"],
+        Language::ZhCn => ["重新生成并使用该用户", "返回"],
+    }
+}
+
+fn regenerate_user_key_helper_lines() -> Vec<String> {
+    vec![
+        theme::warning(copy(
+            Language::current(),
+            "This server does not expose the existing user key. Regenerating invalidates the old key immediately.",
+            "服务端未返回现有用户 Key。重新生成会立即使旧 Key 失效。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn choose_user_prompt(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Choose user in {account_id}/"),
+        Language::ZhCn => format!("选择 {account_id}/ 下的用户"),
+    }
+}
+
+fn empty_account_create_user_prompt(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("No users in {account_id}/. Create one?"),
+        Language::ZhCn => format!("{account_id}/ 下没有用户。是否创建？"),
+    }
+}
+
+fn regenerate_user_key_prompt(account_id: &str, user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Use {account_id}/{user_id} by generating a new user key?"),
+        Language::ZhCn => format!("为 {account_id}/{user_id} 生成新用户 Key 并使用？"),
+    }
+}
+
 struct ValidatedConfig {
     config: Config,
     api_key_role: Option<ApiKeyRole>,
@@ -3219,6 +5003,7 @@ async fn validate_root_api_key_role(
 }
 
 fn save_config(store: &ConfigStore, name: &str, config: &Config, activate: bool) -> Result<()> {
+    validate_new_config_name(store, name)?;
     if activate {
         store.save_and_activate(name, config)?;
         print_saved(store, name, SaveOutcome::Activated, config)
@@ -3461,6 +5246,7 @@ fn prompt_add_config_name(
     ui: &mut LiveRegion,
     section: &str,
     prompt: &str,
+    store: &ConfigStore,
 ) -> Result<PromptResult<Option<String>>> {
     let mut error: Option<String> = None;
     loop {
@@ -3475,9 +5261,9 @@ fn prompt_add_config_name(
                 if value.is_empty() {
                     return Ok(PromptResult::Value(None));
                 }
-                match validate_config_name(value) {
+                match validate_new_config_name(store, value) {
                     Ok(()) => return Ok(PromptResult::Value(Some(value.to_string()))),
-                    Err(next_error) => error = Some(next_error.to_string()),
+                    Err(next_error) => error = Some(prompt_validation_error(next_error)),
                 }
             }
             PromptResult::Back => return Ok(PromptResult::Back),
@@ -3495,7 +5281,7 @@ pub(crate) fn allocate_config_name(store: &ConfigStore, kind: ConfigKind) -> Res
     for _ in 0..32 {
         let suffix = Uuid::new_v4().simple().to_string();
         let candidate = format!("{prefix}-{}", &suffix[..6]);
-        if !store.saved_config_path(&candidate)?.exists() {
+        if !config_name_exists(store, &candidate)? {
             return Ok(candidate);
         }
     }
@@ -3510,6 +5296,7 @@ fn prompt_config_name(
     section: &str,
     prompt: &str,
     default: Option<&str>,
+    validate: impl Fn(&str) -> Result<()>,
 ) -> Result<PromptResult<String>> {
     let mut error: Option<String> = None;
     loop {
@@ -3527,9 +5314,9 @@ fn prompt_config_name(
             false,
             &helper_lines,
         )? {
-            PromptResult::Value(value) => match validate_config_name(&value) {
+            PromptResult::Value(value) => match validate(&value) {
                 Ok(()) => return Ok(PromptResult::Value(value)),
-                Err(next_error) => error = Some(next_error.to_string()),
+                Err(next_error) => error = Some(prompt_validation_error(next_error)),
             },
             PromptResult::Back => return Ok(PromptResult::Back),
             PromptResult::Quit => return Ok(PromptResult::Quit),
@@ -3568,6 +5355,45 @@ fn prompt_identity_value(
             PromptResult::Back => return Ok(PromptResult::Back),
             PromptResult::Quit => return Ok(PromptResult::Quit),
         }
+    }
+}
+
+fn prompt_new_user_id(
+    ui: &mut LiveRegion,
+    section: &str,
+    prompt: &str,
+    existing_users: &[RootUserSummary],
+) -> Result<PromptResult<String>> {
+    let (_, _, helper_lines) = identity_prompt_parts(IdentityMode::RootKey);
+    let mut error: Option<String> = None;
+    loop {
+        let mut lines = helper_lines.clone();
+        if let Some(value) = error.as_ref() {
+            lines.push(theme::error(value).to_string());
+        }
+        match prompt_text(ui, section, prompt, None, None, false, false, &lines)? {
+            PromptResult::Value(value) => match validate_new_user_id(&value, existing_users) {
+                Ok(()) => return Ok(PromptResult::Value(value)),
+                Err(next_error) => error = Some(next_error.to_string()),
+            },
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        }
+    }
+}
+
+fn validate_new_user_id(value: &str, existing_users: &[RootUserSummary]) -> Result<()> {
+    validate_identity_value(value, IdentityField::User)?;
+    if existing_users.iter().any(|user| user.user_id == value) {
+        return Err(Error::Config(duplicate_user_id_error(value)));
+    }
+    Ok(())
+}
+
+fn duplicate_user_id_error(user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("User '{user_id}' already exists. Enter another user ID."),
+        Language::ZhCn => format!("用户 '{user_id}' 已存在。请输入另一个用户 ID。"),
     }
 }
 
@@ -3619,6 +5445,18 @@ fn config_select_label(entry: &ConfigEntry) -> String {
     } else {
         label
     }
+}
+
+fn active_config_index(configs: &[ConfigEntry]) -> Option<usize> {
+    configs.iter().position(|entry| entry.is_active)
+}
+
+fn current_server_url_default(store: &ConfigStore) -> Result<String> {
+    Ok(store
+        .load_active()?
+        .map(|config| config.url)
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CUSTOM_URL.to_string()))
 }
 
 fn active_badge() -> &'static str {
@@ -4279,6 +6117,24 @@ fn empty_to_none(value: String) -> Option<String> {
     }
 }
 
+fn non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn non_empty_str(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 fn is_blank(value: Option<&str>) -> bool {
     value.is_none_or(|value| value.trim().is_empty())
 }
@@ -4331,27 +6187,35 @@ impl Drop for RawPrompt {
 mod tests {
     use super::{
         COMPACT_STATUS_DETAIL_WIDTH, CustomKeyMode, FULL_STATUS_BOX_MIN_ROWS, IdentityMode,
-        InputValueLabel, LiveRegion, OV_LOGO_LINES, RenderedRegion, Rgb, StatusBoxFrame,
-        StatusBoxMode, StatusBoxRuntime, active_delete_block_helper_lines, active_summary_lines,
-        active_summary_render_parts, add_config_name_label, add_save_action_labels,
-        allocate_config_name, box_content_line, box_footer_line, box_title_line,
-        compact_status_box_width, config_select_label, custom_api_key_helper_lines,
-        custom_api_key_input_helper_lines, custom_key_mode_labels,
-        custom_validation_failure_choices, display_config_home, display_width,
-        edit_api_key_choice_labels, edit_custom_key_action_labels, edit_save_action_labels,
-        erase_sequence_for_char, extract_models_from_status_payload, identity_prompt_parts,
-        input_live_lines, input_prompt_with_value, logo_glass_color_for_theme, main_action_labels,
+        InputValueLabel, LiveRegion, OV_LOGO_LINES, RenderedRegion, Rgb, RootAccountSummary,
+        RootUserSummary, StatusBoxFrame, StatusBoxMode, StatusBoxRuntime, account_tree_labels,
+        active_config_index, active_delete_block_helper_lines, active_summary_lines,
+        active_summary_render_parts, add_config_name_label, add_generated_config_name_helper_lines,
+        add_save_action_labels, allocate_config_name, box_content_line, box_footer_line,
+        box_title_line, compact_status_box_width, config_select_label, config_with_selected_user,
+        current_server_url_default, custom_api_key_helper_lines, custom_api_key_input_helper_lines,
+        custom_key_mode_labels, custom_validation_failure_choices, display_config_home,
+        display_width, edit_api_key_choice_labels, edit_custom_key_action_labels,
+        edit_save_action_labels, erase_sequence_for_char, extract_models_from_status_payload,
+        identity_prompt_parts, input_live_lines, input_prompt_with_value,
+        local_config_name_choice_labels, logo_glass_color_for_theme, main_action_labels,
         next_step_copy, openviking_service_api_key_helper_lines,
         openviking_service_validation_failure_choices, ov_logo_width, provider_labels,
-        rendered_live_region_rows, rendered_row_count, root_key_normal_command_notice_lines,
-        root_key_redirect_labels, saved_summary_render_parts, select_live_lines,
+        rendered_live_region_rows, rendered_row_count, root_accounts_from_value,
+        root_api_key_helper_lines, root_key_account_selection_labels,
+        root_key_normal_command_notice_lines, root_key_redirect_labels,
+        root_key_used_for_normal_commands, root_key_user_selection_labels, root_users_from_value,
+        save_config, saved_summary_render_parts, select_live_lines,
         should_confirm_detected_user_key, should_prompt_root_identity, status_box_frame_for_size,
         status_box_lines, status_box_lines_with_runtime, status_box_lines_with_runtime_width,
         status_box_width, status_payload_is_healthy, styled_logo_to_width_for_color_level,
         styled_wordmark_line_for_color_level, switch_validation_error_lines,
-        tagline_ice_color_for_theme, user_key_redirect_labels, validate_config_name,
-        validate_draft, wizard_header_lines, wordmark_gradient_color_for_theme, wordmark_lines,
-        wordmark_width,
+        tagline_ice_color_for_theme, user_key_from_response, user_key_redirect_labels,
+        user_management_config_context, user_management_config_from_server_url,
+        user_management_config_name_choice_labels, user_management_server_url_helper_lines,
+        user_tree_labels, validate_config_name, validate_config_name_change, validate_draft,
+        validate_new_config_name, validate_new_user_id, wizard_header_lines,
+        wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
     };
     use crate::config::Config;
     use crate::config_wizard::store::{
@@ -5152,6 +7016,116 @@ mod tests {
     }
 
     #[test]
+    fn local_config_name_choices_offer_custom_local_name() {
+        assert_eq!(
+            local_config_name_choice_labels("custom-abc123"),
+            vec![
+                "Set custom local name".to_string(),
+                "Use generated name (custom-abc123)".to_string(),
+                "Back".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn user_management_config_name_choices_offer_custom_for_current_name() {
+        assert_eq!(
+            user_management_config_name_choice_labels(Some("managed"), "managed"),
+            vec![
+                "Set custom local name".to_string(),
+                "Use current name (managed)".to_string(),
+                "Back".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn add_config_generated_name_copy_mentions_local_config_name() {
+        let text = strip_ansi(&add_generated_config_name_helper_lines().join("\n"));
+
+        assert!(text.contains("Choose how to name this local CLI config."));
+        assert!(text.contains("ovcli.conf.<name>"));
+    }
+
+    #[test]
+    fn new_config_name_validation_rejects_existing_and_reserved_names() {
+        let dir = unique_dir("new-config-name-conflict");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        store
+            .save_named_config("taken", &Config::default())
+            .expect("existing config should be saved");
+
+        assert!(validate_new_config_name(&store, "available").is_ok());
+
+        let duplicate = validate_new_config_name(&store, "taken")
+            .expect_err("duplicate name should be rejected")
+            .to_string();
+        assert!(duplicate.contains("already exists"));
+
+        let reserved = validate_new_config_name(&store, "active")
+            .expect_err("reserved name should be rejected")
+            .to_string();
+        assert!(reserved.contains("reserved"));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn edit_config_name_validation_allows_current_name_only() {
+        let dir = unique_dir("edit-config-name-conflict");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        store
+            .save_named_config("current", &Config::default())
+            .expect("current config should be saved");
+        store
+            .save_named_config("taken", &Config::default())
+            .expect("other config should be saved");
+
+        assert!(validate_config_name_change(&store, "current", "current").is_ok());
+        assert!(validate_config_name_change(&store, "current", "available").is_ok());
+
+        let duplicate = validate_config_name_change(&store, "current", "taken")
+            .expect_err("renaming to another saved config should be rejected")
+            .to_string();
+        assert!(duplicate.contains("already exists"));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn add_save_rejects_existing_config_name_without_overwriting() {
+        let dir = unique_dir("add-save-name-conflict");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        let existing = Config {
+            url: "https://existing.example.com".to_string(),
+            ..Config::default()
+        };
+        store
+            .save_named_config("taken", &existing)
+            .expect("existing config should be saved");
+
+        let replacement = Config {
+            url: "https://replacement.example.com".to_string(),
+            ..Config::default()
+        };
+        let error = save_config(&store, "taken", &replacement, false)
+            .expect_err("add save should reject existing config name")
+            .to_string();
+        assert!(error.contains("already exists"));
+
+        let saved = store
+            .load_saved_config("taken")
+            .expect("existing config should still load");
+        assert_eq!(saved.url, "https://existing.example.com");
+        assert!(store.load_active().unwrap().is_none());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn provider_helper_copy_is_minimal_and_custom_is_clear() {
         let cloud = openviking_service_api_key_helper_lines();
         let local_custom = custom_api_key_helper_lines(true);
@@ -5315,6 +7289,205 @@ mod tests {
         let inactive_label = config_select_label(&inactive);
         assert_eq!(inactive_label, "local - Custom");
         assert!(!inactive_label.contains("[Active]"));
+    }
+
+    #[test]
+    fn user_management_targets_active_config_without_extra_picker() {
+        let configs = vec![
+            ConfigEntry {
+                name: "dev".to_string(),
+                config: Config::default(),
+                is_active: false,
+                kind: ConfigKind::Custom,
+            },
+            ConfigEntry {
+                name: "prod".to_string(),
+                config: Config::default(),
+                is_active: true,
+                kind: ConfigKind::Custom,
+            },
+        ];
+        assert_eq!(active_config_index(&configs), Some(1));
+
+        let configs_without_active = vec![ConfigEntry {
+            name: "dev".to_string(),
+            config: Config::default(),
+            is_active: false,
+            kind: ConfigKind::Custom,
+        }];
+        assert_eq!(active_config_index(&configs_without_active), None);
+
+        let dir = unique_dir("user-management-context");
+        fs::create_dir_all(&dir).expect("config dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        assert!(user_management_config_context(&store).unwrap().is_none());
+
+        let inactive_config = Config {
+            url: "https://inactive.example.com".to_string(),
+            ..Config::default()
+        };
+        store
+            .save_named_config("inactive", &inactive_config)
+            .expect("inactive config should be saved");
+        assert!(user_management_config_context(&store).unwrap().is_none());
+
+        let active_config = Config {
+            url: "https://active.example.com".to_string(),
+            ..Config::default()
+        };
+        store
+            .save_and_activate("prod", &active_config)
+            .expect("active config should be saved");
+        let context = user_management_config_context(&store)
+            .unwrap()
+            .expect("active config should be used");
+        assert_eq!(context.config_name.as_deref(), Some("prod"));
+        assert_eq!(context.config.url, "https://active.example.com");
+
+        let legacy_dir = unique_dir("user-management-legacy-active");
+        fs::create_dir_all(&legacy_dir).expect("config dir should exist");
+        let legacy_store = ConfigStore::for_config_dir(legacy_dir.clone());
+        let legacy_config = Config {
+            url: "https://legacy.example.com".to_string(),
+            ..Config::default()
+        };
+        legacy_store
+            .save_and_activate("active", &legacy_config)
+            .expect("legacy active config should be saved");
+        let legacy_context = user_management_config_context(&legacy_store)
+            .unwrap()
+            .expect("legacy active config should be used");
+        assert_eq!(legacy_context.config_name, None);
+        assert_eq!(legacy_context.config.url, "https://legacy.example.com");
+
+        let unnamed_dir = unique_dir("user-management-unnamed-active");
+        fs::create_dir_all(&unnamed_dir).expect("config dir should exist");
+        let unnamed_store = ConfigStore::for_config_dir(unnamed_dir.clone());
+        let unnamed_config = Config {
+            url: "https://unnamed.example.com".to_string(),
+            ..Config::default()
+        };
+        unnamed_store
+            .save_and_activate("temporary", &unnamed_config)
+            .expect("active config should be saved");
+        fs::remove_file(unnamed_store.saved_config_path("temporary").unwrap())
+            .expect("saved profile should be removed");
+        let unnamed_context = user_management_config_context(&unnamed_store)
+            .unwrap()
+            .expect("unnamed active config should be used");
+        assert_eq!(unnamed_context.config_name, None);
+        assert_eq!(unnamed_context.config.url, "https://unnamed.example.com");
+
+        fs::remove_dir_all(dir).ok();
+        fs::remove_dir_all(legacy_dir).ok();
+        fs::remove_dir_all(unnamed_dir).ok();
+    }
+
+    #[test]
+    fn user_management_config_from_server_url_normalizes_without_active_config() {
+        let config = user_management_config_from_server_url("127.0.0.1")
+            .expect("server URL should build a temporary config");
+
+        assert_eq!(config.url, "http://127.0.0.1:1933");
+        assert!(config.api_key.is_none());
+        assert!(config.root_api_key.is_none());
+
+        let error = user_management_config_from_server_url("  ")
+            .expect_err("empty server URL should be rejected")
+            .to_string();
+        assert!(error.contains("Server URL cannot be empty"));
+    }
+
+    #[test]
+    fn user_management_root_key_prompt_shows_current_server_url() {
+        let text =
+            strip_ansi(&root_api_key_helper_lines("https://openviking.example.com").join("\n"));
+
+        assert!(text.contains("Server URL:"));
+        assert!(text.contains("https://openviking.example.com"));
+        assert!(text.contains("Used only to list or create accounts/users"));
+    }
+
+    #[test]
+    fn user_management_server_url_prompt_copy_does_not_require_ovcli_conf() {
+        let text = strip_ansi(&user_management_server_url_helper_lines().join("\n"));
+
+        assert!(text.contains("only needs the server URL"));
+        assert!(!text.contains("current ovcli.conf"));
+    }
+
+    #[test]
+    fn user_management_save_writes_named_config_and_active_config() {
+        let dir = unique_dir("user-management-save");
+        fs::create_dir_all(&dir).expect("config dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        let config = Config {
+            url: "https://openviking.example.com".to_string(),
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        store
+            .save_and_activate("managed", &config)
+            .expect("user management config should save");
+
+        assert!(store.saved_config_path("managed").unwrap().exists());
+        let active = store
+            .load_active()
+            .expect("active should load")
+            .expect("active config should exist");
+        assert_eq!(active.api_key.as_deref(), Some("user-key"));
+        assert_eq!(active.root_api_key.as_deref(), Some("root-key"));
+        assert_eq!(active.account.as_deref(), Some("acme"));
+        assert_eq!(active.user.as_deref(), Some("alice"));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn custom_server_url_default_uses_active_config_or_loopback() {
+        let dir = unique_dir("server-url-default");
+        fs::create_dir_all(&dir).expect("config dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+
+        assert_eq!(
+            current_server_url_default(&store).expect("default should resolve"),
+            "http://127.0.0.1:1933"
+        );
+
+        let active_config = Config {
+            url: "https://openviking.example.com".to_string(),
+            ..Config::default()
+        };
+        store
+            .save_and_activate("prod", &active_config)
+            .expect("active config should be saved");
+
+        assert_eq!(
+            current_server_url_default(&store).expect("active URL should resolve"),
+            "https://openviking.example.com"
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn new_user_id_validation_rejects_existing_users_before_admin_call() {
+        let existing_users = vec![RootUserSummary {
+            user_id: "alice".to_string(),
+            role: "user".to_string(),
+            api_key: None,
+            key_prefix: None,
+        }];
+
+        assert!(validate_new_user_id("bob", &existing_users).is_ok());
+
+        let error = validate_new_user_id("alice", &existing_users)
+            .expect_err("duplicate user should be rejected");
+        assert!(error.to_string().contains("already exists"));
     }
 
     #[test]
@@ -5847,9 +8020,154 @@ mod tests {
                 "Add Config",
                 "Switch Config",
                 "Edit Config",
-                "Delete Config"
+                "Delete Config",
+                "User Management",
             ]
             .as_slice()
         );
+    }
+
+    #[test]
+    fn root_account_and_user_labels_render_like_directories() {
+        let account_labels = account_tree_labels(&[
+            RootAccountSummary {
+                account_id: "acme".to_string(),
+                user_count: 2,
+            },
+            RootAccountSummary {
+                account_id: "solo".to_string(),
+                user_count: 1,
+            },
+        ]);
+        assert_eq!(account_labels, vec!["acme/  2 users", "solo/  1 user"]);
+
+        let user_labels = user_tree_labels(
+            "acme",
+            &[
+                RootUserSummary {
+                    user_id: "alice".to_string(),
+                    role: "admin".to_string(),
+                    api_key: Some("alice-key".to_string()),
+                    key_prefix: None,
+                },
+                RootUserSummary {
+                    user_id: "bob".to_string(),
+                    role: "user".to_string(),
+                    api_key: None,
+                    key_prefix: Some("bob-pref".to_string()),
+                },
+            ],
+        );
+        assert_eq!(user_labels, vec!["acme/alice  admin", "acme/bob  user"]);
+    }
+
+    #[test]
+    fn root_key_add_config_selection_labels_offer_user_creation() {
+        let account_labels = root_key_account_selection_labels(&[RootAccountSummary {
+            account_id: "acme".to_string(),
+            user_count: 0,
+        }]);
+        assert_eq!(
+            account_labels,
+            vec!["acme/  0 users", "+ Create new account"]
+        );
+
+        let user_labels = root_key_user_selection_labels("acme", &[]);
+        assert_eq!(user_labels, vec!["+ Create new user in acme/"]);
+    }
+
+    #[test]
+    fn root_key_config_prompts_for_user_selection_before_save() {
+        let root_as_normal = Config {
+            api_key: Some("root-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            ..Config::default()
+        };
+        assert!(root_key_used_for_normal_commands(&root_as_normal));
+
+        let separate_user_key = Config {
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            ..Config::default()
+        };
+        assert!(!root_key_used_for_normal_commands(&separate_user_key));
+    }
+
+    #[test]
+    fn root_admin_response_parsers_sort_and_ignore_empty_items() {
+        let accounts = root_accounts_from_value(&json!([
+            {"account_id": "beta", "user_count": 0},
+            {"account_id": "", "user_count": 9},
+            {"account_id": "alpha", "user_count": 2}
+        ]));
+        assert_eq!(
+            accounts,
+            vec![
+                RootAccountSummary {
+                    account_id: "alpha".to_string(),
+                    user_count: 2,
+                },
+                RootAccountSummary {
+                    account_id: "beta".to_string(),
+                    user_count: 0,
+                },
+            ]
+        );
+
+        let users = root_users_from_value(&json!([
+            {"user_id": "zoe", "role": "admin", "api_key": "zoe-key"},
+            {"user_id": "amy", "key_prefix": "amy-pref"},
+            {"user_id": " ", "api_key": "ignored"}
+        ]));
+        assert_eq!(
+            users,
+            vec![
+                RootUserSummary {
+                    user_id: "amy".to_string(),
+                    role: "user".to_string(),
+                    api_key: None,
+                    key_prefix: Some("amy-pref".to_string()),
+                },
+                RootUserSummary {
+                    user_id: "zoe".to_string(),
+                    role: "admin".to_string(),
+                    api_key: Some("zoe-key".to_string()),
+                    key_prefix: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn selected_user_config_keeps_root_key_and_stores_user_key_identity() {
+        let mut config = Config::default();
+        config.url = "http://127.0.0.1:1933".to_string();
+        config.api_key = Some("root-key".to_string());
+        config.root_api_key = Some("root-key".to_string());
+
+        let updated = config_with_selected_user(&config, "root-key", "acme", "alice", "user-key");
+
+        assert_eq!(updated.root_api_key.as_deref(), Some("root-key"));
+        assert_eq!(updated.api_key.as_deref(), Some("user-key"));
+        assert_eq!(updated.account.as_deref(), Some("acme"));
+        assert_eq!(updated.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn user_key_from_response_requires_non_empty_key() {
+        assert_eq!(
+            user_key_from_response(&json!({"user_key": " new-user-key "})),
+            Some("new-user-key".to_string())
+        );
+        assert_eq!(
+            user_key_from_response(&json!({"api_key": " alt-user-key "})),
+            Some("alt-user-key".to_string())
+        );
+        assert_eq!(
+            user_key_from_response(&json!({"result": {"user_key": " wrapped-user-key "}})),
+            Some("wrapped-user-key".to_string())
+        );
+        assert_eq!(user_key_from_response(&json!({"user_key": "   "})), None);
+        assert_eq!(user_key_from_response(&json!({})), None);
     }
 }
