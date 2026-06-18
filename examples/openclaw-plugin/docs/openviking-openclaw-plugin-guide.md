@@ -394,9 +394,9 @@ bash install.sh --source tos --channel prod --version 2026.6.2
 | --- | --- |
 | Node.js | >= 22 |
 | OpenClaw | >= 2026.4.8 |
-| OpenViking Server | >= 0.2.9 |
+| OpenViking Server | >= 0.4.1 |
 
-兼容性声明在 `install-manifest.json:43`。
+兼容性声明在 `install-manifest.json` 的 `compatibility` 字段。
 
 ### 7.2 启动 OpenViking Server
 
