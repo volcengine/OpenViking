@@ -45,6 +45,16 @@ print(f"Abstract: {abstract}")
 # Output: "Documentation for the project API, covering authentication, endpoints..."
 ```
 
+**Go SDK**
+
+```go
+abstract, err := client.Abstract(ctx, "viking://resources/docs/")
+if err != nil {
+    return err
+}
+fmt.Println(abstract)
+```
+
 **HTTP API**
 
 ```
@@ -89,6 +99,16 @@ openviking abstract viking://resources/docs/
 ```python
 overview = client.overview("viking://resources/docs/")
 print(f"Overview:\n{overview}")
+```
+
+**Go SDK**
+
+```go
+overview, err := client.Overview(ctx, "viking://resources/docs/")
+if err != nil {
+    return err
+}
+fmt.Println(overview)
 ```
 
 **HTTP API**
@@ -143,6 +163,16 @@ openviking overview viking://resources/docs/
 ```python
 content = client.read("viking://resources/docs/api.md")
 print(f"Content:\n{content}")
+```
+
+**Go SDK**
+
+```go
+content, err := client.Read(ctx, "viking://resources/docs/api.md", 0, -1)
+if err != nil {
+    return err
+}
+fmt.Println(content)
 ```
 
 **HTTP API**
@@ -206,6 +236,24 @@ result = client.write(
     wait=True,
 )
 print(result["root_uri"])
+```
+
+**Go SDK**
+
+```go
+result, err := client.Write(
+    ctx,
+    "viking://resources/docs/api.md",
+    "# Updated API\n\nFresh content.",
+    &openviking.WriteOptions{
+        Mode: "replace",
+        Wait: true,
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(result["root_uri"])
 ```
 
 **HTTP API**
@@ -306,6 +354,18 @@ for entry in entries:
     print(f"{entry['name']} - {type_str}")
 ```
 
+**Go SDK**
+
+```go
+entries, err := client.List(ctx, "viking://resources/", nil)
+if err != nil {
+    return err
+}
+for _, entry := range entries {
+    fmt.Println(entry)
+}
+```
+
 **HTTP API**
 
 ```
@@ -377,6 +437,18 @@ for entry in entries:
     print(f"{entry['rel_path']} - {type_str}")
 ```
 
+**Go SDK**
+
+```go
+entries, err := client.Tree(ctx, "viking://resources/", nil)
+if err != nil {
+    return err
+}
+for _, entry := range entries {
+    fmt.Println(entry["rel_path"], entry["isDir"])
+}
+```
+
 **HTTP API**
 
 ```
@@ -442,6 +514,16 @@ print(f"Is directory: {info['isDir']}")
 dir_info = client.stat("viking://resources/docs")
 if dir_info.get('isDir'):
     print(f"Item count: {dir_info.get('count')}")
+```
+
+**Go SDK**
+
+```go
+info, err := client.Stat(ctx, "viking://resources/docs/api.md")
+if err != nil {
+    return err
+}
+fmt.Println(info["size"], info["isDir"])
 ```
 
 **HTTP API**
@@ -523,6 +605,14 @@ client.mkdir("viking://resources/new-project/")
 client.mkdir("viking://resources/new-project/", description="接口文档目录")
 ```
 
+**Go SDK**
+
+```go
+if err := client.Mkdir(ctx, "viking://resources/new-project/", "接口文档目录"); err != nil {
+    return err
+}
+```
+
 **HTTP API**
 
 ```
@@ -584,6 +674,17 @@ client.rm("viking://resources/docs/old.md")
 result = client.rm("viking://resources/old-project/", recursive=True)
 if 'estimated_deleted_count' in result:
     print(f"Deleted {result['estimated_deleted_count']} items")
+```
+
+**Go SDK**
+
+```go
+err := client.Remove(ctx, "viking://resources/old-project/", &openviking.RemoveOptions{
+    Recursive: true,
+})
+if err != nil {
+    return err
+}
 ```
 
 **HTTP API**
@@ -659,6 +760,14 @@ client.mv(
 )
 ```
 
+**Go SDK**
+
+```go
+if err := client.Move(ctx, "viking://resources/old-name/", "viking://resources/new-name/"); err != nil {
+    return err
+}
+```
+
 **HTTP API**
 
 ```
@@ -724,6 +833,18 @@ print(f"Found {results['count']} matches")
 for match in results['matches']:
     print(f"  {match['uri']}:{match['line']}")
     print(f"    {match['content']}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.Grep(ctx, "viking://resources/", "authentication", &openviking.GrepOptions{
+    CaseInsensitive: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["matches"])
 ```
 
 **HTTP API**
@@ -794,6 +915,16 @@ for uri in results['matches']:
 # 查找所有 Python 文件
 results = client.glob("**/*.py", "viking://resources/")
 print(f"Found {results['count']} Python files")
+```
+
+**Go SDK**
+
+```go
+result, err := client.Glob(ctx, "**/*.md", "viking://resources/")
+if err != nil {
+    return err
+}
+fmt.Println(result["matches"])
 ```
 
 **HTTP API**
@@ -1098,6 +1229,21 @@ client.initialize()
 # 注意：导出功能主要通过 CLI 使用
 ```
 
+**Go SDK**
+
+```go
+outPath, err := client.ExportOVPack(
+    ctx,
+    "viking://resources/my-project/",
+    "./exports/my-project.ovpack",
+    &openviking.PackOptions{IncludeVectors: false},
+)
+if err != nil {
+    return err
+}
+fmt.Println(outPath)
+```
+
 **CLI**
 
 ```bash
@@ -1204,6 +1350,24 @@ client.initialize()
 # 注意：导入功能主要通过 CLI 使用
 ```
 
+**Go SDK**
+
+```go
+uri, err := client.ImportOVPack(
+    ctx,
+    "./exports/my-project.ovpack",
+    "viking://resources/imported/",
+    &openviking.ImportPackOptions{
+        OnConflict: "overwrite",
+        VectorMode: "auto",
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(uri)
+```
+
 **CLI**
 
 ```bash
@@ -1267,6 +1431,20 @@ curl -X POST http://localhost:1933/api/v1/pack/backup \
   --output openviking-backup.ovpack
 ```
 
+Go SDK：
+
+```go
+outPath, err := client.BackupOVPack(
+    ctx,
+    "./backups/openviking.ovpack",
+    &openviking.PackOptions{IncludeVectors: true},
+)
+if err != nil {
+    return err
+}
+fmt.Println(outPath)
+```
+
 CLI：
 
 ```bash
@@ -1304,6 +1482,23 @@ curl -X POST http://localhost:1933/api/v1/pack/restore \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\",\"vector_mode\":\"auto\"}"
+```
+
+Go SDK：
+
+```go
+uri, err := client.RestoreOVPack(
+    ctx,
+    "./backups/openviking.ovpack",
+    &openviking.ImportPackOptions{
+        OnConflict: "overwrite",
+        VectorMode: "require",
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(uri)
 ```
 
 CLI：

@@ -58,6 +58,23 @@ function hasCredentialFields(obj) {
   ].some((key) => typeof obj[key] === "string");
 }
 
+function normalizeAuthMode(val) {
+  const mode = str(val, "").toLowerCase();
+  return ["trusted", "api_key"].includes(mode) ? mode : "";
+}
+
+function resolveAuthMode(creds, env = process.env) {
+  const cx = creds.ovFile.codex || {};
+  const server = creds.ovFile.server || {};
+  return (
+    normalizeAuthMode(env.OPENVIKING_AUTH_MODE) ||
+    normalizeAuthMode(cx.authMode) ||
+    normalizeAuthMode(cx.auth_mode) ||
+    normalizeAuthMode(server.auth_mode) ||
+    ((creds.account || creds.user) ? "trusted" : "api_key")
+  );
+}
+
 export function loadCredentialFiles(env = process.env) {
   const cliPathCandidate = normalizePath(env.OPENVIKING_CLI_CONFIG_FILE) || DEFAULT_OVCLI_CONF_PATH;
   const ovPathCandidate = normalizePath(env.OPENVIKING_CONFIG_FILE) || DEFAULT_OV_CONF_PATH;
@@ -224,6 +241,7 @@ function printShellEnv() {
 
 export function syncMcpConfig(file, env = process.env) {
   const creds = resolveOpenVikingCredentials(env);
+  const authMode = resolveAuthMode(creds, env);
   const j = JSON.parse(readFileSync(file, "utf-8"));
   const s = j.mcpServers && j.mcpServers["openviking-memory"];
   if (!s) return false;
@@ -244,10 +262,19 @@ export function syncMcpConfig(file, env = process.env) {
   }
 
   const headers = s.env_http_headers || {};
-  const expectedHeaders = {
-    "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
-    "X-OpenViking-User": "OPENVIKING_USER",
-  };
+  const expectedHeaders = {};
+  if (authMode === "trusted" && creds.account) {
+    expectedHeaders["X-OpenViking-Account"] = "OPENVIKING_ACCOUNT";
+  } else if (headers["X-OpenViking-Account"]) {
+    delete headers["X-OpenViking-Account"];
+    changed = true;
+  }
+  if (authMode === "trusted" && creds.user) {
+    expectedHeaders["X-OpenViking-User"] = "OPENVIKING_USER";
+  } else if (headers["X-OpenViking-User"]) {
+    delete headers["X-OpenViking-User"];
+    changed = true;
+  }
   // Actor-peer is only mapped when a peer is actually configured. Codex's MCP
   // runtime treats unset env vars in env_http_headers as empty-string headers,
   // which the OV side then has to disambiguate from "no peer scope". Match
@@ -291,6 +318,10 @@ function main() {
     process.stdout.write(resolveOpenVikingCredentials().hasApiKey ? "1" : "0");
     return;
   }
+  if (cmd === "has-peer-id") {
+    process.stdout.write(resolveOpenVikingCredentials().peerId ? "1" : "0");
+    return;
+  }
   if (cmd === "sync-mcp") {
     const file = process.argv[3];
     if (!file) {
@@ -301,7 +332,7 @@ function main() {
     syncMcpConfig(file);
     return;
   }
-  process.stderr.write("usage: ov-credentials.mjs <shell-env|mcp-url|has-api-key|sync-mcp>\n");
+  process.stderr.write("usage: ov-credentials.mjs <shell-env|mcp-url|has-api-key|has-peer-id|sync-mcp>\n");
   process.exitCode = 2;
 }
 

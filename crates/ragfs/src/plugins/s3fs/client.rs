@@ -4,6 +4,7 @@
 //! Supports AWS S3 and S3-compatible services (MinIO, LocalStack, TOS).
 
 use crate::core::{ConfigValue, Error, Result};
+use aws_sdk_s3::config::http::HttpResponse;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::error::SdkError;
@@ -63,22 +64,49 @@ where
 fn format_sdk_s3_error<E, R>(op: &str, scope: &str, sdk_err: &SdkError<E, R>) -> Error
 where
     E: std::fmt::Display + ProvideErrorMetadata + RequestId + RequestIdExt,
+    R: std::fmt::Debug + Send + Sync + 'static,
 {
-    let raw_error = sdk_err.to_string();
-    if let Some(service_err) = sdk_err.as_service_error() {
-        Error::internal(build_s3_error_message(
+    use std::any::Any;
+
+    match sdk_err {
+        SdkError::ServiceError(se) => {
+            if let Some(resp) = (se.raw() as &dyn Any).downcast_ref::<HttpResponse>() {
+                let status = resp.status().as_u16();
+                let headers = resp.headers();
+                Error::internal(build_s3_error_message(
+                    op,
+                    scope,
+                    &format!("HTTP {}: {}", status, se.err()),
+                    se.err().code(),
+                    se.err().message(),
+                    se.err()
+                        .request_id()
+                        .or_else(|| headers.get("x-amz-request-id")),
+                    se.err()
+                        .extended_request_id()
+                        .or_else(|| headers.get("x-amz-id-2")),
+                ))
+            } else {
+                Error::internal(build_s3_error_message(
+                    op,
+                    scope,
+                    &format!("service error: {}", se.err()),
+                    se.err().code(),
+                    se.err().message(),
+                    se.err().request_id(),
+                    se.err().extended_request_id(),
+                ))
+            }
+        }
+        _ => Error::internal(build_s3_error_message(
             op,
             scope,
-            &raw_error,
-            service_err.code(),
-            service_err.message(),
-            service_err.request_id(),
-            service_err.extended_request_id(),
-        ))
-    } else {
-        Error::internal(build_s3_error_message(
-            op, scope, &raw_error, None, None, None, None,
-        ))
+            &sdk_err.to_string(),
+            None,
+            None,
+            None,
+            None,
+        )),
     }
 }
 
@@ -623,14 +651,17 @@ impl S3Client {
             }
             Err(sdk_err) => {
                 // Check if it's a 404
-                let service_err = sdk_err.into_service_error();
-                if service_err.is_not_found() {
+                if sdk_err
+                    .as_service_error()
+                    .map(|err| err.is_not_found())
+                    .unwrap_or(false)
+                {
                     Ok(None)
                 } else {
-                    Err(format_s3_service_error(
+                    Err(format_sdk_s3_error(
                         "HeadObject",
                         &format!("bucket={} key={}", self.bucket, key),
-                        &service_err,
+                        &sdk_err,
                     ))
                 }
             }

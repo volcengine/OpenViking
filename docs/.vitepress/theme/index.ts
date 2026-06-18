@@ -2,6 +2,7 @@ import { h } from 'vue'
 import DefaultTheme from 'vitepress/theme'
 import CopyMarkdownButton from './CopyMarkdownButton.vue'
 import LlmsTxtLink from './LlmsTxtLink.vue'
+import OpenVikingSearch from './OpenVikingSearch.vue'
 import './custom.css'
 
 type OpenVikingPreference = {
@@ -300,7 +301,8 @@ export default {
   Layout() {
     return h(DefaultTheme.Layout, null, {
       'doc-before': () => h(CopyMarkdownButton),
-      'doc-footer-before': () => h(LlmsTxtLink)
+      'doc-footer-before': () => h(LlmsTxtLink),
+      'nav-bar-content-before': () => h(OpenVikingSearch)
     })
   }
 }

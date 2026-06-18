@@ -133,9 +133,13 @@ const zhNav: DefaultTheme.NavItem[] = [
   { text: navLabels.zh.about, link: '/zh/about/01-about-us', activeMatch: '/zh/about/' }
 ]
 
-function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: string }[] {
+function collectAllMdFiles(
+  srcDir: string,
+  options: { includeIndex?: boolean } = {}
+): { relativePath: string; absPath: string }[] {
   const results: { relativePath: string; absPath: string }[] = []
   const ignored = new Set(['node_modules', '.vitepress'])
+  const includeIndex = options.includeIndex ?? false
 
   function walk(dir: string) {
     for (const entry of fs.readdirSync(dir)) {
@@ -144,7 +148,7 @@ function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: str
       const stat = fs.statSync(abs)
       if (stat.isDirectory()) {
         walk(abs)
-      } else if (entry.endsWith('.md') && entry !== 'index.md') {
+      } else if (entry.endsWith('.md') && (includeIndex || entry !== 'index.md')) {
         results.push({ relativePath: path.relative(srcDir, abs), absPath: abs })
       }
     }
@@ -152,6 +156,61 @@ function collectAllMdFiles(srcDir: string): { relativePath: string; absPath: str
 
   walk(srcDir)
   return results.sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+}
+
+function markdownToSearchText(content: string): string {
+  return content
+    .replace(/^---[\s\S]*?---\s*/m, '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, ' ')
+    .replace(/^\s{0,3}>\s?/gm, ' ')
+    .replace(/^\s*[-*+]\s+/gm, ' ')
+    .replace(/^\s*\|?[\s:-]+\|[\s|:-]*$/gm, ' ')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/~~([^~\n]+)~~/g, '$1')
+    .replace(/(^|[\s([{"'（【])\*([^*\n]+)\*(?=$|[\s.,;:!?，。；：！？、）】\])}"'])/g, '$1$2')
+    .replace(/(^|[\s([{"'（【])_([^_\n]+)_(?=$|[\s.,;:!?，。；：！？、）】\])}"'])/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function docsSearchLocale(relativePath: string): 'en' | 'zh' | null {
+  if (relativePath.startsWith('en/')) return 'en'
+  if (relativePath.startsWith('zh/')) return 'zh'
+  return null
+}
+
+function buildDocsSearchRecords(srcDir: string) {
+  return collectAllMdFiles(srcDir, { includeIndex: true })
+    .map(({ relativePath, absPath }) => {
+      const normalizedPath = relativePath.replace(/\\/g, '/')
+      const locale = docsSearchLocale(normalizedPath)
+      if (!locale) return null
+
+      const content = fs.readFileSync(absPath, 'utf-8')
+      const url = `/${normalizedPath.replace(/\.md$/, '')}`.replace(/\/index$/, '')
+      return {
+        locale,
+        path: normalizedPath,
+        text: markdownToSearchText(content),
+        title: titleFromMarkdown(absPath),
+        url
+      }
+    })
+    .filter((record): record is NonNullable<typeof record> => record !== null)
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildDocsSearchIndex(siteConfig: any) {
+  fs.writeFileSync(
+    path.join(siteConfig.outDir, 'docs-search-index.json'),
+    JSON.stringify(buildDocsSearchRecords(siteConfig.srcDir)),
+    'utf-8'
+  )
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -242,6 +301,7 @@ export default defineConfig({
   },
   buildEnd(siteConfig) {
     buildLlmsTxt(siteConfig)
+    buildDocsSearchIndex(siteConfig)
   },
   vite: {
     publicDir: 'images',
@@ -260,6 +320,13 @@ export default defineConfig({
               next()
             }
           })
+          server.middlewares.use((req, res, next) => {
+            const pathname = req.url?.split('?')[0]
+            if (pathname !== '/docs-search-index.json') return next()
+
+            res.setHeader('Content-Type', 'application/json; charset=utf-8')
+            res.end(JSON.stringify(buildDocsSearchRecords(docsRoot)))
+          })
         }
       }
     ]
@@ -267,9 +334,6 @@ export default defineConfig({
   themeConfig: {
     logo: '/ov-logo.png',
     logoLink: mainSiteBase,
-    search: {
-      provider: 'local'
-    },
     socialLinks: [
       { icon: 'github', link: `https://github.com/${repo}` }
     ],

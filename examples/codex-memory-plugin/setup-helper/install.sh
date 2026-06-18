@@ -352,6 +352,14 @@ detect_api_key() {
 }
 HAS_API_KEY="$(detect_api_key)"
 
+# Detect whether a peer id is configured. Older/new local setups may not use
+# peer-aware identity yet, so validation must accept both header-present and
+# header-absent MCP cache output depending on the actual config.
+detect_peer_id() {
+  OPENVIKING_CLI_CONFIG_FILE="$OVCLI_CONF" node "$CREDS_SCRIPT" has-peer-id 2>/dev/null || echo "0"
+}
+HAS_PEER_ID="$(detect_peer_id)"
+
 render_plugin_cache() {
   mkdir -p "$(dirname "$CACHE_DIR")"
   rm -rf "$CACHE_DIR"
@@ -588,7 +596,9 @@ validate_plugin_install() {
   if [ ! -L "$marketplace_link" ] || [ "$(readlink "$marketplace_link" 2>/dev/null || true)" != "$PLUGIN_DIR" ]; then
     issues+=("marketplace symlink does not point at $PLUGIN_DIR")
   fi
-  if ! codex plugin list 2>/dev/null | grep -E -q "${PLUGIN_ID}[[:space:]]+installed, enabled"; then
+  # Codex has printed both `installed, enabled` and `(installed, enabled)`
+  # across versions; accept either to avoid false-negative install failures.
+  if ! codex plugin list 2>/dev/null | grep -E -q "${PLUGIN_ID}[[:space:]]+\(?installed, enabled\)?"; then
     issues+=("codex plugin list does not show $PLUGIN_ID as installed, enabled")
   fi
   if [ ! -d "$CACHE_DIR" ]; then
@@ -610,7 +620,12 @@ validate_plugin_install() {
     if [ "$HAS_API_KEY" != "1" ] && grep -q "bearer_token_env_var" "$mcp_json"; then
       issues+=("cached .mcp.json keeps bearer_token_env_var without configured API key")
     fi
-    grep -q '"X-OpenViking-Actor-Peer"' "$mcp_json" || issues+=("cached .mcp.json is missing X-OpenViking-Actor-Peer header mapping")
+    if [ "$HAS_PEER_ID" = "1" ] && ! grep -q '"X-OpenViking-Actor-Peer"' "$mcp_json"; then
+      issues+=("cached .mcp.json is missing X-OpenViking-Actor-Peer header mapping despite configured peer")
+    fi
+    if [ "$HAS_PEER_ID" != "1" ] && grep -q '"X-OpenViking-Actor-Peer"' "$mcp_json"; then
+      issues+=("cached .mcp.json keeps X-OpenViking-Actor-Peer without configured peer")
+    fi
   fi
 
   for script in \

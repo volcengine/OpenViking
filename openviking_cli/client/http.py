@@ -10,6 +10,7 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import quote
 
 import httpx
 
@@ -282,6 +283,11 @@ class AsyncHTTPClient(BaseClient):
         return telemetry
 
     @staticmethod
+    def _path_segment(value: str) -> str:
+        """Encode a value for safe use as one URL path segment."""
+        return quote(value, safe="")
+
+    @staticmethod
     def _normalize_target_uri(
         target_uri: Union[str, List[str]],
     ) -> Union[str, List[str]]:
@@ -510,8 +516,9 @@ class AsyncHTTPClient(BaseClient):
         if telemetry is not False:
             payload["telemetry"] = telemetry
 
+        session_path = self._path_segment(session_id)
         response = await self._http.post(
-            f"/api/v1/sessions/{session_id}/messages/batch",
+            f"/api/v1/sessions/{session_path}/messages/batch",
             json=payload,
         )
         response_data = self._handle_response_data(response)
@@ -1128,29 +1135,34 @@ class AsyncHTTPClient(BaseClient):
         params = {}
         if auto_create:
             params["auto_create"] = "true"
-        response = await self._http.get(f"/api/v1/sessions/{session_id}", params=params)
+        session_path = self._path_segment(session_id)
+        response = await self._http.get(f"/api/v1/sessions/{session_path}", params=params)
         return self._handle_response(response)
 
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
     ) -> Dict[str, Any]:
         """Get assembled session context."""
+        session_path = self._path_segment(session_id)
         response = await self._http.get(
-            f"/api/v1/sessions/{session_id}/context",
+            f"/api/v1/sessions/{session_path}/context",
             params={"token_budget": token_budget},
         )
         return self._handle_response(response)
 
     async def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
         """Get one completed archive for a session."""
+        session_path = self._path_segment(session_id)
+        archive_path = self._path_segment(archive_id)
         response = await self._http.get(
-            f"/api/v1/sessions/{session_id}/archives/{archive_id}",
+            f"/api/v1/sessions/{session_path}/archives/{archive_path}",
         )
         return self._handle_response(response)
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
-        response = await self._http.delete(f"/api/v1/sessions/{session_id}")
+        session_path = self._path_segment(session_id)
+        response = await self._http.delete(f"/api/v1/sessions/{session_path}")
         self._handle_response(response)
 
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -1198,8 +1210,9 @@ class AsyncHTTPClient(BaseClient):
             "keep_recent_count": keep_recent_count,
             "telemetry": telemetry,
         }
+        session_path = self._path_segment(session_id)
         response = await self._http.post(
-            f"/api/v1/sessions/{session_id}/commit",
+            f"/api/v1/sessions/{session_path}/commit",
             json=payload,
         )
         response_data = self._handle_response_data(response)
@@ -1244,8 +1257,9 @@ class AsyncHTTPClient(BaseClient):
             payload["telemetry"] = telemetry
         payload = self._attach_legacy_message_scope(payload)
 
+        session_path = self._path_segment(session_id)
         response = await self._http.post(
-            f"/api/v1/sessions/{session_id}/messages",
+            f"/api/v1/sessions/{session_path}/messages",
             json=payload,
         )
         response_data = self._handle_response_data(response)

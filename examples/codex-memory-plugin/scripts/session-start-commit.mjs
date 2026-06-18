@@ -85,8 +85,8 @@ async function fetchJSON(path, init = {}) {
       headers["Authorization"] = `Bearer ${cfg.apiKey}`;
       headers["X-API-Key"] = cfg.apiKey;
     }
-    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
+    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
     if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);

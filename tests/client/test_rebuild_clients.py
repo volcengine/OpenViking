@@ -156,6 +156,7 @@ async def test_local_client_batch_add_messages_forwards_to_session():
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
     client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
+    client._legacy_agent_id = None
 
     result = await LocalClient.batch_add_messages(
         client,
@@ -208,6 +209,7 @@ async def test_local_client_add_message_accepts_image_parts():
     client = LocalClient.__new__(LocalClient)
     client._service = SimpleNamespace(sessions=FakeSessions())
     client._ctx = SimpleNamespace(user=SimpleNamespace(user_id="user-1"))
+    client._legacy_agent_id = None
 
     result = await LocalClient.add_message(
         client,
@@ -249,6 +251,30 @@ async def test_async_http_client_batch_add_messages_posts_batch_payload():
     fake_http.post.assert_awaited_once_with(
         "/api/v1/sessions/batch-session/messages/batch",
         json={"messages": messages},
+    )
+
+
+async def test_async_http_client_batch_add_messages_url_encodes_session_id():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"session_id": "encoded-session", "message_count": 1, "added": 1}
+    }
+
+    session_id = (
+        "feishu__cli_a938e530eb7c9bd9__"
+        "oc_aa9e08fddf5727f9c53400a07ff505cd#om_x100b6ff6c3df48ace10030ac68d3eb4"
+    )
+
+    await client.batch_add_messages(session_id, [{"role": "user", "content": "hello"}])
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/sessions/"
+        "feishu__cli_a938e530eb7c9bd9__"
+        "oc_aa9e08fddf5727f9c53400a07ff505cd%23om_x100b6ff6c3df48ace10030ac68d3eb4"
+        "/messages/batch",
+        json={"messages": [{"role": "user", "content": "hello"}]},
     )
 
 

@@ -117,8 +117,6 @@ test("syncMcpConfig with peerId maps actor-peer header", async () => {
     assert.equal(server.url, "https://ov.example.com/mcp");
     assert.equal(server.bearer_token_env_var, "OPENVIKING_API_KEY");
     assert.deepEqual(server.env_http_headers, {
-      "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
-      "X-OpenViking-User": "OPENVIKING_USER",
       "X-OpenViking-Actor-Peer": "OPENVIKING_PEER_ID",
     });
   } finally {
@@ -149,14 +147,83 @@ test("syncMcpConfig without peerId omits actor-peer header (symmetric to bearer)
 
     assert.equal(server.url, "https://ov.example.com/mcp");
     assert.equal(server.bearer_token_env_var, "OPENVIKING_API_KEY");
-    assert.deepEqual(server.env_http_headers, {
-      "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
-      "X-OpenViking-User": "OPENVIKING_USER",
-    });
+    assert.deepEqual(server.env_http_headers, {});
     assert.equal(
       Object.prototype.hasOwnProperty.call(server.env_http_headers, "X-OpenViking-Actor-Peer"),
       false,
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("syncMcpConfig in trusted mode maps configured identity headers", async () => {
+  const { dir, path } = await tempJson("ov-creds-mcp-trusted-auth-", {
+    url: "https://ov.example.com",
+    api_key: "cli-key",
+    account: "default",
+    user: "zeus",
+  });
+  const mcpPath = join(dir, ".mcp.json");
+  await writeFile(mcpPath, JSON.stringify({
+    mcpServers: {
+      "openviking-memory": {
+        url: "__OPENVIKING_MCP_URL__",
+        bearer_token_env_var: "STALE_KEY",
+        env_http_headers: {},
+      },
+    },
+  }, null, 2) + "\n");
+
+  try {
+    syncMcpConfig(mcpPath, {
+      OPENVIKING_CLI_CONFIG_FILE: path,
+      OPENVIKING_AUTH_MODE: "trusted",
+    });
+    const rendered = JSON.parse(await readFile(mcpPath, "utf-8"));
+    const server = rendered.mcpServers["openviking-memory"];
+
+    assert.deepEqual(server.env_http_headers, {
+      "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
+      "X-OpenViking-User": "OPENVIKING_USER",
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("syncMcpConfig in api_key mode omits trusted identity headers", async () => {
+  const { dir, path } = await tempJson("ov-creds-mcp-apikey-auth-", {
+    url: "https://ov.example.com",
+    api_key: "cli-key",
+    account: "default",
+    user: "zeus",
+  });
+  const mcpPath = join(dir, ".mcp.json");
+  await writeFile(mcpPath, JSON.stringify({
+    mcpServers: {
+      "openviking-memory": {
+        url: "__OPENVIKING_MCP_URL__",
+        bearer_token_env_var: "STALE_KEY",
+        env_http_headers: {
+          "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
+          "X-OpenViking-User": "OPENVIKING_USER",
+        },
+      },
+    },
+  }, null, 2) + "\n");
+
+  try {
+    syncMcpConfig(mcpPath, {
+      OPENVIKING_CLI_CONFIG_FILE: path,
+      OPENVIKING_AUTH_MODE: "api_key",
+    });
+    const rendered = JSON.parse(await readFile(mcpPath, "utf-8"));
+    const server = rendered.mcpServers["openviking-memory"];
+
+    assert.equal(server.url, "https://ov.example.com/mcp");
+    assert.equal(server.bearer_token_env_var, "OPENVIKING_API_KEY");
+    assert.deepEqual(server.env_http_headers, {});
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

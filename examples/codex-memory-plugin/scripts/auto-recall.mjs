@@ -91,8 +91,8 @@ async function fetchJSON(path, init = {}) {
       headers["Authorization"] = `Bearer ${cfg.apiKey}`;
       headers["X-API-Key"] = cfg.apiKey;
     }
-    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
+    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
     if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
@@ -212,59 +212,10 @@ function postProcess(items, limit, threshold) {
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// User URI space resolution
-// ---------------------------------------------------------------------------
-
-const USER_RESERVED_DIRS = new Set(["memories", "skills"]);
-let _userSpaceCache = "";
-
-async function resolveUserSpace() {
-  if (_userSpaceCache) return _userSpaceCache;
-
-  let fallbackSpace = "default";
-  try {
-    const status = await fetchJSON("/api/v1/system/status");
-    if (status && typeof status.user === "string" && status.user.trim()) {
-      fallbackSpace = status.user.trim();
-    }
-  } catch { /* fallback */ }
-
-  try {
-    const entries = await fetchJSON(`/api/v1/fs/ls?uri=${encodeURIComponent("viking://user")}&output=original`);
-    if (Array.isArray(entries)) {
-      const spaces = entries
-        .filter((e) => e?.isDir)
-        .map((e) => (typeof e.name === "string" ? e.name.trim() : ""))
-        .filter((n) => n && !n.startsWith(".") && !USER_RESERVED_DIRS.has(n));
-      if (spaces.length > 0) {
-        if (spaces.includes(fallbackSpace)) { _userSpaceCache = fallbackSpace; return fallbackSpace; }
-        if (spaces.includes("default")) { _userSpaceCache = "default"; return "default"; }
-        if (spaces.length === 1) { _userSpaceCache = spaces[0]; return spaces[0]; }
-      }
-    }
-  } catch { /* fallback */ }
-
-  _userSpaceCache = fallbackSpace;
-  return fallbackSpace;
-}
-
-async function resolveTargetUri(targetUri) {
-  const trimmed = targetUri.trim().replace(/\/+$/, "");
-  const m = trimmed.match(/^viking:\/\/user(?:\/(.*))?$/);
-  if (!m) return trimmed;
-  const rawRest = (m[1] ?? "").trim();
-  if (!rawRest) return trimmed;
-  const parts = rawRest.split("/").filter(Boolean);
-  if (parts.length === 0) return trimmed;
-  if (!USER_RESERVED_DIRS.has(parts[0])) return trimmed;
-  const space = await resolveUserSpace();
-  return `viking://user/${space}/${parts.join("/")}`;
-}
-
 async function searchScope(query, targetUri, limit, bucket = "memories") {
-  const resolvedUri = await resolveTargetUri(targetUri);
-  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
+  // Keep current-user shorthand here; the server canonicalizes it using the
+  // authenticated/trusted request context.
+  const body = { query, target_uri: targetUri, limit, score_threshold: 0 };
   const result = await fetchJSON("/api/v1/search/find", {
     method: "POST",
     body: JSON.stringify(body),

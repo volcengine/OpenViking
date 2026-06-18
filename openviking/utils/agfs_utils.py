@@ -4,10 +4,12 @@
 RAGFS Client utilities for creating and configuring RAGFS clients.
 """
 
+import asyncio
 import multiprocessing
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Thread
 from typing import Any, Callable, Dict
 
 from openviking_cli.utils.config.config_loader import resolve_config_path
@@ -46,6 +48,72 @@ class RagfsBindingConfig:
             }
 
         return binding_config
+
+
+def _run_coro_blocking(coro: Any) -> Any:
+    """Run an async coroutine from sync startup code, even if an event loop is already running."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: list[Any] = []
+    error: list[BaseException] = []
+
+    def _runner() -> None:
+        try:
+            result.append(asyncio.run(coro))
+        except BaseException as exc:
+            error.append(exc)
+
+    thread = Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    return result[0] if result else None
+
+
+def _dump_openviking_config(config: Any) -> Dict[str, Any]:
+    """Return a full OpenViking config dict for encryption bootstrap."""
+    if hasattr(config, "to_dict"):
+        dumped = config.to_dict()
+    elif hasattr(config, "model_dump"):
+        dumped = config.model_dump()
+    elif isinstance(config, dict):
+        dumped = config
+    else:
+        raise TypeError("OpenViking config must expose to_dict() or model_dump()")
+    if not isinstance(dumped, dict):
+        raise TypeError("OpenViking config dump must be a dictionary")
+    return dumped
+
+
+def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig, Any | None]:
+    """Build the runtime AGFS binding config from storage and encryption settings."""
+    from openviking.crypto.config import bootstrap_encryption
+
+    storage = _get_config_value(config, "storage")
+    agfs_config = _get_config_value(storage, "agfs") if storage is not None else None
+    if agfs_config is None:
+        raise ValueError("OpenViking config storage.agfs is required")
+
+    encryptor = _run_coro_blocking(bootstrap_encryption(_dump_openviking_config(config)))
+    if encryptor is None:
+        return RagfsBindingConfig(agfs=agfs_config), None
+
+    root_key = _run_coro_blocking(encryptor.provider.get_root_key())
+    if not isinstance(root_key, (bytes, bytearray)) or len(root_key) != 32:
+        raise RuntimeError("encryption root_key must be exactly 32 bytes")
+
+    return (
+        RagfsBindingConfig(
+            agfs=agfs_config,
+            root_key=bytes(root_key),
+            provider_type=encryptor.provider_type,
+        ),
+        encryptor,
+    )
 
 
 def resolve_queuefs_mount_point(config: Any = None) -> str:
