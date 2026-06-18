@@ -318,7 +318,11 @@ class FSService:
         context_type: str,
         ctx: RequestContext,
     ) -> None:
-        queue_manager = get_queue_manager()
+        try:
+            queue_manager = get_queue_manager()
+        except RuntimeError as exc:
+            logger.warning("QueueManager not available, skipping delete refresh: %s", exc)
+            return
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
         msg = SemanticMsg(
