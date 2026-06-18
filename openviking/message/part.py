@@ -6,7 +6,7 @@ Message consists of multiple Parts, each Part has different type and purpose.
 """
 
 from dataclasses import dataclass
-from typing import Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 
 @dataclass
@@ -31,6 +31,15 @@ class ContextPart:
 
 
 @dataclass
+class ImagePart:
+    """Image URL component compatible with OpenAI-style message content."""
+
+    type: Literal["image_url"] = "image_url"
+    url: str = ""
+    detail: Optional[str] = None
+
+
+@dataclass
 class ToolPart:
     """Tool call component (references tool file within session).
 
@@ -40,7 +49,7 @@ class ToolPart:
     type: Literal["tool"] = "tool"
     tool_id: str = ""
     tool_name: str = ""
-    tool_uri: str = ""  # viking://session/{user_space_name}/{session_id}/tools/{tool_id}
+    tool_uri: str = ""  # viking://user/{user_id}/sessions/{session_id}/tools/{tool_id}
     skill_uri: str = ""  # viking://user/{user_id}/skills/{skill_name}
     tool_input: Optional[dict] = None
     tool_output: str = ""
@@ -65,10 +74,19 @@ class ToolPart:
     tool_output_group_budget_chars: Optional[int] = None
 
 
-Part = Union[TextPart, ContextPart, ToolPart]
+Part = Union[TextPart, ContextPart, ImagePart, ToolPart]
 
 
-def part_from_dict(data: dict) -> Part:
+def _parse_image_url_payload(data: Dict[str, Any]) -> tuple[str, Optional[str]]:
+    image_url = data.get("image_url")
+    if isinstance(image_url, dict):
+        return str(image_url.get("url", "") or ""), image_url.get("detail")
+    if isinstance(image_url, str):
+        return image_url, None
+    return "", None
+
+
+def part_from_dict(data: Dict[str, Any]) -> Part:
     """Convert a dict to a Part object.
 
     Args:
@@ -85,6 +103,14 @@ def part_from_dict(data: dict) -> Part:
             uri=data.get("uri", ""),
             context_type=data.get("context_type", "memory"),
             abstract=data.get("abstract", ""),
+        )
+    elif part_type == "image_url":
+        url, detail = _parse_image_url_payload(data)
+        if not url.strip():
+            raise ValueError("image_url part requires a non-empty URL")
+        return ImagePart(
+            url=url,
+            detail=detail,
         )
     elif part_type == "tool":
         return ToolPart(

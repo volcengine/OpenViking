@@ -20,6 +20,7 @@ import {
   summarizeConnectionIdentity,
   useAppConnection,
 } from '#/hooks/use-app-connection'
+import { useIdentityDirectory } from '#/hooks/use-identity-directory'
 
 type ConsentSearch = {
   pending: string
@@ -52,7 +53,13 @@ export const Route = createFileRoute('/oauth/consent')({
 function ConsentPage() {
   const { t } = useTranslation(['oauth', 'common'])
   const { pending } = Route.useSearch()
-  const { connection, openConnectionSettings, serverMode } = useAppConnection()
+  const {
+    connection,
+    isConnectionRoleLoading,
+    openConnectionSettings,
+    serverMode,
+  } = useAppConnection()
+  const directory = useIdentityDirectory()
 
   const currentIdentity = React.useMemo(() => {
     const summary = summarizeConnectionIdentity(connection, serverMode)
@@ -65,6 +72,74 @@ function ConsentPage() {
     () =>
       connection.apiKey ? { mode: 'current' } : { mode: 'custom', apiKey: '' },
   )
+  // Set once the user manually picks a mode, so the default-mode effect stops
+  // overriding their choice.
+  const userTouchedRef = React.useRef(false)
+  const handleIdentityChange = React.useCallback(
+    (next: IdentityPickerValue) => {
+      userTouchedRef.current = true
+      setIdentityValue(next)
+    },
+    [],
+  )
+
+  // Default-mode selection. Runs until the user touches the picker. Critical
+  // for root (whose `connection.apiKey` is empty and who cannot authorize as
+  // "current") — once the directory is available, default to selecting a
+  // concrete account/user. Falls back to custom when no path is available.
+  React.useEffect(() => {
+    if (userTouchedRef.current || isConnectionRoleLoading) {
+      return
+    }
+    const desiredMode = connection.apiKey
+      ? 'current'
+      : directory.available
+        ? 'select'
+        : 'custom'
+    setIdentityValue((prev) => {
+      if (prev.mode === desiredMode) {
+        return prev
+      }
+      if (desiredMode === 'current') {
+        return { mode: 'current' }
+      }
+      if (desiredMode === 'select') {
+        return {
+          mode: 'select',
+          accountId: directory.selectedAccountId,
+          userId: directory.selectedUserId,
+          apiKey:
+            directory.resolveUserKey(
+              directory.selectedAccountId,
+              directory.selectedUserId,
+            ) ?? '',
+        }
+      }
+      return { mode: 'custom', apiKey: '' }
+    })
+  }, [connection.apiKey, directory, isConnectionRoleLoading])
+
+  // Keep the select payload (account/user/key) in sync with the directory
+  // whenever we are in select mode — including after the user changes the
+  // dropdowns or fresh user keys arrive.
+  React.useEffect(() => {
+    setIdentityValue((prev) => {
+      if (prev.mode !== 'select') {
+        return prev
+      }
+      const accountId = directory.selectedAccountId
+      const userId = directory.selectedUserId
+      const apiKey = directory.resolveUserKey(accountId, userId) ?? ''
+      if (
+        prev.accountId === accountId &&
+        prev.userId === userId &&
+        prev.apiKey === apiKey
+      ) {
+        return prev
+      }
+      return { mode: 'select', accountId, userId, apiKey }
+    })
+  }, [directory])
 
   React.useEffect(() => {
     if (!pending) {
@@ -236,7 +311,7 @@ function ConsentPage() {
                 </div>
               </dl>
 
-              {!connection.apiKey ? (
+              {!connection.apiKey && !directory.available ? (
                 <div className="grid gap-2 rounded-md border border-dashed p-3 text-sm">
                   <p>{t('consent.signInRequired')}</p>
                   <Button
@@ -255,9 +330,10 @@ function ConsentPage() {
 
               <IdentityPicker
                 value={identityValue}
-                onChange={setIdentityValue}
+                onChange={handleIdentityChange}
                 currentApiKey={connection.apiKey}
                 currentIdentityLabel={currentIdentity}
+                directory={directory}
                 disabled={
                   phase.kind === 'verifying' ||
                   phase.kind === 'denying' ||

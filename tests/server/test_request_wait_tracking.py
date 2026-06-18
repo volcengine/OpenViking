@@ -25,7 +25,8 @@ class _FakeRequestWaitTracker:
     def register_request(self, telemetry_id: str) -> None:
         self.registered_requests.append(telemetry_id)
 
-    async def wait_for_request(self, telemetry_id: str, timeout):
+    async def wait_for_request(self, telemetry_id: str, timeout, poll_interval=None):
+        del poll_interval
         self.wait_calls.append((telemetry_id, timeout))
 
     def build_queue_status(self, telemetry_id: str):
@@ -264,7 +265,7 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
     )
     lock_manager = SimpleNamespace(
         create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_tree=lambda handle, path: _return_true(handle, path),
+        acquire_exact_path=lambda handle, path: _return_true(handle, path),
         release=lambda handle: _return_none(handle),
     )
 
@@ -324,7 +325,7 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
     )
     lock_manager = SimpleNamespace(
         create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_tree=lambda handle, path: _return_true(handle, path),
+        acquire_exact_path=lambda handle, path: _return_true(handle, path),
         release=lambda handle: _return_none(handle),
     )
 

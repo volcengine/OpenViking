@@ -713,12 +713,14 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 
 Optional lightweight model for retrieval intent analysis and query planning. It uses the same configuration shape as `vlm`, but only affects `search()` intent analysis and query expansion. If `query_planner` is omitted or empty, OpenViking falls back to `vlm` for backward compatibility.
 
-We recommend the local Ollama model [`guoxuter/ov_intent_analysis_sft:v4_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v4_q8). Fine-tuned from Qwen3.5-0.8B, it can be deployed locally and is well suited to letting a small model handle retrieval planning: for small talk, greetings, or turns where the context is already sufficient, it returns no queries to reduce unnecessary memory injection and token consumption; when retrieval is needed, it emits structured queries targeting `skill`, `resource`, and `memory`.
+> In `openviking-server init` you can optionally enable a local lightweight query planner; the wizard pulls the Ollama model and writes the `query_planner` config for you. For recognized query-planner models, `search()` selects the matching bundled prompt at runtime. Models not in the mapping keep using `retrieval.intent_analysis`.
+
+We recommend the local Ollama model [`guoxuter/ov_intent_analysis_sft:v7_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v7_q8). Fine-tuned from Qwen3.5-0.8B, it can be deployed locally and is well suited to letting a small model handle retrieval planning: for small talk, greetings, or turns where the context is already sufficient, it returns no queries to reduce unnecessary memory injection and token consumption; when retrieval is needed, it emits structured queries targeting `skill`, `resource`, and `memory`. The earlier [`v4_q8`](https://ollama.com/guoxuter/ov_intent_analysis_sft:v4_q8) revision is still supported as an alternative.
 
 Pull the model first and make sure the Ollama service is reachable:
 
 ```bash
-ollama pull guoxuter/ov_intent_analysis_sft:v4_q8
+ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 ```
 
 Then add the following to your OpenViking configuration:
@@ -727,7 +729,7 @@ Then add the following to your OpenViking configuration:
 {
   "query_planner": {
     "provider": "litellm",
-    "model": "ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v7_q8",
     "api_base": "http://127.0.0.1:11434",
     "temperature": 0.0,
     "timeout": 60,
@@ -738,104 +740,7 @@ Then add the following to your OpenViking configuration:
 }
 ```
 
-> `v4_q8` produces more compact output with lower inference latency, but you also need to replace OpenViking's prompt file with the v4 prompt at `openviking/prompts/templates/retrieval/intent_analysis.yaml` to match the model's expected output schema.  
-> If you prefer not to modify the prompt file, you can keep using `v1_q8`, which is compatible with the current prompt: `ollama/guoxuter/ov_intent_analysis_sft:v1_q8`.
-
-Replace `openviking/prompts/templates/retrieval/intent_analysis.yaml` with:
-
-```yaml
-metadata:
-  id: "retrieval.intent_analysis"
-  name: "Intent Analysis v4"
-  description: "v4 prompt for compact intent-analysis models that emit only queries."
-  version: "4.0.0"
-  language: "en"
-  category: "retrieval"
-
-variables:
-  - name: "compression_summary"
-    type: "string"
-    description: "Session summary"
-    default: ""
-    required: false
-
-  - name: "recent_messages"
-    type: "string"
-    description: "Recent conversation"
-    required: true
-
-  - name: "current_message"
-    type: "string"
-    description: "Current message"
-    required: true
-
-  - name: "context_type"
-    type: "string"
-    description: "Restricted context type (skill/resource/memory)"
-    default: ""
-    required: false
-
-  - name: "target_abstract"
-    type: "string"
-    description: "Abstract of target directory"
-    default: ""
-    required: false
-
-template: |
-  You are OpenViking's context query planner. Given the session context and the current message, decide what context information is missing and emit retrieval queries to fill the gap.
-
-  ## Session Context
-
-  ### Session Summary
-  {{ compression_summary }}
-
-  ### Recent Conversation
-  {{ recent_messages }}
-
-  ### Current Message
-  {{ current_message }}
-  {% if context_type %}
-
-  ## Search Scope Constraints
-
-  **Restricted Context Type**: {{ context_type }}
-  {% if target_abstract %}
-  **Target Directory Abstract**: {{ target_abstract }}
-  {% endif %}
-
-  Only emit `{{ context_type }}` queries; do not generate other types.
-  {% endif %}
-
-  External information takes priority over built-in knowledge - actively query for any missing context.
-
-  ## Context Types
-
-  - `skill` - executable capability (tool, function, API, automation). Query style: imperative starting with a verb.
-  - `resource` - knowledge artifact (doc, spec, guide, code, configuration). Query style: noun phrase.
-  - `memory` - user preference or agent execution experience.
-
-  ## Procedure
-
-  1. Classify the task: operational tasks typically need skill+resource+memory; informational tasks typically need resource+memory; conversational small talk needs no query.
-  2. Skip any context type already covered explicitly in the conversation.
-  3. For each needed type, emit 1-5 concise retrievable queries with `priority` from 1 to 5.
-
-  ## Output Format
-
-  Output a single JSON object with exactly one top-level key:
-
-  - `queries`: array of objects with:
-    - `query`: actual query text
-    - `context_type`: one of `skill`, `resource`, `memory`
-    - `priority`: integer from 1 to 5
-
-  If no query is needed, set `queries` to an empty array `[]`.
-
-  Output the JSON object directly. Do not wrap it in markdown code fences.
-
-llm_config:
-  temperature: 0.0
-```
+For `ollama/guoxuter/ov_intent_analysis_sft:v7_q8` (and `v4_q8`), OpenViking automatically uses the matching bundled prompt during search (`retrieval.ov_intent_analysis_sft_v7` and `retrieval.ov_intent_analysis_sft_v4` respectively). No prompt file replacement or `prompts.templates_dir` override is required. If you use an unmapped model, OpenViking keeps the default `retrieval.intent_analysis` prompt.
 
 This lets a small model handle retrieval planning with lower latency, while keeping a stronger `vlm` for semantic extraction, memory extraction, and multimodal processing.
 
@@ -900,6 +805,30 @@ Set `code_summary_mode` to one of:
 AST extraction supports: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++. Other languages, extraction failures, or empty skeletons automatically fall back to LLM.
 
 See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction-ast-mode) for details.
+
+#### Remote resource network guard
+
+When ingesting a resource from a URL, OpenViking rejects loopback, link-local, private, and other non-public destinations, plus any host not on the code-hosting allowlist, raising `PermissionDeniedError`. To ingest code from self-hosted GitHub Enterprise / GitLab / Azure DevOps, add the host to the matching allowlist under `code`:
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `github_domains` | list[str] | Allowed GitHub hosts (add your GitHub Enterprise host here) | `["github.com", "www.github.com"]` |
+| `gitlab_domains` | list[str] | Allowed GitLab hosts (add your self-hosted GitLab host here) | `["gitlab.com", "www.gitlab.com"]` |
+| `azure_devops_domains` | list[str] | Allowed Azure DevOps hosts | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
+| `code_hosting_domains` | list[str] | Additional generic code-hosting hosts | `["github.com", "gitlab.com"]` |
+
+To ingest from private/internal network addresses (e.g. an internal mirror), set the top-level `allow_private_networks` to `true` (disabled by default, so only public addresses are allowed):
+
+```json
+{
+  "allow_private_networks": false,
+  "code": {
+    "github_domains": ["github.com", "github.example.com"]
+  }
+}
+```
+
+The `PermissionDeniedError` message names the exact key to add for the blocked host.
 
 ### rerank
 
@@ -1009,6 +938,8 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 |-----------|------|-------------|---------|
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
+| `backups` | object | Multi-write storage configuration. When set, the top-level `backend` acts as the primary backend and `backups.items[]` defines backup backends | `null` |
+| `redirects` | array | File redirect policies for multi-write storage. Matching files are written to the specified backup instead of the primary backend | `[]` |
 | `queuefs` | object | QueueFS configuration. Controls the namespace mode, backend, and runtime options for `/queue` | `{ "mode": "shared", "backend": "sqlite", "recover_stale_sec": 0, "busy_timeout_ms": 5000 }` |
 | `queue_db_path` | str (optional) | Legacy compatibility field for QueueFS sqlite DB path. Superseded by `storage.agfs.queuefs.db_path`. Defaults to `{storage.workspace}/_system/queue/queue.db` when not set. Useful when the workspace volume does not support sqlite (e.g. some network filesystems) | `null` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
@@ -1019,6 +950,82 @@ RAGFS uses Rust binding mode by default, directly accessing the file system thro
 
 > [!WARNING]
 > `storage.agfs` no longer supports the AGFS HTTP client mode, and the old HTTP client entry should not be configured anymore. AGFS / RAGFS filesystem access now happens only through the in-process Rust binding (`RAGFSBindingClient`). This does not affect the OpenViking server HTTP API, the `ov` CLI, or `AsyncHTTPClient` / `SyncHTTPClient` when they connect to an OpenViking server.
+
+##### Multi-Write Storage Configuration
+
+`storage.agfs.backups` enables multi-write storage. If it is not configured, OpenViking stays in single-backend mode.
+
+```json
+{
+  "storage": {
+    "workspace": "./data",
+    "agfs": {
+      "backend": "local",
+      "redirects": [
+        {
+          "type": "FileExtensionPolicy",
+          "extensions": ["(pdf|ppt|zip)"],
+          "target": ["s3-backup"]
+        }
+      ],
+      "backups": {
+        "sync_type": "async",
+        "items": [
+          {
+            "name": "s3-backup",
+            "backend": "s3",
+            "s3": {
+              "bucket": "openviking-backup",
+              "region": "cn-beijing",
+              "endpoint": "https://tos-s3-cn-beijing.volces.com",
+              "access_key": "your-ak",
+              "secret_key": "your-sk",
+              "prefix": "multi-write"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+Common `backups` fields:
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `sync_type` | str | Multi-write sync mode. Supports `"async"` or `"sync"` | `"async"` |
+| `write_ack_count` | int | Number of backup acknowledgements required before a `sync` write returns | all backups |
+| `write_ack_timeout_ms` | int | Timeout in milliseconds while waiting for backup acknowledgements in `sync` mode | `null` |
+| `write_concurrency` | int | Maximum async backup write concurrency | `null` |
+| `items` | array | Backup backend list. Each item reuses normal backend configuration and adds fields such as `name`, `operations`, `excludes`, and `encryption` | `[]` |
+
+Common `redirects` fields:
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `type` | str | Policy type. Supports `"FileExtensionPolicy"` or `"FileOverSizePolicy"` | required |
+| `extensions` | array | Extension regex list used by `FileExtensionPolicy`, for example `["(pdf\\|ppt)"]` | `[]` |
+| `max_size_mb` | int | File size threshold in MB used by `FileOverSizePolicy` | `null` |
+| `target` | array | Backup `name` list that receives matched files | required |
+
+File-size redirect example:
+
+```json
+{
+  "type": "FileOverSizePolicy",
+  "max_size_mb": 100,
+  "target": ["s3-backup"]
+}
+```
+
+Notes:
+
+- `redirects` is configured at top-level `storage.agfs` and defines redirect policies for the primary backend.
+- `target` must reference an existing backup `name` from `backups.items[]`.
+- Files matched by redirect still appear as normal readable and listable files through the filesystem APIs.
+
+See the [Multi-Write Storage Guide](./13-multi-write-storage.md) for more examples.
 
 ##### QueueFS Configuration
 
@@ -1098,6 +1105,7 @@ Legacy compatibility example:
 | `prefix` | str | Optional key prefix for namespace isolation | "" |
 | `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections. Also controls the scheme auto-prefixed onto bare-hostname `endpoint` values | true |
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
+| `auto_detect_content_type` | bool | Automatically infer MIME type from the object key / filename extension and set the S3 object `Content-Type` header during upload | false |
 | `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
 | `normalize_encoding_chars` | str | Characters to escape in S3 object keys as `!HH` hexadecimal bytes; empty string disables normalization | `"?#%+@"` |
 
@@ -1119,6 +1127,32 @@ Typical choices:
 - Escaped bytes are encoded as `!HH`, where `HH` is the uppercase hexadecimal value of the byte.
 - Characters not listed in `normalize_encoding_chars`, including Chinese and other Unicode characters, remain unchanged.
 - Set `normalize_encoding_chars` to `""` to keep original path segments in object keys.
+
+`auto_detect_content_type` is disabled by default for backward compatibility. When enabled, RAGFS infers the MIME type from the object key / filename extension and writes it to the S3 object `Content-Type`:
+
+- Detection is based on the object key / filename extension, not file content sniffing.
+- Directory markers whose keys end with `/` do not get a `Content-Type`.
+- Unknown extensions fall back to `application/octet-stream`.
+
+Example:
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "backend": "s3",
+      "s3": {
+        "bucket": "my-bucket",
+        "endpoint": "s3.amazonaws.com",
+        "region": "us-east-1",
+        "access_key": "your-ak",
+        "secret_key": "your-sk",
+        "auto_detect_content_type": true
+      }
+    }
+  }
+}
+```
 
 <details>
 <summary><b>PathStyle S3</b></summary>
@@ -1285,8 +1319,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 ```json
 {
   "memory": {
-    "version": "v2",
-    "agent_memory_enabled": false
+    "version": "v2"
   }
 }
 ```
@@ -1294,7 +1327,6 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | Field | Description | Default |
 |-------|-------------|---------|
 | `version` | Memory implementation version. Only `"v2"` is supported (legacy `"v1"` removed in #2264 — passing `"v1"` now raises a `ValueError` at config load). | `"v2"` |
-| `agent_memory_enabled` | Enables trajectory/experience memory extraction after user-memory extraction. | `false` |
 
 ### ovcli.conf
 

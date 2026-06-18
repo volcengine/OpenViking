@@ -4,6 +4,7 @@
 """Security tests for HTTP server local input handling."""
 
 import threading
+import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import httpx
@@ -43,6 +44,65 @@ description: temp uploaded skill
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["uri"].startswith("viking://user/default/skills/")
+
+
+async def test_add_skill_accepts_temp_uploaded_non_skill_filename(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    skill_file = upload_temp_dir / "upload_123.md"
+    skill_file.write_text(
+        """---
+name: uploaded-arbitrary-name
+description: temp uploaded skill
+---
+
+# Uploaded Skill
+"""
+    )
+    meta_file = upload_temp_dir / f"{skill_file.name}.ov_upload.meta"
+    meta_file.write_text('{"original_filename": "original-skill.md"}', encoding="utf-8")
+
+    resp = await client.post(
+        "/api/v1/skills",
+        json={"temp_file_id": skill_file.name, "wait": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["uri"].startswith("viking://user/default/skills/")
+
+
+async def test_add_skill_accepts_uploaded_zip_with_windows_separators(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    skill_zip = upload_temp_dir / "windows-skill.zip"
+    with zipfile.ZipFile(skill_zip, "w") as zf:
+        zf.writestr(
+            "SKILL.md",
+            """---
+name: windows-skill
+description: uploaded skill with Windows-style zip paths
+---
+
+# Windows Skill
+""",
+        )
+        zf.writestr("scripts\\check_bounding_boxes.py", "print('ok')\n")
+
+    resp = await client.post(
+        "/api/v1/skills",
+        json={"temp_file_id": skill_zip.name, "wait": True},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+
+    script_uri = f"{body['result']['uri']}/scripts/check_bounding_boxes.py"
+    read_resp = await client.get("/api/v1/content/read", params={"uri": script_uri})
+    assert read_resp.status_code == 200, read_resp.text
+    assert read_resp.json()["result"] == "print('ok')\n"
 
 
 async def test_add_skill_rejects_direct_local_path(client: httpx.AsyncClient):

@@ -243,7 +243,7 @@ class AgentLoop:
         await self.bus.publish_outbound(
             OutboundMessage(
                 session_key=session_key,
-                content=f"openviking_search({args_str})",
+                content=f"auto_memory_search({args_str})",
                 event_type=OutboundEventType.TOOL_CALL,
             )
         )
@@ -255,7 +255,7 @@ class AgentLoop:
             )
         )
         return {
-            "tool_name": "openviking_search",
+            "tool_name": "auto_memory_search",
             "args": args_str,
             "result": result,
             "duration": 0,
@@ -344,12 +344,17 @@ class AgentLoop:
         self,
         session_key: SessionKey,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ):
         workspace_id = self._get_ov_workspace_id(session_key)
-        if openviking_connection:
+        if openviking_connection or actor_peer_id:
             from vikingbot.openviking_mount.ov_server import VikingClient
 
-            return await VikingClient.create(workspace_id, connection=openviking_connection)
+            return await VikingClient.create(
+                workspace_id,
+                connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
+            )
 
         client = self._ov_clients.get(workspace_id)
         if client is None:
@@ -433,6 +438,7 @@ class AgentLoop:
         session: Session,
         provider_name: str | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        actor_peer_id: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self._ov_session_context_enabled():
             return session.get_history(provider_name=provider_name)
@@ -446,8 +452,9 @@ class AgentLoop:
             client = await self._get_ov_client(
                 session.key,
                 openviking_connection=openviking_connection,
+                actor_peer_id=actor_peer_id,
             )
-            if openviking_connection:
+            if openviking_connection or actor_peer_id:
                 request_client = client
             context_payload = await client.get_session_context(
                 session_id=session_id,
@@ -640,7 +647,8 @@ class AgentLoop:
         publish_events: bool = True,
         sender_id: str | None = None,
         ov_tools_enable: bool = True,
-        memory_user_ids: list[str] | None = None,
+        memory_peer_ids: list[str] | None = None,
+        memory_owner_user_ids: list[str] | None = None,
         disabled_tools: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
@@ -652,7 +660,9 @@ class AgentLoop:
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
             ov_tools_enable: Whether to enable OpenViking tools for this session
-            memory_user_ids: List of user IDs for memory retrieval
+            memory_peer_ids: List of peer IDs for memory retrieval
+            memory_owner_user_ids: List of explicit OpenViking user IDs for
+                legacy root-key fanout searches
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
 
@@ -776,7 +786,8 @@ class AgentLoop:
                         session_key=session_key,
                         sandbox_manager=self.sandbox_manager,
                         sender_id=sender_id,
-                        memory_user_ids=memory_user_ids,
+                        memory_peer_ids=memory_peer_ids,
+                        memory_owner_user_ids=memory_owner_user_ids,
                         openviking_connection=openviking_connection,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
@@ -920,17 +931,17 @@ class AgentLoop:
             if not isinstance(openviking_connection, dict):
                 openviking_connection = None
             msg.openviking_connection = openviking_connection
-            # Get profile_user_list from channel config
             profile_user_list = []
-            # Try to get memory_users from message metadata first (CLI mode), then from channel config
-            memory_user = msg.metadata.get("memory_users", []) if msg.metadata else []
+            memory_peer_ids = self._metadata_memory_peer_ids(msg.metadata)
+            memory_owner_user_ids = self._metadata_memory_owner_user_ids(msg.metadata)
             channel_config = self._get_channel_config(session_key)
 
             if channel_config and ov_tools_enable:
                 profile_user_list = getattr(channel_config, "profile_user_list", [])
-                # Only override if not already set from metadata
-                if not memory_user:
-                    memory_user = getattr(channel_config, "memory_user", None) or []
+                if not memory_peer_ids:
+                    memory_peer_ids = self._channel_memory_peer_ids(channel_config)
+                if not memory_owner_user_ids:
+                    memory_owner_user_ids = self._channel_memory_owner_user_ids(channel_config)
 
             # Handle slash commands
             is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
@@ -1045,9 +1056,9 @@ class AgentLoop:
             await self._evaluate_previous_response_outcome(session, msg)
 
             # Consolidate memory before processing if session is too large
-            if self._ov_session_context_enabled():
+            if self._ov_session_context_enabled() and not self._eval:
                 await self._maybe_commit_openviking_before_turn(session, msg)
-            elif len(session.messages) > self.memory_window:
+            elif len(session.messages) > self.memory_window and not self._eval:
                 # Clone session for async consolidation, then immediately trim original
                 session_clone = session.clone()
                 keep_count = min(10, max(2, self.memory_window // 2))
@@ -1079,6 +1090,7 @@ class AgentLoop:
                 session,
                 provider_name=provider_name,
                 openviking_connection=openviking_connection,
+                actor_peer_id=msg.sender_id,
             )
             messages = await message_context.build_messages(
                 history=history,
@@ -1087,7 +1099,8 @@ class AgentLoop:
                 session_key=msg.session_key,
                 ov_tools_enable=ov_tools_enable,
                 profile_user_list=profile_user_list,
-                memory_users=memory_user,
+                memory_peer_ids=memory_peer_ids,
+                memory_owner_user_ids=memory_owner_user_ids,
             )
             relevant_memories = message_context.latest_relevant_memories
             auto_memory_tool = None
@@ -1114,7 +1127,8 @@ class AgentLoop:
                     publish_events=True,
                     sender_id=msg.sender_id,
                     ov_tools_enable=ov_tools_enable,
-                    memory_user_ids=memory_user,
+                    memory_peer_ids=memory_peer_ids,
+                    memory_owner_user_ids=memory_owner_user_ids,
                     disabled_tools=disabled_tools,
                     openviking_connection=openviking_connection,
                 )
@@ -1151,7 +1165,7 @@ class AgentLoop:
                 )
                 session.metadata.setdefault("response_facts", {})[response_id] = response_completed
                 await self.sessions.save(session)
-                if self._ov_session_context_enabled():
+                if self._ov_session_context_enabled() and not self._eval:
                     await self._submit_openviking_session_and_clear_if_committed(
                         session,
                         commit_message_threshold=self.memory_window,
@@ -1290,6 +1304,37 @@ class AgentLoop:
         """
         return self.config.channels_config.get_channel_by_key(session_key.channel_key())
 
+    @staticmethod
+    def _normalize_id_list(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+        normalized: list[str] = []
+        for item in value:
+            item_str = str(item).strip()
+            if item_str and item_str not in normalized:
+                normalized.append(item_str)
+        return normalized
+
+    def _metadata_memory_peer_ids(self, metadata: dict[str, Any] | None) -> list[str]:
+        if not isinstance(metadata, dict):
+            return []
+        return self._normalize_id_list(metadata.get("memory_peers"))
+
+    def _metadata_memory_owner_user_ids(self, metadata: dict[str, Any] | None) -> list[str]:
+        if not isinstance(metadata, dict):
+            return []
+        return self._normalize_id_list(metadata.get("memory_users"))
+
+    def _channel_memory_peer_ids(self, channel_config: Any) -> list[str]:
+        return self._normalize_id_list(getattr(channel_config, "memory_peer", None))
+
+    def _channel_memory_owner_user_ids(self, channel_config: Any) -> list[str]:
+        return self._normalize_id_list(getattr(channel_config, "memory_user", None))
+
     def _get_ov_tools_enable(self, session_key: SessionKey) -> bool:
         """Get ov_tools_enable setting from channel config.
 
@@ -1322,7 +1367,11 @@ class AgentLoop:
 
         # Build messages with the announce content
         provider_name = self.config.get_provider_name(self.model) if self.config else None
-        history = await self._build_prompt_history(session, provider_name=provider_name)
+        history = await self._build_prompt_history(
+            session,
+            provider_name=provider_name,
+            actor_peer_id=msg.sender_id,
+        )
         messages = await self.context.build_messages(
             history=history,
             current_message=msg.content,
@@ -1343,7 +1392,7 @@ class AgentLoop:
             session_key=msg.session_key,
             publish_events=False,
             ov_tools_enable=ov_tools_enable,
-            memory_user_ids=None,
+            memory_peer_ids=None,
         )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):

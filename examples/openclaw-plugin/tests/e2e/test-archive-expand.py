@@ -205,6 +205,8 @@ USER_ID = f"xiaojie-{uuid.uuid4().hex[:8]}"
 DISPLAY_NAME = "小杰"
 DEFAULT_GATEWAY = "http://127.0.0.1:19789"
 DEFAULT_OPENVIKING = "http://127.0.0.1:2934"
+AGENT_ID = "main"
+
 console = Console(force_terminal=True)
 
 # ── 测试结果收集 ──────────────────────────────────────────────────────────
@@ -376,11 +378,14 @@ def extract_reply_text(data: dict) -> str:
 
 
 class OVInspector:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, agent_id: str = AGENT_ID):
         self.base_url = base_url.rstrip("/")
+        self.agent_id = agent_id
 
     def _headers(self) -> dict:
         h: dict[str, str] = {"Content-Type": "application/json"}
+        if self.agent_id:
+            h["X-OpenViking-Actor-Peer"] = self.agent_id
         return h
 
     def _get(self, path: str, timeout: int = 10):
@@ -1028,6 +1033,7 @@ def main():
     )
     parser.add_argument("--delay", type=float, default=3.0, help="轮次间等待秒数 (默认: 3)")
     parser.add_argument("--token", default="", help="Gateway auth token (默认: 自动发现)")
+    parser.add_argument("--agent-id", default=AGENT_ID, help=f"Agent ID (默认: {AGENT_ID})")
     parser.add_argument(
         "--gateway-restart-cmd",
         default="",

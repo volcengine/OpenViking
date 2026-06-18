@@ -1,16 +1,18 @@
 /**
  * Shared configuration loader for the Codex OpenViking memory plugin.
  *
- * Resolution priority (highest → lowest), per-field:
- *   1. Environment variables (OPENVIKING_*)
- *   2. ovcli.conf — the CLI client config (carries url/api_key/account/user)
- *   3. ov.conf — the server config (server.* + optional codex.* block for tuning)
- *   4. Built-in defaults
+ * Credential source:
+ *   - Default: active ovcli.conf wins when present, so `ov config switch`
+ *     changes hooks, MCP, and in-process `ov` commands together on next launch.
+ *   - Set OPENVIKING_CREDENTIAL_SOURCE=env to force env-var credentials.
+ *   - Without ovcli.conf, env vars and then ov.conf/defaults are used.
  *
- * Mirrors examples/claude-code-memory-plugin/scripts/config.mjs so the
- * hook surface and the MCP server (src/memory-server.ts imports loadConfig
- * from here) resolve identity identically. Aligning the two prevents
- * silent identity drift between auto-capture and explicit `remember` calls.
+ * Tuning resolution remains env vars > ov.conf codex.* > built-in defaults.
+ *
+ * Mirrors the credential fields that Codex's streamable-HTTP MCP entry
+ * receives from the shell wrapper. Aligning the resolver prevents identity
+ * drift between auto-capture/auto-recall hooks, MCP calls, and child `ov`
+ * commands launched from inside Codex.
  *
  * File-path env vars:
  *   OPENVIKING_CLI_CONFIG_FILE  alternate ovcli.conf path  (preferred)
@@ -28,16 +30,15 @@
  *
  * Misc env vars:
  *   OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS
+ *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
+ *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
  */
 
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
-
-const DEFAULT_OVCLI_CONF_PATH = join(homedir(), ".openviking", "ovcli.conf");
-const DEFAULT_OV_CONF_PATH = join(homedir(), ".openviking", "ov.conf");
+import { join } from "node:path";
+import { resolveOpenVikingCredentials } from "./ov-credentials.mjs";
 
 function num(val, fallback) {
   if (typeof val === "number" && Number.isFinite(val)) return val;
@@ -57,126 +58,21 @@ function envBool(name) {
   const v = process.env[name];
   if (v == null || v === "") return undefined;
   const lower = v.trim().toLowerCase();
-  if (lower === "0" || lower === "false" || lower === "no") return false;
+  if (lower === "0" || lower === "false" || lower === "no" || lower === "off") return false;
   if (lower === "1" || lower === "true" || lower === "yes") return true;
   return undefined;
 }
 
-function tryLoadJson(path) {
-  let raw;
-  try {
-    raw = readFileSync(path, "utf-8");
-  } catch {
-    return null;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch {
-    process.stderr.write(`[openviking-memory] Invalid config file: ${path}\n`);
-    return null;
-  }
-}
-
-function looksLikeOvcli(obj) {
-  if (!obj || typeof obj !== "object") return false;
-  if (obj.server && typeof obj.server === "object") return false;
-  return typeof obj.url === "string" || typeof obj.api_key === "string";
-}
-
-/**
- * Returns { cliFile, cliPath, ovFile, ovPath }. Missing files are
- * represented as empty objects, so callers can read fields unconditionally.
- *
- * OPENVIKING_CLI_CONFIG_FILE overrides the ovcli.conf path.
- * OPENVIKING_CONFIG_FILE overrides the ov.conf path; if the file looks
- * like an ovcli.conf (no `server` section + has `url`/`api_key`), it is
- * also used as the cliFile to support the legacy "pass any conf via
- * OPENVIKING_CONFIG_FILE" pattern.
- */
-function loadFiles() {
-  const cliPathEnv = process.env.OPENVIKING_CLI_CONFIG_FILE
-    ? resolvePath(process.env.OPENVIKING_CLI_CONFIG_FILE.replace(/^~/, homedir()))
-    : null;
-  const ovPathEnv = process.env.OPENVIKING_CONFIG_FILE
-    ? resolvePath(process.env.OPENVIKING_CONFIG_FILE.replace(/^~/, homedir()))
-    : null;
-
-  const cliPath = cliPathEnv || DEFAULT_OVCLI_CONF_PATH;
-  const ovPath = ovPathEnv || DEFAULT_OV_CONF_PATH;
-
-  let cliFile = tryLoadJson(cliPath);
-  let cliLoadedFrom = cliFile ? cliPath : null;
-  let ovFile = tryLoadJson(ovPath);
-  let ovLoadedFrom = ovFile ? ovPath : null;
-
-  // Backward compat: OPENVIKING_CONFIG_FILE pointing at an ovcli-shaped file.
-  // Earlier plugin versions had a single OPENVIKING_CONFIG_FILE that could
-  // point at either ov.conf or ovcli.conf; preserve that by promoting.
-  if (ovPathEnv && !cliPathEnv && looksLikeOvcli(ovFile)) {
-    cliFile = ovFile;
-    cliLoadedFrom = ovLoadedFrom;
-    ovFile = null;
-    ovLoadedFrom = null;
-  }
-
-  return {
-    cliFile: cliFile || {},
-    cliPath: cliLoadedFrom,
-    ovFile: ovFile || {},
-    ovPath: ovLoadedFrom,
-  };
-}
-
-function deriveBaseUrl({ cliFile, ovFile }) {
-  const envUrl = str(process.env.OPENVIKING_URL, null) || str(process.env.OPENVIKING_BASE_URL, null);
-  if (envUrl) return envUrl.replace(/\/+$/, "");
-
-  const cliUrl = str(cliFile.url, null);
-  if (cliUrl) return cliUrl.replace(/\/+$/, "");
-
-  const server = ovFile.server || {};
-  const ovUrl = str(server.url, null);
-  if (ovUrl) return ovUrl.replace(/\/+$/, "");
-
-  const host = str(server.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1");
-  const port = Math.floor(num(server.port, 1933));
-  return `http://${host}:${port}`;
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj || {}, key);
 }
 
 export function loadConfig() {
-  const { cliFile, cliPath, ovFile, ovPath } = loadFiles();
+  const creds = resolveOpenVikingCredentials();
+  const { cliPath, ovFile, ovPath } = creds;
   const configPath = cliPath || ovPath || null;
 
-  const server = ovFile.server || {};
   const cx = ovFile.codex || {};
-
-  const baseUrl = deriveBaseUrl({ cliFile, ovFile });
-
-  // apiKey: env > cliFile.api_key > codex.apiKey > server.root_api_key
-  // Accepts OPENVIKING_BEARER_TOKEN or OPENVIKING_API_KEY (sent as Bearer either way).
-  const apiKey =
-    str(process.env.OPENVIKING_BEARER_TOKEN, null) ||
-    str(process.env.OPENVIKING_API_KEY, null) ||
-    str(cliFile.api_key, null) ||
-    str(cx.apiKey, null) ||
-    str(server.root_api_key, "");
-
-  // account: env > cliFile.account > codex.accountId > ""
-  const account =
-    str(process.env.OPENVIKING_ACCOUNT, null) ||
-    str(cliFile.account, null) ||
-    str(cx.accountId, "");
-
-  // user: env > cliFile.user > codex.userId > ""
-  const user =
-    str(process.env.OPENVIKING_USER, null) ||
-    str(cliFile.user, null) ||
-    str(cx.userId, "");
-
-  const peerId =
-    str(process.env.OPENVIKING_PEER_ID, null) ||
-    str(cx.peerId, null) ||
-    str(cx.peer_id, "");
 
   const debug = envBool("OPENVIKING_DEBUG") ?? (cx.debug === true);
   const defaultLogPath = join(homedir(), ".openviking", "logs", "codex-hooks.log");
@@ -190,17 +86,42 @@ export function loadConfig() {
     process.env.OPENVIKING_CAPTURE_TIMEOUT_MS,
     num(cx.captureTimeoutMs, Math.max(timeoutMs * 2, 30000)),
   )));
+  const recallTimeoutMs = Math.max(1000, Math.floor(num(
+    process.env.OPENVIKING_RECALL_TIMEOUT_MS,
+    num(cx.recallTimeoutMs, 120000),
+  )));
+  const defaultRecallCompressTimeoutMs = Math.max(1000, recallTimeoutMs - 10000);
+  const recallCompressTimeoutMs = Math.max(1000, Math.floor(num(
+    process.env.OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS,
+    num(cx.recallCompressTimeoutMs, defaultRecallCompressTimeoutMs),
+  )));
+  const recallCompressModel = str(
+    process.env.OPENVIKING_RECALL_COMPRESS_MODEL,
+    hasOwn(cx, "recallCompressModel") ? str(cx.recallCompressModel, "") : "",
+  );
+  const cxRecallCompressThinking = hasOwn(cx, "recallCompressThinking")
+    ? cx.recallCompressThinking
+    : (hasOwn(cx, "recallCompressReasoningEffort") ? cx.recallCompressReasoningEffort : "");
+  const recallCompressThinking = str(
+    process.env.OPENVIKING_RECALL_COMPRESS_THINKING,
+    str(
+      process.env.OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT,
+      str(cxRecallCompressThinking, ""),
+    ),
+  );
 
   return {
     configPath,
     cliConfigPath: cliPath,
     ovConfigPath: ovPath,
-    baseUrl,
-    apiKey,
-    account,
-    user,
-    peerId,
+    credentialSource: creds.credentialSource,
+    baseUrl: creds.baseUrl,
+    apiKey: creds.apiKey,
+    account: creds.account,
+    user: creds.user,
+    peerId: creds.peerId,
     timeoutMs,
+    recallTimeoutMs,
 
     autoRecall: envBool("OPENVIKING_AUTO_RECALL") ?? (cx.autoRecall !== false),
     recallLimit: Math.max(1, Math.floor(num(
@@ -216,6 +137,28 @@ export function loadConfig() {
       num(cx.minQueryLength, 3),
     ))),
     logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cx.logRankingDetails === true),
+    recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? (cx.recallCompress !== false),
+    recallCompressModel,
+    recallCompressThinking,
+    recallCompressConfigured: Boolean(recallCompressModel || recallCompressThinking),
+    recallCompressTimeoutMs,
+    recallCompressDetectOnStartup: envBool("OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP") ?? (cx.recallCompressDetectOnStartup !== false),
+    recallCompressDetectTimeoutMs: Math.max(1000, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_DETECT_TIMEOUT_MS,
+      num(cx.recallCompressDetectTimeoutMs, 15000),
+    ))),
+    recallCompressDetectTtlMs: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS,
+      num(cx.recallCompressDetectTtlMs, 604800000),
+    ))),
+    recallCompressMaxInputChars: Math.max(1000, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_MAX_INPUT_CHARS,
+      num(cx.recallCompressMaxInputChars, 18000),
+    ))),
+    recallCompressMaxBullets: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_MAX_BULLETS,
+      num(cx.recallCompressMaxBullets, 6),
+    ))),
 
     autoCapture: envBool("OPENVIKING_AUTO_CAPTURE") ?? (cx.autoCapture !== false),
     captureMode: (str(process.env.OPENVIKING_CAPTURE_MODE, str(cx.captureMode, "semantic")) === "keyword")
@@ -225,7 +168,15 @@ export function loadConfig() {
       process.env.OPENVIKING_CAPTURE_MAX_LENGTH,
       num(cx.captureMaxLength, 24000),
     ))),
+    captureMaxTurnsPerStop: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_CAPTURE_MAX_TURNS_PER_STOP,
+      num(cx.captureMaxTurnsPerStop, 8),
+    ))),
     captureTimeoutMs,
+    captureToolMaxChars: Math.max(200, Math.floor(num(
+      process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS,
+      num(cx.captureToolMaxChars, 2000),
+    ))),
     // Default true: a "memory plugin" without assistant-side capture only sees half the
     // conversation, which makes extraction noticeably worse. Mirrors the claude-code plugin
     // (examples/claude-code-memory-plugin/scripts/config.mjs). Operators who want the old
@@ -234,6 +185,15 @@ export function loadConfig() {
     captureLastAssistantOnStop: envBool("OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP") ?? (cx.captureLastAssistantOnStop !== false),
 
     autoCommitOnCompact: envBool("OPENVIKING_AUTO_COMMIT_ON_COMPACT") ?? (cx.autoCommitOnCompact !== false),
+    resumeArchiveInject: envBool("OPENVIKING_RESUME_ARCHIVE_INJECT") ?? (cx.resumeArchiveInject !== false),
+    resumeArchiveTokenBudget: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET,
+      num(cx.resumeArchiveTokenBudget, 32000),
+    ))),
+    resumeArchiveMaxChars: Math.max(1000, Math.floor(num(
+      process.env.OPENVIKING_RESUME_ARCHIVE_MAX_CHARS,
+      num(cx.resumeArchiveMaxChars, 6000),
+    ))),
 
     debug,
     debugLogPath,

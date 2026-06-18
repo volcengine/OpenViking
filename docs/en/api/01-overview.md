@@ -74,6 +74,42 @@ client = ov.SyncHTTPClient(
 client.initialize()
 ```
 
+#### Go SDK Client
+
+The Go SDK is an HTTP-only client for Client-Server mode. It is published from
+the main repository as the `sdk/go` module.
+
+```bash
+go get github.com/volcengine/OpenViking/sdk/go
+```
+
+```go
+client, err := openviking.NewClient(openviking.Config{
+    BaseURL: "http://localhost:1933",
+    APIKey:  "your-key",
+})
+if err != nil {
+    return err
+}
+defer client.CloseIdleConnections()
+```
+
+The Go SDK sends the same identity headers as the Python HTTP client:
+
+| Config field | HTTP header |
+|--------------|-------------|
+| `APIKey` | `X-API-Key` |
+| `Account` | `X-OpenViking-Account` |
+| `User` | `X-OpenViking-User` |
+| `ActorPeerID` | `X-OpenViking-Actor-Peer` |
+
+For normal `api_key` deployments, `APIKey` is enough because the server derives
+tenant identity from the key. Set `Account` and `User` only for trusted
+deployments or gateways that explicitly forward tenant identity.
+
+It does not implement Python embedded mode or legacy `agent_id` compatibility.
+See [`sdk/go/README.md`](../../../sdk/go/README.md) for package-level examples.
+
 When `url` is not explicitly provided, the HTTP client automatically reads connection information from `ovcli.conf`. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
 
 ```bash
@@ -353,7 +389,31 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 |--------|------|-------------|
 | POST | `/api/v1/resources/temp_upload` | Upload local file for raw HTTP resource / pack import |
 | POST | `/api/v1/resources` | Add resource (supports URL or temp_file_id) |
+
+### Skills
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/skills` | List installed skills |
 | POST | `/api/v1/skills` | Add skill |
+| POST | `/api/v1/skills/find` | Search installed skills |
+| POST | `/api/v1/skills/validate` | Validate skill payload |
+| GET | `/api/v1/skills/{skill_name}` | Get skill |
+| PUT | `/api/v1/skills/{skill_name}` | Update skill |
+| DELETE | `/api/v1/skills/{skill_name}` | Delete skill |
+
+### Watches
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/watches` | List watches or get one by `to_uri` |
+| GET | `/api/v1/watches/{task_id}` | Get watch |
+| PATCH | `/api/v1/watches` | Update watch by `to_uri` |
+| PATCH | `/api/v1/watches/{task_id}` | Update watch by task ID |
+| DELETE | `/api/v1/watches` | Delete watch by `to_uri` |
+| DELETE | `/api/v1/watches/{task_id}` | Delete watch by task ID |
+| POST | `/api/v1/watches/trigger` | Trigger watch by `to_uri` |
+| POST | `/api/v1/watches/{task_id}/trigger` | Trigger watch by task ID |
 
 ### Pack
 

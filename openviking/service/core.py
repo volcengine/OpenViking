@@ -6,21 +6,18 @@ OpenViking Service Core.
 Main service class that composes all sub-services and manages infrastructure lifecycle.
 """
 
-import asyncio
 import os
-from threading import Thread
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
-from openviking.crypto.config import bootstrap_encryption
 from openviking.privacy import UserPrivacyConfigService
-from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
 from openviking.service.pack_service import PackService
 from openviking.service.relation_service import RelationService
+from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
@@ -32,7 +29,10 @@ from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
-from openviking.utils.agfs_utils import resolve_queuefs_mount_point
+from openviking.utils.agfs_utils import (
+    build_runtime_ragfs_binding_config,
+    resolve_queuefs_mount_point,
+)
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotInitializedError
@@ -46,31 +46,6 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from openviking.session.compressor_v2 import SessionCompressorV2
-
-
-def _run_coro_blocking(coro: Any) -> Any:
-    """Run an async coroutine from sync startup code, even if an event loop is already running."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    result: list[Any] = []
-    error: list[BaseException] = []
-
-    def _runner() -> None:
-        """Execute the coroutine in an isolated event loop on a helper thread."""
-        try:
-            result.append(asyncio.run(coro))
-        except BaseException as exc:
-            error.append(exc)
-
-    thread = Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join()
-    if error:
-        raise error[0]
-    return result[0] if result else None
 
 
 class OpenVikingService:
@@ -120,6 +95,7 @@ class OpenVikingService:
         self._relation_service = RelationService()
         self._pack_service = PackService()
         self._search_service = SearchService()
+        self._resource_memory_link_service = ResourceMemoryLinkService()
         self._resource_service = ResourceService()
         self._session_service = SessionService()
         self._debug_service = DebugService()
@@ -163,10 +139,6 @@ class OpenVikingService:
         # Create RAGFS client using utility
         runtime_binding_config = binding_config or RagfsBindingConfig(agfs=config.agfs)
         self._agfs_client = create_agfs_client(runtime_binding_config)
-        self._probe_storage_shape(
-            self._agfs_client,
-            encrypted_mode=runtime_binding_config.encryption_enabled(),
-        )
 
         # Initialize QueueManager with agfs_client
         if self._agfs_client:
@@ -206,22 +178,8 @@ class OpenVikingService:
 
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
-        from openviking.utils.agfs_utils import RagfsBindingConfig
-
-        full_config = self._config.to_dict()
-        self._encryptor = _run_coro_blocking(bootstrap_encryption(full_config))
-        if self._encryptor is None:
-            return RagfsBindingConfig(agfs=self._config.storage.agfs)
-
-        root_key = _run_coro_blocking(self._encryptor.provider.get_root_key())
-        if not isinstance(root_key, (bytes, bytearray)) or len(root_key) != 32:
-            raise RuntimeError("encryption root_key must be exactly 32 bytes")
-
-        return RagfsBindingConfig(
-            agfs=self._config.storage.agfs,
-            root_key=bytes(root_key),
-            provider_type=self._encryptor.provider_type,
-        )
+        binding_config, self._encryptor = build_runtime_ragfs_binding_config(self._config)
+        return binding_config
 
     def _ensure_data_dir_lock_acquired(self) -> None:
         """Acquire the process-level data directory lock once for this service instance."""
@@ -239,25 +197,6 @@ class OpenVikingService:
                 self._config.storage.workspace,
             )
         self._data_dir_lock_acquired = True
-
-    def _probe_storage_shape(self, agfs_client: Any, encrypted_mode: bool) -> None:
-        """Fail fast if existing system metadata shape conflicts with current encryption mode."""
-        try:
-            raw = agfs_client.read_raw("/local/_system/accounts.json")
-        except AGFSNotFoundError:
-            return
-
-        is_encrypted = raw.startswith(b"OVE1")
-        if encrypted_mode and not is_encrypted:
-            raise RuntimeError(
-                "Storage shape mismatch: encryption is enabled but existing "
-                "remained data is plaintext"
-            )
-        if not encrypted_mode and is_encrypted:
-            raise RuntimeError(
-                "Storage shape mismatch: encryption is disabled but existing "
-                "remained data is encrypted"
-            )
 
     @property
     def _agfs(self) -> Any:
@@ -438,7 +377,14 @@ class OpenVikingService:
         # Wire up sub-services
         self._fs_service.set_dependencies(
             viking_fs=self._viking_fs,
+            vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
+            resource_memory_link_service=self._resource_memory_link_service,
+        )
+        self._resource_memory_link_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
+            session_service=self._session_service,
         )
         self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(
@@ -452,6 +398,7 @@ class OpenVikingService:
             resource_processor=self._resource_processor,
             skill_processor=self._skill_processor,
             watch_scheduler=self._watch_scheduler,
+            resource_memory_link_service=self._resource_memory_link_service,
         )
         self._session_service.set_dependencies(
             vikingdb=self._vikingdb_manager,

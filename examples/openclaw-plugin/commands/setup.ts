@@ -64,6 +64,7 @@ const CONFIG_KEYS_TO_PRESERVE = [
   "captureMaxLength",
   "autoRecall",
   "recallResources",
+  "recallTargetTypes",
   "recallLimit",
   "recallScoreThreshold",
   "recallMaxInjectedChars",
@@ -78,6 +79,9 @@ const CONFIG_KEYS_TO_PRESERVE = [
 ] as const;
 
 type PeerRole = "none" | "assistant" | "person";
+const DEFAULT_SETUP_PEER_ROLE: PeerRole = "assistant";
+type RecallTargetType = "resource" | "user" | "agent";
+const ALLOWED_RECALL_TARGET_TYPES = ["resource", "user", "agent"] as const;
 
 type CommandProgram = {
   command: (name: string) => CommandBuilder;
@@ -118,7 +122,7 @@ function normalizePeerRole(value: unknown): PeerRole | undefined {
 function resolveExistingPeerRole(existing: Record<string, unknown> | null | undefined): PeerRole {
   const explicit = normalizePeerRole(existing?.peer_role);
   if (explicit) return explicit;
-  return "none";
+  return DEFAULT_SETUP_PEER_ROLE;
 }
 
 function resolveExistingPeerPrefix(existing: Record<string, unknown> | null | undefined): string {
@@ -129,10 +133,48 @@ function resolveExistingPeerPrefix(existing: Record<string, unknown> | null | un
 }
 
 function resolveSetupPeerRole(value: unknown): PeerRole {
-  if (value === undefined) return "none";
+  if (value === undefined) return DEFAULT_SETUP_PEER_ROLE;
   const role = normalizePeerRole(value);
   if (role) return role;
   throw new Error('peer_role must be "none", "assistant", or "person"');
+}
+
+function normalizeSetupRecallTargetTypes(value: unknown): RecallTargetType[] | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const entries = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[,\n]/)
+      : [];
+  const seen = new Set<RecallTargetType>();
+  const normalized: RecallTargetType[] = [];
+  const unknown: string[] = [];
+
+  for (const raw of entries) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const entry = raw.trim();
+    if (!entry) {
+      continue;
+    }
+    if ((ALLOWED_RECALL_TARGET_TYPES as readonly string[]).includes(entry)) {
+      const typed = entry as RecallTargetType;
+      if (!seen.has(typed)) {
+        seen.add(typed);
+        normalized.push(typed);
+      }
+    } else {
+      unknown.push(entry);
+    }
+  }
+
+  if (unknown.length > 0) {
+    throw new Error(`recall-target-types contains unknown resource types: ${unknown.join(", ")}`);
+  }
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function preserveCurrentConfig(existing: Record<string, unknown> | null | undefined) {
@@ -454,6 +496,7 @@ type SetupResult = {
     peer_prefix?: string;
     accountId?: string;
     userId?: string;
+    recallTargetTypes?: string[];
   };
   health?: HealthResult;
   keyProbe?: ApiKeyProbeResult;
@@ -539,6 +582,7 @@ export function registerSetupCli(api: any): void {
         .option("--peer-prefix <prefix>", "Prefix for assistant peer_id values")
         .option("--account-id <id>", "Account ID (required for root API keys)")
         .option("--user-id <id>", "User ID (required for root API keys)")
+        .option("--recall-target-types <types>", "Comma-separated recall target types: user, agent, resource")
         .option("--allow-offline", "Allow config write even if server is unreachable")
         .option("--force-slot", "Replace existing contextEngine slot even if owned by another plugin")
         .option("--json", "Output result as JSON (machine-readable)")
@@ -546,11 +590,11 @@ export function registerSetupCli(api: any): void {
           const options = (args[0] ?? {}) as Record<string, unknown>;
           const {
             reconfigure, zh: zhOpt, baseUrl, apiKey, peerRole, peerPrefix,
-            accountId, userId, allowOffline, forceSlot, json: jsonOpt,
+            accountId, userId, recallTargetTypes, allowOffline, forceSlot, json: jsonOpt,
           } = options as {
             reconfigure?: boolean; zh?: boolean; baseUrl?: string;
             apiKey?: string; peerRole?: string; peerPrefix?: string; accountId?: string;
-            userId?: string; allowOffline?: boolean; forceSlot?: boolean;
+            userId?: string; recallTargetTypes?: string; allowOffline?: boolean; forceSlot?: boolean;
             json?: boolean;
           };
           const zh = detectLangZh(options);
@@ -566,6 +610,7 @@ export function registerSetupCli(api: any): void {
               peerPrefix,
               accountId,
               userId,
+              recallTargetTypes: normalizeSetupRecallTargetTypes(recallTargetTypes),
               allowOffline: !!allowOffline,
               forceSlot: !!forceSlot,
             });
@@ -741,10 +786,20 @@ async function runRemoteCheck(
 
 async function setupNonInteractive(
   configPath: string,
-  params: { baseUrl: string; apiKey?: string; peerRole?: string; peerPrefix?: string; accountId?: string; userId?: string; allowOffline?: boolean; forceSlot?: boolean },
+  params: {
+    baseUrl: string;
+    apiKey?: string;
+    peerRole?: string;
+    peerPrefix?: string;
+    accountId?: string;
+    userId?: string;
+    recallTargetTypes?: string[];
+    allowOffline?: boolean;
+    forceSlot?: boolean;
+  },
 ): Promise<SetupResult> {
   try {
-    const { baseUrl, apiKey, peerPrefix, accountId, userId, allowOffline, forceSlot } = params;
+    const { baseUrl, apiKey, peerPrefix, accountId, userId, recallTargetTypes, allowOffline, forceSlot } = params;
     const resolvedPeerRole = resolveSetupPeerRole(params.peerRole);
     const resolvedPeerPrefix = (peerPrefix ?? "").trim();
     if (!isValidPeerPrefixInput(resolvedPeerPrefix)) {
@@ -793,6 +848,9 @@ async function setupNonInteractive(
     if (resolvedPeerPrefix) pluginCfg.peer_prefix = resolvedPeerPrefix;
     if (accountId) pluginCfg.accountId = accountId;
     if (userId) pluginCfg.userId = userId;
+    if (recallTargetTypes && recallTargetTypes.length > 0) {
+      pluginCfg.recallTargetTypes = recallTargetTypes;
+    }
 
     writeConfig(configPath, pluginCfg);
     const slot = activateContextEngineSlot(configPath, !!forceSlot);
@@ -809,6 +867,7 @@ async function setupNonInteractive(
           ...(resolvedPeerPrefix ? { peer_prefix: resolvedPeerPrefix } : {}),
           ...(accountId ? { accountId } : {}),
           ...(userId ? { userId } : {}),
+          ...(recallTargetTypes && recallTargetTypes.length > 0 ? { recallTargetTypes } : {}),
         },
         health,
         keyProbe,
@@ -828,6 +887,7 @@ async function setupNonInteractive(
         ...(resolvedPeerPrefix ? { peer_prefix: resolvedPeerPrefix } : {}),
         ...(accountId ? { accountId } : {}),
         ...(userId ? { userId } : {}),
+        ...(recallTargetTypes && recallTargetTypes.length > 0 ? { recallTargetTypes } : {}),
       },
       health,
       keyProbe,
@@ -852,10 +912,11 @@ function printSetupResult(zh: boolean, result: SetupResult): void {
       console.log(`  mode:    ${result.config.mode}`);
       console.log(`  baseUrl: ${result.config.baseUrl}`);
       if (result.config.apiKey) console.log(`  apiKey:  ${result.config.apiKey}`);
-      console.log(`  peer_role: ${result.config.peer_role ?? "none"}`);
+      console.log(`  peer_role: ${result.config.peer_role ?? DEFAULT_SETUP_PEER_ROLE}`);
       if (result.config.peer_prefix) console.log(`  peer_prefix: ${result.config.peer_prefix}`);
       if (result.config.accountId) console.log(`  accountId: ${result.config.accountId}`);
       if (result.config.userId) console.log(`  userId:  ${result.config.userId}`);
+      if (result.config.recallTargetTypes) console.log(`  recallTargetTypes: ${result.config.recallTargetTypes.join(",")}`);
     }
     console.log("");
     if (result.health?.ok) {
@@ -1091,6 +1152,7 @@ async function setupRemote(
 export const __test__ = {
   isLegacyLocalMode,
   isValidPeerPrefixInput,
+  normalizeSetupRecallTargetTypes,
   activateContextEngineSlot,
   isContextEngineSlotActive,
   getStatus,

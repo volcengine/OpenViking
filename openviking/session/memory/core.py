@@ -12,7 +12,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
 from openviking.server.identity import RequestContext
-from openviking.storage.viking_fs import VikingFS
 
 
 class ExtractContextProvider(ABC):
@@ -27,6 +26,12 @@ class ExtractContextProvider(ABC):
             完整的指令描述
         """
         pass
+
+    async def prepare_extraction_messages(self) -> None:
+        """
+        在构建 prompt、ranges 和 ExtractContext 之前准备 extraction-only messages。
+        """
+        return None
 
     @abstractmethod
     async def prefetch(

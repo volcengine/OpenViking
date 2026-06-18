@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import re
 import uuid
@@ -7,6 +8,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from loguru import logger
 
 import openviking as ov
+from openviking.core.peer_id import normalize_peer_id
 from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.user_apikey_manager import UserApiKeyManager
 
@@ -17,6 +19,23 @@ def _is_session_key(agent_id: Optional[str]) -> bool:
     return agent_id is not None and "__" in agent_id
 
 
+def _peer_id_from_external_id(peer_id: Optional[str]) -> Optional[str]:
+    if not peer_id:
+        return None
+    raw_peer_id = str(peer_id).strip()
+    if not raw_peer_id:
+        return None
+    if "/" in raw_peer_id or "\\" in raw_peer_id:
+        return None
+    try:
+        return normalize_peer_id(raw_peer_id)
+    except ValueError:
+        pass
+
+    encoded = base64.urlsafe_b64encode(raw_peer_id.encode("utf-8")).decode("ascii").rstrip("=")
+    return normalize_peer_id(f"ext-{encoded}")
+
+
 class VikingClient:
     def __init__(
         self,
@@ -24,6 +43,7 @@ class VikingClient:
         *,
         agent_id: Optional[str] = None,
         connection: Optional[Mapping[str, Any]] = None,
+        actor_peer_id: Optional[str] = None,
     ):
         if agent_id is None:
             agent_id = workspace_id
@@ -37,7 +57,7 @@ class VikingClient:
         self.agent_id = agent_id
         self.ov_path = config.ov_data_path
         self.mode = openviking_config.mode
-        self.api_key_type = (openviking_config.api_key_type or "root").strip().lower()
+        self.api_key_type = (openviking_config.api_key_type or "user").strip().lower()
         if self.api_key_type not in {"root", "user"}:
             raise ValueError(f"Invalid ov_server.api_key_type: {self.api_key_type}")
 
@@ -51,13 +71,19 @@ class VikingClient:
         self._namespace_policy_loaded = False
         self._request_connection = self._normalize_connection(connection)
         self._request_role: str | None = None
+        connection_actor_peer_id = (
+            self._request_connection.get("actor_peer_id") if self._request_connection else None
+        )
+        self.actor_peer_id = self._peer_id(actor_peer_id) or self._peer_id(connection_actor_peer_id)
 
         if openviking_config.mode == "local":
+            client_kwargs = {"url": openviking_config.server_url}
+            self._apply_actor_peer_scope(client_kwargs)
             if agent_id is None or _is_session_key(agent_id):
-                self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
+                self.client = ov.AsyncHTTPClient(**client_kwargs)
                 self.agent_id = "default"
             else:
-                self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
+                self.client = ov.AsyncHTTPClient(**client_kwargs)
             self.account_id = "default"
             self.user_id = "default"
             self.admin_user_id = "default"
@@ -70,14 +96,17 @@ class VikingClient:
         self.account_id = openviking_config.account_id
         self.admin_user_id = openviking_config.admin_user_id
 
+        api_key = openviking_config.api_key or openviking_config.root_api_key
         remote_client_kwargs = {
             "url": openviking_config.server_url,
-            "api_key": openviking_config.root_api_key,
+            "api_key": api_key,
+            "profile_enabled": False,
         }
         if self._is_root_key_mode():
             remote_client_kwargs["account"] = openviking_config.account_id
             remote_client_kwargs["user"] = openviking_config.admin_user_id
 
+        self._apply_actor_peer_scope(remote_client_kwargs)
         self.client = ov.AsyncHTTPClient(**remote_client_kwargs)
 
         if self._is_root_key_mode() and self.ov_path:
@@ -94,7 +123,15 @@ class VikingClient:
         if not isinstance(connection, Mapping):
             return None
         normalized: dict[str, Any] = {}
-        for key in ("api_key", "account_id", "user_id", "agent_id", "role", "server_url"):
+        for key in (
+            "api_key",
+            "account_id",
+            "user_id",
+            "agent_id",
+            "role",
+            "server_url",
+            "actor_peer_id",
+        ):
             value = connection.get(key)
             if isinstance(value, str) and value.strip():
                 normalized[key] = value.strip()
@@ -138,6 +175,7 @@ class VikingClient:
         if request_role != "user" and self.admin_user_id:
             remote_client_kwargs["user"] = self.admin_user_id
 
+        self._apply_actor_peer_scope(remote_client_kwargs)
         self.client = ov.AsyncHTTPClient(**remote_client_kwargs)
 
     async def _initialize(self):
@@ -152,9 +190,15 @@ class VikingClient:
         *,
         agent_id: Optional[str] = None,
         connection: Optional[Mapping[str, Any]] = None,
+        actor_peer_id: Optional[str] = None,
     ):
         """Factory method to create and initialize a VikingClient instance."""
-        instance = cls(workspace_id=workspace_id, agent_id=agent_id, connection=connection)
+        instance = cls(
+            workspace_id=workspace_id,
+            agent_id=agent_id,
+            connection=connection,
+            actor_peer_id=actor_peer_id,
+        )
         await instance._initialize()
         return instance
 
@@ -205,15 +249,35 @@ class VikingClient:
 
     def _effective_user_id(self, user_id: Optional[str]) -> str:
         if self._has_request_connection():
-            return user_id or self.admin_user_id
+            return ""
         if self._is_user_key_mode():
             return ""
         return user_id or self.admin_user_id
 
     def _effective_session_user_id(self, user_id: Optional[str] = None) -> Optional[str]:
-        if self._has_request_connection():
-            return self.admin_user_id or user_id
+        if self._has_request_connection() or self.mode == "local" or self._is_user_key_mode():
+            return None
         return user_id or self.admin_user_id
+
+    def session_owner_user_id(self) -> Optional[str]:
+        """Return the explicit OpenViking user for session operations, when needed."""
+        return self._effective_session_user_id()
+
+    @staticmethod
+    def default_memory_policy() -> Dict[str, Dict[str, bool]]:
+        """Write extracted conversation memories to peers by default for bot sessions."""
+        return {
+            "self": {"enabled": False},
+            "peer": {"enabled": True},
+        }
+
+    @staticmethod
+    def _peer_id(value: Optional[str]) -> Optional[str]:
+        return _peer_id_from_external_id(str(value)) if value is not None else None
+
+    def _apply_actor_peer_scope(self, client_kwargs: Dict[str, Any]) -> None:
+        if self.actor_peer_id:
+            client_kwargs["actor_peer_id"] = self.actor_peer_id
 
     async def _load_namespace_policy(self) -> None:
         if self._namespace_policy_loaded:
@@ -223,12 +287,12 @@ class VikingClient:
             "isolate_user_scope_by_agent": False,
             "isolate_agent_scope_by_user": False,
         }
-        if self._has_request_connection():
+        if self._has_request_connection() or self.mode == "local" or self._is_user_key_mode():
             self._namespace_policy = policy
             self._namespace_policy_loaded = True
             return
 
-        if self.mode == "remote" and self.account_id:
+        if self._is_root_key_mode() and self.account_id:
             try:
                 accounts = await self.client.admin_list_accounts()
                 for account in accounts or []:
@@ -264,14 +328,147 @@ class VikingClient:
             return f"viking://user/{user_space}/memories/"
         return "viking://user/memories/"
 
+    def _peer_memory_target_uri(self, user_id: Optional[str], peer_id: str) -> str:
+        user_space = self._user_space_fragment(user_id)
+        normalized_peer_id = self._peer_id(peer_id)
+        if not normalized_peer_id:
+            raise ValueError("peer_id is required for peer memory target")
+        if not user_space:
+            raise ValueError("peer memory target requires explicit user_id")
+        return f"viking://user/{user_space}/peers/{normalized_peer_id}/memories/"
+
+    def _current_user_space_fragment(self) -> str:
+        current_user_id = getattr(self, "admin_user_id", None) or getattr(self, "user_id", None)
+        if not current_user_id:
+            return ""
+        return current_user_id
+
+    def _current_peer_memory_target_uri(self, peer_id: str) -> str:
+        normalized_peer_id = self._peer_id(peer_id)
+        if not normalized_peer_id:
+            raise ValueError("peer_id is required for peer memory target")
+        if self._is_user_key_mode() or self._has_request_connection():
+            return f"viking://user/peers/{normalized_peer_id}/memories/"
+        user_space = self._current_user_space_fragment()
+        if not user_space:
+            raise ValueError("peer memory target requires current user_id")
+        return f"viking://user/{user_space}/peers/{normalized_peer_id}/memories/"
+
+    def _current_peer_profile_uri(self, peer_id: str) -> str:
+        return f"{self._current_peer_memory_target_uri(peer_id).rstrip('/')}/profile.md"
+
+    def build_current_memory_target_uris(
+        self,
+        *,
+        peer_ids: Optional[List[str]] = None,
+        include_self: bool = True,
+    ) -> List[str]:
+        uris: List[str] = []
+        if include_self:
+            uris.append(self._memory_target_uri(None))
+
+        normalized_peer_ids = self._dedupe_strings(
+            [
+                pid
+                for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or []))
+                if pid
+            ]
+        )
+        for peer_id in normalized_peer_ids:
+            try:
+                uris.append(self._current_peer_memory_target_uri(peer_id))
+            except ValueError as exc:
+                logger.warning(f"Skip invalid current peer memory target peer_id={peer_id}: {exc}")
+
+        return self._dedupe_strings(uris)
+
+    @staticmethod
+    def _dedupe_strings(values: List[str]) -> List[str]:
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            deduped.append(value)
+        return deduped
+
+    def build_memory_search_target_uris(
+        self,
+        *,
+        user_ids: Optional[List[str]] = None,
+        owner_user_id: Optional[str] = None,
+        peer_ids: Optional[List[str]] = None,
+    ) -> List[str]:
+        target_uris: List[str] = []
+        normalized_user_ids = self._dedupe_strings(
+            [str(user_id).strip() for user_id in (user_ids or []) if str(user_id).strip()]
+        )
+        normalized_peer_ids = self._dedupe_strings(
+            [
+                pid
+                for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or []))
+                if pid
+            ]
+        )
+        effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
+
+        for user_id in normalized_user_ids:
+            target_uris.append(self._memory_target_uri(user_id))
+
+        if effective_owner_user_id and (not target_uris or normalized_peer_ids):
+            target_uris.append(self._memory_target_uri(effective_owner_user_id))
+
+        if effective_owner_user_id:
+            for peer_id in normalized_peer_ids:
+                try:
+                    target_uris.append(
+                        self._peer_memory_target_uri(effective_owner_user_id, peer_id)
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        f"Skip invalid peer memory target owner_user_id={effective_owner_user_id}, peer_id={peer_id}: {exc}"
+                    )
+        elif normalized_peer_ids:
+            for peer_id in normalized_peer_ids:
+                try:
+                    target_uris.append(self._current_peer_memory_target_uri(peer_id))
+                except ValueError as exc:
+                    logger.warning(f"Skip invalid current peer memory target peer_id={peer_id}: {exc}")
+
+        if not target_uris:
+            target_uris.append(self._memory_target_uri(None))
+
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for target_uri in target_uris:
+            target_uri = str(target_uri or "")
+            if not target_uri or target_uri in seen:
+                continue
+            seen.add(target_uri)
+            deduped.append(target_uri)
+        return deduped
+
     def _skill_memory_uri(self, skill_name: str, user_id: Optional[str] = None) -> str:
         return f"{self._memory_target_uri(user_id)}skills/{skill_name}.md"
 
-    async def find(self, query: str, target_uri: Optional[str] = None):
+    async def find(
+        self,
+        query: str,
+        target_uri: Optional[str] = None,
+        context_type: Optional[str | list[str]] = None,
+        filter: Optional[Dict[str, Any]] = None,
+        limit: int = 10,
+    ):
         """搜索资源"""
+        kwargs: Dict[str, Any] = {"limit": limit}
+        if context_type is not None:
+            kwargs["context_type"] = context_type
+        if filter is not None:
+            kwargs["filter"] = filter
         if target_uri:
-            return await self.client.find(query, target_uri=target_uri)
-        return await self.client.find(query)
+            return await self.client.find(query, target_uri=target_uri, **kwargs)
+        return await self.client.find(query, **kwargs)
 
     async def add_resource(self, local_path: str, desc: str) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
@@ -312,6 +509,9 @@ class VikingClient:
     async def read_user_profile(self, user_id: str) -> str:
         """读取用户 profile。"""
         effective_user_id = self._effective_user_id(user_id)
+        if not effective_user_id:
+            return await self.read_content(uri="viking://user/memories/profile.md", level="read")
+
         user_exists = await self._check_user_exists(effective_user_id)
 
         if not user_exists:
@@ -321,6 +521,14 @@ class VikingClient:
         uri = f"{self._memory_target_uri(effective_user_id)}profile.md"
         result = await self.read_content(uri=uri, level="read")
         return result
+
+    async def read_peer_profile(self, peer_id: str) -> str:
+        """读取当前 User 下指定 peer 的 profile。"""
+        try:
+            uri = self._current_peer_profile_uri(peer_id)
+        except ValueError:
+            return ""
+        return await self.read_content(uri=uri, level="read")
 
     async def search(
         self,
@@ -335,7 +543,11 @@ class VikingClient:
             client, should_close = await self._get_user_scoped_client(user_id)
 
         try:
-            result = await client.search(query, target_uri=target_uri, limit=limit)
+            result = await client.search(
+                query,
+                target_uri=target_uri,
+                limit=limit,
+            )
         finally:
             if should_close:
                 await client.close()
@@ -469,6 +681,7 @@ class VikingClient:
                 client_kwargs["account"] = self.account_id
                 client_kwargs["user"] = self.admin_user_id
 
+            self._apply_actor_peer_scope(client_kwargs)
             client = ov.AsyncHTTPClient(**client_kwargs)
             await client.initialize()
             return client, True
@@ -478,9 +691,12 @@ class VikingClient:
     async def search_memory(
         self,
         query: str,
-        user_ids: str | list[str],
+        user_ids: str | list[str] | None = None,
         limit: int = 10,
         agent_user_id: Optional[str] = None,
+        *,
+        owner_user_id: Optional[str] = None,
+        peer_ids: Optional[list[str]] = None,
     ) -> list[Any] | dict[str, list[Any]]:
         """通过上下文消息检索用户 memory。"""
 
@@ -495,24 +711,56 @@ class VikingClient:
             memories = getattr(result, "memories", None)
             return memories if isinstance(memories, list) else []
 
-        if isinstance(user_ids, str):
-            user_ids = [user_ids]
+        if user_ids is None:
+            normalized_user_ids: list[str] = []
+        elif isinstance(user_ids, str):
+            normalized_user_ids = [user_ids]
+        else:
+            normalized_user_ids = list(user_ids)
+        normalized_user_ids = [
+            str(user_id).strip() for user_id in normalized_user_ids if str(user_id).strip()
+        ]
 
-        all_user_memories = []
+        normalized_peer_ids = self._dedupe_strings(
+            [
+                pid
+                for pid in (self._peer_id(peer_value) for peer_value in (peer_ids or []))
+                if pid
+            ]
+        )
+        effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
 
-        for user_id in user_ids:
+        user_ids_to_check = self._dedupe_strings(
+            [
+                *normalized_user_ids,
+                *( [effective_owner_user_id] if effective_owner_user_id else [] ),
+            ]
+        )
+
+        for user_id in user_ids_to_check:
             effective_user_id = self._effective_user_id(user_id)
+            if not effective_user_id:
+                continue
             user_exists = await self._check_user_exists(effective_user_id)
             if not user_exists:
                 await self._initialize_user(effective_user_id)
-                continue
 
-            uri_user_memory = self._memory_target_uri(effective_user_id)
-            user_memory = await self.client.find(
-                query=query,
-                target_uri=uri_user_memory,
-                limit=limit,
-            )
+        target_uris = self.build_memory_search_target_uris(
+            user_ids=normalized_user_ids,
+            owner_user_id=effective_owner_user_id,
+            peer_ids=normalized_peer_ids,
+        )
+        if not target_uris:
+            return []
+
+        all_user_memories = []
+        for target_uri in target_uris:
+            find_kwargs: Dict[str, Any] = {
+                "query": query,
+                "target_uri": target_uri,
+                "limit": limit,
+            }
+            user_memory = await self.client.find(**find_kwargs)
             all_user_memories.extend(_extract_memories(user_memory))
 
         if agent_user_id is not None:
@@ -600,20 +848,20 @@ class VikingClient:
 
         client = self._user_clients.get(user_id)
         if client is None:
-            client = ov.AsyncHTTPClient(
-                url=self.openviking_config.server_url,
-                api_key=api_key,
-                account=self.account_id,
-                user=user_id,
-                profile_enabled=False,
-            )
+            client_kwargs = {
+                "url": self.openviking_config.server_url,
+                "api_key": api_key,
+                "account": self.account_id,
+                "user": user_id,
+                "profile_enabled": False,
+            }
+            self._apply_actor_peer_scope(client_kwargs)
+            client = ov.AsyncHTTPClient(**client_kwargs)
             await client.initialize()
             self._user_clients[user_id] = client
         return client
 
     def _assistant_peer_id(self) -> Optional[str]:
-        if self.admin_user_id:
-            return self.admin_user_id
         return None
 
     def _normalize_session_messages(
@@ -664,7 +912,7 @@ class VikingClient:
                         )
                         if match:
                             skill_name = match.group(1).strip()
-                            skill_uri = self._skill_memory_uri(skill_name, default_user_peer_id)
+                            skill_uri = self._skill_memory_uri(skill_name)
 
                     tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
                     parts.append(
@@ -704,8 +952,9 @@ class VikingClient:
             elif not peer_id and ov_role == "assistant":
                 peer_id = assistant_peer_id
 
-            if peer_id:
-                payload["peer_id"] = peer_id
+            safe_message_peer_id = self._peer_id(peer_id)
+            if safe_message_peer_id:
+                payload["peer_id"] = safe_message_peer_id
 
             normalized.append(payload)
 
@@ -718,12 +967,18 @@ class VikingClient:
         return ""
 
     async def ensure_session(
-        self, session_id: str, user_id: Optional[str] = None
+        self,
+        session_id: str,
+        user_id: Optional[str] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         client = await self._session_client_for_user(user_id)
         if await client.session_exists(session_id):
             return await client.get_session(session_id)
-        return await client.create_session(session_id=session_id)
+        return await client.create_session(
+            session_id=session_id,
+            memory_policy=memory_policy,
+        )
 
     async def get_session(self, session_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         await self.ensure_session(session_id, user_id=user_id)
@@ -772,8 +1027,15 @@ class VikingClient:
         session_id: str,
         keep_recent_count: int = 0,
         user_id: Optional[str] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        await self.ensure_session(session_id, user_id=user_id)
+        await self.ensure_session(
+            session_id,
+            user_id=user_id,
+            memory_policy=memory_policy
+            if memory_policy is not None
+            else self.default_memory_policy(),
+        )
         client = await self._session_client_for_user(user_id)
         return await client.commit_session(
             session_id,
@@ -786,19 +1048,30 @@ class VikingClient:
         messages: list[dict[str, Any]],
         user_id: str = None,
         keep_recent_count: int = 0,
+        peer_id: Optional[str] = None,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ):
         """Append messages to a stable session and commit it."""
         session_user_id = self._effective_session_user_id(user_id)
+        session_memory_policy = (
+            memory_policy if memory_policy is not None else self.default_memory_policy()
+        )
+        await self.ensure_session(
+            session_id,
+            user_id=session_user_id,
+            memory_policy=session_memory_policy,
+        )
         appended = await self.append_messages(
             session_id,
             messages,
-            default_user_peer_id=session_user_id,
+            default_user_peer_id=self._peer_id(peer_id),
             session_user_id=session_user_id,
         )
         commit_result = await self.commit_session(
             session_id,
             keep_recent_count=keep_recent_count,
             user_id=session_user_id,
+            memory_policy=session_memory_policy,
         )
         logger.debug(
             f"Committed OpenViking session {session_id}, "
@@ -858,7 +1131,6 @@ async def account_test():
     res = await client.search("123")
 
     print(res)
-
 
 if __name__ == "__main__":
     asyncio.run(main_test())

@@ -35,7 +35,6 @@ function makeEngine(opts?: {
     : vi.fn().mockResolvedValue(undefined);
 
   const client = {
-    ensureSession: vi.fn().mockResolvedValue(true),
     addSessionMessage,
     commitSession: vi.fn().mockResolvedValue({
       status: "accepted",
@@ -71,7 +70,6 @@ function makeEngine(opts?: {
   return {
     engine,
     client: client as unknown as {
-      ensureSession: ReturnType<typeof vi.fn>;
       addSessionMessage: ReturnType<typeof vi.fn>;
       commitSession: ReturnType<typeof vi.fn>;
       getSession: ReturnType<typeof vi.fn>;
@@ -223,7 +221,7 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it("does not pass peer_id by default", async () => {
+  it("passes sanitized senderId as role_id", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -235,57 +233,7 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
-    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
-  });
-
-  it("passes sanitized senderId as peer_id when peer_role is person", async () => {
-    const { engine, client } = makeEngine({
-      cfgOverrides: { peer_role: "person" },
-    });
-
-    await engine.afterTurn!({
-      sessionId: "s1",
-      sessionFile: "",
-      messages: [{ role: "user", content: "hello world" }],
-      prePromptMessageCount: 0,
-      runtimeContext: { senderId: "telegram:12345" },
-    });
-
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
     expect(client.addSessionMessage.mock.calls[0][5]).toBe("telegram_12345");
-    expect(client.ensureSession).toHaveBeenCalledWith(
-      "s1",
-      {
-        memoryPolicy: {
-          self: { enabled: true },
-          peer: { enabled: true },
-        },
-      },
-      "test-agent",
-    );
-  });
-
-  it("passes runtime agent as peer_id only for assistant messages when peer_role is assistant", async () => {
-    const { engine, client } = makeEngine({
-      cfgOverrides: { peer_role: "assistant" },
-    });
-
-    await engine.afterTurn!({
-      sessionId: "s1",
-      sessionFile: "",
-      messages: [
-        { role: "user", content: "hello world" },
-        { role: "assistant", content: "hi there" },
-      ],
-      prePromptMessageCount: 0,
-      runtimeContext: { senderId: "telegram:12345" },
-    });
-
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
-    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
-    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
-    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][5]).toBe("test-agent");
   });
 
   it("sanitizes <relevant-memories> from user content but not from assistant", async () => {
@@ -357,29 +305,29 @@ describe("context-engine afterTurn()", () => {
     expect(commitCall[1]).toMatchObject({ wait: false });
   });
 
-  it("passes peer memory policy to commit when peer_role is person", async () => {
+  it("keeps afterTurn write and commit enabled when recall target types default to resources only", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 100,
-      getSession: { pending_tokens: 5000 },
-      cfgOverrides: { peer_role: "person" },
+      commitTokenThreshold: 20000,
+      getSession: { pending_tokens: 25000 },
+      cfgOverrides: {
+        recallTargetTypes: [],
+      },
     });
 
     await engine.afterTurn!({
       sessionId: "s1",
       sessionFile: "",
-      messages: [{ role: "user", content: "remember my table tennis preference" }],
+      messages: [
+        { role: "user", content: "persist this user turn even with resource-only recall" },
+        { role: "assistant", content: "persist this assistant turn too" },
+      ],
       prePromptMessageCount: 0,
-      runtimeContext: { senderId: "openclaw-tui" },
     });
 
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
     expect(client.commitSession).toHaveBeenCalledTimes(1);
-    expect(client.commitSession.mock.calls[0][1]).toMatchObject({
-      wait: false,
-      memoryPolicy: {
-        self: { enabled: true },
-        peer: { enabled: true },
-      },
-    });
   });
 
   it("catches errors without throwing", async () => {

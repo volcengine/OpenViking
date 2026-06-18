@@ -15,7 +15,7 @@ Phase 1 intentionally keeps the scope narrow:
 - Resources only. Memories, skills, sessions, and other namespaces are not exposed.
 - Text-first writes. `PUT` currently accepts UTF-8 text content only.
 - WebDAV subset only. `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, and `MOVE` are supported.
-- Semantic sidecars stay internal. Derived files such as `.abstract.md`, `.overview.md`, `.relations.json`, and `.path.ovlock` are hidden from listings and cannot be accessed directly through WebDAV.
+- Semantic sidecars and internal system files stay internal. Derived or internal files such as `.abstract.md`, `.overview.md`, `.relations.json`, `.path.ovlock`, `.redirect.json`, and `.sync_log.json` are hidden from listings and cannot be accessed directly through WebDAV.
 
 Behavior notes:
 
@@ -23,6 +23,7 @@ Behavior notes:
 - Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
 - `PUT` does not create parent collections automatically. Create missing directories with `MKCOL` first.
 - User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
+- When multi-write storage is enabled, files redirected to a backup are still exposed through the filesystem APIs as normal files; internal redirect and sync metadata never become visible to callers.
 
 ## API Reference
 
@@ -42,6 +43,16 @@ Read L0 abstract (~100 tokens summary).
 abstract = client.abstract("viking://resources/docs/")
 print(f"Abstract: {abstract}")
 # Output: "Documentation for the project API, covering authentication, endpoints..."
+```
+
+**Go SDK**
+
+```go
+abstract, err := client.Abstract(ctx, "viking://resources/docs/")
+if err != nil {
+    return err
+}
+fmt.Println(abstract)
 ```
 
 **HTTP API**
@@ -90,6 +101,16 @@ overview = client.overview("viking://resources/docs/")
 print(f"Overview:\n{overview}")
 ```
 
+**Go SDK**
+
+```go
+overview, err := client.Overview(ctx, "viking://resources/docs/")
+if err != nil {
+    return err
+}
+fmt.Println(overview)
+```
+
 **HTTP API**
 
 ```
@@ -135,13 +156,23 @@ Read L2 full content.
 **Notes**
 
 - `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
-- Public URI parameters accept `resources`, `user`, `agent`, and `session` scopes. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
+- Public URI parameters accept `resources` and `user` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}` or the backward-compatible `viking://session/{session_id}` alias. Internal scopes such as `temp` and `queue` return `INVALID_URI`.
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
 content = client.read("viking://resources/docs/api.md")
 print(f"Content:\n{content}")
+```
+
+**Go SDK**
+
+```go
+content, err := client.Read(ctx, "viking://resources/docs/api.md", 0, -1)
+if err != nil {
+    return err
+}
+fmt.Println(content)
 ```
 
 **HTTP API**
@@ -205,6 +236,24 @@ result = client.write(
     wait=True,
 )
 print(result["root_uri"])
+```
+
+**Go SDK**
+
+```go
+result, err := client.Write(
+    ctx,
+    "viking://resources/docs/api.md",
+    "# Updated API\n\nFresh content.",
+    &openviking.WriteOptions{
+        Mode: "replace",
+        Wait: true,
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(result["root_uri"])
 ```
 
 **HTTP API**
@@ -304,6 +353,18 @@ for entry in entries:
     print(f"{entry['name']} - {type_str}")
 ```
 
+**Go SDK**
+
+```go
+entries, err := client.List(ctx, "viking://resources/", nil)
+if err != nil {
+    return err
+}
+for _, entry := range entries {
+    fmt.Println(entry)
+}
+```
+
 **HTTP API**
 
 ```
@@ -375,6 +436,18 @@ for entry in entries:
     print(f"{entry['rel_path']} - {type_str}")
 ```
 
+**Go SDK**
+
+```go
+entries, err := client.Tree(ctx, "viking://resources/", nil)
+if err != nil {
+    return err
+}
+for _, entry := range entries {
+    fmt.Println(entry["rel_path"], entry["isDir"])
+}
+```
+
 **HTTP API**
 
 ```
@@ -440,6 +513,16 @@ print(f"Is directory: {info['isDir']}")
 dir_info = client.stat("viking://resources/docs")
 if dir_info.get('isDir'):
     print(f"Item count: {dir_info.get('count')}")
+```
+
+**Go SDK**
+
+```go
+info, err := client.Stat(ctx, "viking://resources/docs/api.md")
+if err != nil {
+    return err
+}
+fmt.Println(info["size"], info["isDir"])
 ```
 
 **HTTP API**
@@ -521,6 +604,14 @@ client.mkdir("viking://resources/new-project/")
 client.mkdir("viking://resources/new-project/", description="API docs directory")
 ```
 
+**Go SDK**
+
+```go
+if err := client.Mkdir(ctx, "viking://resources/new-project/", "API docs directory"); err != nil {
+    return err
+}
+```
+
 **HTTP API**
 
 ```
@@ -584,6 +675,17 @@ if 'estimated_deleted_count' in result:
     print(f"Deleted {result['estimated_deleted_count']} items")
 ```
 
+**Go SDK**
+
+```go
+err := client.Remove(ctx, "viking://resources/old-project/", &openviking.RemoveOptions{
+    Recursive: true,
+})
+if err != nil {
+    return err
+}
+```
+
 **HTTP API**
 
 ```
@@ -633,6 +735,8 @@ openviking rm viking://resources/old.md [--recursive]
 
 The `estimated_deleted_count` field (for recursive deletes) contains the estimated number of items (files and directories) deleted (from vector index). The CLI will display this information in output.
 
+When deleting `viking://resources/...`, the response may include `memory_cleanup`, indicating that user memories referencing that resource URI were cleaned up before deletion.
+
 ---
 
 ### mv()
@@ -653,6 +757,14 @@ client.mv(
     "viking://resources/old-name/",
     "viking://resources/new-name/"
 )
+```
+
+**Go SDK**
+
+```go
+if err := client.Move(ctx, "viking://resources/old-name/", "viking://resources/new-name/"); err != nil {
+    return err
+}
 ```
 
 **HTTP API**
@@ -720,6 +832,18 @@ print(f"Found {results['count']} matches")
 for match in results['matches']:
     print(f"  {match['uri']}:{match['line']}")
     print(f"    {match['content']}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.Grep(ctx, "viking://resources/", "authentication", &openviking.GrepOptions{
+    CaseInsensitive: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["matches"])
 ```
 
 **HTTP API**
@@ -790,6 +914,16 @@ for uri in results['matches']:
 # Find all Python files
 results = client.glob("**/*.py", "viking://resources/")
 print(f"Found {results['count']} Python files")
+```
+
+**Go SDK**
+
+```go
+result, err := client.Glob(ctx, "**/*.md", "viking://resources/")
+if err != nil {
+    return err
+}
+fmt.Println(result["matches"])
 ```
 
 **HTTP API**
@@ -1094,6 +1228,21 @@ client.initialize()
 # Note: Export functionality is primarily used via CLI
 ```
 
+**Go SDK**
+
+```go
+outPath, err := client.ExportOVPack(
+    ctx,
+    "viking://resources/my-project/",
+    "./exports/my-project.ovpack",
+    &openviking.PackOptions{IncludeVectors: false},
+)
+if err != nil {
+    return err
+}
+fmt.Println(outPath)
+```
+
 **CLI**
 
 ```bash
@@ -1147,12 +1296,12 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 - The API no longer accepts `vectorize` or `force`.
 - `vector_mode=auto` restores a compatible dense snapshot when present, otherwise recomputes vectors. `recompute` always ignores package vectors. `require` fails unless a compatible dense snapshot is present.
 - Dense snapshot compatibility checks compare embedding provider, model, input mode, query/document parameters, and dimensions.
-- Session imports restore session files and do not trigger vectorization.
+- Session files are part of the user namespace (`viking://user/{user_id}/sessions/...`) and do not trigger vectorization.
 - `on_conflict=fail` returns a structured `409 CONFLICT` when the target root already exists.
 - `on_conflict=overwrite` replaces the existing target root. `on_conflict=skip` keeps the existing target root and returns it without writing package contents. `skip` is root-level, not file-level.
 - Packages without a manifest are rejected by default because they cannot provide content integrity guarantees.
 - Packages with manifest entries are rejected if content files or directories are missing, extra files or directories are present, file sizes differ, per-file `sha256` differs, or `content_sha256` is missing or differs.
-- Packages whose manifest `format_version` is not the current supported version are rejected.
+- Packages whose manifest `format_version` is not the current supported version (`3`) are rejected.
 - `.abstract.md` and `.overview.md` are restored as semantic sidecars. `.relations.json` and OVPack internals are excluded.
 - Manifest `context_type`, when present in index scalar metadata, must match the final import path semantics.
 - Top-level scope packages such as `viking://resources/` must be imported to `viking://`.
@@ -1198,6 +1347,24 @@ client.initialize()
 
 # Import .ovpack file (HTTP SDK automatically handles upload)
 # Note: Import functionality is primarily used via CLI
+```
+
+**Go SDK**
+
+```go
+uri, err := client.ImportOVPack(
+    ctx,
+    "./exports/my-project.ovpack",
+    "viking://resources/imported/",
+    &openviking.ImportPackOptions{
+        OnConflict: "overwrite",
+        VectorMode: "auto",
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(uri)
 ```
 
 **CLI**
@@ -1247,8 +1414,9 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 ### backup_ovpack
 
 Back up public scope roots as a restore-only `.ovpack` file. The backup includes
-`resources`, `user`, `agent`, and `session`; it excludes internal runtime data
-such as `temp` and `queue`. Set `include_vectors=true` to include compatible
+`resources` and `user`; sessions are included through the user namespace under
+`user/{user_id}/sessions`. It excludes internal runtime data such as `temp` and
+`queue`. Set `include_vectors=true` to include compatible
 pure-dense vector snapshots; hybrid index types reject vector snapshot export.
 
 ```
@@ -1261,6 +1429,20 @@ curl -X POST http://localhost:1933/api/v1/pack/backup \
   -H "X-API-Key: your-admin-key" \
   -d '{"include_vectors":false}' \
   --output openviking-backup.ovpack
+```
+
+Go SDK:
+
+```go
+outPath, err := client.BackupOVPack(
+    ctx,
+    "./backups/openviking.ovpack",
+    &openviking.PackOptions{IncludeVectors: true},
+)
+if err != nil {
+    return err
+}
+fmt.Println(outPath)
 ```
 
 CLI:
@@ -1276,7 +1458,8 @@ ov backup ./backups/openviking.ovpack --include-vectors
 
 Restore a backup package created by `backup_ovpack` to the original public scope
 roots. Regular import rejects backup packages. Vector handling follows
-`vector_mode`; session files are restored without vectorization.
+`vector_mode`; session files under the user namespace are restored without
+vectorization.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -1301,6 +1484,23 @@ curl -X POST http://localhost:1933/api/v1/pack/restore \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\",\"vector_mode\":\"auto\"}"
+```
+
+Go SDK:
+
+```go
+uri, err := client.RestoreOVPack(
+    ctx,
+    "./backups/openviking.ovpack",
+    &openviking.ImportPackOptions{
+        OnConflict: "overwrite",
+        VectorMode: "require",
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(uri)
 ```
 
 CLI:

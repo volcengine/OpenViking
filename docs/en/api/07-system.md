@@ -66,6 +66,16 @@ healthy = client.health()
 print(f"Healthy: {healthy}")
 ```
 
+**Go SDK**
+
+```go
+healthy, err := client.Health(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(healthy)
+```
+
 **CLI**
 
 ```bash
@@ -262,6 +272,16 @@ print(report["ok"])
 print(report["missing_records"])
 ```
 
+**Go SDK**
+
+```go
+report, err := client.CheckConsistency(ctx, "viking://resources/my-project")
+if err != nil {
+    return err
+}
+fmt.Println(report["ok"])
+```
+
 **CLI**
 
 ```bash
@@ -339,6 +359,18 @@ status = client.wait_processed(timeout=60.0)
 print(f"Processing complete: {status}")
 ```
 
+**Go SDK**
+
+```go
+status, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
+    Timeout: openviking.Float64(60),
+})
+if err != nil {
+    return err
+}
+fmt.Println(status)
+```
+
 **CLI**
 
 ```bash
@@ -403,7 +435,9 @@ The HTTP request body rejects unknown fields. `uri` may use OpenViking path vari
 - `viking://user/<user_id>/skills`
 - `viking://user/<user_id>/skills/<skill_name>`
 
-`viking://session/...` is not supported by `reindex()`.
+Session namespaces are not supported by `reindex()`. Requests for
+`viking://session/...` or `viking://user/<user_id>/sessions/...` are rejected;
+when reindexing a broader user namespace, session subtrees are skipped.
 
 **Modes**
 
@@ -432,6 +466,19 @@ result = client.reindex(
     wait=False,
 )
 print(result["status"])
+```
+
+**Go SDK**
+
+```go
+result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
+    Mode: "vectors_only",
+    Wait: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["status"])
 ```
 
 **HTTP API**
@@ -595,6 +642,16 @@ print(client.observer.queue)
 # TOTAL                 0        0            20         0       20
 ```
 
+**Go SDK**
+
+```go
+status, err := client.QueueStatus(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(status["is_healthy"])
+```
+
 **CLI**
 
 ```bash
@@ -662,6 +719,16 @@ print(client.observer.vikingdb().is_healthy)  # True
 print(client.observer.vikingdb().status)      # Status table string
 ```
 
+**Go SDK**
+
+```go
+status, err := client.VikingDBStatus(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(status["is_healthy"])
+```
+
 **CLI**
 
 ```bash
@@ -724,6 +791,16 @@ print(client.observer.models)
 # dense_embedding        yes      ...
 # rerank                 yes      ...
 # vlm                    yes      ...
+```
+
+**Go SDK**
+
+```go
+status, err := client.ModelsStatus(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(status["is_healthy"])
 ```
 
 **CLI**
@@ -966,6 +1043,16 @@ print(client.observer.system())
 # ...
 #
 # [system] (healthy)
+```
+
+**Go SDK**
+
+```go
+status, err := client.GetStatus(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(status["is_healthy"])
 ```
 
 **CLI**

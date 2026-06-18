@@ -41,12 +41,14 @@ class ContextLevel(int, Enum):
 
 class Vectorize:
     text: str = ""
-    # image: str = ""
+    # images: list of image references (data URIs or URLs) for multimodal embedding
+    images: List[str] = []
     # video: str = ""
     # audio: str = ""
 
-    def __init__(self, text: str = ""):
+    def __init__(self, text: str = "", images: Optional[List[str]] = None):
         self.text = text
+        self.images = list(images) if images else []
 
 
 class Context:
@@ -144,8 +146,11 @@ class Context:
 
     def get_vectorization_text(self) -> str:
         """Get text for vectorization."""
-        # todo: multi-modal support
         return self.vectorize.text
+
+    def get_vectorization_images(self) -> List[str]:
+        """Get image references (data URIs or URLs) for multimodal vectorization."""
+        return self.vectorize.images
 
     def update_activity(self):
         """Update activity statistics."""

@@ -18,6 +18,38 @@ from openviking.parse.parsers.code.ast.skeleton import (
     _compact_params,
 )
 
+CODE_SEARCH_FILE_CAP = 200
+CODE_SEARCH_CONCURRENCY = 10
+
+
+def _entry_field(entry, key: str, fallback_key: str, default):
+    """Read a field from ls entries that may be dicts (camelCase) or objects (snake_case)."""
+    if isinstance(entry, dict):
+        return entry.get(key, default)
+    return getattr(entry, fallback_key, default)
+
+
+def filter_code_uris(entries) -> tuple[list[str], bool]:
+    """Pick file entries whose extension is supported by the AST extractor, capped at 200.
+
+    Returns (uris, capped) where capped is True when the 200-file limit was hit
+    and there may be more matching files beyond the cap.
+    """
+    extractor = get_extractor()
+    uris: list[str] = []
+    for e in entries:
+        is_dir = _entry_field(e, "isDir", "is_dir", False)
+        if is_dir:
+            continue
+        entry_uri = _entry_field(e, "uri", "uri", "")
+        if not entry_uri:
+            continue
+        if extractor.supports(entry_uri):
+            uris.append(entry_uri)
+            if len(uris) > CODE_SEARCH_FILE_CAP:
+                return uris[:CODE_SEARCH_FILE_CAP], True
+    return uris, False
+
 
 def _line_span(item) -> str:
     if item.line_start and item.line_end:

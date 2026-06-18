@@ -8,6 +8,7 @@ import uuid
 import pytest
 import pytest_asyncio
 
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.identity import Role
 from openviking.service.core import OpenVikingService
@@ -89,6 +90,30 @@ async def test_create_duplicate_account_raises(manager: APIKeyManager):
     await manager.create_account(acct, "alice")
     with pytest.raises(AlreadyExistsError):
         await manager.create_account(acct, "bob")
+
+
+async def test_create_account_rolls_back_when_user_persistence_fails(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """create_account should not leave partial in-memory state after a write failure."""
+    acct = _uid()
+    original_save_users_json = manager._legacy._save_users_json
+
+    async def _fail_save_users_json(account_id: str) -> None:
+        if account_id == acct:
+            raise AGFSNotFoundError(account_id)
+        await original_save_users_json(account_id)
+
+    monkeypatch.setattr(manager._legacy, "_save_users_json", _fail_save_users_json)
+
+    with pytest.raises(AGFSNotFoundError):
+        await manager.create_account(acct, "alice")
+
+    assert acct not in manager._legacy._accounts
+
+    monkeypatch.setattr(manager._legacy, "_save_users_json", original_save_users_json)
+    retry_key = await manager.create_account(acct, "alice")
+    assert manager.resolve(retry_key).account_id == acct
 
 
 async def test_delete_account(manager: APIKeyManager):

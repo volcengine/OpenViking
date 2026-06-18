@@ -40,7 +40,7 @@ class _SyncVikingFS:
     async def exists(self, uri, ctx=None):
         return uri in self.entries
 
-    async def ls(self, uri, show_all_hidden=False, ctx=None):
+    async def ls(self, uri, show_all_hidden=False, node_limit=None, ctx=None):
         return self.entries.get(uri, [])
 
     async def stat(self, uri, ctx=None):

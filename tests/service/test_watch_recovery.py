@@ -11,6 +11,7 @@ from typing import AsyncGenerator
 import pytest
 import pytest_asyncio
 
+from openviking.resource.feishu_watch_auth import FeishuRefreshedToken
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
@@ -51,10 +52,12 @@ class MockResourceProcessor:
     def __init__(self):
         self.call_count = 0
         self.processed_paths = []
+        self.calls = []
 
     async def process_resource(self, **kwargs):
         self.call_count += 1
         self.processed_paths.append(kwargs.get("path"))
+        self.calls.append(kwargs)
         return {"root_uri": kwargs.get("to", "viking://resources/test")}
 
 
@@ -69,6 +72,20 @@ class MockVikingDB:
     """Mock VikingDBManager for testing."""
 
     pass
+
+
+class FakeFeishuOAuthClient:
+    def __init__(self, refreshed: FeishuRefreshedToken | None = None):
+        self.refreshed = refreshed or FeishuRefreshedToken(
+            access_token="u-new",
+            refresh_token="r-new",
+            expires_in=7200,
+        )
+        self.calls = []
+
+    async def refresh_user_access_token(self, refresh_token: str) -> FeishuRefreshedToken:
+        self.calls.append(refresh_token)
+        return self.refreshed
 
 
 @pytest_asyncio.fixture
@@ -397,6 +414,47 @@ class TestResourceExistenceCheck:
         assert updated_task is not None
         assert updated_task.is_active is True
         assert resource_processor.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_feishu_user_token_watch_refreshes_before_execution(
+        self, temp_storage: Path, request_context: RequestContext
+    ):
+        resource_processor = MockResourceProcessor()
+        resource_service = ResourceService(
+            vikingdb=MockVikingDB(),
+            viking_fs=MockVikingFS(root_path=str(temp_storage)),
+            resource_processor=resource_processor,
+            skill_processor=MockSkillProcessor(),
+            watch_scheduler=None,
+        )
+        scheduler = WatchScheduler(resource_service=resource_service, viking_fs=None)
+        await scheduler.start()
+        scheduler._feishu_oauth_client = FakeFeishuOAuthClient()
+        watch_manager = scheduler.watch_manager
+
+        task = await watch_manager.create_task(
+            path="https://example.feishu.cn/docx/doc_token",
+            to_uri="viking://resources/feishu-user-watch",
+            watch_interval=30.0,
+            auth_state={
+                "provider": "feishu",
+                "access_token": "u-old",
+                "refresh_token": "r-old",
+                "expires_at": None,
+            },
+        )
+
+        await scheduler._execute_task(task)
+
+        assert scheduler._feishu_oauth_client.calls == ["r-old"]
+        assert resource_processor.call_count == 1
+        assert resource_processor.calls[-1]["feishu_access_token"] == "u-new"
+
+        updated_task = await watch_manager.get_task(task.task_id)
+        assert updated_task is not None
+        assert updated_task.auth_state["access_token"] == "u-new"
+        assert updated_task.auth_state["refresh_token"] == "r-new"
+        assert updated_task.auth_state["expires_at"] is not None
 
 
 class TestSchedulerIntegration:

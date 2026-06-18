@@ -128,7 +128,11 @@ async function resolveUserSpace() {
     fallbackSpace = status.result.user.trim();
   }
 
-  const lsRes = await fetchJSON(`/api/v1/fs/ls?uri=${encodeURIComponent("viking://user")}&output=original`);
+  const lsRes = await fetchJSON(
+    `/api/v1/fs/ls?uri=${encodeURIComponent("viking://user")}&output=original`,
+    {},
+    { actorPeerId: cfg.peerId },
+  );
   if (lsRes.ok && Array.isArray(lsRes.result)) {
     const spaces = lsRes.result
       .filter(e => e?.isDir)
@@ -170,11 +174,10 @@ const SOURCES = [
 async function searchOneSource(query, source, limit) {
   const resolvedUri = await resolveTargetUri(source.uri);
   const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
-  if (cfg.peerId) body.peer_id = cfg.peerId;
   const res = await fetchJSON("/api/v1/search/find", {
     method: "POST",
     body: JSON.stringify(body),
-  });
+  }, { actorPeerId: cfg.peerId });
   if (!res.ok) return [];
   const items = res.result?.[source.bucket] || [];
   return items.map(item => ({ ...item, _sourceType: source.type }));
@@ -214,7 +217,11 @@ async function resolveItemContent(item) {
     content = (item.abstract || item.overview).trim();
   } else if (item.level === 2) {
     try {
-      const res = await fetchJSON(`/api/v1/content/read?uri=${encodeURIComponent(item.uri)}`);
+      const res = await fetchJSON(
+        `/api/v1/content/read?uri=${encodeURIComponent(item.uri)}`,
+        {},
+        { actorPeerId: cfg.peerId },
+      );
       const body = res.ok && typeof res.result === "string" ? res.result.trim() : "";
       content = body || (item.abstract || item.overview || "").trim() || item.uri;
     } catch {

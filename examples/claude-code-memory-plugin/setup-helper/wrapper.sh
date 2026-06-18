@@ -85,9 +85,19 @@ _openviking_define_wrappers() {
     esac
     _ov_head="${_ov_entry%% *}"
     if [ "$_ov_head" = "$_ov_entry" ]; then _ov_sub=""; else _ov_sub="${_ov_entry#* }"; fi
+    # Reject empty, leading-`-` (would be misread as an option by `alias`
+    # below and `command` in the dispatcher), or any non-word-char head.
     case "$_ov_head" in
-      ''|*[!A-Za-z0-9_-]*) continue ;;
+      ''|-*|*[!A-Za-z0-9_-]*) continue ;;
     esac
+    # A same-named shell alias (e.g. `alias cc=claude`) already routes through
+    # the base `claude` wrapper once it expands, so it needs no function here —
+    # and defining one is actively harmful: bash expands the alias mid-eval and
+    # clobbers the real wrapper, while zsh aborts with a parse error on every
+    # shell start. Skip alias names; they're covered for free.
+    if alias "$_ov_head" >/dev/null 2>&1; then
+      continue
+    fi
     eval "${_ov_head}() { _openviking_dispatch \"$_ov_helper\" \"$_ov_head\" \"$_ov_sub\" \"\$@\"; }"
   done
 }

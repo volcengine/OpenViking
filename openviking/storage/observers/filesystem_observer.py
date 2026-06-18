@@ -4,7 +4,7 @@ FilesystemObserver: Filesystem observability tool.
 Provides methods to observe and report filesystem operation statistics.
 """
 
-from typing import Dict, Optional
+from typing import Optional
 
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking_cli.utils import run_async

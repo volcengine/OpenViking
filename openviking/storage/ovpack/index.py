@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from openviking.core.namespace import context_type_for_uri
+from openviking.core.namespace import context_type_for_uri, is_session_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
 from openviking.storage.ovpack.format import (
@@ -197,7 +197,7 @@ async def build_manifest(
     index_records: list[dict[str, Any]] = []
     dense_values: list[float] = []
 
-    if root_uri != "viking://":
+    if root_uri != "viking://" and not is_session_uri(root_uri):
         root_records = await index_records_for_uri(
             viking_fs,
             vector_store,
@@ -211,6 +211,7 @@ async def build_manifest(
     for entry in entries:
         rel_path = entry["rel_path"]
         is_dir = bool(entry.get("isDir"))
+        entry_uri = join_uri(root_uri, rel_path)
         manifest_entries.append(
             {
                 "path": rel_path,
@@ -218,10 +219,12 @@ async def build_manifest(
                 "size": entry.get("size", 0) if not is_dir else 0,
             }
         )
+        if is_session_uri(entry_uri):
+            continue
         records = await index_records_for_uri(
             viking_fs,
             vector_store,
-            join_uri(root_uri, rel_path),
+            entry_uri,
             is_dir=is_dir,
             ctx=ctx,
             include_vectors=include_vectors,

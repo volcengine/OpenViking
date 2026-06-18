@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { extractNewTurnMessages } from "../../text-utils.js";
-import { convertToAgentMessages, mergeConsecutiveAssistants } from "../../context-engine.js";
+import { convertToAgentMessages, mergeConsecutiveAssistants } from "../../services/context-message-adapter.js";
 
 describe("extractNewTurnMessages: toolCallId propagation", () => {
   it("propagates toolCallId from toolResult to extracted tool part", () => {

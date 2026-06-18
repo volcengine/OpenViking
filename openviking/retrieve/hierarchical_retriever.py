@@ -22,14 +22,12 @@ from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
-from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.retrieve.types import (
     ContextType,
     MatchedContext,
     QueryResult,
-    RelatedContext,
     TypedQuery,
 )
 from openviking_cli.utils.config import RerankConfig, RetrievalConfig
@@ -113,6 +111,7 @@ class HierarchicalRetriever:
             scope_dsl: Additional scope constraints passed from public find/search filter
         """
         t0 = time.monotonic()
+        telemetry = get_current_telemetry()
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
 
@@ -136,9 +135,10 @@ class HierarchicalRetriever:
         query_vector = None
         sparse_query_vector = None
         if self.embedder:
-            result: EmbedResult = await embed_compat(self.embedder, query.query, is_query=True)
-            query_vector = result.dense_vector
-            sparse_query_vector = result.sparse_vector
+            with telemetry.measure("search.embed_query"):
+                result: EmbedResult = await embed_compat(self.embedder, query.query, is_query=True)
+                query_vector = result.dense_vector
+                sparse_query_vector = result.sparse_vector
 
         # Step 1: Determine starting directories based on explicit target dirs.
         if target_dirs:
@@ -147,15 +147,16 @@ class HierarchicalRetriever:
             root_uris = default_target_directories(ctx, context_type=query.context_type)
 
         # Step 2: Global vector search to supplement starting points
-        global_results = await self._global_vector_search(
-            vector_proxy=vector_proxy,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            context_type=query.context_type.value if query.context_type else None,
-            target_dirs=target_dirs,
-            scope_dsl=scope_dsl,
-            limit=max(limit, self.GLOBAL_SEARCH_TOPK),
-        )
+        with telemetry.measure("search.vector_retrieval"):
+            global_results = await self._global_vector_search(
+                vector_proxy=vector_proxy,
+                query_vector=query_vector,
+                sparse_query_vector=sparse_query_vector,
+                context_type=query.context_type.value if query.context_type else None,
+                target_dirs=target_dirs,
+                scope_dsl=scope_dsl,
+                limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+            )
 
         # Debug: Print all URIs in global_results
         if logger.isEnabledFor(logging.DEBUG):
@@ -195,25 +196,29 @@ class HierarchicalRetriever:
         )
 
         # Step 4: Recursive search
-        candidates = await self._recursive_search(
-            vector_proxy=vector_proxy,
-            query=query.query,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            starting_points=starting_points,
-            limit=limit,
-            mode=mode,
-            threshold=effective_threshold,
-            score_gte=score_gte,
-            context_type=query.context_type.value if query.context_type else None,
-            target_dirs=target_dirs,
-            scope_dsl=scope_dsl,
-            initial_candidates=initial_candidates,
-            level=level,
-        )
+        with telemetry.measure("search.vector_retrieval"):
+            candidates = await self._recursive_search(
+                vector_proxy=vector_proxy,
+                query=query.query,
+                query_vector=query_vector,
+                sparse_query_vector=sparse_query_vector,
+                starting_points=starting_points,
+                limit=limit,
+                mode=mode,
+                threshold=effective_threshold,
+                score_gte=score_gte,
+                context_type=query.context_type.value if query.context_type else None,
+                target_dirs=target_dirs,
+                scope_dsl=scope_dsl,
+                initial_candidates=initial_candidates,
+                level=level,
+            )
 
         # Step 6: Convert results
-        matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
+        matched = await self._convert_to_matched_contexts(
+            candidates,
+            ctx=ctx,
+        )
 
         final = matched[:limit]
 
@@ -549,20 +554,8 @@ class HierarchicalRetriever:
         is controlled by ``retrieval.hotness_alpha`` (0 disables the boost).
         """
         results = []
-
         for c in candidates:
-            # Read related contexts and get summaries
             relations = []
-            if get_viking_fs():
-                related_uris = await get_viking_fs().get_relations(c.get("uri", ""), ctx=ctx)
-                if related_uris:
-                    related_abstracts = await get_viking_fs().read_batch(
-                        related_uris[: self.MAX_RELATIONS], level="l0", ctx=ctx
-                    )
-                    for uri in related_uris[: self.MAX_RELATIONS]:
-                        abstract = related_abstracts.get(uri, "")
-                        if abstract:
-                            relations.append(RelatedContext(uri=uri, abstract=abstract))
 
             semantic_score = c.get("_final_score", c.get("_score", 0.0))
             # Fix: clamp inf/nan scores from vector search (#inf-score)

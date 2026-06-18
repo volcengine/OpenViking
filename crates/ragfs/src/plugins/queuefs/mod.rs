@@ -199,9 +199,7 @@ impl FileSystem for QueueFileSystem {
     async fn mkdir(&self, path: &str, _mode: u32) -> Result<()> {
         let parsed = Self::parse_queue_path(path)?;
         if !parsed.is_dir {
-            return Err(Error::InvalidOperation(
-                "not a directory path".to_string(),
-            ));
+            return Err(Error::InvalidOperation("not a directory path".to_string()));
         }
         if let Some(queue_name) = parsed.queue_name {
             self.backend.lock().await.create_queue(&queue_name)?;
@@ -260,13 +258,7 @@ impl FileSystem for QueueFileSystem {
         }
     }
 
-    async fn write(
-        &self,
-        path: &str,
-        data: &[u8],
-        _offset: u64,
-        _flags: WriteFlag,
-    ) -> Result<u64> {
+    async fn write(&self, path: &str, data: &[u8], _offset: u64, _flags: WriteFlag) -> Result<u64> {
         let parsed = Self::parse_queue_path(path)?;
 
         let queue_name = parsed
@@ -369,10 +361,7 @@ impl FileSystem for QueueFileSystem {
 
         // Leaf queue: return control files
         if !backend.queue_exists(&queue_name) {
-            return Err(Error::NotFound(format!(
-                "queue not found: {}",
-                queue_name
-            )));
+            return Err(Error::NotFound(format!("queue not found: {}", queue_name)));
         }
 
         Ok(Self::leaf_control_files(now))
@@ -399,7 +388,11 @@ impl FileSystem for QueueFileSystem {
             let queue_name = parsed.queue_name.unwrap();
             if backend.queue_exists(&queue_name) {
                 Ok(FileInfo {
-                    name: queue_name.split('/').last().unwrap_or(&queue_name).to_string(),
+                    name: queue_name
+                        .split('/')
+                        .last()
+                        .unwrap_or(&queue_name)
+                        .to_string(),
                     size: 0,
                     mode: 0o755,
                     mod_time: SystemTime::now(),
@@ -414,8 +407,9 @@ impl FileSystem for QueueFileSystem {
             Ok(FileInfo {
                 name: operation.clone(),
                 size: 0,
-                mode: Self::control_file_mode(operation)
-                    .ok_or_else(|| Error::NotFound(format!("control file not found: {}", operation)))?,
+                mode: Self::control_file_mode(operation).ok_or_else(|| {
+                    Error::NotFound(format!("control file not found: {}", operation))
+                })?,
                 mod_time: SystemTime::now(),
                 is_dir: false,
             })
@@ -444,9 +438,7 @@ impl FileSystem for QueueFileSystem {
         let parsed = Self::parse_queue_path(path)?;
 
         if !parsed.is_dir {
-            return Err(Error::InvalidOperation(
-                "not a directory".to_string(),
-            ));
+            return Err(Error::InvalidOperation("not a directory".to_string()));
         }
 
         if let Some(queue_name) = parsed.queue_name {
@@ -665,32 +657,48 @@ mod tests {
         data: String,
     }
 
+    /// Create a queue filesystem with one initialized queue.
+    async fn queuefs_with(queue: &str) -> QueueFileSystem {
+        let fs = QueueFileSystem::new();
+        fs.mkdir(&format!("/{queue}"), 0o755).await.unwrap();
+        fs
+    }
+
+    /// Enqueue one message into a test queue.
+    async fn enqueue(fs: &dyn FileSystem, queue: &str, data: &[u8]) {
+        fs.write(&format!("/{queue}/enqueue"), data, 0, WriteFlag::None)
+            .await
+            .unwrap();
+    }
+
+    /// Dequeue and deserialize one message from a test queue.
+    async fn dequeue_msg(fs: &dyn FileSystem, queue: &str) -> TestQueueMessage {
+        let result = fs.read(&format!("/{queue}/dequeue"), 0, 0).await.unwrap();
+        serde_json::from_slice(&result).unwrap()
+    }
+
+    /// Read the queue size control file as usize.
+    async fn queue_size(fs: &dyn FileSystem, queue: &str) -> usize {
+        let size = fs.read(&format!("/{queue}/size"), 0, 0).await.unwrap();
+        String::from_utf8(size).unwrap().parse().unwrap()
+    }
+
     #[tokio::test]
     async fn test_queuefs_enqueue_dequeue() {
-        let fs = QueueFileSystem::new();
-
-        // Create a queue first
-        fs.mkdir("/test", 0o755).await.unwrap();
+        let fs = queuefs_with("test").await;
 
         // Enqueue messages
         let data1 = b"message 1";
         let data2 = b"message 2";
-
-        fs.write("/test/enqueue", data1, 0, WriteFlag::None)
-            .await
-            .unwrap();
-        fs.write("/test/enqueue", data2, 0, WriteFlag::None)
-            .await
-            .unwrap();
+        enqueue(&fs, "test", data1).await;
+        enqueue(&fs, "test", data2).await;
 
         // Dequeue messages
-        let result1 = fs.read("/test/dequeue", 0, 0).await.unwrap();
-        let msg1: TestQueueMessage = serde_json::from_slice(&result1).unwrap();
+        let msg1 = dequeue_msg(&fs, "test").await;
         assert!(!msg1.id.is_empty());
         assert_eq!(msg1.data.as_bytes(), data1);
 
-        let result2 = fs.read("/test/dequeue", 0, 0).await.unwrap();
-        let msg2: TestQueueMessage = serde_json::from_slice(&result2).unwrap();
+        let msg2 = dequeue_msg(&fs, "test").await;
         assert!(!msg2.id.is_empty());
         assert_eq!(msg2.data.as_bytes(), data2);
 
@@ -701,16 +709,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_queuefs_peek() {
-        let fs = QueueFileSystem::new();
-
-        // Create a queue first
-        fs.mkdir("/test", 0o755).await.unwrap();
+        let fs = queuefs_with("test").await;
 
         // Enqueue a message
         let data = b"test message";
-        fs.write("/test/enqueue", data, 0, WriteFlag::None)
-            .await
-            .unwrap();
+        enqueue(&fs, "test", data).await;
 
         // Peek should return the message without removing it
         let result1 = fs.read("/test/peek", 0, 0).await.unwrap();
@@ -722,54 +725,36 @@ mod tests {
         assert_eq!(msg2.data.as_bytes(), data);
 
         // Dequeue should still work
-        let result3 = fs.read("/test/dequeue", 0, 0).await.unwrap();
-        let msg3: TestQueueMessage = serde_json::from_slice(&result3).unwrap();
+        let msg3 = dequeue_msg(&fs, "test").await;
         assert_eq!(msg3.data.as_bytes(), data);
     }
 
     #[tokio::test]
     async fn test_queuefs_size() {
-        let fs = QueueFileSystem::new();
-
-        // Create a queue first
-        fs.mkdir("/test", 0o755).await.unwrap();
+        let fs = queuefs_with("test").await;
 
         // Initially empty
-        let size = fs.read("/test/size", 0, 0).await.unwrap();
-        assert_eq!(String::from_utf8(size).unwrap(), "0");
+        assert_eq!(queue_size(&fs, "test").await, 0);
 
         // Add messages
-        fs.write("/test/enqueue", b"msg1", 0, WriteFlag::None)
-            .await
-            .unwrap();
-        fs.write("/test/enqueue", b"msg2", 0, WriteFlag::None)
-            .await
-            .unwrap();
+        enqueue(&fs, "test", b"msg1").await;
+        enqueue(&fs, "test", b"msg2").await;
 
-        let size = fs.read("/test/size", 0, 0).await.unwrap();
-        assert_eq!(String::from_utf8(size).unwrap(), "2");
+        assert_eq!(queue_size(&fs, "test").await, 2);
 
         // Dequeue one
         fs.read("/test/dequeue", 0, 0).await.unwrap();
 
-        let size = fs.read("/test/size", 0, 0).await.unwrap();
-        assert_eq!(String::from_utf8(size).unwrap(), "1");
+        assert_eq!(queue_size(&fs, "test").await, 1);
     }
 
     #[tokio::test]
     async fn test_queuefs_clear() {
-        let fs = QueueFileSystem::new();
-
-        // Create a queue first
-        fs.mkdir("/test", 0o755).await.unwrap();
+        let fs = queuefs_with("test").await;
 
         // Add messages
-        fs.write("/test/enqueue", b"msg1", 0, WriteFlag::None)
-            .await
-            .unwrap();
-        fs.write("/test/enqueue", b"msg2", 0, WriteFlag::None)
-            .await
-            .unwrap();
+        enqueue(&fs, "test", b"msg1").await;
+        enqueue(&fs, "test", b"msg2").await;
 
         // Clear the queue
         fs.write("/test/clear", b"", 0, WriteFlag::None)
@@ -777,8 +762,7 @@ mod tests {
             .unwrap();
 
         // Queue should be empty
-        let size = fs.read("/test/size", 0, 0).await.unwrap();
-        assert_eq!(String::from_utf8(size).unwrap(), "0");
+        assert_eq!(queue_size(&fs, "test").await, 0);
 
         let result = fs.read("/test/dequeue", 0, 0).await;
         assert_eq!(result.unwrap(), b"{}");
@@ -786,10 +770,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_queuefs_read_dir() {
-        let fs = QueueFileSystem::new();
-
-        // Create a queue
-        fs.mkdir("/test", 0o755).await.unwrap();
+        let fs = queuefs_with("test").await;
 
         // Root should list the queue
         let entries = fs.read_dir("/").await.unwrap();
@@ -812,10 +793,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_queuefs_stat() {
-        let fs = QueueFileSystem::new();
-
-        // Create a queue
-        fs.mkdir("/test", 0o755).await.unwrap();
+        let fs = queuefs_with("test").await;
 
         // Stat root
         let info = fs.stat("/").await.unwrap();
@@ -837,10 +815,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_queuefs_invalid_operations() {
-        let fs = QueueFileSystem::new();
-
-        // Create a queue
-        fs.mkdir("/test", 0o755).await.unwrap();
+        let fs = queuefs_with("test").await;
 
         // Cannot read from enqueue
         let result = fs.read("/test/enqueue", 0, 0).await;
@@ -886,8 +861,7 @@ mod tests {
         }
 
         // Check size
-        let size = fs.read("/test/size", 0, 0).await.unwrap();
-        assert_eq!(String::from_utf8(size).unwrap(), "10");
+        assert_eq!(queue_size(fs.as_ref(), "test").await, 10);
 
         // Dequeue all messages
         for _ in 0..10 {
@@ -895,8 +869,7 @@ mod tests {
         }
 
         // Queue should be empty
-        let size = fs.read("/test/size", 0, 0).await.unwrap();
-        assert_eq!(String::from_utf8(size).unwrap(), "0");
+        assert_eq!(queue_size(fs.as_ref(), "test").await, 0);
     }
 
     #[tokio::test]
@@ -907,11 +880,8 @@ mod tests {
         assert!(!plugin.readme().is_empty());
         assert_eq!(plugin.config_params().len(), 4);
 
-        let config = PluginConfig {
-            name: "queuefs".to_string(),
-            mount_path: "/queue".to_string(),
-            params: std::collections::HashMap::new(),
-        };
+        let config =
+            PluginConfig::single_backend("queuefs", "/queue", std::collections::HashMap::new());
 
         plugin.validate(&config).await.unwrap();
         let fs = plugin.initialize(config).await.unwrap();
@@ -920,11 +890,8 @@ mod tests {
         fs.mkdir("/test", 0o755).await.unwrap();
 
         // Test basic operation
-        fs.write("/test/enqueue", b"test", 0, WriteFlag::None)
-            .await
-            .unwrap();
-        let result = fs.read("/test/dequeue", 0, 0).await.unwrap();
-        let msg: TestQueueMessage = serde_json::from_slice(&result).unwrap();
+        enqueue(fs.as_ref(), "test", b"test").await;
+        let msg = dequeue_msg(fs.as_ref(), "test").await;
         assert_eq!(msg.data, "test");
     }
 
@@ -937,27 +904,19 @@ mod tests {
         fs.mkdir("/Semantic", 0o755).await.unwrap();
 
         // Enqueue to both
-        fs.write("/Embedding/enqueue", b"embed1", 0, WriteFlag::None)
-            .await
-            .unwrap();
-        fs.write("/Semantic/enqueue", b"semantic1", 0, WriteFlag::None)
-            .await
-            .unwrap();
+        enqueue(&fs, "Embedding", b"embed1").await;
+        enqueue(&fs, "Semantic", b"semantic1").await;
 
         // Verify isolation
-        let size1 = fs.read("/Embedding/size", 0, 0).await.unwrap();
-        let size2 = fs.read("/Semantic/size", 0, 0).await.unwrap();
-        assert_eq!(String::from_utf8(size1).unwrap(), "1");
-        assert_eq!(String::from_utf8(size2).unwrap(), "1");
+        assert_eq!(queue_size(&fs, "Embedding").await, 1);
+        assert_eq!(queue_size(&fs, "Semantic").await, 1);
 
         // Dequeue from specific queue
-        let msg = fs.read("/Embedding/dequeue", 0, 0).await.unwrap();
-        let msg: TestQueueMessage = serde_json::from_slice(&msg).unwrap();
+        let msg = dequeue_msg(&fs, "Embedding").await;
         assert_eq!(msg.data, "embed1");
 
         // Other queue unaffected
-        let size2 = fs.read("/Semantic/size", 0, 0).await.unwrap();
-        assert_eq!(String::from_utf8(size2).unwrap(), "1");
+        assert_eq!(queue_size(&fs, "Semantic").await, 1);
     }
 
     #[tokio::test]
@@ -977,11 +936,8 @@ mod tests {
         assert!(names.contains(&"warnings"));
 
         // Can enqueue to nested queue
-        fs.write("/logs/errors/enqueue", b"error1", 0, WriteFlag::None)
-            .await
-            .unwrap();
-        let msg = fs.read("/logs/errors/dequeue", 0, 0).await.unwrap();
-        let msg: TestQueueMessage = serde_json::from_slice(&msg).unwrap();
+        enqueue(&fs, "logs/errors", b"error1").await;
+        let msg = dequeue_msg(&fs, "logs/errors").await;
         assert_eq!(msg.data, "error1");
     }
 
@@ -991,13 +947,10 @@ mod tests {
 
         // Create queue
         fs.mkdir("/temp", 0o755).await.unwrap();
-        fs.write("/temp/enqueue", b"data", 0, WriteFlag::None)
-            .await
-            .unwrap();
+        enqueue(&fs, "temp", b"data").await;
 
         // Verify exists
-        let size = fs.read("/temp/size", 0, 0).await.unwrap();
-        assert_eq!(String::from_utf8(size).unwrap(), "1");
+        assert_eq!(queue_size(&fs, "temp").await, 1);
 
         // Delete queue
         fs.remove_all("/temp").await.unwrap();

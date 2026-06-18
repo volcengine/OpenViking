@@ -48,7 +48,7 @@ class Session:
         Args:
             role: Message role (e.g., "user", "assistant")
             content: Text content (simple mode)
-            parts: Parts list (TextPart, ContextPart, ToolPart)
+            parts: Parts list (TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
             peer_id: Optional stable interaction peer identity.
 
@@ -97,7 +97,6 @@ class Session:
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit the session (archive messages and extract memories).
 
@@ -108,7 +107,6 @@ class Session:
             self.session_id,
             telemetry=telemetry,
             keep_recent_count=keep_recent_count,
-            memory_policy=memory_policy,
         )
 
     async def commit_async(
@@ -116,7 +114,6 @@ class Session:
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit the session asynchronously (archive messages and extract memories).
            Used in viking bot for committing.
@@ -127,7 +124,6 @@ class Session:
         return await self.commit(
             telemetry=telemetry,
             keep_recent_count=keep_recent_count,
-            memory_policy=memory_policy,
         )
 
     async def delete(self) -> None:

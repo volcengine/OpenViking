@@ -18,7 +18,6 @@ import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
-import { Route as OauthSetupRouteImport } from './routes/oauth/setup'
 import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
 
 const SettingsRouteRoute = SettingsRouteRouteImport.update({
@@ -66,11 +65,6 @@ const OauthVerifyRoute = OauthVerifyRouteImport.update({
   path: '/oauth/verify',
   getParentRoute: () => rootRouteImport,
 } as any)
-const OauthSetupRoute = OauthSetupRouteImport.update({
-  id: '/oauth/setup',
-  path: '/oauth/setup',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const OauthConsentRoute = OauthConsentRouteImport.update({
   id: '/oauth/consent',
   path: '/oauth/consent',
@@ -86,7 +80,6 @@ export interface FileRoutesByFullPath {
   '/sessions': typeof SessionsRouteRouteWithChildren
   '/settings': typeof SettingsRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
-  '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/sessions/': typeof SessionsIndexRoute
 }
@@ -98,7 +91,6 @@ export interface FileRoutesByTo {
   '/retrieval': typeof RetrievalRouteRoute
   '/settings': typeof SettingsRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
-  '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/sessions': typeof SessionsIndexRoute
 }
@@ -112,7 +104,6 @@ export interface FileRoutesById {
   '/sessions': typeof SessionsRouteRouteWithChildren
   '/settings': typeof SettingsRouteRoute
   '/oauth/consent': typeof OauthConsentRoute
-  '/oauth/setup': typeof OauthSetupRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/sessions/': typeof SessionsIndexRoute
 }
@@ -127,7 +118,6 @@ export interface FileRouteTypes {
     | '/sessions'
     | '/settings'
     | '/oauth/consent'
-    | '/oauth/setup'
     | '/oauth/verify'
     | '/sessions/'
   fileRoutesByTo: FileRoutesByTo
@@ -139,7 +129,6 @@ export interface FileRouteTypes {
     | '/retrieval'
     | '/settings'
     | '/oauth/consent'
-    | '/oauth/setup'
     | '/oauth/verify'
     | '/sessions'
   id:
@@ -152,7 +141,6 @@ export interface FileRouteTypes {
     | '/sessions'
     | '/settings'
     | '/oauth/consent'
-    | '/oauth/setup'
     | '/oauth/verify'
     | '/sessions/'
   fileRoutesById: FileRoutesById
@@ -166,7 +154,6 @@ export interface RootRouteChildren {
   SessionsRouteRoute: typeof SessionsRouteRouteWithChildren
   SettingsRouteRoute: typeof SettingsRouteRoute
   OauthConsentRoute: typeof OauthConsentRoute
-  OauthSetupRoute: typeof OauthSetupRoute
   OauthVerifyRoute: typeof OauthVerifyRoute
 }
 
@@ -235,13 +222,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OauthVerifyRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/oauth/setup': {
-      id: '/oauth/setup'
-      path: '/oauth/setup'
-      fullPath: '/oauth/setup'
-      preLoaderRoute: typeof OauthSetupRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/oauth/consent': {
       id: '/oauth/consent'
       path: '/oauth/consent'
@@ -273,7 +253,6 @@ const rootRouteChildren: RootRouteChildren = {
   SessionsRouteRoute: SessionsRouteRouteWithChildren,
   SettingsRouteRoute: SettingsRouteRoute,
   OauthConsentRoute: OauthConsentRoute,
-  OauthSetupRoute: OauthSetupRoute,
   OauthVerifyRoute: OauthVerifyRoute,
 }
 export const routeTree = rootRouteImport

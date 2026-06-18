@@ -18,6 +18,11 @@ pub struct StatsWrappedFS {
 }
 
 impl StatsWrappedFS {
+    /// Get the wrapped filesystem for specialized delegation.
+    pub(crate) fn inner_fs(&self) -> &Arc<dyn FileSystem> {
+        &self.inner
+    }
+
     /// Create a new statistics-wrapped filesystem
     pub fn new(inner: Box<dyn FileSystem>) -> Self {
         Self {

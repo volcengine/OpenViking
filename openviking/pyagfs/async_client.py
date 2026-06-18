@@ -45,13 +45,12 @@ def encryption_account_id_from_agfs_path(path: str) -> str:
 
 
 def ensure_same_encryption_account(src_path: str, dst_path: str) -> None:
-    """Reject raw moves/copies that would preserve ciphertext under a different account key."""
+    """Reject AGFS moves/copies across encryption-account domains."""
     src_account = encryption_account_id_from_agfs_path(src_path)
     dst_account = encryption_account_id_from_agfs_path(dst_path)
     if src_account != dst_account:
         raise ValueError(
-            "cross-account AGFS move/copy is not supported by raw path operations: "
-            f"{src_account!r} -> {dst_account!r}"
+            f"cross-account AGFS move/copy is not supported: {src_account!r} -> {dst_account!r}"
         )
 
 
@@ -126,19 +125,6 @@ class AsyncAGFSClient:
             kwargs["stream"] = stream
         return await self.run("cat", path, **kwargs, ctx=_fs_ctx_or_default(path, fs_ctx))
 
-    async def read_raw(self, path: str, offset: int = 0, size: int = -1) -> Any:
-        """Read raw bytes, bypassing the encryption layer (cp/persist whole-blob copy)."""
-        kwargs: Dict[str, Any] = {}
-        if offset != 0:
-            kwargs["offset"] = offset
-        if size != -1:
-            kwargs["size"] = size
-        return await self.run("read_raw", path, **kwargs)
-
-    async def write_raw(self, path: str, data: bytes) -> str:
-        """Write raw bytes, bypassing the encryption layer (cp/persist whole-blob copy)."""
-        return await self.run("write_raw", path, data)
-
     async def write(
         self,
         path: str,
@@ -193,10 +179,25 @@ class AsyncAGFSClient:
         ensure_same_encryption_account(old_path, new_path)
         return await self.run("mv", old_path, new_path, ctx=_fs_ctx_or_default(old_path, fs_ctx))
 
-    async def cp(self, src_path: str, dst_path: str, recursive: bool = False) -> Any:
+    async def cp(
+        self,
+        src_path: str,
+        dst_path: str,
+        recursive: bool = False,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> Any:
+        """Copy a path within AGFS while preserving the caller's FsContext."""
         from .helpers import cp
 
-        return await asyncio.to_thread(cp, self._client, src_path, dst_path, recursive=recursive)
+        return await asyncio.to_thread(
+            cp,
+            self._client,
+            src_path,
+            dst_path,
+            recursive=recursive,
+            fs_ctx=_fs_ctx_or_default(src_path, fs_ctx),
+        )
 
     async def grep(self, **kwargs: Any) -> Dict[str, Any]:
         if "ctx" not in kwargs or kwargs["ctx"] is None:
@@ -222,3 +223,15 @@ class AsyncAGFSClient:
             level_limit=level_limit,
             ctx=_fs_ctx_or_default(path, fs_ctx),
         )
+
+    async def system_sync_status(
+        self, path: str, *, fs_ctx: Dict[str, str] | None = None
+    ) -> Dict[str, Any]:
+        """Return multi-write sync status for a file or directory path."""
+        return await self.run("system_sync_status", path, ctx=_fs_ctx_or_default(path, fs_ctx))
+
+    async def system_sync_retry(
+        self, path: str, *, fs_ctx: Dict[str, str] | None = None
+    ) -> Dict[str, Any]:
+        """Retry pending multi-write sync work for a file or directory path."""
+        return await self.run("system_sync_retry", path, ctx=_fs_ctx_or_default(path, fs_ctx))

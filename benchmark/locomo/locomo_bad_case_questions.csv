@@ -1,0 +1,8 @@
+sample_id,question_index,question,answer,category,question_time,evidence,evidence_text,bot_response,reasoning
+sample_0,139,"What kind of painting did Caroline share with Melanie on October 13, 2023?",An abstract painting with blue streaks on a wall.,4,2023-10-22,"[""D1:5""]","[""Caroline: The transgender stories were so inspiring! I was so happy and thankful for all the support.""]","Based on the search results and the full content I read, on October 13, 2023, it was Melanie who shared paintings with Caroline, not the other way around. Melanie showed Caroline two paintings:
+1. A
+sunset-inspired painting
+2. An abstract painting with peaceful blue streaks
+
+There is no record in the available memories of Caroline sharing a painting with Melanie on that specific date.",Gold本身有问题，实际上是 Melanie 给 Caroline 看的（D17:14 speaker=Melanie）。记忆正确，Bot也成功找出和回答
+sample_0,95,What is Melanie's hand-painted bowl a reminder of?,art and self-expression,4,2023-10-22,"[""D4:5""]","[""Caroline: Yep, Melanie! I've got some other stuff with sentimental value, like my hand-painted bowl. A friend made it for my 18th birthday ten years ago. The pattern and colors are awesome-- it reminds me of art and self-expression.""]","That bowl is Caroline's, not Melanie's. It reminds Caroline of art and self-expression.",实际上手画碗是 Caroline 的（D4:5），bot 正确识别了这一点，gold 错了

@@ -8,16 +8,25 @@ from types import SimpleNamespace
 
 import pytest
 
-from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.service.core import OpenVikingService
 from openviking.utils.agfs_utils import RagfsBindingConfig
+
+
+class _FakeCacheConfig:
+    def model_dump(self, mode: str) -> dict:
+        assert mode == "json"
+        return {"enabled": False, "provider": "memory"}
 
 
 class _FakeConfig:
     """Minimal config object exposing the service-facing to_dict API."""
 
     storage = SimpleNamespace(
-        agfs=SimpleNamespace(path="/tmp/ov-test", backend="local"),
+        agfs=SimpleNamespace(
+            path="/tmp/ov-test",
+            backend="local",
+            cache=_FakeCacheConfig(),
+        ),
         skip_process_lock=False,
     )
 
@@ -49,7 +58,7 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
         assert config["encryption"]["enabled"] is True
         return _FakeEncryptor()
 
-    monkeypatch.setattr("openviking.service.core.bootstrap_encryption", _bootstrap)
+    monkeypatch.setattr("openviking.crypto.config.bootstrap_encryption", _bootstrap)
     service = OpenVikingService.__new__(OpenVikingService)
     service._config = _FakeConfig()
     service._encryptor = None
@@ -59,46 +68,16 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
     assert isinstance(ragfs_config, RagfsBindingConfig)
     assert ragfs_config.agfs is service._config.storage.agfs
     assert ragfs_config.to_binding_dict() == {
+        "cache": {
+            "enabled": False,
+            "provider": "memory",
+        },
         "encryption": {
             "root_key": b"k" * 32,
             "provider_type": 1,
-        }
+        },
     }
     assert isinstance(service._encryptor, _FakeEncryptor)
-
-
-@pytest.mark.parametrize(
-    ("encrypted_mode", "raw", "message"),
-    [
-        (True, b"{}", "plaintext"),
-        (False, b"OVE1ciphertext", "encrypted"),
-    ],
-)
-def test_probe_storage_shape_rejects_mode_mismatch(encrypted_mode, raw, message):
-    """Reject existing system metadata whose shape differs from current encryption mode."""
-
-    class _Client:
-        def read_raw(self, path: str) -> bytes:
-            assert path == "/local/_system/accounts.json"
-            return raw
-
-    service = OpenVikingService.__new__(OpenVikingService)
-
-    with pytest.raises(RuntimeError, match=message):
-        service._probe_storage_shape(_Client(), encrypted_mode)
-
-
-def test_probe_storage_shape_allows_empty_system():
-    """Treat missing system metadata as a fresh system."""
-
-    class _Client:
-        def read_raw(self, path: str) -> bytes:
-            assert path == "/local/_system/accounts.json"
-            raise AGFSNotFoundError("not found")
-
-    service = OpenVikingService.__new__(OpenVikingService)
-
-    service._probe_storage_shape(_Client(), encrypted_mode=True)
 
 
 def test_ensure_data_dir_lock_acquired_once(monkeypatch, tmp_path):

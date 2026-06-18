@@ -4,6 +4,7 @@
 
 from openviking.server.routers.admin import router as admin_router
 from openviking.server.routers.bot import router as bot_router
+from openviking.server.routers.code import router as code_router
 from openviking.server.routers.console import router as console_router
 from openviking.server.routers.content import router as content_router
 from openviking.server.routers.debug import router as debug_router
@@ -16,6 +17,7 @@ from openviking.server.routers.relations import router as relations_router
 from openviking.server.routers.resources import router as resources_router
 from openviking.server.routers.search import router as search_router
 from openviking.server.routers.sessions import router as sessions_router
+from openviking.server.routers.skills import router as skills_router
 from openviking.server.routers.stats import router as stats_router
 from openviking.server.routers.system import router as system_router
 from openviking.server.routers.tasks import router as tasks_router
@@ -25,6 +27,7 @@ from openviking.server.routers.webdav import router as webdav_router
 __all__ = [
     "admin_router",
     "bot_router",
+    "code_router",
     "system_router",
     "resources_router",
     "filesystem_router",
@@ -33,6 +36,7 @@ __all__ = [
     "search_router",
     "relations_router",
     "sessions_router",
+    "skills_router",
     "stats_router",
     "pack_router",
     "privacy_configs_router",

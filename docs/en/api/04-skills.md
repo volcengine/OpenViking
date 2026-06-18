@@ -14,10 +14,12 @@ OpenViking supports multiple skill definition formats:
 
 ### Skill Storage Structure
 
-Skills are stored at `viking://user/skills/`:
+Skills are stored under the current user's skills root. The short URI
+`viking://user/skills/` resolves to `viking://user/{user_id}/skills/` for the
+authenticated request:
 
 ```
-viking://user/skills/
+viking://user/{user_id}/skills/
 +-- search-web/
 |   +-- .abstract.md      # L0: Brief description
 |   +-- .overview.md      # L1: Parameters and usage overview
@@ -152,7 +154,7 @@ Skills are a special type of resource that define actions or tools agents can pe
 1. Receive skill data or uploaded temporary file
 2. Detect data format (structured data, SKILL.md content, MCP format)
 3. Parse skill definition
-4. Store to `viking://user/skills/` path
+4. Store to the current user's `viking://user/{user_id}/skills/` path
 5. If `wait=true`, wait for vectorization to complete
 
 **Code Entry Points**:
@@ -183,6 +185,11 @@ Skills are a special type of resource that define actions or tools agents can pe
     - First call `POST /api/v1/resources/temp_upload` to upload a local `SKILL.md` file/zip directory, then call `POST /api/v1/skills` with `temp_file_id`
     - `temp_upload` defaults to local temporary storage; pass `upload_mode=shared` only when you explicitly need distributed shared temporary uploads. In Python HTTP client / CLI flows, this can also be driven by `ovcli.conf` via `upload.mode = "shared"`
   - `POST /api/v1/skills` does not accept direct host filesystem paths in `data`.
+
+- **Targeting**:
+  - Skills are always user-scoped. `add_skill` does not accept `to`, `parent`, or `root_uri`.
+  - Peer-scoped skill roots are not supported; actor peer filtering only applies to peer memories/resources, not peer skills.
+  - Use `viking://user/skills/...` as current-user shorthand when listing, reading, deleting, or searching skills.
 
 - **Supported data formats**:
   1. **Dict (Skill format)**: Includes `name`, `description`, `content`, etc.
@@ -314,6 +321,18 @@ result = client.add_skill("./skills/my-skill/", wait=True)
 client.wait_processed()
 ```
 
+**Go SDK**
+
+```go
+result, err := client.AddSkill(ctx, "./skills/my-skill/", &openviking.AddSkillOptions{
+    Wait: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["uri"])
+```
+
 **CLI**
 
 ```bash
@@ -337,8 +356,8 @@ ov add-skill ./skills/my-skill/ -o json
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://user/skills/my-skill/",
-    "uri": "viking://user/skills/my-skill/",
+    "root_uri": "viking://user/alice/skills/my-skill",
+    "uri": "viking://user/alice/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
     "queue_status": {
@@ -359,8 +378,8 @@ ov add-skill ./skills/my-skill/ -o json
 Note: Skill is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
 status          success
-root_uri        viking://user/skills/my-skill
-uri             viking://user/skills/my-skill
+root_uri        viking://user/alice/skills/my-skill
+uri             viking://user/alice/skills/my-skill
 name            my-skill
 auxiliary_files 2
 ```
@@ -369,8 +388,8 @@ auxiliary_files 2
 ```json
 {
   "status": "success",
-  "root_uri": "viking://user/skills/my-skill",
-  "uri": "viking://user/skills/my-skill",
+  "root_uri": "viking://user/alice/skills/my-skill",
+  "uri": "viking://user/alice/skills/my-skill",
   "name": "my-skill",
   "auxiliary_files": 2
 }
@@ -381,8 +400,8 @@ auxiliary_files 2
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | Processing status: `success` or `error` |
-| `root_uri` | string | Final URI of the skill in OpenViking (same as `uri`) |
-| `uri` | string | Final URI of the skill in OpenViking (same as `root_uri`) |
+| `root_uri` | string | Canonical final URI of the skill in OpenViking (same as `uri`) |
+| `uri` | string | Canonical final URI of the skill in OpenViking (same as `root_uri`) |
 | `name` | string | Skill name |
 | `auxiliary_files` | number | Number of auxiliary files included with the skill |
 | `queue_status` | object | (Optional, only when `wait=true`) Queue processing status with `pending`, `processing`, `completed` counts |
@@ -407,61 +426,60 @@ The Python HTTP SDK raises the corresponding mapped exception for this response.
 
 ## Skill Management Operations
 
+The Python HTTP SDK and Go SDK expose dedicated skill management methods:
+`list_skills`, `find_skills`, `validate_skill`, `get_skill`, `update_skill`,
+and `delete_skill` in Python; `ListSkills`, `FindSkills`, `ValidateSkill`,
+`GetSkill`, `UpdateSkill`, and `DeleteSkill` in Go. The general
+filesystem/content/retrieval methods still work for URI-level access.
+
 ### List Skills
 
 **Python SDK**
 
 ```python
-# List all skills
-skills = client.ls("viking://user/skills/")
-for skill in skills:
-    print(f"{skill['name']}")
+skills = client.list_skills(node_limit=1000)
+for skill in skills["skills"]:
+    print(skill["name"])
+```
 
-# Simple list (names only
-names = client.ls("viking://user/skills/", simple=True)
-print(names)
+**Go SDK**
+
+```go
+skills, err := client.ListSkills(ctx, nil)
+_ = skills
 ```
 
 **HTTP API**
 
 ```bash
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://user/skills/" \
+curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
   -H "X-API-Key: your-key"
 ```
 
-### Read Skill Content
+### Read Skill
 
 **Python SDK**
 
 ```python
-uri = "viking://user/skills/search-web/"
+skill = client.get_skill("search-web", include_content=True, include_files=True)
+print(skill["name"])
+print(skill.get("content"))
+```
 
-# L0: Brief description
-abstract = client.abstract(uri)
-print(f"Abstract: {abstract}")
+**Go SDK**
 
-# L1: Parameters and usage overview
-overview = client.overview(uri)
-print(f"Overview: {overview}")
-
-# L2: Full skill documentation
-content = client.read(uri)
-print(f"Content: {content}")
+```go
+skill, err := client.GetSkill(ctx, "search-web", &openviking.GetSkillOptions{
+    IncludeContent: openviking.Bool(true),
+    IncludeFiles:   openviking.Bool(true),
+})
+_ = skill
 ```
 
 **HTTP API**
 
 ```bash
-# L0: Brief description
-curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://user/skills/search-web/" \
-  -H "X-API-Key: your-key"
-
-# L1: Parameters and usage overview
-curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://user/skills/search-web/" \
-  -H "X-API-Key: your-key"
-
-# L2: Full skill documentation
-curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://user/skills/search-web/" \
+curl -X GET "http://localhost:1933/api/v1/skills/search-web?include_content=true&include_files=true" \
   -H "X-API-Key: your-key"
 ```
 
@@ -470,30 +488,62 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://user/skills/
 **Python SDK**
 
 ```python
-# Semantic search for skills
-results = client.find(
-    "search the internet",
-    target_uri="viking://user/skills/",
-    limit=5
-)
+results = client.find_skills("search the internet", limit=5)
 
-for ctx in results.skills:
-    print(f"Skill: {ctx.uri}")
-    print(f"Score: {ctx.score:.3f}")
-    print(f"Description: {ctx.abstract}")
+for skill in results["skills"]:
+    print(skill["name"], skill["score"])
+```
+
+**Go SDK**
+
+```go
+results, err := client.FindSkills(ctx, "search the internet", &openviking.FindSkillsOptions{
+    Limit: 5,
+})
+_ = results
 ```
 
 **HTTP API**
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/search/find \
+curl -X POST http://localhost:1933/api/v1/skills/find \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
     "query": "search the internet",
-    "target_uri": "viking://user/skills/",
     "limit": 5
   }'
+```
+
+### Validate and Update Skills
+
+**Python SDK**
+
+```python
+validated = client.validate_skill({"name": "search-web", "description": "..."})
+updated = client.update_skill("search-web", "./skills/search-web", wait=True)
+```
+
+**Go SDK**
+
+```go
+validated, err := client.ValidateSkill(ctx, map[string]any{
+    "name":        "search-web",
+    "description": "...",
+}, nil)
+updated, err := client.UpdateSkill(ctx, "search-web", "./skills/search-web", &openviking.UpdateSkillOptions{
+    Wait: true,
+})
+_, _ = validated, updated
+```
+
+**HTTP API**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/skills/validate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"data": {"name": "search-web", "description": "..."}}'
 ```
 
 ### Delete Skills
@@ -501,13 +551,20 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 **Python SDK**
 
 ```python
-client.rm("viking://user/skills/old-skill/", recursive=True)
+client.delete_skill("old-skill")
+```
+
+**Go SDK**
+
+```go
+deleted, err := client.DeleteSkill(ctx, "old-skill")
+_ = deleted
 ```
 
 **HTTP API**
 
 ```bash
-curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://user/skills/old-skill/&recursive=true" \
+curl -X DELETE "http://localhost:1933/api/v1/skills/old-skill" \
   -H "X-API-Key: your-key"
 ```
 

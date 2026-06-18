@@ -60,13 +60,6 @@ class OAuthConfig(BaseModel):
         description="Lifetime of authorization codes in seconds (RFC 6749 recommends short).",
     )
 
-    otp_ttl_seconds: int = Field(
-        default=300,
-        ge=60,
-        le=600,
-        description="Lifetime of one-time passcodes in seconds.",
-    )
-
     db_filename: str = Field(
         default="oauth.db",
         description="SQLite database filename (relative to OpenVikingConfig.storage.workspace).",

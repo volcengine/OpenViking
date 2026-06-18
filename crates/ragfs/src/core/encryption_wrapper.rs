@@ -12,8 +12,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use tracing::warn;
 
 use crate::crypto;
+use crate::shape::SHAPE_MANIFEST_PATH;
 
 use super::context::FsContextView;
 use super::errors::{Error, Result};
@@ -35,6 +37,11 @@ pub struct EncryptionWrappedFS {
 }
 
 impl EncryptionWrappedFS {
+    /// Get the wrapped filesystem for specialized delegation.
+    pub(crate) fn inner_fs(&self) -> &Arc<dyn FileSystem> {
+        &self.inner
+    }
+
     /// Construct an encryption layer over `inner`. Built only when a root key is configured.
     pub fn new(inner: Arc<dyn FileSystem>, root_key: [u8; 32], provider_type: u8) -> Self {
         Self {
@@ -94,6 +101,11 @@ impl EncryptionWrappedFS {
             || path.starts_with("/serverinfo/")
     }
 
+    /// Return true when one path points at the backend-shape manifest.
+    fn is_shape_manifest_path(path: &str) -> bool {
+        path == SHAPE_MANIFEST_PATH || path.ends_with(SHAPE_MANIFEST_PATH)
+    }
+
     /// Derive the encryption account domain from a filesystem path.
     ///
     /// `/local/{account_id}/...` paths are tenant-scoped and use that account id. Control or
@@ -150,7 +162,20 @@ impl FileSystem for EncryptionWrappedFS {
         // the startup probe, so this layer always expects ciphertext.
         let data = self.inner.read(path, 0, 0).await?;
         let account_id = self.require_account_id()?;
-        let plaintext = self.decrypt_envelope(&account_id, &data)?;
+        let plaintext = match self.decrypt_envelope(&account_id, &data) {
+            Ok(plaintext) => plaintext,
+            Err(err) => {
+                warn!(
+                    path = %path,
+                    account_id = %account_id,
+                    ciphertext_len = data.len(),
+                    encrypted_magic = crypto::is_encrypted(&data),
+                    error = %err,
+                    "failed to decrypt encrypted RAGFS file"
+                );
+                return Err(err);
+            }
+        };
         Ok(slice_bytes(plaintext, offset, size))
     }
 
@@ -256,7 +281,11 @@ impl FileSystem for EncryptionWrappedFS {
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
-        self.inner.read_dir(path).await
+        let entries = self.inner.read_dir(path).await?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| entry.name != SHAPE_MANIFEST_PATH.trim_start_matches('/'))
+            .collect())
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -282,9 +311,14 @@ impl FileSystem for EncryptionWrappedFS {
         level_limit: Option<usize>,
     ) -> Result<Vec<TreeEntry>> {
         // Metadata only — no content read, so delegate to preserve plugin-native tree optimizations.
-        self.inner
+        let entries = self
+            .inner
             .tree_directory(path, show_hidden, node_limit, level_limit)
-            .await
+            .await?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| !Self::is_shape_manifest_path(&entry.path))
+            .collect())
     }
 
     async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> Result<()> {
@@ -305,30 +339,21 @@ mod tests {
     use crate::core::PluginConfig;
     use crate::plugins::MemFSPlugin;
 
+    /// Build a memfs plugin config for encryption wrapper tests.
+    fn memfs_config(mount_path: &str) -> PluginConfig {
+        PluginConfig::single_backend("memfs", mount_path, HashMap::new())
+    }
+
+    /// Build a memfs-backed stack mounted at the default path.
     async fn memfs_stack() -> Arc<MountableFS> {
-        let m = Arc::new(MountableFS::new());
-        m.register_plugin(MemFSPlugin).await;
-        m.mount(PluginConfig {
-            name: "memfs".to_string(),
-            mount_path: "/mem".to_string(),
-            params: HashMap::new(),
-        })
-        .await
-        .unwrap();
-        m
+        memfs_stack_at("/mem").await
     }
 
     /// Build a memfs-backed stack mounted at the provided path for path-sensitive tests.
     async fn memfs_stack_at(mount_path: &str) -> Arc<MountableFS> {
         let m = Arc::new(MountableFS::new());
         m.register_plugin(MemFSPlugin).await;
-        m.mount(PluginConfig {
-            name: "memfs".to_string(),
-            mount_path: mount_path.to_string(),
-            params: HashMap::new(),
-        })
-        .await
-        .unwrap();
+        m.mount(memfs_config(mount_path)).await.unwrap();
         m
     }
 
@@ -483,7 +508,9 @@ mod tests {
                 enc.write("/mem/a.txt", b"first", 0, WriteFlag::Create)
                     .await
                     .unwrap();
-                let appended = enc.write("/mem/a.txt", b"second", 0, WriteFlag::Append).await;
+                let appended = enc
+                    .write("/mem/a.txt", b"second", 0, WriteFlag::Append)
+                    .await;
                 assert!(appended.is_err());
             })
             .await;

@@ -1434,3 +1434,21 @@ class TestASTExtractorDispatch:
         verbose = self.extractor.extract_skeleton("m.py", code, verbose=True)
         assert "Detail here." not in compact
         assert "Detail here." in verbose
+
+    def test_viking_resource_md_uses_parent_extension(self):
+        # Viking add-resource stores `foo.py` as directory `foo.py/` with body
+        # `foo.py/foo.md`.  Language detection must fall back to the parent
+        # directory's suffix so code tools recognise the original language.
+        code = "def foo(x):\n    return x\n"
+        viking_uri = "viking://resources/test-code.py/test-code.md"
+        assert self.extractor.supports(viking_uri)
+        assert self.extractor._detect_language(viking_uri) == "python"
+        text = self.extractor.extract_skeleton(viking_uri, code)
+        assert text is not None
+        assert "def foo" in text
+
+    def test_plain_markdown_still_unsupported(self):
+        # A genuine markdown file (no language-bearing parent) must not be
+        # treated as code.
+        assert not self.extractor.supports("notes.md")
+        assert not self.extractor.supports("viking://resources/notes.md")

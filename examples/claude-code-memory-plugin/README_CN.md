@@ -127,6 +127,8 @@ claude() {
 
 重新 source rc（`source ~/.zshrc`，bash 用户改成 `source ~/.bashrc`）后重启 `claude`——`/mcp` 应该显示远程 URL 且认证有效。
 
+**封装其他启动命令。** 如果你通过别的命令启动 Claude Code——比如自定义包装脚本 `cc-custom`，或“基础命令 + 子命令”形式的多词启动器——安装脚本也能一并封装：在它的“Extra launch commands”提示里填写，或运行时传入 `OPENVIKING_CC_WRAP_EXTRA='cc-custom'`。该列表存在同一段 rc 标记块里（wrapper 读取为 `$OPENVIKING_CC_WRAP_EXTRA`）；对多词条目，只有前导参数匹配该子命令的调用才会注入凭据，该命令的其他用法原样放行。**填的是真实命令名，绝不是它的 shell 别名**：别名会在 wrapper 运行前先展开成目标命令，所以封装它指向的那个——`alias cc=claude` 本就走 base `claude` 封装（无需配置），而 `alias cc=claude-custom` 则把 `claude-custom` 填进去即可；别名名若被填入会被跳过。
+
 > **为什么用 function 而不是 `export`？** 全局 export 的 API Key 会被该 shell 派生的所有子进程继承——npm 脚本、构建工具、崩溃 dump、`/proc/<pid>/environ` 都会带上。函数包装把秘钥限定在 `claude` 进程树内。
 >
 > 还没有 `ovcli.conf`？先按 [部署指南 → CLI 章节](../../docs/zh/guides/03-deployment.md#cli) 创建一份。
@@ -165,7 +167,7 @@ claude() {
 | `OPENVIKING_USER`                                | 多租户 user（`X-OpenViking-User` 头）                              |
 | `OPENVIKING_PEER_ID`                             | 可选的稳定 peer，用于自动召回和 session message 写入               |
 
-设置 `OPENVIKING_PEER_ID` 后，hook 会把它作为请求级 `peer_id` 发送。未显式配置 peer 时，subagent 捕获会回退到 Claude 的 `agent_id`，让不同 subagent 默认落到不同 peer memory。
+设置 `OPENVIKING_PEER_ID` 后，数据面的 recall/profile 请求会把它作为 `X-OpenViking-Actor-Peer` 发送；捕获到 session message 时仍写入 body `peer_id`。未显式配置 peer 时，subagent 捕获会回退到 Claude 的 `agent_id`，让不同 subagent 默认落到不同 peer memory。
 
 #### 召回调优
 
@@ -317,10 +319,10 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 |----------|-----------------------------|-----------------------------------------------|
 | 存储     | 扁平 markdown               | 向量数据库 + 结构化抽取                        |
 | 搜索     | 整体加载进上下文            | 语义相似度 + 排序 + token 预算                |
-| 范围     | 单项目                      | 跨项目、跨会话、跨 agent                       |
+| 范围     | 单项目                      | 跨项目、跨会话、peer 维度                      |
 | 容量     | ~200 行（受上下文限制）     | 不受限（服务端存储）                           |
 | 抽取     | 手写规则                    | LLM 驱动的实体 / 偏好 / 事件抽取               |
-| 子 agent | 与父共享                    | 隔离 session + 类型化 agent namespace          |
+| 子 agent | 与父共享                    | 隔离 session + peer 维度捕获                   |
 
 ---
 

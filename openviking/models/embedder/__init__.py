@@ -19,10 +19,12 @@ Supported providers:
 """
 
 from openviking.models.embedder.base import (
+    AllCredentialsFailedError,
     CompositeHybridEmbedder,
     DenseEmbedderBase,
     EmbedderBase,
     EmbedResult,
+    FailoverEmbedder,
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
@@ -67,6 +69,8 @@ __all__ = [
     "SparseEmbedderBase",
     "HybridEmbedderBase",
     "CompositeHybridEmbedder",
+    "FailoverEmbedder",
+    "AllCredentialsFailedError",
     # Google Gemini implementations
     "GeminiDenseEmbedder",
     # Jina AI implementations

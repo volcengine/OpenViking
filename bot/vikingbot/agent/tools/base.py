@@ -24,8 +24,10 @@ class ToolContext:
             and session_key. This determines the sandbox directory for the session.
         sender_id: Optional identifier for the message sender, used for tracking
             and permission checks.
-        memory_user_ids: Optional list of user IDs for memory retrieval. Used by
-            openviking_search tool to search specific users' memory spaces.
+        memory_peer_ids: Optional list of peer IDs for memory retrieval inside
+            the current OpenViking user scope.
+        memory_owner_user_ids: Optional list of explicit OpenViking user IDs
+            for legacy root-key fanout searches.
         openviking_connection: Optional request-scoped OpenViking identity. Studio
             requests use this so tools call OpenViking with the same connection
             selected in the browser.
@@ -42,8 +44,16 @@ class ToolContext:
     sandbox_manager: SandboxManager | None = None
     workspace_id: str = sandbox_manager.to_workspace_id(session_key) if sandbox_manager else None
     sender_id: str | None = None
-    memory_user_ids: list[str] | None = None
+    memory_peer_ids: list[str] | None = None
+    memory_owner_user_ids: list[str] | None = None
+    memory_user_ids: list[str] | None = None  # Deprecated alias for memory_owner_user_ids.
     openviking_connection: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if self.memory_owner_user_ids is None and self.memory_user_ids is not None:
+            self.memory_owner_user_ids = self.memory_user_ids
+        elif self.memory_user_ids is None and self.memory_owner_user_ids is not None:
+            self.memory_user_ids = self.memory_owner_user_ids
 
 
 class Tool(ABC):

@@ -10,10 +10,13 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import quote
 
 import httpx
 
+from openviking.core.peer_id import normalize_peer_selector
 from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
+from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
     AbortedError,
@@ -143,6 +146,8 @@ class AsyncHTTPClient(BaseClient):
         user_id: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
@@ -155,6 +160,8 @@ class AsyncHTTPClient(BaseClient):
             user_id: User identifier. If not provided, defaults to "default".
             account: Optional account identity header for trusted deployments.
             user: Optional user identity header for trusted deployments.
+            actor_peer_id: Optional peer actor scope header.
+            agent_id: Legacy alias for actor_peer_id.
             timeout: HTTP request timeout in seconds. Default 60.0.
             extra_headers: Additional HTTP headers to send with requests. If not provided, reads from ovcli.conf.
         """
@@ -165,6 +172,7 @@ class AsyncHTTPClient(BaseClient):
             or api_key is None
             or account is None
             or effective_user is None
+            or (actor_peer_id is None and agent_id is None)
             or timeout == 60.0
             or extra_headers is None
         )
@@ -176,6 +184,9 @@ class AsyncHTTPClient(BaseClient):
                 api_key = api_key or cli_config.api_key
                 account = account or cli_config.account
                 effective_user = effective_user or cli_config.user
+                if actor_peer_id is None and agent_id is None:
+                    actor_peer_id = cli_config.actor_peer_id
+                    agent_id = cli_config.agent_id
                 if timeout == 60.0:  # only override default with config value
                     timeout = cli_config.timeout
                 if extra_headers is None:
@@ -194,6 +205,10 @@ class AsyncHTTPClient(BaseClient):
         self._api_key = api_key
         self._account = account
         self._user_id = effective_user
+        if actor_peer_id and agent_id:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+        self._legacy_agent_id = normalize_peer_selector(None, agent_id=agent_id)
+        self._actor_peer_id = normalize_peer_selector(actor_peer_id, agent_id=agent_id)
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
         self._extra_headers = extra_headers
@@ -215,6 +230,8 @@ class AsyncHTTPClient(BaseClient):
             headers["X-OpenViking-Account"] = self._account
         if self._user_id:
             headers["X-OpenViking-User"] = self._user_id
+        if self._actor_peer_id:
+            headers["X-OpenViking-Actor-Peer"] = self._actor_peer_id
         if self._extra_headers:
             headers.update(self._extra_headers)
         self._http = httpx.AsyncClient(
@@ -266,6 +283,11 @@ class AsyncHTTPClient(BaseClient):
         return telemetry
 
     @staticmethod
+    def _path_segment(value: str) -> str:
+        """Encode a value for safe use as one URL path segment."""
+        return quote(value, safe="")
+
+    @staticmethod
     def _normalize_target_uri(
         target_uri: Union[str, List[str]],
     ) -> Union[str, List[str]]:
@@ -296,6 +318,31 @@ class AsyncHTTPClient(BaseClient):
             return result
 
         return result
+
+    def _attach_legacy_agent_scope(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if self._legacy_agent_id:
+            payload["agent_id"] = self._legacy_agent_id
+        return payload
+
+    def _attach_legacy_message_scope(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._legacy_agent_id:
+            return payload
+        if payload.get("peer_id") is not None:
+            raise InvalidArgumentError(
+                "peer_id cannot be used when client is configured with legacy agent_id"
+            )
+        if payload.get("role") == "assistant":
+            payload["agent_id"] = self._legacy_agent_id
+        return payload
+
+    def _batch_message_payloads(self, messages: list[dict]) -> list[dict]:
+        if not self._legacy_agent_id:
+            return messages
+        scoped_messages = []
+        for message in messages:
+            payload = dict(message)
+            scoped_messages.append(self._attach_legacy_message_scope(payload))
+        return scoped_messages
 
     def _raise_exception(self, error: Dict[str, Any]) -> None:
         """Raise appropriate exception based on error code."""
@@ -393,6 +440,7 @@ class AsyncHTTPClient(BaseClient):
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -413,6 +461,7 @@ class AsyncHTTPClient(BaseClient):
             "exclude": exclude,
             "directly_upload_media": directly_upload_media,
             "watch_interval": watch_interval,
+            "args": args or {},
             "telemetry": telemetry,
         }
         if preserve_structure is not None:
@@ -463,12 +512,13 @@ class AsyncHTTPClient(BaseClient):
             Result dict with session_id, message_count, and added count.
         """
         telemetry = self._validate_telemetry(telemetry)
-        payload: Dict[str, Any] = {"messages": messages}
+        payload: Dict[str, Any] = {"messages": self._batch_message_payloads(messages)}
         if telemetry is not False:
             payload["telemetry"] = telemetry
 
+        session_path = self._path_segment(session_id)
         response = await self._http.post(
-            f"/api/v1/sessions/{session_id}/messages/batch",
+            f"/api/v1/sessions/{session_path}/messages/batch",
             json=payload,
         )
         response_data = self._handle_response_data(response)
@@ -514,6 +564,231 @@ class AsyncHTTPClient(BaseClient):
         )
         response_data = self._handle_response_data(response)
         return self._attach_telemetry(response_data.get("result"), response_data)
+
+    # ============= Skill Management =============
+
+    async def list_skills(self, node_limit: int = 1000) -> Dict[str, Any]:
+        """List installed agent skills."""
+        response = await self._http.get(
+            "/api/v1/skills",
+            params={"node_limit": node_limit},
+        )
+        return self._handle_response(response)
+
+    async def find_skills(
+        self,
+        query: str,
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        level: Optional[List[int]] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Find installed agent skills by semantic search."""
+        telemetry = self._validate_telemetry(telemetry)
+        payload: Dict[str, Any] = {
+            "query": query,
+            "limit": limit,
+            "score_threshold": score_threshold,
+            "level": level,
+            "telemetry": telemetry,
+        }
+        response = await self._http.post("/api/v1/skills/find", json=payload)
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
+
+    async def validate_skill(
+        self,
+        data: Any,
+        strict: bool = False,
+        source_path: Optional[str] = None,
+        skill_dir_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Validate a skill payload without installing it."""
+        payload: Dict[str, Any] = {"data": data, "strict": strict}
+        if source_path is not None:
+            payload["source_path"] = source_path
+        if skill_dir_name is not None:
+            payload["skill_dir_name"] = skill_dir_name
+        response = await self._http.post("/api/v1/skills/validate", json=payload)
+        return self._handle_response(response)
+
+    async def get_skill(
+        self,
+        skill_name: str,
+        include_content: Optional[bool] = None,
+        include_files: bool = True,
+        include_source: bool = False,
+        level: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Get one installed agent skill."""
+        params: Dict[str, Any] = {
+            "include_files": include_files,
+            "include_source": include_source,
+        }
+        if include_content is not None:
+            params["include_content"] = include_content
+        if level is not None:
+            params["level"] = level
+        response = await self._http.get(f"/api/v1/skills/{skill_name}", params=params)
+        return self._handle_response(response)
+
+    async def update_skill(
+        self,
+        skill_name: str,
+        data: Any,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace an installed agent skill."""
+        telemetry = self._validate_telemetry(telemetry)
+        request_data: Dict[str, Any] = {
+            "wait": wait,
+            "timeout": timeout,
+            "source_metadata": source_metadata,
+            "telemetry": telemetry,
+        }
+
+        if isinstance(data, str):
+            path_obj = Path(data)
+            if path_obj.exists():
+                if path_obj.is_dir():
+                    zip_path = self._zip_directory(data)
+                    try:
+                        request_data["temp_file_id"] = await self._upload_temp_file(zip_path)
+                    finally:
+                        Path(zip_path).unlink(missing_ok=True)
+                elif path_obj.is_file():
+                    request_data["temp_file_id"] = await self._upload_temp_file(data)
+                else:
+                    request_data["data"] = data
+            else:
+                request_data["data"] = data
+        else:
+            request_data["data"] = data
+
+        response = await self._http.put(
+            f"/api/v1/skills/{skill_name}",
+            json=request_data,
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
+
+    async def delete_skill(self, skill_name: str) -> Dict[str, Any]:
+        """Remove an installed agent skill."""
+        response = await self._http.delete(f"/api/v1/skills/{skill_name}")
+        return self._handle_response(response)
+
+    # ============= Watch Management =============
+
+    async def list_watches(
+        self,
+        active_only: bool = False,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List watch tasks, or get one by target URI."""
+        params: Dict[str, Any] = {"active_only": active_only}
+        if to_uri is not None:
+            params["to_uri"] = VikingURI.normalize(to_uri)
+        response = await self._http.get("/api/v1/watches", params=params)
+        return self._handle_response(response)
+
+    async def get_watch(
+        self,
+        task_id: str,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get one watch task by task ID, optionally cross-checking the target URI."""
+        params = {}
+        if to_uri is not None:
+            params["to_uri"] = VikingURI.normalize(to_uri)
+        response = await self._http.get(f"/api/v1/watches/{task_id}", params=params)
+        return self._handle_response(response)
+
+    async def update_watch(
+        self,
+        task_id: Optional[str] = None,
+        *,
+        to_uri: Optional[str] = None,
+        watch_interval: Optional[float] = None,
+        is_active: Optional[bool] = None,
+        reason: Optional[str] = None,
+        instruction: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Partially update a watch task by task ID or target URI."""
+        if not task_id and not to_uri:
+            raise ValueError("Either task_id or to_uri is required")
+        payload: Dict[str, Any] = {}
+        if watch_interval is not None:
+            payload["watch_interval"] = watch_interval
+        if is_active is not None:
+            payload["is_active"] = is_active
+        if reason is not None:
+            payload["reason"] = reason
+        if instruction is not None:
+            payload["instruction"] = instruction
+        if task_id:
+            params = {}
+            if to_uri is not None:
+                params["to_uri"] = VikingURI.normalize(to_uri)
+            response = await self._http.patch(
+                f"/api/v1/watches/{task_id}",
+                params=params,
+                json=payload,
+            )
+        else:
+            response = await self._http.patch(
+                "/api/v1/watches",
+                params={"to_uri": VikingURI.normalize(to_uri)},
+                json=payload,
+            )
+        return self._handle_response(response)
+
+    async def delete_watch(
+        self,
+        task_id: Optional[str] = None,
+        *,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Delete a watch task by task ID or target URI."""
+        if not task_id and not to_uri:
+            raise ValueError("Either task_id or to_uri is required")
+        if task_id:
+            params = {}
+            if to_uri is not None:
+                params["to_uri"] = VikingURI.normalize(to_uri)
+            response = await self._http.delete(f"/api/v1/watches/{task_id}", params=params)
+        else:
+            response = await self._http.delete(
+                "/api/v1/watches",
+                params={"to_uri": VikingURI.normalize(to_uri)},
+            )
+        return self._handle_response(response)
+
+    async def trigger_watch(
+        self,
+        task_id: Optional[str] = None,
+        *,
+        to_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Schedule a watch task for immediate background execution."""
+        if not task_id and not to_uri:
+            raise ValueError("Either task_id or to_uri is required")
+        if task_id:
+            params = {}
+            if to_uri is not None:
+                params["to_uri"] = VikingURI.normalize(to_uri)
+            response = await self._http.post(
+                f"/api/v1/watches/{task_id}/trigger",
+                params=params,
+            )
+        else:
+            response = await self._http.post(
+                "/api/v1/watches/trigger",
+                params={"to_uri": VikingURI.normalize(to_uri)},
+            )
+        return self._handle_response(response)
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""
@@ -596,13 +871,22 @@ class AsyncHTTPClient(BaseClient):
         )
         self._handle_response(response)
 
-    async def rm(self, uri: str, recursive: bool = False) -> None:
+    async def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource."""
         uri = VikingURI.normalize(uri)
+        params = {"uri": uri, "recursive": recursive, "wait": wait}
+        if timeout is not None:
+            params["timeout"] = timeout
         response = await self._http.request(
             "DELETE",
             "/api/v1/fs",
-            params={"uri": uri, "recursive": recursive},
+            params=params,
         )
         self._handle_response(response)
 
@@ -687,23 +971,24 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ) -> FindResult:
         """Semantic search without session context."""
         telemetry = self._validate_telemetry(telemetry)
         normalized_target = self._normalize_target_uri(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
-        payload = {
-            "query": query,
-            "target_uri": normalized_target,
-            "limit": actual_limit,
-            "score_threshold": score_threshold,
-            "filter": filter,
-            "telemetry": telemetry,
-        }
-        if peer_id is not None:
-            payload["peer_id"] = peer_id
+        payload = self._attach_legacy_agent_scope(
+            {
+                "query": query,
+                "target_uri": normalized_target,
+                "limit": actual_limit,
+                "score_threshold": score_threshold,
+                "filter": filter,
+                "context_type": context_type,
+                "telemetry": telemetry,
+            }
+        )
         response = await self._http.post("/api/v1/search/find", json=payload)
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})
@@ -718,25 +1003,26 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ) -> FindResult:
         """Semantic search with optional session context."""
         telemetry = self._validate_telemetry(telemetry)
         normalized_target = self._normalize_target_uri(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
-        payload = {
-            "query": query,
-            "target_uri": normalized_target,
-            "session_id": sid,
-            "limit": actual_limit,
-            "score_threshold": score_threshold,
-            "filter": filter,
-            "telemetry": telemetry,
-        }
-        if peer_id is not None:
-            payload["peer_id"] = peer_id
+        payload = self._attach_legacy_agent_scope(
+            {
+                "query": query,
+                "target_uri": normalized_target,
+                "session_id": sid,
+                "limit": actual_limit,
+                "score_threshold": score_threshold,
+                "filter": filter,
+                "context_type": context_type,
+                "telemetry": telemetry,
+            }
+        )
         response = await self._http.post("/api/v1/search/search", json=payload)
         response_data = self._handle_response_data(response)
         return FindResult.from_dict(response_data.get("result") or {})
@@ -849,29 +1135,34 @@ class AsyncHTTPClient(BaseClient):
         params = {}
         if auto_create:
             params["auto_create"] = "true"
-        response = await self._http.get(f"/api/v1/sessions/{session_id}", params=params)
+        session_path = self._path_segment(session_id)
+        response = await self._http.get(f"/api/v1/sessions/{session_path}", params=params)
         return self._handle_response(response)
 
     async def get_session_context(
         self, session_id: str, token_budget: int = 128_000
     ) -> Dict[str, Any]:
         """Get assembled session context."""
+        session_path = self._path_segment(session_id)
         response = await self._http.get(
-            f"/api/v1/sessions/{session_id}/context",
+            f"/api/v1/sessions/{session_path}/context",
             params={"token_budget": token_budget},
         )
         return self._handle_response(response)
 
     async def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
         """Get one completed archive for a session."""
+        session_path = self._path_segment(session_id)
+        archive_path = self._path_segment(archive_id)
         response = await self._http.get(
-            f"/api/v1/sessions/{session_id}/archives/{archive_id}",
+            f"/api/v1/sessions/{session_path}/archives/{archive_path}",
         )
         return self._handle_response(response)
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
-        response = await self._http.delete(f"/api/v1/sessions/{session_id}")
+        session_path = self._path_segment(session_id)
+        response = await self._http.delete(f"/api/v1/sessions/{session_path}")
         self._handle_response(response)
 
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -888,13 +1179,30 @@ class AsyncHTTPClient(BaseClient):
             return None
         return self._handle_response(response)
 
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        params: Dict[str, Any] = {"limit": limit}
+        if task_type is not None:
+            params["task_type"] = task_type
+        if status is not None:
+            params["status"] = status
+        if resource_id is not None:
+            params["resource_id"] = resource_id
+        response = await self._http.get("/api/v1/tasks", params=params)
+        return self._handle_response(response)
+
     async def commit_session(
         self,
         session_id: str,
         telemetry: TelemetryRequest = False,
         *,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         telemetry = self._validate_telemetry(telemetry)
@@ -902,10 +1210,9 @@ class AsyncHTTPClient(BaseClient):
             "keep_recent_count": keep_recent_count,
             "telemetry": telemetry,
         }
-        if memory_policy is not None:
-            payload["memory_policy"] = memory_policy
+        session_path = self._path_segment(session_id)
         response = await self._http.post(
-            f"/api/v1/sessions/{session_id}/commit",
+            f"/api/v1/sessions/{session_path}/commit",
             json=payload,
         )
         response_data = self._handle_response_data(response)
@@ -948,9 +1255,11 @@ class AsyncHTTPClient(BaseClient):
             payload["peer_id"] = peer_id
         if telemetry is not False:
             payload["telemetry"] = telemetry
+        payload = self._attach_legacy_message_scope(payload)
 
+        session_path = self._path_segment(session_id)
         response = await self._http.post(
-            f"/api/v1/sessions/{session_id}/messages",
+            f"/api/v1/sessions/{session_path}/messages",
             json=payload,
         )
         response_data = self._handle_response_data(response)
@@ -1199,6 +1508,12 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.post(
             f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
         )
+        return self._handle_response(response)
+
+    async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
+        """Start legacy data migration or legacy namespace cleanup."""
+        action = "cleanup" if cleanup else "migrate"
+        response = await self._http.post("/api/v1/admin/migrate", json={"action": action})
         return self._handle_response(response)
 
     # ============= New methods for BaseClient interface =============

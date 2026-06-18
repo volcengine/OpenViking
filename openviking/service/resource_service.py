@@ -16,8 +16,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_optional_viking_uri
+from openviking.core.content_targets import ContentTargetSpec
+from openviking.core.uri_validation import validate_optional_content_target_uri
+from openviking.resource.feishu_watch_auth import (
+    FEISHU_ACCESS_TOKEN_ARG,
+    FEISHU_REFRESH_TOKEN_ARG,
+    create_feishu_auth_state,
+    load_feishu_app_credentials,
+)
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
@@ -40,7 +46,7 @@ from openviking.utils import is_git_repo_url, parse_code_hosting_url
 from openviking.utils.media_processor import _smart_stem
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking.utils.resource_processor import ResourceProcessor
-from openviking.utils.skill_processor import SkillProcessor
+from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
@@ -52,8 +58,42 @@ from openviking_cli.utils import get_logger
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
     from openviking.resource.watch_scheduler import WatchScheduler
+    from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 
 logger = get_logger(__name__)
+
+
+_ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
+    {
+        "path",
+        "ctx",
+        "to",
+        "parent",
+        "reason",
+        "instruction",
+        "wait",
+        "timeout",
+        "build_index",
+        "summarize",
+        "watch_interval",
+        "skip_watch_management",
+        "allow_local_path_resolution",
+        "enforce_public_remote_targets",
+        "resource_lock",
+        "stage_callback",
+        "args",
+        "strict",
+        "source_name",
+        "ignore_dirs",
+        "include",
+        "exclude",
+        "directly_upload_media",
+        "preserve_structure",
+        "create_parent",
+        "telemetry",
+        "request_validator",
+    }
+)
 
 
 @dataclass
@@ -61,6 +101,12 @@ class _ResourceSourceInfo:
     source_name: Optional[str] = None
     source_path: Optional[str] = None
     source_format: Optional[str] = None
+
+
+@dataclass
+class _NormalizedAddResourceArgs:
+    processor_kwargs: Dict[str, Any]
+    watch_auth_state: Optional[Dict[str, Any]] = None
 
 
 class ResourceService:
@@ -73,12 +119,14 @@ class ResourceService:
         resource_processor: Optional[ResourceProcessor] = None,
         skill_processor: Optional[SkillProcessor] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
+        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._resource_processor = resource_processor
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
+        self._resource_memory_link_service = resource_memory_link_service
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
     def set_dependencies(
@@ -88,6 +136,7 @@ class ResourceService:
         resource_processor: ResourceProcessor,
         skill_processor: SkillProcessor,
         watch_scheduler: Optional["WatchScheduler"] = None,
+        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
@@ -95,6 +144,7 @@ class ResourceService:
         self._resource_processor = resource_processor
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
+        self._resource_memory_link_service = resource_memory_link_service
 
     def _get_watch_manager(self) -> Optional["WatchManager"]:
         if not self._watch_scheduler:
@@ -110,6 +160,63 @@ class ResourceService:
                 continue
             sanitized[key] = value
         return sanitized
+
+    def _normalize_add_resource_args(
+        self,
+        args: Optional[Dict[str, Any]],
+        *,
+        watch_interval: float,
+    ) -> _NormalizedAddResourceArgs:
+        if args is None:
+            return _NormalizedAddResourceArgs({})
+        if not isinstance(args, dict):
+            raise InvalidArgumentError("args must be an object.")
+        if not args:
+            return _NormalizedAddResourceArgs({})
+
+        reserved = sorted(set(args).intersection(_ADD_RESOURCE_ARGS_RESERVED_FIELDS))
+        if reserved:
+            raise InvalidArgumentError(
+                "args cannot contain core add_resource fields: " + ", ".join(reserved)
+            )
+
+        normalized = dict(args)
+        token = normalized.get(FEISHU_ACCESS_TOKEN_ARG)
+        refresh_token = normalized.pop(FEISHU_REFRESH_TOKEN_ARG, None)
+        watch_auth_state = None
+        if token is not None:
+            if not isinstance(token, str) or not token.strip():
+                raise InvalidArgumentError("args.feishu_access_token must be a non-empty string.")
+            token = token.strip()
+            normalized[FEISHU_ACCESS_TOKEN_ARG] = token
+            if watch_interval > 0:
+                if not isinstance(refresh_token, str) or not refresh_token.strip():
+                    raise InvalidArgumentError(
+                        "args.feishu_refresh_token must be a non-empty string when "
+                        "args.feishu_access_token is used with watch_interval > 0."
+                    )
+                self._ensure_feishu_credentials_for_watch()
+                watch_auth_state = create_feishu_auth_state(token, refresh_token.strip())
+            elif refresh_token is not None:
+                raise InvalidArgumentError(
+                    "args.feishu_refresh_token is only supported with "
+                    "args.feishu_access_token and watch_interval > 0."
+                )
+        elif refresh_token is not None:
+            raise InvalidArgumentError(
+                "args.feishu_refresh_token requires args.feishu_access_token."
+            )
+
+        return _NormalizedAddResourceArgs(normalized, watch_auth_state)
+
+    def _ensure_feishu_credentials_for_watch(self) -> None:
+        try:
+            load_feishu_app_credentials()
+        except Exception as exc:
+            raise InvalidArgumentError(
+                "Feishu user-token watch requires FEISHU_APP_ID and "
+                "FEISHU_APP_SECRET, or feishu.app_id and feishu.app_secret in ov.conf."
+            ) from exc
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -145,24 +252,20 @@ class ResourceService:
         skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
+        normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        kwargs.update(normalized_args.processor_kwargs)
 
-        if to:
-            to = resolve_path_variables(to)
-        if parent:
-            parent = resolve_path_variables(parent)
-        to = validate_optional_viking_uri(
-            to,
-            field_name="to",
-            allowed_scopes={"resources"},
-        )
-        parent = validate_optional_viking_uri(
-            parent,
-            field_name="parent",
-            allowed_scopes={"resources"},
+        target = ContentTargetSpec.from_fields(
+            ctx=ctx,
+            kind="resource",
+            to=to,
+            parent=parent,
+            create_parent=bool(kwargs.get("create_parent", False)),
         )
 
         from openviking.service.task_tracker import get_task_tracker
@@ -180,11 +283,9 @@ class ResourceService:
             root_uri, resource_lock = await self._plan_resource_target(
                 path=path,
                 ctx=ctx,
-                to=to,
-                parent=parent,
+                target=target,
                 source_name=source_name,
                 source_info=source_info,
-                create_parent=bool(kwargs.get("create_parent", False)),
             )
 
             task_tracker = get_task_tracker()
@@ -317,11 +418,9 @@ class ResourceService:
         *,
         path: str,
         ctx: RequestContext,
-        to: Optional[str],
-        parent: Optional[str],
+        target: ContentTargetSpec,
         source_name: Optional[str],
         source_info: _ResourceSourceInfo,
-        create_parent: bool,
     ) -> tuple[str, LockLease]:
         if not self._resource_processor or not self._viking_fs:
             raise NotInitializedError("ResourceProcessor")
@@ -332,11 +431,11 @@ class ResourceService:
             ctx=ctx,
             doc_name=doc_name,
             scope="resources",
-            to_uri=to,
-            parent_uri=parent,
+            to_uri=target.to,
+            parent_uri=target.parent,
             source_path=source_path,
             source_format=source_info.source_format,
-            create_parent=create_parent,
+            create_parent=target.create_parent,
         )
         if candidate_uri:
             return await self._resource_processor.reserve_unique_candidate(
@@ -422,6 +521,7 @@ class ResourceService:
         enforce_public_remote_targets: bool = False,
         resource_lock: Optional[LockLease] = None,
         stage_callback: Optional[Callable[[str], Any]] = None,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -451,6 +551,7 @@ class ResourceService:
                 avoid recursive watch task creation during scheduled execution)
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
+            args: Parser-specific options forwarded to the parser chain.
             **kwargs: Extra options forwarded to the parser chain
 
         Returns:
@@ -461,6 +562,8 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
+        normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        kwargs.update(normalized_args.processor_kwargs)
         if not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
@@ -495,21 +598,12 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
-            # Resolve path variables before validation
-            if to:
-                to = resolve_path_variables(to)
-            if parent:
-                parent = resolve_path_variables(parent)
-
-            to = validate_optional_viking_uri(
-                to,
-                field_name="to",
-                allowed_scopes={"resources"},
-            )
-            parent = validate_optional_viking_uri(
-                parent,
-                field_name="parent",
-                allowed_scopes={"resources"},
+            target = ContentTargetSpec.from_fields(
+                ctx=ctx,
+                kind="resource",
+                to=to,
+                parent=parent,
+                create_parent=bool(kwargs.get("create_parent", False)),
             )
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
@@ -523,8 +617,8 @@ class ResourceService:
                 reason=reason,
                 instruction=instruction,
                 scope="resources",
-                to=to,
-                parent=parent,
+                to=target.to,
+                parent=target.parent,
                 build_index=build_index,
                 summarize=summarize,
                 stage_callback=stage_callback,
@@ -584,13 +678,14 @@ class ResourceService:
             if watch_manager and not skip_watch_management:
                 with telemetry.measure("resource.watch"):
                     if watch_interval > 0:
-                        watch_to = to
-                        parent_uri = parent
+                        watch_to = target.to
+                        parent_uri = target.parent
                         if not watch_to:
-                            watch_to = validate_optional_viking_uri(
+                            watch_to = validate_optional_content_target_uri(
                                 result.get("root_uri"),
+                                ctx,
+                                kind="resource",
                                 field_name="root_uri",
-                                allowed_scopes={"resources"},
                             )
                             parent_uri = None
                         if not watch_to:
@@ -600,6 +695,8 @@ class ResourceService:
                             )
                         try:
                             processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
+                            if normalized_args.watch_auth_state is not None:
+                                processor_kwargs.pop(FEISHU_ACCESS_TOKEN_ARG, None)
                             await self._handle_watch_task_creation(
                                 path=path,
                                 to_uri=watch_to,
@@ -610,6 +707,7 @@ class ResourceService:
                                 build_index=build_index,
                                 summarize=summarize,
                                 processor_kwargs=processor_kwargs,
+                                auth_state=normalized_args.watch_auth_state,
                                 ctx=ctx,
                             )
                         except ConflictError:
@@ -618,13 +716,21 @@ class ResourceService:
                             logger.warning(
                                 f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
                             )
-                    elif to:
+                    elif target.to:
                         try:
-                            await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
+                            await self._handle_watch_task_cancellation(to_uri=target.to, ctx=ctx)
                         except Exception as e:
                             logger.warning(
-                                f"[ResourceService] Failed to cancel watch task for {to}: {e}"
+                                f"[ResourceService] Failed to cancel watch task for {target.to}: {e}"
                             )
+            if wait:
+                await self._link_resource_reason_memory(
+                    result=result,
+                    ctx=ctx,
+                    reason=reason,
+                    source_name=kwargs.get("source_name"),
+                    timeout=timeout,
+                )
             if not wait:
                 from openviking.service.task_tracker import get_task_tracker
 
@@ -640,25 +746,33 @@ class ResourceService:
                 if telemetry_id:
                     monitor_started = True
                     background = asyncio.create_task(
-                        self._monitor_queue_processing(
+                        self._monitor_resource_queue_then_link_memory(
                             task.task_id,
                             telemetry_id,
-                            ctx.account_id,
-                            ctx.user.user_id,
+                            ctx,
+                            root_uri=root_uri,
+                            reason=reason,
+                            source_name=kwargs.get("source_name"),
+                            timeout=timeout,
                         )
                     )
                     self._background_tasks.add(background)
                     background.add_done_callback(self._background_tasks.discard)
                 else:
-                    await task_tracker.start(
-                        task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                    monitor_started = True
+                    background = asyncio.create_task(
+                        self._monitor_resource_queue_then_link_memory(
+                            task.task_id,
+                            None,
+                            ctx,
+                            root_uri=root_uri,
+                            reason=reason,
+                            source_name=kwargs.get("source_name"),
+                            timeout=timeout,
+                        )
                     )
-                    await task_tracker.complete(
-                        task.task_id,
-                        {"root_uri": root_uri},
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                    )
+                    self._background_tasks.add(background)
+                    background.add_done_callback(self._background_tasks.discard)
             return result
         except Exception as exc:
             telemetry.set_error(
@@ -674,6 +788,95 @@ class ResourceService:
             )
             if wait or not telemetry_id or not monitor_started:
                 get_request_wait_tracker().cleanup(telemetry_id)
+                unregister_wait_telemetry(telemetry_id)
+
+    async def _link_resource_reason_memory(
+        self,
+        *,
+        result: Dict[str, Any],
+        ctx: RequestContext,
+        reason: str,
+        source_name: Optional[str],
+        timeout: Optional[float] = None,
+    ) -> None:
+        if not self._resource_memory_link_service:
+            return
+        if not (reason or "").strip():
+            return
+        root_uri = result.get("root_uri")
+        if not root_uri:
+            return
+        try:
+            link_result = await self._resource_memory_link_service.on_resource_added(
+                ctx=ctx,
+                resource_uri=root_uri,
+                reason=reason,
+                source_name=source_name,
+                timeout=timeout,
+            )
+            result["memory_linking"] = link_result
+        except Exception as exc:
+            logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
+            result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
+
+    async def _monitor_resource_queue_then_link_memory(
+        self,
+        task_id: str,
+        telemetry_id: Optional[str],
+        ctx: RequestContext,
+        *,
+        root_uri: str,
+        reason: str,
+        source_name: Optional[str],
+        timeout: Optional[float],
+    ) -> None:
+        from openviking.service.task_tracker import get_task_tracker
+
+        task_tracker = get_task_tracker()
+        request_wait_tracker = get_request_wait_tracker()
+        await task_tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+        try:
+            if telemetry_id:
+                await request_wait_tracker.wait_for_request(telemetry_id)
+                status = request_wait_tracker.build_queue_status(telemetry_id)
+            else:
+                status = build_queue_status_payload(
+                    await get_queue_manager().wait_complete(timeout=timeout)
+                )
+            errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
+            if errors:
+                await task_tracker.fail(
+                    task_id,
+                    f"queue processing failed: {status}",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                return
+
+            result: Dict[str, Any] = {"root_uri": root_uri, "queue_status": status}
+            await self._link_resource_reason_memory(
+                result=result,
+                ctx=ctx,
+                reason=reason,
+                source_name=source_name,
+                timeout=timeout,
+            )
+            await task_tracker.complete(
+                task_id,
+                result,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        except Exception as exc:
+            await task_tracker.fail(
+                task_id,
+                str(exc),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        finally:
+            if telemetry_id:
+                request_wait_tracker.cleanup(telemetry_id)
                 unregister_wait_telemetry(telemetry_id)
 
     async def _monitor_queue_processing(
@@ -723,6 +926,7 @@ class ResourceService:
         build_index: bool,
         summarize: bool,
         processor_kwargs: Dict[str, Any],
+        auth_state: Optional[Dict[str, Any]],
         ctx: RequestContext,
     ) -> None:
         """Handle creation or update of watch task.
@@ -770,6 +974,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processor_kwargs=processor_kwargs,
+                auth_state=auth_state,
                 is_active=True,
             )
             logger.info(
@@ -789,6 +994,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processor_kwargs=processor_kwargs,
+                auth_state=auth_state,
             )
             logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
 
@@ -828,6 +1034,9 @@ class ResourceService:
         wait: bool = False,
         timeout: Optional[float] = None,
         allow_local_path_resolution: bool = True,
+        source_path_hint: Optional[str] = None,
+        apply_privacy: bool = True,
+        privacy_change_reason: str = "auto-extracted from add_skill",
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -847,12 +1056,24 @@ class ResourceService:
             request_wait_tracker.register_request(telemetry_id)
 
         try:
-            result = await self._skill_processor.process_skill(
-                data=data,
-                viking_fs=self._viking_fs,
-                ctx=ctx,
-                allow_local_path_resolution=allow_local_path_resolution,
-            )
+            if isinstance(data, SkillProcessingPreparation):
+                result = await self._skill_processor.process_prepared_skill(
+                    data,
+                    viking_fs=self._viking_fs,
+                    ctx=ctx,
+                    apply_privacy=apply_privacy,
+                    privacy_change_reason=privacy_change_reason,
+                )
+            else:
+                result = await self._skill_processor.process_skill(
+                    data=data,
+                    viking_fs=self._viking_fs,
+                    ctx=ctx,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    source_path_hint=source_path_hint,
+                    apply_privacy=apply_privacy,
+                    privacy_change_reason=privacy_change_reason,
+                )
             if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                 result["root_uri"] = result["uri"]
 

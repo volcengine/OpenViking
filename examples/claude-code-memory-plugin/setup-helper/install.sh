@@ -16,10 +16,13 @@
 #      ~/.claude/settings.json.
 #
 # Env overrides:
-#   OPENVIKING_HOME        default: $HOME/.openviking
-#   OPENVIKING_REPO_DIR    default: $OPENVIKING_HOME/openviking-repo
-#   OPENVIKING_REPO_URL    default: https://github.com/volcengine/OpenViking.git
-#   OPENVIKING_REPO_BRANCH default: main
+#   OPENVIKING_HOME            default: $HOME/.openviking
+#   OPENVIKING_REPO_DIR        default: $OPENVIKING_HOME/openviking-repo
+#   OPENVIKING_REPO_URL        default: https://github.com/volcengine/OpenViking.git
+#   OPENVIKING_REPO_BRANCH     default: main
+#   OPENVIKING_REPO_ARCHIVE_URL  when set, fetch the source from this zip instead
+#                                of git clone (used by the TOS bootstrap for users
+#                                who can't reach GitHub). Requires `unzip`.
 #
 # Targets bash 3.2+ (macOS /bin/bash) and Linux.
 
@@ -29,6 +32,10 @@ OV_HOME="${OPENVIKING_HOME:-$HOME/.openviking}"
 REPO_DIR="${OPENVIKING_REPO_DIR:-$OV_HOME/openviking-repo}"
 REPO_URL="${OPENVIKING_REPO_URL:-https://github.com/volcengine/OpenViking.git}"
 REPO_BRANCH="${OPENVIKING_REPO_BRANCH:-main}"
+REPO_ARCHIVE_URL="${OPENVIKING_REPO_ARCHIVE_URL:-}"
+# Marks a $REPO_DIR populated from an archive (no .git). Lets re-runs refresh it
+# safely while refusing to clobber a git checkout or unrelated user data.
+ARCHIVE_MARKER='.openviking-archive-source'
 # Honor OPENVIKING_CLI_CONFIG_FILE (the env var the `ov` CLI itself reads —
 # crates/ov_cli/src/config.rs:6) so this installer matches CLI behavior.
 OVCLI_CONF="${OPENVIKING_CLI_CONFIG_FILE:-$OV_HOME/ovcli.conf}"
@@ -46,6 +53,31 @@ warn()    { printf '%s!!%s  %s\n' "$YELLOW" "$RESET" "$*"; }
 err()     { printf '%sxx%s  %s\n' "$RED" "$RESET" "$*" >&2; }
 ask()     { printf '%s??%s  %s' "$CYAN" "$RESET" "$*"; }
 heading() { printf '\n%s%s%s\n' "$BOLD" "$*" "$RESET"; }
+
+# Download a source zip and lay it out at $REPO_DIR (used for the GitHub-free
+# TOS install path). The archive is `git archive` output: a single top-level
+# OpenViking-<ref>/ dir, identical to a checkout minus .git.
+fetch_archive() {
+  local url="$1" dest="$2" tmp_zip tmp_dir top
+  command -v unzip >/dev/null 2>&1 || { err 'unzip not found; required to install from an archive.'; exit 1; }
+  tmp_zip=$(mktemp "${TMPDIR:-/tmp}/ov-src.XXXXXX") || { err 'mktemp failed'; exit 1; }
+  tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/ov-src.XXXXXX") || { err 'mktemp failed'; rm -f "$tmp_zip"; exit 1; }
+  info "Downloading source archive"
+  info "  $url"
+  curl -fsSL -o "$tmp_zip" "$url" || { err "download failed: $url"; rm -rf "$tmp_zip" "$tmp_dir"; exit 1; }
+  unzip -q "$tmp_zip" -d "$tmp_dir" || { err 'unzip failed (corrupt download?)'; rm -rf "$tmp_zip" "$tmp_dir"; exit 1; }
+  top=$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+  if [ -z "$top" ] || [ ! -d "$top/examples" ]; then
+    err 'unexpected archive layout (no top-level dir containing examples/)'
+    rm -rf "$tmp_zip" "$tmp_dir"; exit 1
+  fi
+  rm -rf "$dest"
+  mkdir -p "$(dirname "$dest")"
+  mv "$top" "$dest"
+  : > "$dest/$ARCHIVE_MARKER"
+  rm -rf "$tmp_zip" "$tmp_dir"
+  info "Source ready at $dest"
+}
 
 # ----- 1. Environment check -----
 
@@ -144,7 +176,14 @@ fi
 
 heading "3. OpenViking source repository ($REPO_DIR)"
 
-if [ -d "$REPO_DIR/.git" ]; then
+if [ -n "$REPO_ARCHIVE_URL" ]; then
+  # Archive mode (GitHub-free): refuse to overwrite anything we didn't create.
+  if [ -e "$REPO_DIR" ] && [ ! -f "$REPO_DIR/$ARCHIVE_MARKER" ]; then
+    err "$REPO_DIR exists and was not created from an archive. Move it aside or set OPENVIKING_REPO_DIR."
+    exit 1
+  fi
+  fetch_archive "$REPO_ARCHIVE_URL" "$REPO_DIR"
+elif [ -d "$REPO_DIR/.git" ]; then
   info "Updating existing checkout"
   git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_BRANCH"
   git -C "$REPO_DIR" reset --hard "FETCH_HEAD"

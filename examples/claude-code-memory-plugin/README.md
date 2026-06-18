@@ -127,7 +127,7 @@ claude() {
 
 Re-source your rc (`source ~/.zshrc`, or `source ~/.bashrc` on bash) and restart `claude` — `/mcp` should then show your remote URL with valid auth.
 
-**Wrapping extra launch commands.** If you start Claude Code through a different command — a custom wrapper like `cc-custom`, or a multi-word launcher (a base command plus a sub-command) — the installer can wrap those too. Answer its "Extra launch commands" prompt, or pass `OPENVIKING_CC_WRAP_EXTRA='cc-custom'` when running it. The list is stored in the same rc marker block (read by the wrapper as `$OPENVIKING_CC_WRAP_EXTRA`); for a multi-word entry, only invocations whose leading args match the sub-command get credentials injected, so every *other* use of that command passes through untouched.
+**Wrapping extra launch commands.** If you start Claude Code through a different command — a custom wrapper like `cc-custom`, or a multi-word launcher (a base command plus a sub-command) — the installer can wrap those too. Answer its "Extra launch commands" prompt, or pass `OPENVIKING_CC_WRAP_EXTRA='cc-custom'` when running it. The list is stored in the same rc marker block (read by the wrapper as `$OPENVIKING_CC_WRAP_EXTRA`); for a multi-word entry, only invocations whose leading args match the sub-command get credentials injected, so every *other* use of that command passes through untouched. List the *real* launch command, never a shell alias of it: an alias expands to its target before the wrapper runs, so wrap what it points at — `alias cc=claude` already rides the base `claude` wrapper (add nothing), while `alias cc=claude-custom` is covered by listing `claude-custom`. Alias names are skipped if listed.
 
 > **Why a function instead of `export`?** A globally exported API key leaks into every child process spawned from your shell — npm scripts, build tools, crash dumps, `/proc/<pid>/environ`. The function wrapper limits the secret to the `claude` process tree only.
 >
@@ -167,7 +167,7 @@ All plugin behavior can be set via env vars. Connection / identity vars affect b
 | `OPENVIKING_USER`                                | Multi-tenant user (`X-OpenViking-User` header)                           |
 | `OPENVIKING_PEER_ID`                             | Optional stable peer for recall and captured session messages            |
 
-When `OPENVIKING_PEER_ID` is set, hooks pass it as request-level `peer_id`. Subagent capture falls back to Claude's `agent_id` when no explicit peer is configured, so different subagents can keep separate peer memory by default.
+When `OPENVIKING_PEER_ID` is set, data-plane recall/profile requests send it as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. Subagent capture falls back to Claude's `agent_id` when no explicit peer is configured, so different subagents can keep separate peer memory by default.
 
 #### Recall tuning
 
@@ -319,10 +319,10 @@ Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** 
 |--------------|-----------------------------------|----------------------------------------------------|
 | Storage      | Flat markdown                     | Vector DB + structured extraction                  |
 | Search       | Loaded into context wholesale     | Semantic similarity + ranking + token budget       |
-| Scope        | Per-project                       | Cross-project, cross-session, cross-agent          |
+| Scope        | Per-project                       | Cross-project, cross-session, peer-scoped          |
 | Capacity     | ~200 lines (context limit)        | Unlimited (server-side storage)                    |
 | Extraction   | Manual rules                      | LLM-powered entity / preference / event extraction |
-| Subagents    | Same as parent                    | Isolated session + typed agent namespace           |
+| Subagents    | Same as parent                    | Isolated session + peer-scoped capture             |
 
 ---
 

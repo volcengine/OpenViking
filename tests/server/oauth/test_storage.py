@@ -10,7 +10,7 @@ import time
 import pytest
 import pytest_asyncio
 
-from openviking.server.oauth.otp import generate_otp, hash_secret
+from openviking.server.oauth.otp import hash_secret
 from openviking.server.oauth.storage import OAuthStore
 
 # Test stand-in for an API key fingerprint. Real fps come from
@@ -116,101 +116,46 @@ async def test_get_client_missing(store):
     assert await store.get_client("nope") is None
 
 
-@pytest.mark.asyncio
-async def test_otp_consume_returns_identity(store):
-    otp = generate_otp()
-    await store.insert_otp(
-        otp_plain=otp,
-        account_id="acct1",
-        user_id="user1",
+def _insert_code(store, code, *, account_id="a", user_id="u", ttl_seconds=300):
+    return store.insert_auth_code(
+        code_plain=code,
+        client_id="cx",
+        redirect_uri="https://x.test/cb",
+        code_challenge="ch",
+        code_challenge_method="S256",
+        scope=None,
+        resource=None,
+        account_id=account_id,
+        user_id=user_id,
         role="user",
         authorizing_key_fp=_FP,
-        ttl_seconds=300,
+        ttl_seconds=ttl_seconds,
     )
-    claims = await store.consume_otp(otp)
-    assert claims is not None
-    assert claims["account_id"] == "acct1"
-    assert claims["user_id"] == "user1"
-    assert claims["role"] == "user"
-    assert claims["authorizing_key_fp"] == _FP
 
 
 @pytest.mark.asyncio
-async def test_otp_double_consume_only_one_wins(store):
-    otp = generate_otp()
-    await store.insert_otp(
-        otp_plain=otp,
-        account_id="a",
-        user_id="u",
-        role="user",
-        authorizing_key_fp=_FP,
-        ttl_seconds=300,
+async def test_auth_code_concurrent_consume_race(store):
+    """Two coroutines racing to consume the same code — exactly one wins."""
+    code = "race-code"
+    await _insert_code(store, code)
+    results = await asyncio.gather(
+        store.consume_auth_code(code), store.consume_auth_code(code)
     )
-    first = await store.consume_otp(otp)
-    second = await store.consume_otp(otp)
-    assert first is not None
-    assert second is None  # one-shot
-
-
-@pytest.mark.asyncio
-async def test_otp_concurrent_consume_race(store):
-    """Two coroutines racing to consume the same OTP — exactly one wins."""
-    otp = generate_otp()
-    await store.insert_otp(
-        otp_plain=otp,
-        account_id="a",
-        user_id="u",
-        role="user",
-        authorizing_key_fp=_FP,
-        ttl_seconds=300,
-    )
-    results = await asyncio.gather(store.consume_otp(otp), store.consume_otp(otp))
     winners = [r for r in results if r is not None]
     assert len(winners) == 1
 
 
 @pytest.mark.asyncio
-async def test_otp_expired_rejected(store):
-    otp = generate_otp()
-    # ttl=60 but we monkey-patch expiry by inserting and waiting — instead,
-    # directly insert a stale row using a tiny ttl plus manual time travel.
-    await store.insert_otp(
-        otp_plain=otp,
-        account_id="a",
-        user_id="u",
-        role="user",
-        authorizing_key_fp=_FP,
-        ttl_seconds=60,
-    )
-    # Fast path: forge expiry by editing the row to be in the past.
+async def test_auth_code_expired_rejected(store):
+    code = "stale-code"
+    await _insert_code(store, code, ttl_seconds=60)
+    # Forge expiry by editing the row to be in the past.
     assert store._conn is not None
     store._conn.execute(
         "UPDATE oauth_codes SET expires_at = ? WHERE used = 0",
         (int(time.time()) - 10,),
     )
-    assert await store.consume_otp(otp) is None
-
-
-@pytest.mark.asyncio
-async def test_consume_unknown_otp_returns_none(store):
-    assert await store.consume_otp("NOTREAL") is None
-
-
-@pytest.mark.asyncio
-async def test_otp_kind_isolation(store):
-    """An OTP cannot be consumed via the auth-code path or vice versa."""
-    otp = generate_otp()
-    await store.insert_otp(
-        otp_plain=otp,
-        account_id="a",
-        user_id="u",
-        role="user",
-        authorizing_key_fp=_FP,
-        ttl_seconds=300,
-    )
-    # Trying to consume as auth code must fail (kind mismatch) and leave OTP usable.
-    assert await store.consume_auth_code(otp) is None
-    assert await store.consume_otp(otp) is not None
+    assert await store.consume_auth_code(code) is None
 
 
 @pytest.mark.asyncio
@@ -380,15 +325,7 @@ async def test_revoke_user_tokens_cascades(store):
         authorizing_key_fp=_FP,
         ttl_seconds=3600,
     )
-    otp = generate_otp()
-    await store.insert_otp(
-        otp_plain=otp,
-        account_id="acct",
-        user_id="alice",
-        role="user",
-        authorizing_key_fp=_FP,
-        ttl_seconds=300,
-    )
+    await _insert_code(store, "code-alice", account_id="acct", user_id="alice")
 
     counts = await store.revoke_user_tokens(account_id="acct", user_id="alice")
     assert counts["access_tokens_revoked"] == 1
@@ -398,7 +335,7 @@ async def test_revoke_user_tokens_cascades(store):
     # Alice's everything dead, Bob's untouched.
     assert await store.load_access("at-1") is None
     assert await store.load_access("at-other") is not None
-    assert await store.consume_otp(otp) is None
+    assert await store.consume_auth_code("code-alice") is None
 
 
 @pytest.mark.asyncio
@@ -435,24 +372,10 @@ async def test_gc_keeps_refresh_tombstones_until_natural_expiry(store):
 
 @pytest.mark.asyncio
 async def test_gc_expired_removes_stale_rows(store):
-    fresh = generate_otp()
-    stale = generate_otp()
-    await store.insert_otp(
-        otp_plain=fresh,
-        account_id="a",
-        user_id="u",
-        role="user",
-        authorizing_key_fp=_FP,
-        ttl_seconds=300,
-    )
-    await store.insert_otp(
-        otp_plain=stale,
-        account_id="a",
-        user_id="u",
-        role="user",
-        authorizing_key_fp=_FP,
-        ttl_seconds=300,
-    )
+    fresh = "fresh-code"
+    stale = "stale-code"
+    await _insert_code(store, fresh)
+    await _insert_code(store, stale)
     # Backdate stale row
     assert store._conn is not None
     store._conn.execute(
@@ -462,4 +385,4 @@ async def test_gc_expired_removes_stale_rows(store):
     deleted = await store.gc_expired()
     assert deleted["codes_deleted"] >= 1
     # Fresh row still consumable.
-    assert await store.consume_otp(fresh) is not None
+    assert await store.consume_auth_code(fresh) is not None

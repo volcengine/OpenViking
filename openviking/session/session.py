@@ -19,11 +19,8 @@ from openviking.message import Message, Part
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory_policy import (
-    DEFAULT_AGENT_MEMORY_TYPES,
-    DEFAULT_LONG_TERM_MEMORY_TYPES,
-    MemoryPolicy,
-)
+from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
+from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.tool_result_store import (
     ToolResultStore,
     build_tool_result_id,
@@ -60,22 +57,29 @@ def _wm_debug(msg: str) -> None:
     logger.debug("wm_v2: %s", msg)
 
 
-def _known_memory_types() -> set[str]:
-    """Return memory types accepted by commit memory_policy."""
-    names = set(DEFAULT_LONG_TERM_MEMORY_TYPES) | set(DEFAULT_AGENT_MEMORY_TYPES)
-    try:
-        from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+def _enabled_memory_types() -> set[str]:
+    """Return enabled memory type names registered for extraction."""
+    from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 
-        names.update(MemoryTypeRegistry().list_names())
-    except Exception:
-        logger.debug("Failed to load v2 memory type registry", exc_info=True)
-    return names
+    return set(MemoryTypeRegistry().list_names(include_disabled=False))
+
+
+def _validate_memory_policy_types(policy: MemoryPolicy) -> None:
+    if policy.memory_types is None:
+        return
+    policy.validate_memory_types(_enabled_memory_types())
+
+
+def _split_policy_memory_types(
+    memory_types: Optional[set[str]],
+) -> tuple[Optional[set[str]], Optional[set[str]]]:
+    if memory_types is None:
+        return None, None
+    return memory_types - EXECUTION_MEMORY_TYPES, memory_types & EXECUTION_MEMORY_TYPES
 
 
 def _default_memory_counts() -> Dict[str, int]:
-    counts = dict.fromkeys(sorted(DEFAULT_LONG_TERM_MEMORY_TYPES), 0)
-    counts["total"] = 0
-    return counts
+    return {"total": 0}
 
 
 def _message_peer_ids(messages: List[Message]) -> set[str]:
@@ -84,6 +88,32 @@ def _message_peer_ids(messages: List[Message]) -> set[str]:
         for message in messages
         if (peer_id := safe_peer_id(getattr(message, "peer_id", None)))
     }
+
+
+@dataclass(frozen=True)
+class _MemoryExtractionScope:
+    allow_self_memory: bool
+    allowed_peer_ids: set[str]
+    include_session_skills: bool
+    memory_types: Optional[set[str]]
+
+
+def _resolve_memory_extraction_scope(
+    ctx: RequestContext,
+    policy: MemoryPolicy,
+    messages: List[Message],
+    *,
+    config_session_skill_extraction_enabled: bool,
+) -> _MemoryExtractionScope:
+    allow_self_memory = policy.self_enabled
+    allowed_peer_ids = _message_peer_ids(messages) if policy.peer_enabled else set()
+
+    return _MemoryExtractionScope(
+        allow_self_memory=allow_self_memory,
+        allowed_peer_ids=allowed_peer_ids,
+        include_session_skills=config_session_skill_extraction_enabled and allow_self_memory,
+        memory_types=policy.memory_types,
+    )
 
 
 # =====================================================================
@@ -207,7 +237,6 @@ class SessionMeta:
     updated_at: str = ""
     created_by_account_id: str = ""
     created_by_user_id: str = ""
-    participant_user_ids: List[str] = field(default_factory=list)
     message_count: int = 0
     total_message_count: Optional[int] = 0
     commit_count: int = 0
@@ -246,7 +275,6 @@ class SessionMeta:
             "updated_at": self.updated_at,
             "created_by_account_id": self.created_by_account_id,
             "created_by_user_id": self.created_by_user_id,
-            "participant_user_ids": list(self.participant_user_ids),
             "message_count": self.message_count,
             "commit_count": self.commit_count,
             "memories_extracted": dict(self.memories_extracted),
@@ -281,7 +309,6 @@ class SessionMeta:
             created_by_account_id=data.get("created_by_account_id", "")
             or data.get("account_id", ""),
             created_by_user_id=data.get("created_by_user_id", ""),
-            participant_user_ids=list(data.get("participant_user_ids", [])),
             message_count=data.get("message_count", 0),
             total_message_count=data.get("total_message_count"),
             commit_count=data.get("commit_count", 0),
@@ -327,6 +354,7 @@ class Session:
         user: Optional["UserIdentifier"] = None,
         ctx: Optional[RequestContext] = None,
         session_id: Optional[str] = None,
+        session_uri: Optional[str] = None,
         auto_commit_threshold: int = 8000,
         tool_output_externalization_config: Optional[ToolOutputExternalizationConfig] = None,
     ):
@@ -338,7 +366,7 @@ class Session:
         self.session_id = session_id or str(uuid4())
         self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
-        self._session_uri = canonical_session_uri(self.session_id)
+        self._session_uri = session_uri or canonical_session_uri(self.ctx, self.session_id)
 
         self._messages: List[Message] = []
         self._usage_records: List[Usage] = []
@@ -349,7 +377,6 @@ class Session:
             created_at=get_current_timestamp(),
             created_by_account_id=self.ctx.account_id,
             created_by_user_id=self.ctx.user.user_id,
-            participant_user_ids=[self.ctx.user.user_id],
         )
         self._loaded = False
         self._tool_output_externalization_config = (
@@ -408,8 +435,6 @@ class Session:
             self._meta.created_by_account_id = self.ctx.account_id
         if not self._meta.created_by_user_id:
             self._meta.created_by_user_id = self.ctx.user.user_id
-        if not self._meta.participant_user_ids:
-            self._meta.participant_user_ids = [self._meta.created_by_user_id]
         # WM v2: always rebuild pending_tokens from current messages so the
         # counter stays consistent across restarts and is also backfilled for
         # legacy sessions whose .meta.json predates these fields. O(n) once,
@@ -523,7 +548,12 @@ class Session:
     def _tool_result_store(self) -> Optional[ToolResultStore]:
         if not self._viking_fs:
             return None
-        return ToolResultStore(self._viking_fs, self._session_uri, self.session_id, self.ctx)
+        return ToolResultStore(
+            self._viking_fs,
+            self._session_uri,
+            self.session_id,
+            self.ctx,
+        )
 
     async def _hydrate_tool_outputs_for_extraction(
         self,
@@ -1034,24 +1064,14 @@ class Session:
             return {"tool_results": []}
         return await store.list(tool_name=tool_name, limit=limit)
 
-    def commit(
-        self,
-        keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    def commit(self, keep_recent_count: int = 0) -> Dict[str, Any]:
         """Sync wrapper for commit_async()."""
-        return run_async(
-            self.commit_async(
-                keep_recent_count=keep_recent_count,
-                memory_policy=memory_policy,
-            )
-        )
+        return run_async(self.commit_async(keep_recent_count=keep_recent_count))
 
     @tracer("session.commit.phase1")
     async def commit_async(
         self,
         keep_recent_count: int = 0,
-        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Async commit session: archive immediately, extract memories in background.
 
@@ -1068,8 +1088,6 @@ class Session:
                 behavior of archiving everything. The plugin's afterTurn path
                 typically passes its configured value (default 10); the compact
                 path passes ``0``.
-            memory_policy: Optional per-commit extraction policy. When omitted,
-                the session default policy is used.
 
         Returns a task_id for tracking Phase 2 progress.
         """
@@ -1079,10 +1097,8 @@ class Session:
 
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
-        effective_policy = MemoryPolicy.merge(
-            session_policy=self._meta.memory_policy,
-            commit_policy=memory_policy,
-        )
+        effective_policy = MemoryPolicy.from_dict(self._meta.memory_policy)
+        _validate_memory_policy_types(effective_policy)
         effective_memory_policy = effective_policy.to_dict()
         logger.info(
             f"[TRACER] session_commit started, trace_id={trace_id}, "
@@ -1347,53 +1363,57 @@ class Session:
                                 ctx=self.ctx,
                             )
 
-                    # Summary generation, user memory and agent memory all run concurrently.
+                    # Summary, long-term memory, and execution-derived memory run concurrently.
                     ov_config = get_openviking_config()
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
-                    agent_memory_enabled = ov_config.memory.agent_memory_enabled
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
-                    self_memory_enabled = effective_policy.self_enabled
-                    peer_memory_enabled = effective_policy.peer_enabled
-                    allowed_peer_ids = (
-                        _message_peer_ids(extraction_messages) if peer_memory_enabled else set()
+                    extraction_scope = _resolve_memory_extraction_scope(
+                        self.ctx,
+                        effective_policy,
+                        extraction_messages,
+                        config_session_skill_extraction_enabled=(
+                            config_session_skill_extraction_enabled
+                        ),
+                    )
+                    self_memory_enabled = extraction_scope.allow_self_memory
+                    allowed_peer_ids = extraction_scope.allowed_peer_ids
+                    session_skill_extraction_enabled = extraction_scope.include_session_skills
+                    memory_type_filter = extraction_scope.memory_types
+                    long_term_memory_types, execution_memory_types = _split_policy_memory_types(
+                        memory_type_filter
+                    )
+
+                    long_term_has_work = (
+                        memory_extraction_enabled
+                        and (self_memory_enabled or allowed_peer_ids)
+                        and (long_term_memory_types is None or bool(long_term_memory_types))
+                    )
+                    execution_memory_has_work = (
+                        self_memory_enabled
+                        and memory_extraction_enabled
+                        and (execution_memory_types is None or bool(execution_memory_types))
                     )
                     session_skill_extraction_enabled = (
-                        config_session_skill_extraction_enabled and self_memory_enabled
+                        session_skill_extraction_enabled and execution_memory_has_work
                     )
-                    registered_memory_types = _known_memory_types()
-                    agent_allowed_types = (
-                        registered_memory_types & DEFAULT_AGENT_MEMORY_TYPES
-                        if agent_memory_enabled and memory_extraction_enabled
-                        else set()
-                    )
-                    self_agent_types = agent_allowed_types if self_memory_enabled else set()
-                    long_term_allowed_types = (
-                        registered_memory_types & DEFAULT_LONG_TERM_MEMORY_TYPES
-                        if memory_extraction_enabled and (self_memory_enabled or allowed_peer_ids)
-                        else set()
-                    )
-                    has_policy_work = bool(
-                        long_term_allowed_types
-                        or self_agent_types
-                        or session_skill_extraction_enabled
-                    )
+                    has_policy_work = bool(long_term_has_work or execution_memory_has_work)
                     if self._session_compressor and has_policy_work:
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
                             len(messages),
                         )
 
-                        has_agent_memory = hasattr(
-                            self._session_compressor, "extract_agent_memories"
+                        has_execution_memory = hasattr(
+                            self._session_compressor, "extract_execution_memories"
                         )
 
                         extraction_tasks: List[Any] = [_run_archive_summary()]
                         extraction_labels = ["archive_summary"]
 
-                        if long_term_allowed_types:
+                        if long_term_has_work:
                             extraction_tasks.append(
                                 self._session_compressor.extract_long_term_memories(
                                     messages=extraction_messages,
@@ -1402,31 +1422,29 @@ class Session:
                                     ctx=self.ctx,
                                     latest_archive_overview=latest_archive_overview,
                                     archive_uri=archive_uri,
-                                    allowed_memory_types=long_term_allowed_types,
+                                    allowed_memory_types=long_term_memory_types,
                                     allow_self_memory=self_memory_enabled,
                                     allowed_peer_ids=allowed_peer_ids,
                                 )
                             )
                             extraction_labels.append("long_term")
 
-                        if has_agent_memory and (
-                            self_agent_types or session_skill_extraction_enabled
-                        ):
+                        if has_execution_memory and execution_memory_has_work:
                             try:
                                 extraction_tasks.append(
-                                    self._session_compressor.extract_agent_memories(
+                                    self._session_compressor.extract_execution_memories(
                                         messages=extraction_messages,
                                         ctx=self.ctx,
                                         latest_archive_overview=latest_archive_overview,
                                         archive_uri=archive_uri,
-                                        allowed_memory_types=self_agent_types,
+                                        allowed_memory_types=execution_memory_types,
                                         include_session_skills=session_skill_extraction_enabled,
                                     )
                                 )
-                                extraction_labels.append("agent")
+                                extraction_labels.append("execution")
                             except Exception as exc:
                                 logger.error(
-                                    "Agent memory extraction failed: %s",
+                                    "Execution memory extraction failed: %s",
                                     exc,
                                     exc_info=exc,
                                 )
@@ -3165,10 +3183,18 @@ class Session:
         )
 
         run_async(
-            viking_fs.write_file(uri=f"{archive_uri}/.abstract.md", content=abstract, ctx=self.ctx)
+            viking_fs.write_file(
+                uri=f"{archive_uri}/.abstract.md",
+                content=abstract,
+                ctx=self.ctx,
+            )
         )
         run_async(
-            viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview, ctx=self.ctx)
+            viking_fs.write_file(
+                uri=f"{archive_uri}/.overview.md",
+                content=overview,
+                ctx=self.ctx,
+            )
         )
 
         logger.debug(f"Written archive: {archive_uri}")

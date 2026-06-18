@@ -226,7 +226,8 @@ mod tests {
         assert!(is_encrypted(&env));
 
         let (_p, enc_key2, key_iv2, data_iv2, ct2) = parse_envelope(&env).unwrap();
-        let fk_bytes = aes_gcm_decrypt(&account_key, key_iv2.try_into().unwrap(), enc_key2).unwrap();
+        let fk_bytes =
+            aes_gcm_decrypt(&account_key, key_iv2.try_into().unwrap(), enc_key2).unwrap();
         let fk: [u8; 32] = fk_bytes.try_into().unwrap();
         let back = aes_gcm_decrypt(&fk, data_iv2.try_into().unwrap(), ct2).unwrap();
         assert_eq!(back, plaintext);
@@ -268,7 +269,11 @@ mod tests {
         let got = hkdf_sha256(&root, b"tenant-7");
         let expected =
             hex_to_vec("a5447823b691e80727c6bf913bd3ac051f32c36ad387f39bf062f81c68307ae4");
-        assert_eq!(&got[..], &expected[..], "HKDF must match Python byte-for-byte");
+        assert_eq!(
+            &got[..],
+            &expected[..],
+            "HKDF must match Python byte-for-byte"
+        );
     }
 
     #[test]
@@ -283,9 +288,8 @@ mod tests {
              c42d408a1d21e8707cbd617acc62cb9b75dffea1ef5e7889163d970d13a8622cd4d31cddc163f4736556\
              c0180cbfb5",
         );
-        let expected_plaintext = hex_to_vec(
-            "63726f73732d6c616e6720696e7465726f7020636865636b20e4bda0e5a5bd",
-        );
+        let expected_plaintext =
+            hex_to_vec("63726f73732d6c616e6720696e7465726f7020636865636b20e4bda0e5a5bd");
 
         // Replicate EncryptionWrappedFS::read decryption path.
         let account_key = hkdf_sha256(&root, b"tenant-7");

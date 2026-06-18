@@ -19,6 +19,7 @@ from openviking.core.context import (
 from openviking.core.namespace import (
     classify_uri,
     context_type_for_uri,
+    is_session_uri,
     owner_space_for_uri,
 )
 from openviking.server.dependencies import get_service
@@ -47,6 +48,31 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 REINDEX_TASK_TYPE = "admin_reindex"
+
+
+# Trailing markers VikingFS appends when a directory has no generated .abstract.md/.overview.md
+# (see openviking/storage/viking_fs.py). The rendered value is a placeholder, not semantic
+# content, and must never be embedded as an ABSTRACT (L0) / OVERVIEW (L1) vector (issue #2434).
+_ABSTRACT_NOT_READY_SUFFIX = "[Directory abstract is not ready]"
+_OVERVIEW_NOT_READY_SUFFIX = "[Directory overview is not ready]"
+
+
+def _is_not_ready_sentinel(text: str, suffix: str) -> bool:
+    """Return True if *text* is a VikingFS not-ready directory placeholder.
+
+    VikingFS renders these as a single ``# <uri>`` header followed only by the not-ready marker.
+    Match that exact shape (a ``#`` header with no substantive body before the trailing marker)
+    so the check is uri-agnostic yet never drops real directory content that merely ends with,
+    or mentions, the user-facing marker phrase.
+    """
+    if not text:
+        return False
+    head = text.rstrip()
+    if not head.endswith(suffix):
+        return False
+    head = head[: -len(suffix)].strip()
+    return head.startswith("#") and "\n" not in head
+
 
 _reindex_executor: "ReindexExecutor | None" = None
 
@@ -158,6 +184,12 @@ class ReindexExecutor:
         parts = classification.parts
         if not parts:
             return "global_namespace"
+        if is_session_uri(uri):
+            raise OpenVikingError(
+                f"Unsupported reindex URI: {uri}",
+                code="UNSUPPORTED_URI",
+                details={"uri": uri},
+            )
         if parts == ("user",):
             return "user_namespace"
         if classification.is_user_namespace_root:
@@ -716,6 +748,8 @@ class ReindexExecutor:
             entry_uri = entry.get("uri")
             if not entry_uri:
                 continue
+            if is_session_uri(entry_uri):
+                continue
             classification = classify_uri(entry_uri)
             if classification.is_memory:
                 if entry.get("isDir") and classification.is_memory_root:
@@ -802,7 +836,7 @@ class ReindexExecutor:
                 if entry.get("isDir") and remainder and "/" not in remainder:
                     user_roots.append(entry_uri)
                 continue
-            if entry_uri == "viking://session" or entry_uri.startswith("viking://session/"):
+            if is_session_uri(entry_uri):
                 continue
             if not self._is_global_resource_entry(entry_uri):
                 continue
@@ -1130,7 +1164,7 @@ class ReindexExecutor:
                 details={"uri": uri},
             )
 
-        skill_dict, _, _ = SkillProcessor(service.vikingdb_manager)._parse_skill(
+        skill_dict, _, _, _ = SkillProcessor(service.vikingdb_manager)._parse_skill(
             skill_content,
             allow_local_path_resolution=False,
         )
@@ -1150,15 +1184,17 @@ class ReindexExecutor:
 
     async def _read_directory_abstract(self, uri: str, *, ctx: RequestContext) -> str:
         try:
-            return await get_viking_fs().abstract(uri, ctx=ctx)
+            value = await get_viking_fs().abstract(uri, ctx=ctx)
         except Exception:
             return ""
+        return "" if _is_not_ready_sentinel(value, _ABSTRACT_NOT_READY_SUFFIX) else value
 
     async def _read_directory_overview(self, uri: str, *, ctx: RequestContext) -> str:
         try:
-            return await get_viking_fs().overview(uri, ctx=ctx)
+            value = await get_viking_fs().overview(uri, ctx=ctx)
         except Exception:
             return ""
+        return "" if _is_not_ready_sentinel(value, _OVERVIEW_NOT_READY_SUFFIX) else value
 
     async def _best_file_summary(self, uri: str, *, ctx: RequestContext) -> str:
         parent_uri = VikingURI(uri).parent.uri

@@ -15,7 +15,7 @@ Phase 1 有意把范围控制得比较小：
 - 仅开放 `resources` 命名空间，不暴露 memories、skills、sessions 等其他空间。
 - 以文本写入为主，当前 `PUT` 只接受 UTF-8 文本内容。
 - 只实现一小部分 WebDAV 方法：`OPTIONS`、`PROPFIND`、`GET`、`HEAD`、`PUT`、`DELETE`、`MKCOL`、`MOVE`。
-- 语义侧边文件保持内部可见。`.abstract.md`、`.overview.md`、`.relations.json`、`.path.ovlock` 这些派生文件不会出现在 WebDAV 列表中，也不能被直接访问。
+- 语义侧边文件和系统内部文件保持内部可见。`.abstract.md`、`.overview.md`、`.relations.json`、`.path.ovlock`、`.redirect.json`、`.sync_log.json` 这些派生或内部文件不会出现在 WebDAV 列表中，也不能被直接访问。
 
 行为说明：
 
@@ -23,6 +23,7 @@ Phase 1 有意把范围控制得比较小：
 - 通过 WebDAV 覆盖已有文件时，会像 `write()` 一样刷新相关语义和向量。
 - `PUT` 不会自动创建父目录。缺失的目录需要先用 `MKCOL` 创建。
 - 用户自己创建的点目录或点文件仍然可见，只有上面列出的保留内部文件名会被隐藏。
+- 启用多写存储时，被 redirect 到 backup 的文件仍会通过文件系统 API 呈现为普通文件；内部 redirect 和同步元数据不会暴露给调用方。
 
 ## API 参考
 
@@ -42,6 +43,16 @@ Phase 1 有意把范围控制得比较小：
 abstract = client.abstract("viking://resources/docs/")
 print(f"Abstract: {abstract}")
 # Output: "Documentation for the project API, covering authentication, endpoints..."
+```
+
+**Go SDK**
+
+```go
+abstract, err := client.Abstract(ctx, "viking://resources/docs/")
+if err != nil {
+    return err
+}
+fmt.Println(abstract)
 ```
 
 **HTTP API**
@@ -90,6 +101,16 @@ overview = client.overview("viking://resources/docs/")
 print(f"Overview:\n{overview}")
 ```
 
+**Go SDK**
+
+```go
+overview, err := client.Overview(ctx, "viking://resources/docs/")
+if err != nil {
+    return err
+}
+fmt.Println(overview)
+```
+
 **HTTP API**
 
 ```
@@ -135,13 +156,23 @@ openviking overview viking://resources/docs/
 **说明**
 
 - `read()` 只接受文件 URI。传入已存在的目录 URI 时返回 `INVALID_ARGUMENT`（`400`），而不是 `NOT_FOUND`。该错误会携带结构化的 `details` 字段——`details.expected` 为 `"file"`，`details.actual` 为 `"directory"`，`details.resource` 为出错的 URI（HTTP 路径上会带上）——客户端据此即可以编程方式判断"文件 vs 目录"不匹配（例如回退到 `list`），而无需对错误消息做字符串匹配。
-- 公开 URI 参数只接受 `resources`、`user`、`agent`、`session` 作用域。`temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
+- 公开 URI 参数接受 `resources` 和 `user` 作用域。访问 session 文件时，使用 `viking://user/{user_id}/sessions/{session_id}`，也可以使用向后兼容的 `viking://session/{session_id}` 别名。`temp`、`queue` 等内部作用域会返回 `INVALID_URI`。
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
 content = client.read("viking://resources/docs/api.md")
 print(f"Content:\n{content}")
+```
+
+**Go SDK**
+
+```go
+content, err := client.Read(ctx, "viking://resources/docs/api.md", 0, -1)
+if err != nil {
+    return err
+}
+fmt.Println(content)
 ```
 
 **HTTP API**
@@ -205,6 +236,24 @@ result = client.write(
     wait=True,
 )
 print(result["root_uri"])
+```
+
+**Go SDK**
+
+```go
+result, err := client.Write(
+    ctx,
+    "viking://resources/docs/api.md",
+    "# Updated API\n\nFresh content.",
+    &openviking.WriteOptions{
+        Mode: "replace",
+        Wait: true,
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(result["root_uri"])
 ```
 
 **HTTP API**
@@ -305,6 +354,18 @@ for entry in entries:
     print(f"{entry['name']} - {type_str}")
 ```
 
+**Go SDK**
+
+```go
+entries, err := client.List(ctx, "viking://resources/", nil)
+if err != nil {
+    return err
+}
+for _, entry := range entries {
+    fmt.Println(entry)
+}
+```
+
 **HTTP API**
 
 ```
@@ -376,6 +437,18 @@ for entry in entries:
     print(f"{entry['rel_path']} - {type_str}")
 ```
 
+**Go SDK**
+
+```go
+entries, err := client.Tree(ctx, "viking://resources/", nil)
+if err != nil {
+    return err
+}
+for _, entry := range entries {
+    fmt.Println(entry["rel_path"], entry["isDir"])
+}
+```
+
 **HTTP API**
 
 ```
@@ -441,6 +514,16 @@ print(f"Is directory: {info['isDir']}")
 dir_info = client.stat("viking://resources/docs")
 if dir_info.get('isDir'):
     print(f"Item count: {dir_info.get('count')}")
+```
+
+**Go SDK**
+
+```go
+info, err := client.Stat(ctx, "viking://resources/docs/api.md")
+if err != nil {
+    return err
+}
+fmt.Println(info["size"], info["isDir"])
 ```
 
 **HTTP API**
@@ -522,6 +605,14 @@ client.mkdir("viking://resources/new-project/")
 client.mkdir("viking://resources/new-project/", description="接口文档目录")
 ```
 
+**Go SDK**
+
+```go
+if err := client.Mkdir(ctx, "viking://resources/new-project/", "接口文档目录"); err != nil {
+    return err
+}
+```
+
 **HTTP API**
 
 ```
@@ -585,6 +676,17 @@ if 'estimated_deleted_count' in result:
     print(f"Deleted {result['estimated_deleted_count']} items")
 ```
 
+**Go SDK**
+
+```go
+err := client.Remove(ctx, "viking://resources/old-project/", &openviking.RemoveOptions{
+    Recursive: true,
+})
+if err != nil {
+    return err
+}
+```
+
 **HTTP API**
 
 ```
@@ -634,6 +736,8 @@ openviking rm viking://resources/old.md [--recursive]
 
 `estimated_deleted_count` 字段（递归删除时）包含删除的项目（文件和目录）估计数量（来自向量索引）。CLI 会在输出中显示此信息。
 
+删除 `viking://resources/...` 时，响应可能包含 `memory_cleanup`，表示删除前已清理引用该资源 URI 的用户记忆。
+
 ---
 
 ### mv()
@@ -654,6 +758,14 @@ client.mv(
     "viking://resources/old-name/",
     "viking://resources/new-name/"
 )
+```
+
+**Go SDK**
+
+```go
+if err := client.Move(ctx, "viking://resources/old-name/", "viking://resources/new-name/"); err != nil {
+    return err
+}
 ```
 
 **HTTP API**
@@ -721,6 +833,18 @@ print(f"Found {results['count']} matches")
 for match in results['matches']:
     print(f"  {match['uri']}:{match['line']}")
     print(f"    {match['content']}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.Grep(ctx, "viking://resources/", "authentication", &openviking.GrepOptions{
+    CaseInsensitive: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["matches"])
 ```
 
 **HTTP API**
@@ -791,6 +915,16 @@ for uri in results['matches']:
 # 查找所有 Python 文件
 results = client.glob("**/*.py", "viking://resources/")
 print(f"Found {results['count']} Python files")
+```
+
+**Go SDK**
+
+```go
+result, err := client.Glob(ctx, "**/*.md", "viking://resources/")
+if err != nil {
+    return err
+}
+fmt.Println(result["matches"])
 ```
 
 **HTTP API**
@@ -1095,6 +1229,21 @@ client.initialize()
 # 注意：导出功能主要通过 CLI 使用
 ```
 
+**Go SDK**
+
+```go
+outPath, err := client.ExportOVPack(
+    ctx,
+    "viking://resources/my-project/",
+    "./exports/my-project.ovpack",
+    &openviking.PackOptions{IncludeVectors: false},
+)
+if err != nil {
+    return err
+}
+fmt.Println(outPath)
+```
+
 **CLI**
 
 ```bash
@@ -1148,12 +1297,12 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 - API 已不再接受 `vectorize` 或 `force`。
 - `vector_mode=auto` 会在存在兼容 dense 快照时直接恢复，否则重新向量化；`recompute` 总是忽略包内向量；`require` 要求必须存在兼容 dense 快照，否则导入失败。
 - dense 快照兼容性会比较 embedding provider、model、input、query/document 参数和维度。
-- Session 导入只恢复 session 文件状态，不触发向量化。
+- Session 文件属于 user 命名空间（`viking://user/{user_id}/sessions/...`），恢复后不触发向量化。
 - `on_conflict=fail` 且目标 root 已存在时，会返回结构化的 `409 CONFLICT`。
 - `on_conflict=overwrite` 会替换已有目标 root。`on_conflict=skip` 会保留已有目标 root，并直接返回该路径，不写入包内容。`skip` 是 root 级跳过，不是文件级补齐。
 - 默认拒绝没有 manifest 的包，因为这类包无法提供内容完整性校验。
 - 带 manifest entries 的包如果缺少内容文件或目录、混入额外文件或目录、文件大小不同、单文件 `sha256` 不同，或整体 `content_sha256` 缺失/不匹配，都会被拒绝导入。
-- manifest `format_version` 不是当前支持版本的包会被拒绝。
+- manifest `format_version` 不是当前支持版本（`3`）的包会被拒绝。
 - `.abstract.md` 和 `.overview.md` 会作为语义侧边文件恢复；`.relations.json` 和 OVPack 内部文件会被排除。
 - manifest index 标量中的 `context_type` 如果存在，必须和最终导入路径语义一致。
 - `viking://resources/` 这类顶级 scope 包必须导入到 `viking://`。
@@ -1199,6 +1348,24 @@ client.initialize()
 
 # 导入 .ovpack 文件（HTTP SDK 会自动处理上传）
 # 注意：导入功能主要通过 CLI 使用
+```
+
+**Go SDK**
+
+```go
+uri, err := client.ImportOVPack(
+    ctx,
+    "./exports/my-project.ovpack",
+    "viking://resources/imported/",
+    &openviking.ImportPackOptions{
+        OnConflict: "overwrite",
+        VectorMode: "auto",
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(uri)
 ```
 
 **CLI**
@@ -1248,7 +1415,8 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 ### backup_ovpack
 
 将公开 scope root 备份为只能通过 restore 恢复的 `.ovpack` 文件。备份包含
-`resources`、`user`、`agent`、`session`，不包含 `temp`、`queue` 等内部运行态数据。
+`resources` 和 `user`；session 会通过 user 命名空间下的 `user/{user_id}/sessions`
+一起包含，不包含 `temp`、`queue` 等内部运行态数据。
 设置 `include_vectors=true` 时，会额外导出兼容的纯 dense 向量快照；底层 index type 为 hybrid 时会拒绝导出向量快照。
 
 ```
@@ -1263,6 +1431,20 @@ curl -X POST http://localhost:1933/api/v1/pack/backup \
   --output openviking-backup.ovpack
 ```
 
+Go SDK：
+
+```go
+outPath, err := client.BackupOVPack(
+    ctx,
+    "./backups/openviking.ovpack",
+    &openviking.PackOptions{IncludeVectors: true},
+)
+if err != nil {
+    return err
+}
+fmt.Println(outPath)
+```
+
 CLI：
 
 ```bash
@@ -1275,7 +1457,7 @@ ov backup ./backups/openviking.ovpack --include-vectors
 ### restore_ovpack
 
 恢复 `backup_ovpack` 生成的备份包到原始公开 scope root。普通 import 不接受备份包。
-向量处理遵循 `vector_mode`；session 只恢复文件状态。
+向量处理遵循 `vector_mode`；user 命名空间下的 session 文件只恢复文件状态，不触发向量化。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -1300,6 +1482,23 @@ curl -X POST http://localhost:1933/api/v1/pack/restore \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-admin-key" \
   -d "{\"temp_file_id\":\"$TEMP_FILE_ID\",\"on_conflict\":\"overwrite\",\"vector_mode\":\"auto\"}"
+```
+
+Go SDK：
+
+```go
+uri, err := client.RestoreOVPack(
+    ctx,
+    "./backups/openviking.ovpack",
+    &openviking.ImportPackOptions{
+        OnConflict: "overwrite",
+        VectorMode: "require",
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(uri)
 ```
 
 CLI：

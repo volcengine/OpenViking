@@ -29,9 +29,13 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+#[cfg(feature = "cache")]
+pub mod cache;
 pub mod core;
 pub mod crypto;
+pub mod multibackend;
 pub mod plugins;
+pub mod shape;
 
 // Re-export core types for convenience
 pub use core::{
