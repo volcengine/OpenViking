@@ -1385,7 +1385,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 |-------|------|-------------|---------|
 | `host` | str | Bind address | `127.0.0.1` |
 | `port` | int | Bind port | `1933` |
-| `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"`. Default is `"api_key"` | `"api_key"` |
+| `auth_mode` | str | Authentication mode. Built-ins are `"api_key"`, `"trusted"`, and `"dev"`; custom auth plugins can provide additional string values such as `"ldap"`. | auto (`"api_key"` with `root_api_key`, otherwise `"dev"`) |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
@@ -1395,9 +1395,9 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `temp_upload.shared_max_size_bytes` | int | Maximum size accepted in `shared` mode, in bytes. Requests above this size are rejected before object-store write. | `536870912` (512 MiB) |
 | `temp_upload.shared_prefix` | str | URI prefix used when allocating shared `temp_file_id` objects. | `"viking://upload"` |
 
-`api_key` mode uses API keys and is the default. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
+`api_key` mode uses API keys. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller. `dev` mode limits requests to loopback addresses. When `auth_mode` is omitted, OpenViking auto-selects `api_key` if `root_api_key` is configured and `dev` otherwise.
 
-When `root_api_key` is configured in `api_key` mode, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. In `trusted` mode, ordinary requests do not require user registration first; each request is resolved as `USER` from the injected identity headers. However, skipping `root_api_key` in `trusted` mode is allowed only on localhost. Development mode only applies when `auth_mode = "api_key"` and `root_api_key` is not set.
+When `root_api_key` is configured in `api_key` mode, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. In `trusted` mode, ordinary requests do not require user registration first; each request is resolved as `USER` from the injected identity headers. However, skipping `root_api_key` in `trusted` mode is allowed only on localhost. Custom plugin modes are resolved through the auth plugin registry.
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 

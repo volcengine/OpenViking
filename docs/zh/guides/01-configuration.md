@@ -1358,7 +1358,7 @@ openviking add-resource ./docs --exclude "*.tmp"
 |------|------|------|--------|
 | `host` | str | 绑定地址 | `127.0.0.1` |
 | `port` | int | 绑定端口 | `1933` |
-| `auth_mode` | str | 认证模式：`"api_key"` 或 `"trusted"`。默认值为 `"api_key"` | `"api_key"` |
+| `auth_mode` | str | 认证模式。内置模式包括 `"api_key"`、`"trusted"`、`"dev"`；自定义认证插件可提供额外字符串值，例如 `"ldap"`。 | 自动（配置 `root_api_key` 时为 `"api_key"`，否则为 `"dev"`） |
 | `root_api_key` | str | Root API Key。在 `api_key` 模式下启用多租户认证；在 `trusted` 模式下它只是可选附加保护，不负责解析普通用户身份 | `null` |
 | `profile_enabled` | bool | 是否允许 HTTP 请求通过 `profile=1` 开启请求级 cProfile。关闭时服务端会忽略该请求参数；开启后，CLI 可以显示返回的 `profile`，而 Python HTTP client 默认只触发服务端 profile，不会把顶层 `profile` 字段自动附着到大多数 SDK 返回值上。 | `false` |
 | `cors_origins` | list | CORS 允许的来源 | `["*"]` |
@@ -1368,9 +1368,9 @@ openviking add-resource ./docs --exclude "*.tmp"
 | `temp_upload.shared_max_size_bytes` | int | `shared` 模式下接受的最大文件大小（字节）。超过此阈值的请求会在写入对象存储之前被拒绝。 | `536870912`（512 MiB） |
 | `temp_upload.shared_prefix` | str | 分配 shared `temp_file_id` 对象时使用的 URI 前缀。 | `"viking://upload"` |
 
-`api_key` 模式使用 API Key 认证，也是默认模式；`trusted` 模式信任上游网关或受信调用方注入的 `X-OpenViking-Account` / `X-OpenViking-User` 请求头。
+`api_key` 模式使用 API Key 认证；`trusted` 模式信任上游网关或受信调用方注入的 `X-OpenViking-Account` / `X-OpenViking-User` 请求头；`dev` 模式会将请求限制在本地回环地址。省略 `auth_mode` 时，OpenViking 会在配置了 `root_api_key` 时自动选择 `api_key`，否则选择 `dev`。
 
-在 `api_key` 模式下配置 `root_api_key` 后，服务端启用正式多租户认证，并通过 Admin API 创建工作区和用户 key。在 `trusted` 模式下，普通请求不需要先注册 user key；每个请求都会根据注入的身份头解析成 `USER`。只有在 `auth_mode = "api_key"` 且未配置 `root_api_key` 时，服务端才会进入开发模式。
+在 `api_key` 模式下配置 `root_api_key` 后，服务端启用正式多租户认证，并通过 Admin API 创建工作区和用户 key。在 `trusted` 模式下，普通请求不需要先注册 user key；每个请求都会根据注入的身份头解析成 `USER`。跳过 `trusted` 模式的 `root_api_key` 只允许在 localhost 上使用。自定义插件模式会通过认证插件注册表解析。
 
 启动方式和部署详情见 [服务部署](./03-deployment.md)，认证详情见 [认证](./04-authentication.md)。
 
