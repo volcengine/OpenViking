@@ -6,6 +6,7 @@ description: |
 
   Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
   Skip pure chitchat or simple Q&A with no execution trace.
+  Benchmark extraction boundary: create at most ONE trajectory for the latest rollout/task. Ignore system policy text, retrieved memory_context examples, historical archive overviews, and general domain rules as extraction sources; they are only evidence for judging this rollout. Do not enumerate every policy rule, tool call, or hypothetical task into separate trajectories.
 
 embedding_template: |-
   {{ trajectory_name }}
@@ -110,10 +111,13 @@ fields:
       - If evaluation and policy appear to conflict, analyze the failure against evaluation first and note the conflict in 根因 or 正确做法.
       - Keep the output dense and diagnostic. Avoid long narrative retellings, apology text, or customer-facing phrasing.
       - Extract one record per rollout-level task outcome. Do not split every individual tool call into separate records unless there are truly independent task outcomes in the same session.
+      - Hard cap: output at most ONE trajectory memory for the latest benchmark rollout/task. If the conversation contains multiple user turns or sub-requests that belong to the same case, merge them into one trajectory centered on the final evaluated outcome.
+      - Source boundary: only extract lessons grounded in the actual latest user request, actual tool calls/tool outputs, assistant actions, and visible evaluation feedback. Do NOT extract memories from the airline policy document, tool schemas, retrieved memory_context, CaseSpec examples unrelated to the executed path, or general background instructions.
+      - If evaluation feedback is visible, use it to identify the single decisive expected-vs-actual delta. Do not create additional success or failure memories for other policy topics mentioned only in system text or retrieved memories.
       - Do not collapse independent intents into a broad reusable workflow in 泛化规则. Prefer narrow rules tied to one intent, one target boundary, one policy gate, and one terminal tool family.
       - When the failure is premature done/transfer or a missing state-changing tool, 泛化规则 must state the required terminal action and the forbidden substitute.
       - When the actual trajectory used cancel_reservation plus book_reservation, explicitly distinguish whether that path is policy-eligible and user-confirmed; otherwise mark it as a rejected path, not a reusable positive workflow.
       - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts/counts, exact locations/paths, product names, and raw tool payloads unless the value is a stable policy constant or a tool/action name required for the reusable lesson. Use semantic placeholders such as expected write, target reservation, delayed segment, verified passenger count, policy amount, or computed amount.
       - Tool names, evaluation field names, action category names, and policy constants may remain exact when they are needed for future retrieval and execution.
-      - Use exactly the seven headings above in this exact order. No extra headings, free paragraphs outside sections, or closing remarks.
+      - Use exactly the eight headings above in this exact order. No extra headings, free paragraphs outside sections, or closing remarks.
     merge_op: patch
