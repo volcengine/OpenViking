@@ -37,6 +37,18 @@ def _api_key_root_can_access_path(path: str) -> bool:
     return False
 
 
+def _remove_header(request: Request, name: bytes) -> None:
+    """Remove a header from the underlying request scope.
+
+    Starlette's Headers object is immutable; we mutate the raw scope list
+    so downstream middleware and handlers do not see the header.
+    """
+    scope_headers = request.scope.get("headers", [])
+    request.scope["headers"] = [
+        (key, value) for key, value in scope_headers if key.lower() != name.lower()
+    ]
+
+
 class ApiKeyAuthPlugin(AuthPlugin):
     """API key mode: resolve identity via APIKeyManager.
 
@@ -74,14 +86,13 @@ class ApiKeyAuthPlugin(AuthPlugin):
         identity.account_id = identity.account_id or "default"
         identity.user_id = identity.user_id or "default"
 
+        # Silently ignore identity assertion headers in api_key mode.
+        # Older clients may send these headers out of habit; clearing them
+        # avoids breaking compatibility without weakening security.
         if x_openviking_account:
-            raise PermissionDeniedError(
-                "X-OpenViking-Account can only assert identity in trusted mode."
-            )
+            _remove_header(request, b"x-openviking-account")
         if x_openviking_user:
-            raise PermissionDeniedError(
-                "X-OpenViking-User can only assert identity in trusted mode."
-            )
+            _remove_header(request, b"x-openviking-user")
 
         return identity
 
@@ -152,14 +163,11 @@ class ApiKeyAuthPlugin(AuthPlugin):
                     "please re-authorize the client."
                 )
 
+        # Silently ignore identity assertion headers in api_key mode.
         if x_openviking_account:
-            raise PermissionDeniedError(
-                "X-OpenViking-Account can only assert identity in trusted mode."
-            )
+            _remove_header(request, b"x-openviking-account")
         if x_openviking_user:
-            raise PermissionDeniedError(
-                "X-OpenViking-User can only assert identity in trusted mode."
-            )
+            _remove_header(request, b"x-openviking-user")
 
         return ResolvedIdentity(
             role=role,
