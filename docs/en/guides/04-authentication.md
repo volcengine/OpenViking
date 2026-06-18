@@ -1,6 +1,6 @@
 # Authentication
 
-OpenViking Server supports three authentication modes with role-based access control: `api_key`, `trusted`, and `dev`. The mode is auto-detected if not explicitly configured.
+OpenViking Server supports three built-in authentication modes with role-based access control: `api_key`, `trusted`, and `dev`. The mode is auto-detected if not explicitly configured. In addition, custom authentication plugins can be registered to support arbitrary identity sources (e.g., LDAP, OIDC, mTLS).
 
 ## Overview
 
@@ -45,6 +45,57 @@ Start the server:
 ```bash
 openviking-server
 ```
+
+### Custom Authentication Plugins
+
+The server uses a plugin-based auth architecture. Each `auth_mode` maps to an `AuthPlugin` implementation. Built-in plugins (`dev`, `api_key`, `trusted`) are auto-registered; third-party plugins can be added by subclassing `AuthPlugin` and registering it before startup.
+
+**Plugin interface (`openviking.server.auth.plugin.AuthPlugin`)**
+
+| Method | Purpose |
+|--------|---------|
+| `resolve_identity(request, api_key, x_openviking_account, x_openviking_user)` | Resolve credentials to a `ResolvedIdentity`. |
+| `validate_config(config)` | Validate `ServerConfig` at startup; should `sys.exit(1)` on fatal misconfiguration. |
+| `initialize(app, service, config)` | Initialize runtime state (e.g., `APIKeyManager`) on `app.state`. |
+| `get_request_context_checks(path, identity)` | Optional post-auth path/identity checks. |
+| `requires_api_key_manager()` | Whether Admin API routes need an `APIKeyManager`. |
+| `can_skip_api_key_for_bot_proxy()` | Whether the bot proxy may skip API key validation (e.g., `dev` mode). |
+
+**Register a custom plugin**
+
+```python
+from openviking.server.auth.plugin import AuthPlugin
+from openviking.server.auth.registry import register_auth_plugin
+from openviking.server.identity import ResolvedIdentity, Role
+
+@register_auth_plugin
+class LDAPAuthPlugin(AuthPlugin):
+    auth_mode = "ldap"
+
+    async def resolve_identity(self, request, *, api_key=None, x_openviking_account=None, x_openviking_user=None):
+        # ... LDAP bind and identity resolution ...
+        return ResolvedIdentity(role=Role.USER, account_id="...", user_id="...")
+
+    def validate_config(self, config):
+        pass
+
+    async def initialize(self, app, service, config):
+        pass
+```
+
+Then set `server.auth_mode = "ldap"` in `ov.conf`.
+
+**Custom roles**
+
+The built-in `Role` class supports dynamic registration of custom roles with privilege ranks:
+
+```python
+from openviking.server.identity import Role
+
+Role.register("operator", rank=1)  # Between USER (0) and ADMIN (1)
+```
+
+Custom roles work with `require_role()` and `require_auth_role()` decorators out of the box.
 
 ## Managing Accounts and Users
 

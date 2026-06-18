@@ -488,7 +488,7 @@ async def oauth_verify(
         pending_id=record["pending_id"],
         account_id=ctx.user.account_id,
         user_id=ctx.user.user_id,
-        role=ctx.role.value,
+        role=str(ctx.role),
         verified_key_fp=verifier_fp,
     )
     if not ok:

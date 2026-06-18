@@ -15,6 +15,7 @@ from starlette.requests import Request
 
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context, resolve_identity
+from openviking.server.auth.registry import get_registry
 from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
 from openviking.server.dependencies import set_service
 from openviking.server.identity import ResolvedIdentity, Role
@@ -88,14 +89,24 @@ def _make_request(
     api_key_manager=None,
 ) -> Request:
     """Create a minimal Starlette request for auth dependency tests."""
+    # Ensure built-in plugins are registered
+    from openviking.server.auth.plugins import DevAuthPlugin, ApiKeyAuthPlugin, TrustedAuthPlugin
+
     raw_headers = []
     for key, value in (headers or {}).items():
         raw_headers.append((key.lower().encode("latin-1"), value.encode("latin-1")))
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode=auth_mode, root_api_key=root_api_key)
+    # When auth is disabled and mode is the default api_key, fall back to dev mode
+    effective_auth_mode = auth_mode if auth_enabled or auth_mode != "api_key" else "dev"
+    app.state.config = ServerConfig(auth_mode=effective_auth_mode, root_api_key=root_api_key)
     if auth_enabled:
         # Non-empty api_key_manager means the server is in authenticated mode.
         app.state.api_key_manager = api_key_manager if api_key_manager is not None else object()
+    # Set auth plugin based on mode
+    registry = get_registry()
+    plugin_cls = registry.get(effective_auth_mode)
+    if plugin_cls is not None:
+        app.state.auth_plugin = plugin_cls()
     scope = {
         "type": "http",
         "path": path,
@@ -117,11 +128,21 @@ def _build_auth_http_test_app(
     The full server fixture depends on AGFS native libraries. This helper keeps
     the test focused on request auth behavior and the structured HTTP error body.
     """
+    # Ensure built-in plugins are registered
+    from openviking.server.auth.plugins import DevAuthPlugin, ApiKeyAuthPlugin, TrustedAuthPlugin
+
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode=auth_mode, root_api_key=root_api_key)
+    # When auth is disabled and mode is the default api_key, fall back to dev mode
+    effective_auth_mode = auth_mode if auth_enabled or auth_mode != "api_key" else "dev"
+    app.state.config = ServerConfig(auth_mode=effective_auth_mode, root_api_key=root_api_key)
     if auth_enabled:
         # Match production auth mode so get_request_context enters the guard path.
         app.state.api_key_manager = object()
+    # Set auth plugin based on mode
+    registry = get_registry()
+    plugin_cls = registry.get(effective_auth_mode)
+    if plugin_cls is not None:
+        app.state.auth_plugin = plugin_cls()
 
     @app.exception_handler(OpenVikingError)
     async def openviking_error_handler(request: FastAPIRequest, exc: OpenVikingError):
@@ -160,17 +181,17 @@ def _build_auth_http_test_app(
     @app.get("/api/v1/observer/system")
     async def observer_system(ctx=Depends(get_request_context)):
         """Expose a monitoring route that should keep implicit ROOT behavior."""
-        return {"status": "ok", "result": {"role": ctx.role.value}}
+        return {"status": "ok", "result": {"role": str(ctx.role)}}
 
     @app.post("/api/v1/system/wait")
     async def system_wait(ctx=Depends(get_request_context)):
         """Expose a non-tenant system route for auth regression tests."""
-        return {"status": "ok", "result": {"role": ctx.role.value}}
+        return {"status": "ok", "result": {"role": str(ctx.role)}}
 
     @app.get("/api/v1/debug/vector/scroll")
     async def debug_vector_scroll(ctx=Depends(get_request_context)):
         """Expose a tenant-scoped debug route for auth regression tests."""
-        return {"status": "ok", "result": {"role": ctx.role.value}}
+        return {"status": "ok", "result": {"role": str(ctx.role)}}
 
     @app.get("/api/v1/test/accounts/{account_id}/users/{user_id}")
     async def trusted_identity_from_url(
@@ -214,6 +235,8 @@ async def auth_service(temp_dir):
 async def auth_app(auth_service):
     """App with root_api_key configured and APIKeyManager loaded."""
     from openviking.server.api_keys import APIKeyManager
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.auth.registry import get_registry
 
     config = ServerConfig(root_api_key=ROOT_KEY)
     app = create_app(config=config, service=auth_service)
@@ -223,6 +246,14 @@ async def auth_app(auth_service):
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=auth_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
+
+    # Manually initialize auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("api_key") is None:
+        registry.register(ApiKeyAuthPlugin)
+    plugin_cls = registry.get("api_key")
+    plugin = plugin_cls()
+    app.state.auth_plugin = plugin
 
     return app
 
@@ -1326,7 +1357,7 @@ async def test_trusted_mode_admin_api_http_route_without_identity():
         return {
             "status": "ok",
             "result": {
-                "role": ctx.role.value,
+                "role": str(ctx.role),
                 "account_id": ctx.user.account_id,
                 "user_id": ctx.user.user_id,
             },

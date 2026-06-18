@@ -16,7 +16,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from openviking.server.api_keys import APIKeyManager
 from openviking.server.config import (
     ServerConfig,
     load_bot_gateway_token,
@@ -25,7 +24,7 @@ from openviking.server.config import (
 )
 from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.error_mapping import map_exception
-from openviking.server.identity import AuthMode, Role
+from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.routers import (
@@ -77,42 +76,45 @@ def _on_deferred_init_done(task):
     os._exit(1)
 
 
-async def _initialize_api_key_manager(
+async def _initialize_auth_plugin(
     app: FastAPI,
     service: OpenVikingService,
     config: ServerConfig,
 ) -> None:
-    """Initialize API key state before the app serves authenticated requests."""
-    effective_auth_mode = config.get_effective_auth_mode()
-    if config.root_api_key and config.root_api_key != "":
-        api_key_manager = APIKeyManager(
-            root_key=config.root_api_key,
-            viking_fs=service.viking_fs,
-            api_key_hashing_enabled=config.api_key_hashing_enabled,
-        )
-        await api_key_manager.load()
-        app.state.api_key_manager = api_key_manager
-        logger.info(
-            "APIKeyManager initialized with api_key_hashing_enabled=%s",
-            config.api_key_hashing_enabled,
-        )
-        if effective_auth_mode == AuthMode.TRUSTED:
-            logger.info(
-                "Trusted mode enabled: authentication trusts X-OpenViking-Account/User "
-                "headers and requires the configured server API key on each request. "
-                "Only expose this server behind a trusted network boundary or "
-                "identity-injecting gateway."
-            )
-        return
+    """Initialize the auth plugin before the app serves authenticated requests."""
+    from openviking.server.auth.registry import get_registry
 
-    app.state.api_key_manager = None
-    if effective_auth_mode == AuthMode.TRUSTED:
-        logger.warning(
-            "Trusted mode enabled: authentication uses X-OpenViking-Account/User "
-            "headers without API keys. This is only allowed on localhost. "
-            "Only expose this server behind a trusted network boundary or "
-            "identity-injecting gateway after configuring server.root_api_key."
+    effective_auth_mode = config.get_effective_auth_mode()
+    registry = get_registry()
+
+    # Ensure built-in plugins are registered
+    from openviking.server.auth.plugins import (
+        ApiKeyAuthPlugin,
+        DevAuthPlugin,
+        TrustedAuthPlugin,
+    )
+
+    if registry.get("dev") is None:
+        registry.register(DevAuthPlugin)
+    if registry.get("api_key") is None:
+        registry.register(ApiKeyAuthPlugin)
+    if registry.get("trusted") is None:
+        registry.register(TrustedAuthPlugin)
+
+    plugin_cls = registry.get(effective_auth_mode)
+    if plugin_cls is None:
+        logger.error(
+            "Unknown auth_mode: %r. No auth plugin registered. "
+            "Registered modes: %s.",
+            effective_auth_mode,
+            ", ".join(registry.list_modes()),
         )
+        raise RuntimeError(f"Unknown auth_mode: {effective_auth_mode}")
+
+    plugin = plugin_cls()
+    app.state.auth_plugin = plugin
+    await plugin.initialize(app, service, config)
+    logger.info("Auth plugin initialized: %s", effective_auth_mode)
 
 
 async def _initialize_runtime_state(
@@ -122,7 +124,7 @@ async def _initialize_runtime_state(
 ) -> None:
     """Initialize service and auth dependencies before traffic is accepted."""
     await service.initialize()
-    await _initialize_api_key_manager(app, service, config)
+    await _initialize_auth_plugin(app, service, config)
     logger.info("OpenVikingService initialization complete")
 
 

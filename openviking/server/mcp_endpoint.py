@@ -643,7 +643,7 @@ async def list_watches() -> str:
     tasks = await wm.get_all_tasks(
         ctx.account_id,
         ctx.user.user_id,
-        ctx.role.value,
+        str(ctx.role),
         active_only=False,
     )
     if not tasks:
@@ -679,7 +679,7 @@ async def cancel_watch(to_uri: str) -> str:
         to_uri,
         ctx.account_id,
         ctx.user.user_id,
-        ctx.role.value,
+        str(ctx.role),
     )
     if task is None:
         return f"No watch task found for {to_uri}"
@@ -694,7 +694,7 @@ async def cancel_watch(to_uri: str) -> str:
             task.task_id,
             ctx.account_id,
             ctx.user.user_id,
-            ctx.role.value,
+            str(ctx.role),
         )
     except _wm_mod.PermissionDeniedError:
         return f"Permission denied for {to_uri}"
