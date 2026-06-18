@@ -54,6 +54,36 @@ class _FakeVikingFS:
             if item_uri.startswith(prefix)
         ]
 
+    async def grep(
+        self,
+        uri,
+        pattern,
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=None,
+        level_limit=None,
+        ctx=None,
+    ):
+        del exclude_uri, case_insensitive, level_limit, ctx
+        prefix = uri.rstrip("/") + "/"
+        matches = [
+            {
+                "uri": item_uri,
+                "line": 1,
+                "content": content,
+            }
+            for item_uri, content in self.store.items()
+            if item_uri.startswith(prefix) and re.search(pattern, content)
+        ]
+        if node_limit is not None:
+            matches = matches[:node_limit]
+        return {
+            "matches": matches,
+            "count": len(matches),
+            "match_count": len(matches),
+            "files_scanned": len(self.store),
+        }
+
 
 class _FakeGrepVikingFS(_FakeVikingFS):
     def __init__(self, store, grep_uris):

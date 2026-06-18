@@ -473,10 +473,11 @@ class ResourceMemoryLinkService:
             resource_uri=resource_uri,
         )
         if candidate_uris is None:
-            candidate_uris = await self._tree_candidate_memory_uris(
-                ctx=ctx,
-                resource_uri=resource_uri,
+            logger.warning(
+                "Skipping resource memory reference scan for %s because grep is unavailable",
+                resource_uri,
             )
+            return []
         return await self._read_referencing_memory_matches(
             candidate_uris,
             ctx=ctx,
@@ -513,7 +514,7 @@ class ResourceMemoryLinkService:
                 continue
             except Exception as exc:
                 logger.debug(
-                    "Resource memory grep failed for %s, falling back to tree scan: %s",
+                    "Resource memory grep failed for %s, skipping reference scan: %s",
                     memory_root,
                     exc,
                 )
@@ -523,36 +524,6 @@ class ResourceMemoryLinkService:
                 uri = match.get("uri", "")
                 if self._is_memory_markdown_file(uri):
                     candidate_uris.append(uri)
-
-        return list(dict.fromkeys(candidate_uris))
-
-    async def _tree_candidate_memory_uris(
-        self,
-        *,
-        ctx: RequestContext,
-        resource_uri: str,
-    ) -> List[str]:
-        viking_fs = self._get_viking_fs()
-        candidate_uris: List[str] = []
-        for memory_root in _memory_roots_for_resource_refs(ctx, resource_uri):
-            try:
-                entries = await viking_fs.tree(
-                    memory_root,
-                    ctx=ctx,
-                    node_limit=1000000,
-                    level_limit=None,
-                )
-            except Exception:
-                continue
-
-            for entry in entries:
-                uri = entry.get("uri", "")
-                rel_path = entry.get("rel_path", "")
-                if entry.get("isDir") or not self._is_memory_markdown_file(uri):
-                    continue
-                if rel_path.endswith("/.abstract.md") or rel_path.endswith("/.overview.md"):
-                    continue
-                candidate_uris.append(uri)
 
         return list(dict.fromkeys(candidate_uris))
 
