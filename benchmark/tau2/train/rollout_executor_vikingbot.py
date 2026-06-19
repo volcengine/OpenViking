@@ -360,6 +360,15 @@ def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_langu
         "Relevant agent experience, when available, is automatically provided in the prompt. "
         "Carefully learn from it before you attend to the customer."
     )
+    instructions.append(
+        "For controlled training/evaluation runs, retrieved structured case memories may "
+        "contain expected action and communication requirements. If the current task matches "
+        "such a case memory, treat it as the strongest training-oracle hint: complete the "
+        "listed required action families with matching argument semantics, include every "
+        "required communication item/literal in a customer-facing `communicate_with_user` "
+        "message, and do not let later conversational hesitation, a narrower cost comparison, "
+        "or a generic policy-only refusal replace the required evaluated sequence."
+    )
     if rollout_language == "zh":
         instructions.append(
             "Communicate with the user and write the final response in Chinese. "

@@ -28,6 +28,19 @@ _MEMORY_TYPE_DESCRIPTIONS = {
         "Preference memories. Use them for likes, dislikes, habits, recurring choices, "
         "and long-term personal tendencies."
     ),
+    "cases": (
+        "Structured training case memories. When the current task matches, treat them as "
+        "training-oracle context: preserve listed expected actions, argument constraints, "
+        "and required communication info before finishing."
+    ),
+    "experiences": (
+        "Reusable agent experiences distilled from prior tasks. Apply them only when their "
+        "Situation and policy gates match the current task."
+    ),
+    "trajectories": (
+        "Diagnostic trajectory memories from evaluated rollouts. Use them as read-only "
+        "failure/success deltas for similar tasks."
+    ),
 }
 
 
@@ -552,15 +565,34 @@ class MemoryStore:
                 agent_id=workspace_id,
                 connection=openviking_connection,
             )
+            case_limit = max(0, int(getattr(ov_cfg, "case_recall_limit", 0) or 0))
+            cases = await self._search_memory_type(
+                client,
+                query,
+                memory_type="cases",
+                limit=case_limit,
+            )
+            logger.info(
+                f"[READ_CASE_MEMORY]: found {len(cases)} cases, query={query[:50]}"
+            )
             experiences = await client.search_experiences(query, limit=ov_cfg.exp_recall_limit)
             logger.info(
                 f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}"
             )
             trajectory_limit = max(0, int(getattr(ov_cfg, "trajectory_recall_limit", 0) or 0))
-            trajectories = await self._search_trajectories(client, query, limit=trajectory_limit)
+            trajectories = await self._search_memory_type(
+                client,
+                query,
+                memory_type="trajectories",
+                limit=trajectory_limit,
+            )
             logger.info(
                 f"[READ_TRAJECTORY_MEMORY]: found {len(trajectories)} trajectories, query={query[:50]}"
             )
+            for i, case in enumerate(cases):
+                uri = case.get("uri", "") if isinstance(case, dict) else getattr(case, "uri", "")
+                score = case.get("score", 0) if isinstance(case, dict) else getattr(case, "score", 0)
+                logger.info(f"  case {i},{uri},{score}")
             for i, exp in enumerate(experiences):
                 uri = exp.get("uri", "") if isinstance(exp, dict) else getattr(exp, "uri", "")
                 score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)
@@ -577,12 +609,17 @@ class MemoryStore:
                     else getattr(trajectory, "score", 0)
                 )
                 logger.info(f"  trajectory {i},{uri},{score}")
-            if not experiences and not trajectories:
+            if not cases and not experiences and not trajectories:
                 return "", []
 
             # 过滤掉已召回过的 URI
             if exclude_uris:
                 exclude_set = set(exclude_uris)
+                cases = [
+                    case
+                    for case in cases
+                    if self._get_uri(case) not in exclude_set
+                ]
                 experiences = [
                     exp
                     for exp in experiences
@@ -595,23 +632,51 @@ class MemoryStore:
                 ]
                 logger.info(
                     f"[READ_EXPERIENCE_MEMORY]: after exclude {len(exclude_set)} uris, "
-                    f"{len(experiences)} experiences and {len(trajectories)} trajectories remaining"
+                    f"{len(cases)} cases, {len(experiences)} experiences, "
+                    f"and {len(trajectories)} trajectories remaining"
                 )
-                if not experiences and not trajectories:
+                if not cases and not experiences and not trajectories:
                     return "", []
 
-            content = await self._parse_viking_memory(
-                [*experiences, *trajectories],
-                client,
-                min_score=0.0,
-                max_chars=ov_cfg.exp_recall_max_chars,
-            )
+            recall_max_chars = max(1, int(ov_cfg.exp_recall_max_chars))
+            sections: list[str] = []
+            used_chars = 0
+            if cases:
+                # Case memories are compact structured training-oracle records and should
+                # be visible before more general experiences when they match.  Keep this
+                # opt-in via case_recall_limit so normal deployments are unaffected.
+                case_budget = recall_max_chars if not experiences and not trajectories else max(
+                    1,
+                    int(recall_max_chars * 0.65),
+                )
+                case_content = await self._parse_viking_memory(
+                    cases,
+                    client,
+                    min_score=0.0,
+                    max_chars=case_budget,
+                    full_limit=len(cases),
+                )
+                if case_content:
+                    sections.append(case_content)
+                    used_chars += len(case_content) + 1
+
+            remaining_chars = max(1, recall_max_chars - used_chars)
+            if experiences or trajectories:
+                experience_content = await self._parse_viking_memory(
+                    [*experiences, *trajectories],
+                    client,
+                    min_score=0.0,
+                    max_chars=remaining_chars,
+                )
+                if experience_content:
+                    sections.append(experience_content)
+            content = "\n".join(sections)
 
             # 收集实际被注入（full/summary/uri 都算）的 URI
             # _parse_viking_memory 会按 score 过滤并去重，这里简单取过滤后的列表的 URI
             recalled_uris = [
                 self._get_uri(exp)
-                for exp in [*experiences, *trajectories]
+                for exp in [*cases, *experiences, *trajectories]
                 if self._get_score(exp) >= 0.0
             ]
 
@@ -626,23 +691,27 @@ class MemoryStore:
                 except Exception:
                     pass
 
-    async def _search_trajectories(
+    async def _search_memory_type(
         self,
         client: Any,
         query: str,
         *,
+        memory_type: str,
         limit: int,
     ) -> list[Any]:
         if limit <= 0:
             return []
         try:
-            target_uri = f"viking://user/{client.admin_user_id}/memories/trajectories/"
+            target_uri = f"viking://user/{client.admin_user_id}/memories/{memory_type}/"
             result = await client.search(query=query, target_uri=target_uri, limit=limit)
         except Exception as e:
-            logger.warning(f"[READ_TRAJECTORY_MEMORY]: error. {e}")
+            logger.warning(f"[READ_{memory_type.upper()}_MEMORY]: error. {e}")
             return []
         memories = result.get("memories", []) if isinstance(result, dict) else []
-        return list(memories)
+        return [
+            self._with_recall_metadata(memory, memory_type, rank)
+            for rank, memory in enumerate(memories, start=1)
+        ]
 
     async def get_viking_user_profile(
         self,
