@@ -207,6 +207,7 @@ if not isinstance(ov_server, dict):
     ov_server = {}
 bot["ov_server"] = ov_server
 ov_server["server_url"] = openviking_url
+ov_server.setdefault("trajectory_recall_limit", 2)
 config_path.parent.mkdir(parents=True, exist_ok=True)
 config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY

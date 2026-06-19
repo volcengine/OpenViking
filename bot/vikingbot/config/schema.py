@@ -540,6 +540,10 @@ class OpenVikingConfig(BaseModel):
     memory_recall_max_chars: int = 4000
     # How many experience memories to fetch per call to get_viking_experience_context.
     exp_recall_limit: int = 5
+    # Also search recent diagnostic trajectory memories and inject them as
+    # read-only lessons after experience memories.  Trajectories often contain
+    # sharper evaluated deltas than generalized experiences during batch train.
+    trajectory_recall_limit: int = 0
     # Total character budget for the injected experience block. Memories beyond this
     # budget are degraded to link-only (uri + score) instead of being dropped.
     exp_recall_max_chars: int = 10000

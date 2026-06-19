@@ -556,11 +556,28 @@ class MemoryStore:
             logger.info(
                 f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}"
             )
+            trajectory_limit = max(0, int(getattr(ov_cfg, "trajectory_recall_limit", 0) or 0))
+            trajectories = await self._search_trajectories(client, query, limit=trajectory_limit)
+            logger.info(
+                f"[READ_TRAJECTORY_MEMORY]: found {len(trajectories)} trajectories, query={query[:50]}"
+            )
             for i, exp in enumerate(experiences):
                 uri = exp.get("uri", "") if isinstance(exp, dict) else getattr(exp, "uri", "")
                 score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)
                 logger.info(f"  {i},{uri},{score}")
-            if not experiences:
+            for i, trajectory in enumerate(trajectories):
+                uri = (
+                    trajectory.get("uri", "")
+                    if isinstance(trajectory, dict)
+                    else getattr(trajectory, "uri", "")
+                )
+                score = (
+                    trajectory.get("score", 0)
+                    if isinstance(trajectory, dict)
+                    else getattr(trajectory, "score", 0)
+                )
+                logger.info(f"  trajectory {i},{uri},{score}")
+            if not experiences and not trajectories:
                 return "", []
 
             # 过滤掉已召回过的 URI
@@ -571,22 +588,30 @@ class MemoryStore:
                     for exp in experiences
                     if self._get_uri(exp) not in exclude_set
                 ]
+                trajectories = [
+                    trajectory
+                    for trajectory in trajectories
+                    if self._get_uri(trajectory) not in exclude_set
+                ]
                 logger.info(
                     f"[READ_EXPERIENCE_MEMORY]: after exclude {len(exclude_set)} uris, "
-                    f"{len(experiences)} remaining"
+                    f"{len(experiences)} experiences and {len(trajectories)} trajectories remaining"
                 )
-                if not experiences:
+                if not experiences and not trajectories:
                     return "", []
 
             content = await self._parse_viking_memory(
-                experiences, client, min_score=0.0, max_chars=ov_cfg.exp_recall_max_chars
+                [*experiences, *trajectories],
+                client,
+                min_score=0.0,
+                max_chars=ov_cfg.exp_recall_max_chars,
             )
 
             # 收集实际被注入（full/summary/uri 都算）的 URI
             # _parse_viking_memory 会按 score 过滤并去重，这里简单取过滤后的列表的 URI
             recalled_uris = [
                 self._get_uri(exp)
-                for exp in experiences
+                for exp in [*experiences, *trajectories]
                 if self._get_score(exp) >= 0.0
             ]
 
@@ -600,6 +625,24 @@ class MemoryStore:
                     await client.close()
                 except Exception:
                     pass
+
+    async def _search_trajectories(
+        self,
+        client: Any,
+        query: str,
+        *,
+        limit: int,
+    ) -> list[Any]:
+        if limit <= 0:
+            return []
+        try:
+            target_uri = f"viking://user/{client.admin_user_id}/memories/trajectories/"
+            result = await client.search(query=query, target_uri=target_uri, limit=limit)
+        except Exception as e:
+            logger.warning(f"[READ_TRAJECTORY_MEMORY]: error. {e}")
+            return []
+        memories = result.get("memories", []) if isinstance(result, dict) else []
+        return list(memories)
 
     async def get_viking_user_profile(
         self,
