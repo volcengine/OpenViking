@@ -161,6 +161,9 @@ type FindOptions struct {
 	Until          string
 	TimeField      string
 	Level          []int
+	// IncludeProvenance asks the server to return per-query retrieval
+	// provenance (see FindResult.QueryResults). Defaults to false.
+	IncludeProvenance bool
 }
 
 // SearchOptions controls Search.
@@ -177,6 +180,9 @@ type SearchOptions struct {
 	Until          string
 	TimeField      string
 	Level          []int
+	// IncludeProvenance asks the server to return per-query retrieval
+	// provenance (see FindResult.QueryResults). Defaults to false.
+	IncludeProvenance bool
 }
 
 // GrepOptions controls Grep.
@@ -257,7 +263,10 @@ type FindResult struct {
 	Resources    []MatchedContext `json:"resources,omitempty"`
 	Skills       []MatchedContext `json:"skills,omitempty"`
 	QueryPlan    *QueryPlan       `json:"query_plan,omitempty"`
-	QueryResults []map[string]any `json:"query_results,omitempty"`
+	// QueryResults holds the per-query retrieval provenance returned when
+	// the request sets IncludeProvenance. The server emits this list under
+	// the "provenance" key.
+	QueryResults []map[string]any `json:"provenance,omitempty"`
 	Total        int              `json:"total,omitempty"`
 }
 
