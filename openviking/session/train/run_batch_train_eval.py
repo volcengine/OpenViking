@@ -48,6 +48,11 @@ def parse_args() -> argparse.Namespace:
         help="Streaming JSONL event output path. Defaults to report directory/events.jsonl.",
     )
     parser.add_argument(
+        "--result-dir-name",
+        default="train",
+        help="Result subdirectory under result/{dataset}/ (default: train).",
+    )
+    parser.add_argument(
         "--benchmark-service-url",
         default=None,
         help="Benchmark runtime service URL, e.g. http://127.0.0.1:1944",
@@ -157,6 +162,7 @@ async def main_async() -> int:
             user_id=args.user_id,
             output_path=args.output,
             events_path=args.events_output,
+            result_dir_name=args.result_dir_name,
             keep_default_tools=True,
             max_iterations=args.max_iterations,
             train_index=args.train_index,

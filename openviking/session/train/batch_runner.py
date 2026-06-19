@@ -73,6 +73,7 @@ class BatchTrainEvalConfig:
     clean_result: bool = True
     keep_recent_results: int = 5
     events_path: str | None = None
+    result_dir_name: str = "train"
     run_timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"))
 
     def __post_init__(self) -> None:
@@ -112,6 +113,8 @@ class BatchTrainEvalConfig:
             raise ValueError("benchmark_service_url must not be empty")
         if self.keep_recent_results < 0:
             raise ValueError("keep_recent_results must be >= 0")
+        if not str(self.result_dir_name or "").strip():
+            raise ValueError("result_dir_name must not be empty")
 
 
 @dataclass(slots=True)
@@ -147,6 +150,7 @@ class BatchTrainEvalReport:
     clean_result: bool = True
     keep_recent_results: int = 5
     events_path: str | None = None
+    result_dir_name: str = "train"
     baseline_cache_path: str | None = None
     baseline_cache_hit: bool = False
     baseline_force_recompute: bool = False
@@ -184,6 +188,7 @@ class BatchTrainEvalReport:
             "clean_result": self.clean_result,
             "keep_recent_results": self.keep_recent_results,
             "events_path": self.events_path,
+            "result_dir_name": self.result_dir_name,
             "baseline_cache_path": self.baseline_cache_path,
             "baseline_cache_hit": self.baseline_cache_hit,
             "baseline_force_recompute": self.baseline_force_recompute,
@@ -227,6 +232,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             trials=config.trials,
             clean_result=config.clean_result,
             keep_recent_results=config.keep_recent_results,
+            result_dir_name=config.result_dir_name,
             baseline_force_recompute=config.baseline_force_recompute,
             skip_baseline_eval=config.skip_baseline_eval,
             eval_split=config.eval_split,
@@ -406,6 +412,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             clean_result=config.clean_result,
             keep_recent_results=config.keep_recent_results,
             events_path=str(_events_path(config)),
+            result_dir_name=config.result_dir_name,
             baseline_cache_path=(
                 str(baseline_cache_path) if baseline_cache_path is not None else None
             ),
@@ -878,11 +885,11 @@ def _run_output_dir(config: BatchTrainEvalConfig) -> Path:
 
 
 def _result_base_dir(config: BatchTrainEvalConfig) -> Path:
-    return _repo_root() / "result" / config.dataset / "train"
+    return _repo_root() / "result" / config.dataset / config.result_dir_name
 
 
 def _latest_rollouts_path(config: BatchTrainEvalConfig) -> Path:
-    return _repo_root() / "result" / config.dataset / "train" / "latest_rollouts"
+    return _repo_root() / "result" / config.dataset / config.result_dir_name / "latest_rollouts"
 
 
 def _repo_root() -> Path:

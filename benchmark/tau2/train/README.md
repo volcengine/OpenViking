@@ -44,14 +44,49 @@ bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
   --keep-recent-results 10
 ```
 
+
+### Running multiple slots concurrently
+
+The one-click launcher accepts a launcher-only `--slot N` before the normal
+train/eval arguments. Slot `0` is the default legacy setup. Slot `N > 0` uses
+independent ports, OpenViking config/data, logs, and result directory so multiple
+experiments can run at the same time:
+
+| Slot value | OpenViking port | VikingBot port | Tau2 service port | OpenViking root | Result directory |
+|------------|-----------------|----------------|-------------------|-----------------|------------------|
+| `0` | `1933` | `18790` | `1944` | `~/.openviking` | `result/tau2/train` |
+| `1` | `1934` | `18791` | `1945` | `~/openviking_1` | `result/tau2/train_1` |
+| `N` | `1933 + N` | `18790 + N` | `1944 + N` | `~/openviking_N` | `result/tau2/train_N` |
+
+Example: run slot 1 without touching slot 0 services or data:
+
+```bash
+bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
+  --slot 1 \
+  --epochs 2 \
+  --train-index 14 \
+  --eval-split train \
+  --eval-index 14 \
+  --trials 8 \
+  --skip-baseline-eval \
+  --skip-final-eval
+```
+
+Environment variables such as `OPENVIKING_PORT`, `OPENVIKING_BOT_PORT`,
+`TAU2_SERVICE_PORT`, `OPENVIKING_CONFIG_FILE`, `OPENVIKING_DATA_DIR`,
+`RESULT_DIR_NAME`, and `LOG_DIR` can still override the slot-derived defaults.
+For non-zero slots, the launcher copies the base `~/.openviking/ov.conf` when
+needed and rewrites the slot config's `storage.workspace`, `server.port`,
+`server.bot_api_url`, and `bot.ov_server.server_url`.
+
 The launcher writes service logs and pid files under:
 
 ```text
-result/tau2/train/service_logs/
+result/tau2/<result-dir-name>/service_logs/
 ```
 
-OpenViking readiness is checked at `http://127.0.0.1:1933/bot/v1/health`;
-the Tau2 service readiness check is `http://127.0.0.1:1944/health`.
+OpenViking readiness is checked at `http://127.0.0.1:<ov-port>/bot/v1/health`;
+the Tau2 service readiness check is `http://127.0.0.1:<tau2-port>/health`.
 
 ## 2. Start the Tau2 service manually
 
@@ -146,9 +181,9 @@ Default concurrency and output behavior:
 - rollout concurrency: `150`
 - session.commit concurrency: `100`
 - eval trials: `8`
-- `--clean-result` is enabled by default and keeps the most recent 5 `result/tau2/train/run_<domain>_<timestamp>/` run directories while preserving `result/tau2/train/cache/` and all non-`run_` directories such as `result/tau2/train/opt/`. Use `--keep-recent-results N` to change the retention count, or `--no-clean-result` to keep all previous runs.
+- `--clean-result` is enabled by default and keeps the most recent 5 `result/tau2/<result-dir-name>/run_<domain>_<timestamp>/` run directories while preserving `result/tau2/<result-dir-name>/cache/` and all non-`run_` directories such as `result/tau2/<result-dir-name>/opt/`. Use `--keep-recent-results N` to change the retention count, or `--no-clean-result` to keep all previous runs.
 - `--skip-final-eval` skips the extra final held-out eval pass. The one-click launcher enables this by default because the Tau2 wrapper already enables `--eval-each-epoch`.
-- Streaming JSONL events are written to `result/tau2/train/run_<domain>_<timestamp>/events.jsonl`; train commit events include `trace_id` for live `tail -f` debugging. Use `--events-output` to override the path.
+- Streaming JSONL events are written to `result/tau2/<result-dir-name>/run_<domain>_<timestamp>/events.jsonl`; train commit events include `trace_id` for live `tail -f` debugging. Use `--events-output` to override the path.
 
 ### Common options
 
@@ -172,6 +207,7 @@ Default concurrency and output behavior:
 | `--keep-recent-results` | `5` | Number of recent default `run_` directories to keep when cleaning; cache and non-`run_` directories are preserved |
 | `--output` | auto | JSON report output path |
 | `--events-output` | auto | Streaming JSONL event output path |
+| `--result-dir-name` | `train` | Result subdirectory under `result/<dataset>/`; one-click slots set this to `train_N` |
 | `--benchmark-service-url` | `http://127.0.0.1:1944` | Benchmark runtime service URL |
 | `--config` | `~/.openviking/ov.conf` | ov.conf path |
 | `--server-url` | from config | OpenViking server URL |
@@ -207,13 +243,13 @@ bash benchmark/tau2/train/run_batch_train_eval.sh \
 By default each run writes artifacts under the repository-level result directory:
 
 ```text
-result/tau2/train/run_<domain>_<timestamp>/
+result/tau2/<result-dir-name>/run_<domain>_<timestamp>/
   report.json
   rollouts_index.json
   rollouts/
 ```
 
-`result/tau2/train/latest_rollouts` points to the most recent rollouts directory.
+`result/tau2/<result-dir-name>/latest_rollouts` points to the most recent rollouts directory.
 Each rollout artifact group is one original task; each rollout has its own subdirectory
 with `memory_context.md`, `messages.json`, `tool_calls.json`, `evaluation.json`,
 and `commit_messages.json`. These files, plus `rollouts_index.json`, are written

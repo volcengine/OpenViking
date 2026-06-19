@@ -10,6 +10,7 @@ from openviking.session.train.batch_runner import (
     _baseline_cache_key,
     _clean_result_dir,
     _load_baseline_cache,
+    _result_base_dir,
     _write_baseline_cache,
 )
 
@@ -289,3 +290,29 @@ def test_eval_loader_can_target_train_split():
 
     assert loader.split == "train"
     assert loader.filters == {"task_indices": [14]}
+
+
+def test_result_dir_name_selects_result_subdirectory(tmp_path: Path, monkeypatch):
+    import openviking.session.train.batch_runner as batch_runner
+
+    monkeypatch.setattr(batch_runner, "_repo_root", lambda: tmp_path)
+    config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        benchmark_service_url="http://127.0.0.1:1944",
+        result_dir_name="train_1",
+    )
+
+    assert _result_base_dir(config) == tmp_path / "result" / "tau2" / "train_1"
+
+
+def test_result_dir_name_must_not_be_empty():
+    import pytest
+
+    with pytest.raises(ValueError, match="result_dir_name must not be empty"):
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            benchmark_service_url="http://127.0.0.1:1944",
+            result_dir_name=" ",
+        )
