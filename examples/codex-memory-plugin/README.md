@@ -152,7 +152,7 @@ On `resume`, the script skips commit/sweep. If local state has no live `ovSessio
 
 ### Auto-recall (every UserPromptSubmit)
 
-`auto-recall.mjs` reads `prompt` and `session_id` from stdin, derives the long-lived OpenViking session id (`cx-<safe-session-id>` unless legacy state already has an `ovSessionId`), calls `/api/v1/search/search` with that `session_id`, ranks results, reads full content for top-ranked leaves, and emits:
+`auto-recall.mjs` reads `prompt` and `session_id` from stdin, derives the long-lived OpenViking session id (`cx-<safe-session-id>`) directly from the Codex session id (no plugin state read, so a corrupt state file can't crash recall), calls `/api/v1/search/search` with that `session_id`, ranks results, reads full content for top-ranked leaves, and emits:
 
 ```json
 { "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<openviking-context source=\"auto-recall\" format=\"digest\">\nOpenViking memory digest:\n- ...\n</openviking-context>" } }

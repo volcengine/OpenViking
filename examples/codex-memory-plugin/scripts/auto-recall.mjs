@@ -25,7 +25,7 @@ import {
   loadCachedRecallCompressorProfile,
   markRecallCompressorRuntimeFailed,
 } from "./recall-compressor-profile.mjs";
-import { loadState, resolveOvSessionId } from "./session-state.mjs";
+import { deriveOvSessionId } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
@@ -241,10 +241,13 @@ async function searchAll(query, limit, sessionId = null) {
   });
 }
 
-async function resolveRecallSessionId(codexSessionId) {
+function resolveRecallSessionId(codexSessionId) {
   if (!codexSessionId) return null;
-  const state = await loadState(codexSessionId);
-  return resolveOvSessionId(state);
+  // Derive directly: the OV session id is deterministic (cx-<safe-id>), so
+  // recall does not need to read plugin state. This keeps the recall hook
+  // crash-free even if the state file is corrupt/missing, and stays in sync
+  // with capture, which now also derives cx-* unconditionally.
+  return deriveOvSessionId(codexSessionId);
 }
 
 async function readMemoryContent(uri) {
@@ -456,7 +459,7 @@ async function main() {
 
   const userPrompt = (input.prompt || "").trim();
   const codexSessionId = typeof input.session_id === "string" ? input.session_id.trim() : "";
-  const recallSessionId = await resolveRecallSessionId(codexSessionId);
+  const recallSessionId = resolveRecallSessionId(codexSessionId);
   log("start", {
     codexSessionId: codexSessionId || null,
     recallSessionId,

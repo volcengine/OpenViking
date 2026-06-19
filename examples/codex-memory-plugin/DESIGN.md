@@ -148,10 +148,11 @@ State is updated:
 
 `UserPromptSubmit` stdin includes the user's `prompt` plus the Codex
 `session_id`. Recall derives the same OpenViking session id used by Stop
-capture (`cx-<safe-session-id>`, unless legacy state already has an
-`ovSessionId`) and calls `/api/v1/search/search` with that `session_id`,
-so OpenViking can use recent session messages and archive overview during
-query expansion. Recalled memory is sent back through
+capture (`cx-<safe-session-id>`) directly from the Codex session id and
+calls `/api/v1/search/search` with that `session_id`, so OpenViking can
+use recent session messages and archive overview during query expansion.
+Recall does not read plugin state, so a corrupt or missing state file
+cannot crash the recall hook. Recalled memory is sent back through
 `hookSpecificOutput.additionalContext`, then Codex injects it into the
 model turn. Transcript capture may later see that injected context
 adjacent to the prompt, so plugin-generated recall and resume context are
@@ -216,8 +217,9 @@ OV session id, while commits create additional archives under that session.
 ```
 
 Legacy state files from earlier plugin versions may still contain a UUID
-`ovSessionId`; the hook preserves that value until the next commit so
-already-captured turns are not orphaned.
+`ovSessionId`; those are now overwritten with the derived `cx-*` id on the
+next resolve. The migration window for preserving old UUID sessions has
+closed.
 
 State files are atomic-write (tmpfile + rename) to survive crash mid-write.
 
