@@ -141,15 +141,13 @@ function resolveIdentityField(
 export function resolveInitialApiKey({
   defaultApiKey,
   envApiKey,
-  sessionApiKey,
   storedApiKey,
 }: {
   defaultApiKey: string
   envApiKey: string
-  sessionApiKey: string
   storedApiKey: string | undefined
 }): string {
-  return envApiKey || storedApiKey || sessionApiKey || defaultApiKey
+  return envApiKey || storedApiKey || defaultApiKey
 }
 
 function applyConnection(
@@ -190,7 +188,6 @@ async function detectConnectionRole(
 
 function readInitialConnection(): ConnectionDraft {
   const storedConnection = readStoredConnection()
-  const sessionApiKey = ovClient.getConnection().apiKey
   const adminApiKey =
     ENV_ADMIN_API_KEY ||
     storedConnection.adminApiKey ||
@@ -198,7 +195,6 @@ function readInitialConnection(): ConnectionDraft {
   const apiKey = resolveInitialApiKey({
     defaultApiKey: DEFAULT_CONNECTION.apiKey,
     envApiKey: ENV_API_KEY,
-    sessionApiKey,
     storedApiKey: storedConnection.apiKey,
   })
   return normalizeConnectionDraft({
