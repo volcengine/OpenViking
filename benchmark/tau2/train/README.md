@@ -55,8 +55,8 @@ experiments can run at the same time:
 | Slot value | OpenViking port | VikingBot port | Tau2 service port | OpenViking root | Result directory |
 |------------|-----------------|----------------|-------------------|-----------------|------------------|
 | `0` | `1933` | `18790` | `1944` | `~/.openviking` | `result/tau2/train` |
-| `1` | `1934` | `18791` | `1945` | `~/openviking_1` | `result/tau2/train_1` |
-| `N` | `1933 + N` | `18790 + N` | `1944 + N` | `~/openviking_N` | `result/tau2/train_N` |
+| `1` | `1934` | `18791` | `1945` | `~/.openviking_1` | `result/tau2/train_1` |
+| `N` | `1933 + N` | `18790 + N` | `1944 + N` | `~/.openviking_N` | `result/tau2/train_N` |
 
 Example: run slot 1 without touching slot 0 services or data:
 
@@ -75,9 +75,9 @@ bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
 Environment variables such as `OPENVIKING_PORT`, `OPENVIKING_BOT_PORT`,
 `TAU2_SERVICE_PORT`, `OPENVIKING_CONFIG_FILE`, `OPENVIKING_DATA_DIR`,
 `RESULT_DIR_NAME`, and `LOG_DIR` can still override the slot-derived defaults.
-For non-zero slots, the launcher copies the base `~/.openviking/ov.conf` when
-needed and rewrites the slot config's `storage.workspace`, `server.port`,
-`server.bot_api_url`, and `bot.ov_server.server_url`.
+For non-zero slots, the launcher copies base `~/.openviking/*.conf*` config
+files when needed and rewrites the slot config's `storage.workspace`,
+`server.port`, `server.bot_api_url`, and `bot.ov_server.server_url`.
 
 The launcher writes service logs and pid files under:
 

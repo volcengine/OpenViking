@@ -29,8 +29,8 @@ Launcher options:
             OV port     = 1933 + N
             OV bot port = 18790 + N
             tau2 port   = 1944 + N
-            OV config   = ~/openviking_N/ov.conf
-            OV data     = ~/openviking_N/data
+            OV config   = ~/.openviking_N/ov.conf
+            OV data     = ~/.openviking_N/data
             result dir  = result/tau2/train_N
 
 All remaining args are passed to benchmark/tau2/train/run_batch_train_eval.sh.
@@ -94,7 +94,7 @@ else
   DEFAULT_TAU2_SERVICE_PORT="$((1944 + SLOT))"
   DEFAULT_RESULT_DIR_NAME="train_${SLOT}"
   DEFAULT_LOG_DIR="${REPO_ROOT}/result/tau2/${DEFAULT_RESULT_DIR_NAME}/service_logs"
-  DEFAULT_SLOT_ROOT="${HOME}/openviking_${SLOT}"
+  DEFAULT_SLOT_ROOT="${HOME}/.openviking_${SLOT}"
   DEFAULT_OPENVIKING_CONFIG_FILE="${DEFAULT_SLOT_ROOT}/ov.conf"
   DEFAULT_OPENVIKING_DATA_DIR="${DEFAULT_SLOT_ROOT}/data"
 fi
@@ -141,21 +141,28 @@ prepare_slot_config() {
   fi
 
   local escaped_workspace
+  local config_dir
   escaped_workspace="$(json_string_escape "${OPENVIKING_DATA_DIR}")"
-  mkdir -p "$(dirname "${OPENVIKING_CONFIG_FILE}")" "${OPENVIKING_DATA_DIR}"
+  config_dir="$(dirname "${OPENVIKING_CONFIG_FILE}")"
+  mkdir -p "${config_dir}" "${OPENVIKING_DATA_DIR}"
+
+  if [[ -d "${HOME}/.openviking" && "${config_dir}" != "${HOME}/.openviking" ]]; then
+    local config_name
+    for config_name in ov.conf ovcli.conf ovcli.settings.conf; do
+      if [[ -f "${HOME}/.openviking/${config_name}" ]]; then
+        cp -f "${HOME}/.openviking/${config_name}" "${config_dir}/${config_name}"
+      fi
+    done
+  fi
 
   if [[ ! -f "${OPENVIKING_CONFIG_FILE}" ]]; then
-    if [[ -f "${HOME}/.openviking/ov.conf" ]]; then
-      cp -f "${HOME}/.openviking/ov.conf" "${OPENVIKING_CONFIG_FILE}"
-    else
-      cat > "${OPENVIKING_CONFIG_FILE}" <<EOF_CONFIG
+    cat > "${OPENVIKING_CONFIG_FILE}" <<EOF_CONFIG
 {
   "storage": {
     "workspace": "${escaped_workspace}"
   }
 }
 EOF_CONFIG
-    fi
   fi
 
   python - \
