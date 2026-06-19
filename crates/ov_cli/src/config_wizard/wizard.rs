@@ -5638,45 +5638,59 @@ fn prompt_select<T: ToString>(
     let mut selected = default.min(items.len().saturating_sub(1));
     let raw = RawPrompt::enter(true)?;
 
-    loop {
-        ui.render(&select_live_lines(
-            section,
-            prompt,
-            &items,
-            selected,
-            helper_lines,
-        ))?;
+    ui.render(&select_live_lines(
+        section,
+        prompt,
+        &items,
+        selected,
+        helper_lines,
+    ))?;
 
+    loop {
         match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Up => {
-                    selected = if selected == 0 {
-                        items.len().saturating_sub(1)
-                    } else {
-                        selected - 1
-                    };
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                match key.code {
+                    KeyCode::Up => {
+                        selected = if selected == 0 {
+                            items.len().saturating_sub(1)
+                        } else {
+                            selected - 1
+                        };
+                    }
+                    KeyCode::Down => selected = (selected + 1) % items.len().max(1),
+                    KeyCode::Enter => {
+                        drop(raw);
+                        ui.clear()?;
+                        return Ok(PromptResult::Value(selected));
+                    }
+                    KeyCode::Esc => {
+                        drop(raw);
+                        ui.clear()?;
+                        return Ok(PromptResult::Back);
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        drop(raw);
+                        ui.clear()?;
+                        return Ok(PromptResult::Quit);
+                    }
+                    _ => continue,
                 }
-                KeyCode::Down => selected = (selected + 1) % items.len().max(1),
-                KeyCode::Enter => {
-                    drop(raw);
-                    ui.clear()?;
-                    return Ok(PromptResult::Value(selected));
-                }
-                KeyCode::Esc => {
-                    drop(raw);
-                    ui.clear()?;
-                    return Ok(PromptResult::Back);
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    drop(raw);
-                    ui.clear()?;
-                    return Ok(PromptResult::Quit);
-                }
-                _ => {}
-            },
-            Event::Key(_) => {}
+                ui.render(&select_live_lines(
+                    section,
+                    prompt,
+                    &items,
+                    selected,
+                    helper_lines,
+                ))?;
+            }
             Event::Resize(_, _) => {
-                // Redraw on the next loop using the new terminal width.
+                ui.render(&select_live_lines(
+                    section,
+                    prompt,
+                    &items,
+                    selected,
+                    helper_lines,
+                ))?;
             }
             _ => {}
         }
