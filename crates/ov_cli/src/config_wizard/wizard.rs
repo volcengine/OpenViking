@@ -8,7 +8,7 @@ use colored::Colorize;
 use crossterm::{
     ExecutableCommand,
     cursor::{Hide, MoveToColumn, MoveUp, Show},
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{self, Clear, ClearType, disable_raw_mode, enable_raw_mode},
 };
 use unicode_width::UnicodeWidthChar;
@@ -5648,7 +5648,7 @@ fn prompt_select<T: ToString>(
         ))?;
 
         match event::read()? {
-            Event::Key(key) => match key.code {
+            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                 KeyCode::Up => {
                     selected = if selected == 0 {
                         items.len().saturating_sub(1)
@@ -5674,6 +5674,7 @@ fn prompt_select<T: ToString>(
                 }
                 _ => {}
             },
+            Event::Key(_) => {}
             Event::Resize(_, _) => {
                 // Redraw on the next loop using the new terminal width.
             }
@@ -5713,7 +5714,7 @@ fn prompt_text(
         let raw = RawPrompt::enter(false)?;
         loop {
             match event::read()? {
-                Event::Key(key) => match key.code {
+                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                     KeyCode::Enter => {
                         let chosen = if value.trim().is_empty() {
                             default_copy.trim().to_string()
@@ -5767,6 +5768,7 @@ fn prompt_text(
                     }
                     _ => {}
                 },
+                Event::Key(_) => {}
                 Event::Resize(_, _) => {
                     render_text_prompt(
                         ui,

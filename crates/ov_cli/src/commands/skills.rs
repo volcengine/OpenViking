@@ -1386,7 +1386,7 @@ fn prompt_multi_select_skills(
 ) -> Result<Option<Vec<String>>> {
     use crossterm::{
         cursor,
-        event::{self, Event, KeyCode, KeyModifiers},
+        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
         execute, terminal,
     };
 
@@ -1433,7 +1433,7 @@ fn prompt_multi_select_skills(
         io::stdout().flush()?;
 
         match event::read()? {
-            Event::Key(key) => match key.code {
+            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                 KeyCode::Up => {
                     current = if current == 0 {
                         skills.len().saturating_sub(1)
@@ -1462,6 +1462,7 @@ fn prompt_multi_select_skills(
                 }
                 _ => {}
             },
+            Event::Key(_) => {}
             Event::Resize(_, _) => {
                 // Redraw on the next loop using the new terminal width.
             }

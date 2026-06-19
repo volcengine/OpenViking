@@ -970,7 +970,7 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
 
     use crossterm::{
         cursor,
-        event::{self, Event, KeyCode, KeyModifiers},
+        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
         execute, terminal,
     };
 
@@ -1013,7 +1013,7 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
         io::stdout().flush()?;
 
         match event::read()? {
-            Event::Key(key) => match key.code {
+            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                 KeyCode::Up => {
                     selected = if selected == 0 {
                         items.len().saturating_sub(1)
@@ -1036,6 +1036,7 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
                 }
                 _ => {}
             },
+            Event::Key(_) => {}
             Event::Resize(_, _) => {
                 // Redraw on the next loop using the new terminal width.
             }
