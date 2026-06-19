@@ -1326,7 +1326,7 @@ class Session:
                                 "session_uri": self._session_uri,
                                 "account_id": self.ctx.account_id,
                                 "user_id": self.ctx.user.user_id,
-                                "role": self.ctx.role.value,
+                                "role": str(self.ctx.role),
                             },
                         )
 

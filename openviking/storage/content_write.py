@@ -466,7 +466,7 @@ class ContentWriteCoordinator:
             recursive=recursive,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            role=ctx.role.value,
+            role=str(ctx.role),
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
             coalesce_key=(

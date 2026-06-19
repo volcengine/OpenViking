@@ -12,10 +12,10 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 def test_role_values():
-    """Role enum should have correct string values."""
-    assert Role.ROOT.value == "root"
-    assert Role.ADMIN.value == "admin"
-    assert Role.USER.value == "user"
+    """Built-in roles should expose stable string values."""
+    assert str(Role.ROOT) == "root"
+    assert str(Role.ADMIN) == "admin"
+    assert str(Role.USER) == "user"
 
 
 def test_role_from_string():
@@ -23,6 +23,19 @@ def test_role_from_string():
     assert Role("root") == Role.ROOT
     assert Role("admin") == Role.ADMIN
     assert Role("user") == Role.USER
+
+
+def test_custom_role_value():
+    """Custom roles should behave like strings and support registered ranks."""
+    role = Role("reviewer")
+    assert str(role) == "reviewer"
+    assert role == "reviewer"
+
+    try:
+        Role.register("reviewer", 1)
+        assert Role("reviewer").rank == 1
+    finally:
+        Role._CUSTOM_RANK.pop("reviewer", None)
 
 
 def test_resolved_identity_defaults():

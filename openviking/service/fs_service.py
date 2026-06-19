@@ -331,7 +331,7 @@ class FSService:
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             peer_id=ctx.user.user_id,
-            role=ctx.role.value,
+            role=str(ctx.role),
             skip_vectorization=False,
             telemetry_id=telemetry_id,
             coalesce_key=build_semantic_coalesce_key(
