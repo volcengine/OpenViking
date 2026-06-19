@@ -1,10 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for memory semantic queue stall fix (issue #864).
+"""Tests for memory semantic queue stall (#864) and poison-loop (#2734) fixes.
 
-Ensures that _process_memory_directory() error paths propagate exceptions
-so that on_dequeue() always calls report_success() or report_error().
+#864: _process_memory_directory() error paths must propagate so on_dequeue()
+always calls report_success() or report_error() (never stalls).
+#2734: a context_type="memory" message whose URI is a file or a vanished
+directory is a terminal skip (report_success, no re-enqueue), while transient
+errors still requeue.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -57,6 +60,7 @@ async def test_memory_empty_dir_still_reports_success():
     processor = SemanticProcessor()
 
     fake_fs = MagicMock()
+    fake_fs.stat = AsyncMock(return_value={"isDir": True})
     fake_fs.ls = AsyncMock(return_value=[])
 
     msg = _make_msg()
@@ -93,35 +97,43 @@ async def test_memory_empty_dir_still_reports_success():
 
 
 @pytest.mark.asyncio
-async def test_memory_ls_error_reports_error():
-    """When viking_fs.ls raises a filesystem error, report_error() must be called.
+async def test_memory_non_directory_uri_skips_terminally():
+    """A context_type='memory' msg whose URI is a file is skipped, not re-enqueued (issue #2734).
 
-    Uses a real classify_api_error (no mock) — FileNotFoundError is classified
-    as permanent by the real classifier, so the processor calls report_error().
+    A memory file reindexed with mode=semantic_and_vectors enqueues a
+    context_type="memory" message whose URI is a file. stat() reports isDir=False,
+    so the guard marks the message done and reports success without ever calling
+    ls() — instead of ls()'ing the file, raising, and re-enqueuing forever (the
+    AGFS poison loop). Directory-ness is decided by stat(), not by the ls() error,
+    because ls() (_ls_original) collapses every failure into NotFoundError and
+    therefore cannot distinguish a file/missing target from a transient error.
     """
     processor = SemanticProcessor()
 
     fake_fs = MagicMock()
-    fake_fs.ls = AsyncMock(side_effect=FileNotFoundError("/memories not found"))
+    fake_fs.stat = AsyncMock(return_value={"name": "android-dual-host.md", "isDir": False})
+    fake_fs.ls = AsyncMock(return_value=[])
 
-    msg = _make_msg()
+    msg = _make_msg(uri="viking://user/usr1/memories/handoffs/active/proj/android-dual-host.md")
     data = _build_data(msg)
 
     success_called = False
+    requeue_called = False
+    error_called = False
 
     def on_success():
         nonlocal success_called
         success_called = True
 
-    error_called = False
-    error_info = {}
+    def on_requeue():
+        nonlocal requeue_called
+        requeue_called = True
 
     def on_error(error_msg, error_data=None):
-        nonlocal error_called, error_info
+        nonlocal error_called
         error_called = True
-        error_info["msg"] = error_msg
 
-    processor.set_callbacks(on_success, lambda: None, on_error)
+    processor.set_callbacks(on_success, on_requeue, on_error)
 
     with (
         patch(
@@ -135,9 +147,64 @@ async def test_memory_ls_error_reports_error():
     ):
         await processor.on_dequeue(data)
 
-    assert error_called, "report_error() was not called when ls() raised an exception"
-    assert not success_called, "report_success() should not be called on ls() error"
-    assert "/memories not found" in error_info["msg"]
+    assert success_called, "a non-directory memory URI must report success (terminal skip)"
+    assert not requeue_called, "a non-directory memory URI must NOT be re-enqueued (no poison loop)"
+    assert not error_called, "a non-directory memory URI must not report an error"
+    fake_fs.ls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_memory_missing_directory_skips_terminally():
+    """A vanished memory directory (stat raises not-found) is a terminal skip.
+
+    If the directory disappeared between enqueue and processing there is nothing to
+    summarize, so the message is acked rather than re-enqueued. Transient stat()
+    errors are NOT swallowed here — they fall through to ls() and requeue (see
+    test_memory_ls_transient_error_requeues).
+    """
+    processor = SemanticProcessor()
+
+    fake_fs = MagicMock()
+    fake_fs.stat = AsyncMock(side_effect=FileNotFoundError("gone"))
+    fake_fs.ls = AsyncMock(return_value=[])
+
+    msg = _make_msg()
+    data = _build_data(msg)
+
+    success_called = False
+    requeue_called = False
+    error_called = False
+
+    def on_success():
+        nonlocal success_called
+        success_called = True
+
+    def on_requeue():
+        nonlocal requeue_called
+        requeue_called = True
+
+    def on_error(error_msg, error_data=None):
+        nonlocal error_called
+        error_called = True
+
+    processor.set_callbacks(on_success, on_requeue, on_error)
+
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=fake_fs,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            return_value=None,
+        ),
+    ):
+        await processor.on_dequeue(data)
+
+    assert success_called, "a vanished memory directory must report success (terminal skip)"
+    assert not requeue_called, "a vanished memory directory must NOT be re-enqueued"
+    assert not error_called, "a vanished memory directory must not report an error"
+    fake_fs.ls.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -152,6 +219,9 @@ async def test_memory_ls_transient_error_requeues():
     processor = SemanticProcessor()
 
     fake_fs = MagicMock()
+    # stat reports a real directory, so the guard proceeds to ls(); the transient
+    # ls() error must still requeue (it must NOT be collapsed into a terminal skip).
+    fake_fs.stat = AsyncMock(return_value={"isDir": True})
     fake_fs.ls = AsyncMock(side_effect=RuntimeError("500 Internal Server Error"))
 
     msg = _make_msg(telemetry_id="tel-1")
@@ -206,6 +276,7 @@ async def test_memory_write_error_reports_error():
     processor = SemanticProcessor()
 
     fake_fs = MagicMock()
+    fake_fs.stat = AsyncMock(return_value={"isDir": True})
     fake_fs.ls = AsyncMock(return_value=[{"name": "file1.md", "isDir": False}])
     fake_fs.read_file = AsyncMock(return_value="some content")
     fake_fs.write_file = AsyncMock(side_effect=PermissionError("Permission denied"))

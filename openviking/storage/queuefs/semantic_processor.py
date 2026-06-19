@@ -30,6 +30,7 @@ from openviking.parse.parsers.media.utils import (
     get_media_type,
 )
 from openviking.prompts import render_prompt
+from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -540,6 +541,35 @@ class SemanticProcessor(DequeueHandlerBase):
                 request_wait_tracker.mark_semantic_done(msg.telemetry_id, msg.id)
 
         try:
+            # Decide directory-ness with stat(), not by classifying the ls() error:
+            # ls() routes through _ls_original, which collapses EVERY failure —
+            # transient AGFS/network errors included — into NotFoundError, so the
+            # ls() error cannot distinguish "not a directory / gone" from "retry me".
+            # stat() can: it returns isDir for an existing path and re-raises transient
+            # errors as-is, raising not-found only when the path is genuinely missing.
+            # A context_type="memory" message whose URI is a file (a memory file
+            # reindexed with mode=semantic_and_vectors) or a vanished directory has no
+            # directory to summarize: mark it done and skip so it acks instead of
+            # re-enqueuing forever (the AGFS-persisted poison loop). A transient stat()
+            # error falls through to ls(), which still raises so on_dequeue requeues —
+            # genuine retries are preserved.
+            try:
+                dir_stat = await viking_fs.stat(dir_uri, ctx=ctx)
+            except Exception as e:
+                if is_not_found_error(e):
+                    logger.warning(f"Skipping memory semantic generation for {dir_uri}: no longer exists")
+                    _mark_done()
+                    return
+                dir_stat = None
+            if dir_stat is not None and not dir_stat.get("isDir", False):
+                logger.warning(
+                    f"Skipping memory semantic generation for non-directory URI {dir_uri}: a memory "
+                    "file was likely reindexed with mode=semantic_and_vectors; memory files should "
+                    "use mode=vectors_only"
+                )
+                _mark_done()
+                return
+
             try:
                 entries = await viking_fs.ls(dir_uri, node_limit=LS_ALL_NODES, ctx=ctx)
             except Exception as e:
