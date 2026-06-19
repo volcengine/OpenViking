@@ -248,6 +248,28 @@ openviking-server doctor
 | `circuit_breaker.reset_timeout` | float | 基础恢复等待时间（秒，默认：`60`） |
 | `circuit_breaker.max_reset_timeout` | float | 指数退避后的最大恢复等待时间（秒，默认：`600`） |
 
+#### Embedding 自动重建
+
+当配置中的 embedding 维度发生变化时（例如从 1024 维模型切换到 1536 维模型），现有的向量集合会变得不兼容。OpenViking 可以通过删除并用新维度重新创建集合来自动重建。
+
+```json
+{
+  "embedding": {
+    "auto_rebuild": true
+  }
+}
+```
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `auto_rebuild` | bool | 设为 `true` 时，检测到 embedding 维度不匹配会自动删除并重建集合。设为 `false` 时，抛出 `EmbeddingRebuildRequiredError` 并需要手动处理。 | `false` |
+
+> **说明：** 启用 `auto_rebuild` 后，只会删除并重建**向量索引**，原始源文件（存储在 RAGFS 中）**不受影响** — 文件内容保持完整。重建后，OpenViking 会使用新的模型/维度重新嵌入文件以生成向量。
+
+如果 `auto_rebuild` 为 `false`（默认值）且检测到维度不匹配，OpenViking 会抛出 `EmbeddingRebuildRequiredError`，并提示以下处理方式：
+- 设置 `embedding.auto_rebuild=true` 自动重建向量索引
+- 手动删除并重新创建向量集合
+
 **可用模型**
 
 | 模型 | 维度 | 输入类型 | 说明 |
