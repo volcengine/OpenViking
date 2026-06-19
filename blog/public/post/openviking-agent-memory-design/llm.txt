@@ -10,21 +10,21 @@ Cover image:
 /assets/covers/openviking-agent-memory-design.png
 
 Article images:
-/post/openviking-agent-memory-design/images/figure-01.webp
-/post/openviking-agent-memory-design/images/figure-02.webp
-/post/openviking-agent-memory-design/images/figure-03.webp
-/post/openviking-agent-memory-design/images/figure-04.webp
-/post/openviking-agent-memory-design/images/figure-05.webp
-/post/openviking-agent-memory-design/images/figure-06.webp
+/post/openviking-agent-memory-design/images/figure-01.png
+/post/openviking-agent-memory-design/images/figure-02.png
+/post/openviking-agent-memory-design/images/figure-03.png
+/post/openviking-agent-memory-design/images/figure-04.png
+/post/openviking-agent-memory-design/images/figure-05.png
+/post/openviking-agent-memory-design/images/figure-06.png
 /post/openviking-agent-memory-design/images/figure-07.png
-/post/openviking-agent-memory-design/images/figure-08.webp
-/post/openviking-agent-memory-design/images/figure-09.webp
-/post/openviking-agent-memory-design/images/figure-10.webp
-/post/openviking-agent-memory-design/images/figure-11.webp
-/post/openviking-agent-memory-design/images/figure-12.webp
-/post/openviking-agent-memory-design/images/figure-13.webp
-/post/openviking-agent-memory-design/images/figure-14.webp
-/post/openviking-agent-memory-design/images/figure-15.webp
+/post/openviking-agent-memory-design/images/figure-08.png
+/post/openviking-agent-memory-design/images/figure-09.png
+/post/openviking-agent-memory-design/images/figure-10.png
+/post/openviking-agent-memory-design/images/figure-11.png
+/post/openviking-agent-memory-design/images/figure-12.png
+/post/openviking-agent-memory-design/images/figure-13.png
+/post/openviking-agent-memory-design/images/figure-14.png
+/post/openviking-agent-memory-design/images/figure-15.png
 
 ## Thesis
 

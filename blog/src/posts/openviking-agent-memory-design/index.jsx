@@ -124,6 +124,15 @@ function MemoryDesignStyles() {
         font-size: 15px;
         line-height: 1.58;
       }
+      .ovamd .b-figure,
+      .ovamd .b-figure__media {
+        max-width: 100%;
+      }
+      .ovamd .b-figure__media img {
+        width: 100%;
+        height: auto;
+        object-fit: contain;
+      }
       .ovamd .b-figure--wide {
         margin-left: min(-7vw, -64px);
         margin-right: min(-7vw, -64px);
@@ -253,7 +262,7 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       })}</P>
 
       <Figure
-        src={img('figure-01.webp')}
+        src={img('figure-01.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'A generated frontend page drifting away from the intended style', zh: '新会话生成的前端页面偏离原本风格' })}
@@ -283,7 +292,7 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       })}</P>
 
       <Figure
-        src={img('figure-02.webp')}
+        src={img('figure-02.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'Design preferences emerging through agent collaboration', zh: 'Agent 协作过程中产生设计偏好' })}
@@ -320,7 +329,7 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       />
 
       <Figure
-        src={img('figure-03.webp')}
+        src={img('figure-03.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'Extracted memories organized into semantic categories', zh: '提取后的记忆按语义类型组织' })}
@@ -332,7 +341,7 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       })}</P>
 
       <Figure
-        src={img('figure-04.webp')}
+        src={img('figure-04.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'Intent analysis routes a user query to the right memory space', zh: '意图分析把用户请求路由到正确记忆空间' })}
@@ -346,7 +355,7 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       </Callout>
 
       <Figure
-        src={img('figure-05.webp')}
+        src={img('figure-05.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'A memory tree narrows retrieval by semantic path', zh: '记忆树按语义路径逐层缩小检索范围' })}
@@ -367,7 +376,7 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       })}</P>
 
       <Figure
-        src={img('figure-06.webp')}
+        src={img('figure-06.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'A new session without OpenViking loses earlier context', zh: '未接入 OpenViking 的新会话丢失历史记忆' })}
@@ -387,7 +396,7 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       })}</P>
 
       <Figure
-        src={img('figure-08.webp')}
+        src={img('figure-08.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'Sub-agents sharing one project memory', zh: '多个 SubAgent 共享同一份项目记忆' })}
@@ -407,7 +416,7 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       })}</P>
 
       <Figure
-        src={img('figure-06.webp')}
+        src={img('figure-06.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'A Trae rule that cannot be inherited by Claude Code without shared memory', zh: '未接入 OpenViking 时 Trae 规范无法被 Claude Code 继承' })}
@@ -415,19 +424,19 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
 
       <div className="ovamd-split">
         <Figure
-          src={img('figure-09.webp')}
+          src={img('figure-09.png')}
           frame="soft"
           alt={T({ en: 'Tool output before shared memory alignment', zh: '共享记忆对齐前的工具输出' })}
         />
         <Figure
-          src={img('figure-10.webp')}
+          src={img('figure-10.png')}
           frame="soft"
           alt={T({ en: 'Tool output after shared memory alignment', zh: '共享记忆对齐后的工具输出' })}
         />
       </div>
 
       <Figure
-        src={img('figure-11.webp')}
+        src={img('figure-11.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'Trae and Claude Code continue from one memory base after OpenViking is connected', zh: '接入 OpenViking 后 Trae 和 Claude Code 基于同一份记忆继续协作' })}
@@ -450,14 +459,14 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       })}</P>
 
       <Figure
-        src={img('figure-12.webp')}
+        src={img('figure-12.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'Playground collaboration decisions are written into OpenViking memory', zh: 'Playground 协作决策写入 OpenViking 记忆' })}
       />
 
       <Figure
-        src={img('figure-13.webp')}
+        src={img('figure-13.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'A new playground task recalls prior style and component rules', zh: '新 Playground 任务召回旧的风格和组件规范' })}
@@ -491,7 +500,7 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       />
 
       <Figure
-        src={img('figure-14.webp')}
+        src={img('figure-14.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'Trae MCP configuration screen for OpenViking', zh: 'Trae 中配置 OpenViking MCP' })}
@@ -505,7 +514,7 @@ const OpenVikingAgentMemoryDesign = ({ t }) => {
       </Callout>
 
       <Figure
-        src={img('figure-15.webp')}
+        src={img('figure-15.png')}
         size="wide"
         frame="soft"
         alt={T({ en: 'OpenViking community QR code', zh: 'OpenViking 社区二维码' })}
