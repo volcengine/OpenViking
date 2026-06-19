@@ -18,7 +18,7 @@ def test_route_skills():
     router = KnowledgeRouter()
     k = _make(category="skills", title="PostgreSQL Config")
     uri = router.route(k)
-    assert uri.startswith("viking://skills/general/")
+    assert uri.startswith("viking://resources/skills/general/")
     assert uri.endswith(".md")
 
 
@@ -26,7 +26,7 @@ def test_route_skills_with_source_tool():
     router = KnowledgeRouter()
     k = _make(category="skills", title="PostgreSQL Config", source_tool="claude_code")
     uri = router.route(k)
-    assert uri.startswith("viking://skills/claude_code/")
+    assert uri.startswith("viking://resources/skills/claude_code/")
     assert uri.endswith(".md")
 
 
@@ -42,7 +42,7 @@ def test_route_memories_global():
     router = KnowledgeRouter()
     k = _make(category="memories", title="Global Memory")
     uri = router.route(k)
-    assert uri.startswith("viking://memories/global/")
+    assert uri.startswith("viking://resources/memories/global/")
 
 
 def test_route_resources():
@@ -71,3 +71,11 @@ def test_sanitize_filename():
     router = KnowledgeRouter()
     assert router._sanitize_filename('file<>:name') == 'file___name'
     assert router._sanitize_filename("a" * 100) == "a" * 50
+
+
+def test_sanitize_filename_non_ascii():
+    router = KnowledgeRouter()
+    result = router._sanitize_filename("中文标题测试")
+    assert len(result) == 16
+    assert result.isascii()
+    assert all(c in "0123456789abcdef" for c in result)

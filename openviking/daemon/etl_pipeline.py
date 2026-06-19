@@ -46,15 +46,21 @@ class BatchETLPipeline:
         if not turns:
             return []
 
-        # Step 3: Extract knowledge in parallel
-        tasks = [self.extractor.extract(turn) for turn in turns]
+        # Step 3: Extract knowledge with limited concurrency (2 parallel VLM calls max)
+        sem = asyncio.Semaphore(2)
+
+        async def _guarded_extract(turn):
+            async with sem:
+                return await self.extractor.extract(turn)
+
+        tasks = [_guarded_extract(turn) for turn in turns]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Step 4: Filter errors and deduplicate
         extracted: List[ExtractedKnowledge] = []
         for result in results:
             if isinstance(result, Exception):
-                logger.error("Extraction failed: %s", result)
+                logger.error("Extraction failed: %s", result, exc_info=result)
                 continue
 
             if result is not None and not self.deduplicator.is_duplicate(result):

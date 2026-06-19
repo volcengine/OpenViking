@@ -1,6 +1,7 @@
 """
 Route extracted knowledge to appropriate viking:// URIs based on category and project.
 """
+import hashlib
 import re
 from typing import Optional
 
@@ -17,10 +18,10 @@ class KnowledgeRouter:
         """
         Determine the target URI for a knowledge item.
 
-        Routing rules:
-        - skills -> viking://skills/<source_tool>/<title>.md
-        - memories (with project) -> viking://memories/projects/<project>/decisions.md
-        - memories (no project) -> viking://memories/global/<title>.md
+        Routing rules (all under resources/ scope):
+        - skills -> viking://resources/skills/<source_tool>/<title>.md
+        - memories (with project) -> viking://resources/memories/<project>/decisions.md
+        - memories (no project) -> viking://resources/memories/global/<title>.md
         - resources -> viking://resources/<tech_stack>/<title>.md
         """
         category = knowledge.category
@@ -30,14 +31,14 @@ class KnowledgeRouter:
 
         if category == "skills":
             safe_source = self._sanitize_filename(source)
-            return f"viking://skills/{safe_source}/{title}.md"
+            return f"viking://resources/skills/{safe_source}/{title}.md"
 
         elif category == "memories":
             if project_name:
                 safe_project = self._sanitize_filename(project_name)
-                return f"viking://memories/projects/{safe_project}/decisions.md"
+                return f"viking://resources/memories/{safe_project}/decisions.md"
             else:
-                return f"viking://memories/global/{title}.md"
+                return f"viking://resources/memories/global/{title}.md"
 
         elif category == "resources":
             entity_links = knowledge.entity_links
@@ -50,7 +51,12 @@ class KnowledgeRouter:
 
     @staticmethod
     def _sanitize_filename(name: str) -> str:
-        """Sanitize a string for use as a filename."""
+        """Sanitize a string for use as a filename. Non-ASCII names are replaced with a short hash."""
         sanitized = re.sub(r'[<>:"/\\|?*]', '_', name)
         sanitized = sanitized.strip().replace(' ', '_')
-        return sanitized[:50]
+        sanitized = sanitized[:50]
+        # If any non-ASCII characters remain, use a truncated hash instead
+        if not sanitized.isascii():
+            name_hash = hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
+            sanitized = name_hash
+        return sanitized

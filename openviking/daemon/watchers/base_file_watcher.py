@@ -93,6 +93,13 @@ class BaseFileWatcher(ABC):
         """Additional filtering. Override for tool-specific rules. Default: keep all."""
         return True
 
+    def _post_normalize(self, event: Dict, file_path: str) -> Dict:
+        """Hook for subclasses to enrich normalized events with file-path context.
+        Called after normalize_event() and before filter_event().
+        Default: return event unchanged.
+        """
+        return event
+
     def matches_file_pattern(self, file_path: str) -> bool:
         """Check if file matches the watcher's file pattern."""
         filename = os.path.basename(file_path)
@@ -137,6 +144,10 @@ class BaseFileWatcher(ABC):
 
             new_position = cursor.last_position + len(new_content.encode("utf-8"))
 
+            logger.info("[%s] Processing %s: %d bytes new content from pos %d",
+                           self.tool_name, file_path, len(new_content.encode("utf-8")), cursor.last_position)
+
+            event_count = 0
             for line in new_content.splitlines():
                 line = line.strip()
                 if not line:
@@ -150,6 +161,8 @@ class BaseFileWatcher(ABC):
                 if normalized is None:
                     continue
 
+                normalized = self._post_normalize(normalized, file_path)
+
                 if not self.filter_event(normalized):
                     continue
 
@@ -158,13 +171,15 @@ class BaseFileWatcher(ABC):
 
                 byte_size = len(line.encode("utf-8"))
                 self._buffer.add_line(normalized, byte_size)
+                event_count += 1
 
+            logger.info("[%s] Added %d events to buffer (total: %d, trigger at %d)",
+                           self.tool_name, event_count, len(self._buffer.lines), self.batch_trigger_lines)
             self.cursor_manager.update_cursor(file_path, new_position)
-
             self._check_batch_trigger()
 
         except Exception as e:
-            logger.error("[%s] Error processing file %s: %s", self.tool_name, file_path, e)
+            logger.error("[%s] Error processing file %s: %s", self.tool_name, file_path, e, exc_info=True)
 
     def _check_batch_trigger(self):
         """Check if batch trigger conditions are met."""
@@ -183,10 +198,10 @@ class BaseFileWatcher(ABC):
             return
 
         events = self._buffer.lines.copy()
-        self._buffer.clear()
 
         logger.info("[%s] Flushing %d events", self.tool_name, len(events))
         try:
             self.batch_callback(events)
+            self._buffer.clear()
         except Exception as e:
-            logger.error("[%s] Batch callback failed: %s", self.tool_name, e)
+            logger.error("[%s] Batch callback failed: %s", self.tool_name, e, exc_info=True)

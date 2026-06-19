@@ -134,7 +134,7 @@ def test_knowledge_router_all_categories():
     assert "skills/claude_code" in router.route(skill)
 
     mem_proj = ExtractedKnowledge(status="EXTRACTED", category="memories", title="Arch", content="...", project_name="myapp")
-    assert "memories/projects/myapp" in router.route(mem_proj)
+    assert "memories/myapp" in router.route(mem_proj)
 
     mem_global = ExtractedKnowledge(status="EXTRACTED", category="memories", title="General", content="...")
     assert "memories/global" in router.route(mem_global)

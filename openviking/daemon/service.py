@@ -66,10 +66,12 @@ class DaemonService:
         self._running = False
         self._etl_task: Optional[asyncio.Task] = None
         self._batch_queue: asyncio.Queue = asyncio.Queue()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def start(self):
         """Start the Daemon service with all configured watchers."""
         logger.info("Starting OpenViking Active Daemon...")
+        self._loop = asyncio.get_running_loop()
 
         self.cursor_manager = CursorManager(self.db_path)
         self.etl_pipeline = BatchETLPipeline()
@@ -101,7 +103,7 @@ class DaemonService:
                 self.watchers.append(watcher)
                 logger.info("Watcher started: %s -> %s", wc.tool_name, watch_dir)
             except Exception as e:
-                logger.warning("Failed to start watcher %s: %s", wc.tool_name, e)
+                logger.warning("Failed to start watcher %s: %s", wc.tool_name, e, exc_info=True)
 
         self._running = True
         logger.info("Daemon started with %d watcher(s)", len(self.watchers))
@@ -128,11 +130,16 @@ class DaemonService:
         logger.info("Daemon stopped")
 
     def _enqueue_batch(self, events):
-        """Sync callback from watcher thread - puts events onto async queue."""
+        """Sync callback from watcher thread - thread-safe enqueue onto async queue."""
         try:
-            self._batch_queue.put_nowait(events)
+            logger.info("_enqueue_batch: received %d events, queue size before: %d",
+                        len(events), self._batch_queue.qsize())
+            if self._loop is not None and self._loop.is_running():
+                self._loop.call_soon_threadsafe(self._batch_queue.put_nowait, events)
+            else:
+                self._batch_queue.put_nowait(events)
         except Exception as e:
-            logger.error("Failed to enqueue batch: %s", e)
+            logger.error("Failed to enqueue batch: %s", e, exc_info=True)
 
     async def _etl_loop(self):
         """Background loop that processes batches from the queue."""
@@ -148,6 +155,9 @@ class DaemonService:
 
             if events is None:
                 break
+
+            logger.info("ETL loop: dequeued %d events, queue size after: %d",
+                        len(events), self._batch_queue.qsize())
 
             try:
                 extracted = await self.etl_pipeline.process_batch(events)
@@ -172,7 +182,7 @@ class DaemonService:
                         else:
                             logger.warning("Failed to write: %s", knowledge.title)
                     except Exception as e:
-                        logger.error("Error writing knowledge: %s", e)
+                        logger.error("Error writing knowledge: %s", e, exc_info=True)
 
             except Exception as e:
                 logger.error("Error in ETL processing: %s", e, exc_info=True)

@@ -1,6 +1,7 @@
 """
 Data models for OpenViking Active Daemon.
 """
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -36,6 +37,8 @@ class BatchBuffer:
     created_at: float = 0.0
 
     def add_line(self, line: Dict[str, Any], byte_size: int):
+        if self.is_empty():
+            self.created_at = time.time()
         self.lines.append(line)
         self.byte_count += byte_size
 

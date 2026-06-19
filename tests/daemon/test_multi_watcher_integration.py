@@ -91,8 +91,8 @@ def test_claude_code_events_have_tool_name(tmp_path):
 
     test_file = tmp_path / "session.jsonl"
     test_file.write_text(
-        '{"role": "user", "content": "Hello from CC"}\n'
-        '{"role": "assistant", "content": "Hi from CC"}\n'
+        '{"type": "user", "message": {"role": "user", "content": "Hello from CC"}}\n'
+        '{"type": "assistant", "message": {"role": "assistant", "content": "Hi from CC"}}\n'
     )
     watcher._process_file(str(test_file))
 
