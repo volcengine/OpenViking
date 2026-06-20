@@ -293,6 +293,13 @@ class BasePollingWatcher(ABC):
                 if raw_events:
                     new_position = cursor.last_position
                     for raw in raw_events:
+                        # ⚠️ 关键：先推进 cursor，再做 normalize/filter。
+                        # 否则被过滤掉的条目（如空文本工具调用）如果恰好是最高 rowid，
+                        # 会导致 cursor 永远不越过它，每次 poll 都重复查出。
+                        pos = raw.get("_cursor_position", 0)
+                        if pos > new_position:
+                            new_position = pos
+
                         normalized = self.normalize_event(raw)
                         if normalized is None:
                             continue
@@ -300,11 +307,6 @@ class BasePollingWatcher(ABC):
                             continue
                         normalized["tool_name"] = self._tool_name
                         self._buffer.add_line(normalized, byte_size=0)
-
-                        # 追踪最大 cursor position
-                        pos = raw.get("_cursor_position", 0)
-                        if pos > new_position:
-                            new_position = pos
 
                     # 更新 cursor
                     if new_position > cursor.last_position:
@@ -343,6 +345,7 @@ class BasePollingWatcher(ABC):
 |--------|------|------|
 | 轮询机制 | `Thread` + `Event.wait(interval)` | 与 watchdog Observer 平级，DaemonService 已处理线程安全 |
 | cursor key | 使用 `watch_dir` 字符串 | 与文件 watcher 的 `file_path` 互不冲突，CursorManager 无需改动 |
+| cursor 推进时机 | **先推进再 normalize/filter** | ⚠️ 实测发现：被过滤掉的条目（如空文本工具调用）如果是最高 rowid，不先推进会导致无限重复查询 |
 | DB 连接管理 | 子类在 `query_new_events` 内自行 open/close | SQLite `?mode=ro` 只读，避免锁冲突；CursorManager 已有 per-call connect 模式 |
 | `_cursor_position` 约定 | raw event dict 中必须携带 | 让子类灵活定义位置语义（rowid/timestamp/offset），基类只取 max |
 | `BatchBuffer` 复用 | 直接用现有实现 | `byte_size=0`（DB 无字节偏移概念），time trigger 正常工作 |
@@ -537,6 +540,36 @@ sqlite3 "%APPDATA%/Cursor/User/globalStorage/state.vscdb" \
   "SELECT [key], value FROM cursorDiskKV WHERE [key] LIKE 'bubbleId:%' LIMIT 3"
 ```
 
+**⚠️ `_discover_composer_ids` 待修正（实测发现）**：
+
+真实数据验证发现 `composer.composerData` **不在** 工作区 ItemTable 中，而是以 `composerData:<uuid>` 的形式存在全局 DB 的 `cursorDiskKV` 表中（13 条记录）。工作区 ItemTable 只有 `composer.composerHeaders`。
+
+当前实现（查 workspace ItemTable）不会报错但收集不到数据。主流程不依赖此辅助方法（直接扫描 bubbleId:*），但如需使用应改为：
+
+```python
+def _discover_composer_ids(self) -> List[str]:
+    """从全局 DB cursorDiskKV 查询 composerData:* keys。"""
+    composer_ids = []
+    db_path = self.resolve_db_path()
+    if not db_path:
+        return composer_ids
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT [key] FROM cursorDiskKV WHERE [key] LIKE 'composerData:%'"
+            ).fetchall()
+            for (key,) in rows:
+                cid = key.split(":", 1)[1]
+                if cid:
+                    composer_ids.append(cid)
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return composer_ids
+```
+
 #### 3.3 WindsurfDBWatcher（P2，待调研）
 
 **⚠️ Windsurf 的具体表名和 key 模式尚无公开文档。** Phase 4 需先 dump 真实 state.vscdb 确认：
@@ -655,24 +688,26 @@ CREATE TABLE IF NOT EXISTS file_cursors (
 
 ### 四、实施任务清单
 
-#### Phase 1：基础设施（BasePollingWatcher + 测试框架）
+#### Phase 1：基础设施（BasePollingWatcher + 测试框架）— ✅ 已完成
 
-| # | 任务 | 文件 | 预估 |
+| # | 任务 | 文件 | 状态 |
 |---|------|------|------|
-| 1.1 | 创建 `BasePollingWatcher` 基类 | `watchers/base_polling_watcher.py` | ~120 行 |
-| 1.2 | 创建 `test_base_polling_watcher.py` 单元测试 | `tests/daemon/` | mock poll loop / buffer / flush / Protocol 验证 |
+| 1.1 | 创建 `BasePollingWatcher` 基类 | `watchers/base_polling_watcher.py` | ✅ ~170 行 |
+| 1.2 | 创建 `test_base_polling_watcher.py` 单元测试 | `tests/daemon/` | ✅ 12 tests passing |
 
-#### Phase 2：CursorDBWatcher（P0 核心）
+#### Phase 2：CursorDBWatcher（P0 核心）— ✅ 已完成
 
-| # | 任务 | 文件 | 预估 |
+| # | 任务 | 文件 | 状态 |
 |---|------|------|------|
-| 2.1 | ~~调研~~：dump 真实 Cursor state.vscdb 结构 | — | **已完成**（见 §2.1） |
-| 2.2 | 创建 `CursorDBWatcher`（双库架构、cursorDiskKV、bubbleId 解析） | `watchers/cursor_db_watcher.py` | ~150 行 |
-| 2.3 | 单元测试 `test_cursor_db_watcher.py` | `tests/daemon/` | 创建临时双库 SQLite → mock bubble 数据 → normalize 验证 |
-| 2.4 | 集成测试：完整 poll 周期 → batch_callback 验证 | 同上 | |
-| 2.5 | Registry 注册 `cursor_db` | `watchers/registry.py` | 5 行 |
+| 2.1 | dump 真实 Cursor state.vscdb 结构 | — | ✅ 见 §2.1 + §4.1 |
+| 2.2 | 创建 `CursorDBWatcher`（双库架构、cursorDiskKV、bubbleId 解析） | `watchers/cursor_db_watcher.py` | ✅ ~170 行 |
+| 2.3 | 单元测试 `test_cursor_db_watcher.py` | `tests/daemon/` | ✅ 16 tests passing |
+| 2.4 | 集成测试：完整 poll 周期 → batch_callback 验证 | 同上 | ✅ `test_full_poll_cycle` |
+| 2.5 | Registry 注册 `cursor_db` | `watchers/registry.py` | ✅ |
+| 2.6 | **E2E 验证**：真实 state.vscdb 端到端 | — | ✅ 见 §4.1 |
+| 2.7 | **Bug 修复**：cursor 推进时机（先于 normalize） | `base_polling_watcher.py` | ✅ 见 §4.2 |
 
-#### Phase 3：TraeDBWatcher（P1）
+#### Phase 3：TraeDBWatcher（P1）— 🔲 待实施
 
 | # | 任务 | 文件 | 预估 |
 |---|------|------|------|
@@ -680,7 +715,7 @@ CREATE TABLE IF NOT EXISTS file_cursors (
 | 3.2 | `normalize_event`：处理 `content` 为空的 fallback（`agentTaskContent.proposalText`） | 同上 | |
 | 3.3 | 单元测试 + Registry 注册 `trae_db` | `tests/daemon/test_trae_db_watcher.py` | |
 
-#### Phase 4：WindsurfDBWatcher（P2，需先 dump 确认格式）
+#### Phase 4：WindsurfDBWatcher（P2，需先 dump 确认格式）— 🔲 待实施
 
 | # | 任务 | 文件 | 预估 |
 |---|------|------|------|
@@ -688,13 +723,74 @@ CREATE TABLE IF NOT EXISTS file_cursors (
 | 4.2 | 创建 `WindsurfDBWatcher` | `watchers/windsurf_db_watcher.py` | ~30 行（若格式同 Cursor） |
 | 4.3 | 单元测试 + Registry 注册 `windsurf_db` | | |
 
-#### Phase 5：集成验证
+#### Phase 5：集成验证 — ✅ 部分完成
 
-| # | 任务 | 文件 | 预估 |
+| # | 任务 | 文件 | 状态 |
 |---|------|------|------|
-| 5.1 | 更新 `test_multi_watcher_integration.py`：加入 DB watcher 测试 | `tests/daemon/` | |
-| 5.2 | 端到端：真实 Cursor 对话 → watcher → ETL → viking:// | 手动验证 | |
-| 5.3 | 更新 `test_all_watchers_registered` 验证新增 watcher | | 2 行 |
+| 5.1 | 更新 `test_multi_watcher_integration.py`：加入 DB watcher 测试 | `tests/daemon/` | ✅ 3 new tests |
+| 5.2 | 端到端：真实 Cursor 对话 → watcher → ETL → viking:// | 手动验证 | 🔲 需 `serve --with-daemon` |
+| 5.3 | 更新 `test_all_watchers_registered` 验证新增 watcher | | ✅ 6 watchers |
+| 5.4 | `_discover_composer_ids` 修正为查 cursorDiskKV | `cursor_db_watcher.py` | 🔲 低优先级 |
+| 5.5 | 全量回归测试（53 tests） | — | ✅ all passing |
+
+---
+
+### 四.一、实施记录
+
+#### 4.1 真实数据 E2E 验证（2026-06-20）
+
+使用本机 `C:\Users\20145\AppData\Roaming\Cursor\User\globalStorage\state.vscdb`（1.4MB）对 CursorDBWatcher 进行端到端验证。
+
+**DB 概况**：
+
+| 表 | 行数 | 说明 |
+|----|------|------|
+| `ItemTable` | 128 | workspace 元数据（`composer.composerHeaders` 等） |
+| `cursorDiskKV` | 104 | 对话内容 + composer 数据 |
+
+**cursorDiskKV key 分布**：
+
+| 前缀 | 数量 | 说明 |
+|------|------|------|
+| `agentKv:blob:*` | 66 | Agent 知识片段 |
+| `bubbleId:*` | 20 | 对话消息（5 条有文本，15 条空文本/工具调用） |
+| `composerData:*` | 13 | 会话元数据（⚠️ 不在 ItemTable 中） |
+| `checkpointId:*` | 1 | 检查点 |
+| `inlineDiffs-*` | 4 | 内联 diff |
+
+**E2E 测试结果**：
+
+| 检查项 | 结果 |
+|--------|------|
+| DB 发现 & 连接 | ✅ PASS |
+| 首次 poll 查出 20 条 bubbleId | ✅ PASS |
+| normalize 保留 5 条（过滤 15 条空文本工具调用） | ✅ PASS |
+| batch 回调正确投递 5 条事件 | ✅ PASS |
+| cursor 持久化到 rowid=91 | ✅ PASS |
+| 二次 poll 幂等（0 条新数据） | ✅ PASS |
+| cursor 二次 poll 不变 | ✅ PASS |
+| 角色分布 user=1, assistant=4 | ✅ PASS |
+| 53 项单元测试全部通过，0 回归 | ✅ PASS |
+
+**真实 bubble 格式确认**：
+- `_v: 3` ✓
+- `type: 1`（user）/ `2`（assistant） ✓
+- `text` 字段包含对话内容 ✓
+- `createdAt` ISO-8601 时间戳 ✓
+- `toolFormerData` 对象（工具调用，text 为空）✓
+- `capabilityType: 15`（工具调用标记）✓
+
+#### 4.2 Cursor 推进 Bug 修复
+
+**问题**：`_poll_loop` 中 cursor 只在 normalize 保留事件后才推进。被过滤掉的条目（如空文本工具调用 bubble，`text: ""`）如果恰好是批次中最高 rowid，会导致 cursor 永远不越过它，每次 poll 都重复查出该条目。
+
+**症状**：E2E 验证中首次 poll 后 cursor 停在 rowid=90（最后一条有文本的 bubble），但 rowid=91 是一条空文本工具调用 bubble。第二次 poll 返回 1 条 raw event（虽然 normalize 正确返回 None 不产生输出），但浪费查询且 cursor 不推进。
+
+**修复**：将 `_cursor_position` 追踪提前到 normalize/filter 之前。无论事件是否被保留，cursor 都推进到已扫描的最大 rowid。
+
+**影响范围**：`base_polling_watcher.py` 的 `_poll_loop` 方法。所有 BasePollingWatcher 子类（包括未来的 Trae、Windsurf watcher）均受益。
+
+**验证**：修复后二次 poll 返回 0 条 raw event，cursor 稳定在 rowid=91。
 
 ---
 
@@ -724,18 +820,19 @@ CREATE TABLE IF NOT EXISTS file_cursors (
 
 ### 七、文件变更清单
 
-| 操作 | 文件路径 |
-|------|----------|
-| **新增** | `openviking/daemon/watchers/base_polling_watcher.py` |
-| **新增** | `openviking/daemon/watchers/cursor_db_watcher.py`（P0） |
-| **新增** | `openviking/daemon/watchers/trae_db_watcher.py`（P1） |
-| **新增** | `openviking/daemon/watchers/windsurf_db_watcher.py`（P2） |
-| **新增** | `tests/daemon/test_base_polling_watcher.py` |
-| **新增** | `tests/daemon/test_cursor_db_watcher.py` |
-| **新增** | `tests/daemon/test_trae_db_watcher.py` |
-| **修改** | `openviking/daemon/watchers/registry.py` — 添加 cursor_db / trae_db / windsurf_db 注册 |
-| **修改** | `tests/daemon/test_multi_watcher_integration.py` — 添加 DB watcher 测试用例 |
-| **不改** | `models.py` / `cursor_manager.py` / `service.py` / `etl_pipeline.py` / `config.py` / `base_file_watcher.py` |
+| 操作 | 文件路径 | 状态 |
+|------|----------|------|
+| ✅ 新增 | `openviking/daemon/watchers/base_polling_watcher.py` | ~170 行，含 cursor 推进 bug fix |
+| ✅ 新增 | `openviking/daemon/watchers/cursor_db_watcher.py`（P0） | ~170 行 |
+| 🔲 新增 | `openviking/daemon/watchers/trae_db_watcher.py`（P1） | 待 Phase 3 |
+| 🔲 新增 | `openviking/daemon/watchers/windsurf_db_watcher.py`（P2） | 待 Phase 4 |
+| ✅ 新增 | `tests/daemon/test_base_polling_watcher.py` | 12 tests |
+| ✅ 新增 | `tests/daemon/test_cursor_db_watcher.py` | 16 tests |
+| 🔲 新增 | `tests/daemon/test_trae_db_watcher.py` | 待 Phase 3 |
+| ✅ 修改 | `openviking/daemon/watchers/registry.py` | +cursor_db 注册 |
+| 🔲 修改 | `openviking/daemon/watchers/registry.py` | +trae_db / +windsurf_db 注册 |
+| ✅ 修改 | `tests/daemon/test_multi_watcher_integration.py` | +3 cursor_db 测试 |
+| ✅ 不改 | `models.py` / `cursor_manager.py` / `service.py` / `etl_pipeline.py` / `config.py` / `base_file_watcher.py` | 验证无需改动 |
 
 ---
 
