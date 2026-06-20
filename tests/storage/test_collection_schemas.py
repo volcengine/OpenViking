@@ -270,7 +270,7 @@ async def test_init_context_collection_rejects_mismatched_nonempty_collection(mo
         lambda: config,
     )
 
-    with pytest.raises(EmbeddingRebuildRequiredError, match="Rebuild is required"):
+    with pytest.raises(EmbeddingRebuildRequiredError, match="rebuild is required"):
         await init_context_collection(_FakeStorage())
 
 
@@ -475,7 +475,7 @@ async def test_embedding_handler_truncates_queue_input_before_embed(monkeypatch)
     class _CapturingVikingDB:
         is_closing = False
 
-        async def upsert(self, _data, *, ctx):
+        async def upsert(self, _data, *, ctx, partial_update=False):
             return "rec-1"
 
     class _CapturingEmbedder(DenseEmbedderBase):
@@ -520,7 +520,7 @@ async def test_embedding_handler_local_bm25_write_embeds_dense_then_rebuilds(mon
             super().__init__()
             self.rebuilt_with = None
 
-        async def upsert(self, _data, *, ctx):
+        async def upsert(self, _data, *, ctx, partial_update=False):
             return "rec-1"
 
         async def rebuild_local_bm25_sparse_vectors(self, sparse_embedder, *, ctx):
@@ -2515,7 +2515,7 @@ async def test_volcengine_backend_upsert_partial_update_creates_when_record_does
 async def test_viking_vector_index_backend_update_search_tags_updates_exact_uri_only():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     backend = object.__new__(VikingVectorIndexBackend)
-    calls = {"fetch_by_uri": [], "upsert": []}
+    calls = {"fetch_by_uri": [], "get": [], "upsert": []}
 
     resource_uri = "viking://resources/demo/doc.md"
 
@@ -2523,12 +2523,17 @@ async def test_viking_vector_index_backend_update_search_tags_updates_exact_uri_
         calls["fetch_by_uri"].append((uri, ctx.account_id))
         return {"id": "root-id", "uri": resource_uri, "search_tags": ["old=root"]}
 
+    async def _fake_get(ids, *, ctx):
+        calls["get"].append((ids, ctx.account_id))
+        return [{"id": "root-id", "uri": resource_uri, "search_tags": ["old=root"]}]
+
     async def _fake_upsert(data, *, ctx, partial_update=False):
         del ctx, partial_update
         calls["upsert"].append(dict(data))
         return data["id"]
 
     backend.fetch_by_uri = _fake_fetch_by_uri
+    backend.get = _fake_get
     backend.upsert = _fake_upsert
 
     updated = await backend.update_search_tags(
@@ -2542,6 +2547,7 @@ async def test_viking_vector_index_backend_update_search_tags_updates_exact_uri_
         {"id": "root-id", "uri": resource_uri, "search_tags": ["old=root", "team=search"]}
     ]
     assert calls["fetch_by_uri"] == [(resource_uri, ctx.account_id)]
+    assert calls["get"] == [(["root-id"], ctx.account_id)]
     assert calls["upsert"] == [
         {"id": "root-id", "uri": resource_uri, "search_tags": ["old=root", "team=search"]}
     ]
@@ -2551,7 +2557,7 @@ async def test_viking_vector_index_backend_update_search_tags_updates_exact_uri_
 async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatch):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     overview_uri = "viking://resources/demo/doc.md/.overview.md"
-    calls = {"fetch_by_uri": [], "upsert": []}
+    calls = {"fetch_by_uri": [], "get": [], "upsert": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -2560,12 +2566,17 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
         assert uri == overview_uri
         return {"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1"]}
 
+    async def _fake_get(ids, *, ctx):
+        calls["get"].append((ids, ctx.account_id))
+        return [{"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1"]}]
+
     async def _fake_upsert(data, *, ctx, partial_update=False):
         del ctx, partial_update
         calls["upsert"].append(dict(data))
         return data["id"]
 
     backend.fetch_by_uri = _fake_fetch_by_uri
+    backend.get = _fake_get
     backend.upsert = _fake_upsert
 
     updated = await backend.update_search_tags(
@@ -2579,6 +2590,7 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
         {"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1", "team=search"]}
     ]
     assert calls["fetch_by_uri"] == [(overview_uri, ctx.account_id)]
+    assert calls["get"] == [(["overview-id"], ctx.account_id)]
     assert calls["upsert"] == [
         {"id": "overview-id", "uri": overview_uri, "search_tags": ["existing=1", "team=search"]}
     ]
@@ -2588,7 +2600,7 @@ async def test_update_search_tags_for_leaf_uri_queries_exact_uri_only(monkeypatc
 async def test_update_search_tags_with_levels_queries_directory_uri_only():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     directory_uri = "viking://resources/demo/doc.md"
-    calls = {"filter": [], "upsert": []}
+    calls = {"filter": [], "get": [], "upsert": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -2606,12 +2618,20 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
             {"id": "dir-l1", "uri": directory_uri, "level": 1, "search_tags": ["old=1"]},
         ]
 
+    async def _fake_get(ids, *, ctx):
+        calls["get"].append((ids, ctx.account_id))
+        return [
+            {"id": "dir-l0", "uri": directory_uri, "level": 0, "search_tags": ["old=0"]},
+            {"id": "dir-l1", "uri": directory_uri, "level": 1, "search_tags": ["old=1"]},
+        ]
+
     async def _fake_upsert(data, *, ctx, partial_update=False):
         del ctx, partial_update
         calls["upsert"].append(dict(data))
         return data["id"]
 
     backend.filter = _fake_filter
+    backend.get = _fake_get
     backend.upsert = _fake_upsert
 
     updated = await backend.update_search_tags(
@@ -2626,6 +2646,7 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
     assert len(calls["filter"]) == 1
     assert calls["filter"][0]["limit"] == 2
     assert "id" in calls["filter"][0]["output_fields"]
+    assert calls["get"] == [(["dir-l0", "dir-l1"], ctx.account_id)]
     assert calls["upsert"] == [
         {
             "id": "dir-l0",
@@ -2645,7 +2666,7 @@ async def test_update_search_tags_with_levels_queries_directory_uri_only():
 @pytest.mark.asyncio
 async def test_update_search_tags_with_levels_skips_records_without_id_and_private_helper_is_removed():
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    calls = {"filter": [], "upsert": []}
+    calls = {"filter": [], "get": [], "upsert": []}
 
     backend = VikingVectorIndexBackend.__new__(VikingVectorIndexBackend)
 
@@ -2663,12 +2684,26 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
             {"id": "r2", "uri": "viking://resources/demo/doc.md", "level": 2, "search_tags": None},
         ]
 
+    async def _fake_get(ids, *, ctx):
+        del ctx
+        calls["get"].append(ids)
+        return [
+            {
+                "id": "r1",
+                "uri": "viking://resources/demo/doc.md",
+                "level": 0,
+                "search_tags": ["old=1"],
+            },
+            {"id": "r2", "uri": "viking://resources/demo/doc.md", "level": 2, "search_tags": None},
+        ]
+
     async def _fake_upsert(data, *, ctx, partial_update=False):
         del ctx, partial_update
         calls["upsert"].append(dict(data))
         return data["id"]
 
     backend.filter = _fake_filter
+    backend.get = _fake_get
     backend.upsert = _fake_upsert
 
     updated = await backend.update_search_tags(
@@ -2681,6 +2716,7 @@ async def test_update_search_tags_with_levels_skips_records_without_id_and_priva
 
     assert not hasattr(VikingVectorIndexBackend, "_apply_search_tags_to_records")
     assert calls["filter"] == [True]
+    assert calls["get"] == [["r1", "r2"]]
     assert updated == [
         {
             "id": "r1",
