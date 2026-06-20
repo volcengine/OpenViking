@@ -73,6 +73,17 @@ class ToolPartRequest(BaseModel):
 PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
 
 
+class AutoCommitPolicyRequest(BaseModel):
+    """Session-level server-side auto-commit policy."""
+
+    enabled: bool
+    token_threshold: Optional[int] = Field(default=None, ge=0)
+    idle_timeout_seconds: Optional[int] = Field(default=None, gt=0)
+    keep_recent_count: int = Field(default=0, ge=0)
+
+    model_config = {"extra": "forbid"}
+
+
 class AddMessageRequest(BaseModel):
     """Request model for adding a message.
 
@@ -89,6 +100,7 @@ class AddMessageRequest(BaseModel):
     agent_uri: Optional[str] = None
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
+    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     created_at: Optional[str] = None
     telemetry: TelemetryRequest = False
 
@@ -104,10 +116,34 @@ class AddMessageRequest(BaseModel):
         return self
 
 
+class BatchMessageRequest(BaseModel):
+    """Batch message item model without session-level policy fields."""
+
+    role: str
+    peer_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    agent_uri: Optional[str] = None
+    content: Optional[str] = None
+    parts: Optional[List[Dict[str, Any]]] = None
+    created_at: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_content_or_parts(self) -> "BatchMessageRequest":
+        if self.content is None and self.parts is None:
+            raise ValueError("Either 'content' or 'parts' must be provided")
+        self.peer_id = normalize_peer_selector(
+            self.peer_id,
+            agent_id=self.agent_id,
+            agent_uri=self.agent_uri,
+        )
+        return self
+
+
 class BatchAddMessageRequest(BaseModel):
     """Request model for adding multiple messages in a single request."""
 
-    messages: List[AddMessageRequest] = Field(..., max_length=100)
+    messages: List[BatchMessageRequest] = Field(..., max_length=100)
+    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     telemetry: TelemetryRequest = False
 
 
@@ -445,6 +481,12 @@ async def add_message(
     async def _add() -> dict[str, Any]:
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
         parts = _resolve_message_parts(request)
+        policy_payload = (
+            request.auto_commit_policy.model_dump()
+            if request.auto_commit_policy is not None
+            else None
+        )
+        policy_provided = "auto_commit_policy" in request.model_fields_set
 
         session.add_messages(
             [
@@ -455,6 +497,16 @@ async def add_message(
                     "created_at": request.created_at,
                 }
             ]
+        )
+        await service.sessions.persist_auto_commit_policy_and_schedule(
+            session,
+            auto_commit_policy=policy_payload,
+            policy_provided=policy_provided,
+        )
+        await service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            _ctx,
+            reason_hint="token_threshold",
         )
         return {
             "session_id": session_id,
@@ -485,6 +537,12 @@ async def batch_add_messages(
     async def _batch_add() -> dict[str, Any]:
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
         specs = []
+        policy_payload = (
+            request.auto_commit_policy.model_dump()
+            if request.auto_commit_policy is not None
+            else None
+        )
+        policy_provided = "auto_commit_policy" in request.model_fields_set
         for msg_request in request.messages:
             parts = _resolve_message_parts(msg_request)
             specs.append(
@@ -496,6 +554,16 @@ async def batch_add_messages(
                 }
             )
         msgs = session.add_messages(specs)
+        await service.sessions.persist_auto_commit_policy_and_schedule(
+            session,
+            auto_commit_policy=policy_payload,
+            policy_provided=policy_provided,
+        )
+        await service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            _ctx,
+            reason_hint="token_threshold",
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

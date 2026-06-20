@@ -267,6 +267,10 @@ class SessionMeta:
     # process restarts.
     keep_recent_count: int = 0
     memory_policy: Optional[Dict[str, Any]] = None
+    auto_commit_policy: Optional[Dict[str, Any]] = None
+    last_message_at: str = ""
+    auto_commit_last_error: str = ""
+    auto_commit_last_error_at: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -284,6 +288,12 @@ class SessionMeta:
             "pending_tokens": self.pending_tokens,
             "keep_recent_count": self.keep_recent_count,
             "memory_policy": dict(self.memory_policy) if self.memory_policy is not None else None,
+            "auto_commit_policy": (
+                dict(self.auto_commit_policy) if self.auto_commit_policy is not None else None
+            ),
+            "last_message_at": self.last_message_at,
+            "auto_commit_last_error": self.auto_commit_last_error,
+            "auto_commit_last_error_at": self.auto_commit_last_error_at,
         }
         if self.total_message_count is not None:
             data["total_message_count"] = self.total_message_count
@@ -327,6 +337,10 @@ class SessionMeta:
             pending_tokens=max(0, int(data.get("pending_tokens", 0) or 0)),
             keep_recent_count=max(0, int(data.get("keep_recent_count", 0) or 0)),
             memory_policy=data.get("memory_policy"),
+            auto_commit_policy=data.get("auto_commit_policy"),
+            last_message_at=data.get("last_message_at", ""),
+            auto_commit_last_error=data.get("auto_commit_last_error", ""),
+            auto_commit_last_error_at=data.get("auto_commit_last_error_at", ""),
         )
 
 
