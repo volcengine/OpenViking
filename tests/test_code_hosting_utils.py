@@ -290,3 +290,37 @@ def test_is_git_repo_url_unknown_domain():
 
 def test_is_git_repo_url_single_segment():
     assert is_git_repo_url("https://github.com/org") is False
+
+
+# --- host normalization (trailing dot / case), consistency with #2689 + network_guard ---
+
+
+def test_parse_code_hosting_url_https_trailing_dot():
+    assert parse_code_hosting_url("https://github.com./org/repo") == "org/repo"
+
+
+def test_parse_code_hosting_url_git_ssh_uppercase_host():
+    assert parse_code_hosting_url("git@GitHub.com:org/repo.git") == "org/repo"
+
+
+def test_is_github_url_trailing_dot():
+    assert is_github_url("https://github.com./org/repo") is True
+
+
+def test_is_code_hosting_url_trailing_dot():
+    assert is_code_hosting_url("https://github.com./org/repo") is True
+
+
+def test_is_github_url_uppercase_config_domain():
+    def upper_cfg():
+        return SimpleNamespace(
+            code=SimpleNamespace(
+                github_domains=["GITHUB.COM"],
+                gitlab_domains=[],
+                azure_devops_domains=[],
+                code_hosting_domains=["GITHUB.COM"],
+            )
+        )
+
+    with patch.object(_module, "get_openviking_config", side_effect=upper_cfg):
+        assert is_github_url("https://github.com/org/repo") is True
