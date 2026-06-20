@@ -478,8 +478,25 @@ class HierarchicalRetriever:
                     s if math.isfinite(s) else 0.0 for s in (r.get("_score", 0.0) for r in results)
                 ]
                 if self._rerank_client and mode == RetrieverMode.THINKING:
-                    documents = [str(r.get("abstract", "")) for r in results]
-                    query_scores = self._rerank_scores(query, documents, query_scores)
+                    # L2 abstracts hold full, untruncated file content and can exceed
+                    # the reranker's batch size limit, which makes _rerank_scores fall
+                    # back to vector scores for the ENTIRE batch — including the L0/L1
+                    # directory abstracts that rerank fine. Only send non-L2 documents
+                    # to the reranker and scatter the results back by index; L2
+                    # candidates keep their vector score. See issue #2739.
+                    rerank_indices = [
+                        i for i, r in enumerate(results) if r.get("level", 2) != 2
+                    ]
+                    if rerank_indices:
+                        rerank_docs = [
+                            str(results[i].get("abstract", "")) for i in rerank_indices
+                        ]
+                        rerank_fallback = [query_scores[i] for i in rerank_indices]
+                        rerank_scores = self._rerank_scores(
+                            query, rerank_docs, rerank_fallback
+                        )
+                        for i, rr_score in zip(rerank_indices, rerank_scores, strict=True):
+                            query_scores[i] = rr_score
 
                 for r, score in zip(results, query_scores, strict=True):
                     uri = r.get("uri", "")

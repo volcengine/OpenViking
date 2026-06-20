@@ -500,3 +500,104 @@ async def test_convert_to_matched_contexts_returns_empty_relations():
     )
 
     assert result[0].relations == []
+
+
+class _L2OverflowChildProxy:
+    """Return a mixed-level child set for the root, empty for deeper parents.
+
+    Children:
+      - an L1 directory with a small abstract (rerank-eligible),
+      - an L2 file with an oversized full-content abstract (must be excluded),
+      - a row with NO ``level`` field, which the retriever treats as L2 by
+        convention (``r.get("level", 2)``), so it must also be excluded.
+
+    Regression for issue #2739.
+    """
+
+    def __init__(self) -> None:
+        self._seen: set = set()
+
+    async def search_children_in_tenant(
+        self,
+        parent_uri: str,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        if parent_uri in self._seen or parent_uri != "viking://resources":
+            return []
+        self._seen.add(parent_uri)
+        return [
+            {
+                "uri": "viking://resources/subdir",
+                "abstract": "small directory abstract",
+                "_score": 0.2,
+                "level": 1,
+                "context_type": "resource",
+            },
+            {
+                "uri": "viking://resources/big-file.md",
+                "abstract": "X" * 5000,  # oversized L2 full-content abstract
+                "_score": 0.8,
+                "level": 2,
+                "context_type": "resource",
+            },
+            {
+                # No "level" field -> treated as L2 by the retriever's
+                # r.get("level", 2) convention, so excluded from rerank too.
+                "uri": "viking://resources/no-level.md",
+                "abstract": "Y" * 4000,
+                "_score": 0.5,
+                "context_type": "resource",
+            },
+        ]
+
+
+@pytest.mark.asyncio
+async def test_recursive_search_excludes_l2_abstracts_from_rerank(monkeypatch):
+    # Regression for #2739: _recursive_search must not feed L2 (full-content)
+    # abstracts to the reranker. Doing so overflows the rerank batch and forces
+    # the whole batch (including L0/L1 directory abstracts) to fall back to
+    # vector scores. Only non-L2 docs are reranked; L2 (and missing-level, which
+    # the retriever treats as L2) candidates keep their vector score.
+    fake_client = FakeRerankClient([0.99])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=_config(),
+        retrieval_config=RetrievalConfig(score_propagation_alpha=1.0),
+    )
+
+    candidates = await retriever._recursive_search(
+        vector_proxy=_L2OverflowChildProxy(),
+        query="hello",
+        query_vector=None,
+        sparse_query_vector=None,
+        starting_points=[("viking://resources", 0.4)],
+        limit=10,
+        mode=RetrieverMode.THINKING,
+    )
+
+    # Only the non-L2 (L1) abstract reaches the reranker; the oversized L2 file
+    # abstract AND the missing-level row are excluded, so the batch never
+    # overflows.
+    assert fake_client.calls == [("hello", ["small directory abstract"])]
+
+    by_uri = {c["uri"]: c for c in candidates}
+    # L2 candidate keeps its vector score (0.8), not a rerank score.
+    assert "viking://resources/big-file.md" in by_uri
+    assert by_uri["viking://resources/big-file.md"]["_final_score"] == pytest.approx(0.8)
+    # Missing-level candidate is treated as L2 and keeps its vector score (0.5).
+    assert "viking://resources/no-level.md" in by_uri
+    assert by_uri["viking://resources/no-level.md"]["_final_score"] == pytest.approx(0.5)
+    # Non-L2 candidate received the rerank score.
+    assert "viking://resources/subdir" in by_uri
+    assert by_uri["viking://resources/subdir"]["_final_score"] == pytest.approx(0.99)
