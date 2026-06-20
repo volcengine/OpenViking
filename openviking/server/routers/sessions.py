@@ -73,6 +73,17 @@ class ToolPartRequest(BaseModel):
 PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
 
 
+class AutoCommitPolicyRequest(BaseModel):
+    """Session-level server-side auto-commit policy."""
+
+    enabled: bool
+    token_threshold: Optional[int] = Field(default=None, gt=0)
+    idle_timeout_seconds: Optional[int] = Field(default=None, gt=0)
+    keep_recent_count: int = Field(default=0, ge=0)
+
+    model_config = {"extra": "forbid"}
+
+
 class AddMessageRequest(BaseModel):
     """Request model for adding a message.
 
@@ -89,6 +100,7 @@ class AddMessageRequest(BaseModel):
     agent_uri: Optional[str] = None
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
+    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     created_at: Optional[str] = None
     telemetry: TelemetryRequest = False
 
@@ -108,7 +120,24 @@ class BatchAddMessageRequest(BaseModel):
     """Request model for adding multiple messages in a single request."""
 
     messages: List[AddMessageRequest] = Field(..., max_length=100)
+    auto_commit_policy: Optional[AutoCommitPolicyRequest] = None
     telemetry: TelemetryRequest = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_per_message_auto_commit_policy(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        messages = data.get("messages")
+        if not isinstance(messages, list):
+            return data
+        for message in messages:
+            if isinstance(message, dict) and "auto_commit_policy" in message:
+                raise ValueError(
+                    "Per-message auto_commit_policy is not allowed in batch requests; "
+                    "use the top-level auto_commit_policy field instead"
+                )
+        return data
 
 
 class UsedRequest(BaseModel):
@@ -453,6 +482,12 @@ async def add_message(
     async def _add() -> dict[str, Any]:
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
         parts = _resolve_message_parts(request)
+        policy_payload = (
+            request.auto_commit_policy.model_dump()
+            if request.auto_commit_policy is not None
+            else None
+        )
+        policy_provided = "auto_commit_policy" in request.model_fields_set
 
         session.add_messages(
             [
@@ -463,6 +498,16 @@ async def add_message(
                     "created_at": request.created_at,
                 }
             ]
+        )
+        await service.sessions.persist_auto_commit_policy_and_schedule(
+            session,
+            auto_commit_policy=policy_payload,
+            policy_provided=policy_provided,
+        )
+        await service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            _ctx,
+            reason_hint="token_threshold",
         )
         return {
             "session_id": session_id,
@@ -493,6 +538,12 @@ async def batch_add_messages(
     async def _batch_add() -> dict[str, Any]:
         session = await service.sessions.get(session_id, _ctx, auto_create=True)
         specs = []
+        policy_payload = (
+            request.auto_commit_policy.model_dump()
+            if request.auto_commit_policy is not None
+            else None
+        )
+        policy_provided = "auto_commit_policy" in request.model_fields_set
         for msg_request in request.messages:
             parts = _resolve_message_parts(msg_request)
             specs.append(
@@ -504,6 +555,16 @@ async def batch_add_messages(
                 }
             )
         msgs = session.add_messages(specs)
+        await service.sessions.persist_auto_commit_policy_and_schedule(
+            session,
+            auto_commit_policy=policy_payload,
+            policy_provided=policy_provided,
+        )
+        await service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            _ctx,
+            reason_hint="token_threshold",
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

@@ -152,6 +152,8 @@ ov glob "**/*.md" --uri viking://resources
 # Session workflow
 SESSION=$(ov -o json session new | jq -r '.result.session_id')
 ov session add-message --session-id $SESSION --role user --content "Hello"
+ov session add-message --session-id $SESSION --role user --content "remember this" \
+  --auto-commit-enabled true --token-threshold 512 --idle-timeout-seconds 60 --keep-recent-count 2
 ov session commit --session-id $SESSION
 ```
 

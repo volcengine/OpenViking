@@ -85,6 +85,15 @@ def test_root_build_system_includes_maturin_for_isolated_builds():
     assert 'shutil.which("maturin")' not in setup_py
 
 
+def test_root_build_system_pins_setuptools_scm_below_v10_for_isolated_builds():
+    pyproject = _read_text("pyproject.toml")
+
+    assert '"setuptools-scm>=8.0,<10.0",' in pyproject
+    assert '"setuptools_scm>=8.0,<10.0",' in pyproject
+    assert '"setuptools-scm>=8.0",' not in pyproject
+    assert '"setuptools_scm>=10.0.0",' not in pyproject
+
+
 def test_root_build_system_honors_ci_compiler_overrides_and_requires_ragfs_for_wheels():
     setup_py = _read_text("setup.py")
     build_workflow = _read_text(".github/workflows/_build.yml")
