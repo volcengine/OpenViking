@@ -123,6 +123,10 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 2 || tags[0] != "project-x" || tags[1] != "draft" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
 		writeOK(t, w, map[string]any{
 			"resources": []map[string]any{
 				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9},
@@ -139,6 +143,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		Until:       "2026-06-18",
 		TimeField:   "created_at",
 		Level:       []int{0, 2},
+		Tags:        []string{"project-x", "draft"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +159,7 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level")
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "tags")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -195,6 +200,10 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		if !ok || len(levels) != 1 || levels[0] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 1 || tags[0] != "project-x" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -206,6 +215,7 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		Until:     "2026-06-18",
 		TimeField: "updated_at",
 		Level:     []int{2},
+		Tags:      []string{"project-x"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +227,7 @@ func TestSearchOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level")
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "tags")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
