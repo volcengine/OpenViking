@@ -694,12 +694,31 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 | content | str | Conditional | - | Message text content (HTTP API simple mode, mutually exclusive with parts) |
 | created_at | str | No | None | Optional ISO 8601 timestamp to persist on the message |
 | peer_id | str | No | None | Optional stable interaction peer identity |
+| auto_commit_policy | object | No | None | Optional session-level auto-commit policy. When provided, it is persisted into session metadata and reused by later server-side automatic triggers |
 
 > **Note**: HTTP API supports two modes:
 > 1. **Simple mode**: Use `content` string (backward compatible)
 > 2. **Parts mode**: Use `parts` array (full Part support)
 >
 > If both `content` and `parts` are provided, `parts` takes precedence.
+
+`auto_commit_policy` fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | bool | Yes | Enables or disables automatic commit for the session. Setting it to `false` turns off auto-triggering for that session |
+| `token_threshold` | int | No | Token threshold. After a message write, OpenViking tries an immediate auto commit when `pending_tokens` reaches this value |
+| `idle_timeout_seconds` | int | No | Idle timeout in seconds. When configured, the session becomes eligible for the server-side idle scheduler |
+| `keep_recent_count` | int | No | Number of recent live messages to keep after commit. Updating it also updates session metadata and rebuilds `pending_tokens` |
+
+Additional notes:
+
+- `auto_commit_policy` is a session-level policy, not a per-message policy.
+- Once written, later server-side automatic triggering uses the persisted value from session metadata.
+- `token_threshold` is evaluated immediately after message writes and does not depend on the idle scheduler.
+- `idle_timeout_seconds` only takes effect when the server-wide `server.session_auto_commit.idle_enabled` switch is enabled.
+- When idle scheduling is enabled, the server detects due idle commits by periodic scans of session `.meta.json` files.
+- `auto_commit_last_error` records errors from automatic triggering and phase-1 commit scheduling. Phase-2 extraction failures are reported on the background task and `.failed.json`, not through this field.
 
 **Part Types (Python SDK)**
 
@@ -895,9 +914,13 @@ Add multiple messages to a session in a single request. Suitable for scenarios t
 |------|------|------|--------|------|
 | session_id | str | Yes | - | Session ID |
 | messages | List[AddMessageRequest] | Yes | - | List of messages, each following the same format as `add_message()`, max 100 |
+| auto_commit_policy | object | No | None | Optional session-level auto-commit policy. It may only be provided once at the batch top level |
 | telemetry | bool | No | False | Whether to attach operation telemetry data |
 
-> **Note**: Each message follows the exact same format as `add_message()`, supporting both `content` (simple mode) and `parts` (Parts mode). If you need to add more than 100 messages, call in batches.
+> **Note**:
+> 1. Each message supports both `content` (simple mode) and `parts` (Parts mode). If you need to add more than 100 messages, call in batches.
+> 2. `auto_commit_policy` is only allowed at the batch top level.
+> 3. `messages[*].auto_commit_policy` is rejected by the server.
 
 #### 3. Usage Examples
 

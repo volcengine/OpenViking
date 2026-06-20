@@ -1274,6 +1274,18 @@ enum SessionCommands {
         /// Stable interaction peer id. Omit for self memory.
         #[arg(long = "peer-id", value_name = "peer-id")]
         peer_id: Option<String>,
+        /// Enable or disable session auto commit.
+        #[arg(long = "auto-commit-enabled", value_name = "bool")]
+        auto_commit_enabled: Option<bool>,
+        /// Trigger auto commit when pending tokens reach this threshold.
+        #[arg(long = "token-threshold", value_name = "tokens")]
+        token_threshold: Option<u32>,
+        /// Trigger auto commit after this idle timeout in seconds.
+        #[arg(long = "idle-timeout-seconds", value_name = "seconds")]
+        idle_timeout_seconds: Option<u32>,
+        /// Keep this many recent live messages after commit.
+        #[arg(long = "keep-recent-count", value_name = "count")]
+        keep_recent_count: Option<u32>,
     },
     /// Add multiple messages to a session
     AddMessages {
@@ -1283,6 +1295,18 @@ enum SessionCommands {
         /// Messages as JSON array of {role, content} objects
         #[arg(value_name = "messages-json")]
         messages: String,
+        /// Enable or disable session auto commit.
+        #[arg(long = "auto-commit-enabled", value_name = "bool")]
+        auto_commit_enabled: Option<bool>,
+        /// Trigger auto commit when pending tokens reach this threshold.
+        #[arg(long = "token-threshold", value_name = "tokens")]
+        token_threshold: Option<u32>,
+        /// Trigger auto commit after this idle timeout in seconds.
+        #[arg(long = "idle-timeout-seconds", value_name = "seconds")]
+        idle_timeout_seconds: Option<u32>,
+        /// Keep this many recent live messages after commit.
+        #[arg(long = "keep-recent-count", value_name = "count")]
+        keep_recent_count: Option<u32>,
     },
     /// Commit a session (archive messages and extract memories)
     Commit {

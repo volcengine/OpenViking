@@ -24,6 +24,9 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+if TYPE_CHECKING:
+    from openviking.snapshot_namespace import AsyncSnapshotNamespace
+
 
 if TYPE_CHECKING:
     from openviking.snapshot_namespace import AsyncSnapshotNamespace
@@ -196,6 +199,8 @@ class AsyncOpenViking:
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
+        *,
+        auto_commit_policy: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -217,6 +222,7 @@ class AsyncOpenViking:
             parts=parts,
             created_at=created_at,
             peer_id=peer_id,
+            auto_commit_policy=auto_commit_policy,
             telemetry=telemetry,
         )
 
@@ -225,12 +231,15 @@ class AsyncOpenViking:
         session_id: str,
         messages: list[dict],
         telemetry: TelemetryRequest = False,
+        *,
+        auto_commit_policy: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Add multiple messages to a session in a single request."""
         await self._ensure_initialized()
         return await self._client.batch_add_messages(
             session_id=session_id,
             messages=messages,
+            auto_commit_policy=auto_commit_policy,
             telemetry=telemetry,
         )
 

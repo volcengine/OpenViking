@@ -244,6 +244,17 @@ class ToolOutputExternalizationConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class SessionAutoCommitConfig(BaseModel):
+    """Server-wide controls for automatic session commits."""
+
+    idle_enabled: bool = False
+    check_interval_seconds: float = Field(default=60.0, gt=0)
+    scan_batch_size: int = Field(default=16, gt=0)
+    scan_batch_pause_seconds: float = Field(default=0.0, ge=0)
+
+    model_config = {"extra": "forbid"}
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
@@ -267,6 +278,7 @@ class ServerConfig(BaseModel):
     upload_signed_ttl_seconds: int = 600
     temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
     user_config_defaults: UserConfig = Field(default_factory=UserConfig)
+    session_auto_commit: SessionAutoCommitConfig = Field(default_factory=SessionAutoCommitConfig)
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )

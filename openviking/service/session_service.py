@@ -6,17 +6,28 @@ Session Service for OpenViking.
 Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
+import asyncio
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
-from openviking.server.config import ToolOutputExternalizationConfig
+from openviking.server.config import SessionAutoCommitConfig, ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
+from openviking.service.session_auto_commit import (
+    compute_next_check_at,
+    get_idle_timeout_seconds,
+    get_token_threshold,
+    has_uncommitted_content,
+    is_next_check_due,
+    should_enable_auto_commit,
+)
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     NotFoundError,
@@ -45,6 +56,9 @@ class SessionService:
         self._session_compressor = session_compressor
         self._tool_output_externalization_config = ToolOutputExternalizationConfig()
         self._usage_reporter: Optional["UsageReporter"] = None
+        self._session_auto_commit_config = SessionAutoCommitConfig()
+        self._auto_commit_claims: set[tuple[str, str, str]] = set()
+        self._auto_commit_claims_lock = asyncio.Lock()
 
     def set_dependencies(
         self,
@@ -67,10 +81,19 @@ class SessionService:
         """Set the usage reporter for newly created sessions."""
         self._usage_reporter = usage_reporter
 
+    def set_session_auto_commit_config(self, config: SessionAutoCommitConfig) -> None:
+        """Set server-wide controls for automatic session commits."""
+        self._session_auto_commit_config = config.model_copy(deep=True)
+
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
         if not self._viking_fs:
             raise NotInitializedError("VikingFS")
+
+    @property
+    def viking_fs(self) -> VikingFS:
+        self._ensure_initialized()
+        return self._viking_fs
 
     @staticmethod
     def _record_lifecycle_metric(action: str, status: str) -> None:
@@ -347,3 +370,130 @@ class SessionService:
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories
+
+    async def persist_auto_commit_policy_and_schedule(
+        self,
+        session: Session,
+        *,
+        auto_commit_policy: Any,
+        policy_provided: bool,
+    ) -> None:
+        """Persist message-time auto-commit policy/meta updates."""
+        if policy_provided:
+            session.meta.auto_commit_policy = auto_commit_policy
+            next_keep_recent_count = 0
+            if isinstance(auto_commit_policy, dict):
+                try:
+                    next_keep_recent_count = max(
+                        0,
+                        int(auto_commit_policy.get("keep_recent_count", 0) or 0),
+                    )
+                except (TypeError, ValueError):
+                    next_keep_recent_count = 0
+            current_keep_recent_count = max(0, int(session.meta.keep_recent_count or 0))
+            session.meta.keep_recent_count = next_keep_recent_count
+            if current_keep_recent_count != next_keep_recent_count:
+                session._rebuild_pending_tokens()
+        session.meta.last_message_at = get_current_timestamp()
+        await session._save_meta()
+
+    async def maybe_schedule_auto_commit(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        *,
+        reason_hint: str,
+    ) -> bool:
+        """Best-effort automatic commit scheduler entrypoint."""
+        session = await self.get(session_id, ctx, auto_create=False)
+        policy = session.meta.auto_commit_policy
+        if not self._should_run_auto_commit(session, policy, reason_hint):
+            return False
+
+        claim = (ctx.account_id, ctx.user.user_id, session_id)
+        async with self._auto_commit_claims_lock:
+            if claim in self._auto_commit_claims:
+                return False
+            tracker = get_task_tracker()
+            if await tracker.has_running(
+                "session_commit",
+                session_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            ):
+                return False
+            self._auto_commit_claims.add(claim)
+
+        asyncio.create_task(self.run_auto_commit(session_id, ctx, reason=reason_hint))
+        return True
+
+    async def run_auto_commit(self, session_id: str, ctx: RequestContext, *, reason: str) -> None:
+        """Run one best-effort automatic commit and release process-local claim."""
+        claim = (ctx.account_id, ctx.user.user_id, session_id)
+        try:
+            tracker = get_task_tracker()
+            if await tracker.has_running(
+                "session_commit",
+                session_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            ):
+                return
+
+            session = await self.get(session_id, ctx, auto_create=False)
+            policy = session.meta.auto_commit_policy
+            if not self._should_run_auto_commit(session, policy, reason):
+                return
+
+            keep_recent_count = int((policy or {}).get("keep_recent_count", 0) or 0)
+            result = await session.commit_async(keep_recent_count=keep_recent_count)
+            if result.get("archived"):
+                session.meta.auto_commit_last_error = ""
+                session.meta.auto_commit_last_error_at = ""
+            await session._save_meta()
+        except Exception as exc:
+            logger.warning("Automatic session commit failed for %s: %s", session_id, exc)
+            try:
+                session = await self.get(session_id, ctx, auto_create=False)
+                session.meta.auto_commit_last_error = str(exc)
+                session.meta.auto_commit_last_error_at = get_current_timestamp()
+                await session._save_meta()
+            except Exception:
+                logger.debug(
+                    "Failed to persist auto-commit error for %s", session_id, exc_info=True
+                )
+        finally:
+            async with self._auto_commit_claims_lock:
+                self._auto_commit_claims.discard(claim)
+
+    @staticmethod
+    def _has_uncommitted_content(session: Session) -> bool:
+        return has_uncommitted_content(session.meta.to_dict())
+
+    def _should_run_auto_commit(self, session: Session, policy: Any, reason: str) -> bool:
+        """Validate the current session state still satisfies the trigger reason."""
+        if not should_enable_auto_commit(policy):
+            return False
+
+        if reason == "token_threshold":
+            threshold = get_token_threshold(policy)
+            if threshold is None:
+                return False
+            try:
+                pending_tokens = int(session.meta.pending_tokens or 0)
+            except (TypeError, ValueError):
+                return False
+            return pending_tokens >= threshold
+
+        if reason == "idle_timeout":
+            if not self._session_auto_commit_config.idle_enabled:
+                return False
+            idle_timeout = get_idle_timeout_seconds(policy)
+            if idle_timeout is None or not self._has_uncommitted_content(session):
+                return False
+            next_check_at = compute_next_check_at(session.meta.last_message_at, idle_timeout)
+            if not next_check_at:
+                return False
+            return is_next_check_due(next_check_at, datetime.now()) is True
+
+        return False

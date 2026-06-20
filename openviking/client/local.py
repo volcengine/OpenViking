@@ -936,6 +936,7 @@ class LocalClient(BaseClient):
         parts: Optional[List[Dict[str, Any]]] = None,
         created_at: Optional[str] = None,
         peer_id: Optional[str] = None,
+        auto_commit_policy: dict[str, Any] | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
@@ -960,6 +961,7 @@ class LocalClient(BaseClient):
                 parts,
                 created_at,
                 peer_id,
+                auto_commit_policy,
             ),
         )
         return attach_telemetry_payload(
@@ -975,6 +977,7 @@ class LocalClient(BaseClient):
         parts: Optional[List[Dict[str, Any]]],
         created_at: Optional[str],
         peer_id: Optional[str],
+        auto_commit_policy: dict[str, Any] | None,
     ) -> Dict[str, Any]:
         from openviking.message.part import Part, TextPart, part_from_dict
 
@@ -994,6 +997,16 @@ class LocalClient(BaseClient):
             peer_id=self._resolve_message_peer_id(role, peer_id),
             created_at=created_at,
         )
+        await self._service.sessions.persist_auto_commit_policy_and_schedule(
+            session,
+            auto_commit_policy=auto_commit_policy,
+            policy_provided=auto_commit_policy is not None,
+        )
+        await self._service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            self._ctx,
+            reason_hint="token_threshold",
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
@@ -1003,13 +1016,18 @@ class LocalClient(BaseClient):
         self,
         session_id: str,
         messages: List[Dict[str, Any]],
+        auto_commit_policy: dict[str, Any] | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add multiple messages to a session in one batch."""
         execution = await run_with_telemetry(
             operation="session.batch_add_messages",
             telemetry=telemetry,
-            fn=lambda: self._batch_add_messages_impl(session_id, messages),
+            fn=lambda: self._batch_add_messages_impl(
+                session_id,
+                messages,
+                auto_commit_policy,
+            ),
         )
         return attach_telemetry_payload(
             execution.result,
@@ -1020,6 +1038,7 @@ class LocalClient(BaseClient):
         self,
         session_id: str,
         messages: List[Dict[str, Any]],
+        auto_commit_policy: dict[str, Any] | None,
     ) -> Dict[str, Any]:
         from openviking.message.part import Part, TextPart, part_from_dict
 
@@ -1027,6 +1046,12 @@ class LocalClient(BaseClient):
         specs: list[dict[str, Any]] = []
 
         for index, message in enumerate(messages):
+            if "auto_commit_policy" in message:
+                raise ValueError(
+                    "Per-message auto_commit_policy is not allowed in batch requests; "
+                    "use the top-level auto_commit_policy field instead"
+                )
+
             role = message.get("role")
             if not role:
                 raise ValueError(f"messages[{index}]: missing required key 'role'")
@@ -1049,6 +1074,16 @@ class LocalClient(BaseClient):
             )
 
         added = session.add_messages(specs)
+        await self._service.sessions.persist_auto_commit_policy_and_schedule(
+            session,
+            auto_commit_policy=auto_commit_policy,
+            policy_provided=auto_commit_policy is not None,
+        )
+        await self._service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            self._ctx,
+            reason_hint="token_threshold",
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

@@ -424,6 +424,201 @@ async def test_add_message(client: httpx.AsyncClient):
     assert body["result"]["message_count"] == 1
 
 
+async def test_add_message_persists_auto_commit_policy_and_last_message_at(
+    client: httpx.AsyncClient,
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "user",
+            "content": "Hello, world!",
+            "auto_commit_policy": {
+                "enabled": True,
+                "token_threshold": 123,
+                "idle_timeout_seconds": 60,
+                "keep_recent_count": 5,
+            },
+        },
+    )
+    assert resp.status_code == 200
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    assert session_resp.status_code == 200
+    result = session_resp.json()["result"]
+    assert result["auto_commit_policy"] == {
+        "enabled": True,
+        "token_threshold": 123,
+        "idle_timeout_seconds": 60,
+        "keep_recent_count": 5,
+    }
+    assert result["last_message_at"]
+    assert result["keep_recent_count"] == 5
+
+
+async def test_add_message_policy_updates_keep_recent_count_for_pending_tokens(
+    client: httpx.AsyncClient,
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    first_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "user",
+            "content": "one two three four five six seven eight nine ten",
+            "auto_commit_policy": {
+                "enabled": True,
+                "token_threshold": 999999,
+                "idle_timeout_seconds": None,
+                "keep_recent_count": 0,
+            },
+        },
+    )
+    assert first_resp.status_code == 200
+
+    before_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    before_result = before_resp.json()["result"]
+    assert before_result["pending_tokens"] > 0
+
+    second_resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "user",
+            "content": "eleven twelve thirteen fourteen fifteen sixteen",
+            "auto_commit_policy": {
+                "enabled": True,
+                "token_threshold": 999999,
+                "idle_timeout_seconds": None,
+                "keep_recent_count": 2,
+            },
+        },
+    )
+    assert second_resp.status_code == 200
+
+    after_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    after_result = after_resp.json()["result"]
+    assert after_result["keep_recent_count"] == 2
+    assert after_result["message_count"] == 2
+    assert after_result["pending_tokens"] == 0
+
+
+async def test_token_only_auto_commit_policy_persists_without_idle_timeout(
+    client: httpx.AsyncClient,
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "user",
+            "content": "Hello, world!",
+            "auto_commit_policy": {
+                "enabled": True,
+                "token_threshold": 1,
+                "idle_timeout_seconds": None,
+                "keep_recent_count": 0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    result = session_resp.json()["result"]
+    assert result["auto_commit_policy"] == {
+        "enabled": True,
+        "token_threshold": 1,
+        "idle_timeout_seconds": None,
+        "keep_recent_count": 0,
+    }
+
+
+async def test_idle_auto_commit_policy_persists_on_session_meta(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "user",
+            "content": "Hello, world!",
+            "auto_commit_policy": {
+                "enabled": True,
+                "token_threshold": None,
+                "idle_timeout_seconds": 60,
+                "keep_recent_count": 0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    result = session_resp.json()["result"]
+    assert result["auto_commit_policy"] == {
+        "enabled": True,
+        "token_threshold": None,
+        "idle_timeout_seconds": 60,
+        "keep_recent_count": 0,
+    }
+    assert result["last_message_at"]
+
+
+async def test_idle_global_switch_still_persists_policy_without_idle_scheduler(
+    client: httpx.AsyncClient, service
+):
+    service.sessions._session_auto_commit_config.idle_enabled = False
+
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "user",
+            "content": "Hello, world!",
+            "auto_commit_policy": {
+                "enabled": True,
+                "token_threshold": None,
+                "idle_timeout_seconds": 60,
+                "keep_recent_count": 0,
+            },
+        },
+    )
+    assert resp.status_code == 200
+
+    session_resp = await client.get(f"/api/v1/sessions/{session_id}")
+    result = session_resp.json()["result"]
+    assert result["auto_commit_policy"] == {
+        "enabled": True,
+        "token_threshold": None,
+        "idle_timeout_seconds": 60,
+        "keep_recent_count": 0,
+    }
+
+
+async def test_session_load_recovers_message_count_from_live_messages(service):
+    ctx = RequestContext(user=UserIdentifier("acct_a", "user_b"), role=Role.ADMIN)
+    await service.initialize_account_directories(ctx)
+    await service.initialize_user_directories(ctx)
+
+    session = await service.sessions.create(ctx)
+    session.add_message("user", [TextPart("我爱吃西瓜")])
+
+    session = await service.sessions.get(session.session_id, ctx, auto_create=False)
+    session.meta.message_count = 0
+    session.meta.pending_tokens = 0
+    await session._save_meta()
+
+    reloaded = service.sessions.session(ctx, session.session_id)
+    await reloaded.load()
+
+    assert len(reloaded.messages) == 1
+    assert reloaded.meta.message_count == 1
+
+
 async def test_add_message_accepts_image_part(client: httpx.AsyncClient, service):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
@@ -585,6 +780,31 @@ async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, 
     await session.load()
     assert isinstance(session.messages[0].parts[0], TextPart)
     assert isinstance(session.messages[0].parts[1], ImagePart)
+
+
+async def test_batch_add_message_rejects_per_message_auto_commit_policy(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/messages/batch",
+        json={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello",
+                    "auto_commit_policy": {
+                        "enabled": True,
+                        "token_threshold": 1,
+                        "idle_timeout_seconds": None,
+                        "keep_recent_count": 0,
+                    },
+                }
+            ]
+        },
+    )
+
+    assert resp.status_code == 400
 
 
 async def test_add_message_splits_tool_result_aggregate(client: httpx.AsyncClient):

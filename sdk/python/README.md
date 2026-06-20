@@ -100,6 +100,23 @@ context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
 ```
 
+Enable session auto commit from the SDK:
+
+```python
+policy = {
+    "enabled": True,
+    "token_threshold": 512,
+    "idle_timeout_seconds": 60,
+    "keep_recent_count": 2,
+}
+
+client.session("demo-session").add_message(
+    "user",
+    "remember this automatically",
+    auto_commit_policy=policy,
+)
+```
+
 ## Quick Start: Async Client
 
 ```python

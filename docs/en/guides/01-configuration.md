@@ -1108,6 +1108,41 @@ Legacy compatibility example:
 }
 ```
 
+##### Session Auto Commit Configuration
+
+`server.session_auto_commit` controls server-wide automatic session commit behavior.
+
+```json
+{
+  "server": {
+    "session_auto_commit": {
+      "idle_enabled": false,
+      "check_interval_seconds": 60.0,
+      "scan_batch_size": 16,
+      "scan_batch_pause_seconds": 0.0
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `idle_enabled` | bool | Enables the server-side idle-timeout auto-commit scheduler. When disabled, the idle scheduler is not started. Token-threshold immediate triggering still works | `false` |
+| `check_interval_seconds` | float | Poll interval for the idle scheduler in seconds. Must be greater than `0` | `60.0` |
+| `scan_batch_size` | int | Maximum number of session meta files read concurrently in each idle scan batch. Must be greater than `0` | `16` |
+| `scan_batch_pause_seconds` | float | Optional pause between idle scan batches, in seconds. Use this to reduce storage pressure during large scans | `0.0` |
+
+Notes:
+
+- `server.session_auto_commit` is a server-wide control surface, not a per-session business policy.
+- Per-session auto-commit behavior is configured through `auto_commit_policy` on message write APIs and persisted into session metadata.
+- When `idle_enabled=false`:
+  - `SessionAutoCommitScheduler` is not started
+- When `idle_enabled=true`:
+  - `SessionAutoCommitScheduler` wakes up periodically and scans session `.meta.json` files under AGFS `/local/{account}/user/{user}/sessions`
+  - It does not perform a dedicated startup recovery sweep; idle detection happens only on periodic scans
+- Token-threshold auto commit does not depend on the scheduler and is unaffected by this switch.
+
 
 ##### S3 Backend Configuration
 
