@@ -33,9 +33,9 @@ class FakeCursorManager:
 # --- Registry Tests ---
 
 def test_all_watchers_registered():
-    """All 5 built-in watchers should be registered."""
+    """All 6 built-in watchers should be registered."""
     available = list_available_watchers()
-    expected = {"claude_code", "generic_jsonl", "aider", "cursor", "continue_dev"}
+    expected = {"claude_code", "generic_jsonl", "aider", "cursor", "continue_dev", "cursor_db"}
     assert expected.issubset(set(available)), f"Missing: {expected - set(available)}"
 
 
@@ -328,3 +328,58 @@ def test_knowledge_router_uses_source_tool():
     )
     uri2 = router.route(k2)
     assert "general" in uri2
+
+
+# --- CursorDBWatcher Integration ---
+
+def test_cursor_db_watcher_via_factory(tmp_path):
+    """cursor_db watcher should be creatable via factory and satisfy Protocol."""
+    batches = []
+    cm = FakeCursorManager()
+
+    watcher = create_watcher(
+        tool_name="cursor_db",
+        watch_dir=str(tmp_path),
+        cursor_manager=cm,
+        batch_callback=lambda e: batches.append(e),
+        poll_interval=60,
+    )
+    assert isinstance(watcher, BaseWatcher)
+    assert watcher.tool_name == "cursor_db"
+
+
+def test_cursor_db_normalize_compatible_with_reconstructor():
+    """Events from cursor_db watcher should work with ConversationReconstructor."""
+    from openviking.daemon.conversation_reconstructor import ConversationReconstructor
+
+    events = [
+        {"role": "user", "content": "How to use Cursor effectively?",
+         "tool_name": "cursor_db", "timestamp": "2026-06-20T10:00:00Z",
+         "session_id": "comp-123"},
+        {"role": "assistant", "content": "Here are some tips for using Cursor...",
+         "tool_name": "cursor_db", "timestamp": "2026-06-20T10:00:01Z",
+         "session_id": "comp-123"},
+    ]
+
+    reconstructor = ConversationReconstructor()
+    turns = reconstructor.reconstruct(events)
+
+    assert len(turns) == 1
+    assert turns[0].user_prompt == "How to use Cursor effectively?"
+    assert turns[0].source_tool == "cursor_db"
+
+
+def test_cursor_db_events_compatible_with_filter():
+    """Events from cursor_db should work with LowValueFilter."""
+    from openviking.daemon.filters import LowValueFilter
+
+    events = [
+        {"role": "user", "content": "A meaningful question about architecture design",
+         "tool_name": "cursor_db"},
+        {"role": "assistant", "content": "Here is a detailed explanation of the pattern",
+         "tool_name": "cursor_db"},
+    ]
+
+    f = LowValueFilter()
+    filtered = f.apply(events)
+    assert len(filtered) == 2

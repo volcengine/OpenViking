@@ -68,5 +68,11 @@ def _register_builtins():
     except ImportError:
         pass
 
+    try:
+        from openviking.daemon.watchers.cursor_db_watcher import CursorDBWatcher
+        _WATCHER_REGISTRY["cursor_db"] = CursorDBWatcher
+    except ImportError:
+        pass
+
 
 _register_builtins()
