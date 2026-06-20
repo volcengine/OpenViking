@@ -9,7 +9,7 @@ For HTTP mode, use AsyncHTTPClient or SyncHTTPClient.
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
@@ -20,6 +20,9 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from openviking.snapshot_namespace import AsyncSnapshotNamespace
 
 
 class AsyncOpenViking:
@@ -189,6 +192,8 @@ class AsyncOpenViking:
         created_at: str | None = None,
         peer_id: str | None = None,
         telemetry: TelemetryRequest = False,
+        *,
+        auto_commit_policy: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -210,6 +215,7 @@ class AsyncOpenViking:
             parts=parts,
             created_at=created_at,
             peer_id=peer_id,
+            auto_commit_policy=auto_commit_policy,
             telemetry=telemetry,
         )
 
@@ -218,12 +224,15 @@ class AsyncOpenViking:
         session_id: str,
         messages: list[dict],
         telemetry: TelemetryRequest = False,
+        *,
+        auto_commit_policy: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Add multiple messages to a session in a single request."""
         await self._ensure_initialized()
         return await self._client.batch_add_messages(
             session_id=session_id,
             messages=messages,
+            auto_commit_policy=auto_commit_policy,
             telemetry=telemetry,
         )
 
@@ -348,6 +357,7 @@ class AsyncOpenViking:
         """
         if getattr(self, "_snapshot", None) is None:
             from openviking.snapshot_namespace import AsyncSnapshotNamespace
+
             self._snapshot = AsyncSnapshotNamespace(self)
         return self._snapshot
 
