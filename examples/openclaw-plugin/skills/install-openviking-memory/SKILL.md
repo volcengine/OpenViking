@@ -413,20 +413,22 @@ Expected output:
 > (CN) 🎉 全部搞定！OpenViking 长期记忆已经接好了。
 >
 > 工作方式：
-> - **每一轮**：你的对话会被自动归档到 OpenViking session 里
-> - **`/compact` 时**：归档消息会在 OpenViking 服务端被抽取成长期记忆
+> - **每一轮**：你的对话会被自动追加到 OpenViking session 里；自动抽取依赖阈值 commit 或 `/compact`
+> - **明确要记住时**：如果你说“记住/保存/存一下”某个长期事实，我会用 `memory_store` 立即提交到记忆管线
+> - **`/compact` 时**：待提交的 session 消息会在 OpenViking 服务端被抽取成长期记忆
 > - **后续会话**：每次回复前我都会自动搜一下相关记忆并带进上下文
 >
-> 想验证一下吗？跟我聊几句包含可记忆事实的话（例如"我的邮箱是 test@example.com"），然后调一下 `/compact`，再开新对话问"我的邮箱是？"，应该就能召回了。
+> 想验证一下吗？可以直接说“记住我的邮箱是 test@example.com”，让我通过 `memory_store` 立即提交；或者先聊几句包含可记忆事实的话，再调一下 `/compact`。之后开新对话问“我的邮箱是？”，应该就能召回了。
 
 > (EN) 🎉 All set! OpenViking long-term memory is connected.
 >
 > How it works:
-> - **Every turn**: our messages are auto-archived into an OpenViking session
-> - **On `/compact`**: archived messages are extracted into long-term memories on the OpenViking server
+> - **Every turn**: our messages are appended to an OpenViking session; automatic extraction depends on a threshold commit or `/compact`
+> - **Explicit remember requests**: if you ask me to remember/save/store a long-term fact, I can use `memory_store` to commit it immediately
+> - **On `/compact`**: pending session messages are extracted into long-term memories on the OpenViking server
 > - **Future sessions**: relevant memories are auto-retrieved and injected before my replies
 >
-> Want to verify? Tell me a few facts (e.g. "my email is test@example.com"), run `/compact`, then start a new chat and ask "what's my email?" — it should recall.
+> Want to verify? Say "remember my email is test@example.com" so I can commit it via `memory_store`, or tell me a few memory-worthy facts and run `/compact`. Then start a new chat and ask "what's my email?" — it should recall.
 
 ---
 
@@ -434,15 +436,25 @@ Expected output:
 
 ## How It Works
 
-The context-engine pipeline has three distinct stages — keep them apart, especially when telling users when memories become searchable long-term memory on the OpenViking server:
+The context-engine pipeline has three distinct stages plus one explicit write path — keep them apart, especially when telling users when memories become searchable long-term memory on the OpenViking server:
 
-- **Archive / capture (context-engine `afterTurn`)**: at the end of a user turn, the plugin commits user/assistant messages to the OpenViking session via `POST /api/v1/sessions/.../messages`. This is **archive only** — no memory extraction yet. You'll see session message counts grow on the server, but no new files under `viking://user/.../memories/`.
-- **Memory extraction (on `/compact`)**: memory extraction runs when the user invokes OpenClaw's `/compact` command. The server-side extraction pipeline reads the archived session and writes new memories. The plugin's `after_compaction` hook is currently reserved; the extraction itself is driven by the server. **No `/compact`, no new memory files.**
+- **Archive / capture (context-engine `afterTurn`)**: at the end of a user turn, the plugin appends user/assistant messages to the OpenViking session via `POST /api/v1/sessions/.../messages`. This is **session capture only** unless `pending_tokens` crosses `commitTokenThreshold`; below the threshold, no memory extraction runs yet. You'll see session message counts grow on the server, but no new files under `viking://user/.../memories/`.
+- **Memory extraction (threshold commit or `/compact`)**: memory extraction runs after a session commit. The commit can be triggered asynchronously when `afterTurn` crosses `commitTokenThreshold`, synchronously when the user invokes OpenClaw's `/compact` command, or explicitly by `memory_store`. The server-side extraction pipeline reads the archived session and writes new memories.
   - `captureMode: "semantic"` (default): server extraction pipeline filters all qualifying text.
   - `captureMode: "keyword"`: only text matching trigger words (e.g. "remember", "preference") is considered.
 - **Auto-Recall (context-engine `assemble()`)**: before prompt context is assembled, the plugin queries OpenViking for relevant memories and injects them into context. Recall works even when there are no extracted memories yet — you just won't see anything come back.
 
-**Practical implication for testing**: if you write down a fact and immediately try to recall it without `/compact`, the plugin will only retrieve it as recent session context (archived messages), not as a long-term memory. To verify long-term memory cross-session, you must run `/compact` first.
+**Practical implication for testing**: if you write down a short fact and immediately try to recall it without a threshold commit, `/compact`, or `memory_store`, the plugin may only retrieve it as recent session context, not as a long-term memory. To verify long-term memory cross-session deterministically, run `/compact` or use `memory_store` for the fact being tested.
+
+### Explicit long-term memory writes
+
+Auto-capture is best-effort and commit-dependent. When the user explicitly says to remember, save, or store an important long-term fact, preference, project, or decision, the agent should call `memory_store` instead of waiting for ordinary auto-capture.
+
+Use `memory_store` as the integration-side reliable path for durable-memory intent:
+
+- It writes the supplied text into an OpenViking session and calls `commit(wait=true)`.
+- It complements auto-capture; it does not replace normal session capture.
+- If it commits but extracts 0 memories, the explicit path has done its job. Treat that as a server-side extraction/model/configuration issue and check OpenViking logs.
 
 ## Available Tools
 
@@ -467,6 +479,8 @@ Example: user asks "What programming language did I say I like?"
 | `text` | Yes | Information text to store |
 | `role` | No | Session role (default `user`) |
 | `sessionId` | No | Existing OpenViking session ID |
+
+Use this when the user explicitly asks to remember/save/store a long-term fact, preference, project, or decision.
 
 Example: user says "Remember my email is xxx@example.com".
 
@@ -578,7 +592,7 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `userId` | — | Required when `apiKey` is a root key. |
 | `targetUri` | `viking://user/memories` | Default search scope URI. |
 | `timeoutMs` | (plugin default) | HTTP timeout for OpenViking calls. |
-| `autoCapture` | `true` | Auto-archive turn messages to OpenViking session at `afterTurn` (extraction itself runs on `/compact`, not here). |
+| `autoCapture` | `true` | Auto-append turn messages to the OpenViking session at `afterTurn`; extraction runs only after a threshold commit, `/compact`, or explicit `memory_store`. |
 | `captureMode` | `"semantic"` | Filter mode used by the server-side extraction pipeline: `semantic` or `keyword`. |
 | `captureMaxLength` | `24000` | Max text length per archived turn. |
 | `autoRecall` | `true` | Auto-recall and inject memories before reply. |
