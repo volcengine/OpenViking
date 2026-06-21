@@ -62,7 +62,9 @@ class BatchTrainEvalConfig:
     commit_timeout_seconds: float | None = None
     commit_concurrency: int = 100
     train_index: int | None = None
+    train_indices: list[int] | None = None
     eval_index: int | None = None
+    eval_indices: list[int] | None = None
     benchmark_service_url: str | None = None
     baseline_force_recompute: bool = False
     skip_baseline_eval: bool = False
@@ -99,6 +101,14 @@ class BatchTrainEvalConfig:
             raise ValueError("train_index must be >= 0")
         if self.eval_index is not None and self.eval_index < 0:
             raise ValueError("eval_index must be >= 0")
+        if self.train_indices is not None:
+            self.train_indices = _normalize_indices(self.train_indices, label="train_indices")
+            if self.train_index is not None:
+                self.train_index = None
+        if self.eval_indices is not None:
+            self.eval_indices = _normalize_indices(self.eval_indices, label="eval_indices")
+            if self.eval_index is not None:
+                self.eval_index = None
         if self.eval_split is not None:
             normalized_eval_split = str(self.eval_split).strip().lower()
             if normalized_eval_split in {"", "none"}:
@@ -117,6 +127,19 @@ class BatchTrainEvalConfig:
             raise ValueError("result_dir_name must not be empty")
 
 
+def _normalize_indices(values: list[int], *, label: str) -> list[int]:
+    result: list[int] = []
+    for value in values:
+        index = int(value)
+        if index < 0:
+            raise ValueError(f"{label} must contain only >= 0 values")
+        if index not in result:
+            result.append(index)
+    if not result:
+        raise ValueError(f"{label} must not be empty")
+    return result
+
+
 @dataclass(slots=True)
 class BatchTrainEvalReport:
     """Serializable report for remote benchmark batch train/eval."""
@@ -128,7 +151,9 @@ class BatchTrainEvalReport:
     concurrency: int
     commit_concurrency: int
     train_index: int | None
+    train_indices: list[int] | None
     eval_index: int | None
+    eval_indices: list[int] | None
     policy_root_uri: str
     baseline_eval: dict[str, Any] | None
     train_epochs: list[dict[str, Any]] = field(default_factory=list)
@@ -166,7 +191,9 @@ class BatchTrainEvalReport:
             "concurrency": self.concurrency,
             "commit_concurrency": self.commit_concurrency,
             "train_index": self.train_index,
+            "train_indices": self.train_indices,
             "eval_index": self.eval_index,
+            "eval_indices": self.eval_indices,
             "policy_root_uri": self.policy_root_uri,
             "baseline_eval": self.baseline_eval,
             "train_epochs": self.train_epochs,
@@ -228,7 +255,9 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
             train_index=config.train_index,
+            train_indices=config.train_indices,
             eval_index=config.eval_index,
+            eval_indices=config.eval_indices,
             trials=config.trials,
             clean_result=config.clean_result,
             keep_recent_results=config.keep_recent_results,
@@ -281,7 +310,12 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
         eval_loader = (
             None
             if config.eval_split is None
-            else _case_loader(config, split=config.eval_split, sample_index=config.eval_index)
+            else _case_loader(
+                config,
+                split=config.eval_split,
+                sample_index=config.eval_index,
+                sample_indices=config.eval_indices,
+            )
         )
         if (
             eval_loader is not None
@@ -309,7 +343,12 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 if baseline_eval is not None:
                     _print_baseline_cache_hit(baseline_eval, baseline_cache_path)
 
-        train_loader = _case_loader(config, split="train", sample_index=config.train_index)
+        train_loader = _case_loader(
+            config,
+            split="train",
+            sample_index=config.train_index,
+            sample_indices=config.train_indices,
+        )
 
         train_context = _pipeline_context(
             epoch=0,
@@ -390,7 +429,9 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             concurrency=config.concurrency,
             commit_concurrency=config.commit_concurrency,
             train_index=config.train_index,
+            train_indices=config.train_indices,
             eval_index=config.eval_index,
+            eval_indices=config.eval_indices,
             policy_root_uri=policy_root_uri,
             baseline_eval=baseline_eval,
             train_epochs=list(train_result.metadata.get("train_reports", [])),
@@ -584,6 +625,7 @@ def _write_baseline_cache(
         "domain": config.domain,
         "split": config.eval_split,
         "eval_index": config.eval_index,
+        "eval_indices": config.eval_indices,
         "trials": config.trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
@@ -722,9 +764,12 @@ def _case_loader(
     *,
     split: str,
     sample_index: int | None,
+    sample_indices: list[int] | None = None,
 ) -> RemoteCaseLoader:
     filters: dict[str, Any] = {}
-    if sample_index is not None:
+    if sample_indices is not None:
+        filters["task_indices"] = list(sample_indices)
+    elif sample_index is not None:
         filters["task_indices"] = [sample_index]
     return RemoteCaseLoader(
         service_url=_require_benchmark_service_url(config),
@@ -810,13 +855,17 @@ def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
         "domain": config.domain,
         "split": config.eval_split,
         "eval_index": config.eval_index,
+        "eval_indices": config.eval_indices,
         "trials": config.trials,
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
     }
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
-    index = "all" if config.eval_index is None else str(config.eval_index)
+    if config.eval_indices is not None:
+        index = "multi-" + "-".join(str(item) for item in config.eval_indices)
+    else:
+        index = "all" if config.eval_index is None else str(config.eval_index)
     split = _cache_slug(str(config.eval_split or "none"))
     return f"{_cache_slug(config.domain)}_{split}_index-{index}_trials-{config.trials}_{digest}"
 

@@ -70,10 +70,20 @@ def parse_args() -> argparse.Namespace:
         help="Run only the train sample at this 0-based split index. Default runs all train samples.",
     )
     parser.add_argument(
+        "--train-indices",
+        default=None,
+        help="Comma-separated train sample indices. Overrides --train-index.",
+    )
+    parser.add_argument(
         "--eval-index",
         type=int,
         default=None,
         help="Run only the eval/test sample at this 0-based split index. Default runs all eval samples.",
+    )
+    parser.add_argument(
+        "--eval-indices",
+        default=None,
+        help="Comma-separated eval/test sample indices. Overrides --eval-index.",
     )
     parser.add_argument(
         "--force-baseline-recompute",
@@ -140,6 +150,21 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _parse_indices_arg(value: str | None) -> list[int] | None:
+    if value is None or not str(value).strip():
+        return None
+    indices: list[int] = []
+    for part in str(value).split(","):
+        item = part.strip()
+        if not item:
+            continue
+        index = int(item)
+        if index < 0:
+            raise ValueError("indices must be >= 0")
+        indices.append(index)
+    return indices or None
+
+
 async def main_async() -> int:
     args = parse_args()
     from openviking.session.train.batch_runner import (
@@ -166,7 +191,9 @@ async def main_async() -> int:
             keep_default_tools=True,
             max_iterations=args.max_iterations,
             train_index=args.train_index,
+            train_indices=_parse_indices_arg(args.train_indices),
             eval_index=args.eval_index,
+            eval_indices=_parse_indices_arg(args.eval_indices),
             benchmark_service_url=args.benchmark_service_url,
             baseline_force_recompute=args.force_baseline_recompute,
             eval_each_epoch=args.eval_each_epoch,

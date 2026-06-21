@@ -17,6 +17,7 @@ from typing import Any
 import uvicorn
 
 DEFAULT_NATIVE_THREAD_WORKERS = 128
+DEFAULT_MAX_ROLLOUT_CONCURRENCY = 32
 TAU2_SERVICE_LOG_LEVEL = "WARNING"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -50,6 +51,7 @@ def create_app(
     config_path: str | None = None,
     rollout_language: str = "default",
     rollout_backend: str | None = None,
+    max_rollout_concurrency: int | None = None,
 ):
     if rollout_language not in {"default", "zh"}:
         raise ValueError("rollout_language must be 'default' or 'zh'")
@@ -92,6 +94,7 @@ def create_app(
         service_name="tau2",
         make_case_loader=make_case_loader,
         make_rollout_executor=make_rollout_executor,
+        max_rollout_concurrency=max_rollout_concurrency,
     )
 
 
@@ -129,6 +132,20 @@ def parse_args() -> argparse.Namespace:
         default=int(os.getenv("TAU2_NATIVE_THREAD_WORKERS", str(DEFAULT_NATIVE_THREAD_WORKERS))),
         help="Default thread pool workers for native tau2 rollout execution (default: 128).",
     )
+    parser.add_argument(
+        "--max-rollout-concurrency",
+        type=int,
+        default=int(
+            os.getenv(
+                "TAU2_MAX_ROLLOUT_CONCURRENCY",
+                str(DEFAULT_MAX_ROLLOUT_CONCURRENCY),
+            )
+        ),
+        help=(
+            "Maximum concurrent rollout executions hosted by this service. "
+            f"Default: {DEFAULT_MAX_ROLLOUT_CONCURRENCY}."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -162,6 +179,7 @@ def main() -> None:
         config_path=args.config,
         rollout_language=args.rollout_language,
         rollout_backend=args.rollout_backend,
+        max_rollout_concurrency=args.max_rollout_concurrency,
     )
     config = uvicorn.Config(
         app,

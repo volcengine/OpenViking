@@ -109,6 +109,7 @@ class RemoteRolloutExecutor:
     request_timeout_seconds: float = 300.0
     poll_interval_seconds: float = 2.0
     execution_timeout_seconds: float = 3600.0
+    missing_execution_grace_seconds: float = 60.0
     show_progress: bool = False
     progress_label: str = "rollout"
     on_rollout_complete: Any | None = None
@@ -122,6 +123,8 @@ class RemoteRolloutExecutor:
             raise ValueError("poll_interval_seconds must be > 0")
         if self.execution_timeout_seconds <= 0:
             raise ValueError("execution_timeout_seconds must be > 0")
+        if self.missing_execution_grace_seconds <= 0:
+            raise ValueError("missing_execution_grace_seconds must be > 0")
 
     async def execute(
         self,
@@ -217,8 +220,12 @@ class RemoteRolloutExecutor:
         *,
         case: Case,
     ) -> Rollout:
-        deadline = asyncio.get_running_loop().time() + self.execution_timeout_seconds
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        deadline = started_at + self.execution_timeout_seconds
+        missing_execution_deadline = started_at + self.missing_execution_grace_seconds
         transient_errors = 0
+        missing_execution_errors = 0
         last_transient_error: BaseException | None = None
         while True:
             try:
@@ -234,6 +241,22 @@ class RemoteRolloutExecutor:
                         f"{type(exc).__name__}: {exc}"
                     ) from exc
                 await asyncio.sleep(min(self.poll_interval_seconds * transient_errors, 10.0))
+                continue
+            if response.status_code == 404:
+                missing_execution_errors += 1
+                if (
+                    loop.time() >= deadline
+                    or loop.time() >= missing_execution_deadline
+                ):
+                    raise RuntimeError(
+                        f"rollout execution {execution_id} was not found while polling "
+                        f"case {case.name}; observed {missing_execution_errors} 404 response(s) "
+                        f"over {loop.time() - started_at:.1f}s. Last response: "
+                        f"{_response_text(response)}"
+                    )
+                await asyncio.sleep(
+                    min(self.poll_interval_seconds * missing_execution_errors, 10.0)
+                )
                 continue
             response.raise_for_status()
             data = response.json()
@@ -264,7 +287,8 @@ class RemoteRolloutExecutor:
 
 def _progress_stage_label(stage: Any, *, default: str) -> str:
     stage_text = str(stage or "")
-    stage_name = stage_text.split(maxsplit=1)[0]
+    stage_parts = stage_text.split(maxsplit=1)
+    stage_name = stage_parts[0] if stage_parts else ""
     if _is_progress_stage_name(stage_name):
         return f"{stage_name}_start"
     if stage_name.endswith("_start") and _is_progress_stage_name(stage_name[:-6]):
@@ -291,6 +315,17 @@ def _require_execution_id(data: dict[str, Any], *, case: Case) -> str:
     if not isinstance(execution_id, str) or not execution_id:
         raise RuntimeError(f"rollout service did not return execution_id for case {case.name}")
     return execution_id
+
+
+def _response_text(response: httpx.Response, *, max_chars: int = 500) -> str:
+    try:
+        text = response.text
+    except Exception:
+        return "<unavailable>"
+    text = text.replace("\n", "\\n")
+    if len(text) > max_chars:
+        return text[:max_chars] + "..."
+    return text
 
 
 def _policy_set_to_dict(policy_set: ExperienceSet) -> dict[str, Any]:

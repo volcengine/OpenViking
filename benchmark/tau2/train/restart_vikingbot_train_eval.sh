@@ -104,6 +104,7 @@ OPENVIKING_BOT_PORT="${OPENVIKING_BOT_PORT:-${DEFAULT_OPENVIKING_BOT_PORT}}"
 TAU2_SERVICE_HOST="${TAU2_SERVICE_HOST:-127.0.0.1}"
 TAU2_SERVICE_PORT="${TAU2_SERVICE_PORT:-${DEFAULT_TAU2_SERVICE_PORT}}"
 TAU2_ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-vikingbot}"
+TAU2_MAX_ROLLOUT_CONCURRENCY="${TAU2_MAX_ROLLOUT_CONCURRENCY:-32}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-180}"
 RESULT_DIR_NAME="${RESULT_DIR_NAME:-${DEFAULT_RESULT_DIR_NAME}}"
 LOG_DIR="${LOG_DIR:-${DEFAULT_LOG_DIR}}"
@@ -123,6 +124,33 @@ log() {
 fail() {
   printf '[restart-vikingbot-train] ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+stop_existing_listener() {
+  local name="$1"
+  local port="$2"
+  local pids
+  pids="$(lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -z "${pids}" ]]; then
+    log "no existing ${name} listener on port ${port}"
+    return 0
+  fi
+
+  log "stopping existing ${name} listener(s) on port ${port}: ${pids}"
+  kill ${pids} 2>/dev/null || true
+  for _ in {1..20}; do
+    sleep 0.2
+    if ! lsof -tiTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1; then
+      log "✓ stopped existing ${name} listener(s) on port ${port}"
+      return 0
+    fi
+  done
+
+  pids="$(lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -n "${pids}" ]]; then
+    log "force stopping existing ${name} listener(s) on port ${port}: ${pids}"
+    kill -9 ${pids} 2>/dev/null || true
+  fi
 }
 
 json_string_escape() {
@@ -208,7 +236,13 @@ if not isinstance(ov_server, dict):
 bot["ov_server"] = ov_server
 ov_server["server_url"] = openviking_url
 ov_server.setdefault("case_recall_limit", 1)
-ov_server.setdefault("trajectory_recall_limit", 2)
+ov_server["trajectory_recall_limit"] = max(
+    int(ov_server.get("trajectory_recall_limit", 0) or 0), 4
+)
+ov_server["exp_recall_limit"] = max(int(ov_server.get("exp_recall_limit", 0) or 0), 6)
+ov_server["exp_recall_max_chars"] = max(
+    int(ov_server.get("exp_recall_max_chars", 0) or 0), 14000
+)
 config_path.parent.mkdir(parents=True, exist_ok=True)
 config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
@@ -249,6 +283,8 @@ start_openviking_server() {
   log "restarting OpenViking server on port ${OPENVIKING_PORT}, bot port ${OPENVIKING_BOT_PORT}"
   log "OpenViking log: ${OPENVIKING_LOG}"
   : > "${OPENVIKING_LOG}"
+  stop_existing_listener "OpenViking server" "${OPENVIKING_PORT}"
+  stop_existing_listener "OpenViking bot" "${OPENVIKING_BOT_PORT}"
 
   (
     cd "${REPO_ROOT}"
@@ -275,6 +311,7 @@ start_tau2_service() {
   log "restarting tau2 service on ${TAU2_SERVICE_HOST}:${TAU2_SERVICE_PORT} backend=${TAU2_ROLLOUT_BACKEND}"
   log "tau2 service log: ${TAU2_SERVICE_LOG}"
   : > "${TAU2_SERVICE_LOG}"
+  stop_existing_listener "tau2 rollout service" "${TAU2_SERVICE_PORT}"
 
   (
     cd "${REPO_ROOT}"
@@ -283,7 +320,8 @@ start_tau2_service() {
       --host "${TAU2_SERVICE_HOST}" \
       --port "${TAU2_SERVICE_PORT}" \
       --config "${OPENVIKING_CONFIG_FILE}" \
-      --rollout-backend "${TAU2_ROLLOUT_BACKEND}"
+      --rollout-backend "${TAU2_ROLLOUT_BACKEND}" \
+      --max-rollout-concurrency "${TAU2_MAX_ROLLOUT_CONCURRENCY}"
   ) >"${TAU2_SERVICE_LOG}" 2>&1 &
 
   echo "$!" > "${LOG_DIR}/tau2-service.pid"
