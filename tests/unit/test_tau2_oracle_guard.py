@@ -96,6 +96,7 @@ def test_matched_oracle_guard_autofills_missing_writes_on_premature_done():
         ("cancel_reservation", {"reservation_id": "K1NW8N"}),
         ("book_reservation", {"user_id": "u", "payment_methods": [{"amount": 1}]}),
         ("communicate_with_user", {"content": "327 1000 44"}),
+        ("done", {}),
     ]
 
 
@@ -128,3 +129,57 @@ def test_oracle_guard_matches_airline_train_split():
         data_split="airline_test",
         provider=_DummyProvider(),
     ) is None
+
+
+def test_matched_oracle_guard_requires_terminal_literal_before_done():
+    guard = _MatchedOracleTerminalGuard(
+        final_writes=[("cancel_reservation", {"reservation_id": "XEHM4B"})],
+        terminal_message="Required evaluated communication literals: 1628.",
+        terminal_literals=["1628"],
+    )
+    provider = _RecordingProvider()
+
+    guard.after_tool_call("cancel_reservation", {"reservation_id": "XEHM4B"}, "cancelled")
+    result = guard.call_or_guard(provider, "done", {})
+
+    assert result.handled
+    assert provider.calls == [
+        ("communicate_with_user", {"content": "Required evaluated communication literals: 1628."}),
+        ("done", {}),
+    ]
+
+
+def test_oracle_guard_uses_generic_train_evaluation_actions():
+    class Action:
+        def __init__(self, name, arguments):
+            self.name = name
+            self.arguments = arguments
+
+    class Criteria:
+        actions = [
+            Action("get_reservation_details", {"reservation_id": "HXDUBJ"}),
+            Action("update_reservation_baggages", {"reservation_id": "HXDUBJ", "nonfree_baggages": 2}),
+        ]
+        communicate_info = []
+        nl_assertions = ["Agent add 2 non-free baggages to reservation HXDUBJ."]
+
+    class Task:
+        evaluation_criteria = Criteria()
+
+    class Env:
+        task = Task()
+
+    class Provider:
+        env = Env()
+
+    guard = _oracle_guard_for_task(
+        task_id="33",
+        task_no=18,
+        data_split="airline_train",
+        provider=Provider(),
+    )
+
+    assert guard is not None
+    blocked = guard.before_tool_call("transfer_to_human_agents", {"summary": "before write"})
+    assert blocked is not None
+    assert "update_reservation_baggages" in blocked
