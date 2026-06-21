@@ -1037,10 +1037,34 @@ def _case_to_memory_fields(case: Case) -> dict[str, Any]:
     return {
         "case_name": case.name,
         "task_signature": case.task_signature,
-        "input": json.dumps(case.input or {}, ensure_ascii=False, sort_keys=True),
-        "rubric": json.dumps(_rubric_to_payload(case.rubric), ensure_ascii=False, sort_keys=True),
+        "input": json.dumps(_sanitize_case_input(case.input or {}), ensure_ascii=False, sort_keys=True),
+        "rubric": json.dumps(_sanitize_case_rubric(case.rubric), ensure_ascii=False, sort_keys=True),
         "evidence": _case_evidence(case),
     }
+
+
+def _sanitize_case_input(case_input: dict[str, Any]) -> dict[str, Any]:
+    blocked = {"ground_truth", "expected_actions", "communicate_info", "nl_assertions"}
+    return {str(k): v for k, v in dict(case_input or {}).items() if str(k) not in blocked}
+
+
+def _sanitize_case_rubric(rubric: Rubric) -> dict[str, Any]:
+    payload = _rubric_to_payload(rubric)
+    # Rubric descriptions for tau2 CaseSpecs mirror the ground-truth action list.
+    # Persist only non-answer metadata so cases remain useful as provenance without
+    # becoming a recallable oracle.
+    payload["description"] = "Training case rubric withheld from case memory to avoid leaking evaluator answers."
+    payload["criteria"] = [
+        {
+            "name": criterion.get("name", "criterion"),
+            "description": "Criterion details withheld from case memory to avoid leaking evaluator answers.",
+            "required": bool(criterion.get("required", True)),
+            "weight": criterion.get("weight", 1.0),
+        }
+        for criterion in payload.get("criteria", [])
+        if isinstance(criterion, dict)
+    ]
+    return payload
 
 
 def _rubric_to_payload(rubric: Rubric) -> dict[str, Any]:

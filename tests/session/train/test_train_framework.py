@@ -48,7 +48,7 @@ def _case() -> Case:
     return Case(
         name="duplicate_booking",
         task_signature="booking_duplicate",
-        input={"user_request": "cancel the duplicate booking"},
+        input={"user_request": "cancel the duplicate booking", "ground_truth": "SECRET_EXPECTED_ACTION"},
         rubric=Rubric(
             name="booking_duplicate_rubric",
             description="Cancel only the verified duplicate booking.",
@@ -1087,6 +1087,17 @@ async def test_session_commit_policy_trainer_records_commit_trace_id():
             {"memory_types": ["cases", "trajectories", "experiences"]},
         )
     ]
+    committed_messages = client.messages[commit_result["session_id"]]
+    assert len(committed_messages) == 3
+    joined_text = "\n".join(
+        part.get("text", "")
+        for message in committed_messages
+        for part in message.get("parts", [])
+        if isinstance(part, dict)
+    )
+    assert "OpenViking Training Oracle Summary" not in joined_text
+    assert "SECRET_EXPECTED_ACTION" not in joined_text
+    assert "ground_truth" not in joined_text
 
 
 @pytest.mark.asyncio
@@ -1121,8 +1132,8 @@ async def test_session_commit_policy_trainer_splits_large_message_batches():
 
     commit_result = result.apply_result.metadata["commit_results"][0]
     assert commit_result["error"] is None
-    assert batch_sizes == [100, 100, 52]
-    assert len(client.messages[commit_result["session_id"]]) == 252
+    assert batch_sizes == [100, 100, 51]
+    assert len(client.messages[commit_result["session_id"]]) == 251
 
 
 @pytest.mark.asyncio

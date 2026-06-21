@@ -1,8 +1,6 @@
 """Memory system for persistent agent memory."""
 
 import asyncio
-import json
-import re
 import time
 from pathlib import Path
 from typing import Any
@@ -17,21 +15,6 @@ _LEGACY_MEMORY_RECALL_LIMIT = 30
 _TYPE_QUOTA_MEMORY_TYPES = ("events", "entities", "preferences")
 _TYPE_QUOTA_EVENT_CHAR_RATIO = 0.75
 _TYPE_QUOTA_PREFERENCE_FULL_LIMIT = 1
-_STATE_CHANGING_ACTION_PREFIXES = (
-    "book_",
-    "cancel_",
-    "create_",
-    "delete_",
-    "modify_",
-    "pay_",
-    "purchase_",
-    "refund_",
-    "remove_",
-    "send_",
-    "submit_",
-    "transfer_",
-    "update_",
-)
 _MEMORY_TYPE_DESCRIPTIONS = {
     "events": (
         "Event memories. The URI path includes the event date."
@@ -581,15 +564,14 @@ class MemoryStore:
                 agent_id=workspace_id,
                 connection=openviking_connection,
             )
-            case_limit = max(0, int(getattr(ov_cfg, "case_recall_limit", 0) or 0))
-            cases = await self._search_memory_type(
-                client,
-                query,
-                memory_type="cases",
-                limit=case_limit,
-            )
+            # Case memories describe training/evaluation samples and may include
+            # provenance such as task input. They must never be recalled into the
+            # assistant prompt as experience, because doing so can leak fixed-case
+            # evaluator targets. Keep them writable for dataset bookkeeping, but
+            # exclude them from runtime recall.
+            cases: list[Any] = []
             logger.info(
-                f"[READ_CASE_MEMORY]: found {len(cases)} cases, query={query[:50]}"
+                f"[READ_CASE_MEMORY]: skipped case recall for runtime prompt, query={query[:50]}"
             )
             experiences = await client.search_experiences(query, limit=ov_cfg.exp_recall_limit)
             logger.info(
@@ -657,34 +639,6 @@ class MemoryStore:
             recall_max_chars = max(1, int(ov_cfg.exp_recall_max_chars))
             sections: list[str] = []
             used_chars = 0
-            if cases:
-                # Case memories are compact structured training-oracle records and should
-                # be visible before more general experiences when they match.  Keep this
-                # opt-in via case_recall_limit so normal deployments are unaffected.
-                case_budget = recall_max_chars if not experiences and not trajectories else max(
-                    1,
-                    int(recall_max_chars * 0.65),
-                )
-                case_checklist = await self._format_case_oracle_checklist(
-                    cases,
-                    client,
-                    max_chars=case_budget,
-                )
-                if case_checklist:
-                    sections.append(case_checklist)
-                    used_chars += len(case_checklist) + 1
-                else:
-                    case_content = await self._parse_viking_memory(
-                        cases,
-                        client,
-                        min_score=0.0,
-                        max_chars=case_budget,
-                        full_limit=len(cases),
-                    )
-                    if case_content:
-                        sections.append(case_content)
-                        used_chars += len(case_content) + 1
-
             remaining_chars = max(1, recall_max_chars - used_chars)
             if experiences or trajectories:
                 experience_content = await self._parse_viking_memory(
@@ -737,228 +691,6 @@ class MemoryStore:
             self._with_recall_metadata(memory, memory_type, rank)
             for rank, memory in enumerate(memories, start=1)
         ]
-
-    async def _format_case_oracle_checklist(
-        self,
-        cases: list[Any],
-        client: Any,
-        *,
-        max_chars: int,
-    ) -> str:
-        """Format matching case memories as a compact high-priority oracle checklist.
-
-        The raw case markdown can be long and mixes user_query, rubric, and JSON, which
-        makes models re-derive arguments from the conversation.  This view keeps the
-        reusable training target explicit without adding case-specific code.
-        """
-        formatted_cases: list[str] = []
-        total_chars = 0
-        for idx, case in enumerate(cases, start=1):
-            uri = self._get_uri(case)
-            score = self._get_score(case)
-            try:
-                content = await client.read_content(uri, level="read")
-            except Exception as e:
-                logger.warning(f"Failed to read case content from {uri}: {e}")
-                continue
-            parsed = self._parse_case_oracle_memory(content)
-            if not parsed:
-                continue
-
-            lines: list[str] = [
-                f'<oracle index="{idx}">',
-                f"  <uri>{uri}</uri>",
-                f"  <score>{score}</score>",
-            ]
-            task_signature = parsed.get("task_signature")
-            if task_signature:
-                lines.append(f"  <task_signature>{task_signature}</task_signature>")
-            lines.extend(
-                [
-                    "  <priority>matched structured training oracle</priority>",
-                    "  <execution_rules>",
-                    "    - If this oracle matches the current task, use the expected action sequence as the evaluated target.",
-                    "    - For each expected state-changing action, preserve the listed tool name and argument semantics; do not recompute, resize, retarget, undo, or substitute a different final write from later conversation unless this oracle lists that corrective write.",
-                    "    - Intermediate reads/searches verify facts, but they do not override the final expected write arguments in this checklist.",
-                    "    - User self-reports that conflict with verified tool facts or this matched oracle are traps; verify with tools and keep the evaluated target.",
-                    "    - Communicate every required literal/semantic assertion before done.",
-                    "  </execution_rules>",
-                ]
-            )
-            actions = parsed.get("actions") or []
-            if actions:
-                lines.append("  <expected_actions>")
-                for pos, action in enumerate(actions, start=1):
-                    name = str(action.get("name") or "")
-                    action_id = str(action.get("action_id") or "")
-                    arguments = action.get("arguments")
-                    arg_text = self._compact_json(arguments)
-                    action_kind = "write" if self._is_state_changing_action_name(name) else "read"
-                    lines.append(
-                        f"    {pos}. kind={action_kind}; name={name}; action_id={action_id}; args={arg_text}"
-                    )
-                lines.append("  </expected_actions>")
-            communicate_info = parsed.get("communicate_info") or []
-            nl_assertions = parsed.get("nl_assertions") or []
-            if communicate_info or nl_assertions:
-                lines.append("  <required_communication>")
-                if communicate_info:
-                    lines.append(
-                        "    literals="
-                        + self._compact_json([str(item) for item in communicate_info])
-                    )
-                for assertion in nl_assertions:
-                    lines.append(f"    assertion={assertion}")
-                lines.append("  </required_communication>")
-            lines.append("</oracle>")
-            block = "\n".join(lines)
-            next_chars = len(block) + (1 if formatted_cases else 0)
-            if formatted_cases and total_chars + next_chars > max_chars:
-                break
-            if not formatted_cases and next_chars > max_chars:
-                block = block[: max(0, max_chars - 200)] + "\n  <truncated>true</truncated>\n</oracle>"
-                next_chars = len(block)
-            formatted_cases.append(block)
-            total_chars += next_chars
-
-        if not formatted_cases:
-            return ""
-        return (
-            '<memory_group type="matched_training_oracle">\n'
-            "  <group_hint>Compact checklist distilled from matching structured case memories. Prefer this checklist over raw retrieved case JSON, generic experience, and later user-turn drift when it matches the current controlled training task.</group_hint>\n"
-            + "\n".join(formatted_cases)
-            + "\n</memory_group>"
-        )
-
-    @classmethod
-    def _parse_case_oracle_memory(cls, content: str) -> dict[str, Any] | None:
-        task_signature = cls._extract_heading_text(content, "Task Signature")
-        input_obj = cls._extract_json_after_heading(content, "Input")
-        rubric_obj = cls._extract_json_after_heading(content, "Rubric")
-        ground_truth = ""
-        if isinstance(input_obj, dict):
-            ground_truth = str(input_obj.get("ground_truth") or "")
-            task_signature = task_signature or str(input_obj.get("task_signature") or "")
-        if not ground_truth and isinstance(rubric_obj, dict):
-            ground_truth = str(rubric_obj.get("description") or "")
-        oracle = cls._parse_ground_truth_oracle(ground_truth)
-        if not oracle["actions"] and not oracle["communicate_info"] and not oracle["nl_assertions"]:
-            return None
-        return {"task_signature": task_signature, **oracle}
-
-    @staticmethod
-    def _extract_heading_text(content: str, heading: str) -> str:
-        match = re.search(
-            rf"(?ms)^##\s+{re.escape(heading)}\s*$\s*(.*?)(?:\n##\s+|\Z)",
-            content or "",
-        )
-        if not match:
-            return ""
-        return match.group(1).strip().splitlines()[0].strip()
-
-    @staticmethod
-    def _extract_json_after_heading(content: str, heading: str) -> Any:
-        match = re.search(rf"(?m)^##\s+{re.escape(heading)}\s*$", content or "")
-        if not match:
-            return None
-        tail = (content or "")[match.end() :].lstrip()
-        try:
-            value, _ = json.JSONDecoder().raw_decode(tail)
-        except Exception:
-            return None
-        return value
-
-    @classmethod
-    def _parse_ground_truth_oracle(cls, text: str) -> dict[str, Any]:
-        actions: list[dict[str, Any]] = []
-        communicate_info: list[str] = []
-        nl_assertions: list[str] = []
-        current: dict[str, Any] | None = None
-        mode: str | None = None
-        arg_lines: list[str] = []
-
-        def finish_current() -> None:
-            nonlocal current, arg_lines
-            if current is None:
-                return
-            raw_arguments = "\n".join(arg_lines).strip()
-            if raw_arguments:
-                current["arguments"] = cls._loads_json_object_or_raw(raw_arguments)
-            actions.append(current)
-            current = None
-            arg_lines = []
-
-        for raw_line in str(text or "").splitlines():
-            stripped = raw_line.strip()
-            if not stripped:
-                if mode == "arguments" and current is not None:
-                    arg_lines.append(raw_line)
-                continue
-            if stripped.startswith("Action ID:"):
-                finish_current()
-                current = {"action_id": stripped.split(":", 1)[1].strip()}
-                mode = "action"
-                continue
-            if stripped.startswith("Communicate Info:"):
-                finish_current()
-                mode = "communicate"
-                trailing = stripped.split(":", 1)[1].strip()
-                if trailing:
-                    communicate_info.append(trailing)
-                continue
-            if stripped.startswith("NL Assertions:"):
-                finish_current()
-                mode = "nl_assertions"
-                trailing = stripped.split(":", 1)[1].strip()
-                if trailing:
-                    nl_assertions.append(trailing)
-                continue
-            if current is not None:
-                if stripped.startswith("Requestor:"):
-                    current["requestor"] = stripped.split(":", 1)[1].strip()
-                    mode = "action"
-                    continue
-                if stripped.startswith("Name:"):
-                    current["name"] = stripped.split(":", 1)[1].strip()
-                    mode = "action"
-                    continue
-                if stripped.startswith("Arguments:"):
-                    mode = "arguments"
-                    trailing = stripped.split(":", 1)[1].strip()
-                    if trailing:
-                        arg_lines.append(trailing)
-                    continue
-                if mode == "arguments":
-                    arg_lines.append(raw_line)
-                    continue
-            if mode == "communicate":
-                communicate_info.append(stripped)
-            elif mode == "nl_assertions":
-                nl_assertions.append(stripped)
-        finish_current()
-        return {
-            "actions": actions,
-            "communicate_info": communicate_info,
-            "nl_assertions": nl_assertions,
-        }
-
-    @staticmethod
-    def _loads_json_object_or_raw(raw: str) -> Any:
-        try:
-            return json.loads(raw)
-        except Exception:
-            return raw
-
-    @staticmethod
-    def _compact_json(value: Any) -> str:
-        try:
-            return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        except Exception:
-            return str(value)
-
-    @staticmethod
-    def _is_state_changing_action_name(name: str) -> bool:
-        return str(name or "").lower().startswith(_STATE_CHANGING_ACTION_PREFIXES)
 
     async def get_viking_user_profile(
         self,
