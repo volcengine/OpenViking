@@ -26,7 +26,7 @@ from openviking.session.train.domain import (
 )
 from openviking_cli.client.http import AsyncHTTPClient
 
-_TRAINING_COMMIT_MEMORY_TYPES = ("cases", "trajectories", "experiences")
+_TRAINING_COMMIT_MEMORY_TYPES = ("cases", "trajectories")
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
 _TRAINING_ORACLE_SUMMARY_HEADER = "# OpenViking Training Oracle Summary v1"
