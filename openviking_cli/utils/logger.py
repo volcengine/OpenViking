@@ -4,10 +4,12 @@
 Logging utilities for OpenViking.
 """
 
+import atexit
 import logging
+import queue
 import sys
 from contextlib import contextmanager
-from logging.handlers import TimedRotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional, Tuple
 from uuid import uuid4
@@ -63,6 +65,10 @@ _otel_log_handler: Any = None
 _MANAGED_LOGGER_ROOTS = ("openviking", "openviking_cli", "uvicorn")
 _shared_log_handler: Optional[logging.Handler] = None
 _shared_log_handler_key: Optional[tuple[Any, ...]] = None
+
+# QueueListener for thread-safe stdout/stderr logging (avoids StreamHandler deadlocks)
+_std_queue_listener: Optional[QueueListener] = None
+_std_queue_real_handler: Optional[logging.Handler] = None
 
 
 def _get_log_context() -> dict[str, Any]:
@@ -641,10 +647,29 @@ def _create_log_handler(log_output: str, config: Optional[Any]) -> logging.Handl
     if log_output == "file":
         log_output = "stdout"
 
-    if log_output == "stdout":
-        return logging.StreamHandler(sys.stdout)
-    elif log_output == "stderr":
-        return logging.StreamHandler(sys.stderr)
+    if log_output in ("stdout", "stderr"):
+        # QueueHandler + QueueListener prevents StreamHandler thread deadlocks
+        # when stdout/stderr is redirected to a file by systemd/journald.
+        # The listener thread is the ONLY thread that touches the real stream,
+        # so the handler lock can never be held across threads.
+        global _std_queue_listener, _std_queue_real_handler
+
+        if _std_queue_listener is not None:
+            return QueueHandler(_std_queue_listener.queue)
+
+        stream = sys.stdout if log_output == "stdout" else sys.stderr
+        _std_queue_real_handler = logging.StreamHandler(stream)
+
+        log_queue: queue.Queue = queue.Queue(-1)
+        _std_queue_listener = QueueListener(
+            log_queue, _std_queue_real_handler, respect_handler_level=True
+        )
+        _std_queue_listener.start()
+        atexit.register(_std_queue_listener.stop)
+
+        qh = QueueHandler(log_queue)
+        qh._ov_real_handler = _std_queue_real_handler  # type: ignore[attr-defined]
+        return qh
     else:
         if config is not None:
             try:
@@ -681,6 +706,18 @@ def _build_standard_handler(
     format_string: str,
 ) -> logging.Handler:
     handler = _create_log_handler(log_output, config)
+
+    # QueueHandler delegates formatting to the real handler in the listener thread.
+    # Set formatter + filters on the real handler so emitted LogRecords get
+    # formatted by the listener (single-threaded, no deadlock risk).
+    if isinstance(handler, QueueHandler):
+        real = getattr(handler, '_ov_real_handler', None)
+        if real is not None:
+            real.setFormatter(logging.Formatter(format_string))
+            from openviking.telemetry.tracer import TraceIdLoggingFilter
+            real.addFilter(TraceIdLoggingFilter())
+        return handler
+
     handler.setFormatter(logging.Formatter(format_string))
 
     # Add trace id filter
