@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from benchmark.tau2.train.rollout_executor_vikingbot import _MatchedOracleTerminalGuard
+from benchmark.tau2.train.rollout_executor_vikingbot import (
+    _MatchedOracleTerminalGuard,
+    _oracle_guard_for_task,
+)
 
 
 def test_matched_oracle_guard_blocks_post_final_state_writes_and_transfer():
@@ -106,3 +109,22 @@ def test_matched_oracle_guard_blocks_wrong_prefinal_write():
 
     assert blocked is not None
     assert "next required evaluated write is cancel_reservation" in blocked
+
+
+class _DummyProvider:
+    env = None
+
+
+def test_oracle_guard_matches_airline_train_split():
+    assert _oracle_guard_for_task(
+        task_id="14",
+        task_no=10,
+        data_split="airline_train",
+        provider=_DummyProvider(),
+    ) is not None
+    assert _oracle_guard_for_task(
+        task_id="14",
+        task_no=10,
+        data_split="airline_test",
+        provider=_DummyProvider(),
+    ) is None

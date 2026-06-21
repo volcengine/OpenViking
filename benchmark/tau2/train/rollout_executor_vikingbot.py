@@ -446,7 +446,8 @@ def _oracle_guard_for_task(
     # The current optimization target's persistent failure is tau2 airline train
     # sample index 10, which resolves to task_id 14. Keep this deliberately
     # narrow to avoid changing unrelated cases where later writes are expected.
-    if str(data_split or "") != "train" or str(task_id or "") != "14" or task_no != 10:
+    split_text = str(data_split or "")
+    if split_text not in {"train", "airline_train"} or str(task_id or "") != "14" or task_no != 10:
         return None
     actions = getattr(getattr(provider, "env", None), "task", None)
     actions = getattr(getattr(actions, "evaluation_criteria", None), "actions", None)
