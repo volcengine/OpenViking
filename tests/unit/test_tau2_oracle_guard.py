@@ -29,7 +29,8 @@ def test_matched_oracle_guard_blocks_post_final_state_writes_and_transfer():
             "payment_methods": [
                 {"payment_id": "certificate_3765853", "amount": 500},
                 {"payment_id": "gift_card_8020792", "amount": 198},
-            ]
+            ],
+            "insurance": "no",
         },
         '{"reservation_id":"HATHAT"}',
     )

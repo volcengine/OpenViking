@@ -450,7 +450,20 @@ def _is_state_changing_or_transfer_tool(tool_name: str) -> bool:
 
 
 def _arguments_match(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
-    return _normalize_for_compare(actual) == _normalize_for_compare(expected)
+    return _expected_subset_matches(_normalize_for_compare(actual), _normalize_for_compare(expected))
+
+
+def _expected_subset_matches(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return False
+        return all(k in actual and _expected_subset_matches(actual[k], v) for k, v in expected.items())
+    if isinstance(expected, list):
+        return isinstance(actual, list) and len(actual) == len(expected) and all(
+            _expected_subset_matches(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected, strict=True)
+        )
+    return actual == expected
 
 
 def _normalize_for_compare(value: Any) -> Any:
