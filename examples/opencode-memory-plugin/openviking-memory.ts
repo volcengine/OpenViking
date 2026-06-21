@@ -1664,10 +1664,9 @@ function extractMessageText(parts: { type: string; text?: string }[]): string | 
 /** Perform search against OpenViking with a timeout guard. Returns empty on any failure. */
 async function performRecallSearch(config: OpenVikingConfig, query: string): Promise<RecallSearchItem[]> {
   try {
-    const body: { query: string; limit: number; mode: string } = {
+    const body: { query: string; limit: number } = {
       query: query.slice(0, 4000),
       limit: 20,
-      mode: "auto",
     }
     const response = await makeRequest<OpenVikingResponse<{ memories?: RecallSearchItem[]; results?: RecallSearchItem[] }>>(
       config,
@@ -1688,10 +1687,11 @@ async function performRecallSearch(config: OpenVikingConfig, query: string): Pro
 
 /** Run auto recall using chat.message hook — injects persistent synthetic part. */
 async function runAutoRecall(
-  input: { sessionID: string; messageID: string; parts: { type: string; text?: string }[] },
+  config: OpenVikingConfig,
+  input: { sessionID: string; messageID?: string },
   output: { parts: any[] },
 ): Promise<void> {
-  const query = extractMessageText(input.parts ?? [])
+  const query = extractMessageText(output.parts ?? [])
   if (!query) return
 
   const rawResults = await performRecallSearch(config, query)
@@ -2375,7 +2375,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
     "chat.message": async (input, output) => {
       try {
         if (!config.autoRecall?.enabled) return
-        await runAutoRecall(input, output)
+        await runAutoRecall(config, input, output)
       } catch (error: any) {
         log("WARN", "recall", "Auto recall failed, skipping silently", {
           error: error?.message ?? String(error),
