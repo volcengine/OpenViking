@@ -121,8 +121,8 @@ def _make_config(api_key_type: str, mode: str = "remote", **ov_overrides):
         mode=mode,
         api_key_type=api_key_type,
         server_url="http://ov.local",
-        api_key="user-key",
-        root_api_key="root-key",
+        api_key="root-key" if api_key_type == "root" else "user-key",
+        root_api_key="legacy-root-key",
         account_id="acct",
         admin_user_id="admin",
         **ov_overrides,
@@ -145,6 +145,7 @@ def test_viking_client_init_root_mode_sets_account_and_user(monkeypatch):
 
     first = _DummyHTTPClient.instances[0]
     assert client.api_key_type == "root"
+    assert first.kwargs["api_key"] == "root-key"
     assert first.kwargs["account"] == "acct"
     assert first.kwargs["user"] == "admin"
     assert first.kwargs["profile_enabled"] is False
@@ -180,10 +181,25 @@ def test_viking_client_actor_peer_id_sets_actor_header(monkeypatch):
     assert first.kwargs["actor_peer_id"] == client.actor_peer_id
 
 
+def test_viking_client_uses_effective_auth_mode_for_dev(monkeypatch):
+    config = _make_config("user", mode="remote")
+    config.ov_server.effective_auth_mode = "dev"
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: config)
+
+    client = VikingClient()
+
+    first = _DummyHTTPClient.instances[0]
+    assert client.auth_mode == "dev"
+    assert client.mode == "local"
+    assert first.kwargs == {"url": "http://ov.local"}
+
+
 def test_openviking_config_api_key_type_empty_values_are_inferred():
     assert OpenVikingConfig(api_key_type=None, api_key="user-key").api_key_type == "user"
     assert OpenVikingConfig(api_key_type="", api_key="user-key").api_key_type == "user"
-    assert OpenVikingConfig(api_key_type="root", api_key="root-key").api_key_type == "root"
+    config = OpenVikingConfig(api_key_type="root", api_key="root-key")
+    assert config.api_key_type == "root"
+    assert config.api_key == "root-key"
 
 
 def test_user_key_current_memory_targets_use_current_user_shorthand(monkeypatch):
@@ -213,7 +229,7 @@ def test_ov_server_api_key_mode_ignores_bot_root_key_and_uses_ovcli_user_key(mon
     assert bot_data["api_key_type"] == "user"
 
 
-def test_ov_server_trusted_mode_uses_top_level_root_key(monkeypatch):
+def test_ov_server_trusted_mode_fills_api_key_from_top_level_root_key(monkeypatch):
     bot_data = {}
     ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
     monkeypatch.setattr(
@@ -225,12 +241,98 @@ def test_ov_server_trusted_mode_uses_top_level_root_key(monkeypatch):
     config_loader_module._merge_ov_server_config(bot_data, ov_data)
 
     assert bot_data["mode"] == "remote"
-    assert "api_key" not in bot_data
-    assert bot_data["root_api_key"] == "server-root-key"
+    assert bot_data["api_key"] == "server-root-key"
+    assert "root_api_key" not in bot_data
     assert bot_data["api_key_type"] == "root"
 
 
-def test_ov_server_api_key_implies_remote_mode(monkeypatch):
+def test_ov_server_external_url_does_not_inherit_trusted_root_key(monkeypatch):
+    bot_data = {"server_url": "https://external.example"}
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="external-user-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "external-user-key"
+    assert bot_data["api_key_type"] == "user"
+    assert "root_api_key" not in bot_data
+
+
+def test_ov_server_explicit_url_is_external_even_if_it_matches_local_url(monkeypatch):
+    bot_data = {"server_url": "http://localhost:1933"}
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "stale-ovcli-key"
+    assert bot_data["api_key_type"] == "user"
+    assert "root_api_key" not in bot_data
+
+
+def test_ov_server_external_url_forces_remote_mode():
+    bot_data = {
+        "server_url": "https://external.example",
+        "mode": "local",
+        "api_key": "external-user-key",
+    }
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "external-user-key"
+    assert bot_data["api_key_type"] == "user"
+    assert "root_api_key" not in bot_data
+
+
+def test_ov_server_external_url_root_key_does_not_imply_root_mode(monkeypatch):
+    bot_data = {
+        "server_url": "https://external.example",
+        "root_api_key": "bot-root-key",
+    }
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="external-user-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "external-user-key"
+    assert bot_data["api_key_type"] == "user"
+    assert bot_data["root_api_key"] == "bot-root-key"
+
+
+def test_ov_server_legacy_mode_is_ignored_for_current_api_key_server(monkeypatch):
+    bot_data = {"mode": "local"}
+    ov_data = {"root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="ovcli-user-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "ovcli-user-key"
+    assert bot_data["api_key_type"] == "user"
+
+
+def test_ov_server_current_dev_mode_ignores_legacy_api_key_for_mode(monkeypatch):
     bot_data = {"api_key": "bot-user-key"}
     monkeypatch.setattr(
         config_loader_module,
@@ -240,7 +342,7 @@ def test_ov_server_api_key_implies_remote_mode(monkeypatch):
 
     config_loader_module._merge_ov_server_config(bot_data, {})
 
-    assert bot_data["mode"] == "remote"
+    assert bot_data["mode"] == "local"
     assert bot_data["api_key"] == "bot-user-key"
 
 
@@ -398,13 +500,38 @@ def test_validate_openviking_auth_allows_user_key(monkeypatch, capsys):
     assert captured.err == ""
 
 
+def test_validate_openviking_auth_uses_effective_auth_mode_not_legacy_mode(
+    monkeypatch, capsys
+):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            effective_auth_mode="dev",
+            mode="remote",
+            api_key_type="user",
+            api_key="configured-key",
+            root_api_key="",
+            server_url="http://ov.local",
+        )
+    )
+    monkeypatch.setattr(
+        config_loader_module,
+        "_request_openviking_json",
+        lambda *_args, **_kwargs: _auth_probe(data={"auth_mode": "dev"}),
+    )
+
+    config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
 def test_validate_openviking_auth_warns_for_trusted_bad_root_key(monkeypatch, capsys):
     config = SimpleNamespace(
         ov_server=SimpleNamespace(
             mode="remote",
-            api_key="",
+            api_key="configured-root",
             api_key_type="root",
-            root_api_key="configured-root",
+            root_api_key="legacy-root",
             account_id="acct",
             admin_user_id="admin",
             server_url="http://ov.local",
@@ -434,9 +561,9 @@ def test_validate_openviking_auth_allows_trusted_root(monkeypatch, capsys):
     config = SimpleNamespace(
         ov_server=SimpleNamespace(
             mode="remote",
-            api_key="",
+            api_key="root-key",
             api_key_type="root",
-            root_api_key="root-key",
+            root_api_key="legacy-root",
             account_id="acct",
             admin_user_id="admin",
             server_url="http://ov.local",

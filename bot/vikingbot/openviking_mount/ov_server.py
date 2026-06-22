@@ -56,8 +56,8 @@ class VikingClient:
         self.workspace_id = agent_id
         self.agent_id = agent_id
         self.ov_path = config.ov_data_path
-        self.mode = openviking_config.mode
         self.auth_mode = self._resolve_auth_mode(openviking_config)
+        self.mode = "local" if self.auth_mode == "dev" else "remote"
         self.api_key_type = self._resolve_api_key_type(openviking_config)
 
         self.admin_user_client = None
@@ -74,7 +74,7 @@ class VikingClient:
         )
         self.actor_peer_id = self._peer_id(actor_peer_id) or self._peer_id(connection_actor_peer_id)
 
-        if openviking_config.mode == "local":
+        if self._is_dev_mode():
             client_kwargs = {"url": openviking_config.server_url}
             self._apply_actor_peer_scope(client_kwargs)
             if agent_id is None or _is_session_key(agent_id):
@@ -94,11 +94,7 @@ class VikingClient:
         self.account_id = openviking_config.account_id
         self.admin_user_id = openviking_config.admin_user_id
 
-        api_key = (
-            openviking_config.root_api_key or openviking_config.api_key
-            if self._is_root_key_mode()
-            else openviking_config.api_key
-        )
+        api_key = openviking_config.api_key
         remote_client_kwargs = {
             "url": openviking_config.server_url,
             "api_key": api_key,
@@ -116,11 +112,15 @@ class VikingClient:
         return str(value or "").strip().lower()
 
     def _resolve_auth_mode(self, openviking_config: Any) -> str:
+        effective_auth_mode = self._normalize_auth_value(
+            getattr(openviking_config, "effective_auth_mode", None)
+        )
+        if effective_auth_mode in {"trusted", "api_key", "dev"}:
+            return effective_auth_mode
+
         api_key_type = self._normalize_auth_value(getattr(openviking_config, "api_key_type", None))
         if api_key_type == "root":
             return "trusted"
-        if getattr(openviking_config, "mode", None) == "local":
-            return "dev"
         return "api_key"
 
     def _resolve_api_key_type(self, openviking_config: Any) -> str:
@@ -248,19 +248,20 @@ class VikingClient:
 
     def _is_root_key_mode(self) -> bool:
         return (
-            self.mode == "remote"
-            and self.auth_mode == "trusted"
+            self.auth_mode == "trusted"
             and self.api_key_type == "root"
             and not self._has_request_connection()
         )
 
     def _is_user_key_mode(self) -> bool:
         return (
-            self.mode == "remote"
-            and self.auth_mode == "api_key"
+            self.auth_mode == "api_key"
             and self.api_key_type == "user"
             and not self._has_request_connection()
         )
+
+    def _is_dev_mode(self) -> bool:
+        return self.auth_mode == "dev" and not self._has_request_connection()
 
     def _has_request_connection(self) -> bool:
         return self._request_connection is not None
@@ -276,7 +277,7 @@ class VikingClient:
         return user_id or self.admin_user_id
 
     def _effective_session_user_id(self, user_id: Optional[str] = None) -> Optional[str]:
-        if self._has_request_connection() or self.mode == "local" or self._is_user_key_mode():
+        if self._has_request_connection() or self._is_dev_mode() or self._is_user_key_mode():
             return None
         return user_id or self.admin_user_id
 
@@ -308,7 +309,7 @@ class VikingClient:
             "isolate_user_scope_by_agent": False,
             "isolate_agent_scope_by_user": False,
         }
-        if self._has_request_connection() or self.mode == "local" or self._is_user_key_mode():
+        if self._has_request_connection() or self._is_dev_mode() or self._is_user_key_mode():
             self._namespace_policy = policy
             self._namespace_policy_loaded = True
             return
@@ -654,7 +655,7 @@ class VikingClient:
     async def _create_trusted_user_client(self, user_id: str):
         client_kwargs = {
             "url": self.openviking_config.server_url,
-            "api_key": self.openviking_config.root_api_key or self.openviking_config.api_key,
+            "api_key": self.openviking_config.api_key,
             "account": self.account_id,
             "user": user_id,
             "profile_enabled": False,
@@ -802,7 +803,7 @@ class VikingClient:
     async def _session_client_for_user(self, user_id: Optional[str] = None):
         if self._has_request_connection():
             return self.client
-        if not user_id or self.mode == "local" or self._is_user_key_mode():
+        if not user_id or self._is_dev_mode() or self._is_user_key_mode():
             return self._session_client(user_id)
         if user_id == self.admin_user_id and self.admin_user_client:
             return self.admin_user_client

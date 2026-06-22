@@ -4,7 +4,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -515,11 +515,16 @@ class WebSearchConfig(BaseModel):
 class OpenVikingConfig(BaseModel):
     """Viking tools configuration."""
 
-    mode: str = "remote"  # local or remote
+    _effective_auth_mode: str = PrivateAttr(default="")
+
+    # Deprecated as user config. Kept for compatibility; load_config derives it
+    # from OpenViking's effective dev auth mode.
+    mode: str = "remote"
     api_key_type: Literal["root", "user"] | None = None
     server_url: str = ""
+    # User API key when api_key_type=user; root API key when api_key_type=root.
     api_key: str = ""
-    # Used when api_key_type is "root" for trusted OpenViking calls.
+    # Deprecated compatibility field. Use api_key with api_key_type=root instead.
     root_api_key: str = ""
     account_id: str = "default"
     admin_user_id: str = "default"
@@ -556,6 +561,13 @@ class OpenVikingConfig(BaseModel):
         if not self.api_key_type:
             self.api_key_type = "user"
         return self
+
+    @property
+    def effective_auth_mode(self) -> str:
+        return self._effective_auth_mode
+
+    def set_effective_auth_mode(self, auth_mode: str) -> None:
+        self._effective_auth_mode = str(auth_mode or "").strip().lower()
 
 
 class WebToolsConfig(BaseModel):

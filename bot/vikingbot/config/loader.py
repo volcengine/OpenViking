@@ -9,6 +9,10 @@ from typing import Any
 
 import httpx
 from loguru import logger
+from openviking.server.config import (
+    ServerConfig,
+    get_server_url_from_server_data,
+)
 from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 
 from vikingbot.config.schema import Config
@@ -109,10 +113,13 @@ def load_config() -> Config:
 
             bot_server_data = bot_data.get("ov_server", {})
             ov_server_data = full_data.get("server", {})
-            _merge_ov_server_config(bot_server_data, ov_server_data)
+            effective_auth_mode = _merge_ov_server_config(bot_server_data, ov_server_data)
             bot_data["ov_server"] = bot_server_data
 
-            return Config.model_validate(bot_data)
+            config = Config.model_validate(bot_data)
+            config.ov_server.set_effective_auth_mode(effective_auth_mode)
+
+            return config
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Warning: Failed to load config from {path}: {e}")
             print("Using default configuration.")
@@ -144,43 +151,67 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
             bot_data["agents"]["extra_headers"] = vlm_data["extra_headers"]
 
 
-def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> None:
+def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> str:
     """
     Merge ov_server config into bot config.
     """
-    if "server_url" not in bot_data or not bot_data["server_url"]:
-        host = ov_data.get("host", "127.0.0.1")
-        port = ov_data.get("port", "1933")
-        bot_data["server_url"] = f"http://{host}:{port}"
+    server_data = ov_data if isinstance(ov_data, dict) else {}
+    configured_server_url = str(bot_data.get("server_url") or "").strip()
 
-    api_key = bot_data.get("api_key") or ""
-    api_key_type = _normalize_api_key_type(bot_data.get("api_key_type"))
-    server_auth_mode = _effective_ov_auth_mode(ov_data)
-    if not api_key_type:
-        api_key_type = "root" if server_auth_mode == "trusted" else "user"
+    if configured_server_url:
+        return _merge_external_ov_server_config(bot_data, configured_server_url)
+
+    return _merge_current_ov_server_config(bot_data, server_data)
+
+
+def _merge_external_ov_server_config(bot_data: dict, server_url: str) -> str:
+    bot_data["server_url"] = server_url
+    bot_data["mode"] = "remote"
+    bot_data["api_key_type"] = _normalize_api_key_type(bot_data.get("api_key_type")) or "user"
+    if bot_data["api_key_type"] == "user":
+        _fill_user_api_key_from_ovcli(bot_data)
+    return _bot_auth_mode_from_api_key_type(bot_data["api_key_type"], "api_key")
+
+
+def _merge_current_ov_server_config(bot_data: dict, server_data: dict) -> str:
+    bot_data["server_url"] = get_server_url_from_server_data(server_data)
+
+    server_auth_mode = ServerConfig(
+        auth_mode=server_data.get("auth_mode"),
+        root_api_key=server_data.get("root_api_key"),
+    ).get_effective_auth_mode()
+    api_key_type = _normalize_api_key_type(bot_data.get("api_key_type")) or (
+        "root" if server_auth_mode == "trusted" else "user"
+    )
     bot_data["api_key_type"] = api_key_type
 
-    server_root_api_key = ov_data.get("root_api_key", "")
-    if api_key_type == "root" and server_auth_mode == "trusted":
-        if server_root_api_key:
-            bot_data["root_api_key"] = server_root_api_key
+    server_root_api_key = str(server_data.get("root_api_key") or "").strip()
+    if (
+        api_key_type == "root"
+        and server_auth_mode == "trusted"
+        and server_root_api_key
+        and not str(bot_data.get("api_key") or "").strip()
+    ):
+        bot_data["api_key"] = server_root_api_key
 
-    mode = bot_data["mode"] if "mode" in bot_data and bot_data["mode"] else ""
-    if not mode:
-        mode = (
-            "local"
-            if server_auth_mode == "dev" and api_key_type != "root" and not api_key
-            else "remote"
-        )
-        bot_data["mode"] = mode
-    if not api_key and mode == "remote" and api_key_type == "user":
-        try:
-            cli_config = load_ovcli_config()
-        except ValueError as e:
-            print(str(e), file=sys.stderr)
-            raise
-        if cli_config and cli_config.api_key:
-            bot_data["api_key"] = cli_config.api_key
+    effective_auth_mode = _bot_auth_mode_from_api_key_type(api_key_type, server_auth_mode)
+    mode = "local" if effective_auth_mode == "dev" else "remote"
+    bot_data["mode"] = mode
+    if effective_auth_mode == "api_key":
+        _fill_user_api_key_from_ovcli(bot_data)
+    return effective_auth_mode
+
+
+def _fill_user_api_key_from_ovcli(bot_data: dict) -> None:
+    if str(bot_data.get("api_key") or "").strip():
+        return
+    try:
+        cli_config = load_ovcli_config()
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        raise
+    if cli_config and cli_config.api_key:
+        bot_data["api_key"] = cli_config.api_key
 
 
 def _normalize_api_key_type(value: Any) -> str:
@@ -188,26 +219,26 @@ def _normalize_api_key_type(value: Any) -> str:
     return normalized if normalized in {"root", "user"} else ""
 
 
-def _effective_ov_auth_mode(ov_data: dict) -> str:
-    explicit_mode = str(ov_data.get("auth_mode") or "").strip().lower()
-    if explicit_mode:
-        return explicit_mode
-    return "api_key" if str(ov_data.get("root_api_key") or "").strip() else "dev"
-
-
-def _ov_server_auth_mode(ov_server: Any) -> str:
-    api_key_type = _normalize_api_key_type(getattr(ov_server, "api_key_type", "user"))
+def _bot_auth_mode_from_api_key_type(api_key_type: str, server_auth_mode: str) -> str:
     if api_key_type == "root":
         return "trusted"
-    if getattr(ov_server, "mode", None) == "local":
+    if server_auth_mode == "dev":
         return "dev"
     return "api_key"
 
 
-def _ov_server_root_api_key(ov_server: Any) -> str:
-    root_api_key = str(getattr(ov_server, "root_api_key", "") or "").strip()
-    if root_api_key:
-        return root_api_key
+def _ov_server_auth_mode(ov_server: Any) -> str:
+    effective_auth_mode = str(getattr(ov_server, "effective_auth_mode", "") or "").strip().lower()
+    if effective_auth_mode in {"trusted", "api_key", "dev"}:
+        return effective_auth_mode
+
+    api_key_type = _normalize_api_key_type(getattr(ov_server, "api_key_type", "user"))
+    if api_key_type == "root":
+        return "trusted"
+    return "api_key"
+
+
+def _ov_server_trusted_api_key(ov_server: Any) -> str:
     if _normalize_api_key_type(getattr(ov_server, "api_key_type", "")) == "root":
         return str(getattr(ov_server, "api_key", "") or "").strip()
     return ""
@@ -275,7 +306,8 @@ def _auth_mode_change_hint(actual_auth_mode: str, current_auth_mode: str) -> str
     if actual_auth_mode == "trusted":
         return (
             "To use this server, set bot.ov_server.api_key_type to 'root' and configure "
-            "bot.ov_server.root_api_key, or remove the bot.ov_server override so VikingBot "
+            "bot.ov_server.api_key with the OpenViking root API key, or remove the "
+            "bot.ov_server override so VikingBot "
             "inherits server.auth_mode='trusted' from the same ov.conf."
         )
     if actual_auth_mode == "api_key":
@@ -286,12 +318,11 @@ def _auth_mode_change_hint(actual_auth_mode: str, current_auth_mode: str) -> str
         )
     if actual_auth_mode == "dev":
         return (
-            "To use this server, let VikingBot run with the same dev configuration "
-            "(bot.ov_server.mode='local' or the default same-ov.conf settings), or change "
-            "the OpenViking server.auth_mode and restart the server."
+            "To use this server, let VikingBot inherit the same dev OpenViking server "
+            "configuration, or change the OpenViking server.auth_mode and restart the server."
         )
     return (
-        "Update bot.ov_server.api_key_type/mode or the OpenViking server.auth_mode so both "
+        "Update bot.ov_server.api_key_type or the OpenViking server.auth_mode so both "
         f"sides use the same auth mode. VikingBot currently expects '{current_auth_mode}'."
     )
 
@@ -356,7 +387,7 @@ def _validate_api_key_mode_key(ov_server: Any, server_url: str) -> None:
 
 
 def _validate_trusted_mode_key(ov_server: Any, server_url: str) -> None:
-    root_api_key = _ov_server_root_api_key(ov_server)
+    root_api_key = _ov_server_trusted_api_key(ov_server)
     account_id = str(getattr(ov_server, "account_id", "") or "default").strip()
     user_id = str(getattr(ov_server, "admin_user_id", "") or "default").strip()
     headers = {
@@ -376,7 +407,7 @@ def _validate_trusted_mode_key(ov_server: Any, server_url: str) -> None:
                 "Warning: VikingBot is configured for trusted OpenViking access "
                 "(api_key_type=root), but the configured root API key was rejected. "
                 "OpenViking memory and file tools may not work correctly. Configure "
-                "bot.ov_server.root_api_key with the OpenViking root API key.",
+                "bot.ov_server.api_key with the OpenViking root API key.",
                 file=sys.stderr,
             )
         else:
@@ -384,7 +415,8 @@ def _validate_trusted_mode_key(ov_server: Any, server_url: str) -> None:
                 "Warning: VikingBot is configured for trusted OpenViking access "
                 "(api_key_type=root), but no usable root API key is configured. "
                 "OpenViking memory and file tools may not work correctly. Configure "
-                "bot.ov_server.root_api_key, or use localhost trusted mode without a root key.",
+                "bot.ov_server.api_key with the OpenViking root API key, or use localhost "
+                "trusted mode without a root key.",
                 file=sys.stderr,
             )
         return

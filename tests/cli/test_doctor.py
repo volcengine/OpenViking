@@ -812,8 +812,8 @@ class TestCheckVikingBot:
             status, detail, fix = check_vikingbot()
 
         assert status == "warn"
-        assert "root_api_key in api_key mode" in detail
-        assert "Root API keys cannot access data APIs" in fix
+        assert "root_api_key is deprecated and ignored" in detail
+        assert "bot.ov_server.api_key" in fix
 
     def test_pass_with_root_api_key_type_for_explicit_server_url(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
@@ -838,6 +838,29 @@ class TestCheckVikingBot:
         assert "trusted OpenViking auth" in detail
         assert fix is None
 
+    def test_warn_when_external_root_key_omits_root_api_key_type(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "bot": {
+                        "ov_server": {
+                            "server_url": "https://trusted.example",
+                            "root_api_key": "root-key",
+                        }
+                    }
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "warn"
+        assert "root_api_key is deprecated and ignored" in detail
+        assert "api_key_type=root" not in detail
+        assert "User API key" in fix
+
     def test_warn_when_root_api_key_type_inherits_api_key_server(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(
@@ -847,7 +870,7 @@ class TestCheckVikingBot:
                     "bot": {
                         "ov_server": {
                             "api_key_type": "root",
-                            "root_api_key": "root-key",
+                            "api_key": "root-key",
                         }
                     },
                 }
@@ -867,6 +890,30 @@ class TestCheckVikingBot:
         assert "server.auth_mode='trusted'" in fix
         assert "bot.ov_server.server_url" in fix
         assert "api_key_type='root'" in fix
+
+    def test_pass_when_explicit_same_url_is_treated_as_external_server(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {"host": "127.0.0.1", "port": 1933, "root_api_key": "root-key"},
+                    "bot": {
+                        "ov_server": {
+                            "server_url": "http://localhost:1933",
+                            "api_key_type": "root",
+                            "api_key": "root-key",
+                        }
+                    },
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "trusted OpenViking auth" in detail
+        assert fix is None
 
     def test_pass_with_trusted_root_api_key(self, tmp_path: Path):
         config = tmp_path / "ov.conf"

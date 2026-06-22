@@ -20,6 +20,10 @@ import sys
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+from openviking.server.config import (
+    ServerConfig,
+    get_server_url_from_server_data,
+)
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.ovcli_config import load_ovcli_config
@@ -455,18 +459,11 @@ def _load_ovcli_api_key_for_doctor() -> str:
     return str(getattr(cli_config, "api_key", "") or "").strip()
 
 
-def _bot_uses_inherited_openviking_server(ov_server: dict[str, Any]) -> bool:
-    """Return whether bot.ov_server targets the same server section by default."""
-    return not str(ov_server.get("server_url") or "").strip()
-
-
 def _bot_openviking_server_url(ov_server: dict[str, Any], server: dict[str, Any]) -> str:
     configured_url = str(ov_server.get("server_url") or "").strip()
     if configured_url:
         return configured_url
-    host = str(server.get("host") or "127.0.0.1").strip()
-    port = str(server.get("port") or "1933").strip()
-    return f"http://{host}:{port}"
+    return get_server_url_from_server_data(server)
 
 
 def check_vikingbot() -> CheckResult:
@@ -474,7 +471,8 @@ def check_vikingbot() -> CheckResult:
 
     VikingBot is optional, so missing auth configuration is a warning rather
     than a hard failure. In api_key mode VikingBot must use a User API key; in
-    trusted mode it uses server.root_api_key plus trusted identity headers.
+    trusted mode it uses a root API key through bot.ov_server.api_key plus
+    trusted identity headers.
     """
     config_path = _find_config()
     if config_path is None:
@@ -485,10 +483,11 @@ def check_vikingbot() -> CheckResult:
         return "warn", "Cannot check (config unreadable)", None
 
     server = data.get("server") if isinstance(data.get("server"), dict) else {}
-    auth_mode = str(server.get("auth_mode") or "").strip().lower()
+    auth_mode = ServerConfig(
+        auth_mode=server.get("auth_mode"),
+        root_api_key=server.get("root_api_key"),
+    ).get_effective_auth_mode()
     server_root_api_key = str(server.get("root_api_key") or "").strip()
-    if not auth_mode:
-        auth_mode = "api_key" if server_root_api_key else "dev"
 
     bot = data.get("bot")
     if not isinstance(bot, dict):
@@ -501,11 +500,17 @@ def check_vikingbot() -> CheckResult:
     api_key = str(ov_server.get("api_key") or "").strip()
     root_api_key = str(ov_server.get("root_api_key") or "").strip()
     explicit_api_key_type = str(ov_server.get("api_key_type") or "").strip().lower()
-    api_key_type = explicit_api_key_type or ("root" if auth_mode == "trusted" else "user")
     bot_server_url = _bot_openviking_server_url(ov_server, server)
+    bot_uses_current_server = not str(ov_server.get("server_url") or "").strip()
+    if explicit_api_key_type:
+        api_key_type = explicit_api_key_type
+    elif bot_uses_current_server:
+        api_key_type = "root" if auth_mode == "trusted" else "user"
+    else:
+        api_key_type = "user"
 
     if api_key_type == "root":
-        if _bot_uses_inherited_openviking_server(ov_server) and auth_mode != "trusted":
+        if bot_uses_current_server and auth_mode != "trusted":
             return (
                 "warn",
                 f"bot.ov_server targets {bot_server_url} with api_key_type=root, "
@@ -516,10 +521,17 @@ def check_vikingbot() -> CheckResult:
                 "To use another trusted server, set bot.ov_server.server_url to that server "
                 "and keep api_key_type='root'.",
             )
-        trusted_root_key = root_api_key or api_key or (
-            server_root_api_key if auth_mode == "trusted" else ""
+        trusted_root_key = api_key or (
+            server_root_api_key if bot_uses_current_server and auth_mode == "trusted" else ""
         )
         if _is_placeholder_secret(trusted_root_key):
+            if root_api_key:
+                return (
+                    "warn",
+                    "bot.ov_server.root_api_key is deprecated and ignored",
+                    "Move the root API key to bot.ov_server.api_key and keep "
+                    "bot.ov_server.api_key_type='root'",
+                )
             if auth_mode == "trusted" and not ov_server:
                 return (
                     "warn",
@@ -530,12 +542,18 @@ def check_vikingbot() -> CheckResult:
             return (
                 "warn",
                 "bot.ov_server.api_key_type=root without root API key",
-                "Configure bot.ov_server.root_api_key or bot.ov_server.api_key with a root "
-                "API key for trusted OpenViking access",
+                "Configure bot.ov_server.api_key with a root API key for trusted "
+                "OpenViking access",
             )
         return "pass", "bot.ov_server configured for trusted OpenViking auth", None
 
-    if auth_mode == "dev" and not api_key and not root_api_key and not explicit_api_key_type:
+    if (
+        bot_uses_current_server
+        and auth_mode == "dev"
+        and not api_key
+        and not root_api_key
+        and not explicit_api_key_type
+    ):
         return "pass", "VikingBot aligned with dev OpenViking auth", None
 
     ovcli_api_key = "" if not _is_placeholder_secret(api_key) else _load_ovcli_api_key_for_doctor()
@@ -548,9 +566,9 @@ def check_vikingbot() -> CheckResult:
         if root_api_key:
             return (
                 "warn",
-                "bot.ov_server uses root_api_key in api_key mode",
-                "Root API keys cannot access data APIs in api_key mode; configure "
-                "bot.ov_server.api_key or ovcli.conf api_key with a User API key",
+                "bot.ov_server.root_api_key is deprecated and ignored",
+                "Use bot.ov_server.api_key for the active key. In api_key mode configure "
+                "a User API key in bot.ov_server.api_key or ovcli.conf api_key.",
             )
         if not bot or not ov_server:
             return (
