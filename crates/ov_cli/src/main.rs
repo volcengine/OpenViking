@@ -1074,8 +1074,6 @@ enum ObserverCommands {
     Vikingdb,
     /// Get models status (VLM, Embedding, Rerank)
     Models,
-    /// Get transaction system status
-    Transaction,
     /// Get retrieval quality metrics
     Retrieval,
     /// Get filesystem operation metrics
@@ -3390,7 +3388,6 @@ mod tests {
             &["ov", "observer", "queue"],
             &["ov", "observer", "vikingdb"],
             &["ov", "observer", "models"],
-            &["ov", "observer", "transaction"],
             &["ov", "observer", "retrieval"],
             &["ov", "observer", "filesystem"],
             &["ov", "observer", "system"],

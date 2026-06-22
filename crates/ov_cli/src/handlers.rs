@@ -402,9 +402,6 @@ pub async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<(
         ObserverCommands::Models => {
             commands::observer::models(&client, ctx.output_format, ctx.compact).await
         }
-        ObserverCommands::Transaction => {
-            commands::observer::transaction(&client, ctx.output_format, ctx.compact).await
-        }
         ObserverCommands::Retrieval => {
             commands::observer::retrieval(&client, ctx.output_format, ctx.compact).await
         }
