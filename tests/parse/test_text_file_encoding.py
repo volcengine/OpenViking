@@ -29,13 +29,30 @@ def test_markdown_file_read_strips_utf8_bom(tmp_path):
     assert MarkdownParser()._read_file(path) == content
 
 
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-16-be", "utf-32", "utf-32-be"])
+def test_markdown_file_read_normalizes_unicode_bom_text(tmp_path, encoding):
+    content = "# Heading\n\nBody\n"
+    path = tmp_path / f"unicode-bom-{encoding}.md"
+    encoded = content.encode(encoding)
+    if encoding == "utf-16-be":
+        encoded = b"\xfe\xff" + encoded
+    elif encoding == "utf-32-be":
+        encoded = b"\x00\x00\xfe\xff" + encoded
+    path.write_bytes(encoded)
+
+    assert MarkdownParser()._read_file(path) == content
+
+
 @pytest.mark.parametrize(
     ("encoding", "content"),
     [
+        ("shift_jis", "漢字\n"),
         ("shift_jis", "# タイトル\n本文です\n"),
         ("big5", "# 標題\n繁體中文內容\n"),
         ("euc-kr", "# 제목\n본문 내용\n"),
         ("cp1252", "Price: €10 – café\n"),
+        ("cp1252", "Smart “quotes” and — dash\n"),
+        ("cp1252", "œ Œ ž Ž š Š Ÿ ™\n"),
         ("latin-1", "café naïve\n"),
     ],
 )
@@ -62,3 +79,10 @@ def test_encoding_detection_handles_empty_text_without_warning(tmp_path, monkeyp
 
     assert detect_and_convert_encoding(b"", path) == b""
     assert warnings == []
+
+
+def test_encoding_detection_preserves_malformed_bom_bytes(tmp_path):
+    raw = b"\xff\xfe\x00"
+    path = tmp_path / "malformed-utf16.md"
+
+    assert detect_and_convert_encoding(raw, path) == raw
