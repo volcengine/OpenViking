@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from openviking.server.auth import _auth_mode, get_request_context
+from openviking.server.config import get_server_url_from_server_data
 from openviking.server.identity import RequestContext
 from openviking_cli.utils.logger import get_logger
 
@@ -76,6 +77,7 @@ def _build_openviking_connection(
     api_key: str,
     ctx: RequestContext,
     effective_auth_mode: str,
+    server_url: str,
 ) -> dict:
     connection = {
         "account_id": ctx.user.account_id,
@@ -83,6 +85,7 @@ def _build_openviking_connection(
         "agent_id": DEFAULT_BOT_AGENT_ID,
         "role": getattr(ctx.role, "value", str(ctx.role)),
         "api_key_type": "root" if effective_auth_mode == "trusted" else "user",
+        "server_url": server_url,
         "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
     }
     if api_key:
@@ -105,6 +108,7 @@ def _attach_openviking_connection(
     api_key = _extract_forward_api_key(request)
     plugin = getattr(request.app.state, "auth_plugin", None)
     effective_auth_mode = _auth_mode(request)
+    server_url = get_server_url_from_server_data(getattr(request.app.state, "config", None))
     if not api_key:
         if plugin is not None and plugin.can_skip_api_key_for_bot_proxy():
             if effective_auth_mode == "trusted":
@@ -112,6 +116,7 @@ def _attach_openviking_connection(
                     api_key="",
                     ctx=ctx,
                     effective_auth_mode=effective_auth_mode,
+                    server_url=server_url,
                 )
                 return enriched
             enriched.setdefault("user_id", ctx.user.user_id)
@@ -124,6 +129,7 @@ def _attach_openviking_connection(
         api_key=api_key,
         ctx=ctx,
         effective_auth_mode=effective_auth_mode,
+        server_url=server_url,
     )
     return enriched
 

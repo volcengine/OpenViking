@@ -119,7 +119,7 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
     monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
 
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode="trusted")
+    app.state.config = ServerConfig(auth_mode="trusted", host="127.0.0.1", port=1944)
     app.state.auth_plugin = TrustedAuthPlugin()
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
@@ -144,6 +144,7 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
         "agent_id": "web-playground",
         "role": "user",
         "api_key_type": "root",
+        "server_url": "http://127.0.0.1:1944",
         "namespace_policy": {
             "isolate_user_scope_by_agent": False,
             "isolate_agent_scope_by_user": False,
@@ -186,7 +187,7 @@ async def test_chat_proxy_forwards_trusted_request_without_root_api_key(monkeypa
     monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
 
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode="trusted")
+    app.state.config = ServerConfig(auth_mode="trusted", host="127.0.0.1", port=1955)
     app.state.auth_plugin = TrustedAuthPlugin()
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
@@ -210,6 +211,7 @@ async def test_chat_proxy_forwards_trusted_request_without_root_api_key(monkeypa
         "agent_id": "web-playground",
         "role": "user",
         "api_key_type": "root",
+        "server_url": "http://127.0.0.1:1955",
         "namespace_policy": {
             "isolate_user_scope_by_agent": False,
             "isolate_agent_scope_by_user": False,

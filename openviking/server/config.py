@@ -203,10 +203,14 @@ class ServerConfig(BaseModel):
 
 def get_server_url_from_server_data(server_data: object) -> str:
     """Return the loopback URL clients use for the configured OpenViking server."""
-    if not isinstance(server_data, dict):
-        server_data = {}
-    host = str(server_data.get("host") or "127.0.0.1").strip()
-    port = str(server_data.get("port") or "1933").strip()
+    if isinstance(server_data, dict):
+        host_value = server_data.get("host")
+        port_value = server_data.get("port")
+    else:
+        host_value = getattr(server_data, "host", None)
+        port_value = getattr(server_data, "port", None)
+    host = str(host_value or "127.0.0.1").strip()
+    port = str(port_value or "1933").strip()
     return f"http://{host}:{port}"
 
 
