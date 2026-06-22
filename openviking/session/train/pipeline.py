@@ -88,6 +88,7 @@ class OfflinePolicyOptimizationPipeline:
         stop_decision: PipelineHookDecision | None = None
 
         for epoch in range(max_epochs):
+            ctx.execution_metadata["epoch"] = epoch
             await _emit_epoch_start(ctx, epoch)
             epoch_result = await self._run_training_epoch(
                 epoch=epoch,

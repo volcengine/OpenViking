@@ -759,6 +759,9 @@ def _stage_dir(label: str, *, epoch: int | None = None) -> str:
         split = label.removeprefix("final_").removesuffix("_rollout")
         return f"final/{_safe_fragment(split)}"
     if label.startswith("epoch_") and label.endswith("_rollout"):
+        split = label.removeprefix("epoch_").removesuffix("_rollout")
+        if split == "train":
+            return "train" if epoch is None else f"epoch_{epoch}/train"
         return "eval" if epoch is None else f"epoch_{epoch}/eval"
     if label == "test_rollout":
         return "eval" if epoch is None else f"epoch_{epoch}/eval"

@@ -394,6 +394,28 @@ async def test_offline_policy_optimization_pipeline_supports_train_and_eval():
 
 
 @pytest.mark.asyncio
+async def test_training_updates_execution_metadata_epoch_each_epoch():
+    pipeline = OfflinePolicyOptimizationPipeline(
+        snapshotter=DummySnapshotter(),
+        rollout_executor=DummyExecutor(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+    )
+    context = PipelineContext(max_epochs=2, execution_metadata={"rollout_stage": "epoch_train_rollout"})
+
+    result = await pipeline.train(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=_policy_set(),
+        context=context,
+    )
+
+    assert [item.epoch for item in result.epochs] == [0, 1]
+    assert context.execution_metadata["epoch"] == 1
+
+
+@pytest.mark.asyncio
 async def test_train_runs_test_eval_after_each_epoch_when_configured():
     hook = RecordingLifecycleHook()
     pipeline = OfflinePolicyOptimizationPipeline(
@@ -1290,6 +1312,47 @@ def test_rollout_artifact_recorder_separates_epoch_eval_dirs(tmp_path):
     index = recorder.finalize().to_dict()
     rollout_stages = [item["stage"] for item in index["case_groups"][0]["rollouts"]]
     assert rollout_stages == ["epoch_0/eval", "epoch_1/eval"]
+
+
+def test_rollout_artifact_recorder_maps_epoch_train_rollout_to_train_dir(tmp_path):
+    from openviking.session.train import RolloutArtifactRecorder
+    from openviking.session.train.context import ExecutionContext
+
+    recorder = RolloutArtifactRecorder(run_dir=tmp_path)
+    case = Case(
+        name="tau2_airline_train_7",
+        task_signature="tau2:airline:train:7",
+        input={
+            "data_split": "airline_train",
+            "task_no": 7,
+            "task_id": "task-7",
+        },
+        rubric=Rubric(name="reward", description="reward", criteria=[]),
+    )
+    rollout = Rollout(
+        case=case,
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+    )
+
+    recorder.record_rollout_completion(
+        rollout=rollout,
+        index=0,
+        context=ExecutionContext(
+            policy_snapshot_id="snapshot-1",
+            metadata={"epoch": 0, "training": True, "rollout_stage": "epoch_train_rollout"},
+        ),
+    )
+
+    group_dir = tmp_path / "rollouts" / "airline_train_task_7_task-7"
+    assert (group_dir / "epoch_0" / "train" / "trial_0" / "status.json").exists()
+    assert not (group_dir / "epoch_0" / "eval" / "trial_0").exists()
+
+    index = recorder.finalize().to_dict()
+    rollout_index = index["case_groups"][0]["rollouts"][0]
+    assert rollout_index["stage"] == "epoch_0/train"
+    assert rollout_index["path"].endswith("epoch_0/train/trial_0")
 
 
 def test_rollout_artifact_recorder_keeps_baseline_and_final_eval_dirs(tmp_path):
