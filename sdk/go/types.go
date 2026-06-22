@@ -142,6 +142,13 @@ type WriteOptions struct {
 	Telemetry any
 }
 
+// SetTagsOptions controls SetTags.
+type SetTagsOptions struct {
+	Mode      string
+	Recursive bool
+	Telemetry any
+}
+
 // ReindexOptions controls Reindex.
 type ReindexOptions struct {
 	Mode string

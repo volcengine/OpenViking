@@ -151,6 +151,35 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	return result, err
 }
 
+// SetTags sets explicit k=v retrieval tags metadata for a file or directory.
+// Valid modes are "replace" (default) and "append"; Recursive applies the tags
+// to every file under a directory URI.
+func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *SetTagsOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &SetTagsOptions{Mode: "replace"}
+	}
+	mode := opts.Mode
+	if mode == "" {
+		mode = "replace"
+	}
+	// The server contract is tags:list[str]; a nil slice would marshal to JSON
+	// null and fail validation, so normalize to an empty list. With mode
+	// "replace" an empty list clears all tags.
+	if tags == nil {
+		tags = []string{}
+	}
+	payload := map[string]any{
+		"uri":       NormalizeURI(uri),
+		"tags":      tags,
+		"mode":      mode,
+		"recursive": opts.Recursive,
+	}
+	setAny(payload, "telemetry", opts.Telemetry)
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/set_tags", nil, payload, &result)
+	return result, err
+}
+
 // Reindex triggers reindexing for a URI.
 func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) (map[string]any, error) {
 	if opts == nil {
