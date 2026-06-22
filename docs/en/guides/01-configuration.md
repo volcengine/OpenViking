@@ -809,7 +809,7 @@ The `PermissionDeniedError` message names the exact key to add for the blocked h
 
 ### rerank
 
-Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, and OpenAI-compatible APIs.
+Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, OpenAI-compatible APIs, LiteLLM, and Hugging Face Text Embeddings Inference (TEI).
 
 **Volcengine (VikingDB):**
 
@@ -839,24 +839,42 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 }
 ```
 
+**Hugging Face Text Embeddings Inference (TEI):**
+
+```json
+{
+  "rerank": {
+    "provider": "tei",
+    "api_base": "http://localhost:8080",
+    "api_key": "optional-tei-api-key",
+    "model": "BAAI/bge-reranker-v2-m3",
+    "threshold": 0.05
+  }
+}
+```
+
+For TEI, `api_base` may be either the server base URL (`http://localhost:8080`) or the full rerank endpoint (`http://localhost:8080/rerank`). `api_key` is optional and is sent as a Bearer token when configured. TEI is auto-detected when only `api_base` is set; if your TEI deployment also uses `api_key`, set `"provider": "tei"` explicitly so it is not treated as an OpenAI-compatible rerank endpoint.
+
 **Parameters**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | str | `"vikingdb"`, `"cohere"`, or `"openai"`. Auto-detected if omitted. |
+| `provider` | str | `"vikingdb"`, `"cohere"`, `"openai"`, `"litellm"`, or `"tei"`. Auto-detected if omitted. |
 | `ak` | str | VikingDB Access Key (vikingdb provider only) |
 | `sk` | str | VikingDB Secret Key (vikingdb provider only) |
 | `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
-| `api_key` | str | API key (for `openai` or `cohere` providers) |
-| `api_base` | str | Endpoint URL (for `openai` provider) |
-| `model` | str | Model name (for `openai` providers) |
+| `api_key` | str | API key (for `openai` or `cohere` providers, optional for `tei`) |
+| `api_base` | str | Endpoint URL (for `openai` provider) or TEI base/rerank URL (for `tei`) |
+| `model` | str | Model name (for `openai` and `litellm`; optional label for TEI usage tracking) |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
-| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
+| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible or TEI providers, optional) |
 
 **Supported providers:**
 - `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
 - `cohere`: Cohere Rerank API
 - `openai`: OpenAI-compatible Rerank API
+- `litellm`: LiteLLM rerank API
+- `tei`: Hugging Face Text Embeddings Inference rerank API
 
 If rerank is not configured, search uses vector similarity only.
 

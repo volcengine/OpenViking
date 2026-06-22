@@ -251,10 +251,11 @@ class TestRerankConfig:
         with pytest.raises(ValidationError):
             RerankConfig(provider="openai", api_base="https://example.com/rerank")
 
-    def test_default_provider_is_vikingdb(self):
+    def test_default_provider_is_auto_detected(self):
         config = RerankConfig()
-        assert config.provider == "vikingdb"
+        assert config.provider is None
+        assert config._effective_provider() is None
 
     def test_unknown_provider_raises_value_error(self):
-        with pytest.raises(ValueError, match="provider"):
-            RerankConfig(provider="cohere", ak="ak", sk="sk")
+        with pytest.raises(ValidationError, match="provider"):
+            RerankConfig(provider="unknown")
