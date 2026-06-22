@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { BotIcon, ClipboardIcon, TerminalIcon } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  BotIcon,
+  ClipboardIcon,
+  TerminalIcon,
+} from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '#/components/ui/button'
@@ -13,13 +18,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '#/components/ui/sheet'
 import { FilePreview } from '#/routes/resources/-components/file-preview'
 import { AddResourceForm } from '#/routes/resources/-components/add-resource-page'
 import { UploadTaskDialog } from '#/routes/resources/-components/upload-task-dialog'
@@ -99,7 +97,7 @@ function PlaygroundRoute() {
 }
 
 function PlaygroundWorkbench() {
-  const { t } = useTranslation('playground')
+  const { t } = useTranslation(['playground', 'resources'])
   const search = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const initialCurrentUri = useMemo(
@@ -604,38 +602,19 @@ function PlaygroundWorkbench() {
       </div>
 
       {isCompactLayout ? (
-        <Sheet open={actionPanelOpen} onOpenChange={setActionPanelOpen}>
-          <SheetContent
-            side="right"
-            className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 data-[side=right]:w-[min(92vw,28rem)] sm:max-w-[28rem]"
-          >
-            <SheetHeader className="sr-only">
-              <SheetTitle>
-                {activePanel === 'terminal'
-                  ? t('tabs.terminal')
-                  : t('tabs.agent')}
-              </SheetTitle>
-              <SheetDescription>
-                {activePanel === 'terminal'
-                  ? t('tabs.terminal')
-                  : t('tabs.agent')}
-              </SheetDescription>
-            </SheetHeader>
-            <PlaygroundActionPanel
-              activePanel={activePanel}
-              currentUri={currentUri}
-              entries={entries}
-              onOpenAddResource={() => setUploadDialogOpen(true)}
-              onOpenResource={revealResource}
-              onPanelChange={handlePanelChange}
-              onSessionChange={(sessionId) =>
-                syncSearch({ session: sessionId })
-              }
-              openingUri={openingUri}
-              sessionId={search.session}
-            />
-          </SheetContent>
-        </Sheet>
+        <PlaygroundMobileActionScreen
+          activePanel={activePanel}
+          currentUri={currentUri}
+          entries={entries}
+          onClose={() => setActionPanelOpen(false)}
+          onOpenAddResource={() => setUploadDialogOpen(true)}
+          onOpenResource={revealResource}
+          onPanelChange={handlePanelChange}
+          onSessionChange={(sessionId) => syncSearch({ session: sessionId })}
+          open={actionPanelOpen}
+          openingUri={openingUri}
+          sessionId={search.session}
+        />
       ) : null}
 
       <Dialog
@@ -725,22 +704,139 @@ function PlaygroundActionPanel({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-14 shrink-0 items-center border-b px-3">
-        <div className="inline-flex rounded-lg border bg-background p-1">
-          <PanelTab
-            active={activePanel === 'terminal'}
-            icon={TerminalIcon}
-            label={t('tabs.terminal')}
-            onClick={() => onPanelChange('terminal')}
-          />
-          <PanelTab
-            active={activePanel === 'agent'}
-            icon={BotIcon}
-            label={t('tabs.agent')}
-            onClick={() => onPanelChange('agent')}
-          />
-        </div>
+        <PlaygroundActionTabs
+          activePanel={activePanel}
+          onPanelChange={onPanelChange}
+        />
       </div>
 
+      <PlaygroundActionContent
+        activePanel={activePanel}
+        currentUri={currentUri}
+        entries={entries}
+        onOpenAddResource={onOpenAddResource}
+        onOpenResource={onOpenResource}
+        onSessionChange={onSessionChange}
+        openingUri={openingUri}
+        sessionId={sessionId}
+      />
+    </div>
+  )
+}
+
+function PlaygroundMobileActionScreen({
+  activePanel,
+  currentUri,
+  entries,
+  onClose,
+  onOpenAddResource,
+  onOpenResource,
+  onPanelChange,
+  onSessionChange,
+  open,
+  openingUri,
+  sessionId,
+}: {
+  activePanel: PlaygroundPanel
+  currentUri: string
+  entries: VikingFsEntry[]
+  onClose: () => void
+  onOpenAddResource: () => void
+  onOpenResource: ResourceOpenHandler
+  onPanelChange: (panel: PlaygroundPanel) => void
+  onSessionChange: (sessionId: string) => void
+  open: boolean
+  openingUri: string | null
+  sessionId?: string
+}) {
+  const { t } = useTranslation(['playground', 'resources'])
+
+  if (!open) {
+    return null
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex min-h-0 flex-col bg-background lg:hidden">
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3">
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          title={t('dirBrowser.back', { ns: 'resources' })}
+          aria-label={t('dirBrowser.back', { ns: 'resources' })}
+          onClick={onClose}
+        >
+          <ArrowLeftIcon className="size-4" />
+        </Button>
+        <PlaygroundActionTabs
+          activePanel={activePanel}
+          onPanelChange={onPanelChange}
+        />
+      </div>
+      <div className="min-h-0 flex-1">
+        <PlaygroundActionContent
+          activePanel={activePanel}
+          currentUri={currentUri}
+          entries={entries}
+          onOpenAddResource={onOpenAddResource}
+          onOpenResource={onOpenResource}
+          onSessionChange={onSessionChange}
+          openingUri={openingUri}
+          sessionId={sessionId}
+        />
+      </div>
+    </div>
+  )
+}
+
+function PlaygroundActionTabs({
+  activePanel,
+  onPanelChange,
+}: {
+  activePanel: PlaygroundPanel
+  onPanelChange: (panel: PlaygroundPanel) => void
+}) {
+  const { t } = useTranslation('playground')
+
+  return (
+    <div className="inline-flex rounded-lg border bg-background p-1">
+      <PanelTab
+        active={activePanel === 'terminal'}
+        icon={TerminalIcon}
+        label={t('tabs.terminal')}
+        onClick={() => onPanelChange('terminal')}
+      />
+      <PanelTab
+        active={activePanel === 'agent'}
+        icon={BotIcon}
+        label={t('tabs.agent')}
+        onClick={() => onPanelChange('agent')}
+      />
+    </div>
+  )
+}
+
+function PlaygroundActionContent({
+  activePanel,
+  currentUri,
+  entries,
+  onOpenAddResource,
+  onOpenResource,
+  onSessionChange,
+  openingUri,
+  sessionId,
+}: {
+  activePanel: PlaygroundPanel
+  currentUri: string
+  entries: VikingFsEntry[]
+  onOpenAddResource: () => void
+  onOpenResource: ResourceOpenHandler
+  onSessionChange: (sessionId: string) => void
+  openingUri: string | null
+  sessionId?: string
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
       {activePanel === 'terminal' ? (
         <TerminalPanel
           currentUri={currentUri}
