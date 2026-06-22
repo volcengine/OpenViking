@@ -68,6 +68,15 @@ func readJSONBody(t *testing.T, r *http.Request) map[string]any {
 	return body
 }
 
+func requireBodyKeysAbsent(t *testing.T, body map[string]any, keys ...string) {
+	t.Helper()
+	for _, key := range keys {
+		if _, ok := body[key]; ok {
+			t.Fatalf("unexpected %s in body: %#v", key, body)
+		}
+	}
+}
+
 func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search/find" {
@@ -101,6 +110,19 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if got := body["limit"]; got != float64(5) {
 			t.Fatalf("limit = %#v", got)
 		}
+		if got := body["since"]; got != "2026-06-01" {
+			t.Fatalf("since = %#v", got)
+		}
+		if got := body["until"]; got != "2026-06-18" {
+			t.Fatalf("until = %#v", got)
+		}
+		if got := body["time_field"]; got != "created_at" {
+			t.Fatalf("time_field = %#v", got)
+		}
+		levels, ok := body["level"].([]any)
+		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
+			t.Fatalf("level = %#v", body["level"])
+		}
 		writeOK(t, w, map[string]any{
 			"resources": []map[string]any{
 				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9},
@@ -113,12 +135,95 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		TargetURI:   "resources/docs",
 		Limit:       5,
 		ContextType: []string{"resource"},
+		Since:       "2026-06-01",
+		Until:       "2026-06-18",
+		TimeField:   "created_at",
+		Level:       []int{0, 2},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Resources) != 1 || result.Resources[0].URI != "viking://resources/docs/api.md" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/find" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level")
+		writeOK(t, w, map[string]any{"resources": []any{}})
+	}))
+	defer closeServer()
+
+	if _, err := client.Find(context.Background(), "auth", &FindOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/search" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		if got := body["query"]; got != "auth" {
+			t.Fatalf("query = %#v", got)
+		}
+		if got := body["session_id"]; got != "session-1" {
+			t.Fatalf("session_id = %#v", got)
+		}
+		if got := body["target_uri"]; got != "viking://resources/docs" {
+			t.Fatalf("target_uri = %#v", got)
+		}
+		if got := body["since"]; got != "1d" {
+			t.Fatalf("since = %#v", got)
+		}
+		if got := body["until"]; got != "2026-06-18" {
+			t.Fatalf("until = %#v", got)
+		}
+		if got := body["time_field"]; got != "updated_at" {
+			t.Fatalf("time_field = %#v", got)
+		}
+		levels, ok := body["level"].([]any)
+		if !ok || len(levels) != 1 || levels[0] != float64(2) {
+			t.Fatalf("level = %#v", body["level"])
+		}
+		writeOK(t, w, map[string]any{"resources": []any{}})
+	}))
+	defer closeServer()
+
+	if _, err := client.Search(context.Background(), "auth", &SearchOptions{
+		TargetURI: "resources/docs",
+		SessionID: "session-1",
+		Since:     "1d",
+		Until:     "2026-06-18",
+		TimeField: "updated_at",
+		Level:     []int{2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchOmitsSearchFiltersWhenUnset(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/search" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level")
+		writeOK(t, w, map[string]any{"resources": []any{}})
+	}))
+	defer closeServer()
+
+	if _, err := client.Search(context.Background(), "auth", &SearchOptions{}); err != nil {
+		t.Fatal(err)
 	}
 }
 

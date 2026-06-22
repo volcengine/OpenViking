@@ -370,6 +370,46 @@ describe("buildAutoRecallContext trace", () => {
     expect(recorded.searches.map((search) => search.resourceType)).toEqual(["user"]);
   });
 
+  it("uses configured autoRecallTimeoutMs as the outer timeout budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const cfg = makeCfg({ autoRecallTimeoutMs: 30000, recallTargetTypes: ["user"] });
+      const client = {
+        healthCheck: vi.fn().mockResolvedValue(undefined),
+        find: vi.fn().mockImplementation(() =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve({
+              memories: [makeMemory({
+                uri: "viking://user/memories/slow-backend",
+                abstract: "Slow local backend recall still completes within the configured budget.",
+                score: 0.9,
+              })],
+              total: 1,
+            }), 10000);
+          })
+        ),
+        read: vi.fn().mockResolvedValue("unused"),
+      };
+
+      const resultPromise = buildAutoRecallContext({
+        cfg,
+        client: client as any,
+        agentId: "agent-1",
+        queryText: "which slow backend memory should be recalled?",
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+
+      await vi.advanceTimersByTimeAsync(10000);
+      await expect(resultPromise).resolves.toMatchObject({
+        memoryCount: 1,
+      });
+      const result = await resultPromise;
+      expect(result.block).toContain("Slow local backend recall still completes within the configured budget.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records search errors while still injecting successful recall hits", async () => {
     const cfg = makeCfg({ recallTargetTypes: ["resource", "user"] });
     const client = {

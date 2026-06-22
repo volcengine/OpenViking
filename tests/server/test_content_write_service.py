@@ -320,10 +320,12 @@ class _FakeVikingFS:
         self.write_file_calls = []
         self.rm_calls = []
         self.content = {file_uri: "original"}
+        self.vector_store = None
+        self.tree_entries = []
 
     async def stat(self, uri: str, ctx=None):
         del ctx
-        if uri == self._file_uri:
+        if uri == self._file_uri or uri in self.content:
             return {"isDir": False}
         if uri == self._root_uri:
             return {"isDir": True}
@@ -350,6 +352,23 @@ class _FakeVikingFS:
         del ctx, lock_handle
         self.rm_calls.append(uri)
         self.content.pop(uri, None)
+
+    async def tree(
+        self,
+        uri: str,
+        ctx=None,
+        output: str = "original",
+        show_all_hidden: bool = False,
+        node_limit: int = 1000,
+        level_limit: int = 3,
+        abs_limit: int = 256,
+    ):
+        del ctx, output, show_all_hidden, node_limit, level_limit, abs_limit
+        assert uri == self._root_uri
+        return list(self.tree_entries)
+
+    def _get_vector_store(self):
+        return self.vector_store
 
 
 class _FakeSemanticQueue:
@@ -973,3 +992,430 @@ async def test_create_mode_regression_append_unchanged(monkeypatch):
     )
 
     assert result["mode"] == "append"
+
+
+@pytest.mark.asyncio
+async def test_set_tags_updates_vector_record(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        def __init__(self):
+            self.update_calls = []
+
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            del ctx
+            if levels is None:
+                self.update_calls.append((uri, list(tags), mode))
+                return [{"uri": uri}]
+            self.update_calls.append((uri, list(tags), mode, list(levels)))
+            return []
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+    result = await coordinator.set_tags(
+        uri=file_uri,
+        tags=["Env=Prod", " env=prod "],
+        ctx=ctx,
+    )
+
+    assert result["tags"] == ["env=prod"]
+    assert result["tags_updated"] is True
+    assert "semantic_status" not in result
+    assert "vector_status" not in result
+    assert "queue_status" not in result
+    assert fake_store.update_calls == [(file_uri, ["env=prod"], "replace")]
+
+
+@pytest.mark.asyncio
+async def test_set_tags_uses_store_update_api_without_fetch(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        def __init__(self):
+            self.update_calls = []
+
+        async def fetch_by_uri(self, uri: str, ctx=None):
+            del uri, ctx
+            raise AssertionError("set_tags should not depend on fetch_by_uri")
+
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            del ctx
+            assert levels is None
+            self.update_calls.append((uri, list(tags), mode))
+            return [{"uri": uri}]
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+    result = await coordinator.set_tags(
+        uri=file_uri,
+        tags=["Env=Prod"],
+        mode="replace",
+        ctx=ctx,
+    )
+
+    assert result["success_count"] == 1
+    assert result["skipped_count"] == 0
+    assert result["failed_count"] == 0
+    assert result["root_uri"] == root_uri
+    assert fake_store.update_calls == [(file_uri, ["env=prod"], "replace")]
+
+
+@pytest.mark.asyncio
+async def test_set_tags_user_scope_resource_leaf_returns_parent_root_uri(monkeypatch):
+    file_uri = "viking://user/default/resources/demo/doc.md"
+    root_uri = "viking://user/default/resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        def __init__(self):
+            self.update_calls = []
+
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            del ctx
+            assert levels is None
+            self.update_calls.append((uri, list(tags), mode))
+            return [{"uri": uri}]
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+
+    result = await coordinator.set_tags(
+        uri=file_uri,
+        tags=["team=search"],
+        mode="replace",
+        ctx=ctx,
+    )
+
+    assert result["success_count"] == 1
+    assert result["root_uri"] == root_uri
+    assert result["context_type"] == "resource"
+    assert fake_store.update_calls == [(file_uri, ["team=search"], "replace")]
+
+
+@pytest.mark.asyncio
+async def test_set_tags_derived_abstract_maps_to_parent_level_zero(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md/.abstract.md"
+    root_uri = "viking://resources/demo"
+    updated_uri = "viking://resources/demo/doc.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        def __init__(self):
+            self.update_calls = []
+
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            del ctx
+            self.update_calls.append((uri, list(tags), mode, levels))
+            return [{"uri": uri}]
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+
+    result = await coordinator.set_tags(
+        uri=file_uri,
+        tags=["team=test"],
+        mode="replace",
+        ctx=ctx,
+    )
+
+    assert result["success_count"] == 1
+    assert result["skipped_count"] == 0
+    assert result["updated_uris"] == [updated_uri]
+    assert fake_store.update_calls == [(updated_uri, ["team=test"], "replace", [0])]
+
+
+@pytest.mark.asyncio
+async def test_set_tags_append_merges_existing_tags(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        def __init__(self):
+            self.update_calls = []
+
+        async def fetch_by_uri(self, uri: str, ctx=None):
+            del uri, ctx
+            raise AssertionError("append should be handled inside store update API")
+
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            del ctx
+            assert levels is None
+            self.update_calls.append((uri, list(tags), mode))
+            return [{"uri": uri}]
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+    result = await coordinator.set_tags(
+        uri=file_uri,
+        tags=["Env=Prod", " team=search "],
+        mode="append",
+        ctx=ctx,
+    )
+
+    assert result["mode"] == "append"
+    assert "recursive" not in result
+    assert result["success_count"] == 1
+    assert result["skipped_count"] == 0
+    assert result["failed_count"] == 0
+    assert fake_store.update_calls == [(file_uri, ["env=prod", "team=search"], "append")]
+
+
+@pytest.mark.asyncio
+async def test_set_tags_rejects_non_kv_tags(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            raise AssertionError("invalid tags must fail before store update")
+
+    fake_vfs.vector_store = _FakeVectorStore()
+    with pytest.raises(InvalidArgumentError, match="k=v"):
+        await coordinator.set_tags(uri=file_uri, tags=["project-a"], ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_set_tags_recursive_directory_updates_descendants(monkeypatch):
+    root_uri = "viking://resources/demo"
+    file_uri = f"{root_uri}/doc.md"
+    abstract_uri = f"{root_uri}/.abstract.md"
+    overview_uri = f"{root_uri}/.overview.md"
+    nested_dir_uri = f"{root_uri}/nested"
+    nested_abstract_uri = f"{nested_dir_uri}/.abstract.md"
+    nested_overview_uri = f"{nested_dir_uri}/.overview.md"
+    nested_file_uri = f"{nested_dir_uri}/note.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    fake_vfs.tree_entries = [
+        {"uri": abstract_uri, "isDir": False},
+        {"uri": overview_uri, "isDir": False},
+        {"uri": file_uri, "isDir": False},
+        {"uri": nested_dir_uri, "isDir": True},
+        {"uri": nested_abstract_uri, "isDir": False},
+        {"uri": nested_overview_uri, "isDir": False},
+        {"uri": nested_file_uri, "isDir": False},
+    ]
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        def __init__(self):
+            self.update_calls = []
+            self.directory_update_calls = []
+
+        async def fetch_by_uri(self, uri: str, ctx=None):
+            del uri, ctx
+            raise AssertionError("recursive tag updates should use store update API")
+
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            del ctx
+            if levels is None:
+                self.update_calls.append((uri, list(tags), mode))
+                return [{"uri": uri}]
+            self.directory_update_calls.append((uri, list(tags), mode, list(levels)))
+            return [{"uri": uri}]
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+    result = await coordinator.set_tags(
+        uri=root_uri,
+        tags=["env=prod"],
+        mode="append",
+        recursive=True,
+        ctx=ctx,
+    )
+
+    assert result["mode"] == "append"
+    assert "recursive" not in result
+    assert result["success_count"] == 4
+    assert result["skipped_count"] == 0
+    assert result["failed_count"] == 0
+    assert set(result["updated_uris"]) == {
+        root_uri,
+        file_uri,
+        nested_dir_uri,
+        nested_file_uri,
+    }
+    assert sorted(fake_store.update_calls) == sorted(
+        [(file_uri, ["env=prod"], "append"), (nested_file_uri, ["env=prod"], "append")]
+    )
+    assert sorted(fake_store.directory_update_calls) == sorted(
+        [
+            (root_uri, ["env=prod"], "append", [0, 1]),
+            (nested_dir_uri, ["env=prod"], "append", [0, 1]),
+        ]
+    )
+    assert nested_dir_uri in result["updated_uris"]
+
+
+@pytest.mark.asyncio
+async def test_set_tags_recursive_directory_all_missing_vector_records_returns_zero_counts(
+    monkeypatch,
+):
+    root_uri = "viking://resources/demo"
+    file_uri = f"{root_uri}/doc.md"
+    abstract_uri = f"{root_uri}/.abstract.md"
+    overview_uri = f"{root_uri}/.overview.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    fake_vfs.tree_entries = [
+        {"uri": abstract_uri, "isDir": False},
+        {"uri": overview_uri, "isDir": False},
+        {"uri": file_uri, "isDir": False},
+    ]
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        def __init__(self):
+            self.update_calls = []
+
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            del ctx
+            if levels is None:
+                self.update_calls.append((uri, list(tags), mode))
+                return []
+            self.update_calls.append((uri, list(tags), mode, list(levels)))
+            return []
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+    result = await coordinator.set_tags(
+        uri=root_uri,
+        tags=["env=prod"],
+        mode="replace",
+        recursive=True,
+        ctx=ctx,
+    )
+
+    assert result["success_count"] == 0
+    assert result["skipped_count"] == 3
+    assert result["failed_count"] == 0
+    assert result["updated_uris"] == []
+    assert result["tags_updated"] is False
+
+
+@pytest.mark.asyncio
+async def test_set_tags_non_recursive_directory_all_missing_vector_records_returns_zero_counts(
+    monkeypatch,
+):
+    root_uri = "viking://resources/demo"
+    file_uri = f"{root_uri}/doc.md"
+    abstract_uri = f"{root_uri}/.abstract.md"
+    overview_uri = f"{root_uri}/.overview.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    fake_vfs.content[abstract_uri] = "abstract"
+    fake_vfs.content[overview_uri] = "overview"
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        def __init__(self):
+            self.update_calls = []
+
+        async def update_search_tags(self, uri: str, tags, *, mode: str, levels=None, ctx=None):
+            del ctx
+            if levels is None:
+                self.update_calls.append((uri, list(tags), mode))
+                return []
+            self.update_calls.append((uri, list(tags), mode, list(levels)))
+            return []
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+    result = await coordinator.set_tags(
+        uri=root_uri,
+        tags=["env=prod"],
+        mode="replace",
+        recursive=False,
+        ctx=ctx,
+    )
+
+    assert result["success_count"] == 0
+    assert result["skipped_count"] == 1
+    assert result["failed_count"] == 0
+    assert result["updated_uris"] == []
+    assert result["tags_updated"] is False
+    assert fake_store.update_calls == [(root_uri, ["env=prod"], "replace", [0, 1])]
+
+
+@pytest.mark.asyncio
+async def test_set_tags_single_uri_missing_vector_record_returns_zero_counts(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        def __init__(self):
+            self.update_calls = []
+
+        async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
+            del ctx
+            self.update_calls.append((uri, list(tags), mode))
+            return False
+
+    fake_store = _FakeVectorStore()
+    fake_vfs.vector_store = fake_store
+
+    result = await coordinator.set_tags(
+        uri=file_uri,
+        tags=["env=prod"],
+        mode="replace",
+        ctx=ctx,
+    )
+
+    assert result["success_count"] == 0
+    assert result["skipped_count"] == 1
+    assert result["failed_count"] == 0
+    assert result["updated_uris"] == []
+    assert result["root_uri"] == root_uri
+    assert result["tags_updated"] is False
+
+
+@pytest.mark.asyncio
+async def test_set_tags_does_not_return_write_queue_fields(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    fake_vfs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=fake_vfs)
+
+    class _FakeVectorStore:
+        async def update_search_tags(self, uri: str, tags, *, mode: str, ctx=None):
+            del ctx
+            assert uri == file_uri
+            assert list(tags) == ["env=prod"]
+            assert mode == "replace"
+            return True
+
+    fake_vfs.vector_store = _FakeVectorStore()
+
+    result = await coordinator.set_tags(
+        uri=file_uri,
+        tags=["env=prod"],
+        mode="replace",
+        ctx=ctx,
+    )
+
+    assert result["tags_updated"] is True
+    assert "semantic_status" not in result
+    assert "vector_status" not in result
+    assert "queue_status" not in result

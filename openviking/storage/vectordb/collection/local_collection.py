@@ -541,20 +541,52 @@ class LocalCollection(ICollection):
 
     # data interface
     def upsert_data(self, raw_data_list: List[Dict[str, Any]], ttl=0):
-        result = UpsertDataResult()
-        data_list = []
+        data_list = self._validate_raw_data_list(raw_data_list)
+        return self._write_data_list(data_list, ttl=ttl)
 
+    def update_data(self, raw_data_list: List[Dict[str, Any]]):
+        if not raw_data_list:
+            return UpsertDataResult()
+
+        pk = self.meta.primary_key
+        primary_keys = []
+        for raw_data in raw_data_list:
+            if pk not in raw_data:
+                raise ValueError(f"primary key '{pk}' is required for update")
+            primary_keys.append(raw_data[pk])
+
+        existing = self.fetch_data(primary_keys)
+        existing_map = {item.id: item.fields for item in existing.items}
+        missing_ids = [key for key in primary_keys if key not in existing_map]
+        if missing_ids:
+            raise ValueError(f"record not found for primary key(s): {missing_ids}")
+
+        merged_list = []
+        for raw_data in raw_data_list:
+            existing_fields = existing_map[raw_data[pk]] or {}
+            merged = dict(existing_fields)
+            merged.update(raw_data)
+            merged_list.append(merged)
+
+        processed_list = self._validate_raw_data_list(merged_list)
+        return self._write_data_list(processed_list, ttl=0)
+
+    def _validate_raw_data_list(self, raw_data_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        data_list = []
         for raw_data in raw_data_list:
             if self.data_processor:
                 try:
                     data = self.data_processor.validate_and_process(raw_data)
                 except ValueError as e:
                     logger.error(f"Data validation failed: {e}, raw_data: {raw_data}")
-                    return result
+                    raise
             else:
-                # Should not happen given init logic, but for safety
                 data = raw_data
             data_list.append(data)
+        return data_list
+
+    def _write_data_list(self, data_list: List[Dict[str, Any]], ttl=0):
+        result = UpsertDataResult()
 
         dense_emb, sparse_emb = (
             self.vectorizer_adapter.vectorize_raw_data(data_list)

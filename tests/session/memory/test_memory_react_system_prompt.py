@@ -26,7 +26,7 @@ class TestProviderInstruction:
             in instruction
         )
         assert (
-            "ONLY read URIs that are explicitly listed in ls tool results or returned by previous tool calls"
+            "ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls"
             in instruction
         )
 
@@ -58,6 +58,7 @@ class TestProviderInstruction:
         instruction = provider.instruction()
 
         assert "Resource URI Handling" not in instruction
+        assert "Affected memory URIs" not in instruction
 
     def test_instruction_includes_resource_uri_handling_for_user_scoped_resource_uri(self):
         provider = SessionExtractContextProvider(
@@ -80,6 +81,9 @@ class TestProviderInstruction:
         assert "Resource URI Handling" in instruction
         assert "viking://user/{user_id}/resources/..." in instruction
         assert "viking://user/{user_id}/peers/{peer_id}/resources/..." in instruction
+        assert (
+            "system-generated `## Resource Deletion` block's `Affected memory URIs`" in instruction
+        )
 
 
 class TestSkillToolCallExposure:

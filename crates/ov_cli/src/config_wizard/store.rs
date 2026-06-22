@@ -240,6 +240,10 @@ impl ConfigStore {
         write_config_file(&self.active_path, config)
     }
 
+    pub(crate) fn save_active_config(&self, config: &Config) -> Result<()> {
+        write_config_file(&self.active_path, config)
+    }
+
     pub fn save_edited_config(
         &self,
         old_name: &str,

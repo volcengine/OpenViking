@@ -22,7 +22,7 @@ async def get_task_by_uri(service: ResourceService, to_uri: str, ctx: RequestCon
         to_uri=to_uri,
         account_id=ctx.account_id,
         user_id=ctx.user.user_id,
-        role=ctx.role.value,
+        role=str(ctx.role),
     )
 
 
@@ -441,7 +441,7 @@ class TestWatchTaskConflict:
             task_id=task_id,
             account_id=request_context.account_id,
             user_id=request_context.user.user_id,
-            role=request_context.role.value,
+            role=str(request_context.role),
             is_active=False,
         )
 
@@ -590,7 +590,7 @@ class TestWatchTaskUpdate:
             task_id=task.task_id,
             account_id=request_context.account_id,
             user_id=request_context.user.user_id,
-            role=request_context.role.value,
+            role=str(request_context.role),
             is_active=False,
         )
 

@@ -25,6 +25,7 @@ import {
   loadCachedRecallCompressorProfile,
   markRecallCompressorRuntimeFailed,
 } from "./recall-compressor-profile.mjs";
+import { deriveOvSessionId } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
@@ -212,21 +213,22 @@ function postProcess(items, limit, threshold) {
   return result;
 }
 
-async function searchScope(query, targetUri, limit, bucket = "memories") {
+async function searchScope(query, targetUri, limit, bucket = "memories", sessionId = null) {
   // Keep current-user shorthand here; the server canonicalizes it using the
   // authenticated/trusted request context.
   const body = { query, target_uri: targetUri, limit, score_threshold: 0 };
-  const result = await fetchJSON("/api/v1/search/find", {
+  if (sessionId) body.session_id = sessionId;
+  const result = await fetchJSON("/api/v1/search/search", {
     method: "POST",
     body: JSON.stringify(body),
   });
   return result?.[bucket] || [];
 }
 
-async function searchAll(query, limit) {
+async function searchAll(query, limit, sessionId = null) {
   const [userMems, userSkills] = await Promise.all([
-    searchScope(query, "viking://user/memories", limit),
-    searchScope(query, "viking://user/skills", limit, "skills"),
+    searchScope(query, "viking://user/memories", limit, "memories", sessionId),
+    searchScope(query, "viking://user/skills", limit, "skills", sessionId),
   ]);
   log("search_complete", { scope: "user", rawCount: userMems.length, topScores: userMems.slice(0, 3).map((m) => m.score) });
   log("search_complete", { scope: "skills", rawCount: userSkills.length, topScores: userSkills.slice(0, 3).map((m) => m.score) });
@@ -237,6 +239,15 @@ async function searchAll(query, limit) {
     seen.add(m.uri);
     return true;
   });
+}
+
+function resolveRecallSessionId(codexSessionId) {
+  if (!codexSessionId) return null;
+  // Derive directly: the OV session id is deterministic (cx-<safe-id>), so
+  // recall does not need to read plugin state. This keeps the recall hook
+  // crash-free even if the state file is corrupt/missing, and stays in sync
+  // with capture, which now also derives cx-* unconditionally.
+  return deriveOvSessionId(codexSessionId);
 }
 
 async function readMemoryContent(uri) {
@@ -447,7 +458,11 @@ async function main() {
   }
 
   const userPrompt = (input.prompt || "").trim();
+  const codexSessionId = typeof input.session_id === "string" ? input.session_id.trim() : "";
+  const recallSessionId = resolveRecallSessionId(codexSessionId);
   log("start", {
+    codexSessionId: codexSessionId || null,
+    recallSessionId,
     query: userPrompt.slice(0, 200),
     queryLength: userPrompt.length,
     config: { recallLimit: cfg.recallLimit, scoreThreshold: cfg.scoreThreshold },
@@ -467,7 +482,7 @@ async function main() {
   }
 
   const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-  const allMemories = await searchAll(userPrompt, candidateLimit);
+  const allMemories = await searchAll(userPrompt, candidateLimit, recallSessionId);
   if (allMemories.length === 0) {
     log("skip", { stage: "search", reason: "no results" });
     emit();

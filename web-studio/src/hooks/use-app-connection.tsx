@@ -138,6 +138,18 @@ function resolveIdentityField(
   return storedValue || defaultValue
 }
 
+export function resolveInitialApiKey({
+  defaultApiKey,
+  envApiKey,
+  storedApiKey,
+}: {
+  defaultApiKey: string
+  envApiKey: string
+  storedApiKey: string | undefined
+}): string {
+  return envApiKey || storedApiKey || defaultApiKey
+}
+
 function applyConnection(
   connection: ConnectionDraft,
   serverMode: ServerMode,
@@ -180,11 +192,11 @@ function readInitialConnection(): ConnectionDraft {
     ENV_ADMIN_API_KEY ||
     storedConnection.adminApiKey ||
     DEFAULT_CONNECTION.adminApiKey
-  const apiKey =
-    ENV_API_KEY ||
-    ovClient.getConnection().apiKey ||
-    storedConnection.apiKey ||
-    DEFAULT_CONNECTION.apiKey
+  const apiKey = resolveInitialApiKey({
+    defaultApiKey: DEFAULT_CONNECTION.apiKey,
+    envApiKey: ENV_API_KEY,
+    storedApiKey: storedConnection.apiKey,
+  })
   return normalizeConnectionDraft({
     ...DEFAULT_CONNECTION,
     ...storedConnection,
@@ -263,8 +275,8 @@ export function AppConnectionProvider({
     () =>
       Boolean(
         initialConnectionRef.current?.baseUrl &&
-          (initialConnectionRef.current.adminApiKey ||
-            initialConnectionRef.current.apiKey),
+        (initialConnectionRef.current.adminApiKey ||
+          initialConnectionRef.current.apiKey),
       ),
   )
   const [serverMode, setServerMode] = React.useState<ServerMode>('checking')

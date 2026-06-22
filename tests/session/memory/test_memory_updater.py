@@ -239,6 +239,124 @@ class TestMemoryUpdater:
         assert viking_fs.rm_calls == []
 
     @pytest.mark.asyncio
+    async def test_generate_events_overview_without_extract_context_uses_summary_or_filename(self):
+        schema = MemoryTypeSchema(
+            memory_type="events",
+            description="event memory",
+            directory="viking://user/{{ user_space }}/memories/events",
+            filename_template="{{ event_name }}.md",
+            fields=[],
+            overview_template=(
+                "# Events Overview\n"
+                "{% for item in items %}\n"
+                "- [{{ item.file_content.summary|default(item.file_name, true) }}](./{{ item.file_name }})\n"
+                "{% endfor %}"
+            ),
+        )
+        registry = MagicMock()
+        registry.get.return_value = schema
+
+        directory = "viking://user/alice/memories/events/2026/06/16"
+        event_uri = f"{directory}/kept_event.md"
+        plain_event_uri = f"{directory}/plain_event.md"
+        overview_uri = f"{directory}/.overview.md"
+
+        class FakeVikingFS:
+            def __init__(self):
+                self.store = {
+                    event_uri: MemoryFileUtils.write(
+                        MemoryFile(
+                            uri=event_uri,
+                            content="Summary: kept event",
+                            memory_type="events",
+                            extra_fields={
+                                "event_name": "kept_event",
+                                "summary": "kept event",
+                                "ranges": "0",
+                            },
+                        )
+                    ),
+                    plain_event_uri: "Plain event first sentence. More detail on the same line.",
+                    overview_uri: (
+                        "# Events Overview\n"
+                        "**Date:** 2026/06/16\n"
+                        "- [deleted event](./deleted_event.md)\n"
+                    ),
+                }
+
+            async def ls(self, uri, show_all_hidden=False, ctx=None):
+                return [
+                    {"name": "kept_event.md", "isDir": False},
+                    {"name": "plain_event.md", "isDir": False},
+                    {"name": ".overview.md", "isDir": False},
+                ]
+
+            async def read_file(self, uri, ctx=None):
+                return self.store[uri]
+
+            async def write_file(self, uri, content, ctx=None):
+                self.store[uri] = content
+
+        viking_fs = FakeVikingFS()
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=viking_fs)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        await updater.generate_overview("events", directory, ctx, extract_context=None)
+
+        assert "**Date:**" not in viking_fs.store[overview_uri]
+        assert "- [kept event](./kept_event.md)" in viking_fs.store[overview_uri]
+        assert "- [plain_event.md](./plain_event.md)" in viking_fs.store[overview_uri]
+        assert "deleted_event.md" not in viking_fs.store[overview_uri]
+
+    @pytest.mark.asyncio
+    async def test_generate_overview_template_fallbacks_for_preferences_and_entities(self):
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.load_from_yaml("openviking/prompts/templates/memory/entities.yaml")
+        registry.load_from_yaml("openviking/prompts/templates/memory/preferences.yaml")
+
+        entity_dir = "viking://user/alice/memories/entities/动漫角色"
+        entity_uri = f"{entity_dir}/越前龙马.md"
+        entity_overview_uri = f"{entity_dir}/.overview.md"
+        preference_dir = "viking://user/alice/memories/preferences/alice"
+        preference_uri = f"{preference_dir}/workflow.md"
+        preference_overview_uri = f"{preference_dir}/.overview.md"
+
+        class FakeVikingFS:
+            def __init__(self):
+                self.store = {
+                    entity_uri: "A tennis character.",
+                    preference_uri: "Prefers concise updates.",
+                }
+
+            async def ls(self, uri, show_all_hidden=False, ctx=None):
+                if uri == entity_dir:
+                    return [{"name": "越前龙马.md", "isDir": False}]
+                if uri == preference_dir:
+                    return [{"name": "workflow.md", "isDir": False}]
+                return []
+
+            async def read_file(self, uri, ctx=None):
+                return self.store[uri]
+
+            async def write_file(self, uri, content, ctx=None):
+                self.store[uri] = content
+
+        viking_fs = FakeVikingFS()
+        updater = MemoryUpdater(registry=registry)
+        updater._get_viking_fs = MagicMock(return_value=viking_fs)
+        ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+
+        await updater.generate_overview("entities", entity_dir, ctx, extract_context=None)
+        await updater.generate_overview("preferences", preference_dir, ctx, extract_context=None)
+
+        assert "**Category:** 动漫角色" in viking_fs.store[entity_overview_uri]
+        assert "- [越前龙马.md](./越前龙马.md)" in viking_fs.store[entity_overview_uri]
+        assert "**User:** alice" in viking_fs.store[preference_overview_uri]
+        assert "**Topic:** workflow.md" in viking_fs.store[preference_overview_uri]
+        assert "- [workflow.md](./workflow.md)" in viking_fs.store[preference_overview_uri]
+
+    @pytest.mark.asyncio
     async def test_apply_operations_preserves_pre_resolved_multi_uris_for_new_page_ids(self):
         registry = MagicMock()
         registry.get.return_value = MemoryTypeSchema(

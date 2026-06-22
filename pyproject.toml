@@ -30,6 +30,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
+    "openviking-sdk>=0.1.1",
     "pydantic>=2.0.0",
     "typing-extensions>=4.5.0",
     "pyyaml>=6.0",
@@ -209,7 +210,7 @@ vikingbot = "vikingbot.cli.commands:app"
 [tool.setuptools_scm]
 write_to = "openviking/_version.py"
 local_scheme = "no-local-version"
-tag_regex = "^(?:v)?(?:[a-zA-Z0-9_]+@)?(?P<version>[0-9]+(?:\\.[0-9]+)*)$"
+tag_regex = "^v(?P<version>[0-9]+(?:\\.[0-9]+)*)$"
 
 [tool.setuptools.packages.find]
 where = [".", "bot"]

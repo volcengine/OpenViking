@@ -246,6 +246,20 @@ async def upsert_data(request: DataUpsertRequest, req: Request):
         return error_response(e.message, e.code.value, request=req)
 
 
+@data_router.post("/update", response_model=ApiResponse)
+async def update_data(request: DataUpsertRequest, req: Request):
+    """Update existing data in collection using only explicitly provided fields."""
+    try:
+        collection = get_collection_or_raise(request.collection_name, request.project or "default")
+        data_list = data_utils.convert_dict(request.fields)
+
+        logger.debug(f"Updating {len(data_list)} records in {request.collection_name}")
+        result = collection.update_data(data_list=data_list)
+        return success_response("update data success", result, request=req)
+    except VikingDBException as e:
+        return error_response(e.message, e.code.value, request=req)
+
+
 @data_router.get("/fetch_in_collection", response_model=ApiResponse)
 async def fetch_data(
     req: Request,

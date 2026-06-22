@@ -272,7 +272,7 @@ Command parsers support quoted args and flags. Resource-only flags are rejected 
 | `configured=false` | Setup did not persist config | Re-run `openclaw openviking setup ... --json`; branch on JSON `error`. |
 | `slotActive=false` | Another context engine owns the slot or gateway has stale state | Inspect `plugins.slots.contextEngine`; use `--force-slot` only after user confirms. |
 | `health.ok=false` | Server unreachable or wrong `baseUrl` / key | Check `baseUrl`, network, `/health`, and auth. |
-| No long-term memory after a fresh fact | `/compact` or commit/extraction has not run, or server extraction failed | Run `/compact`; check OpenViking server logs. |
+| No long-term memory after a fresh fact | `/compact` or commit/extraction has not run, or server extraction failed | Use `memory_store` for explicit remember/save/store intents; otherwise run `/compact` or wait for threshold commit, then check OpenViking server logs. |
 | Recall misses shared documents | `resource` target is not enabled | Use `memory_recall` with `resourceTypes:["resource"]` or configure `recallTargetTypes: ["resource"]`. |
 | Summary lacks exact detail | Archive summary is too coarse | Use `ov_archive_search` with concrete keywords, then `ov_archive_expand`. |
 | Large tool output preview is insufficient | Tool result was externalized | Use `openviking_tool_result_search/read` with the ref. |

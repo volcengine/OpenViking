@@ -165,11 +165,16 @@ impl FileSystem for EncryptionWrappedFS {
         let plaintext = match self.decrypt_envelope(&account_id, &data) {
             Ok(plaintext) => plaintext,
             Err(err) => {
+                if !crypto::is_encrypted(&data) {
+                    // ponytail: transitional plaintext fallback for backends that enabled
+                    // encryption after plaintext files already existed; remove after migration.
+                    return Ok(slice_bytes(data, offset, size));
+                }
                 warn!(
                     path = %path,
                     account_id = %account_id,
                     ciphertext_len = data.len(),
-                    encrypted_magic = crypto::is_encrypted(&data),
+                    encrypted_magic = true,
                     error = %err,
                     "failed to decrypt encrypted RAGFS file"
                 );

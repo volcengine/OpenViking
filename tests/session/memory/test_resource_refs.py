@@ -6,6 +6,7 @@ from openviking.session.memory.utils.resource_refs import (
     contains_resource_uri,
     extract_resource_uris,
     sync_memory_resource_refs,
+    unlink_resource_references_from_memory,
 )
 
 
@@ -87,3 +88,39 @@ def test_sync_memory_resource_refs_keeps_bare_uri_clean_before_chinese_punctuati
             "match_text": "昨天晚上我看了",
         }
     ]
+
+
+def test_unlink_resource_references_preserves_visible_markdown_text():
+    resource_uri = "viking://resources/images/2026/06/12/yueqian_jpeg"
+    child_uri = f"{resource_uri}/child.jpeg"
+    mf = MemoryFile(
+        content=(f"用户保存了[越前龙马照片]({resource_uri})。\n用户也保存了[子图]({child_uri})。"),
+        extra_fields={
+            "resource_refs": [
+                {"resource_uri": resource_uri, "source": "content.write"},
+                {"resource_uri": child_uri, "source": "content.write"},
+            ]
+        },
+    )
+
+    changed = unlink_resource_references_from_memory(mf, resource_uri, recursive=False)
+
+    assert changed is True
+    assert mf.content == f"用户保存了越前龙马照片。\n用户也保存了[子图]({child_uri})。"
+    assert mf.extra_fields["resource_refs"] == [
+        {"resource_uri": child_uri, "source": "content.write"}
+    ]
+
+
+def test_unlink_resource_references_removes_bare_uri_but_keeps_sentence():
+    resource_uri = "viking://resources/images/2026/06/12/yueqian_jpeg"
+    mf = MemoryFile(
+        content=f"用户保存了越前龙马照片 {resource_uri}。",
+        extra_fields={"resource_refs": [{"resource_uri": resource_uri}]},
+    )
+
+    changed = unlink_resource_references_from_memory(mf, resource_uri)
+
+    assert changed is True
+    assert mf.content == "用户保存了越前龙马照片。"
+    assert "resource_refs" not in mf.extra_fields

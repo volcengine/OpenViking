@@ -357,6 +357,42 @@ async def test_sdk_find(http_client):
     assert hasattr(result, "total")
 
 
+async def test_sdk_find_accepts_tags(http_client):
+    client, _ = http_client
+    f = TEST_TMP_DIR / "sdk_find_tags.md"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(SAMPLE_MD_CONTENT)
+    await client.add_resource(path=str(f), reason="find tags test", wait=True)
+
+    result = await client.find(query="sample document", limit=5, tags=["team=search"])
+    assert hasattr(result, "resources")
+
+
+async def test_sdk_search_accepts_tags(http_client):
+    client, _ = http_client
+    f = TEST_TMP_DIR / "sdk_search_tags.md"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(SAMPLE_MD_CONTENT)
+    await client.add_resource(path=str(f), reason="search tags test", wait=True)
+
+    result = await client.search(query="sample document", limit=5, tags=["team=search"])
+    assert hasattr(result, "resources")
+
+
+async def test_sdk_set_tags_accepts_tags(http_client):
+    client, _ = http_client
+    f = TEST_TMP_DIR / "sdk_write_tags.md"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("hello")
+    added = await client.add_resource(path=str(f), reason="write tags test", wait=True)
+    uri = added["root_uri"]
+    children = await client.ls(uri, simple=True)
+    file_uri = children[0]
+
+    result = await client.set_tags(file_uri, ["team=search"])
+    assert isinstance(result, dict)
+
+
 async def test_sdk_find_telemetry(http_client):
     client, _ = http_client
     f = TEST_TMP_DIR / "sdk_search_telemetry.md"

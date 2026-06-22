@@ -26,6 +26,12 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
+	setString(payload, "since", opts.Since)
+	setString(payload, "until", opts.Until)
+	setString(payload, "time_field", opts.TimeField)
+	if len(opts.Level) > 0 {
+		payload["level"] = opts.Level
+	}
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/find", nil, payload, &result)
@@ -54,6 +60,12 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
+	setString(payload, "since", opts.Since)
+	setString(payload, "until", opts.Until)
+	setString(payload, "time_field", opts.TimeField)
+	if len(opts.Level) > 0 {
+		payload["level"] = opts.Level
+	}
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)

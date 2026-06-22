@@ -157,6 +157,10 @@ type FindOptions struct {
 	Filter         map[string]any
 	ContextType    any
 	Telemetry      any
+	Since          string
+	Until          string
+	TimeField      string
+	Level          []int
 }
 
 // SearchOptions controls Search.
@@ -169,6 +173,10 @@ type SearchOptions struct {
 	Filter         map[string]any
 	ContextType    any
 	Telemetry      any
+	Since          string
+	Until          string
+	TimeField      string
+	Level          []int
 }
 
 // GrepOptions controls Grep.

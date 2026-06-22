@@ -1386,7 +1386,7 @@ fn prompt_multi_select_skills(
 ) -> Result<Option<Vec<String>>> {
     use crossterm::{
         cursor,
-        event::{self, Event, KeyCode, KeyModifiers},
+        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
         execute, terminal,
     };
 
@@ -1422,48 +1422,60 @@ fn prompt_multi_select_skills(
     let _raw_guard = RawGuard::enter()?;
     let mut current = 0usize;
     let mut checked = vec![false; skills.len()];
-    let mut rendered_region = RenderedSkillSelectRegion::default();
+
+    // Initial render
+    let lines = skill_multi_select_lines(prompt, skills, current, &checked);
+    let mut rendered_region =
+        RenderedSkillSelectRegion::from_lines(&lines, live_skill_select_columns());
+    print!("{}", live_select_block(&lines));
+    io::stdout().flush()?;
 
     loop {
-        clear_rendered_region(&rendered_region)?;
-        let lines = skill_multi_select_lines(prompt, skills, current, &checked);
-        rendered_region =
-            RenderedSkillSelectRegion::from_lines(&lines, live_skill_select_columns());
-        print!("{}", live_select_block(&lines));
-        io::stdout().flush()?;
-
         match event::read()? {
-            Event::Key(key) => match key.code {
-                KeyCode::Up => {
-                    current = if current == 0 {
-                        skills.len().saturating_sub(1)
-                    } else {
-                        current - 1
-                    };
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                match key.code {
+                    KeyCode::Up => {
+                        current = if current == 0 {
+                            skills.len().saturating_sub(1)
+                        } else {
+                            current - 1
+                        };
+                    }
+                    KeyCode::Down => current = (current + 1) % skills.len(),
+                    KeyCode::Char(' ') => checked[current] = !checked[current],
+                    KeyCode::Char('a') | KeyCode::Char('A') => {
+                        let select_all = checked.iter().any(|value| !*value);
+                        checked.fill(select_all);
+                    }
+                    KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
+                        clear_rendered_region(&rendered_region)?;
+                        let selected = selected_skill_names(skills, current, &checked);
+                        return Ok(Some(selected));
+                    }
+                    KeyCode::Esc => {
+                        clear_rendered_region(&rendered_region)?;
+                        return Ok(None);
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        clear_rendered_region(&rendered_region)?;
+                        return Err(Error::Client("Aborted.".to_string()));
+                    }
+                    _ => continue,
                 }
-                KeyCode::Down => current = (current + 1) % skills.len(),
-                KeyCode::Char(' ') => checked[current] = !checked[current],
-                KeyCode::Char('a') | KeyCode::Char('A') => {
-                    let select_all = checked.iter().any(|value| !*value);
-                    checked.fill(select_all);
-                }
-                KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
-                    clear_rendered_region(&rendered_region)?;
-                    let selected = selected_skill_names(skills, current, &checked);
-                    return Ok(Some(selected));
-                }
-                KeyCode::Esc => {
-                    clear_rendered_region(&rendered_region)?;
-                    return Ok(None);
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    clear_rendered_region(&rendered_region)?;
-                    return Err(Error::Client("Aborted.".to_string()));
-                }
-                _ => {}
-            },
+                clear_rendered_region(&rendered_region)?;
+                let lines = skill_multi_select_lines(prompt, skills, current, &checked);
+                rendered_region =
+                    RenderedSkillSelectRegion::from_lines(&lines, live_skill_select_columns());
+                print!("{}", live_select_block(&lines));
+                io::stdout().flush()?;
+            }
             Event::Resize(_, _) => {
-                // Redraw on the next loop using the new terminal width.
+                clear_rendered_region(&rendered_region)?;
+                let lines = skill_multi_select_lines(prompt, skills, current, &checked);
+                rendered_region =
+                    RenderedSkillSelectRegion::from_lines(&lines, live_skill_select_columns());
+                print!("{}", live_select_block(&lines));
+                io::stdout().flush()?;
             }
             _ => {}
         }

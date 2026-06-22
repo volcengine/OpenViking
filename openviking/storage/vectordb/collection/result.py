@@ -10,6 +10,15 @@ class UpsertDataResult:
 
 
 @dataclass
+class UpdateResult:
+    ok: bool = False
+    ids: List[str] = field(default_factory=list)
+    updated_count: int = 0
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+@dataclass
 class DataItem:
     id: Any = None
     fields: Optional[Dict[str, Any]] = None

@@ -3,7 +3,6 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
-import json
 import threading
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -13,16 +12,16 @@ from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
+from openviking.parse.image_rewrite import (
+    IMAGE_MAPPINGS_FILENAME,
+    rewrite_image_uris,
+)
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
     FILE_TYPE_CODE,
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
-)
-from openviking.parse.image_rewrite import (
-    IMAGE_MAPPINGS_FILENAME,
-    rewrite_image_uris,
 )
 from openviking.parse.parsers.media.utils import (
     generate_audio_summary,
@@ -171,7 +170,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
     @staticmethod
     def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:
-        role = Role(msg.role) if msg.role in {r.value for r in Role} else Role.ROOT
+        role = Role(msg.role or Role.ROOT)
         return RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=role,

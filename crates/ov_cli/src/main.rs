@@ -518,6 +518,20 @@ enum Commands {
         #[arg(long, value_name = "seconds", help_heading = "Common options")]
         timeout: Option<f64>,
     },
+    /// [Data] Update explicit retrieval tags metadata for a file or directory
+    SetTags {
+        /// Viking URI
+        uri: String,
+        /// Comma-separated k=v tags, e.g. env=prod,team=search
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Tag update mode: replace or append (append replaces existing values by key)
+        #[arg(long, default_value = "replace")]
+        mode: String,
+        /// Recursively update descendant files and semantic nodes when target is a directory
+        #[arg(long, default_value = "false")]
+        recursive: bool,
+    },
     /// [Data] Download file to local path (supports binaries/images)
     Get {
         /// Viking URI
@@ -581,6 +595,9 @@ enum Commands {
             help_heading = "Common options"
         )]
         context_type: Option<Vec<String>>,
+        /// Only include results matching any of these explicit tags
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Option<Vec<String>>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -639,6 +656,9 @@ enum Commands {
             help_heading = "Advanced options"
         )]
         context_type: Option<Vec<String>>,
+        /// Only include results matching any of these explicit tags
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Option<Vec<String>>,
     },
     /// [Data] Run content pattern search
     Grep {
@@ -2876,6 +2896,12 @@ async fn main() {
             handlers::handle_write(uri, content, from_file, effective_mode, wait, timeout, ctx)
                 .await
         }
+        Commands::SetTags {
+            uri,
+            tags,
+            mode,
+            recursive,
+        } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
         Commands::Reindex { uri, mode, wait } => {
             handlers::handle_reindex(uri, mode, wait, ctx).await
         }
@@ -2889,6 +2915,7 @@ async fn main() {
             before,
             level,
             context_type,
+            tags,
         } => {
             handlers::handle_find(
                 query,
@@ -2899,6 +2926,7 @@ async fn main() {
                 before,
                 level,
                 context_type,
+                tags,
                 ctx,
             )
             .await
@@ -2913,6 +2941,7 @@ async fn main() {
             before,
             level,
             context_type,
+            tags,
         } => {
             handlers::handle_search(
                 query,
@@ -2924,6 +2953,7 @@ async fn main() {
                 before,
                 level,
                 context_type,
+                tags,
                 ctx,
             )
             .await
@@ -3055,6 +3085,14 @@ mod tests {
             }
             _ => panic!("expected search command"),
         }
+    }
+
+    #[test]
+    fn cli_find_and_search_reject_removed_peer_id_flag() {
+        assert!(Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "peer-a"]).is_err());
+        assert!(
+            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "peer-a"]).is_err()
+        );
     }
 
     #[test]
