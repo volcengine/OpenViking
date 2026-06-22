@@ -1,59 +1,59 @@
 # openviking-sdk
 
-Lightweight Python HTTP SDK for OpenViking.
+OpenViking 的轻量级 Python HTTP SDK。
 
-`openviking-sdk` is the small package for users who only need to call an existing OpenViking server over HTTP. It avoids the heavier local-runtime, server, and CLI dependencies from the main `openviking` package.
+`openviking-sdk` 面向只需要通过 HTTP 调用现有 OpenViking 服务的用户。它避免了主包 `openviking` 中较重的本地运行时、服务端和 CLI 依赖。
 
-## Installation
+## 安装
 
 ```bash
 pip install openviking-sdk
 ```
 
-Requirements:
+要求：
 
 - Python 3.10+
-- A reachable OpenViking HTTP server, for example `http://127.0.0.1:1933`
+- 一个可访问的 OpenViking HTTP 服务，例如 `http://127.0.0.1:1933`
 
-## Package Name vs Import Name
+## 包名与导入名
 
-- PyPI package name: `openviking-sdk`
-- Python import name: `openviking_sdk`
+- PyPI 包名：`openviking-sdk`
+- Python 导入名：`openviking_sdk`
 
 ```python
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 ```
 
-## Configuration Sources
+## 配置来源
 
-You can configure the SDK in three ways, with this precedence:
+SDK 支持三种配置方式，优先级从高到低如下：
 
-1. Explicit constructor arguments
-2. Environment variables such as `OPENVIKING_URL`, `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_ACTOR_PEER_ID`, and `OPENVIKING_TIMEOUT`
-3. `ovcli.conf`, either from `OPENVIKING_CLI_CONFIG_FILE` or the default path `~/.openviking/ovcli.conf`
+1. 显式构造参数
+2. 环境变量，例如 `OPENVIKING_URL`、`OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_ACTOR_PEER_ID` 和 `OPENVIKING_TIMEOUT`
+3. `ovcli.conf`，来源可以是 `OPENVIKING_CLI_CONFIG_FILE` 指定的路径，或者默认路径 `~/.openviking/ovcli.conf`
 
-This means existing setups that relied on `ovcli.conf` continue to work after the SDK split.
+这意味着之前依赖 `ovcli.conf` 的配置方式，在 SDK 拆分之后仍然可以继续使用。
 
-## Authentication Model
+## 认证模型
 
-Most deployments use API key authentication.
+大多数部署场景使用 API Key 认证。
 
-Common client fields:
+常见客户端字段：
 
-- `url`: OpenViking server base URL
-- `api_key`: root key or user key
-- `account`: optional account override, usually only needed with a root key
-- `user`: optional user override, usually only needed with a root key
-- `user_id`: legacy alias for `user`
-- `actor_peer_id`: optional actor peer override
-- `agent_id`: legacy alias for `actor_peer_id`
+- `url`：OpenViking 服务的基础 URL
+- `api_key`：root key 或 user key
+- `account`：可选的 account 覆盖，通常只在使用 root key 时需要
+- `user`：可选的 user 覆盖，通常只在使用 root key 时需要
+- `user_id`：`user` 的兼容旧别名
+- `actor_peer_id`：可选的 actor peer 覆盖
+- `agent_id`：`actor_peer_id` 的兼容旧别名
 
-Compatibility notes:
+兼容性说明：
 
-- `user_id` and `agent_id` are still accepted for legacy callers
-- `actor_peer_id` and `agent_id` cannot be passed together
+- 旧调用方仍然可以使用 `user_id` 和 `agent_id`
+- `actor_peer_id` 和 `agent_id` 不能同时传入
 
-Example:
+示例：
 
 ```python
 from openviking_sdk import SyncHTTPClient
@@ -64,7 +64,7 @@ client = SyncHTTPClient(
 )
 ```
 
-If you are using a root key and want to act as a specific tenant user:
+如果你使用的是 root key，并且希望以某个租户用户身份执行：
 
 ```python
 from openviking_sdk import SyncHTTPClient
@@ -77,7 +77,7 @@ client = SyncHTTPClient(
 )
 ```
 
-## Quick Start: Sync Client
+## 快速开始：同步客户端
 
 ```python
 from openviking_sdk import SyncHTTPClient
@@ -98,7 +98,7 @@ context = client.session("demo-session").get_session_context(token_budget=4096)
 print("context:", context)
 ```
 
-## Quick Start: Async Client
+## 快速开始：异步客户端
 
 ```python
 import asyncio
@@ -129,9 +129,9 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## Common Operations
+## 常见操作
 
-### Create a Session
+### 创建 Session
 
 ```python
 from openviking_sdk import SyncHTTPClient
@@ -141,9 +141,9 @@ result = client.create_session("demo-session")
 print(result)
 ```
 
-### Add a Resource from a Local File
+### 从本地文件添加资源
 
-`add_resource` handles file upload for local paths automatically.
+`add_resource` 会自动处理本地路径对应的文件上传。
 
 ```python
 from openviking_sdk import SyncHTTPClient
@@ -159,7 +159,7 @@ result = client.add_resource(
 print(result)
 ```
 
-### Filesystem Operations
+### 文件系统操作
 
 ```python
 from openviking_sdk import SyncHTTPClient
@@ -171,7 +171,7 @@ print(client.ls("viking://resources"))
 print(client.read("viking://resources/demo-dir/example.md"))
 ```
 
-### Retrieval
+### 检索
 
 ```python
 from openviking_sdk import SyncHTTPClient
@@ -182,9 +182,9 @@ result = client.find("hello", limit=5)
 print(result)
 ```
 
-## Admin Operations
+## 管理员操作
 
-If you connect with a root key, the SDK also exposes admin APIs such as:
+如果你使用 root key 连接，SDK 也暴露了管理员 API，例如：
 
 - `admin_create_account`
 - `admin_register_user`
@@ -193,7 +193,7 @@ If you connect with a root key, the SDK also exposes admin APIs such as:
 - `admin_regenerate_key`
 - `admin_delete_account`
 
-Example:
+示例：
 
 ```python
 from openviking_sdk import SyncHTTPClient
@@ -210,9 +210,9 @@ result = root_client.admin_create_account(
 print(result)
 ```
 
-## Error Handling
+## 错误处理
 
-The SDK maps server-side error codes to Python exceptions.
+SDK 会把服务端错误码映射为 Python 异常。
 
 ```python
 from openviking_sdk import OpenVikingError, SyncHTTPClient
@@ -225,56 +225,56 @@ except OpenVikingError as exc:
     print(type(exc).__name__, exc)
 ```
 
-## Relationship to `openviking`
+## 与 `openviking` 的关系
 
-Use `openviking-sdk` when you want:
+在以下场景中使用 `openviking-sdk`：
 
-- the HTTP client only
-- the smallest dependency footprint
-- a package suitable for application-side integration
+- 只需要 HTTP 客户端
+- 希望依赖体积尽可能小
+- 作为业务应用侧集成包使用
 
-Use `openviking` when you want:
+在以下场景中使用 `openviking`：
 
-- the full Python package
-- local runtime integrations
-- server entrypoints
-- compatibility imports that re-export the HTTP clients
+- 需要完整 Python 主包
+- 需要本地运行时集成
+- 需要服务端入口
+- 需要重新导出 HTTP client 的兼容导入路径
 
-## Development
+## 开发
 
-Install from source:
+从源码安装：
 
 ```bash
 cd sdk/python
 pip install -e .
 ```
 
-Build distributions:
+构建发行包：
 
 ```bash
 cd sdk/python
 python -m build
 ```
 
-The SDK version is derived from git tags with this format:
+SDK 版本号来自以下格式的 git tag：
 
 ```text
 python-sdk/v0.1.3
 ```
 
-That tag namespace is independent from the main package release tags such as:
+这个 tag 命名空间独立于主包的发布 tag，例如：
 
 ```text
 v0.3.26
 ```
 
-## Release
+## 发布
 
-The repository is configured so SDK releases can be driven by SDK-only tags.
+仓库已经配置为支持通过 SDK 专用 tag 触发 SDK 发布。
 
-Typical flow:
+典型流程：
 
-1. Merge SDK changes.
-2. Create and push a tag like `python-sdk/v0.1.3`.
-3. GitHub Actions builds `sdk/python`.
-4. GitHub Actions publishes `openviking-sdk` to PyPI.
+1. 合并 SDK 相关改动
+2. 创建并推送类似 `python-sdk/v0.1.3` 的 tag
+3. GitHub Actions 构建 `sdk/python`
+4. GitHub Actions 将 `openviking-sdk` 发布到 PyPI

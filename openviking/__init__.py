@@ -27,11 +27,11 @@ except ImportError as exc:
     ) from exc
 
 if TYPE_CHECKING:
-    from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
-
     from openviking.async_client import AsyncOpenViking
     from openviking.session import Session
     from openviking.sync_client import SyncOpenViking
+    from openviking_cli.client.http import AsyncHTTPClient
+    from openviking_cli.client.sync_http import SyncHTTPClient
     from openviking_cli.session.user_id import UserIdentifier
 
     OpenViking = SyncOpenViking
@@ -55,11 +55,11 @@ def __getattr__(name: str):
 
         return Session
     if name == "AsyncHTTPClient":
-        from openviking_sdk import AsyncHTTPClient
+        from openviking_cli.client.http import AsyncHTTPClient
 
         return AsyncHTTPClient
     if name == "SyncHTTPClient":
-        from openviking_sdk import SyncHTTPClient
+        from openviking_cli.client.sync_http import SyncHTTPClient
 
         return SyncHTTPClient
     if name == "UserIdentifier":

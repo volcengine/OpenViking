@@ -214,9 +214,11 @@ class AsyncHTTPClient:
         agent_id: Optional[str] = None,
         timeout: float = 60.0,
         extra_headers: Optional[Dict[str, str]] = None,
-        profile_enabled: Optional[bool] = False,
+        profile_enabled: Optional[bool] = None,
         upload_mode: Optional[str] = None,
     ):
+        if actor_peer_id and agent_id:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
         effective_user = user if user is not None else user_id
         effective_actor = actor_peer_id or agent_id
         config = resolve_client_config(
@@ -226,6 +228,9 @@ class AsyncHTTPClient:
             user=effective_user,
             actor_peer_id=effective_actor,
             timeout=timeout,
+            extra_headers=extra_headers,
+            profile_enabled=profile_enabled,
+            upload_mode=upload_mode,
         )
         self._url = config.url
         self._api_key = config.api_key
@@ -233,9 +238,9 @@ class AsyncHTTPClient:
         self._user_id = config.user
         self._actor_peer_id = config.actor_peer_id
         self._timeout = config.timeout
-        self._extra_headers = extra_headers or {}
-        self._profile_enabled = bool(profile_enabled)
-        self._upload_mode = upload_mode
+        self._extra_headers = config.extra_headers
+        self._profile_enabled = config.profile_enabled
+        self._upload_mode = config.upload_mode
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
 
