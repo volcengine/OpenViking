@@ -371,9 +371,7 @@ def _ensure_api_test_user_key(root_client, account_id: str, user_id: str) -> str
         return _fallback_api_test_key("创建测试账户失败")
 
     if resp.status_code != 200:
-        return _fallback_api_test_key(
-            f"无法查询用户列表({resp.status_code}): {resp.text[:200]}"
-        )
+        return _fallback_api_test_key(f"无法查询用户列表({resp.status_code}): {resp.text[:200]}")
 
     users = resp.json().get("result", [])
     user_key = _extract_user_key(users, user_id)

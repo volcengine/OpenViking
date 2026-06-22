@@ -1,13 +1,30 @@
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+API_TEST_DIR = Path(__file__).resolve().parent
+if str(API_TEST_DIR) not in sys.path:
+    sys.path.insert(0, str(API_TEST_DIR))
 
-import conftest as api_conftest  # noqa: E402
+
+def _load_api_test_conftest():
+    spec = importlib.util.spec_from_file_location(
+        "api_test_bootstrap_conftest",
+        API_TEST_DIR / "conftest.py",
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("failed to load tests/api_test/conftest.py")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+api_conftest = _load_api_test_conftest()
 
 
 class FakeResponse:
@@ -66,8 +83,7 @@ def test_register_conflict_reuses_concurrently_created_user_key(monkeypatch):
     )
 
     assert (
-        api_conftest._ensure_api_test_user_key(root_client, "default", "default")
-        == "race-user-key"
+        api_conftest._ensure_api_test_user_key(root_client, "default", "default") == "race-user-key"
     )
 
 
