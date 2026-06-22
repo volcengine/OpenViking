@@ -237,6 +237,7 @@ ADDITIONAL_TEXT_EXTENSIONS = {
 TEXT_ENCODINGS = [
     "utf-8",  # Most common modern encoding
     "utf-8-sig",  # UTF-8 with BOM
+    "gb18030",  # Chinese GB18030 (superset of GBK)
     "gbk",  # Chinese GBK (simplified Chinese)
     "gb2312",  # Chinese GB2312 (simplified Chinese)
     "big5",  # Traditional Chinese

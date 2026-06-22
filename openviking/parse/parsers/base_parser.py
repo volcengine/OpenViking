@@ -80,30 +80,24 @@ class BaseParser(ABC):
             File content as string
         """
         path = Path(path)
-        from openviking.parse.parsers.upload_utils import (
-            detect_and_convert_encoding,
-            is_text_file,
-        )
+        from openviking.parse.parsers.upload_utils import detect_and_convert_encoding
 
         raw = path.read_bytes()
         normalized = detect_and_convert_encoding(raw, path)
-        decode_error: Optional[UnicodeDecodeError] = None
         try:
             return normalized.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            decode_error = exc
-            if is_text_file(path):
-                raise ValueError(f"Unable to decode text file: {path}") from exc
+        except UnicodeDecodeError:
+            pass
 
-        # Preserve the previous permissive fallback for parser subclasses that
-        # read custom extensions not covered by the shared text-file detector.
-        for encoding in ("utf-8-sig", "cp1252", "latin-1"):
+        # Preserve the previous permissive fallback for files whose encoding is
+        # unknown or rejected by text detection as likely binary/control-heavy.
+        for encoding in ("utf-8-sig", "cp1252"):
             try:
                 return raw.decode(encoding)
             except UnicodeDecodeError:
                 continue
 
-        raise ValueError(f"Unable to decode file: {path}") from decode_error
+        return raw.decode("latin-1")
 
     def _get_viking_fs(self):
         """
