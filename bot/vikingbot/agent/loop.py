@@ -455,14 +455,30 @@ class AgentLoop:
             else:
                 final_content = response.content
                 final_reasoning_content = response.reasoning_content
+                if final_content is None:
+                    logger.warning(f"[NULL_CONTENT]: final_content is None, full LLMResponse: {response!r}")
+                # Thinking models may place the actual answer in reasoning_content
+                # while content is empty; fall back to it instead of dropping the answer.
+                if (
+                    (final_content is None or not final_content.strip())
+                    and response.reasoning_content
+                    and response.reasoning_content.strip()
+                ):
+                    final_content = response.reasoning_content
                 break
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
-            if iteration >= self.max_iterations:
+            if final_reasoning_content and final_reasoning_content.strip():
+                final_content = final_reasoning_content
+            elif iteration >= self.max_iterations:
                 final_content = f"Reached {self.max_iterations} iterations without completion."
             else:
+                logger.warning(
+                    "[EMPTY_RESPONSE]: empty content with no reasoning fallback "
+                    f"(iteration={iteration}, has_reasoning={bool(final_reasoning_content)})"
+                )
                 final_content = "I've completed processing but have no response to give."
-
+        logger.warning(f"[Agentloop]: test. iteration={iteration}")
         return final_content, final_reasoning_content, tools_used, token_usage, iteration
 
     @trace(
