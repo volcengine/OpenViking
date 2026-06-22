@@ -195,7 +195,7 @@ describe("plugin normal flow with healthy backend", () => {
         autoCapture: true,
         autoRecall: true,
         baseUrl,
-        commitTokenThreshold: 20000,
+        commitTokenThresholdRatio: 0.1,
         mode: "remote",
       },
       registerContextEngine: (_id, factory) => {

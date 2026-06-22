@@ -19,7 +19,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.recallPreferAbstract).toBe(false);
     expect(cfg.recallMaxInjectedChars).toBe(4000);
     expect(cfg.recallTokenBudget).toBe(4000);
-    expect(cfg.commitTokenThreshold).toBe(20000);
+    expect(cfg.commitTokenThresholdRatio).toBe(0.5);
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.autoRecallTimeoutMs).toBe(5000);
@@ -46,6 +46,11 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.enabledTools).not.toContain("add_resource");
     expect(cfg.disabledTools).toContain("add_resource");
     expect(cfg.agentExperience.enabled).toBe(false);
+  });
+
+  it("tolerates the deprecated commitTokenThreshold key and ignores it", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ commitTokenThreshold: 20000 });
+    expect(cfg.commitTokenThresholdRatio).toBe(0.5);
   });
 
   it("enables add_resource only when explicitly allowed", () => {
