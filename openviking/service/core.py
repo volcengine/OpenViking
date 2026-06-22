@@ -33,6 +33,7 @@ from openviking.utils.agfs_utils import (
     build_runtime_ragfs_binding_config,
     resolve_queuefs_mount_point,
 )
+from openviking.utils.disk_pressure import DiskPressureMonitor
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotInitializedError
@@ -374,6 +375,19 @@ class OpenVikingService:
         await self._watch_scheduler.start()
         logger.info("WatchScheduler started")
 
+        # Start disk pressure monitor if enabled
+        dp_config = config.storage.disk_pressure
+        if dp_config.enabled:
+            monitor = DiskPressureMonitor.initialize(
+                workspace_path=config.storage.workspace,
+                check_interval_seconds=dp_config.check_interval_seconds,
+                warning_threshold_percent=dp_config.warning_threshold_percent,
+                critical_threshold_percent=dp_config.critical_threshold_percent,
+                min_free_bytes=dp_config.min_free_bytes,
+            )
+            await monitor.start()
+            logger.info("DiskPressureMonitor started")
+
         # Wire up sub-services
         self._fs_service.set_dependencies(
             viking_fs=self._viking_fs,
@@ -416,6 +430,11 @@ class OpenVikingService:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
+        monitor = DiskPressureMonitor.get_instance()
+        if monitor is not None:
+            await monitor.stop()
+            logger.info("DiskPressureMonitor stopped")
+
         await self._resource_service.close_background_tasks()
 
         if self._watch_scheduler:

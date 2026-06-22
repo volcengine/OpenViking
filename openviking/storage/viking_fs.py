@@ -407,6 +407,17 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> str:
         """Write file"""
+        from openviking.utils.disk_pressure import DiskPressureError, DiskPressureMonitor
+
+        monitor = DiskPressureMonitor.get_instance()
+        if monitor is not None:
+            try:
+                monitor.check_write_allowed()
+            except DiskPressureError as e:
+                from openviking.pyagfs.exceptions import AGFSIOError
+
+                raise AGFSIOError(str(e)) from e
+
         self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         if isinstance(data, str):

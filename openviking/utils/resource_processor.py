@@ -129,6 +129,15 @@ class ResourceProcessor:
         4. (Optional) Build vector index
         5. (Optional) Summarize
         """
+        from openviking.utils.disk_pressure import DiskPressureError, DiskPressureMonitor
+
+        monitor = DiskPressureMonitor.get_instance()
+        if monitor is not None:
+            try:
+                monitor.check_write_allowed()
+            except DiskPressureError as e:
+                raise OpenVikingError(f"Resource import blocked by disk pressure: {e}") from e
+
         result = {
             "status": "success",
             "errors": [],

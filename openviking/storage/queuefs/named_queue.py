@@ -202,6 +202,16 @@ class NamedQueue:
 
     async def enqueue(self, data: Union[str, Dict[str, Any]]) -> str:
         """Send message to queue (enqueue)."""
+        from openviking.utils.disk_pressure import DiskPressureError, DiskPressureMonitor
+
+        monitor = DiskPressureMonitor.get_instance()
+        if monitor is not None:
+            try:
+                monitor.check_write_allowed()
+            except DiskPressureError as e:
+                logger.error(f"Queue enqueue blocked by disk pressure: {e}")
+                raise
+
         await self._ensure_initialized()
         enqueue_file = f"{self.path}/enqueue"
 

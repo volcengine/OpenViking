@@ -194,6 +194,24 @@ async def readiness_check(request: Request):
     except Exception as e:
         checks["ollama"] = f"error: {e}"
 
+    # 6. Disk pressure check
+    try:
+        from openviking.utils.disk_pressure import DiskPressureMonitor
+
+        monitor = DiskPressureMonitor.get_instance()
+        if monitor is not None:
+            disk_status = monitor.get_status()
+            if disk_status["state"] == "critical":
+                checks["disk"] = f"critical: {disk_status['usage_percent']}% used"
+            elif disk_status["state"] == "warning":
+                checks["disk"] = f"warning: {disk_status['usage_percent']}% used"
+            else:
+                checks["disk"] = "ok"
+        else:
+            checks["disk"] = "not_configured"
+    except Exception as e:
+        checks["disk"] = f"error: {e}"
+
     all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503
     return JSONResponse(
@@ -312,3 +330,27 @@ async def admin_sync_retry(
     uri = validate_viking_uri(resolve_path_variables(sync_path))
     result = await service.fs.system_sync_retry(uri, ctx=ctx)
     return Response(status="ok", result=result)
+
+
+@router.get("/api/v1/system/disk", tags=["system"])
+async def disk_status():
+    """Disk pressure status endpoint.
+
+    Returns disk usage stats and pressure state.
+    Returns 503 if disk pressure is CRITICAL.
+    """
+    from openviking.utils.disk_pressure import DiskPressureMonitor
+
+    monitor = DiskPressureMonitor.get_instance()
+    if monitor is None:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "not_configured",
+                "reason": "Disk pressure monitor not initialized",
+            },
+        )
+
+    status = monitor.get_status()
+    status_code = 200 if status["state"] != "critical" else 503
+    return JSONResponse(status_code=status_code, content=status)

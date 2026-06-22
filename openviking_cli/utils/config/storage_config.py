@@ -14,6 +14,83 @@ from .vectordb_config import VectorDBBackendConfig
 logger = get_logger(__name__)
 
 
+class ResourceRetentionConfig(BaseModel):
+    """Configuration for resource version retention."""
+
+    max_versions: int = Field(
+        default=0,
+        description=(
+            "Maximum number of numbered version copies to keep per resource base name. "
+            "When exceeded, oldest versions are pruned after creating new version. "
+            "0 = no limit (current behavior)."
+        ),
+    )
+    max_age_days: int = Field(
+        default=0,
+        description=(
+            "Maximum age in days for numbered version copies. "
+            "Versions older than this may be pruned. 0 = no limit."
+        ),
+    )
+    prune_on_import: bool = Field(
+        default=True,
+        description="Automatically prune old versions when importing new resource.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class DiskPressureConfig(BaseModel):
+    """Configuration for disk pressure monitoring."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable disk pressure monitoring.",
+    )
+    check_interval_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description="Interval between disk usage checks in seconds.",
+    )
+    warning_threshold_percent: float = Field(
+        default=85.0,
+        ge=0,
+        le=100,
+        description=(
+            "Disk usage percentage that triggers WARNING state. "
+            "Operations continue but warnings are logged."
+        ),
+    )
+    critical_threshold_percent: float = Field(
+        default=95.0,
+        ge=0,
+        le=100,
+        description=(
+            "Disk usage percentage that triggers CRITICAL state. "
+            "Write operations are blocked until disk usage decreases."
+        ),
+    )
+    min_free_bytes: int = Field(
+        default=1073741824,  # 1 GB
+        ge=0,
+        description=(
+            "Minimum free bytes required. Triggers CRITICAL if free space "
+            "falls below this value, regardless of percentage."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_thresholds(self):
+        if self.critical_threshold_percent <= self.warning_threshold_percent:
+            raise ValueError(
+                "storage.disk_pressure.critical_threshold_percent must be > warning_threshold_percent"
+            )
+        return self
+
+
+
 class StorageConfig(BaseModel):
     """Configuration for storage backend.
 
@@ -42,6 +119,17 @@ class StorageConfig(BaseModel):
         default_factory=VectorDBBackendConfig,
         description="VectorDB backend configuration",
     )
+
+    retention: ResourceRetentionConfig = Field(
+        default_factory=ResourceRetentionConfig,
+        description="Resource version retention configuration",
+    )
+
+    disk_pressure: DiskPressureConfig = Field(
+        default_factory=DiskPressureConfig,
+        description="Disk pressure monitoring configuration",
+    )
+
 
     params: Dict[str, Any] = Field(
         default_factory=dict, description="Additional storage-specific parameters"
