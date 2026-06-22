@@ -77,7 +77,7 @@ def _warn_deprecated_memory_user(memory_user: list[str] | None) -> None:
     if not memory_user:
         return
     typer.secho(
-        "Warning: --memory-user is deprecated and only kept for legacy root-key fanout. "
+        "Warning: --memory-user is deprecated and only kept for explicit owner-user lookup. "
         "Use --memory-peer for the current OpenViking User/Peer model.",
         fg=typer.colors.YELLOW,
         err=True,

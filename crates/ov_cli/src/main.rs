@@ -3090,9 +3090,7 @@ mod tests {
     #[test]
     fn cli_find_and_search_reject_removed_peer_id_flag() {
         assert!(Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "peer-a"]).is_err());
-        assert!(
-            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "peer-a"]).is_err()
-        );
+        assert!(Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "peer-a"]).is_err());
     }
 
     #[test]

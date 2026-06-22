@@ -65,7 +65,7 @@ class BaseChannelConfig(BaseModel):
     enabled: bool = True
     ov_tools_enable: bool = True
     memory_peer: list[str] | None = None
-    memory_user: list[str] | None = None  # Deprecated legacy owner-user memory lookup.
+    memory_user: list[str] | None = None  # Deprecated alias for owner-user memory lookup.
 
     def channel_id(self) -> str:
         return "default"
@@ -519,7 +519,7 @@ class OpenVikingConfig(BaseModel):
     api_key_type: Literal["root", "user"] | None = None
     server_url: str = ""
     api_key: str = ""
-    # 废弃，后续使用api_key
+    # Used when api_key_type is "root" for trusted OpenViking calls.
     root_api_key: str = ""
     account_id: str = "default"
     admin_user_id: str = "default"
@@ -552,11 +552,9 @@ class OpenVikingConfig(BaseModel):
         return normalized or None
 
     @model_validator(mode="after")
-    def apply_api_key_compatibility(self):
+    def default_api_key_type(self):
         if not self.api_key_type:
-            self.api_key_type = "user" if not self.root_api_key or self.api_key else "root"
-        if self.root_api_key and not self.api_key:
-            self.api_key = self.root_api_key
+            self.api_key_type = "user"
         return self
 
 

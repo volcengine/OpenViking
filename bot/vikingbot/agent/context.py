@@ -104,7 +104,7 @@ class ContextBuilder:
             ov_tools_enable: Whether to enable OpenViking tools and memory.
             profile_user_list: Deprecated list of additional peer IDs to fetch profiles for.
             memory_peer_ids: Peer IDs used for memory retrieval; profiles are fetched too.
-            memory_owner_user_ids: Deprecated legacy owner-user IDs used for root-key fanout.
+            memory_owner_user_ids: Deprecated owner-user IDs used for trusted-mode lookup.
 
         Returns:
             Complete system prompt.
@@ -369,7 +369,7 @@ IMPORTANT:
             ov_tools_enable: Whether to enable OpenViking tools and memory.
             profile_user_list: Deprecated list of additional peer IDs to fetch profiles for.
             memory_peer_ids: Optional list of peer IDs to fetch memory for.
-            memory_owner_user_ids: Deprecated legacy owner-user IDs used for root-key fanout.
+            memory_owner_user_ids: Deprecated owner-user IDs used for trusted-mode lookup.
 
         Returns:
             List of messages including system prompt.

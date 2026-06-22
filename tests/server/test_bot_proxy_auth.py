@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 
 import openviking.server.routers.bot as bot_router_module
+from openviking.server.auth.plugins import DevAuthPlugin, TrustedAuthPlugin
 from openviking.server.config import ServerConfig
 from openviking.server.identity import AuthMode
 
@@ -63,6 +64,7 @@ async def test_feedback_proxy_forwards_request(monkeypatch):
 
     app = FastAPI()
     app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
 
@@ -118,6 +120,7 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
 
     app = FastAPI()
     app.state.config = ServerConfig(auth_mode="trusted")
+    app.state.auth_plugin = TrustedAuthPlugin()
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
 
@@ -140,6 +143,7 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
         "user_id": "alice",
         "agent_id": "web-playground",
         "role": "user",
+        "api_key_type": "root",
         "namespace_policy": {
             "isolate_user_scope_by_agent": False,
             "isolate_agent_scope_by_user": False,
@@ -166,6 +170,7 @@ async def test_chat_proxy_rejects_authenticated_request_without_forwardable_api_
 
     app = FastAPI()
     app.state.config = ServerConfig(auth_mode="trusted")
+    app.state.auth_plugin = TrustedAuthPlugin()
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
 

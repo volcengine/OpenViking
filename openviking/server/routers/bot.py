@@ -94,12 +94,17 @@ def _attach_openviking_connection(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Bot proxy requires a forwardable OpenViking API key.",
         )
+    effective_auth_mode = ""
+    if config is not None and hasattr(config, "get_effective_auth_mode"):
+        effective_auth_mode = config.get_effective_auth_mode()
+        effective_auth_mode = getattr(effective_auth_mode, "value", str(effective_auth_mode))
     enriched["openviking_connection"] = {
         "api_key": api_key,
         "account_id": ctx.user.account_id,
         "user_id": ctx.user.user_id,
         "agent_id": DEFAULT_BOT_AGENT_ID,
         "role": getattr(ctx.role, "value", str(ctx.role)),
+        "api_key_type": "root" if effective_auth_mode == "trusted" else "user",
         "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
     }
     return enriched

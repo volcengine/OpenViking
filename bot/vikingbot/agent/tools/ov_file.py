@@ -410,7 +410,7 @@ class VikingSearchTool(OVFileTool):
                 and (memory_owner_user_ids or legacy_memory_user_ids)
             ):
                 user_ids = memory_owner_user_ids or legacy_memory_user_ids
-                target_uris = ["viking://resources/"]
+                search_targets: list[tuple[str, str | None]] = [("viking://resources/", None)]
                 for user_id in self._dedupe_strings(list(user_ids or [])):
                     memory_uri = client._memory_target_uri(user_id)
                     skill_uri = (
@@ -418,7 +418,7 @@ class VikingSearchTool(OVFileTool):
                         if memory_uri.rstrip("/").endswith("/memories")
                         else "viking://user/skills/"
                     )
-                    target_uris.extend([memory_uri, skill_uri])
+                    search_targets.extend([(memory_uri, user_id), (skill_uri, user_id)])
             else:
                 peer_ids = self._memory_peer_ids(tool_context)
                 if not target_uri:
@@ -451,11 +451,15 @@ class VikingSearchTool(OVFileTool):
                 else:
                     target_uris = [target_uri]
 
-            for search_target_uri in target_uris:
+                search_targets = [(search_target_uri, None) for search_target_uri in target_uris]
+
+            for search_target_uri, search_user_id in search_targets:
                 search_kwargs = {
                     "target_uri": search_target_uri,
                     "limit": 10,
                 }
+                if search_user_id:
+                    search_kwargs["user_id"] = search_user_id
                 results = await client.search(query, **search_kwargs)
                 filtered_items = self._filter_search_items(results, min_score=min_score)
                 for item_type, items in filtered_items.items():
