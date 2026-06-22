@@ -69,6 +69,8 @@ function managedHead(meta) {
   const title = escapeHtml(meta.title);
   const description = escapeAttr(meta.description);
   const image = escapeAttr(meta.image);
+  const imageWidth = Number(meta.imageWidth) || 0;
+  const imageHeight = Number(meta.imageHeight) || 0;
   const canonical = escapeAttr(meta.canonical);
   const llmUrl = meta.llmPath ? `${SITE_URL}${meta.llmPath}` : '';
   const ld = JSON.stringify(jsonLd(meta)).replaceAll('</script', '<\\/script');
@@ -83,11 +85,15 @@ function managedHead(meta) {
     `<meta property="og:description" content="${description}" />`,
     `<meta property="og:url" content="${canonical}" />`,
     `<meta property="og:image" content="${image}" />`,
+    imageWidth ? `<meta property="og:image:width" content="${imageWidth}" />` : '',
+    imageHeight ? `<meta property="og:image:height" content="${imageHeight}" />` : '',
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${escapeAttr(meta.title)}" />`,
     `<meta name="twitter:description" content="${description}" />`,
     `<meta name="twitter:image" content="${image}" />`,
-  ];
+    imageWidth ? `<meta name="twitter:image:width" content="${imageWidth}" />` : '',
+    imageHeight ? `<meta name="twitter:image:height" content="${imageHeight}" />` : '',
+  ].filter(Boolean);
 
   if (meta.llmPath) {
     tags.push(`<link rel="alternate" type="text/markdown" title="llm.txt" href="${escapeAttr(llmUrl)}" />`);
