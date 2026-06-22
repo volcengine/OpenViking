@@ -14,8 +14,8 @@ from openviking.utils.agfs_utils import (
     create_agfs_client,
     mount_agfs_backend,
 )
-from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
+from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
@@ -432,7 +432,7 @@ def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
                 {
                     "name": "local-explicit",
                     "backend": "local",
-                    "local": {"local_dir": str(explicit_backup_dir)},
+                    "local": {"workspace": str(explicit_backup_dir)},
                 },
                 {
                     "name": "local-default",
@@ -469,9 +469,7 @@ def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
     assert not explicit_backup_dir.exists()
 
     assert default_local["backend"] == "localfs"
-    assert default_local["params"]["local_dir"] == str(
-        tmp_path / "viking" / "_backups" / "local-default"
-    )
+    assert default_local["params"]["local_dir"] == str(tmp_path / "_backups" / "local-default")
 
     assert s3_backup["backend"] == "s3fs"
     assert s3_backup["params"] == {

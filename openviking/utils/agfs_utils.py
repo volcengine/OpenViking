@@ -331,12 +331,12 @@ def _serialize_s3_backup_params(
 def _serialize_local_backup_params(
     item: Any, backend_config: Any, data_path: Path
 ) -> Dict[str, Any]:
-    """Serialize one local backup item and fill the default workspace local_dir."""
+    """Serialize one local backup item and map workspace to the localfs local_dir param."""
     local_dir = (
-        _get_config_value(backend_config, "local_dir") if backend_config is not None else None
+        _get_config_value(backend_config, "workspace") if backend_config is not None else None
     )
     if local_dir is None:
-        local_dir = data_path / "viking" / "_backups" / _get_config_value(item, "name")
+        local_dir = data_path / "_backups" / _get_config_value(item, "name")
     local_dir_path = Path(local_dir).expanduser()
     return {"local_dir": str(local_dir_path)}
 
