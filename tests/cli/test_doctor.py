@@ -963,6 +963,27 @@ class TestCheckVikingBot:
         assert "trusted OpenViking auth" in detail
         assert fix is None
 
+    def test_pass_current_trusted_prefers_server_root_key(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {
+                        "auth_mode": "trusted",
+                        "root_api_key": "server-root-key",
+                    },
+                    "bot": {"ov_server": {"api_key": "stale-bot-key"}},
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "trusted OpenViking auth" in detail
+        assert fix is None
+
     def test_warn_with_trusted_missing_root_api_key(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(json.dumps({"server": {"auth_mode": "trusted"}}))

@@ -186,11 +186,11 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
   - 若不配置，默认使用 `ov.conf` 中配置的 OpenViking Server 信息。
   - 如果你使用远端 OpenViking Server，可以在这里配置目标服务地址和 API Key。
     - `server_url`：OpenViking Server 基础地址，例如 `https://api.vikingdb.cn-beijing.volces.com/openviking` 或 `http://localhost:1933`。
-    - `api_key`：`api_key` 模式下 bot 调用 OpenViking Server 使用的 API Key，必须是 OpenViking User key。Root key 在 `api_key` 模式下不能访问 OpenViking 数据 API。
-    - `root_api_key`：仅用于 `trusted` 模式，通常从顶层 `server.root_api_key` 合并而来。`api_key` 模式不要在 `bot.ov_server` 下配置它。
+    - `api_key`：bot 调用 OpenViking Server 使用的 API Key。`api_key` 模式下必须是 OpenViking User key；trusted 模式且 `api_key_type: "root"` 时，该字段就是 OpenViking root key。
+    - `root_api_key`：废弃兼容字段。新配置不要使用；trusted 模式请使用 `api_key` 配合 `api_key_type: "root"`。
     - `account_id`：默认值为 `default`，即 OpenViking 的账号 ID。同一 OpenViking account 下的所有 user 共享 resources。
     - `api_key_type`：默认由同一个 `ov.conf` 中的 OpenViking `server.auth_mode` 推导：`api_key`/`dev` 为 `user`，`trusted` 为 `root`。通常无需手动配置。
-      如果 `bot.ov_server` 指向另一套 OpenViking Server，且对方使用 trusted 鉴权，请设置 `api_key_type: "root"`，并在 `root_api_key` 或 `api_key` 中提供对方的 root key。
+      如果 `bot.ov_server` 指向另一套 OpenViking Server，且对方使用 trusted 鉴权，请设置 `api_key_type: "root"`，并在 `api_key` 中提供对方的 root key。
     - `exp_write_tools`：可选，触发经验记忆注入的工具名列表（自演化 agent memory 循环，详见 #2007）。默认 `["write_file", "edit_file"]`。该配置只控制 bot 侧注入触发时机；已存储 experience 的生成由 OpenViking 记忆抽取和当前 session 的 `memory_policy.memory_types` 白名单控制。
     - `recall_exp_first_round_only`：可选。为 `true` 时，`ContextBuilder._build_user_memory` 跳过每轮 user/agent 经验召回，仅在首个 user turn 注入一次经验。默认 `false`。
     - 每轮 user/peer 记忆召回默认使用 type-quota 检索。`profile.md` 仍由 profile 链路单独注入，不占自动检索候选位。

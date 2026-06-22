@@ -184,11 +184,11 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
   - If not configured, the OpenViking server information configured in `ov.conf` is used by default
   - If you use a remote OpenViking Server, configure the target service URL and API key here
     - `server_url`: OpenViking server base URL, for example `https://api.vikingdb.cn-beijing.volces.com/openviking` or `http://localhost:1933`.
-    - `api_key`: API key used by the bot when calling the OpenViking server in `api_key` mode. This must be an OpenViking User key. Root keys cannot access OpenViking data APIs in `api_key` mode.
-    - `root_api_key`: Used only for `trusted` mode, normally merged from top-level `server.root_api_key`. Do not configure this under `bot.ov_server` for `api_key` mode.
+    - `api_key`: API key used by the bot when calling the OpenViking server. In `api_key` mode, this must be an OpenViking User key; in trusted mode with `api_key_type: "root"`, this is the OpenViking root key.
+    - `root_api_key`: Deprecated compatibility field. Do not use it for new configs; use `api_key` with `api_key_type: "root"` for trusted mode.
     - `account_id`: Defaults to `default`, which is the OpenViking account ID. All users under the same OpenViking account share resources.
     - `api_key_type`: Defaults from the OpenViking `server.auth_mode` in the same `ov.conf`: `user` for `api_key`/`dev`, `root` for `trusted`. Manual configuration is usually unnecessary.
-      If `bot.ov_server` points to another OpenViking server and that server uses trusted auth, set `api_key_type: "root"` and provide its root key in `root_api_key` or `api_key`.
+      If `bot.ov_server` points to another OpenViking server and that server uses trusted auth, set `api_key_type: "root"` and provide its root key in `api_key`.
     - exp_write_tools: Optional list of tool names that trigger experience-memory injection before the call (self-evolving agent memory loop, see #2007). Defaults to `["write_file", "edit_file"]`. This only controls the bot-side injection trigger; stored experience generation is governed by OpenViking memory extraction and the active session `memory_policy.memory_types` whitelist.
     - `recall_exp_first_round_only`: Optional. When `true`, `ContextBuilder._build_user_memory` skips per-turn user/agent experience recall and injects experiences only once on the first user turn. Defaults to `false`.
     - Per-turn user/peer memory recall uses type-quota search by default. `profile.md` is injected through the profile path and does not occupy auto-search candidates.

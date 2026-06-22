@@ -521,8 +521,8 @@ def check_vikingbot() -> CheckResult:
                 "To use another trusted server, set bot.ov_server.server_url to that server "
                 "and keep api_key_type='root'.",
             )
-        trusted_root_key = api_key or (
-            server_root_api_key if bot_uses_current_server and auth_mode == "trusted" else ""
+        trusted_root_key = (
+            server_root_api_key if bot_uses_current_server and auth_mode == "trusted" else api_key
         )
         if _is_placeholder_secret(trusted_root_key):
             if root_api_key:

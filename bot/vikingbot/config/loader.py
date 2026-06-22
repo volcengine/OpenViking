@@ -190,7 +190,6 @@ def _merge_current_ov_server_config(bot_data: dict, server_data: dict) -> str:
         api_key_type == "root"
         and server_auth_mode == "trusted"
         and server_root_api_key
-        and not str(bot_data.get("api_key") or "").strip()
     ):
         bot_data["api_key"] = server_root_api_key
 

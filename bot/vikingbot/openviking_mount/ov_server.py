@@ -164,6 +164,12 @@ class VikingClient:
                 ),
             }
         if not normalized.get("api_key"):
+            if (
+                normalized.get("api_key_type") == "root"
+                and normalized.get("account_id")
+                and normalized.get("user_id")
+            ):
+                return normalized
             return None
         return normalized
 
@@ -186,9 +192,10 @@ class VikingClient:
 
         remote_client_kwargs = {
             "url": connection.get("server_url") or self.openviking_config.server_url,
-            "api_key": connection["api_key"],
             "profile_enabled": False,
         }
+        if connection.get("api_key"):
+            remote_client_kwargs["api_key"] = connection["api_key"]
         if self.api_key_type == "root" and self.account_id:
             remote_client_kwargs["account"] = self.account_id
         if self.api_key_type == "root" and self.admin_user_id:

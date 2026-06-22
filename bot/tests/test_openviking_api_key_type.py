@@ -246,6 +246,22 @@ def test_ov_server_trusted_mode_fills_api_key_from_top_level_root_key(monkeypatc
     assert bot_data["api_key_type"] == "root"
 
 
+def test_ov_server_current_trusted_prefers_top_level_root_key(monkeypatch):
+    bot_data = {"api_key": "stale-bot-key"}
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "server-root-key"
+    assert bot_data["api_key_type"] == "root"
+
+
 def test_ov_server_external_url_does_not_inherit_trusted_root_key(monkeypatch):
     bot_data = {"server_url": "https://external.example"}
     ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
@@ -688,6 +704,30 @@ def test_viking_client_request_connection_preserves_trusted_scope(monkeypatch):
         "profile_enabled": False,
         "account": "acct",
         "user": "default",
+    }
+
+
+def test_viking_client_request_connection_allows_trusted_no_key(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+
+    VikingClient(
+        agent_id="workspace#channel",
+        connection={
+            "server_url": "http://studio.local",
+            "account_id": "acct",
+            "user_id": "alice",
+            "agent_id": "web-playground",
+            "role": "user",
+            "api_key_type": "root",
+        },
+    )
+
+    first = _DummyHTTPClient.instances[0]
+    assert first.kwargs == {
+        "url": "http://studio.local",
+        "profile_enabled": False,
+        "account": "acct",
+        "user": "alice",
     }
 
 
