@@ -1220,6 +1220,35 @@ async def test_viking_client_append_messages_chunks_batches_at_server_limit(monk
 
 
 @pytest.mark.asyncio
+async def test_viking_client_ensure_session_creates_after_legacy_not_found(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    client = VikingClient(workspace_id="workspace")
+
+    class NotFoundError(Exception):
+        code = "NOT_FOUND"
+
+    created = []
+
+    async def _get_session(_session_id):
+        raise NotFoundError("Resource not found")
+
+    async def _create_session(session_id=None, memory_policy=None):
+        created.append((session_id, memory_policy))
+        return {"session_id": session_id, "memory_policy": memory_policy}
+
+    monkeypatch.setattr(client.client, "get_session", _get_session)
+    monkeypatch.setattr(client.client, "create_session", _create_session)
+
+    result = await client.ensure_session(
+        "session-1",
+        memory_policy={"strategy": "compact"},
+    )
+
+    assert result == {"session_id": "session-1", "memory_policy": {"strategy": "compact"}}
+    assert created == [("session-1", {"strategy": "compact"})]
+
+
+@pytest.mark.asyncio
 async def test_search_memory_uses_user_namespace(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
     client = VikingClient()

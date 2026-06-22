@@ -3,7 +3,7 @@ name: Python SDK Release
 on:
   push:
     tags:
-      - "python-sdk/v*"
+      - "python-sdk@*"
   workflow_dispatch:
     inputs:
       target:
@@ -73,7 +73,7 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
           SDK_VERSION: ${{ steps.version.outputs.sdk_version }}
         run: |
-          EXPECTED_TAG="python-sdk/v${SDK_VERSION}"
+          EXPECTED_TAG="python-sdk@${SDK_VERSION}"
           if [ "$TAG_NAME" != "$EXPECTED_TAG" ]; then
             echo "Tag $TAG_NAME does not match resolved SDK version $SDK_VERSION"
             exit 1

@@ -259,7 +259,7 @@ python -m build
 The SDK version is derived from git tags with this format:
 
 ```text
-python-sdk/v0.1.3
+python-sdk@0.1.3
 ```
 
 That tag namespace is independent from the main package release tags such as:
@@ -275,6 +275,6 @@ The repository is configured so SDK releases can be driven by SDK-only tags.
 Typical flow:
 
 1. Merge SDK changes.
-2. Create and push a tag like `python-sdk/v0.1.3`.
+2. Create and push a tag like `python-sdk@0.1.3`.
 3. GitHub Actions builds `sdk/python`.
 4. GitHub Actions publishes `openviking-sdk` to PyPI.

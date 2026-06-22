@@ -259,7 +259,7 @@ python -m build
 SDK 版本号来自以下格式的 git tag：
 
 ```text
-python-sdk/v0.1.3
+python-sdk@0.1.3
 ```
 
 这个 tag 命名空间独立于主包的发布 tag，例如：
@@ -275,6 +275,6 @@ v0.3.26
 典型流程：
 
 1. 合并 SDK 相关改动
-2. 创建并推送类似 `python-sdk/v0.1.3` 的 tag
+2. 创建并推送类似 `python-sdk@0.1.3` 的 tag
 3. GitHub Actions 构建 `sdk/python`
 4. GitHub Actions 将 `openviking-sdk` 发布到 PyPI
