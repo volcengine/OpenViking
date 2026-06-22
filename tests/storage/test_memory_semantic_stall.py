@@ -7,7 +7,7 @@
 always calls report_success() or report_error() (never stalls).
 #2734: a context_type="memory" message whose URI is a file or a vanished
 directory is a terminal skip (report_success, no re-enqueue), while transient
-errors still requeue.
+stat()/ls() errors still requeue.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -159,8 +159,8 @@ async def test_memory_missing_directory_skips_terminally():
 
     If the directory disappeared between enqueue and processing there is nothing to
     summarize, so the message is acked rather than re-enqueued. Transient stat()
-    errors are NOT swallowed here — they fall through to ls() and requeue (see
-    test_memory_ls_transient_error_requeues).
+    errors are NOT swallowed here — they requeue (see
+    test_memory_stat_transient_error_requeues).
     """
     processor = SemanticProcessor()
 
@@ -204,6 +204,58 @@ async def test_memory_missing_directory_skips_terminally():
     assert success_called, "a vanished memory directory must report success (terminal skip)"
     assert not requeue_called, "a vanished memory directory must NOT be re-enqueued"
     assert not error_called, "a vanished memory directory must not report an error"
+    fake_fs.ls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_memory_stat_transient_error_requeues():
+    """Transient stat() errors re-enqueue before ls() is attempted."""
+    processor = SemanticProcessor()
+
+    fake_fs = MagicMock()
+    fake_fs.stat = AsyncMock(side_effect=RuntimeError("500 Internal Server Error"))
+    fake_fs.ls = AsyncMock(return_value=[])
+
+    msg = _make_msg(telemetry_id="tel-1")
+    data = _build_data(msg)
+
+    success_called = False
+    requeue_called = False
+    error_called = False
+
+    def on_success():
+        nonlocal success_called
+        success_called = True
+
+    def on_requeue():
+        nonlocal requeue_called
+        requeue_called = True
+
+    def on_error(error_msg, error_data=None):
+        nonlocal error_called
+        error_called = True
+
+    processor.set_callbacks(on_success, on_requeue, on_error)
+
+    reenqueue_mock = AsyncMock()
+
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=fake_fs,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            return_value=None,
+        ),
+        patch.object(processor, "_reenqueue_semantic_msg", new=reenqueue_mock),
+    ):
+        await processor.on_dequeue(data)
+
+    assert requeue_called, "report_requeue() must fire for transient stat() errors"
+    assert success_called, "report_success() must fire after successful re-enqueue"
+    assert not error_called, "report_error() must NOT fire for transient stat() errors"
+    reenqueue_mock.assert_awaited_once()
     fake_fs.ls.assert_not_called()
 
 

@@ -550,17 +550,19 @@ class SemanticProcessor(DequeueHandlerBase):
             # A context_type="memory" message whose URI is a file (a memory file
             # reindexed with mode=semantic_and_vectors) or a vanished directory has no
             # directory to summarize: mark it done and skip so it acks instead of
-            # re-enqueuing forever (the AGFS-persisted poison loop). A transient stat()
-            # error falls through to ls(), which still raises so on_dequeue requeues —
-            # genuine retries are preserved.
+            # re-enqueuing forever (the AGFS-persisted poison loop). Any other stat()
+            # error is still transient/unknown and propagates to on_dequeue's existing
+            # requeue handling.
             try:
                 dir_stat = await viking_fs.stat(dir_uri, ctx=ctx)
             except Exception as e:
                 if is_not_found_error(e):
-                    logger.warning(f"Skipping memory semantic generation for {dir_uri}: no longer exists")
+                    logger.warning(
+                        f"Skipping memory semantic generation for {dir_uri}: no longer exists"
+                    )
                     _mark_done()
                     return
-                dir_stat = None
+                raise
             if dir_stat is not None and not dir_stat.get("isDir", False):
                 logger.warning(
                     f"Skipping memory semantic generation for non-directory URI {dir_uri}: a memory "
