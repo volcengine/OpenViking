@@ -210,6 +210,8 @@ def get_server_url_from_server_data(server_data: object) -> str:
         host_value = getattr(server_data, "host", None)
         port_value = getattr(server_data, "port", None)
     host = str(host_value or "127.0.0.1").strip()
+    if ":" in host and not (host.startswith("[") and host.endswith("]")):
+        host = f"[{host}]"
     port = str(port_value or "1933").strip()
     return f"http://{host}:{port}"
 

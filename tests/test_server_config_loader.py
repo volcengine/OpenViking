@@ -116,6 +116,18 @@ def test_get_server_url_from_server_config_uses_runtime_host_and_port():
     assert get_server_url_from_server_data(config) == "http://127.0.0.1:1944"
 
 
+def test_get_server_url_from_server_data_brackets_ipv6_literal():
+    server = {"host": "::1", "port": 1933}
+
+    assert get_server_url_from_server_data(server) == "http://[::1]:1933"
+
+
+def test_get_server_url_from_server_config_brackets_ipv6_literal():
+    config = ServerConfig(host="::1", port=1944)
+
+    assert get_server_url_from_server_data(config) == "http://[::1]:1944"
+
+
 def test_load_server_config_preserves_metrics_account_dimension_fields(tmp_path):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
