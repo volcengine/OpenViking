@@ -661,3 +661,60 @@ func TestHealth(t *testing.T) {
 		t.Fatal("expected healthy")
 	}
 }
+
+func TestRelationsLinkUnlink(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/relations":
+			if got := r.URL.Query().Get("uri"); got != "viking://resources/a" {
+				t.Fatalf("relations uri query = %q", got)
+			}
+			writeOK(t, w, []map[string]any{
+				{"uri": "viking://resources/b", "reason": "cites"},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/relations/link":
+			body := readJSONBody(t, r)
+			if got := body["from_uri"]; got != "viking://resources/a" {
+				t.Fatalf("link from_uri = %#v", got)
+			}
+			toURIs, ok := body["to_uris"].([]any)
+			if !ok || len(toURIs) != 2 || toURIs[0] != "viking://resources/b" || toURIs[1] != "viking://resources/c" {
+				t.Fatalf("link to_uris = %#v", body["to_uris"])
+			}
+			if got := body["reason"]; got != "cites" {
+				t.Fatalf("link reason = %#v", got)
+			}
+			writeOK(t, w, map[string]any{"from": "viking://resources/a", "to": toURIs})
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/relations/link":
+			body := readJSONBody(t, r)
+			if got := body["from_uri"]; got != "viking://resources/a" {
+				t.Fatalf("unlink from_uri = %#v", got)
+			}
+			if got := body["to_uri"]; got != "viking://resources/b" {
+				t.Fatalf("unlink to_uri = %#v", got)
+			}
+			writeOK(t, w, map[string]any{"from": "viking://resources/a", "to": "viking://resources/b"})
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer closeServer()
+
+	rels, err := client.Relations(context.Background(), "viking://resources/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rels) != 1 || rels[0]["uri"] != "viking://resources/b" || rels[0]["reason"] != "cites" {
+		t.Fatalf("unexpected relations: %#v", rels)
+	}
+
+	// Short URIs are normalized to viking:// form, and a single target is sent as a list.
+	if err := client.Link(context.Background(), "resources/a",
+		[]string{"resources/b", "resources/c"}, "cites"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := client.Unlink(context.Background(), "resources/a", "resources/b"); err != nil {
+		t.Fatal(err)
+	}
+}
