@@ -48,7 +48,7 @@ def _case() -> Case:
     return Case(
         name="duplicate_booking",
         task_signature="booking_duplicate",
-        input={"user_request": "cancel the duplicate booking", "ground_truth": "SECRET_EXPECTED_ACTION"},
+        input={"user_request": "cancel the duplicate booking"},
         rubric=Rubric(
             name="booking_duplicate_rubric",
             description="Cancel only the verified duplicate booking.",
@@ -1087,17 +1087,6 @@ async def test_session_commit_policy_trainer_records_commit_trace_id():
             {"memory_types": ["cases", "trajectories", "experiences"]},
         )
     ]
-    committed_messages = client.messages[commit_result["session_id"]]
-    assert len(committed_messages) == 3
-    joined_text = "\n".join(
-        part.get("text", "")
-        for message in committed_messages
-        for part in message.get("parts", [])
-        if isinstance(part, dict)
-    )
-    assert "OpenViking Training Oracle Summary" not in joined_text
-    assert "SECRET_EXPECTED_ACTION" not in joined_text
-    assert "ground_truth" not in joined_text
 
 
 @pytest.mark.asyncio
@@ -1132,8 +1121,8 @@ async def test_session_commit_policy_trainer_splits_large_message_batches():
 
     commit_result = result.apply_result.metadata["commit_results"][0]
     assert commit_result["error"] is None
-    assert batch_sizes == [100, 100, 51]
-    assert len(client.messages[commit_result["session_id"]]) == 251
+    assert batch_sizes == [100, 100, 52]
+    assert len(client.messages[commit_result["session_id"]]) == 252
 
 
 @pytest.mark.asyncio
@@ -1236,7 +1225,8 @@ async def test_rollout_artifact_recorder_writes_train_rollouts_before_commit(tmp
         / "rollouts"
         / "airline_train_task_7_task-7"
         / "epoch_0"
-        / "rollout_0"
+        / "train"
+        / "trial_0"
     )
     assert (rollout_dir / "status.json").exists()
     assert (rollout_dir / "rollout.json").exists()
@@ -1293,13 +1283,13 @@ def test_rollout_artifact_recorder_separates_epoch_eval_dirs(tmp_path):
         )
 
     group_dir = tmp_path / "rollouts" / "airline_test_task_0_2"
-    assert (group_dir / "test_epoch_0" / "trial_0" / "status.json").exists()
-    assert (group_dir / "test_epoch_1" / "trial_0" / "status.json").exists()
-    assert not (group_dir / "test" / "trial_0").exists()
+    assert (group_dir / "epoch_0" / "eval" / "trial_0" / "status.json").exists()
+    assert (group_dir / "epoch_1" / "eval" / "trial_0" / "status.json").exists()
+    assert not (group_dir / "eval" / "trial_0").exists()
 
     index = recorder.finalize().to_dict()
     rollout_stages = [item["stage"] for item in index["case_groups"][0]["rollouts"]]
-    assert rollout_stages == ["test_epoch_0", "test_epoch_1"]
+    assert rollout_stages == ["epoch_0/eval", "epoch_1/eval"]
 
 
 def test_rollout_artifact_recorder_keeps_baseline_and_final_eval_dirs(tmp_path):
@@ -1334,8 +1324,8 @@ def test_rollout_artifact_recorder_keeps_baseline_and_final_eval_dirs(tmp_path):
     recorder.record_eval(label="final_test_rollout", epoch=2, analyses=[analysis])
 
     group_dir = tmp_path / "rollouts" / "airline_test_task_0_2"
-    assert (group_dir / "baseline_test" / "trial_0" / "status.json").exists()
-    assert (group_dir / "final_test" / "trial_0" / "status.json").exists()
+    assert (group_dir / "baseline" / "test" / "trial_0" / "status.json").exists()
+    assert (group_dir / "final" / "test" / "trial_0" / "status.json").exists()
 
 
 def test_console_reporter_highlights_accuracy_and_prints_epoch_summary(capsys):
@@ -1441,16 +1431,104 @@ def test_rollout_artifact_event_recorder_enriches_commit_result(tmp_path):
         / "rollouts"
         / "airline_train_task_7_task-7"
         / "epoch_0"
-        / "rollout_0"
+        / "train"
+        / "trial_0"
     )
-    commit_result = json.loads((rollout_dir / "commit_result.json").read_text())
+    commit_dir = (
+        tmp_path
+        / "rollouts"
+        / "airline_train_task_7_task-7"
+        / "epoch_0"
+        / "commit"
+        / "trial_0"
+    )
+    assert not (rollout_dir / "commit_result.json").exists()
+    commit_result = json.loads((commit_dir / "commit_result.json").read_text())
     status = json.loads((rollout_dir / "status.json").read_text())
     index = json.loads((tmp_path / "rollouts_index.json").read_text())
     assert commit_result["artifact_state"] == "commit_submitted"
     assert commit_result["session_id"] == "session-1"
     assert status["artifact_state"] == "commit_submitted"
     assert status["archive_uri"] == "viking://archive"
-    assert index["case_groups"][0]["rollouts"][0]["artifact_state"] == "commit_submitted"
+    assert status["commit_path"] == str(commit_dir)
+    rollout_index = index["case_groups"][0]["rollouts"][0]
+    assert rollout_index["artifact_state"] == "commit_submitted"
+    assert rollout_index["path"] == str(rollout_dir)
+    assert rollout_index["commit_path"] == str(commit_dir)
+
+
+@pytest.mark.asyncio
+async def test_rollout_artifact_recorder_writes_epoch_commit_artifacts_under_commit_dir(tmp_path):
+    from openviking.session.train import RolloutArtifactRecorder
+
+    class CommitArtifactClient:
+        async def read(self, uri):
+            assert uri == "viking://archive/memory_diff.json"
+            return '{"updated": true}'
+
+    recorder = RolloutArtifactRecorder(run_dir=tmp_path, client=CommitArtifactClient())
+    case = Case(
+        name="tau2_airline_train_7",
+        task_signature="tau2:airline:train:7",
+        input={
+            "data_split": "airline_train",
+            "task_no": 7,
+            "task_id": "task-7",
+            "user_request": "change my seat",
+        },
+        rubric=Rubric(name="reward", description="reward", criteria=[]),
+    )
+    rollout = Rollout(
+        case=case,
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+    )
+    analysis = RolloutAnalysis(
+        evaluation=rollout.evaluation,
+        trajectories=[],
+        metadata={"rollout": rollout},
+    )
+
+    await recorder.record_train_epoch(
+        epoch=0,
+        analyses=[analysis],
+        commit_results=[
+            {
+                "index": 0,
+                "archive_uri": "viking://archive",
+                "task_status": "completed",
+                "error": None,
+            }
+        ],
+    )
+
+    train_dir = (
+        tmp_path
+        / "rollouts"
+        / "airline_train_task_7_task-7"
+        / "epoch_0"
+        / "train"
+        / "trial_0"
+    )
+    commit_dir = (
+        tmp_path
+        / "rollouts"
+        / "airline_train_task_7_task-7"
+        / "epoch_0"
+        / "commit"
+        / "trial_0"
+    )
+    assert (train_dir / "status.json").exists()
+    assert not (train_dir / "commit_result.json").exists()
+    assert not (train_dir / "memory_diff.json").exists()
+    assert (commit_dir / "commit_result.json").exists()
+    assert (commit_dir / "memory_diff.json").read_text() == '{"updated": true}'
+
+    status = json.loads((train_dir / "status.json").read_text())
+    assert status["artifact_state"] == "memory_diff_done"
+    assert status["commit_path"] == str(commit_dir)
+    assert status["memory_diff_path"] == str(commit_dir / "memory_diff.json")
 
 
 class DelayedSessionCommitClient(FakeSessionCommitClient):

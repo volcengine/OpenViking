@@ -2,13 +2,12 @@ memory_type: trajectories
 description: |
   输出语言硬约束：生成的 memory 必须使用中文，不受对话语言或 {{ language }} 影响。所有自然语言字段都必须用中文，包括名称、检索锚点、摘要、要点和分析内容。固定 schema 标题、工具名、API/function 名、evaluation 字段名、enum 值、代码标识符和必要的引用字面量可保留原文。
 
-  A compact, reusable operation contract distilled from an agent task trajectory.
+  本模板用于从 agent 任务轨迹中提炼一个紧凑、可复用的操作契约。
 
-  Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
-  Skip pure chitchat or simple Q&A with no execution trace.
-  Single-task extraction boundary: create at most ONE trajectory for the latest rollout/task. Treat the latest rollout as the only source of new memory. Ignore system policy text, retrieved memory_context/Experience Reminder examples, candidate/source memories, historical archive overviews, and general domain rules as extraction sources; they are only context for judging this rollout. Do not enumerate every policy rule, tool call, recalled memory, or hypothetical task into separate trajectories.
+  当 agent 处理了包含决策、工具调用或多步骤动作的明确任务时才提取；纯闲聊或没有执行轨迹的简单问答不要提取。
+  单任务边界：每个最新 rollout/task 最多创建一个 trajectory。只把最新 rollout 作为新 memory 的来源。系统 policy 和通用领域规则不能单独作为抽取来源；但当当前用户请求、工具观察、action/evaluation delta 或终态决策依赖某个 policy eligibility gate 时，必须把对应 policy 作为判断当前轨迹的上下文证据。忽略 retrieved memory_context、Experience Reminder、candidate/source memories 和历史 archive overview，不要从这些内容中抽取新 trajectory。不要把每条 policy、每次工具调用、召回 memory 或假设任务拆成单独 trajectory。
 
-  IMPORTANT source filter for structured evaluation runs: if an earlier message contains a structured evaluation case spec, `task_signature`, `ground_truth`, visible evaluation, or final status/evaluation report, that final case identifies the ONLY current task. The extracted `trajectory_name`, `retrieval_anchor`, and `content` must be about that current case's user_query/evaluation/tool trace only. Any memory whose intent, target object, route/date or equivalent constraints, terminal action, or failure mode is not tied to that current case is invalid and must be omitted.
+  结构化评测场景的重要 source filter：如果前文存在结构化 case spec、`task_signature`、`ground_truth`、可见 evaluation 或最终 status/evaluation report，则该最终 case 标识唯一当前任务。抽取出的 `trajectory_name`、`retrieval_anchor` 和 `content` 必须只围绕该当前 case 的 user_query、evaluation 和 tool trace。任何 intent、目标对象、路线/日期或等价约束、终态动作、失败模式不属于当前 case 的 memory 都无效，必须省略。
 
 embedding_template: |-
   {{ trajectory_name }}
@@ -25,125 +24,94 @@ fields:
   - name: trajectory_name
     type: string
     description: |
-      Name the task directly and stably.
-      Must be written in Chinese (中文), regardless of {{ language }}.
-      Use a concise Chinese noun phrase, max 15 Chinese characters.
-      Do not create near-duplicate names for the same task.
-      Good: "重复请求处理", "异步任务挂起修复", "补偿对象错绑".
-      Prefer the reusable operation or decision boundary over raw instance wording from the opening request.
+      直接、稳定地命名任务。
+      新生成名称必须使用中文，不受 {{ language }} 影响。
+      使用简洁中文名词短语，最多 15 个汉字。
+      不要为同一任务创建近似重复名称。
+      好例子："重复请求处理"、"异步任务挂起修复"、"补偿对象错绑"。
+      优先表达可复用的操作或决策边界，而不是照抄用户开场请求。
     merge_op: immutable
 
   - name: outcome
     type: string
     description: |
-      Use exactly one of: success, failure, partial, unfinished, unknown.
+      只能使用以下值之一：success, failure, partial, unfinished, unknown。
     merge_op: immutable
 
   - name: retrieval_anchor
     type: string
     description: |
-      Positive semantic retrieval text for this rollout analysis, written for embedding rather than display.
-      Use Chinese (中文) for natural-language portions, while keeping the fixed labels, enum values, tool names, and evaluation field names unchanged.
-      Format: "Intent: <booking|modification|cancellation|baggage|upgrade|refund_compensation|lookup|transfer|multi_intent|other>; Stage: <opening|after_read|before_write|after_write|terminal_handoff|final_response|evaluation_failure|evaluation_success>; Terminal action: <required final tool family or none>; Forbidden substitute: <tool/action that must not replace the terminal action or none>; Policy gates: <eligibility/confirmation/object-binding checks>; Failure mode: <none, missing expected action, wrong target, wrong args, premature handoff/done, policy mismatch, or other>; Target: <primary object or write/read boundary>."
+      为该 rollout 分析生成正向语义检索文本；它面向 embedding，而不是展示。
+      自然语言部分使用中文；固定 enum 值、工具名和 evaluation 字段名可保留原文。
+      建议格式："意图: <booking|modification|cancellation|baggage|upgrade|refund_compensation|lookup|transfer|multi_intent|other>; 阶段: <opening|after_read|before_write|after_write|terminal_handoff|final_response|evaluation_failure|evaluation_success>; 终态动作: <required final tool family or none>; 禁止替代: <tool/action that must not replace the terminal action or none>; Policy gates: <eligibility/confirmation/object-binding checks>; 失败模式: <none, missing expected action, wrong target, wrong args, premature handoff/done, policy mismatch, or other>; 目标: <primary object or write/read boundary>."
 
-      Rules:
-      - Keep it shorter and more retrieval-focused than content.
-      - For structured evaluation runs, the anchor must match the current case's primary intent and terminal action family; never anchor on an intent/tool family that appears only in retrieved memories, Experience Reminder, candidate_source_trajectory, policy text, or historical examples.
-      - Describe when this analysis should be retrieved using positive applies-when language only.
-      - Include the decisive user intent, terminal tool family, policy gate, failure/success mode, and target boundary, not raw case identifiers.
-      - Use "Forbidden substitute" to mark harmful near-miss workflows, such as cancellation+recreation replacing an in-place update tool, handoff replacing an in-scope tool flow, or communicate/done replacing a required state-changing action.
-      - Do not copy the opening request when the reusable lesson only becomes valid after reads, verification, failure, or a terminal boundary; anchor on the condition that was actually established.
-      - Generalize identifiers, names, exact numbers, dates, places, amounts, and raw tool payloads as strictly as content unless the value is a stable policy constant or tool name.
+      规则：
+      - 比 content 更短、更聚焦检索。
+      - 结构化评测场景中，anchor 必须匹配当前 case 的主 intent 和终态动作族；不得锚定只出现在 retrieved memories、Experience Reminder、candidate_source_trajectory、policy 文本或历史样例里的 intent/tool family。
+      - 使用正向适用条件描述该分析应在何时被检索。
+      - 包含决定性的用户意图、终态工具族、policy gate、失败/成功模式和目标边界，不要包含原始 case id。
+      - 用“禁止替代”标明有害近似流程，例如用取消+重建替代原地 update、用 handoff 替代可处理工具流，或用 communicate/done 替代必需的状态变更动作。
+      - 当可复用 lesson 只有在读取、核验、失败或终态边界后才成立时，不要照抄开场请求；应锚定实际建立的条件。
+      - 泛化 identifiers、姓名、精确数字、日期、地点、金额和原始 tool payload；稳定 policy 常量或必要工具名除外。
     merge_op: immutable
 
   - name: content
     type: string
     description: |
-      Eval-oriented rollout trajectory analysis in EXACTLY this format. Use Chinese (中文) for all natural-language prose, while keeping the section titles exactly as written below.
+      生成面向 evaluation 的 rollout trajectory 分析。必须严格使用以下格式。自然语言全部使用中文，下面的 section 标题必须原样保留。
 
       # 结论
-      <one concise sentence explaining the core success/failure/partial outcome. Start with the intent family, required terminal action, key policy gate, and forbidden substitute action when relevant. For failures, name the missed expected action, wrong object binding, wrong parameter, premature handoff/termination, or other primary failure.>
+      <一句话概括核心成功/失败/部分完成结果。相关时从意图族、必需终态动作、关键 policy gate、禁止替代动作开始。失败时点明缺失的 expected action、错误对象绑定、错误参数、过早 handoff/终止或其他主失败。>
 
       # Evaluation 信号
       - Outcome: <success|failure|partial|unfinished|unknown>.
-      - Reward: <visible reward/score/pass status if available; otherwise say evaluation not visible>.
-      - DB/Communicate: <visible db_check, communicate reward, or other evaluation breakdown if available>.
-      - Failed expected action: <the most important failed action_check, missing write, wrong args, or none/unknown>.
+      - Reward: <可见 reward/score/pass status；若不可见则写 evaluation not visible>.
+      - DB/Communicate: <可见 db_check、communicate reward 或其他 evaluation breakdown>.
+      - Failed expected action: <最重要的 failed action_check、missing write、wrong args，或 none/unknown>.
 
       # Expected vs Actual
-      - Expected: <evaluation/action_checks expected tool/action sequence and key parameters, generalized when instance-local>.
-      - Actual: <actual tool/action sequence and key parameters from the trajectory>.
-      - Delta: <missing action, wrong target object, wrong amount/count/status, extra action, premature handoff/done, or no material delta>.
+      - Expected: <evaluation/action_checks 期望的 tool/action sequence 和关键参数；实例本地信息需泛化>.
+      - Actual: <实际轨迹中的 tool/action sequence 和关键参数>.
+      - Delta: <missing action、wrong target object、wrong amount/count/status、extra action、premature handoff/done，或 no material delta>.
 
       # 事实链
-      - User/task intent: <what the user was trying to accomplish>.
-      - Candidate objects: <important retrieved objects and their decisive fields, such as status, count, membership, insurance, lifecycle state, ownership, or policy eligibility>.
-      - Correct target: <object/action that best matches evaluation and verified tool facts>.
-      - Wrong target or rejected path: <object/action the agent incorrectly followed, if any>.
-      - Policy gates and terminal action: <policy eligibility, required confirmation, allowed terminal tool, and forbidden substitute tool/action>.
+      - User/task intent: <用户试图完成什么>.
+      - Candidate objects: <重要候选对象及决定性字段，例如 status、count、membership、insurance、lifecycle state、ownership 或 policy eligibility>.
+      - Correct target: <最符合 evaluation 和已核验 tool facts 的对象/动作>.
+      - Wrong target or rejected path: <agent 错误走向的对象/动作，如有>.
+      - Policy gates and terminal action: <policy eligibility、required confirmation、allowed terminal tool、forbidden substitute tool/action>.
 
       # 实际轨迹偏离
-      1. <chronological step showing the agent's first relevant read/decision/action>
-      2. <first key divergence from the verified/evaluation-aligned path>
-      3. <consequence that caused the final reward or task outcome>
+      1. <按时间顺序写第一个相关读取/决策/动作>
+      2. <相对已核验/evaluation-aligned 路径的第一个关键偏离>
+      3. <导致最终 reward 或任务结果的后果>
 
       # 根因
-      - Category: <one or more of object_binding_error, insufficient_retrieval, policy_misread, wrong_parameter_calculation, missing_tool_call, premature_handoff_or_done, user_misled_agent, environment_or_evaluation_mismatch, other>.
-      - Explanation: <why that category explains the outcome, grounded in evaluation and tool facts>.
+      - Category: <一个或多个：object_binding_error, insufficient_retrieval, policy_misread, wrong_parameter_calculation, missing_tool_call, premature_handoff_or_done, user_misled_agent, environment_or_evaluation_mismatch, other>.
+      - Explanation: <为什么该类别解释本结果；必须基于 evaluation 和 tool facts>.
 
       # 正确做法
-      1. <correct next read/verification step, if needed>
-      2. <correct interpretation of misleading user claims versus tool facts>
-      3. <correct final tool/action call or final response boundary, including key generalized parameters, and explicit note when cancel/book/handoff/done must NOT substitute for the expected terminal action>
+      1. <正确的下一步读取/核验，如需要>
+      2. <对误导性用户说法与 tool facts 的正确解释>
+      3. <正确的终态 tool/action call 或 final response boundary；包含泛化后的关键参数；需要时明确 cancel/book/handoff/done 不得替代 expected terminal action>
 
       # 泛化规则
-      - <reusable rule for future agents that would prevent this failure or preserve this success>
-      - <second rule when useful>
-      - <third rule when useful>
+      - <可复用规则，用于未来 agent 避免该失败或保持该成功>
+      - <有用时写第二条规则>
+      - <有用时写第三条规则>
 
-      Rules:
-      - This trajectory is an evidence-driven structured evaluation rollout analysis, not a generic conversation summary and not a broad umbrella memory.
-      - Treat evaluation feedback/action_checks as the strongest oracle when visible. Then use tool calls/tool outputs, then system policy, then user self-report.
-      - CASESPEC ACTION ORACLE: In structured training runs, the case memory / CaseSpec / ground_truth / rubric is part of the latest task source. If it contains an `Actions:` list, treat that list exactly like visible `action_checks` even when the final `evaluation report` is `{}` or sparse. Diagnose against the listed action names, arguments, and order. Do NOT replace a ground_truth-required write sequence with a policy-only refusal/handoff/no-write lesson.
-      - COMMUNICATE_CHECK ORACLE: If visible evaluation contains `communicate_checks` (or ground_truth / rubric `Communicate Info` / NL Assertions), treat each `info` literal and its associated semantic assertion as required customer-facing content. In `DB/Communicate`, `Expected vs Actual`, `事实链`, and `正确做法`, preserve the exact required literal as an evidence anchor, but derive its meaning from the current user request, NL Assertions, and tool outputs. Do NOT guess a default label such as refund, fee, compensation, or remaining balance merely because the literal is numeric; if the user/rubric says total cost/count/status for a queried set, keep that semantic label.
-      - CASESPEC COMMUNICATION REQUIREMENT: In structured training runs, the case memory / CaseSpec / ground_truth / rubric is part of the latest task source. If it contains `Communicate Info` or NL Assertions describing required customer communication, carry those communication requirements into the trajectory even when the final `evaluation report` is `{}` or only says reward is below 1.0. Compare the actual assistant messages against those required literals/semantic assertions before diagnosing missing `done`, timeout, or generic failure. If the actual messages omit a required literal from `Communicate Info`, the failure includes a communication omission.
-      - AGGREGATE COMMUNICATION FAILURES: When DB/action checks pass but `communicate_checks` fail, the primary delta is missing or semantically wrong customer communication, not a missing DB operation. If the required `info` is an aggregate value, identify the queried set and time boundary from the user turn and tool facts (for example current/upcoming/other items before later writes versus remaining/refunded items after writes). Diagnose substitutions such as communicating only a subset total, a refund total, or a post-change remaining total as wrong semantic scope even if other business actions succeeded.
-      - EXACT COMMUNICATION DELTA: If all expected actions/DB pass and only `communicate_checks` fail, `Failed expected action` must be "none" or "missing communicate info", not missing `done` or missing write. The trajectory must quote/retain the required `info` literal and describe the actual communicated competing value(s), e.g. subset/remaining/refund totals, so a later experience can tell the future agent exactly what semantic scope to communicate.
-      - DONE IS NOT A SUBSTITUTE FOR REQUIRED COMMUNICATION: Do not diagnose a rollout as merely missing `done` when the CaseSpec/ground_truth/rubric or evaluation includes required `Communicate Info` and the actual assistant messages omitted it. The correct terminal boundary is: communicate all required literals/semantic assertions first, then call `done`.
-      - For trajectory diagnosis, evaluation is the oracle; for later experience generalization, mark any evaluation-vs-policy conflict as non-generalizable or guardrail-only rather than converting it into a positive workflow.
-      - The model may not see CaseSpec/rubric. Do not rely on CaseSpec unless it is present in the archived messages; evaluation feedback is sufficient to infer expected actions.
-      - Always align expected vs actual actions. If action_match is false, check whether the tool was missing, used on the wrong object, had wrong arguments, or was preempted by handoff/done.
-      - EXPECTED-WRITE ORACLE: When visible evaluation/action_checks explicitly require a state-changing tool (for example an update, cancellation/deletion, booking/creation, add-on, payment, or compensation tool) and that expected action is missing or argument-mismatched, diagnose the missing/wrong expected write as the primary delta. Do NOT replace the expected write with a refusal, handoff, stricter policy reading, different upgrade tier, or no-write workflow merely because domain-policy reasoning seems to conflict; instead note any policy-vs-evaluation tension separately and keep the evaluated tool family as the training target.
-      - GROUND_TRUTH WRITE OVERRIDE: If CaseSpec/ground_truth/rubric `Actions:` require a state-changing sequence, it overrides policy-only cancellation/eligibility reasoning for this training memory. The `Expected`, `Correct target`, `正确做法`, and `泛化规则` must preserve the required sequence. A rule that says to avoid, refuse, transfer, or omit a ground_truth-required write is invalid unless the same ground_truth/evaluation says that write was forbidden.
-      - EXACT ACTION NAME PRESERVATION: When naming expected tools, copy the exact `action.name` from visible evaluation/action_checks, or the exact tool_name from the actual trace. Never substitute aliases or invented generic names (for example do not rewrite an evaluated update tool into a different "modify" tool). If a higher-level operation label is useful, put it in prose while still naming the exact evaluated tool.
-      - Reconstruct the factual chain from tool outputs before judging policy or user intent. User claims are clues only and must not override fresh tool observations.
-      - Find the first key divergence, not merely the last failed message.
-      - For failures involving state-changing tools, first decide whether the state-changing tool itself was expected. If visible evaluation/action_checks list only read/query tools (for example get_user_details/get_reservation_details) and DB reward is 0.0 after an actual write such as cancel_reservation/modify_reservation/book_reservation, treat the write as the primary forbidden substitute that caused DB mismatch; do NOT diagnose the failure as missing post-write verification, and do NOT present the write as correct.
-      - AGENT-VISIBLE GATE MAPPING: When evaluation/action_checks are read-only but the live agent would not see those action_checks, translate the failure into observable runtime gates from the same trace whenever possible: verified object status, ownership, timestamp arithmetic, membership/cabin/insurance, user confirmation, refund eligibility, or other policy prerequisites. The Correct target/rejected path and 泛化规则 must be keyed to those observable facts, not to a hidden phrase such as "evaluation says query-only". If no observable policy gate explains why the write was forbidden, mark the positive workflow as non-generalizable/evaluation-only and avoid creating agent-facing execution guidance from it.
-      - If the expected action list contains no write tool, the correct terminal boundary is the expected read/communication/refusal boundary from evaluation, even when domain policy might have allowed a write after confirmation. Evaluation remains the oracle for training memory; mark any policy-vs-evaluation tension explicitly instead of converting the actual write into a positive workflow. When an observable policy gate also forbids the write, state that gate as the reusable reason future agents can apply.
-      - Do NOT label a query-only expected / actual-write / DB=0 failure as environment_or_evaluation_mismatch merely because the write tool returned success. Tool success only proves the write executed; DB mismatch plus query-only expected actions means the write changed state that evaluation expected to remain unchanged. Root cause must name the forbidden write, wrong eligibility decision, or wrong target/parameter that triggered it.
-      - For cancellation eligibility involving a 24-hour window, compare full timestamps against the policy current time, not just calendar dates. If created_at is more than 24 hours before current time, the 24-hour cancellation gate is false; a user or prior support representative claim cannot override that tool timestamp. When a failure trace approved cancellation using an incorrect 24-hour calculation, diagnose `policy_misread` / `wrong_parameter_calculation` and mark cancel_reservation as forbidden.
-      - For failures involving state-changing tools, explicitly identify the missed expected operation or wrong/forbidden write operation and its key parameter family.
-      - For success trajectories, still record the decisive verification path and why it avoided likely traps.
-      - If evaluation and policy appear to conflict, analyze the failure against evaluation first and note the conflict in 根因 or 正确做法.
-      - When evaluation expects a specific modification-before-terminal sequence, preserve the evaluated modification level and terminal action exactly as a generalized action family. Do not infer a stronger or different workaround (such as upgrading to a higher class/tier, cancel-and-recreate, or transfer) unless that exact action family appears in evaluation or in a successful evaluated trace.
-      - For failures where a user-requested prerequisite modification is followed by an evaluated terminal write, diagnose against that evaluated sequence. If the actual trajectory refuses, hands off, upgrades to a different tier/category, or stops after discussion, state that the first divergence is failure to execute the evaluated prerequisite modification and the following terminal write after user confirmation.
-      - Keep the output dense and diagnostic. Avoid long narrative retellings, apology text, or customer-facing phrasing.
-      - Extract one record per rollout-level task outcome. Do not split every individual tool call into separate records unless there are truly independent task outcomes in the same session.
-      - Hard cap: output at most ONE trajectory memory for the latest single-task rollout/task. If the conversation contains multiple user turns or sub-requests that belong to the same case, merge them into one trajectory centered on the final evaluated outcome. If more than one candidate record seems possible, keep only the one matching the current CaseSpec `task_signature`/user_query and the final evaluation delta; otherwise output no trajectory.
-      - Source boundary: only extract lessons grounded in the actual latest user request, actual tool calls/tool outputs, assistant actions, visible CaseSpec/ground_truth/evaluation for the current case, and visible evaluation feedback. Do NOT extract memories from the domain policy document, tool schemas, Experience Reminder, retrieved memory_context, candidate/source memories, CaseSpec examples unrelated to the executed path, historical archive overviews, or general background instructions.
-      - Negative source examples: memories named or described only inside Experience Reminder, memory_context, candidate_experience, or candidate_source_trajectory (for example unrelated cancellation, insurance, delay compensation, no-flight booking, cabin-change, or multi-modification cases) must not appear as trajectory_name, retrieval_anchor, Expected/Actual, 泛化规则, or any other new trajectory field unless the current user_query/tool trace/evaluation is about that exact intent.
-      - If evaluation feedback is visible, use it to identify the single decisive expected-vs-actual delta. Do not create additional success or failure memories for other policy topics mentioned only in system text, Experience Reminder, memory_context, candidate memories, or retrieved memories.
-      - If CaseSpec/ground_truth and policy reasoning conflict, do not let a policy-only interpretation become the trajectory's general rule. Write the trajectory as evaluated-sequence training evidence, and state any policy concern only as tension/non-generalizable context, never as the future action plan.
-      - For communication-only failures, do not reinterpret the required communication literal as a different monetary/count concept. If the current case user query or NL Assertions describe an aggregate information request, the trajectory must state that exact aggregate communication requirement and must distinguish it from refunds, fees, operation costs, or post-operation remaining totals unless those are explicitly the requested/evaluated semantic.
-      - If a later user turn repeats or acknowledges a wrong subset aggregate, but evaluation/NL Assertions require a broader aggregate literal, do not treat the user's acknowledgement as changing the evaluated communication target. Diagnose the assistant's earlier narrower answer as the divergence and state the broader evaluated aggregate that must be included before `done`.
-      - If CaseSpec/ground_truth says an aggregate such as total cost of in-scope upcoming/current items must be communicated, and the assistant instead communicated "other", "remaining", "refund", or operation-specific totals, mark the semantic scope as wrong even if that narrower value answered a later user phrasing.
-      - Do not collapse independent intents into a broad reusable workflow in 泛化规则. Prefer narrow rules tied to one intent, one target boundary, one policy gate, and one terminal tool family.
-      - When the failure is premature handoff/done or a missing state-changing tool, 泛化规则 must state the required terminal action and the forbidden substitute. If a state-changing tool was actually executed and DB failed, do not label the failure as a missing confirmation/post-write step in a way that makes the executed write reusable; first state whether the write itself was allowed by evaluation and observable policy gates.
-      - When the actual trajectory used cancellation/deletion plus recreation, explicitly distinguish whether that path is policy-eligible and user-confirmed; otherwise mark it as a rejected path, not a reusable positive workflow.
-      - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts/counts, exact locations/paths, product names, and raw tool payloads unless the value is a stable policy constant or a tool/action name required for the reusable lesson. Use semantic placeholders such as expected write, target object, delayed segment, verified passenger count, policy amount, or computed amount.
-      - Tool names, evaluation field names, action category names, and policy constants may remain exact when they are needed for future retrieval and execution.
-      - For handoff/done, refusal, or requirement-unmet failures, keep trajectory content diagnostic and do not phrase 泛化规则 as a broad positive workflow. State the exact expected terminal family and forbidden substitute when evaluation shows one.
-      - Trace tool boundary: if naming a tool in this memory, use only tools actually available in the latest trace or evaluation, or exact terminal tool names from the current rollout. Never output nonexistent, external, or candidate-only tools; rewrite to a current trace tool only when the current rollout supports it, otherwise omit the tool name.
-      - Use exactly the eight headings above in this exact order. No extra headings, free paragraphs outside sections, or closing remarks.
+      规则：
+      - Scope/source：每个最新 evaluated task 最多抽取一个 trajectory。所有判断必须落在当前用户请求、实际工具调用/输出、assistant 动作、可见 CaseSpec/ground_truth/evaluation 上。不要从 retrieved memories、Experience Reminder、candidate/source memories、历史样例或无关 policy sections 抽取。system/domain policy 只用于判断与当前观察事实绑定的 policy gate。
+      - Evidence priority：Expected vs Actual 优先使用 evaluation/action_checks/CaseSpec 作为 oracle。即使最终 report 很稀疏，CaseSpec 的 `Actions`、`Communicate Info`、NL Assertions 也算证据。保留精确 evaluated/actual tool names。之后依次使用 tool facts、policy、user self-report。
+      - Oracle-to-runtime mapping：在面向未来 agent 的 sections（`# 结论`、`Policy gates and terminal action`、`# 根因`、`# 正确做法`、`# 泛化规则`）中，只要当前 trace 暴露了 runtime 可见 gate，就要把 hidden oracle 约束转译成这些 gate：status、ownership、timestamp arithmetic、cabin/membership/insurance、eligibility、confirmation、refund 或 object binding。当 policy/tool facts 已能解释边界时，不要把 `ground_truth要求仅查询`、`训练oracle要求`、`evaluation says query-only` 写成可复用理由；这些 oracle 证据只能出现在 `# Evaluation 信号` 或 `# Expected vs Actual`。若没有可观察 gate 能解释边界，则标为 non-generalizable/evaluation-only。
+      - Write/action deltas：若 expected actions 要求某个 state-changing tool 但 actual 漏掉或参数错，诊断该 exact missing/wrong write，并保留 evaluated sequence；不要替换成更严格拒绝、handoff、cancel-and-recreate 或不同 tier/tool。若 expected actions 只有 read/refusal/communication，但 actual 做了 state-changing tool 且 DB failed，则该 write 是 forbidden substitute；不要因为 tool returned success 就归因为缺少 post-write verification、`done` 或 environment mismatch。Tool success 只证明 write 已执行。
+      - Communication deltas：若 evaluation/CaseSpec 要求 customer-facing `Communicate Info` 或 NL Assertions，把精确 required literals 及其语义标签带入 `DB/Communicate`、`Expected vs Actual`、`事实链` 和 `正确做法`。对 aggregate values，从用户回合和 tool facts 推导 inclusion set 与 time boundary；不要用 refund total、fee total、subset total 或 post-change remaining total 替代。若只有 communication failed，主 delta 是 missing/wrong communication，不是 missing write 或 `done`；必须先 communicate required items，再 `done`。
+      - Policy-gated decisions：先从 tool outputs 重建事实链，再判断 policy；用户说法或 prior-support approval claims 不能覆盖当前 policy + tool facts。航空取消/退款场景中，在批准或调用 `cancel_reservation` 前，必须核验无已飞航段，并至少满足一个 allow-cancel gate：用完整 timestamp arithmetic 判断预订在 24 小时内、航司取消、business cabin，或有 travel insurance 且 reason covered。若全部 gate 都不满足，正确终态是 refusal/communication 或 policy-specified handoff，`cancel_reservation` 是 forbidden。
+      - Output discipline：严格保留八个 required headings 及顺序；不要加额外标题或结尾语。找第一个关键偏离，不只写最后症状。内容要密集、诊断化。泛化姓名、ID、精确日期/金额/路线、路径和原始 payload；稳定 policy constants 或执行所需 exact tool/evaluation names 除外。只提当前 trace/evaluation 中存在的工具。
+
+      Few-shot guidance（缩略模式，不改变输出格式）：
+      - Forbidden cancellation write：如果 Expected 只有 `get_user_details` + `get_reservation_details`，Actual 包含 `cancel_reservation`，且 tool facts 显示 economy/no insurance/change-of-plan/created_at 超过 policy current time 前 24h/no airline cancellation，则 future-facing sections 应写："取消请求因目标预订不满足任何取消资格而不得批准；`cancel_reservation` 是 forbidden write；用户或前客服口头批准不能覆盖 policy + tool facts。" 不要把 "ground_truth要求仅查询" 写成可复用理由。
+      - Communication-only failure：如果 DB/action checks 通过，但 `communicate_checks` 要求 literal `1628` 表示 in-scope upcoming items 的 total cost，而 Actual 只说了 refund/remaining/subset total，则写："主失败是缺少语义正确的聚合沟通；需在 `done` 前用正确标签传达 `1628`。" 不要把 missing write 或 missing `done` 诊断为主因。
+      - Missing expected write：如果 Expected 要求 reads/pricing/confirmation 后调用 `update_reservation_flights`，但 Actual 拒绝、转人工或 cancel-and-rebook，则写："主失败是未执行 evaluated `update_reservation_flights`；禁止用 handoff/refusal/cancel-and-rebook 替代该 exact tool family。" 保留精确工具名。
+
     merge_op: patch

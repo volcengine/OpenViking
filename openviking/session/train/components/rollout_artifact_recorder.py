@@ -123,7 +123,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
             _RolloutRecord(
                 rollout=rollout,
                 evaluation=_rollout_evaluation_or_default(rollout),
-                stage=f"epoch_{epoch}",
+                stage=f"epoch_{epoch}/train",
                 epoch=epoch,
                 commit_index=idx,
                 artifact_state="rollout_done",
@@ -156,7 +156,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                 _RolloutRecord(
                     rollout=rollout,
                     evaluation=analysis.evaluation,
-                    stage=f"epoch_{epoch}",
+                    stage=f"epoch_{epoch}/train",
                     epoch=epoch,
                     commit_result=commit_result,
                     commit_index=idx,
@@ -171,12 +171,13 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
     def record_train_commit_result(self, event: str, **fields: Any) -> None:
         if event not in {"train_commit_submitted", "train_commit_done", "train_commit_failed"}:
             return
-        rollout_dir = self._rollout_dir_from_event_fields(fields)
-        if rollout_dir is None:
+        train_dir = self._train_rollout_dir_from_event_fields(fields)
+        commit_dir = self._commit_rollout_dir_from_event_fields(fields)
+        if train_dir is None or commit_dir is None:
             return
         commit_result = _commit_result_from_event(event, fields)
-        _write_json(rollout_dir / "commit_result.json", commit_result)
-        status_path = rollout_dir / "status.json"
+        _write_json(commit_dir / "commit_result.json", commit_result)
+        status_path = train_dir / "status.json"
         if status_path.exists():
             try:
                 status = json.loads(status_path.read_text(encoding="utf-8"))
@@ -188,19 +189,23 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                     "commit_error": commit_result.get("error"),
                     "commit_task_status": commit_result.get("task_status"),
                     "archive_uri": commit_result.get("archive_uri"),
+                    "commit_path": str(commit_dir),
+                    "commit_result_path": str(commit_dir / "commit_result.json"),
                 }
             )
             _write_json(status_path, status)
 
         if commit_result.get("error"):
-            self._latest_failed_rollout = rollout_dir
+            self._latest_failed_rollout = train_dir
         self._update_rollout_index_entry(
-            path=str(rollout_dir),
+            path=str(train_dir),
             updates={
                 "artifact_state": _artifact_state_from_commit_event(event),
                 "commit_error": commit_result.get("error"),
                 "archive_uri": commit_result.get("archive_uri"),
                 "commit_task_status": commit_result.get("task_status"),
+                "commit_path": str(commit_dir),
+                "commit_result_path": str(commit_dir / "commit_result.json"),
             },
         )
         self._write_index()
@@ -327,8 +332,6 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         (rollout_dir / "commit_messages.md").write_text(
             _format_commit_messages_markdown(commit_msgs), encoding="utf-8"
         )
-        if record.commit_result is not None:
-            _write_json(rollout_dir / "commit_result.json", record.commit_result)
 
     async def _write_train_commit_artifacts(self, records: list["_RolloutRecord"]) -> None:
         if self.client is None:
@@ -339,39 +342,39 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
             archive_uri = str(record.commit_result.get("archive_uri") or "").strip()
             if not archive_uri:
                 continue
-            rollout_dir = (
-                self.rollouts_root
-                / _case_group_id(record.rollout)
-                / record.stage
-                / _rollout_dir_name(record)
-            )
+            train_dir = self._train_rollout_dir(record)
+            commit_dir = self._commit_rollout_dir(record)
             try:
                 memory_diff = await self.client.read(f"{archive_uri}/memory_diff.json")
             except Exception as exc:  # best-effort artifact enrichment
                 _write_json(
-                    rollout_dir / "memory_diff_error.json",
+                    commit_dir / "memory_diff_error.json",
                     {"archive_uri": archive_uri, "error": str(exc)},
                 )
                 self._update_rollout_status(
-                    rollout_dir,
+                    train_dir,
                     memory_diff_error=str(exc),
+                    commit_path=str(commit_dir),
                 )
                 self._update_rollout_index_entry(
-                    path=str(rollout_dir),
-                    updates={"memory_diff_error": str(exc)},
+                    path=str(train_dir),
+                    updates={"memory_diff_error": str(exc), "commit_path": str(commit_dir)},
                 )
+                self._write_index()
                 continue
-            (rollout_dir / "memory_diff.json").write_text(str(memory_diff), encoding="utf-8")
+            (commit_dir / "memory_diff.json").write_text(str(memory_diff), encoding="utf-8")
             self._update_rollout_status(
-                rollout_dir,
+                train_dir,
                 artifact_state="memory_diff_done",
-                memory_diff_path=str(rollout_dir / "memory_diff.json"),
+                memory_diff_path=str(commit_dir / "memory_diff.json"),
+                commit_path=str(commit_dir),
             )
             self._update_rollout_index_entry(
-                path=str(rollout_dir),
+                path=str(train_dir),
                 updates={
                     "artifact_state": "memory_diff_done",
-                    "memory_diff_path": str(rollout_dir / "memory_diff.json"),
+                    "memory_diff_path": str(commit_dir / "memory_diff.json"),
+                    "commit_path": str(commit_dir),
                 },
             )
             self._write_index()
@@ -395,16 +398,14 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         group_entry = self._case_groups.get(group_id)
         if group_entry is None:
             self._write_group(group_id, records)
-            return
+            group_entry = self._case_groups.get(group_id)
+            if group_entry is None:
+                return
         for record in records:
-            rollout_dir = (
-                self.rollouts_root
-                / group_id
-                / record.stage
-                / _rollout_dir_name(record)
-            )
+            train_dir = self._train_rollout_dir(record)
+            commit_dir = self._commit_rollout_dir(record)
             if record.commit_result is not None:
-                _write_json(rollout_dir / "commit_result.json", record.commit_result)
+                _write_json(commit_dir / "commit_result.json", record.commit_result)
             updates = {
                 "artifact_state": record.artifact_state,
                 "commit_error": (
@@ -416,11 +417,15 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                 "commit_task_status": (
                     record.commit_result.get("task_status") if record.commit_result else None
                 ),
+                "commit_path": str(commit_dir),
+                "commit_result_path": str(commit_dir / "commit_result.json")
+                if record.commit_result is not None
+                else None,
             }
-            self._update_rollout_status(rollout_dir, **updates)
-            self._update_rollout_index_entry(path=str(rollout_dir), updates=updates)
+            self._update_rollout_status(train_dir, **updates)
+            self._update_rollout_index_entry(path=str(train_dir), updates=updates)
             if not record.passed or _commit_failed(record.commit_result):
-                self._latest_failed_rollout = rollout_dir
+                self._latest_failed_rollout = train_dir
         self._write_group_readme(self.rollouts_root / group_id, group_entry)
 
     def _update_rollout_index_entry(self, *, path: str, updates: dict[str, Any]) -> None:
@@ -430,7 +435,31 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                     item.update(updates)
                     return
 
-    def _rollout_dir_from_event_fields(self, fields: dict[str, Any]) -> Path | None:
+    def _train_rollout_dir(self, record: "_RolloutRecord") -> Path:
+        return (
+            self.rollouts_root
+            / _case_group_id(record.rollout)
+            / f"epoch_{record.epoch}"
+            / "train"
+            / _rollout_dir_name(record)
+        )
+
+    def _commit_rollout_dir(self, record: "_RolloutRecord") -> Path:
+        return (
+            self.rollouts_root
+            / _case_group_id(record.rollout)
+            / f"epoch_{record.epoch}"
+            / "commit"
+            / _rollout_dir_name(record)
+        )
+
+    def _train_rollout_dir_from_event_fields(self, fields: dict[str, Any]) -> Path | None:
+        return self._rollout_dir_from_event_fields(fields, phase="train")
+
+    def _commit_rollout_dir_from_event_fields(self, fields: dict[str, Any]) -> Path | None:
+        return self._rollout_dir_from_event_fields(fields, phase="commit")
+
+    def _rollout_dir_from_event_fields(self, fields: dict[str, Any], *, phase: str) -> Path | None:
         split = fields.get("split")
         task_no = fields.get("task_no")
         task_id = fields.get("case_task_id") or fields.get("case_name")
@@ -443,7 +472,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
             f"{_safe_fragment(str(task_no))}_"
             f"{_safe_fragment(task_id)}"
         )[:120]
-        return self.rollouts_root / group_id / f"epoch_{epoch}" / f"rollout_{index}"
+        return self.rollouts_root / group_id / f"epoch_{epoch}" / phase / f"trial_{index}"
 
     def _write_group_readme(self, group_dir: Path, group_entry: dict[str, Any]) -> None:
         failed = [item for item in group_entry["rollouts"] if not item.get("passed") or item.get("commit_error")]
@@ -561,10 +590,10 @@ def _stage_from_execution_metadata(metadata: dict[str, Any]) -> str:
     if not stage:
         training = bool(metadata.get("training"))
         if training:
-            return f"epoch_{epoch}"
-        return "baseline_test" if epoch < 0 else f"test_epoch_{epoch}"
+            return f"epoch_{epoch}/train"
+        return "baseline/test" if epoch < 0 else f"epoch_{epoch}/eval"
     if stage.startswith("train_rollout"):
-        return f"epoch_{epoch}"
+        return f"epoch_{epoch}/train"
     return _stage_dir(stage.split(maxsplit=1)[0], epoch=epoch)
 
 
@@ -718,23 +747,21 @@ def _rollout_name(record: _RolloutRecord) -> str:
     if trial is not None:
         return f"trial_{trial}"
     if record.commit_index is not None:
-        return f"rollout_{record.commit_index}"
+        return f"trial_{record.commit_index}"
     return _safe_fragment(record.rollout.case.name)
 
 
 def _stage_dir(label: str, *, epoch: int | None = None) -> str:
     if label.startswith("baseline_") and label.endswith("_rollout"):
         split = label.removeprefix("baseline_").removesuffix("_rollout")
-        return f"baseline_{_safe_fragment(split)}"
+        return f"baseline/{_safe_fragment(split)}"
     if label.startswith("final_") and label.endswith("_rollout"):
         split = label.removeprefix("final_").removesuffix("_rollout")
-        return f"final_{_safe_fragment(split)}"
+        return f"final/{_safe_fragment(split)}"
     if label.startswith("epoch_") and label.endswith("_rollout"):
-        split = label.removeprefix("epoch_").removesuffix("_rollout")
-        prefix = _safe_fragment(split)
-        return prefix if epoch is None else f"{prefix}_epoch_{epoch}"
+        return "eval" if epoch is None else f"epoch_{epoch}/eval"
     if label == "test_rollout":
-        return "test" if epoch is None else f"test_epoch_{epoch}"
+        return "eval" if epoch is None else f"epoch_{epoch}/eval"
     return _safe_fragment(label)
 
 

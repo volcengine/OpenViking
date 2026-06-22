@@ -51,6 +51,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
     """会话提取 Provider - 从会话消息中提取记忆"""
 
     include_tool_parts_in_conversation: bool = False
+    split_long_text_messages_for_extraction: bool = True
 
     def __init__(
         self,
@@ -105,7 +106,8 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
         if self._extract_context is None:
             self._extract_context = ExtractContext(
-                self.messages if isinstance(self.messages, list) else []
+                self.messages if isinstance(self.messages, list) else [],
+                split_long_text_messages=self.split_long_text_messages_for_extraction,
             )
         return self._extract_context
 

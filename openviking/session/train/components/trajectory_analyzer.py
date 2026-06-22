@@ -184,7 +184,7 @@ class TrajectoryRolloutAnalyzer:
         if viking_fs is None:
             raise RuntimeError("VikingFS is required to extract trajectory memories")
 
-        extract_context = ExtractContext(messages)
+        extract_context = provider.get_extract_context()
         allowed_types: set[str] = {_TRAJECTORY_MEMORY_TYPE}
         if include_session_skills:
             allowed_types.add(SESSION_SKILL_MEMORY_TYPE)

@@ -10,6 +10,14 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
 )
+from openviking.session.memory.agent_trajectory_context_provider import (
+    AgentTrajectoryContextProvider,
+)
+from openviking.session.memory.session_extract_context_provider import (
+    SessionExtractContextProvider,
+)
+from openviking.message import Message
+from openviking.message.part import TextPart
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -28,6 +36,18 @@ def test_create_tool_context_uses_extract_context_page_id_map():
     tool_ctx = provider.create_tool_context()
 
     assert tool_ctx.page_id_map is extract_context.page_id_map
+
+
+def test_user_memory_provider_splits_but_trajectory_provider_keeps_messages_whole():
+    text = "第一句很长很长很长很长很长很长很长很长很长很长很长。" * 8
+    messages = [Message(id="1", role="user", parts=[TextPart(text=text)])]
+
+    user_provider = SessionExtractContextProvider(messages=messages)
+    trajectory_provider = AgentTrajectoryContextProvider(messages=messages)
+
+    assert len(user_provider.get_extract_context().messages) > 1
+    assert len(trajectory_provider.get_extract_context().messages) == 1
+    assert trajectory_provider.get_extract_context().messages[0] is messages[0]
 
 
 @pytest.mark.asyncio

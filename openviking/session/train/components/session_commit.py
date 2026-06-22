@@ -29,7 +29,24 @@ from openviking_cli.client.http import AsyncHTTPClient
 _TRAINING_COMMIT_MEMORY_TYPES = ("cases", "trajectories")
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
+_TRAINING_ORACLE_SUMMARY_HEADER = "# OpenViking Training Oracle Summary v1"
 _SESSION_BATCH_ADD_MESSAGE_LIMIT = 100
+_STATE_CHANGING_ACTION_PREFIXES = (
+    "book_",
+    "cancel_",
+    "create_",
+    "delete_",
+    "modify_",
+    "pay_",
+    "purchase_",
+    "refund_",
+    "remove_",
+    "send_",
+    "submit_",
+    "transfer_",
+    "update_",
+)
+
 
 @dataclass(slots=True)
 class SessionCommitPolicyTrainer:
@@ -142,6 +159,7 @@ class SessionCommitPolicyTrainer:
         try:
             messages = (
                 [_case_spec_message_to_request(rollout)]
+                + [_training_oracle_summary_message_to_request(rollout)]
                 + [_message_to_request(message) for message in rollout.messages]
                 + [_evaluation_message_to_request(rollout)]
             )
@@ -472,6 +490,299 @@ def _case_spec_payload(rollout: Rollout) -> dict[str, Any]:
     }
 
 
+def _training_oracle_summary_message_to_request(rollout: Rollout) -> dict[str, Any]:
+    text = (
+        f"{_TRAINING_ORACLE_SUMMARY_HEADER}\n\n"
+        "This message is a deterministic training-only summary derived from "
+        "CaseSpec, rollout tool calls, and OutcomeEvaluation. It is not domain "
+        "policy. When extracting training memories, preserve CaseSpec-required "
+        "actions and communication requirements; do not learn an experience "
+        "that forbids or replaces a required write action merely because the "
+        "base policy text appears restrictive.\n\n"
+        f"```json\n{_training_oracle_summary_payload_json(rollout)}\n```"
+    )
+    return {
+        "role": "system",
+        "parts": [{"type": "text", "text": text}],
+    }
+
+
+def _training_oracle_summary_payload_json(rollout: Rollout) -> str:
+    return json.dumps(
+        _training_oracle_summary_payload(rollout),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+
+
+def _training_oracle_summary_payload(rollout: Rollout) -> dict[str, Any]:
+    expected = _parse_ground_truth_oracle(rollout.case.input.get("ground_truth") or "")
+    actual_actions = _actual_tool_actions(rollout.messages)
+    evaluation_signal = _evaluation_signal(rollout.evaluation)
+    expected_names = [action["name"] for action in expected["actions"] if action.get("name")]
+    actual_names = [action["name"] for action in actual_actions if action.get("name")]
+    missing_expected_actions = _missing_action_names(expected_names, actual_names)
+    expected_write_names = [
+        name for name in expected_names if _is_state_changing_action_name(name)
+    ]
+    actual_write_names = [
+        name for name in actual_names if _is_state_changing_action_name(name)
+    ]
+    missing_expected_write_names = [
+        name for name in missing_expected_actions if name in expected_write_names
+    ]
+    write_actions_satisfied = not missing_expected_write_names
+    communication_requirements = expected["communicate_info"] + expected["nl_assertions"]
+    communication_missing = _missing_communication_requirements(
+        requirements=communication_requirements,
+        messages=rollout.messages,
+        evaluation_signal=evaluation_signal,
+    )
+    return {
+        "protocol": "openviking.batch_train.oracle_summary.v1",
+        "case": {
+            "name": rollout.case.name,
+            "task_signature": rollout.case.task_signature,
+        },
+        "expected": {
+            "actions": expected["actions"],
+            "action_names": expected_names,
+            "state_changing_action_names": expected_write_names,
+            "communicate_info": expected["communicate_info"],
+            "nl_assertions": expected["nl_assertions"],
+        },
+        "actual": {
+            "tool_actions": actual_actions,
+            "tool_action_names": actual_names,
+            "state_changing_action_names": actual_write_names,
+        },
+        "derived_signal": {
+            "evaluation_passed": bool(rollout.evaluation.passed)
+            if rollout.evaluation is not None
+            else None,
+            "evaluation_score": rollout.evaluation.score
+            if rollout.evaluation is not None
+            else None,
+            "missing_expected_action_names": missing_expected_actions,
+            "missing_expected_state_changing_action_names": missing_expected_write_names,
+            "write_actions_satisfied": write_actions_satisfied,
+            "communication_requirements_missing_from_assistant_text": communication_missing,
+            "communication_only_failure": (
+                bool(rollout.evaluation is not None and not rollout.evaluation.passed)
+                and write_actions_satisfied
+                and not missing_expected_actions
+                and bool(communication_missing)
+            ),
+            "evaluation_feedback_objects": evaluation_signal["feedback_objects"],
+        },
+        "training_guidance": [
+            "Ground-truth expected actions are the oracle for this training example.",
+            "Do not create or update experience memory that says to skip, forbid, refuse, transfer instead of, or finish before a required state-changing action.",
+            "If required actions are satisfied but required communication is missing, learn only a communication repair.",
+        ],
+    }
+
+
+def _parse_ground_truth_oracle(text: str) -> dict[str, Any]:
+    actions: list[dict[str, Any]] = []
+    communicate_info: list[str] = []
+    nl_assertions: list[str] = []
+    current: dict[str, Any] | None = None
+    mode: str | None = None
+    arg_lines: list[str] = []
+
+    def finish_current() -> None:
+        nonlocal current, arg_lines
+        if current is None:
+            return
+        raw_arguments = "\n".join(arg_lines).strip()
+        if raw_arguments:
+            current["arguments"] = _loads_json_object_or_raw(raw_arguments)
+        actions.append(current)
+        current = None
+        arg_lines = []
+
+    for raw_line in str(text or "").splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            if mode == "arguments" and current is not None:
+                arg_lines.append(raw_line)
+            continue
+        if stripped.startswith("Action ID:"):
+            finish_current()
+            current = {"action_id": stripped.split(":", 1)[1].strip()}
+            mode = "action"
+            continue
+        if stripped.startswith("Communicate Info:"):
+            finish_current()
+            mode = "communicate"
+            trailing = stripped.split(":", 1)[1].strip()
+            if trailing:
+                communicate_info.append(trailing)
+            continue
+        if stripped.startswith("NL Assertions:"):
+            finish_current()
+            mode = "nl_assertions"
+            trailing = stripped.split(":", 1)[1].strip()
+            if trailing:
+                nl_assertions.append(trailing)
+            continue
+        if current is not None:
+            if stripped.startswith("Requestor:"):
+                current["requestor"] = stripped.split(":", 1)[1].strip()
+                mode = "action"
+                continue
+            if stripped.startswith("Name:"):
+                current["name"] = stripped.split(":", 1)[1].strip()
+                mode = "action"
+                continue
+            if stripped.startswith("Arguments:"):
+                mode = "arguments"
+                trailing = stripped.split(":", 1)[1].strip()
+                if trailing:
+                    arg_lines.append(trailing)
+                continue
+            if mode == "arguments":
+                arg_lines.append(raw_line)
+                continue
+        if mode == "communicate":
+            communicate_info.append(stripped)
+        elif mode == "nl_assertions":
+            nl_assertions.append(stripped)
+    finish_current()
+    return {
+        "actions": actions,
+        "communicate_info": communicate_info,
+        "nl_assertions": nl_assertions,
+    }
+
+
+def _loads_json_object_or_raw(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except Exception:
+        return raw
+
+
+def _actual_tool_actions(messages: list[Any]) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    for message in messages:
+        for part in getattr(message, "parts", []) or []:
+            if getattr(part, "type", None) != "tool":
+                continue
+            name = str(getattr(part, "tool_name", "") or "")
+            if not name:
+                continue
+            actions.append(
+                {
+                    "name": name,
+                    "arguments": getattr(part, "tool_input", None) or {},
+                    "status": str(getattr(part, "tool_status", "") or ""),
+                }
+            )
+    return actions
+
+
+def _missing_action_names(expected_names: list[str], actual_names: list[str]) -> list[str]:
+    remaining = list(actual_names)
+    missing: list[str] = []
+    for name in expected_names:
+        if name in remaining:
+            remaining.remove(name)
+        else:
+            missing.append(name)
+    return missing
+
+
+def _is_state_changing_action_name(name: str) -> bool:
+    lowered = str(name or "").lower()
+    return lowered.startswith(_STATE_CHANGING_ACTION_PREFIXES)
+
+
+def _evaluation_signal(evaluation: RubricEvaluation | None) -> dict[str, Any]:
+    feedback_objects: list[dict[str, Any]] = []
+    if evaluation is None:
+        return {"feedback_objects": feedback_objects}
+    texts: list[str] = list(evaluation.feedback or [])
+    for result in evaluation.criterion_results:
+        texts.extend(result.feedback or [])
+        texts.extend(result.evidence or [])
+        if isinstance(result.metadata, dict):
+            value = result.metadata.get("evaluation_result")
+            if isinstance(value, dict):
+                feedback_objects.append(value)
+    for text in texts:
+        stripped = str(text).strip()
+        if not stripped or not stripped.startswith(("{", "[")):
+            continue
+        try:
+            value = json.loads(stripped)
+        except Exception:
+            continue
+        if isinstance(value, dict):
+            feedback_objects.append(value)
+    return {"feedback_objects": feedback_objects}
+
+
+def _missing_communication_requirements(
+    *,
+    requirements: list[str],
+    messages: list[Any],
+    evaluation_signal: dict[str, Any],
+) -> list[str]:
+    assistant_text = "\n".join(
+        _message_text(message)
+        for message in messages
+        if getattr(message, "role", None) == "assistant"
+    ).lower()
+    missing: list[str] = []
+    for requirement in requirements:
+        requirement_text = str(requirement).strip()
+        if not requirement_text:
+            continue
+        needles = _communication_needles(requirement_text)
+        if needles and any(needle in assistant_text for needle in needles):
+            continue
+        missing.append(requirement_text)
+
+    # If the evaluator already supplied structured communicate checks, prefer
+    # those explicit unmet requirements over text heuristics.
+    structured_missing: list[str] = []
+    for obj in evaluation_signal.get("feedback_objects", []) or []:
+        checks = obj.get("communicate_checks") if isinstance(obj, dict) else None
+        if not isinstance(checks, list):
+            continue
+        for check in checks:
+            if not isinstance(check, dict) or check.get("met") is not False:
+                continue
+            expected = check.get("expected") or check.get("value") or check.get("info")
+            if expected is not None:
+                structured_missing.append(str(expected))
+    return structured_missing or missing
+
+
+def _communication_needles(requirement: str) -> list[str]:
+    lowered = requirement.lower()
+    needles = [lowered]
+    digit_groups = re.findall(r"\d[\d,]*", requirement)
+    for digits in digit_groups:
+        normalized = digits.replace(",", "")
+        if normalized:
+            needles.append(normalized)
+        if len(normalized) > 3:
+            needles.append(f"{int(normalized):,}")
+    return list(dict.fromkeys(needle for needle in needles if needle))
+
+
+def _message_text(message: Any) -> str:
+    texts: list[str] = []
+    for part in getattr(message, "parts", []) or []:
+        if getattr(part, "type", None) == "text":
+            texts.append(str(getattr(part, "text", "") or ""))
+    return "\n".join(texts)
+
+
 def _evaluation_message_to_request(rollout: Rollout) -> dict[str, Any]:
     text = (
         "# OpenViking OutcomeEvaluation\n\n"
@@ -498,10 +809,6 @@ def _evaluation_payload_json(rollout: Rollout) -> str:
 
 
 def _case_input_payload(case_input: dict[str, Any]) -> dict[str, Any]:
-    # Case memories may be persisted for training data provenance/retrieval, but
-    # they must not carry evaluator answers into the memory system.  In
-    # particular, tau2 ``ground_truth`` contains expected tool calls and
-    # communication literals, so omit it from the committed CaseSpec.
     allowed_keys = (
         "domain",
         "split",
@@ -509,6 +816,7 @@ def _case_input_payload(case_input: dict[str, Any]) -> dict[str, Any]:
         "task_id",
         "task_no",
         "user_query",
+        "ground_truth",
     )
     return {key: case_input[key] for key in allowed_keys if key in case_input}
 

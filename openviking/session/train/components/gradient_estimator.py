@@ -16,7 +16,6 @@ from openviking.session.memory.agent_experience_context_provider import (
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.train.domain import ExperienceSet, RolloutAnalysis, Trajectory
 from openviking.session.train.gradients import PatchSemanticGradient
 from openviking.storage.viking_fs import get_viking_fs
@@ -108,7 +107,7 @@ class ExperienceGradientEstimator:
             trajectory_summary=trajectory.content,
             trajectory_uri=trajectory.uri,
         )
-        extract_context = ExtractContext(context.messages)
+        extract_context = provider.get_extract_context()
         isolation_handler = MemoryIsolationHandler(
             context.request_context,
             extract_context,

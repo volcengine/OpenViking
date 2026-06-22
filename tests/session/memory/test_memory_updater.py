@@ -102,6 +102,18 @@ class TestMemoryUpdater:
         page_id = extract_context.page_id_map.get_page_id("viking://user/a/memories/profile.md")
         assert page_id == 1
 
+    def test_extract_context_can_disable_long_text_message_split(self):
+        text = "第一句很长很长很长很长很长很长很长很长很长很长很长。" * 8
+        messages = [Message(id="1", role="user", parts=[TextPart(text=text)])]
+
+        split_context = ExtractContext(messages)
+        unsplit_context = ExtractContext(messages, split_long_text_messages=False)
+
+        assert len(split_context.messages) > 1
+        assert len(unsplit_context.messages) == 1
+        assert unsplit_context.messages[0] is messages[0]
+        assert unsplit_context.chunk_meta == {}
+
     def test_create(self):
         """Test creating a MemoryUpdater."""
         updater = MemoryUpdater()

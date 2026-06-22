@@ -235,10 +235,11 @@ if not isinstance(ov_server, dict):
     ov_server = {}
 bot["ov_server"] = ov_server
 ov_server["server_url"] = openviking_url
-ov_server.setdefault("case_recall_limit", 1)
-ov_server["trajectory_recall_limit"] = max(
-    int(ov_server.get("trajectory_recall_limit", 0) or 0), 4
-)
+# Tau2 VikingBot rollout should learn from distilled experiences only.
+# Keep structured case oracles and diagnostic trajectories out of runtime recall
+# to avoid leaking train-case-specific answers or verbose failure traces.
+ov_server["case_recall_limit"] = 0
+ov_server["trajectory_recall_limit"] = 0
 ov_server["exp_recall_limit"] = max(int(ov_server.get("exp_recall_limit", 0) or 0), 6)
 ov_server["exp_recall_max_chars"] = max(
     int(ov_server.get("exp_recall_max_chars", 0) or 0), 14000

@@ -147,9 +147,18 @@ def _operation_trace_id(op: ResolvedOperation) -> str | None:
 class ExtractContext:
     """Extract context for template rendering."""
 
-    def __init__(self, messages: List[Message], chunk_meta: Optional[Dict[int, ChunkMeta]] = None):
+    def __init__(
+        self,
+        messages: List[Message],
+        chunk_meta: Optional[Dict[int, ChunkMeta]] = None,
+        *,
+        split_long_text_messages: bool = True,
+    ):
         if chunk_meta is None:
-            self.messages, self.chunk_meta = self._build_extraction_messages(messages)
+            if split_long_text_messages:
+                self.messages, self.chunk_meta = self._build_extraction_messages(messages)
+            else:
+                self.messages, self.chunk_meta = list(messages or []), {}
         else:
             self.messages = messages
             self.chunk_meta = chunk_meta

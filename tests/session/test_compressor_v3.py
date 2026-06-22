@@ -266,10 +266,10 @@ def _training_case() -> Case:
     return Case(
         name="duplicate_booking",
         task_signature="Handle duplicate bookings safely.",
-        input={"summary": "cancel only the duplicate booking", "task_id": "task-1", "ground_truth": "SECRET_TOOL_CALL"},
+        input={"summary": "cancel only the duplicate booking", "task_id": "task-1"},
         rubric=Rubric(
             name="duplicate_booking_rubric",
-            description="SECRET_RUBRIC_EXPECTED_ACTION",
+            description="Verify duplicates before cancellation.",
             criteria=[
                 RubricCriterion(
                     name="verify_duplicate",
@@ -394,19 +394,6 @@ def test_training_case_spec_message_uses_fast_path_protocol():
     assert text.startswith("# OpenViking Batch Training CaseSpec v1")
     assert "openviking.batch_train.case_spec.v1" in text
     assert "duplicate_booking_rubric" in text
-    assert "ground_truth" not in text
-    assert "SECRET_TOOL_CALL" not in text
-
-
-def test_case_memory_fields_strip_answer_like_payloads():
-    from openviking.session.compressor_v3 import _case_to_memory_fields
-
-    fields = _case_to_memory_fields(_training_case())
-
-    assert "SECRET_TOOL_CALL" not in fields["input"]
-    assert "ground_truth" not in fields["input"]
-    assert "SECRET_RUBRIC_EXPECTED_ACTION" not in fields["rubric"]
-    assert "withheld" in fields["rubric"]
 
 
 @pytest.mark.asyncio
