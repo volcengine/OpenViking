@@ -13,6 +13,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '#/components/ui/sheet'
 import { FilePreview } from '#/routes/resources/-components/file-preview'
 import { AddResourceForm } from '#/routes/resources/-components/add-resource-page'
 import { UploadTaskDialog } from '#/routes/resources/-components/upload-task-dialog'
@@ -51,7 +58,11 @@ import {
   PLAYGROUND_RIGHT_WIDTH,
   PLAYGROUND_RIGHT_WIDTH_STORAGE_KEY,
 } from './-lib/constants'
-import type { PlaygroundPanel, PlaygroundSearch } from './-lib/types'
+import type {
+  PlaygroundPanel,
+  PlaygroundSearch,
+  ResourceOpenHandler,
+} from './-lib/types'
 import {
   clampNumber,
   cleanVikingUri,
@@ -111,6 +122,8 @@ function PlaygroundWorkbench() {
   const [activePanel, setActivePanel] = useState<PlaygroundPanel>(
     search.panel ?? 'agent',
   )
+  const [actionPanelOpen, setActionPanelOpen] = useState(false)
+  const isCompactLayout = useIsCompactPlaygroundLayout()
   const [uploadDialogOpen, setUploadDialogOpen] = useState(
     () => search.upload ?? false,
   )
@@ -315,6 +328,14 @@ function PlaygroundWorkbench() {
     [syncSearch],
   )
 
+  const handleOpenActionPanel = useCallback(
+    (panel: PlaygroundPanel) => {
+      handlePanelChange(panel)
+      setActionPanelOpen(true)
+    },
+    [handlePanelChange],
+  )
+
   const handleOpenProcessingTasks = useCallback(() => {
     setTaskDialogOpen(true)
     void refreshTasks()
@@ -464,7 +485,7 @@ function PlaygroundWorkbench() {
         className="flex min-h-0 flex-1 flex-col bg-background lg:flex-row"
         style={layoutStyle}
       >
-        <aside className="flex min-h-[260px] min-w-0 flex-col border-b bg-muted/20 lg:min-h-0 lg:w-[var(--playground-left-width)] lg:min-w-[var(--playground-left-width)] lg:border-b-0">
+        <aside className="flex min-h-[180px] min-w-0 shrink-0 basis-[36%] flex-col border-b bg-muted/20 lg:min-h-0 lg:w-[var(--playground-left-width)] lg:min-w-[var(--playground-left-width)] lg:basis-auto lg:border-b-0">
           <ContextExplorerHeader
             activeTaskCount={activeTaskCount}
             hasActiveTasks={hasActiveTasks}
@@ -498,7 +519,7 @@ function PlaygroundWorkbench() {
           onPointerDown={(event) => handleResizeStart('context', event)}
         />
 
-        <main className="flex min-h-[420px] min-w-0 flex-1 flex-col border-b lg:min-h-0 lg:border-b-0">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col lg:border-b-0">
           <div className="flex min-h-14 items-center gap-3 border-b px-4">
             <button
               type="button"
@@ -525,6 +546,28 @@ function PlaygroundWorkbench() {
             >
               <ClipboardIcon className="size-4" />
             </Button>
+            <div className="flex shrink-0 items-center gap-1 lg:hidden">
+              <Button
+                type="button"
+                size="icon-sm"
+                variant={activePanel === 'terminal' ? 'secondary' : 'ghost'}
+                title={t('tabs.terminal')}
+                aria-label={t('tabs.terminal')}
+                onClick={() => handleOpenActionPanel('terminal')}
+              >
+                <TerminalIcon className="size-4" />
+              </Button>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant={activePanel === 'agent' ? 'secondary' : 'ghost'}
+                title={t('tabs.agent')}
+                aria-label={t('tabs.agent')}
+                onClick={() => handleOpenActionPanel('agent')}
+              >
+                <BotIcon className="size-4" />
+              </Button>
+            </div>
           </div>
           <div className="min-h-0 flex-1">
             <FilePreview
@@ -541,47 +584,59 @@ function PlaygroundWorkbench() {
           onPointerDown={(event) => handleResizeStart('action', event)}
         />
 
-        <aside className="flex min-h-[460px] min-w-0 flex-col bg-muted/15 lg:min-h-0 lg:w-[var(--playground-right-width)] lg:min-w-[var(--playground-right-width)]">
-          <div className="flex h-14 items-center border-b px-3">
-            <div className="inline-flex rounded-lg border bg-background p-1">
-              <PanelTab
-                active={activePanel === 'terminal'}
-                icon={TerminalIcon}
-                label={t('tabs.terminal')}
-                onClick={() => handlePanelChange('terminal')}
-              />
-              <PanelTab
-                active={activePanel === 'agent'}
-                icon={BotIcon}
-                label={t('tabs.agent')}
-                onClick={() => handlePanelChange('agent')}
-              />
-            </div>
-          </div>
-
-          {activePanel === 'terminal' ? (
-            <TerminalPanel
+        {!isCompactLayout ? (
+          <aside className="hidden min-h-0 min-w-0 flex-col bg-muted/15 lg:flex lg:w-[var(--playground-right-width)] lg:min-w-[var(--playground-right-width)]">
+            <PlaygroundActionPanel
+              activePanel={activePanel}
               currentUri={currentUri}
               entries={entries}
               onOpenAddResource={() => setUploadDialogOpen(true)}
               onOpenResource={revealResource}
+              onPanelChange={handlePanelChange}
               onSessionChange={(sessionId) =>
                 syncSearch({ session: sessionId })
               }
               openingUri={openingUri}
               sessionId={search.session}
             />
-          ) : (
-            <AgentPanel
-              initialSessionId={search.session}
+          </aside>
+        ) : null}
+      </div>
+
+      {isCompactLayout ? (
+        <Sheet open={actionPanelOpen} onOpenChange={setActionPanelOpen}>
+          <SheetContent
+            side="right"
+            className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 data-[side=right]:w-[min(92vw,28rem)] sm:max-w-[28rem]"
+          >
+            <SheetHeader className="sr-only">
+              <SheetTitle>
+                {activePanel === 'terminal'
+                  ? t('tabs.terminal')
+                  : t('tabs.agent')}
+              </SheetTitle>
+              <SheetDescription>
+                {activePanel === 'terminal'
+                  ? t('tabs.terminal')
+                  : t('tabs.agent')}
+              </SheetDescription>
+            </SheetHeader>
+            <PlaygroundActionPanel
+              activePanel={activePanel}
+              currentUri={currentUri}
+              entries={entries}
+              onOpenAddResource={() => setUploadDialogOpen(true)}
               onOpenResource={revealResource}
+              onPanelChange={handlePanelChange}
               onSessionChange={(sessionId) =>
                 syncSearch({ session: sessionId })
               }
+              openingUri={openingUri}
+              sessionId={search.session}
             />
-          )}
-        </aside>
-      </div>
+          </SheetContent>
+        </Sheet>
+      ) : null}
 
       <Dialog
         open={uploadDialogOpen}
@@ -619,6 +674,90 @@ function PlaygroundWorkbench() {
         onNavigateDir={handleNavigateDirectory}
         scopeUri={currentUri}
       />
+    </div>
+  )
+}
+
+function useIsCompactPlaygroundLayout() {
+  const [isCompact, setIsCompact] = useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 1023px)').matches
+      : false,
+  )
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') {
+      return
+    }
+    const mql = window.matchMedia('(max-width: 1023px)')
+    const onChange = () => setIsCompact(mql.matches)
+    onChange()
+    mql.addEventListener('change', onChange)
+    return () => mql.removeEventListener('change', onChange)
+  }, [])
+
+  return isCompact
+}
+
+function PlaygroundActionPanel({
+  activePanel,
+  currentUri,
+  entries,
+  onOpenAddResource,
+  onOpenResource,
+  onPanelChange,
+  onSessionChange,
+  openingUri,
+  sessionId,
+}: {
+  activePanel: PlaygroundPanel
+  currentUri: string
+  entries: VikingFsEntry[]
+  onOpenAddResource: () => void
+  onOpenResource: ResourceOpenHandler
+  onPanelChange: (panel: PlaygroundPanel) => void
+  onSessionChange: (sessionId: string) => void
+  openingUri: string | null
+  sessionId?: string
+}) {
+  const { t } = useTranslation('playground')
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-14 shrink-0 items-center border-b px-3">
+        <div className="inline-flex rounded-lg border bg-background p-1">
+          <PanelTab
+            active={activePanel === 'terminal'}
+            icon={TerminalIcon}
+            label={t('tabs.terminal')}
+            onClick={() => onPanelChange('terminal')}
+          />
+          <PanelTab
+            active={activePanel === 'agent'}
+            icon={BotIcon}
+            label={t('tabs.agent')}
+            onClick={() => onPanelChange('agent')}
+          />
+        </div>
+      </div>
+
+      {activePanel === 'terminal' ? (
+        <TerminalPanel
+          currentUri={currentUri}
+          entries={entries}
+          onOpenAddResource={onOpenAddResource}
+          onOpenResource={onOpenResource}
+          onSessionChange={onSessionChange}
+          openingUri={openingUri}
+          sessionId={sessionId}
+        />
+      ) : (
+        <AgentPanel
+          initialSessionId={sessionId}
+          onOpenResource={onOpenResource}
+          onSessionChange={onSessionChange}
+        />
+      )}
     </div>
   )
 }
