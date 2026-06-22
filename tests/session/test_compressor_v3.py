@@ -12,8 +12,14 @@ from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session import create_session_compressor
 from openviking.session.compressor_v3 import SessionCompressorV3
-from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+from openviking.session.memory.dataclass import (
+    MemoryFile,
+    ResolvedOperation,
+    ResolvedOperations,
+    StoredLink,
+)
 from openviking.session.memory.memory_updater import MemoryUpdateResult
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.train import (
     Case,
     ExperienceSet,
@@ -198,6 +204,84 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
     assert cases[0].name == "重复预订处理"
     assert cases[0].input["summary"] == "用户要求处理重复预订"
     assert cases[0].rubric.criteria[0].name == "先验证重复"
+
+
+@pytest.mark.asyncio
+async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollouts(monkeypatch):
+    seen_rollouts = []
+    rollout_messages = _messages()
+
+    class FakeTrainer:
+        policy_set = ExperienceSet(
+            root_uri="viking://user/u/memories/experiences",
+            policies=[],
+        )
+
+    class FakeAnalyzer:
+        async def analyze(self, rollout, context):
+            del context
+            seen_rollouts.append(rollout)
+            return RolloutAnalysis(
+                evaluation=RubricEvaluation(
+                    passed=True,
+                    score=1.0,
+                    criterion_results=[],
+                    feedback=[],
+                ),
+                trajectories=[],
+                gradients=[],
+            )
+
+    async def fake_estimate_exp_gradients(**kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(ls=AsyncMock(return_value=[])),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_streaming_policy_trainer",
+        AsyncMock(return_value=FakeTrainer()),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3._estimate_exp_gradients",
+        fake_estimate_exp_gradients,
+    )
+
+    case_a = _training_case()
+    case_b = Case(
+        name="case_b",
+        task_signature="Handle a second extracted case.",
+        input={"summary": "second case"},
+        rubric=case_a.rubric,
+    )
+
+    compressor = SessionCompressorV3(
+        vikingdb=None,
+        rollout_analyzer=FakeAnalyzer(),
+        streaming_trainer_config=StreamingPolicyTrainerConfig(
+            max_wait_seconds=60,
+            max_gradients_per_update=8,
+        ),
+    )
+
+    result = await compressor.train_from_extracted_cases(
+        cases=[case_a, case_b],
+        messages=rollout_messages,
+        ctx=_ctx(),
+        session_id="s1",
+    )
+
+    assert result["case_count"] == 2
+    assert result["submitted"] == 2
+    assert [rollout.case.name for rollout in seen_rollouts] == [
+        "duplicate_booking",
+        "case_b",
+    ]
+    assert [rollout.messages for rollout in seen_rollouts] == [
+        rollout_messages,
+        rollout_messages,
+    ]
 
 
 @pytest.mark.asyncio
@@ -509,12 +593,20 @@ async def test_v3_builds_training_memory_diff_from_streaming_result(monkeypatch)
                 kind="upsert",
                 memory_type="experiences",
                 target_name="booking_duplicate_handling",
-                target_uri="viking://user/u/memories/experiences/booking_duplicate_handling.md",
-                before_content="old exp content",
-                after_content="new exp content fallback",
-            )
-        ]
-    )
+                    target_uri="viking://user/u/memories/experiences/booking_duplicate_handling.md",
+                    before_content="old exp content",
+                    after_content="new exp content fallback",
+                    links=[
+                        StoredLink(
+                            from_uri="viking://user/u/memories/experiences/booking_duplicate_handling.md",
+                            to_uri="viking://user/u/memories/trajectories/duplicate_booking.md",
+                            link_type="derived_from",
+                            weight=1.0,
+                        )
+                    ],
+                )
+            ]
+        )
     training_result = RolloutTrainingResult(
         analyses=[
             RolloutAnalysis(
@@ -561,3 +653,279 @@ async def test_v3_builds_training_memory_diff_from_streaming_result(monkeypatch)
     assert update["memory_type"] == "experiences"
     assert update["before"] == "old exp content"
     assert update["after"] == "new exp content"
+
+
+@pytest.mark.asyncio
+async def test_v3_training_memory_diff_filters_batch_items_by_current_analysis_trajectory(monkeypatch):
+    archive_uri = "viking://user/u/sessions/s1/history/archive_001"
+    traj_a = "viking://user/u/memories/trajectories/traj_a.md"
+    traj_b = "viking://user/u/memories/trajectories/traj_b.md"
+    exp_a = "viking://user/u/memories/experiences/exp_a.md"
+    exp_b = "viking://user/u/memories/experiences/exp_b.md"
+
+    class FakeFS:
+        async def read_file(self, uri, ctx=None):
+            del ctx
+            return {
+                exp_a: "exp a\n\n<!-- MEMORY_FIELDS\n{}\n-->",
+                exp_b: "exp b\n\n<!-- MEMORY_FIELDS\n{}\n-->",
+            }[uri]
+
+    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=SimpleNamespace())
+    training_result = RolloutTrainingResult(
+        analyses=[
+            RolloutAnalysis(
+                evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+                trajectories=[
+                    Trajectory(
+                        name="traj_a",
+                        uri=traj_a,
+                        content="trajectory a",
+                        outcome="success",
+                        retrieval_anchor="",
+                    )
+                ],
+            )
+        ],
+        gradients=[],
+        plan=PolicyUpdatePlan(
+            items=[
+                PolicyPlanItem(
+                    kind="upsert",
+                    memory_type="experiences",
+                    target_name="exp_a",
+                    target_uri=exp_a,
+                    before_content=None,
+                    after_content="exp a fallback",
+                    links=[
+                        StoredLink(
+                            from_uri=exp_a,
+                            to_uri=traj_a,
+                            link_type="derived_from",
+                            weight=1.0,
+                        )
+                    ],
+                ),
+                PolicyPlanItem(
+                    kind="upsert",
+                    memory_type="experiences",
+                    target_name="exp_b",
+                    target_uri=exp_b,
+                    before_content=None,
+                    after_content="exp b fallback",
+                    links=[
+                        StoredLink(
+                            from_uri=exp_b,
+                            to_uri=traj_b,
+                            link_type="derived_from",
+                            weight=1.0,
+                        )
+                    ],
+                ),
+            ]
+        ),
+        apply_result=PolicyApplyResult(
+            updated_policy_set=ExperienceSet(
+                root_uri="viking://user/u/memories/experiences",
+                policies=[],
+            ),
+            written_uris=[exp_a, exp_b],
+        ),
+    )
+
+    diff = await compressor._build_training_memory_diff(
+        training_result=training_result,
+        viking_fs=FakeFS(),
+        ctx=_ctx(),
+        archive_uri=archive_uri,
+    )
+
+    assert diff["summary"] == {"total_adds": 2, "total_updates": 0, "total_deletes": 0}
+    assert [op["uri"] for op in diff["operations"]["adds"]] == [traj_a, exp_a]
+
+
+@pytest.mark.asyncio
+async def test_v3_training_links_case_to_trajectory_and_experience_via_trajectory(monkeypatch):
+    case_uri = "viking://user/u/memories/cases/duplicate_booking.md"
+    traj_uri = "viking://user/u/memories/trajectories/duplicate_booking.md"
+    exp_uri = "viking://user/u/memories/experiences/booking_duplicate_handling.md"
+
+    class FakeFS:
+        def __init__(self):
+            self.files = {
+                case_uri: MemoryFileUtils.write(
+                    MemoryFile(
+                        uri=case_uri,
+                        content="# duplicate_booking",
+                        memory_type="cases",
+                        extra_fields={"memory_type": "cases", "case_name": "duplicate_booking"},
+                    ),
+                    content_template=(
+                        "# {{ case_name }}\n\n"
+                        "## Linked Experiences\n"
+                        "{% for link in links or [] %}"
+                        "{% set target_uri = link.to_uri or '' %}"
+                        "{% if '/memories/experiences/' in target_uri %}"
+                        "- [{{ uri_basename(target_uri) }}]({{ link_target(target_uri) }})\n"
+                        "{% endif %}"
+                        "{% endfor %}"
+                    ),
+                ),
+                traj_uri: MemoryFileUtils.write(
+                    MemoryFile(
+                        uri=traj_uri,
+                        content="trajectory content",
+                        memory_type="trajectories",
+                        extra_fields={"memory_type": "trajectories", "trajectory_name": "duplicate_booking"},
+                        backlinks=[
+                            StoredLink(
+                                from_uri=exp_uri,
+                                to_uri=traj_uri,
+                                link_type="derived_from",
+                                weight=1.0,
+                                match_text=None,
+                                description="",
+                            ).model_dump()
+                        ],
+                    )
+                ),
+                exp_uri: MemoryFileUtils.write(
+                    MemoryFile(
+                        uri=exp_uri,
+                        content="old exp content",
+                        memory_type="experiences",
+                        extra_fields={"memory_type": "experiences", "experience_name": "booking_duplicate_handling"},
+                    )
+                ),
+            }
+
+        async def read_file(self, uri, ctx=None):
+            del ctx
+            return self.files[uri]
+
+        async def write_file(self, uri, content, ctx=None):
+            del ctx
+            self.files[uri] = content
+
+        async def ls(self, uri, output="original", ctx=None):
+            del uri, output, ctx
+            return []
+
+    class FakeTrainer:
+        policy_set = ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[])
+
+        async def submit_gradients(self, gradients, *, analysis=None, rollout=None):
+            del gradients, analysis, rollout
+            plan = PolicyUpdatePlan(
+                items=[
+                    PolicyPlanItem(
+                        kind="upsert",
+                        memory_type="experiences",
+                        target_name="booking_duplicate_handling",
+                        target_uri=exp_uri,
+                        before_content="old exp content",
+                        after_content="new exp content",
+                        links=[
+                            StoredLink(
+                                from_uri=exp_uri,
+                                to_uri=traj_uri,
+                                link_type="derived_from",
+                                weight=1.0,
+                                match_text=None,
+                                description="",
+                            )
+                        ],
+                    )
+                ]
+            )
+            return RolloutTrainingResult(
+                analyses=[],
+                gradients=[],
+                plan=plan,
+                apply_result=PolicyApplyResult(
+                    updated_policy_set=ExperienceSet(
+                        root_uri="viking://user/u/memories/experiences",
+                        policies=[],
+                    ),
+                    written_uris=[exp_uri],
+                    errors=[],
+                ),
+                metadata={},
+            )
+
+    class FakeAnalyzer:
+        async def analyze(self, rollout, context):
+            del rollout, context
+            return RolloutAnalysis(
+                evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+                trajectories=[
+                    Trajectory(
+                        name="duplicate_booking",
+                        uri=traj_uri,
+                        content="trajectory content",
+                        outcome="success",
+                        retrieval_anchor="",
+                    )
+                ],
+                gradients=[],
+            )
+
+    async def fake_estimate_exp_gradients(**kwargs):
+        from openviking.session.train import PatchSemanticGradient
+
+        return [
+            PatchSemanticGradient(
+                before_file=None,
+                after_file=MemoryFile(
+                    uri=exp_uri,
+                    content="new exp content",
+                    memory_type="experiences",
+                    extra_fields={"experience_name": "booking_duplicate_handling"},
+                ),
+                base_version=1,
+                rationale="test",
+                links=[],
+                confidence=0.9,
+                metadata={},
+            )
+        ]
+
+    fs = FakeFS()
+    monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_streaming_policy_trainer",
+        AsyncMock(return_value=FakeTrainer()),
+    )
+    monkeypatch.setattr("openviking.session.compressor_v3._estimate_exp_gradients", fake_estimate_exp_gradients)
+
+    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=FakeAnalyzer())
+    result = await compressor.train_from_extracted_cases(
+        cases=[_training_case()],
+        case_uri_by_name={"duplicate_booking": case_uri},
+        messages=_messages(),
+        ctx=_ctx(),
+    )
+
+    assert result["submitted"] == 1
+    case_file = MemoryFileUtils.read(fs.files[case_uri], uri=case_uri)
+    assert any(
+        link["to_uri"] == traj_uri
+        and link["link_type"] == "related_to"
+        and link.get("match_text") is None
+        and link.get("description") == ""
+        for link in case_file.links
+    )
+    assert any(
+        link["to_uri"] == exp_uri
+        and link["link_type"] == "related_to"
+        and link.get("match_text") is None
+        and link.get("description") == ""
+        for link in case_file.links
+    )
+    linked_experiences_section = fs.files[case_uri].split("## Linked Experiences", 1)[1].split("<!-- MEMORY_FIELDS", 1)[0]
+    assert "[booking_duplicate_handling](../experiences/booking_duplicate_handling.md)" in linked_experiences_section
+    assert "duplicate_booking.md" not in linked_experiences_section
+    traj_file = MemoryFileUtils.read(fs.files[traj_uri], uri=traj_uri)
+    assert any(link["from_uri"] == case_uri for link in traj_file.backlinks)
+    exp_file = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri)
+    assert any(link["from_uri"] == case_uri for link in exp_file.backlinks)

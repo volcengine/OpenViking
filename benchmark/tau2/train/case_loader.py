@@ -79,7 +79,6 @@ class Tau2CaseLoader:
     def _case_from_task(self, task_no: int, task_id: str) -> Case:
         task = _load_tau2_task(self.domain, task_id)
         policy = ""
-        ground_truth = str(task.evaluation_criteria)
         user_query = str(task.user_scenario)
         data_split = f"{self.domain}_{self.split}"
         return Case(
@@ -94,11 +93,10 @@ class Tau2CaseLoader:
                 "data_root": self.data_root,
                 "user_query": user_query,
                 "policy": policy,
-                "ground_truth": ground_truth,
             },
             rubric=Rubric(
                 name=f"tau2_{data_split}_{task_no}_rubric",
-                description=ground_truth,
+                description="Tau2 task reward must reach 1.0.",
                 criteria=[
                     RubricCriterion(
                         name="tau2_reward",

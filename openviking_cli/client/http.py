@@ -661,7 +661,7 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= Content Reading =============
 
-    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+    async def read(self, uri: str, offset: int = 0, limit: int = -1, raw: bool = False) -> str:
         """Read file content.
 
         Args:
@@ -672,9 +672,14 @@ class AsyncHTTPClient(BaseClient):
         uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/content/read",
-            params={"uri": uri, "offset": offset, "limit": limit},
+            params={"uri": uri, "offset": offset, "limit": limit, "raw": raw},
         )
         return self._handle_response(response)
+
+
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read raw file content, including hidden MEMORY_FIELDS metadata."""
+        return await self.read(uri, offset=offset, limit=limit, raw=True)
 
     async def abstract(self, uri: str) -> str:
         """Read L0 abstract."""

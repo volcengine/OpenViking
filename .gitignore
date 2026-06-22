@@ -213,3 +213,6 @@ tests/integration/.tmp_*/
 
 # Beads issue tracker local state
 .beads/
+
+# LoopX local control-plane state
+.loopx/

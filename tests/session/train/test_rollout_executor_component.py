@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -586,6 +587,98 @@ async def test_tau2_vikingbot_rollout_runs_on_current_event_loop():
 
 
 @pytest.mark.asyncio
+async def test_tau2_prepare_task_case_experience_skill_writes_required_skill(tmp_path, monkeypatch):
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    class FakeSandbox:
+        def __init__(self):
+            self.writes = []
+
+        async def write_file(self, path, content):
+            self.writes.append((path, content))
+            target = tmp_path / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+    fake_sandbox = FakeSandbox()
+
+    class FakeSandboxManager:
+        def get_workspace_path(self, session_key):
+            return tmp_path
+
+        def to_workspace_id(self, session_key):
+            return "workspace"
+
+        async def get_sandbox(self, session_key):
+            return fake_sandbox
+
+    class FakeAgent:
+        sandbox_manager = FakeSandboxManager()
+        context = SimpleNamespace(workspace=tmp_path)
+
+    class FakeMemoryStore:
+        def __init__(self, workspace):
+            self.workspace = workspace
+
+        async def get_task_case_experience_content(self, **kwargs):
+            return "linked exp content", ["viking://user/u/memories/experiences/exp.md"]
+
+    monkeypatch.setattr("vikingbot.agent.memory.MemoryStore", FakeMemoryStore)
+
+    context_builder = await module._prepare_task_case_experience_skill(
+        agent=FakeAgent(),
+        session_key=SimpleNamespace(),
+        query="user query",
+        case_lookup={"benchmark": "tau2", "strict": True, "case_name": "case"},
+    )
+
+    skill_path = tmp_path / "skills" / "task_case_experience" / "SKILL.md"
+    content = skill_path.read_text(encoding="utf-8")
+    assert context_builder.workspace == tmp_path
+    assert "name: task_case_experience" in content
+    assert "MUST: read and apply this skill" in content
+    assert "linked exp content" in content
+    assert "viking://user/u/memories/experiences/exp.md" in content
+    assert fake_sandbox.writes
+    assert fake_sandbox.writes[0][0] == "skills/task_case_experience/SKILL.md"
+
+
+@pytest.mark.asyncio
+async def test_tau2_task_case_skill_is_required_with_relative_read_path(tmp_path, monkeypatch):
+    from vikingbot.config.schema import SessionKey
+
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    class FakeMemoryStore:
+        def __init__(self, workspace):
+            self.workspace = workspace
+
+        async def get_task_case_experience_content(self, **kwargs):
+            return "linked exp content", ["viking://user/u/memories/experiences/exp.md"]
+
+    monkeypatch.setattr("vikingbot.agent.memory.MemoryStore", FakeMemoryStore)
+    module._write_task_case_experience_skill(
+        workspace_path=tmp_path,
+        case_lookup={"benchmark": "tau2", "strict": True, "case_name": "case"},
+        content="linked exp content",
+        uris=["viking://user/u/memories/experiences/exp.md"],
+    )
+
+    from vikingbot.agent.context import ContextBuilder
+
+    context_builder = ContextBuilder(tmp_path, eval=True)
+    system_prompt = await context_builder.build_system_prompt(
+        SessionKey(type="cli", channel_id="tau2", chat_id="case"),
+        ov_tools_enable=False,
+    )
+
+    assert "Required skill: before taking any task action" in system_prompt
+    assert "`skills/task_case_experience/SKILL.md`" in system_prompt
+    assert "<location>skills/task_case_experience/SKILL.md</location>" in system_prompt
+    assert f"<location>{tmp_path}" not in system_prompt
+
+
+@pytest.mark.asyncio
 async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatch):
     import benchmark.tau2.train.rollout_executor_vikingbot as module
     from benchmark.tau2.train.rollout_executor_vikingbot import VikingBotTau2RolloutExecutor
@@ -619,7 +712,8 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
 
     async def fake_run_agent(**kwargs):
         calls.append(("run_agent", threading.get_ident()))
-        return "final", None, [], {}, 1, None, None
+        calls.append(("case_lookup", kwargs.get("case_lookup")))
+        return "final", None, [], {}, 1, None, None, None
 
     monkeypatch.setattr(module, "_tool_provider_cls", lambda: FakeTau2BenchToolProvider)
     monkeypatch.setattr(module, "_build_agent", lambda *args, **kwargs: FakeAgent())
@@ -631,6 +725,7 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
         task_signature="tau2:airline:train:0",
         input={
             "domain": "airline",
+            "split": "train",
             "task_id": "0",
             "task_no": 0,
             "data_split": "airline_train",
@@ -645,7 +740,28 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
     )
 
     assert rollout.metadata["reward"] == 1.0
-    call_threads = dict(calls)
+    call_values = dict(calls)
+    assert call_values["case_lookup"] == {
+        "benchmark": "tau2",
+        "strict": True,
+        "case_names": ["tau2_case", "tau2_airline_train_0"],
+        "domain": "airline",
+        "split": "train",
+        "data_split": "airline_train",
+        "task_no": 0,
+        "task_id": "0",
+        "case_name": "tau2_case",
+        "task_signature": "tau2:airline:train:0",
+        "original_case_name": None,
+        "expected_fields": {
+            "input.domain": "airline",
+            "input.split": "train",
+            "input.data_split": "airline_train",
+            "input.task_no": 0,
+            "input.task_id": "0",
+        },
+    }
+    call_threads = call_values
     assert call_threads["reset"] != event_loop_thread
     assert call_threads["build_agent"] != event_loop_thread
     assert call_threads["reward"] != event_loop_thread

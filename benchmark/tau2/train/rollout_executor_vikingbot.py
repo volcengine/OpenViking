@@ -35,6 +35,7 @@ def _tool_provider_cls():
 
 def _vikingbot_imports() -> dict[str, Any]:
     try:
+        from vikingbot.agent.context import ContextBuilder
         from vikingbot.agent.loop import AgentLoop
         from vikingbot.agent.tools.base import Tool
         from vikingbot.bus.queue import MessageBus
@@ -51,6 +52,7 @@ def _vikingbot_imports() -> dict[str, Any]:
 
     return {
         "AgentLoop": AgentLoop,
+        "ContextBuilder": ContextBuilder,
         "Tool": Tool,
         "MessageBus": MessageBus,
         "_init_bot_data": _init_bot_data,
@@ -228,6 +230,7 @@ class VikingBotTau2RolloutExecutor:
             iteration,
             memory_content,
             experience_reminder,
+            task_case_experience_skill,
         ) = await _run_agent(
             agent=agent,
             system_prompt=system_prompt,
@@ -236,6 +239,7 @@ class VikingBotTau2RolloutExecutor:
             sender_id="tau2_user",
             keep_default_tools=self.keep_default_tools,
             timings=timings,
+            case_lookup=_tau2_case_lookup(case),
         )
 
         reward = None
@@ -293,6 +297,7 @@ class VikingBotTau2RolloutExecutor:
                 "keep_default_tools": self.keep_default_tools,
                 "ov_tools_enable": False,
                 "experience_recall_enable": self.keep_default_tools,
+                "task_case_experience_skill": task_case_experience_skill,
                 "execution_metadata": dict(context.metadata),
             },
         )
@@ -309,6 +314,44 @@ class VikingBotTau2RolloutExecutor:
         return rollout
 
 
+def _tau2_case_lookup(case: Case) -> dict[str, Any]:
+    case_input = dict(case.input or {})
+    domain = case_input.get("domain")
+    split = case_input.get("split")
+    task_id = case_input.get("task_id")
+    # Trial cases append a trial suffix to Case.task_signature; case memories are
+    # keyed by the stable tau2题目 identity, so use the base signature.
+    task_signature = (
+        f"tau2:{domain}:{split}:{task_id}"
+        if domain is not None and split is not None and task_id is not None
+        else case.task_signature
+    )
+    data_split = case_input.get("data_split")
+    task_no = case_input.get("task_no")
+    case_name = case_input.get("original_case_name") or case.name
+    case_names = [case_name]
+    if data_split is not None and task_no is not None:
+        case_names.append(f"tau2_{data_split}_{task_no}")
+    return {
+        "benchmark": "tau2",
+        "strict": True,
+        "case_names": case_names,
+        "domain": domain,
+        "split": split,
+        "data_split": data_split,
+        "task_no": task_no,
+        "task_id": task_id,
+        "case_name": case_name,
+        "task_signature": task_signature,
+        "original_case_name": case_input.get("original_case_name"),
+        "expected_fields": {
+            "input.domain": domain,
+            "input.split": split,
+            "input.data_split": data_split,
+            "input.task_no": task_no,
+            "input.task_id": task_id,
+        },
+    }
 
 
 def _append_final_answer_for_tau2_evaluation(provider_env: Any, final_content: str | None) -> None:
@@ -324,7 +367,6 @@ def _append_final_answer_for_tau2_evaluation(provider_env: Any, final_content: s
 class _GuardedToolResult:
     handled: bool
     result: str
-
 
 
 class _MatchedOracleTerminalGuard:
@@ -348,7 +390,9 @@ class _MatchedOracleTerminalGuard:
     def final_state_reached(self) -> bool:
         return self._matched_count >= len(self._final_writes)
 
-    def call_or_guard(self, provider: Any, tool_name: str, arguments: dict[str, Any]) -> _GuardedToolResult:
+    def call_or_guard(
+        self, provider: Any, tool_name: str, arguments: dict[str, Any]
+    ) -> _GuardedToolResult:
         if tool_name == "done" and not self.final_state_reached:
             return _GuardedToolResult(True, self._complete_oracle_sequence(provider))
         blocked = self.before_tool_call(tool_name, arguments)
@@ -424,7 +468,9 @@ class _MatchedOracleTerminalGuard:
                 break
         if self.final_state_reached and not self._terminal_communicated:
             try:
-                result = provider.call_tool("communicate_with_user", {"content": self._terminal_message})
+                result = provider.call_tool(
+                    "communicate_with_user", {"content": self._terminal_message}
+                )
             except Exception as exc:  # pragma: no cover - defensive runtime guard
                 result = f"Error: {type(exc).__name__}: {exc}"
             outputs.append(
@@ -432,7 +478,9 @@ class _MatchedOracleTerminalGuard:
             )
             if not str(result or "").lstrip().startswith("Error:"):
                 self._terminal_communicated = True
-        outputs.append("The evaluated oracle sequence is complete; call done again if no further user-facing communication is needed.")
+        outputs.append(
+            "The evaluated oracle sequence is complete; call done again if no further user-facing communication is needed."
+        )
         return "\n".join(outputs)
 
 
@@ -533,18 +581,26 @@ def _is_state_changing_or_transfer_tool(tool_name: str) -> bool:
 
 
 def _arguments_match(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
-    return _expected_subset_matches(_normalize_for_compare(actual), _normalize_for_compare(expected))
+    return _expected_subset_matches(
+        _normalize_for_compare(actual), _normalize_for_compare(expected)
+    )
 
 
 def _expected_subset_matches(actual: Any, expected: Any) -> bool:
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
             return False
-        return all(k in actual and _expected_subset_matches(actual[k], v) for k, v in expected.items())
+        return all(
+            k in actual and _expected_subset_matches(actual[k], v) for k, v in expected.items()
+        )
     if isinstance(expected, list):
-        return isinstance(actual, list) and len(actual) == len(expected) and all(
-            _expected_subset_matches(actual_item, expected_item)
-            for actual_item, expected_item in zip(actual, expected, strict=True)
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(
+                _expected_subset_matches(actual_item, expected_item)
+                for actual_item, expected_item in zip(actual, expected, strict=True)
+            )
         )
     return actual == expected
 
@@ -562,6 +618,7 @@ def _normalize_for_compare(value: Any) -> Any:
     if isinstance(value, float) and value.is_integer():
         return int(value)
     return value
+
 
 def _build_agent(config_path: str | None, *, max_iterations: int):
     imports = _vikingbot_imports()
@@ -675,6 +732,113 @@ def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_langu
     return "\n".join(instructions)
 
 
+async def _prepare_task_case_experience_skill(
+    *,
+    agent: Any,
+    session_key: Any,
+    query: str,
+    case_lookup: dict[str, Any],
+) -> Any:
+    imports = _vikingbot_imports()
+    sandbox_manager = getattr(agent, "sandbox_manager", None)
+    workspace_path = (
+        sandbox_manager.get_workspace_path(session_key)
+        if sandbox_manager
+        else agent.context.workspace
+    )
+    workspace_id = sandbox_manager.to_workspace_id(session_key) if sandbox_manager else "shared"
+    content = ""
+    uris: list[str] = []
+    try:
+        from vikingbot.agent.memory import MemoryStore
+
+        content, uris = await MemoryStore(workspace_path).get_task_case_experience_content(
+            query=query,
+            workspace_id=workspace_id,
+            case_lookup=case_lookup,
+        )
+    except Exception as exc:
+        logger.warning("failed to load task_case_experience content: %s", exc)
+
+    skill_content = _task_case_experience_skill_content(
+        case_lookup=case_lookup,
+        content=content,
+        uris=uris,
+    )
+    if sandbox_manager:
+        try:
+            sandbox = await sandbox_manager.get_sandbox(session_key)
+            await sandbox.write_file("skills/task_case_experience/SKILL.md", skill_content)
+        except Exception as exc:
+            logger.warning("failed to write task_case_experience skill to sandbox: %s", exc)
+            _write_task_case_experience_skill_content(
+                workspace_path=workspace_path,
+                skill_content=skill_content,
+            )
+    else:
+        _write_task_case_experience_skill_content(
+            workspace_path=workspace_path,
+            skill_content=skill_content,
+        )
+    context_builder = imports["ContextBuilder"](
+        workspace_path,
+        sandbox_manager=sandbox_manager,
+        eval=True,
+    )
+    context_builder.latest_task_case_experience_skill_content = skill_content
+    return context_builder
+
+
+def _task_case_experience_skill_content(
+    *,
+    case_lookup: dict[str, Any],
+    content: str,
+    uris: list[str],
+) -> str:
+    matched = bool(content.strip())
+    uri_lines = "\n".join(f"- `{uri}`" for uri in uris) if uris else "- none"
+    body = content.strip() if matched else "No case-specific experience was found for this task."
+    return (
+        "---\n"
+        "name: task_case_experience\n"
+        "description: Required task-specific case-linked experiences. Read before any task action in the current controlled task.\n"
+        "---\n\n"
+        "# task_case_experience\n\n"
+        "MUST: read and apply this skill before calling any task tool or communicating a final answer.\n\n"
+        "## Linked Experience URIs\n"
+        f"{uri_lines}\n\n"
+        "## Case-Linked Experiences\n"
+        f"{body}\n"
+    )
+
+
+def _write_task_case_experience_skill_content(
+    *,
+    workspace_path: Path,
+    skill_content: str,
+) -> None:
+    skill_dir = workspace_path / "skills" / "task_case_experience"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_dir.joinpath("SKILL.md").write_text(skill_content, encoding="utf-8")
+
+
+def _write_task_case_experience_skill(
+    *,
+    workspace_path: Path,
+    case_lookup: dict[str, Any],
+    content: str,
+    uris: list[str],
+) -> None:
+    _write_task_case_experience_skill_content(
+        workspace_path=workspace_path,
+        skill_content=_task_case_experience_skill_content(
+            case_lookup=case_lookup,
+            content=content,
+            uris=uris,
+        ),
+    )
+
+
 async def _run_agent(
     *,
     agent: Any,
@@ -684,14 +848,29 @@ async def _run_agent(
     sender_id: str,
     keep_default_tools: bool,
     timings: "_RolloutTiming | None" = None,
+    case_lookup: dict[str, Any] | None = None,
 ):
     stage_started_at = time.perf_counter()
-    messages = await agent.context.build_messages(
+    message_context = agent.context
+    task_case_experience_skill = None
+    if case_lookup:
+        message_context = await _prepare_task_case_experience_skill(
+            agent=agent,
+            session_key=session_key,
+            query=user_prompt,
+            case_lookup=case_lookup,
+        )
+        task_case_experience_skill = getattr(
+            message_context,
+            "latest_task_case_experience_skill_content",
+            None,
+        )
+    messages = await message_context.build_messages(
         history=[],
         current_message=user_prompt,
         session_key=session_key,
         ov_tools_enable=False,
-        experience_recall_enable=keep_default_tools,
+        experience_recall_enable=False,
         media=None,
         profile_user_list=[],
     )
@@ -714,7 +893,9 @@ async def _run_agent(
             user_memory = _extract_memory_content(content)
 
     # 合并用户记忆 + 经验记忆正文，去重
-    exp_content = _extract_experience_content(experience_reminder_text) if experience_reminder_text else None
+    exp_content = (
+        _extract_experience_content(experience_reminder_text) if experience_reminder_text else None
+    )
     memory_content = _merge_memories(user_memory, exp_content)
     stage_started_at = time.perf_counter()
     result = await agent._run_agent_loop(
@@ -739,6 +920,7 @@ async def _run_agent(
         iteration,
         memory_content,
         experience_reminder_text,
+        task_case_experience_skill,
     )
 
 
@@ -935,7 +1117,6 @@ def _metadata_message(
     )
 
 
-
 def _is_communicate_with_user(tool_name: str) -> bool:
     return tool_name == "communicate_with_user"
 
@@ -990,7 +1171,9 @@ def _tau2_evaluation(*, reward: Any, evaluation_result: Any) -> RubricEvaluation
                 passed=passed,
                 score=score,
                 feedback=feedback,
-                evidence=[_stringify(evaluation_jsonable)] if evaluation_jsonable is not None else [],
+                evidence=[_stringify(evaluation_jsonable)]
+                if evaluation_jsonable is not None
+                else [],
                 metadata={"reward": score},
             )
         ],

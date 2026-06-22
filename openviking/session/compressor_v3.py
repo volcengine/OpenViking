@@ -20,17 +20,18 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.context import Context
-from openviking.message import Message, TextPart
+from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
 from openviking.session.memory.dataclass import (
     MemoryOperationSource,
     ResolvedOperation,
     ResolvedOperations,
+    StoredLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_type_registry import create_default_registry
-from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.memory_updater import ExtractContext, write_stored_links
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -85,28 +86,8 @@ logger = get_logger(__name__)
 _CASES_MEMORY_TYPE = "cases"
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
-_TRAINING_ORACLE_SUMMARY_HEADER = "# OpenViking Training Oracle Summary v1"
 _TRAINING_FAST_PATH_MEMORY_TYPES = frozenset({"cases", "trajectories", "experiences"})
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
-_EXPERIENCE_CONFLICT_TERMS = (
-    "不要",
-    "不得",
-    "不能",
-    "不应",
-    "严禁",
-    "禁止",
-    "拒绝",
-    "转人工",
-    "transfer",
-    "human agent",
-    "refuse",
-    "deny",
-    "do not",
-    "don't",
-    "must not",
-    "should not",
-    "cannot",
-)
 
 
 class SessionCompressorV3:
@@ -288,6 +269,7 @@ class SessionCompressorV3:
             cases=result.cases,
             messages=message_list,
             ctx=ctx,
+            case_uri_by_name=getattr(result, "case_uri_by_name", {}),
             session_id=session_id,
             archive_uri=archive_uri or "",
             strict_extract_errors=strict_extract_errors,
@@ -327,6 +309,7 @@ class SessionCompressorV3:
             cases=[case],
             messages=_training_messages_after_case_spec(messages),
             ctx=ctx,
+            case_uri_by_name={case.name: _first_context_uri(contexts)},
             session_id=session_id,
             archive_uri=archive_uri,
             strict_extract_errors=strict_extract_errors,
@@ -520,6 +503,7 @@ class SessionCompressorV3:
             contexts=contexts,
             cases=extracted_cases,
             memory_diff=memory_diff,
+            case_uri_by_name=_case_uri_by_name(extracted_cases, patch_operations, result),
         )
 
     @tracer("train.compressor_v3.train_from_extracted_cases", ignore_result=True, ignore_args=True)
@@ -529,6 +513,7 @@ class SessionCompressorV3:
         cases: list[Case],
         messages: list[Message],
         ctx: Optional[RequestContext],
+        case_uri_by_name: dict[str, str] | None = None,
         session_id: Optional[str] = None,
         archive_uri: str = "",
         strict_extract_errors: bool = False,
@@ -633,7 +618,10 @@ class SessionCompressorV3:
                 archive_uri=archive_uri,
             )
 
+            case_uri_map = dict(case_uri_by_name or {})
+
             for case in cases:
+                case_uri = _case_uri_for_case(case, case_uri_map)
                 rollout = Rollout(
                     case=case,
                     messages=list(messages),
@@ -651,12 +639,6 @@ class SessionCompressorV3:
                     context=gradient_context,
                     viking_fs=viking_fs,
                 )
-                filtered_exp_gradients = _filter_oracle_conflicting_experience_gradients(
-                    gradients=exp_gradients,
-                    messages=messages,
-                )
-                filtered_exp_gradient_count += len(exp_gradients) - len(filtered_exp_gradients)
-                exp_gradients = filtered_exp_gradients
                 exp_training_result = _trajectory_only_training_result(
                     analysis=analysis,
                     rollout=rollout,
@@ -668,7 +650,15 @@ class SessionCompressorV3:
                         analysis=analysis,
                         rollout=rollout,
                     )
-
+                if case_uri:
+                    await self._link_case_to_training_outputs(
+                        analysis=analysis,
+                        case_uri=case_uri,
+                        plan=exp_training_result.plan,
+                        apply_result=exp_training_result.apply_result,
+                        ctx=ctx,
+                        viking_fs=viking_fs,
+                    )
                 # Skill path: co-extracted skill gradients go directly to skill trainer
                 if skill_trainer is not None and analysis.gradients:
                     skill_gradients = [
@@ -756,9 +746,15 @@ class SessionCompressorV3:
             training_result.apply_result.updated_policy_set.root_uri
             or _experience_root_uri(ctx)
         )
+        source_trajectory_uris = set(seen_trajectory_uris)
 
         for item in training_result.plan.items:
             if item.memory_type != "experiences":
+                continue
+            if source_trajectory_uris and not _plan_item_has_source_trajectory(
+                item,
+                source_trajectory_uris,
+            ):
                 continue
             uri = _experience_plan_item_uri(item, root_uri)
             if not uri:
@@ -801,6 +797,32 @@ class SessionCompressorV3:
             deletes=deletes,
         )
 
+    async def _link_case_to_training_outputs(
+        self,
+        *,
+        analysis: RolloutAnalysis,
+        case_uri: str,
+        plan: PolicyUpdatePlan,
+        apply_result: PolicyApplyResult,
+        ctx: RequestContext,
+        viking_fs: Any,
+    ) -> None:
+        links = _case_training_links(
+            analysis=analysis,
+            case_uri=case_uri,
+            plan=plan,
+            apply_result=apply_result,
+        )
+        if not links:
+            return
+        await _render_case_links_from_template(
+            case_uri=case_uri,
+            links=links,
+            ctx=ctx,
+            viking_fs=viking_fs,
+        )
+        await write_stored_links(links, ctx, viking_fs, skip_uris={case_uri})
+
     async def _write_final_memory_diff(
         self,
         *,
@@ -831,6 +853,7 @@ class _V3ExtractionResult:
     contexts: list[Context] = field(default_factory=list)
     cases: list[Case] = field(default_factory=list)
     memory_diff: dict[str, Any] | None = None
+    case_uri_by_name: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -893,53 +916,8 @@ def _message_text(message: Message) -> str:
 
 
 def _training_messages_after_case_spec(messages: list[Message]) -> list[Message]:
-    """Return commit messages after CaseSpec, ensuring an oracle summary exists."""
-    trailing = list(messages[1:])
-    if trailing and _message_text(trailing[0]).strip().startswith(_TRAINING_ORACLE_SUMMARY_HEADER):
-        return trailing
-    payload = _training_case_spec_payload_from_message(messages[0]) if messages else None
-    if payload is None:
-        return trailing
-    return [_oracle_summary_message_from_case_payload(payload)] + trailing
-
-
-def _oracle_summary_message_from_case_payload(payload: dict[str, Any]) -> Message:
-    raw_case = payload.get("case") if isinstance(payload.get("case"), dict) else {}
-    raw_input = raw_case.get("input") if isinstance(raw_case.get("input"), dict) else {}
-    oracle = _parse_ground_truth_oracle(str(raw_input.get("ground_truth") or ""))
-    expected_names = [action["name"] for action in oracle["actions"] if action.get("name")]
-    expected_write_names = [
-        name for name in expected_names if _is_state_changing_action_name(name)
-    ]
-    summary = {
-        "protocol": "openviking.batch_train.oracle_summary.v1",
-        "case": {
-            "name": str(raw_case.get("name") or ""),
-            "task_signature": str(raw_case.get("task_signature") or ""),
-        },
-        "expected": {
-            "actions": oracle["actions"],
-            "action_names": expected_names,
-            "state_changing_action_names": expected_write_names,
-            "communicate_info": oracle["communicate_info"],
-            "nl_assertions": oracle["nl_assertions"],
-        },
-        "training_guidance": [
-            "Ground-truth expected actions are the oracle for this training example.",
-            "Do not learn an experience that forbids, refuses, transfers instead of, or finishes before a required state-changing action.",
-        ],
-    }
-    text = (
-        f"{_TRAINING_ORACLE_SUMMARY_HEADER}\n\n"
-        "Deterministic training-only summary derived from CaseSpec. "
-        "Preserve required actions and communication when extracting memories.\n\n"
-        f"```json\n{json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True)}\n```"
-    )
-    return Message(
-        id="openviking-training-oracle-summary",
-        role="user",
-        parts=[TextPart(text=text)],
-    )
+    """Return commit messages after CaseSpec."""
+    return list(messages[1:])
 
 
 def _parse_training_case_spec_payload(text: str) -> dict[str, Any]:
@@ -1038,7 +1016,11 @@ def _case_to_memory_fields(case: Case) -> dict[str, Any]:
         "case_name": case.name,
         "task_signature": case.task_signature,
         "input": json.dumps(case.input or {}, ensure_ascii=False, sort_keys=True),
-        "rubric": json.dumps(_rubric_to_payload(case.rubric), ensure_ascii=False, sort_keys=True),
+        "rubric": json.dumps(
+            _rubric_to_payload(case.rubric),
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
         "evidence": _case_evidence(case),
     }
 
@@ -1216,6 +1198,208 @@ class _NoopGradientEstimator:
         return []
 
 
+def _case_uri_for_case(case: Case, case_uri_by_name: dict[str, str]) -> str:
+    if case.name in case_uri_by_name:
+        return case_uri_by_name[case.name]
+    uris = (case.metadata or {}).get("case_uris")
+    if isinstance(uris, list) and uris:
+        return str(uris[0])
+    fields = (case.metadata or {}).get("memory_fields")
+    if isinstance(fields, dict):
+        uri = fields.get("uri")
+        if uri:
+            return str(uri)
+    return ""
+
+
+def _case_uri_by_name(
+    cases: list[Case],
+    operations: ResolvedOperations,
+    result: Any,
+) -> dict[str, str]:
+    candidates = set((getattr(result, "written_uris", []) or []) + (getattr(result, "edited_uris", []) or []))
+    mapping: dict[str, str] = {}
+    for op in getattr(operations, "upsert_operations", []) or []:
+        if getattr(op, "memory_type", None) != _CASES_MEMORY_TYPE:
+            continue
+        fields = dict(getattr(op, "memory_fields", {}) or {})
+        name = str(fields.get("case_name") or fields.get("name") or "").strip()
+        if not name:
+            continue
+        for uri in getattr(op, "uris", []) or []:
+            if not candidates or uri in candidates:
+                mapping[name] = uri
+                break
+    for case in cases:
+        if case.name not in mapping:
+            uri = _case_uri_for_case(case, {})
+            if uri:
+                mapping[case.name] = uri
+    return mapping
+
+
+def _first_context_uri(contexts: list[Context]) -> str:
+    for context in contexts or []:
+        uri = getattr(context, "uri", "")
+        if uri:
+            return str(uri)
+    return ""
+
+
+def _case_training_links(
+    *,
+    analysis: RolloutAnalysis,
+    case_uri: str,
+    plan: PolicyUpdatePlan,
+    apply_result: PolicyApplyResult,
+) -> list[StoredLink]:
+    trajectory_links = _case_trajectory_links(analysis=analysis, case_uri=case_uri)
+    trajectory_uris = {link.to_uri for link in trajectory_links if link.to_uri}
+    experience_links = _case_experience_links_via_trajectories(
+        case_uri=case_uri,
+        trajectory_uris=trajectory_uris,
+        plan=plan,
+        apply_result=apply_result,
+    )
+    return _dedupe_stored_links([*trajectory_links, *experience_links])
+
+
+def _case_trajectory_links(
+    *,
+    analysis: RolloutAnalysis,
+    case_uri: str,
+) -> list[StoredLink]:
+    links: list[StoredLink] = []
+    for trajectory in getattr(analysis, "trajectories", []) or []:
+        uri = str(getattr(trajectory, "uri", "") or "")
+        if not uri or "/memories/trajectories/" not in uri:
+            continue
+        links.append(
+            _stored_link(
+                from_uri=case_uri,
+                target_uri=uri,
+                link_type="related_to",
+                description="",
+            )
+        )
+    return links
+
+
+def _case_experience_links_via_trajectories(
+    *,
+    case_uri: str,
+    trajectory_uris: set[str],
+    plan: PolicyUpdatePlan,
+    apply_result: PolicyApplyResult,
+) -> list[StoredLink]:
+    if not trajectory_uris:
+        return []
+    touched = set(getattr(apply_result, "written_uris", []) or [])
+    touched.update(getattr(apply_result, "edited_uris", []) or [])
+    result: list[StoredLink] = []
+    seen: set[str] = set()
+    root_uri = (
+        getattr(getattr(apply_result, "updated_policy_set", None), "root_uri", "")
+        or _experience_root_uri(None)
+    )
+    for item in getattr(plan, "items", []) or []:
+        if item.memory_type != "experiences" or item.kind != "upsert":
+            continue
+        if not _plan_item_has_source_trajectory(item, trajectory_uris):
+            continue
+        uri = _experience_plan_item_uri(item, root_uri)
+        if touched and uri not in touched:
+            continue
+        if uri in seen:
+            continue
+        seen.add(uri)
+        result.append(
+            _stored_link(
+                from_uri=case_uri,
+                target_uri=uri,
+                link_type="related_to",
+                description="",
+            )
+        )
+    return result
+
+
+def _plan_item_has_source_trajectory(item: PolicyPlanItem, trajectory_uris: set[str]) -> bool:
+    for link in getattr(item, "links", []) or []:
+        try:
+            stored = link if isinstance(link, StoredLink) else StoredLink(**dict(link))
+        except Exception:
+            continue
+        if (
+            stored.link_type == "derived_from"
+            and stored.to_uri in trajectory_uris
+            and "/memories/trajectories/" in str(stored.to_uri or "")
+        ):
+            return True
+    return False
+
+
+def _dedupe_stored_links(links: list[StoredLink]) -> list[StoredLink]:
+    result: list[StoredLink] = []
+    seen: set[tuple[str, str, str, str | None]] = set()
+    for link in links:
+        key = (link.from_uri, link.to_uri, link.link_type, link.match_text)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(link)
+    return result
+
+
+def _stored_link(
+    *,
+    from_uri: str,
+    target_uri: str,
+    link_type: str,
+    description: str,
+) -> StoredLink:
+    return StoredLink(
+        from_uri=from_uri,
+        to_uri=target_uri,
+        link_type=link_type,
+        weight=1.0,
+        match_text=None,
+        description=description,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+async def _render_case_links_from_template(
+    *,
+    case_uri: str,
+    links: list[StoredLink],
+    ctx: RequestContext,
+    viking_fs: Any,
+) -> None:
+    if not links:
+        return
+    try:
+        raw = await viking_fs.read_file(case_uri, ctx=ctx)
+    except Exception as exc:
+        tracer.error(f"Failed to read case memory for link rendering {case_uri}: {exc}")
+        return
+
+    mf = MemoryFileUtils.read(raw or "", uri=case_uri)
+    from openviking.session.memory.merge_op.link_merge import merge_links
+
+    merged_links = merge_links(mf.links, [link.model_dump() for link in links])
+    if merged_links != mf.links:
+        mf.links = merged_links
+
+    schema = create_default_registry().get(_CASES_MEMORY_TYPE)
+    content_template = schema.content_template if schema is not None else None
+    await viking_fs.write_file(
+        case_uri,
+        MemoryFileUtils.write(mf, content_template=content_template),
+        ctx=ctx,
+    )
+
+
 async def _estimate_exp_gradients(
     *,
     analysis: RolloutAnalysis,
@@ -1230,7 +1414,8 @@ async def _estimate_exp_gradients(
     second extraction pass.
     """
     estimator = ExperienceGradientEstimator(viking_fs=viking_fs)
-    return await estimator.estimate(analysis, policy_set, context)
+    gradients = await estimator.estimate(analysis, policy_set, context)
+    return gradients
 
 
 def _gradient_memory_type(gradient: Any) -> str:
@@ -1422,213 +1607,4 @@ def _trajectory_content_from_rollout(rollout: Rollout) -> str:
             "- Conversation Evidence:",
             conversation,
         ]
-    )
-
-
-def _filter_oracle_conflicting_experience_gradients(
-    *,
-    gradients: list[Any],
-    messages: list[Message],
-) -> list[Any]:
-    """Drop experience gradients that conflict with CaseSpec-required writes.
-
-    The guard is intentionally generic: it reads the training oracle summary or
-    CaseSpec, finds required state-changing tool names, and blocks broad
-    refusal/transfer/skip guidance that mentions those tools or the current
-    task family.  This prevents one failed rollout from teaching the agent to
-    avoid actions that the evaluator explicitly requires.
-    """
-    required_writes = set(_required_write_action_names_from_messages(messages))
-    if not required_writes:
-        return list(gradients)
-    kept: list[Any] = []
-    for gradient in gradients:
-        content = _gradient_after_content(gradient)
-        if _experience_content_conflicts_with_required_writes(content, required_writes):
-            metadata = dict(getattr(gradient, "metadata", {}) or {})
-            metadata["oracle_conflict_filtered"] = True
-            try:
-                gradient.metadata = metadata
-            except Exception:
-                pass
-            logger.info(
-                "Filtered oracle-conflicting experience gradient target=%s required_writes=%s",
-                getattr(gradient, "target_name", "<unknown>"),
-                sorted(required_writes),
-            )
-            continue
-        kept.append(gradient)
-    return kept
-
-
-def _required_write_action_names_from_messages(messages: list[Message]) -> list[str]:
-    for message in messages:
-        text = _message_text(message).strip()
-        if not text.startswith(_TRAINING_ORACLE_SUMMARY_HEADER):
-            continue
-        payload = _json_payload_from_fenced_text(text)
-        expected = payload.get("expected") if isinstance(payload, dict) else None
-        if isinstance(expected, dict):
-            names = expected.get("state_changing_action_names")
-            if isinstance(names, list):
-                return [str(name) for name in names if str(name).strip()]
-
-    for message in messages:
-        text = _message_text(message).strip()
-        if not text.startswith(_TRAINING_CASE_SPEC_HEADER):
-            continue
-        payload = _parse_training_case_spec_payload(text)
-        raw_case = payload.get("case") if isinstance(payload.get("case"), dict) else {}
-        raw_input = raw_case.get("input") if isinstance(raw_case.get("input"), dict) else {}
-        oracle = _parse_ground_truth_oracle(str(raw_input.get("ground_truth") or ""))
-        return [
-            action["name"]
-            for action in oracle["actions"]
-            if action.get("name") and _is_state_changing_action_name(action["name"])
-        ]
-    return []
-
-
-def _json_payload_from_fenced_text(text: str) -> dict[str, Any]:
-    match = _JSON_FENCE_RE.search(text)
-    raw_payload = match.group(1).strip() if match else text
-    try:
-        value = JsonUtils.loads(raw_payload)
-    except Exception:
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
-def _gradient_after_content(gradient: Any) -> str:
-    after_file = getattr(gradient, "after_file", None)
-    return str(getattr(after_file, "content", "") or "")
-
-
-def _experience_content_conflicts_with_required_writes(
-    content: str,
-    required_writes: set[str],
-) -> bool:
-    lowered = str(content or "").lower()
-    if not lowered.strip():
-        return False
-    has_conflict_term = any(term in lowered for term in _EXPERIENCE_CONFLICT_TERMS)
-    if not has_conflict_term:
-        return False
-    if "done" in lowered and any(term in lowered for term in ("before", "先", "提前")):
-        has_conflict_term = True
-    mentioned_required = any(name.lower() in lowered for name in required_writes)
-    mentions_terminal_replacement = any(
-        term in lowered
-        for term in (
-            "transfer_to_human_agents",
-            "转人工",
-            "human agent",
-            "done",
-            "拒绝",
-            "refuse",
-            "deny",
-        )
-    )
-    return mentioned_required or mentions_terminal_replacement
-
-
-def _parse_ground_truth_oracle(text: str) -> dict[str, Any]:
-    actions: list[dict[str, Any]] = []
-    communicate_info: list[str] = []
-    nl_assertions: list[str] = []
-    current: dict[str, Any] | None = None
-    mode: str | None = None
-    arg_lines: list[str] = []
-
-    def finish_current() -> None:
-        nonlocal current, arg_lines
-        if current is None:
-            return
-        raw_arguments = "\n".join(arg_lines).strip()
-        if raw_arguments:
-            current["arguments"] = _loads_json_object_or_raw(raw_arguments)
-        actions.append(current)
-        current = None
-        arg_lines = []
-
-    for raw_line in str(text or "").splitlines():
-        stripped = raw_line.strip()
-        if not stripped:
-            if mode == "arguments" and current is not None:
-                arg_lines.append(raw_line)
-            continue
-        if stripped.startswith("Action ID:"):
-            finish_current()
-            current = {"action_id": stripped.split(":", 1)[1].strip()}
-            mode = "action"
-            continue
-        if stripped.startswith("Communicate Info:"):
-            finish_current()
-            mode = "communicate"
-            trailing = stripped.split(":", 1)[1].strip()
-            if trailing:
-                communicate_info.append(trailing)
-            continue
-        if stripped.startswith("NL Assertions:"):
-            finish_current()
-            mode = "nl_assertions"
-            trailing = stripped.split(":", 1)[1].strip()
-            if trailing:
-                nl_assertions.append(trailing)
-            continue
-        if current is not None:
-            if stripped.startswith("Requestor:"):
-                current["requestor"] = stripped.split(":", 1)[1].strip()
-                mode = "action"
-                continue
-            if stripped.startswith("Name:"):
-                current["name"] = stripped.split(":", 1)[1].strip()
-                mode = "action"
-                continue
-            if stripped.startswith("Arguments:"):
-                mode = "arguments"
-                trailing = stripped.split(":", 1)[1].strip()
-                if trailing:
-                    arg_lines.append(trailing)
-                continue
-            if mode == "arguments":
-                arg_lines.append(raw_line)
-                continue
-        if mode == "communicate":
-            communicate_info.append(stripped)
-        elif mode == "nl_assertions":
-            nl_assertions.append(stripped)
-    finish_current()
-    return {
-        "actions": actions,
-        "communicate_info": communicate_info,
-        "nl_assertions": nl_assertions,
-    }
-
-
-def _loads_json_object_or_raw(raw: str) -> Any:
-    try:
-        return json.loads(raw)
-    except Exception:
-        return raw
-
-
-def _is_state_changing_action_name(name: str) -> bool:
-    lowered = str(name or "").lower()
-    return lowered.startswith(
-        (
-            "book_",
-            "cancel_",
-            "create_",
-            "delete_",
-            "modify_",
-            "pay_",
-            "purchase_",
-            "refund_",
-            "remove_",
-            "send_",
-            "submit_",
-            "transfer_",
-            "update_",
-        )
     )

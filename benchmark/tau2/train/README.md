@@ -135,7 +135,7 @@ bash benchmark/tau2/train/run_batch_train_eval.sh \
 ## 4. Train with a cached pre-training test score
 
 The runner evaluates the test split before training automatically. For the same
-dataset/domain, `--eval-index`, `--trials`, and rollout options, this baseline is
+dataset/domain, `--eval-index` value(s), `--trials`, and rollout options, this baseline is
 cached under `result/tau2/train/cache/baseline/` and reused by later runs. Normal
 runs do not recompute the baseline when this cache hits; pass
 `--force-baseline-recompute` only when you intentionally want to refresh it. Use
@@ -195,9 +195,9 @@ Default concurrency and output behavior:
 | `--concurrency` | `150` | Max concurrent rollout executions |
 | `--commit-concurrency` | `100` | Max concurrent `session.commit` submissions during training |
 | `--trials` | `8` | Run each eval case N times and aggregate scores |
-| `--train-index` | all | Run only the train sample at this 0-based split index |
+| `--train-index` | all | Run train sample(s) at 0-based split index/indices, e.g. `7` or `1,5,6` |
 | `--eval-split` | `test` | Split used for baseline/per-epoch/final eval: `test`, `train`, or `none` |
-| `--eval-index` | all | Run only the eval sample at this 0-based split index within `--eval-split` |
+| `--eval-index` | all | Run eval sample(s) at 0-based split index/indices within `--eval-split`, e.g. `14` or `1,5,6` |
 | `--max-iterations` | `30` | Max steps per rollout |
 | `--force-baseline-recompute` | off | Recompute cached pre-training baseline instead of reusing it |
 | `--skip-baseline-eval` | off | Skip pre-training baseline eval/cache entirely |

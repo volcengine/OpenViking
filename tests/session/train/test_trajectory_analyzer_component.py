@@ -142,11 +142,13 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
     ]
     assert len(fs.writes) == 1
     assert fs.writes[0][0] == "viking://user/u/memories/trajectories/task_20260607120000.md"
+    assert '"case_name": "case"' in fs.writes[0][1]
     assert len(analysis.trajectories) == 1
     traj = analysis.trajectories[0]
     assert traj.name == "task"
     assert traj.outcome == "success"
     assert traj.retrieval_anchor == "Stage: final"
+    assert traj.metadata["case_name"] == "case"
     assert analysis.evaluation.passed is True
     assert analysis.metadata["policy_snapshot_id"] == "snapshot"
 

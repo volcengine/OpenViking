@@ -129,6 +129,8 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     assert gradient.links[0].from_uri == gradient.target_uri
     assert gradient.links[0].to_uri == analysis.trajectories[0].uri
     assert gradient.links[0].link_type == "derived_from"
+    assert gradient.links[0].match_text is None
+    assert gradient.links[0].description == ""
     assert gradient.confidence == pytest.approx(0.9)
     assert gradient.metadata["trajectory_outcome"] == "success"
     assert gradient.metadata["rubric_passed"] is True

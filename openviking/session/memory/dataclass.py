@@ -278,7 +278,7 @@ class MemoryFile(BaseModel):
         metadata = {
             key: value
             for key, value in dict(self.extra_fields).items()
-            if key not in {"user_id", "user_ids"}
+            if key not in {"user_id", "user_ids", "_uri"}
         }
         metadata.setdefault("version", 1)
         metadata["content"] = self.content

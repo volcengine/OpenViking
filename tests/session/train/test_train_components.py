@@ -375,6 +375,8 @@ async def test_memory_file_policy_updater_writes_v2_compatible_source_trajectory
         link.get("from_uri") == exp_uri
         and link.get("to_uri") == traj_uri
         and link.get("link_type") == "derived_from"
+        and link.get("match_text") is None
+        and link.get("description") == ""
         for link in exp_mf.links
     )
 
@@ -383,6 +385,8 @@ async def test_memory_file_policy_updater_writes_v2_compatible_source_trajectory
         link.get("from_uri") == exp_uri
         and link.get("to_uri") == traj_uri
         and link.get("link_type") == "derived_from"
+        and link.get("match_text") is None
+        and link.get("description") == ""
         for link in traj_mf.backlinks
     )
 
@@ -602,6 +606,177 @@ async def test_patch_merge_policy_optimizer_merges_all_patch_gradients_once(monk
         "viking://user/u/memories/trajectories/traj2.md",
     ]
     assert {link.from_uri for link in plan.items[0].links} == {f"{root}/重复预订处理.md"}
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_policy_optimizer_keeps_distinct_output_source_links_scoped(monkeypatch):
+    from openviking.session.memory.dataclass import (
+        ResolvedOperation,
+        ResolvedOperations,
+    )
+
+    policy_set = ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[])
+    root = policy_set.root_uri
+    gradients = [
+        _patch_gradient(
+            name="取消资格核验",
+            uri=f"{root}/取消资格核验.md",
+            before=None,
+            after="取消前核验资格",
+            base_version=None,
+            links=[
+                StoredLink(
+                    from_uri=f"{root}/取消资格核验.md",
+                    to_uri="viking://user/u/memories/trajectories/traj_cancel.md",
+                    link_type="derived_from",
+                    weight=1.0,
+                )
+            ],
+        ),
+        _patch_gradient(
+            name="退款总额传达",
+            uri=f"{root}/退款总额传达.md",
+            before=None,
+            after="多笔退款后传达总额",
+            base_version=None,
+            links=[
+                StoredLink(
+                    from_uri=f"{root}/退款总额传达.md",
+                    to_uri="viking://user/u/memories/trajectories/traj_refund.md",
+                    link_type="derived_from",
+                    weight=1.0,
+                )
+            ],
+        ),
+    ]
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self):
+            return (
+                ResolvedOperations(
+                    upsert_operations=[
+                        ResolvedOperation(
+                            old_memory_file_content=None,
+                            memory_fields={
+                                "experience_name": "取消资格核验",
+                                "content": "取消前核验资格",
+                            },
+                            memory_type="experiences",
+                            uris=[f"{root}/取消资格核验.md"],
+                        ),
+                        ResolvedOperation(
+                            old_memory_file_content=None,
+                            memory_fields={
+                                "experience_name": "退款总额传达",
+                                "content": "多笔退款后传达总额",
+                            },
+                            memory_type="experiences",
+                            uris=[f"{root}/退款总额传达.md"],
+                        ),
+                    ],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                [],
+            )
+
+    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
+
+    plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+        gradients,
+        policy_set,
+        PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
+    )
+
+    links_by_name = {item.target_name: {link.to_uri for link in item.links} for item in plan.items}
+    assert links_by_name == {
+        "取消资格核验": {"viking://user/u/memories/trajectories/traj_cancel.md"},
+        "退款总额传达": {"viking://user/u/memories/trajectories/traj_refund.md"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_policy_optimizer_single_canonical_output_inherits_all_source_links(monkeypatch):
+    from openviking.session.memory.dataclass import (
+        ResolvedOperation,
+        ResolvedOperations,
+    )
+
+    policy_set = ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[])
+    root = policy_set.root_uri
+    gradients = [
+        _patch_gradient(
+            name="重复预订处理",
+            uri=f"{root}/重复预订处理.md",
+            before=None,
+            after="核对订单后只取消重复订单",
+            base_version=None,
+            links=[
+                StoredLink(
+                    from_uri=f"{root}/重复预订处理.md",
+                    to_uri="viking://user/u/memories/trajectories/traj1.md",
+                    link_type="derived_from",
+                    weight=1.0,
+                )
+            ],
+        ),
+        _patch_gradient(
+            name="处理酒店重复预订",
+            uri=f"{root}/处理酒店重复预订.md",
+            before=None,
+            after="识别有效订单并取消重复订单",
+            base_version=None,
+            links=[
+                StoredLink(
+                    from_uri=f"{root}/处理酒店重复预订.md",
+                    to_uri="viking://user/u/memories/trajectories/traj2.md",
+                    link_type="derived_from",
+                    weight=1.0,
+                )
+            ],
+        ),
+    ]
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self):
+            return (
+                ResolvedOperations(
+                    upsert_operations=[
+                        ResolvedOperation(
+                            old_memory_file_content=None,
+                            memory_fields={
+                                "experience_name": "重复预订处理",
+                                "content": "合并后的重复预订处理经验",
+                            },
+                            memory_type="experiences",
+                            uris=[f"{root}/重复预订处理.md"],
+                        )
+                    ],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                [],
+            )
+
+    monkeypatch.setattr("openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop)
+
+    plan = await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+        gradients,
+        policy_set,
+        PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
+    )
+
+    assert len(plan.items) == 1
+    assert {link.to_uri for link in plan.items[0].links} == {
+        "viking://user/u/memories/trajectories/traj1.md",
+        "viking://user/u/memories/trajectories/traj2.md",
+    }
 
 
 @pytest.mark.asyncio

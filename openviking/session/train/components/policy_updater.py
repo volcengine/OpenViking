@@ -355,7 +355,7 @@ def _source_trajectory_links(
         if key in seen:
             continue
         seen.add(key)
-        update = {"from_uri": exp_uri}
+        update = {"from_uri": exp_uri, "match_text": None, "description": ""}
         if not link.created_at:
             update["created_at"] = datetime.now(timezone.utc).isoformat()
         result.append(link.model_copy(update=update))

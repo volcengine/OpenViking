@@ -540,13 +540,11 @@ class OpenVikingConfig(BaseModel):
     memory_recall_max_chars: int = 4000
     # How many experience memories to fetch per call to get_viking_experience_context.
     exp_recall_limit: int = 5
-    # Also search matching structured case memories.  These are primarily useful for
-    # controlled training/evaluation where the memory store contains task-specific
-    # oracle summaries; default off for normal user-facing deployments.
+    # Also search matching structured case memories. When enabled, VikingBot
+    # can follow deterministic case -> experience links before direct exp recall.
+    # Default off for normal user-facing deployments.
     case_recall_limit: int = 0
-    # Also search recent diagnostic trajectory memories and inject them as
-    # read-only lessons after experience memories.  Trajectories often contain
-    # sharper evaluated deltas than generalized experiences during batch train.
+    # Deprecated/no-op: trajectory memories are not injected into VikingBot recall.
     trajectory_recall_limit: int = 0
     # Total character budget for the injected experience block. Memories beyond this
     # budget are degraded to link-only (uri + score) instead of being dropped.

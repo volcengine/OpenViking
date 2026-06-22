@@ -314,3 +314,19 @@ class RolloutTrainingResult:
     plan: PolicyUpdatePlan
     apply_result: PolicyApplyResult
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ScopedRolloutTrainingResult:
+    """Training result for one submitter inside a shared streaming batch.
+
+    ``batch_result`` keeps the full flush outcome for diagnostics, while the
+    top-level fields are scoped to the submitter's rollout/gradient provenance.
+    """
+
+    analyses: list[RolloutAnalysis]
+    gradients: list[Any]
+    plan: PolicyUpdatePlan
+    apply_result: PolicyApplyResult
+    batch_result: RolloutTrainingResult
+    metadata: dict[str, Any] = field(default_factory=dict)

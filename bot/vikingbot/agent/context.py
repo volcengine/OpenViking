@@ -145,11 +145,19 @@ class ContextBuilder:
         # 2. Available skills: only show summary (agent uses read_file to load)
         skills_summary = self.skills.build_skills_summary()
         if skills_summary:
+            required_skill_note = ""
+            task_case_skill = self.workspace / "skills" / "task_case_experience" / "SKILL.md"
+            if task_case_skill.exists():
+                task_case_skill_path = "skills/task_case_experience/SKILL.md"
+                required_skill_note = (
+                    "\nRequired skill: before taking any task action, you MUST read "
+                    f"`{task_case_skill_path}` and apply its instructions.\n"
+                )
             parts.append(f"""# Skills
 
 The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
 Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
-
+{required_skill_note}
 {skills_summary}""")
 
         # Viking peer profile (only if ov tools are enabled). In the current
@@ -331,6 +339,7 @@ IMPORTANT:
         memory_owner_user_ids: list[str] | None = None,
         experience_recall_enable: bool | None = None,
         exp_exclude_uris: list[str] | None = None,
+        experience_case_lookup: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -382,6 +391,7 @@ IMPORTANT:
                 workspace_id=workspace_id,
                 exclude_uris=exp_exclude_uris,
                 openviking_connection=self._openviking_connection,
+                case_lookup=experience_case_lookup,
             )
             cost = round(_time.time() - start, 2)
             logger.info(

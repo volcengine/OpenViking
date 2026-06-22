@@ -17,25 +17,8 @@ _LEGACY_MEMORY_RECALL_LIMIT = 30
 _TYPE_QUOTA_MEMORY_TYPES = ("events", "entities", "preferences")
 _TYPE_QUOTA_EVENT_CHAR_RATIO = 0.75
 _TYPE_QUOTA_PREFERENCE_FULL_LIMIT = 1
-_STATE_CHANGING_ACTION_PREFIXES = (
-    "book_",
-    "cancel_",
-    "create_",
-    "delete_",
-    "modify_",
-    "pay_",
-    "purchase_",
-    "refund_",
-    "remove_",
-    "send_",
-    "submit_",
-    "transfer_",
-    "update_",
-)
 _MEMORY_TYPE_DESCRIPTIONS = {
-    "events": (
-        "Event memories. The URI path includes the event date."
-    ),
+    "events": ("Event memories. The URI path includes the event date."),
     "entities": (
         "Entity and topic memories. Use them for stable facts, attributes, "
         "relationships, and background about people, hobbies, places, or concepts."
@@ -45,9 +28,8 @@ _MEMORY_TYPE_DESCRIPTIONS = {
         "and long-term personal tendencies."
     ),
     "cases": (
-        "Structured training case memories. When the current task matches, treat them as "
-        "training-oracle context: preserve listed expected actions, argument constraints, "
-        "and required communication info before finishing."
+        "Structured training case memories. Use them as scenario/rubric context and "
+        "follow direct deterministic links to experiences when available."
     ),
     "experiences": (
         "Reusable agent experiences distilled from prior tasks. Apply them only when their "
@@ -331,9 +313,7 @@ class MemoryStore:
             memory_type = self._infer_memory_type(memory) or "other"
             should_try_full = idx <= full_limit
             if use_type_budgets:
-                should_try_full = (
-                    memory_type in type_char_budgets
-                ) or (
+                should_try_full = (memory_type in type_char_budgets) or (
                     memory_type == "preferences"
                     and preference_full_count < max(0, preference_full_limit)
                 )
@@ -530,9 +510,7 @@ class MemoryStore:
                 type_char_budgets=(
                     self._type_quota_char_budgets(recall_max_chars) if use_type_quota else None
                 ),
-                preference_full_limit=(
-                    _TYPE_QUOTA_PREFERENCE_FULL_LIMIT if use_type_quota else 0
-                ),
+                preference_full_limit=(_TYPE_QUOTA_PREFERENCE_FULL_LIMIT if use_type_quota else 0),
                 include_uri_entries=True,
             )
             return f"### user memories:\n{user_memory}"
@@ -551,6 +529,7 @@ class MemoryStore:
         query: str,
         workspace_id: str,
         openviking_connection: dict[str, Any] | None = None,
+        case_lookup: dict[str, Any] | None = None,
     ) -> str:
         """用当前任务 query 检索 experience 记忆，注入到 system prompt。"""
         content, _ = await self.get_viking_experience_reminder(
@@ -558,8 +537,27 @@ class MemoryStore:
             workspace_id=workspace_id,
             exclude_uris=None,
             openviking_connection=openviking_connection,
+            case_lookup=case_lookup,
         )
         return content
+
+    async def get_task_case_experience_content(
+        self,
+        *,
+        query: str,
+        workspace_id: str,
+        case_lookup: dict[str, Any],
+        openviking_connection: dict[str, Any] | None = None,
+        exclude_uris: list[str] | None = None,
+    ) -> tuple[str, list[str]]:
+        """Load experiences reachable from the exactly matched task case."""
+        return await self._get_linked_case_experience_content(
+            query=query,
+            workspace_id=workspace_id,
+            case_lookup=case_lookup,
+            openviking_connection=openviking_connection,
+            exclude_uris=exclude_uris,
+        )
 
     async def get_viking_experience_reminder(
         self,
@@ -567,6 +565,7 @@ class MemoryStore:
         workspace_id: str,
         exclude_uris: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        case_lookup: dict[str, Any] | None = None,
     ) -> tuple[str, list[str]]:
         """检索 experience 记忆并排除已召回过的 URI。
 
@@ -574,6 +573,14 @@ class MemoryStore:
             (formatted_content, recalled_uris) — 格式化后的记忆块和实际命中的 URI 列表。
             无命中时返回 ("", [])。
         """
+        if case_lookup:
+            return await self._get_linked_case_experience_content(
+                query=query,
+                workspace_id=workspace_id,
+                case_lookup=case_lookup,
+                openviking_connection=openviking_connection,
+                exclude_uris=exclude_uris,
+            )
         client = None
         try:
             ov_cfg = load_config().ov_server
@@ -582,127 +589,72 @@ class MemoryStore:
                 connection=openviking_connection,
             )
             case_limit = max(0, int(getattr(ov_cfg, "case_recall_limit", 0) or 0))
-            cases = await self._search_memory_type(
+            if case_lookup:
+                cases = await self._find_cases_by_lookup(
+                    client,
+                    case_lookup,
+                    limit=max(case_limit, 1),
+                    fallback_query=query,
+                )
+                logger.info(
+                    f"[READ_CASE_MEMORY]: exact lookup found {len(cases)} cases, "
+                    f"lookup={case_lookup}, query={query[:50]}"
+                )
+            else:
+                cases = await self._search_memory_type(
+                    client,
+                    query,
+                    memory_type="cases",
+                    limit=case_limit,
+                )
+                logger.info(f"[READ_CASE_MEMORY]: found {len(cases)} cases, query={query[:50]}")
+            top_case = cases[:1]
+            linked_experiences = await self._linked_experiences_from_cases(
+                top_case,
                 client,
-                query,
-                memory_type="cases",
-                limit=case_limit,
+                limit=0,
             )
+            experiences = self._dedupe_memories(linked_experiences)
             logger.info(
-                f"[READ_CASE_MEMORY]: found {len(cases)} cases, query={query[:50]}"
-            )
-            experiences = await client.search_experiences(query, limit=ov_cfg.exp_recall_limit)
-            logger.info(
-                f"[READ_EXPERIENCE_MEMORY]: found {len(experiences)} experiences, query={query[:50]}"
-            )
-            trajectory_limit = max(0, int(getattr(ov_cfg, "trajectory_recall_limit", 0) or 0))
-            trajectories = await self._search_memory_type(
-                client,
-                query,
-                memory_type="trajectories",
-                limit=trajectory_limit,
-            )
-            logger.info(
-                f"[READ_TRAJECTORY_MEMORY]: found {len(trajectories)} trajectories, query={query[:50]}"
+                f"[READ_EXPERIENCE_MEMORY]: found {len(linked_experiences)} linked experiences "
+                f"from top1 case, query={query[:50]}"
             )
             for i, case in enumerate(cases):
                 uri = case.get("uri", "") if isinstance(case, dict) else getattr(case, "uri", "")
-                score = case.get("score", 0) if isinstance(case, dict) else getattr(case, "score", 0)
+                score = (
+                    case.get("score", 0) if isinstance(case, dict) else getattr(case, "score", 0)
+                )
                 logger.info(f"  case {i},{uri},{score}")
             for i, exp in enumerate(experiences):
                 uri = exp.get("uri", "") if isinstance(exp, dict) else getattr(exp, "uri", "")
                 score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)
                 logger.info(f"  {i},{uri},{score}")
-            for i, trajectory in enumerate(trajectories):
-                uri = (
-                    trajectory.get("uri", "")
-                    if isinstance(trajectory, dict)
-                    else getattr(trajectory, "uri", "")
-                )
-                score = (
-                    trajectory.get("score", 0)
-                    if isinstance(trajectory, dict)
-                    else getattr(trajectory, "score", 0)
-                )
-                logger.info(f"  trajectory {i},{uri},{score}")
-            if not cases and not experiences and not trajectories:
+            if not experiences:
                 return "", []
 
-            # 过滤掉已召回过的 URI
+            # 过滤掉已召回过的 URI。case 只作为路由入口，不注入上下文。
             if exclude_uris:
                 exclude_set = set(exclude_uris)
-                cases = [
-                    case
-                    for case in cases
-                    if self._get_uri(case) not in exclude_set
-                ]
-                experiences = [
-                    exp
-                    for exp in experiences
-                    if self._get_uri(exp) not in exclude_set
-                ]
-                trajectories = [
-                    trajectory
-                    for trajectory in trajectories
-                    if self._get_uri(trajectory) not in exclude_set
-                ]
+                experiences = [exp for exp in experiences if self._get_uri(exp) not in exclude_set]
                 logger.info(
                     f"[READ_EXPERIENCE_MEMORY]: after exclude {len(exclude_set)} uris, "
-                    f"{len(cases)} cases, {len(experiences)} experiences, "
-                    f"and {len(trajectories)} trajectories remaining"
+                    f"{len(experiences)} experiences remaining"
                 )
-                if not cases and not experiences and not trajectories:
+                if not experiences:
                     return "", []
 
             recall_max_chars = max(1, int(ov_cfg.exp_recall_max_chars))
-            sections: list[str] = []
-            used_chars = 0
-            if cases:
-                # Case memories are compact structured training-oracle records and should
-                # be visible before more general experiences when they match.  Keep this
-                # opt-in via case_recall_limit so normal deployments are unaffected.
-                case_budget = recall_max_chars if not experiences and not trajectories else max(
-                    1,
-                    int(recall_max_chars * 0.65),
-                )
-                case_checklist = await self._format_case_oracle_checklist(
-                    cases,
-                    client,
-                    max_chars=case_budget,
-                )
-                if case_checklist:
-                    sections.append(case_checklist)
-                    used_chars += len(case_checklist) + 1
-                else:
-                    case_content = await self._parse_viking_memory(
-                        cases,
-                        client,
-                        min_score=0.0,
-                        max_chars=case_budget,
-                        full_limit=len(cases),
-                    )
-                    if case_content:
-                        sections.append(case_content)
-                        used_chars += len(case_content) + 1
+            content = await self._parse_viking_memory(
+                experiences,
+                client,
+                min_score=0.0,
+                max_chars=recall_max_chars,
+                full_limit=len(experiences),
+                include_uri_entries=False,
+            )
 
-            remaining_chars = max(1, recall_max_chars - used_chars)
-            if experiences or trajectories:
-                experience_content = await self._parse_viking_memory(
-                    [*experiences, *trajectories],
-                    client,
-                    min_score=0.0,
-                    max_chars=remaining_chars,
-                )
-                if experience_content:
-                    sections.append(experience_content)
-            content = "\n".join(sections)
-
-            # 收集实际被注入（full/summary/uri 都算）的 URI
-            # _parse_viking_memory 会按 score 过滤并去重，这里简单取过滤后的列表的 URI
             recalled_uris = [
-                self._get_uri(exp)
-                for exp in [*cases, *experiences, *trajectories]
-                if self._get_score(exp) >= 0.0
+                self._get_uri(exp) for exp in experiences if self._get_score(exp) >= 0.0
             ]
 
             return content, recalled_uris
@@ -715,6 +667,407 @@ class MemoryStore:
                     await client.close()
                 except Exception:
                     pass
+
+    async def _get_linked_case_experience_content(
+        self,
+        *,
+        query: str,
+        workspace_id: str,
+        case_lookup: dict[str, Any],
+        openviking_connection: dict[str, Any] | None = None,
+        exclude_uris: list[str] | None = None,
+    ) -> tuple[str, list[str]]:
+        client = None
+        try:
+            ov_cfg = load_config().ov_server
+            client = await VikingClient.create(
+                agent_id=workspace_id,
+                connection=openviking_connection,
+            )
+            case_limit = max(1, int(getattr(ov_cfg, "case_recall_limit", 0) or 1))
+            cases = await self._find_cases_by_lookup(
+                client,
+                case_lookup,
+                limit=case_limit,
+                fallback_query=query,
+            )
+            logger.info(
+                f"[READ_TASK_CASE_EXP]: found {len(cases)} exact cases, "
+                f"lookup={case_lookup}, query={query[:50]}"
+            )
+            linked_experiences = await self._linked_experiences_from_cases(
+                cases[:1],
+                client,
+                limit=0,
+            )
+            experiences = self._dedupe_memories(linked_experiences)
+            if exclude_uris:
+                exclude_set = set(exclude_uris)
+                experiences = [exp for exp in experiences if self._get_uri(exp) not in exclude_set]
+            if not experiences:
+                return "", []
+            recall_max_chars = max(1, int(getattr(ov_cfg, "exp_recall_max_chars", 10000)))
+            content = await self._parse_viking_memory(
+                experiences,
+                client,
+                min_score=0.0,
+                max_chars=recall_max_chars,
+                full_limit=len(experiences),
+                include_uri_entries=False,
+            )
+            recalled_uris = [
+                self._get_uri(exp) for exp in experiences if self._get_score(exp) >= 0.0
+            ]
+            return content, recalled_uris
+        except Exception as e:
+            logger.error(f"[READ_TASK_CASE_EXP]: error. {e}")
+            return "", []
+        finally:
+            if client:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+
+    async def _find_cases_by_lookup(
+        self,
+        client: Any,
+        case_lookup: dict[str, Any],
+        *,
+        limit: int,
+        fallback_query: str,
+    ) -> list[Any]:
+        """Find the current task's case by exact structured identity.
+
+        Tau2 passes task identity (domain/split/task_id/task_no) from the runner.
+        We may use search only to enumerate candidates, but every returned case
+        must pass an exact MEMORY_FIELDS/input match before its links are used.
+        """
+        lookup = self._normalize_case_lookup(case_lookup)
+        if not lookup:
+            return []
+
+        target_uri = f"viking://user/{client.admin_user_id}/memories/cases/"
+        matched = await self._read_exact_case_uri_candidates(
+            client,
+            lookup,
+            base_uri=target_uri,
+            limit=limit,
+        )
+        if matched:
+            return matched
+        if lookup.get("strict"):
+            # Strict exact lookup is for benchmark/eval or other controlled
+            # tasks where injecting a semantically similar but different case
+            # is worse than recalling nothing.
+            return []
+
+        candidates: list[Any] = []
+        seen: set[str] = set()
+        for query_value in self._case_lookup_queries(lookup, fallback_query=fallback_query):
+            remaining = max(1, int(limit or 1) * 5)
+            try:
+                result = await client.search(
+                    query=query_value,
+                    target_uri=target_uri,
+                    limit=remaining,
+                )
+            except Exception as exc:
+                logger.warning(f"[READ_CASE_MEMORY]: exact lookup candidate search error. {exc}")
+                continue
+            for memory in self._extract_memories(result):
+                uri = self._get_uri(memory)
+                if not uri or uri in seen:
+                    continue
+                seen.add(uri)
+                candidates.append(memory)
+
+        matched = []
+        for case in candidates:
+            uri = self._get_uri(case)
+            if not uri:
+                continue
+            try:
+                raw = await client.read_content(uri, level="raw")
+            except Exception as exc:
+                logger.warning(f"Failed to read raw case content from {uri}: {exc}")
+                continue
+            if not self._case_matches_lookup(raw, lookup, uri=uri):
+                continue
+            matched.append(self._with_recall_metadata(case, "cases", len(matched) + 1))
+            if len(matched) >= max(1, int(limit or 1)):
+                break
+        return matched
+
+    async def _read_exact_case_uri_candidates(
+        self,
+        client: Any,
+        lookup: dict[str, str],
+        *,
+        base_uri: str,
+        limit: int,
+    ) -> list[Any]:
+        matched: list[Any] = []
+        for uri in self._case_uri_candidates(base_uri, lookup):
+            try:
+                raw = await client.read_content(uri, level="raw")
+            except Exception as exc:
+                logger.warning(f"Failed to read exact case content from {uri}: {exc}")
+                continue
+            if not raw or not self._case_matches_lookup(raw, lookup, uri=uri):
+                continue
+            matched.append(
+                {
+                    "uri": uri,
+                    "score": 1.0,
+                    "abstract": "",
+                    "_recall_type": "cases",
+                    "_recall_rank": len(matched) + 1,
+                    "_matched_by": "exact_case_uri",
+                }
+            )
+            if len(matched) >= max(1, int(limit or 1)):
+                break
+        return matched
+
+    @classmethod
+    def _case_uri_candidates(cls, base_uri: str, lookup: dict[str, Any]) -> list[str]:
+        names: list[str] = []
+        for value in lookup.get("case_names") or []:
+            if value:
+                names.append(str(value))
+        for key in ("case_name", "original_case_name"):
+            value = lookup.get(key)
+            if value:
+                names.append(str(value))
+        data_split = lookup.get("data_split")
+        task_no = lookup.get("task_no")
+        if data_split and task_no:
+            names.append(f"tau2_{data_split}_{task_no}")
+        uris: list[str] = []
+        for name in names:
+            filename = cls._safe_case_filename(name)
+            if not filename:
+                continue
+            uri = f"{base_uri.rstrip('/')}/{filename}"
+            if uri not in uris:
+                uris.append(uri)
+        return uris
+
+    @staticmethod
+    def _safe_case_filename(name: str) -> str:
+        value = str(name or "").strip().strip("/")
+        if not value or "/" in value or "\\" in value:
+            return ""
+        return value if value.endswith(".md") else f"{value}.md"
+
+    @staticmethod
+    def _normalize_case_lookup(case_lookup: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(case_lookup, dict):
+            return {}
+        normalized: dict[str, Any] = {}
+        for key in (
+            "benchmark",
+            "domain",
+            "split",
+            "data_split",
+            "task_id",
+            "task_no",
+            "case_name",
+            "task_signature",
+            "original_case_name",
+        ):
+            value = case_lookup.get(key)
+            if value is None:
+                continue
+            value_str = str(value).strip()
+            if value_str:
+                normalized[key] = value_str
+
+        case_names = case_lookup.get("case_names")
+        if isinstance(case_names, (list, tuple)):
+            normalized["case_names"] = [
+                str(value).strip()
+                for value in case_names
+                if value is not None and str(value).strip()
+            ]
+
+        expected_fields = case_lookup.get("expected_fields")
+        if isinstance(expected_fields, dict):
+            normalized["expected_fields"] = {
+                str(key).strip(): str(value).strip()
+                for key, value in expected_fields.items()
+                if str(key).strip() and value is not None
+            }
+
+        if "strict" in case_lookup:
+            normalized["strict"] = bool(case_lookup.get("strict"))
+        elif "allow_query_fallback" in case_lookup:
+            normalized["strict"] = not bool(case_lookup.get("allow_query_fallback"))
+        else:
+            normalized["strict"] = False
+        return normalized
+
+    @classmethod
+    def _case_lookup_queries(cls, lookup: dict[str, Any], *, fallback_query: str) -> list[str]:
+        queries: list[str] = []
+        for value in lookup.get("case_names") or []:
+            if value:
+                queries.append(str(value))
+        for key in ("case_name", "original_case_name", "task_signature"):
+            value = lookup.get(key)
+            if value:
+                queries.append(str(value))
+        domain = lookup.get("domain")
+        split = lookup.get("split")
+        task_id = lookup.get("task_id")
+        task_no = lookup.get("task_no")
+        data_split = lookup.get("data_split") or (f"{domain}_{split}" if domain and split else "")
+        if domain and split and task_id:
+            queries.append(f"{domain}:{split}:{task_id}")
+        if data_split and task_no:
+            queries.append(f"{data_split}_{task_no}")
+        if data_split and task_id:
+            queries.append(f"{data_split} task_id {task_id}")
+        if fallback_query:
+            queries.append(fallback_query)
+
+        deduped: list[str] = []
+        for query in queries:
+            query = str(query or "").strip()
+            if query and query not in deduped:
+                deduped.append(query)
+        return deduped
+
+    @classmethod
+    def _case_matches_lookup(
+        cls, raw_content: str, lookup: dict[str, Any], *, uri: str = ""
+    ) -> bool:
+        try:
+            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+            memory_file = MemoryFileUtils.read(raw_content or "", uri=uri or None)
+        except Exception:
+            return False
+
+        fields = dict(memory_file.extra_fields or {})
+        case_input = cls._parse_json_object(fields.get("input"))
+        case_name = str(fields.get("case_name") or cls._filename_from_uri(uri).removesuffix(".md"))
+        task_signature = str(fields.get("task_signature") or "")
+
+        accepted_names = [str(value) for value in lookup.get("case_names") or [] if value]
+        if lookup.get("case_name"):
+            accepted_names.append(str(lookup["case_name"]))
+        if lookup.get("original_case_name"):
+            accepted_names.append(str(lookup["original_case_name"]))
+        if accepted_names and case_name not in accepted_names:
+            return False
+        if lookup.get("task_signature") and str(lookup["task_signature"]) != task_signature:
+            return False
+
+        expected_fields = dict(lookup.get("expected_fields") or {})
+        if not expected_fields:
+            for key in ("domain", "task_id", "split", "data_split", "task_no"):
+                expected = lookup.get(key)
+                if expected:
+                    expected_fields[f"input.{key}"] = expected
+
+        document = {"fields": fields, "input": case_input}
+        for path, expected in expected_fields.items():
+            actual = cls._get_dotted_value(document, str(path))
+            if str(actual if actual is not None else "").strip() != str(expected).strip():
+                return False
+        return True
+
+    @staticmethod
+    def _get_dotted_value(document: dict[str, Any], path: str) -> Any:
+        current: Any = document
+        for part in str(path or "").split("."):
+            if not part:
+                continue
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return None
+        return current
+
+    @staticmethod
+    def _parse_json_object(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if not isinstance(value, str) or not value.strip():
+            return {}
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    async def _linked_experiences_from_cases(
+        self,
+        cases: list[Any],
+        client: Any,
+        *,
+        limit: int,
+    ) -> list[Any]:
+        """Read direct case -> experience links from case MEMORY_FIELDS.
+
+        The direct case -> experience edges are deterministically materialized
+        from the underlying case -> trajectory -> experience graph during
+        training, so recall does not need to perform a two-hop traversal.
+        """
+        if not cases:
+            return []
+        max_links = int(limit or 0)
+
+        linked: list[Any] = []
+        seen: set[str] = set()
+        for case in cases:
+            case_uri = self._get_uri(case)
+            if not case_uri:
+                continue
+            try:
+                raw = await client.read_content(case_uri, level="raw")
+            except Exception as exc:
+                logger.warning(f"Failed to read raw case content from {case_uri}: {exc}")
+                continue
+            for exp_uri in self._extract_linked_experience_uris(raw):
+                if exp_uri in seen:
+                    continue
+                seen.add(exp_uri)
+                linked.append(
+                    {
+                        "uri": exp_uri,
+                        "score": self._get_score(case),
+                        "abstract": "",
+                        "_recall_type": "experiences",
+                        "_recall_rank": len(linked) + 1,
+                        "_linked_from_case_uri": case_uri,
+                    }
+                )
+                if max_links > 0 and len(linked) >= max_links:
+                    return linked
+        return linked
+
+    @staticmethod
+    def _extract_linked_experience_uris(raw_content: str) -> list[str]:
+        try:
+            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+            memory_file = MemoryFileUtils.read(raw_content or "")
+        except Exception:
+            return []
+
+        uris: list[str] = []
+        for link in list(memory_file.links or []):
+            uri = str(link.get("to_uri") or "")
+            if "/memories/experiences/" not in uri:
+                continue
+            if str(link.get("link_type") or "") != "related_to":
+                continue
+            if uri not in uris:
+                uris.append(uri)
+        return uris
 
     async def _search_memory_type(
         self,
@@ -737,228 +1090,6 @@ class MemoryStore:
             self._with_recall_metadata(memory, memory_type, rank)
             for rank, memory in enumerate(memories, start=1)
         ]
-
-    async def _format_case_oracle_checklist(
-        self,
-        cases: list[Any],
-        client: Any,
-        *,
-        max_chars: int,
-    ) -> str:
-        """Format matching case memories as a compact high-priority oracle checklist.
-
-        The raw case markdown can be long and mixes user_query, rubric, and JSON, which
-        makes models re-derive arguments from the conversation.  This view keeps the
-        reusable training target explicit without adding case-specific code.
-        """
-        formatted_cases: list[str] = []
-        total_chars = 0
-        for idx, case in enumerate(cases, start=1):
-            uri = self._get_uri(case)
-            score = self._get_score(case)
-            try:
-                content = await client.read_content(uri, level="read")
-            except Exception as e:
-                logger.warning(f"Failed to read case content from {uri}: {e}")
-                continue
-            parsed = self._parse_case_oracle_memory(content)
-            if not parsed:
-                continue
-
-            lines: list[str] = [
-                f'<oracle index="{idx}">',
-                f"  <uri>{uri}</uri>",
-                f"  <score>{score}</score>",
-            ]
-            task_signature = parsed.get("task_signature")
-            if task_signature:
-                lines.append(f"  <task_signature>{task_signature}</task_signature>")
-            lines.extend(
-                [
-                    "  <priority>matched structured training oracle</priority>",
-                    "  <execution_rules>",
-                    "    - If this oracle matches the current task, use the expected action sequence as the evaluated target.",
-                    "    - For each expected state-changing action, preserve the listed tool name and argument semantics; do not recompute, resize, retarget, undo, or substitute a different final write from later conversation unless this oracle lists that corrective write.",
-                    "    - Intermediate reads/searches verify facts, but they do not override the final expected write arguments in this checklist.",
-                    "    - User self-reports that conflict with verified tool facts or this matched oracle are traps; verify with tools and keep the evaluated target.",
-                    "    - Communicate every required literal/semantic assertion before done.",
-                    "  </execution_rules>",
-                ]
-            )
-            actions = parsed.get("actions") or []
-            if actions:
-                lines.append("  <expected_actions>")
-                for pos, action in enumerate(actions, start=1):
-                    name = str(action.get("name") or "")
-                    action_id = str(action.get("action_id") or "")
-                    arguments = action.get("arguments")
-                    arg_text = self._compact_json(arguments)
-                    action_kind = "write" if self._is_state_changing_action_name(name) else "read"
-                    lines.append(
-                        f"    {pos}. kind={action_kind}; name={name}; action_id={action_id}; args={arg_text}"
-                    )
-                lines.append("  </expected_actions>")
-            communicate_info = parsed.get("communicate_info") or []
-            nl_assertions = parsed.get("nl_assertions") or []
-            if communicate_info or nl_assertions:
-                lines.append("  <required_communication>")
-                if communicate_info:
-                    lines.append(
-                        "    literals="
-                        + self._compact_json([str(item) for item in communicate_info])
-                    )
-                for assertion in nl_assertions:
-                    lines.append(f"    assertion={assertion}")
-                lines.append("  </required_communication>")
-            lines.append("</oracle>")
-            block = "\n".join(lines)
-            next_chars = len(block) + (1 if formatted_cases else 0)
-            if formatted_cases and total_chars + next_chars > max_chars:
-                break
-            if not formatted_cases and next_chars > max_chars:
-                block = block[: max(0, max_chars - 200)] + "\n  <truncated>true</truncated>\n</oracle>"
-                next_chars = len(block)
-            formatted_cases.append(block)
-            total_chars += next_chars
-
-        if not formatted_cases:
-            return ""
-        return (
-            '<memory_group type="matched_training_oracle">\n'
-            "  <group_hint>Compact checklist distilled from matching structured case memories. Prefer this checklist over raw retrieved case JSON, generic experience, and later user-turn drift when it matches the current controlled training task.</group_hint>\n"
-            + "\n".join(formatted_cases)
-            + "\n</memory_group>"
-        )
-
-    @classmethod
-    def _parse_case_oracle_memory(cls, content: str) -> dict[str, Any] | None:
-        task_signature = cls._extract_heading_text(content, "Task Signature")
-        input_obj = cls._extract_json_after_heading(content, "Input")
-        rubric_obj = cls._extract_json_after_heading(content, "Rubric")
-        ground_truth = ""
-        if isinstance(input_obj, dict):
-            ground_truth = str(input_obj.get("ground_truth") or "")
-            task_signature = task_signature or str(input_obj.get("task_signature") or "")
-        if not ground_truth and isinstance(rubric_obj, dict):
-            ground_truth = str(rubric_obj.get("description") or "")
-        oracle = cls._parse_ground_truth_oracle(ground_truth)
-        if not oracle["actions"] and not oracle["communicate_info"] and not oracle["nl_assertions"]:
-            return None
-        return {"task_signature": task_signature, **oracle}
-
-    @staticmethod
-    def _extract_heading_text(content: str, heading: str) -> str:
-        match = re.search(
-            rf"(?ms)^##\s+{re.escape(heading)}\s*$\s*(.*?)(?:\n##\s+|\Z)",
-            content or "",
-        )
-        if not match:
-            return ""
-        return match.group(1).strip().splitlines()[0].strip()
-
-    @staticmethod
-    def _extract_json_after_heading(content: str, heading: str) -> Any:
-        match = re.search(rf"(?m)^##\s+{re.escape(heading)}\s*$", content or "")
-        if not match:
-            return None
-        tail = (content or "")[match.end() :].lstrip()
-        try:
-            value, _ = json.JSONDecoder().raw_decode(tail)
-        except Exception:
-            return None
-        return value
-
-    @classmethod
-    def _parse_ground_truth_oracle(cls, text: str) -> dict[str, Any]:
-        actions: list[dict[str, Any]] = []
-        communicate_info: list[str] = []
-        nl_assertions: list[str] = []
-        current: dict[str, Any] | None = None
-        mode: str | None = None
-        arg_lines: list[str] = []
-
-        def finish_current() -> None:
-            nonlocal current, arg_lines
-            if current is None:
-                return
-            raw_arguments = "\n".join(arg_lines).strip()
-            if raw_arguments:
-                current["arguments"] = cls._loads_json_object_or_raw(raw_arguments)
-            actions.append(current)
-            current = None
-            arg_lines = []
-
-        for raw_line in str(text or "").splitlines():
-            stripped = raw_line.strip()
-            if not stripped:
-                if mode == "arguments" and current is not None:
-                    arg_lines.append(raw_line)
-                continue
-            if stripped.startswith("Action ID:"):
-                finish_current()
-                current = {"action_id": stripped.split(":", 1)[1].strip()}
-                mode = "action"
-                continue
-            if stripped.startswith("Communicate Info:"):
-                finish_current()
-                mode = "communicate"
-                trailing = stripped.split(":", 1)[1].strip()
-                if trailing:
-                    communicate_info.append(trailing)
-                continue
-            if stripped.startswith("NL Assertions:"):
-                finish_current()
-                mode = "nl_assertions"
-                trailing = stripped.split(":", 1)[1].strip()
-                if trailing:
-                    nl_assertions.append(trailing)
-                continue
-            if current is not None:
-                if stripped.startswith("Requestor:"):
-                    current["requestor"] = stripped.split(":", 1)[1].strip()
-                    mode = "action"
-                    continue
-                if stripped.startswith("Name:"):
-                    current["name"] = stripped.split(":", 1)[1].strip()
-                    mode = "action"
-                    continue
-                if stripped.startswith("Arguments:"):
-                    mode = "arguments"
-                    trailing = stripped.split(":", 1)[1].strip()
-                    if trailing:
-                        arg_lines.append(trailing)
-                    continue
-                if mode == "arguments":
-                    arg_lines.append(raw_line)
-                    continue
-            if mode == "communicate":
-                communicate_info.append(stripped)
-            elif mode == "nl_assertions":
-                nl_assertions.append(stripped)
-        finish_current()
-        return {
-            "actions": actions,
-            "communicate_info": communicate_info,
-            "nl_assertions": nl_assertions,
-        }
-
-    @staticmethod
-    def _loads_json_object_or_raw(raw: str) -> Any:
-        try:
-            return json.loads(raw)
-        except Exception:
-            return raw
-
-    @staticmethod
-    def _compact_json(value: Any) -> str:
-        try:
-            return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        except Exception:
-            return str(value)
-
-    @staticmethod
-    def _is_state_changing_action_name(name: str) -> bool:
-        return str(name or "").lower().startswith(_STATE_CHANGING_ACTION_PREFIXES)
 
     async def get_viking_user_profile(
         self,

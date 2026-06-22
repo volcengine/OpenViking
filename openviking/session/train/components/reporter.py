@@ -532,7 +532,11 @@ def _has_epoch_eval(context: Any) -> bool:
 def _is_epoch_test_report(label: str, report: dict[str, Any]) -> bool:
     label_text = str(label)
     return (
-        (label_text == "test_rollout" or label_text.startswith("epoch_"))
+        (
+            label_text == "test_rollout"
+            or label_text.startswith("epoch_")
+            or label_text.startswith("eval_")
+        )
         and label_text.endswith("_rollout")
         and report.get("epoch") is not None
         and int(report.get("epoch") or 0) >= 0

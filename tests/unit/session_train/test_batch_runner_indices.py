@@ -10,14 +10,12 @@ from openviking.session.train.batch_runner import (
 )
 
 
-def test_case_loader_uses_sample_indices_filter_and_overrides_single_index():
+def test_case_loader_uses_multi_value_train_and_eval_index_filters():
     config = BatchTrainEvalConfig(
         dataset="tau2",
         domain="airline",
-        train_index=99,
-        train_indices=[1, 5, 5, 6],
-        eval_index=88,
-        eval_indices=[10, 14, 18],
+        train_index=[1, 5, 5, 6],
+        eval_index="10,14,18",
         benchmark_service_url="http://127.0.0.1:1944",
     )
 
@@ -25,28 +23,24 @@ def test_case_loader_uses_sample_indices_filter_and_overrides_single_index():
         config,
         split="train",
         sample_index=config.train_index,
-        sample_indices=config.train_indices,
     )
     eval_loader = _case_loader(
         config,
         split="train",
         sample_index=config.eval_index,
-        sample_indices=config.eval_indices,
     )
 
-    assert config.train_index is None
-    assert config.eval_index is None
-    assert config.train_indices == [1, 5, 6]
-    assert config.eval_indices == [10, 14, 18]
+    assert config.train_index == [1, 5, 6]
+    assert config.eval_index == [10, 14, 18]
     assert train_loader.filters == {"task_indices": [1, 5, 6]}
     assert eval_loader.filters == {"task_indices": [10, 14, 18]}
 
 
-def test_baseline_cache_key_depends_on_eval_indices():
+def test_baseline_cache_key_depends_on_multi_eval_index():
     base = BatchTrainEvalConfig(
         dataset="tau2",
         domain="airline",
-        eval_indices=[1, 5, 6],
+        eval_index=[1, 5, 6],
         trials=8,
         benchmark_service_url="http://127.0.0.1:1944",
     )
@@ -55,7 +49,7 @@ def test_baseline_cache_key_depends_on_eval_indices():
         BatchTrainEvalConfig(
             dataset="tau2",
             domain="airline",
-            eval_indices=[1, 5, 6],
+            eval_index="1,5,6",
             trials=8,
             benchmark_service_url="http://127.0.0.1:1944",
         )
@@ -64,8 +58,20 @@ def test_baseline_cache_key_depends_on_eval_indices():
         BatchTrainEvalConfig(
             dataset="tau2",
             domain="airline",
-            eval_indices=[1, 5],
+            eval_index=[1, 5],
             trials=8,
             benchmark_service_url="http://127.0.0.1:1944",
         )
     )
+
+
+def test_empty_index_filter_is_invalid():
+    import pytest
+
+    with pytest.raises(ValueError, match="train_index must not be empty"):
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            train_index="",
+            benchmark_service_url="http://127.0.0.1:1944",
+        )

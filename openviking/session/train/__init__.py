@@ -89,6 +89,7 @@ from openviking.session.train.domain import (
     Rubric,
     RubricCriterion,
     RubricEvaluation,
+    ScopedRolloutTrainingResult,
     Trajectory,
     TrajectoryOutcome,
 )
@@ -179,6 +180,7 @@ __all__ = [
     "RolloutExecutor",
     "RolloutEvaluator",
     "RolloutTrainingResult",
+    "ScopedRolloutTrainingResult",
     "Rubric",
     "RubricCriterion",
     "RubricEvaluation",

@@ -325,6 +325,12 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         _write_json(rollout_dir / "tool_calls.json", _tool_calls(rollout))
         _write_json(rollout_dir / "evaluation.json", evaluation_to_dict(record.evaluation))
         (rollout_dir / "memory_context.md").write_text(_memory_context(rollout), encoding="utf-8")
+        task_case_skill = _task_case_experience_skill(rollout)
+        if task_case_skill:
+            (rollout_dir / "task_case_experience_skill.md").write_text(
+                task_case_skill,
+                encoding="utf-8",
+            )
         (rollout_dir / "prompt_for_llm.md").write_text(_prompt_for_llm(record), encoding="utf-8")
         # Full commit messages (as sent to session.commit)
         commit_msgs = _build_commit_messages(rollout)
@@ -638,6 +644,10 @@ def _status_payload(record: _RolloutRecord) -> dict[str, Any]:
         "score": record.score,
         "policy_snapshot_id": rollout.policy_snapshot_id,
         "has_memory_context": bool(_memory_context(rollout).strip()),
+        "has_task_case_experience_skill": bool(_task_case_experience_skill(rollout).strip()),
+        "task_case_experience_skill_path": "task_case_experience_skill.md"
+        if _task_case_experience_skill(rollout).strip()
+        else None,
         "artifact_state": record.artifact_state,
         "commit_error": record.commit_result.get("error") if record.commit_result else None,
         "commit_task_status": (
@@ -727,6 +737,14 @@ def _memory_context(rollout: Rollout) -> str:
     return str(value)
 
 
+def _task_case_experience_skill(rollout: Rollout) -> str:
+    metadata = rollout.metadata or {}
+    value = metadata.get("task_case_experience_skill")
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _case_group_id(rollout: Rollout) -> str:
     split = _safe_fragment(_split(rollout) or "split")
     task_no = _safe_fragment(
@@ -758,6 +776,11 @@ def _stage_dir(label: str, *, epoch: int | None = None) -> str:
     if label.startswith("final_") and label.endswith("_rollout"):
         split = label.removeprefix("final_").removesuffix("_rollout")
         return f"final/{_safe_fragment(split)}"
+    if label.startswith("eval_") and label.endswith("_rollout"):
+        split = label.removeprefix("eval_").removesuffix("_rollout")
+        if split == "train":
+            return "train" if epoch is None else f"epoch_{epoch}/train"
+        return "eval" if epoch is None else f"epoch_{epoch}/eval"
     if label.startswith("epoch_") and label.endswith("_rollout"):
         split = label.removeprefix("epoch_").removesuffix("_rollout")
         if split == "train":
@@ -823,11 +846,9 @@ def _build_commit_messages(rollout: Rollout) -> list[dict[str, Any]]:
         _case_spec_message_to_request,
         _evaluation_message_to_request,
         _message_to_request,
-        _training_oracle_summary_message_to_request,
     )
 
     messages: list[dict[str, Any]] = [_case_spec_message_to_request(rollout)]
-    messages.append(_training_oracle_summary_message_to_request(rollout))
     for msg in rollout.messages:
         messages.append(_message_to_request(msg))
     messages.append(_evaluation_message_to_request(rollout))

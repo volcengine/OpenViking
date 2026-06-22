@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 from openviking.session.memory.utils.uri import render_template
 from openviking.utils.time_utils import parse_iso_datetime
@@ -58,10 +59,23 @@ def _deserialize_datetime(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+
+
+def _uri_basename(uri: str) -> str:
+    name = str(uri or "").rstrip("/").rsplit("/", 1)[-1]
+    return name.removesuffix(".md")
+
+
+def _template_link_target(source_uri: Optional[str], target_uri: str) -> str:
+    if source_uri and target_uri:
+        return LinkRenderer.relative_path(str(source_uri), str(target_uri)) or str(target_uri)
+    return str(target_uri or "")
+
 def _serialize_with_metadata(
     metadata: Dict[str, Any],
     content_template: str = None,
     extract_context: Any = None,
+    source_uri: Optional[str] = None,
 ) -> str:
     content = metadata.pop("content", "") or ""
 
@@ -69,6 +83,11 @@ def _serialize_with_metadata(
         try:
             template_vars = metadata.copy()
             template_vars["content"] = content
+            template_vars.setdefault("links", [])
+            template_vars.setdefault("backlinks", [])
+            template_vars["source_uri"] = source_uri or ""
+            template_vars["uri_basename"] = _uri_basename
+            template_vars["link_target"] = lambda target_uri: _template_link_target(source_uri, target_uri)
             content = render_template(content_template, template_vars, extract_context)
         except Exception:
             logger.exception(
@@ -79,6 +98,11 @@ def _serialize_with_metadata(
 
     if not clean_metadata:
         return content
+
+    clean_metadata.pop("_uri", None)
+    links = clean_metadata.get("links")
+    if isinstance(links, list) and source_uri:
+        content = LinkRenderer.render_links(content, str(source_uri), links)
 
     metadata_json = json.dumps(
         clean_metadata, indent=2, default=_serialize_datetime, ensure_ascii=False
@@ -119,6 +143,7 @@ class MemoryFileUtils:
             metadata,
             content_template=content_template,
             extract_context=extract_context,
+            source_uri=memory_file.uri,
         )
 
     @staticmethod

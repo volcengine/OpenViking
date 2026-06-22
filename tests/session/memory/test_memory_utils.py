@@ -401,3 +401,25 @@ Content"""
         )
 
         assert memory_file.plain_content() == "Worked with Frank Ocean."
+
+    def test_write_does_not_put_uri_in_memory_fields_metadata(self):
+        memory_file = MemoryFile(
+            uri="viking://user/default/memories/experiences/source.md",
+            memory_type="experiences",
+            content="Source content mentions Target.",
+            extra_fields={"_uri": "viking://stale/should-not-persist"},
+            links=[
+                {
+                    "from_uri": "viking://user/default/memories/experiences/source.md",
+                    "to_uri": "viking://user/default/memories/trajectories/target.md",
+                    "link_type": "derived_from",
+                    "match_text": "Target",
+                }
+            ],
+        )
+
+        written = MemoryFileUtils.write(memory_file)
+        parsed = parse_memory_file_with_fields(written)
+
+        assert "_uri" not in parsed
+        assert "[Target](../trajectories/target.md)" in written

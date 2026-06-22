@@ -235,10 +235,10 @@ if not isinstance(ov_server, dict):
     ov_server = {}
 bot["ov_server"] = ov_server
 ov_server["server_url"] = openviking_url
-# Tau2 VikingBot rollout should learn from distilled experiences only.
-# Keep structured case oracles and diagnostic trajectories out of runtime recall
-# to avoid leaking train-case-specific answers or verbose failure traces.
-ov_server["case_recall_limit"] = 0
+# Tau2 VikingBot rollout uses experience memories; matching cases are only used
+# to follow deterministic case -> experience links. Diagnostic trajectories are
+# not injected into runtime recall.
+ov_server["case_recall_limit"] = max(int(ov_server.get("case_recall_limit", 0) or 0), 3)
 ov_server["trajectory_recall_limit"] = 0
 ov_server["exp_recall_limit"] = max(int(ov_server.get("exp_recall_limit", 0) or 0), 6)
 ov_server["exp_recall_max_chars"] = max(

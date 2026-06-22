@@ -1340,9 +1340,7 @@ def test_tool_context_syncs_legacy_memory_user_alias():
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(monkeypatch, tmp_path):
     calls = []
 
     class _FakeClient:
@@ -1380,9 +1378,7 @@ async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_type_quota_groups_with_event_summaries_and_uris(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_type_quota_groups_with_event_summaries_and_uris(monkeypatch, tmp_path):
     clients = []
     base_uri = "viking://user/default/peers/sender-1/memories"
 
@@ -1394,8 +1390,7 @@ async def test_viking_memory_type_quota_groups_with_event_summaries_and_uris(
                 f"{base_uri}/events/e2.md": (
                     "Summary: long event summary\n"
                     "2023-01-01 (Sunday) ChatLog:\n"
-                    "full long event details "
-                    + ("x" * 800)
+                    "full long event details " + ("x" * 800)
                 ),
                 f"{base_uri}/events/e3.md": "legacy event without summary",
                 f"{base_uri}/entities/en1.md": "short entity",
@@ -1498,9 +1493,7 @@ async def test_viking_memory_type_quota_groups_with_event_summaries_and_uris(
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_type_quota_continues_after_oversized_entity(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_type_quota_continues_after_oversized_entity(monkeypatch, tmp_path):
     base_uri = "viking://user/default/peers/sender-1/memories"
 
     class _FakeClient:
@@ -1542,17 +1535,15 @@ async def test_viking_memory_type_quota_continues_after_oversized_entity(
     )
 
     assert '<memory index="1" type="uri">' in result
-    assert '<uri>viking://user/default/peers/sender-1/memories/entities/long.md</uri>' in result
+    assert "<uri>viking://user/default/peers/sender-1/memories/entities/long.md</uri>" in result
     assert '<memory index="2" type="full">' in result
-    assert '<uri>viking://user/default/peers/sender-1/memories/entities/short.md</uri>' in result
+    assert "<uri>viking://user/default/peers/sender-1/memories/entities/short.md</uri>" in result
     assert "<content>short fact</content>" in result
     assert "long fact " not in result
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_type_quota_does_not_overflow_preference_budget(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_type_quota_does_not_overflow_preference_budget(monkeypatch, tmp_path):
     base_uri = "viking://user/default/peers/sender-1/memories"
 
     class _FakeClient:
@@ -1600,9 +1591,7 @@ async def test_viking_memory_type_quota_does_not_overflow_preference_budget(
 
 
 @pytest.mark.asyncio
-async def test_viking_memory_context_returns_empty_after_profile_filter(
-    monkeypatch, tmp_path
-):
+async def test_viking_memory_context_returns_empty_after_profile_filter(monkeypatch, tmp_path):
     class _FakeClient:
         async def search_memory(self, **_kwargs):
             return [
@@ -1705,7 +1694,9 @@ async def test_openviking_grep_default_memory_expands_current_peer(monkeypatch):
 
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/memories/"] if include_self else []
-            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            uris.extend(
+                f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or []
+            )
             return uris
 
         async def grep(self, uri, pattern, case_insensitive=False, user_id=None):
@@ -1740,7 +1731,9 @@ async def test_openviking_list_default_memory_expands_current_peer(monkeypatch):
 
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/memories/"] if include_self else []
-            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            uris.extend(
+                f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or []
+            )
             return uris
 
         async def list_resources(self, path=None, recursive=False):
@@ -1774,7 +1767,9 @@ async def test_openviking_glob_root_adds_current_peer_memory(monkeypatch):
 
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/memories/"] if include_self else []
-            uris.extend(f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            uris.extend(
+                f"viking://user/default/peers/{peer_id}/memories/" for peer_id in peer_ids or []
+            )
             return uris
 
         async def glob(self, pattern, uri="viking://"):
@@ -1811,8 +1806,7 @@ async def test_openviking_glob_root_uses_namespaced_self_targets_for_root_key(mo
         def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
             uris = ["viking://user/admin/memories/"] if include_self else []
             uris.extend(
-                f"viking://user/admin/peers/{peer_id}/memories/"
-                for peer_id in peer_ids or []
+                f"viking://user/admin/peers/{peer_id}/memories/" for peer_id in peer_ids or []
             )
             return uris
 
@@ -2088,3 +2082,293 @@ async def test_openviking_request_connection_client_is_closed_after_tool_call(mo
     assert result == "No results found for query: hello"
     assert len(_DummyHTTPClient.instances) == 1
     assert _DummyHTTPClient.instances[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_experience_reminder_follows_direct_case_experience_links(monkeypatch, tmp_path):
+    from openviking.session.memory.dataclass import MemoryFile, StoredLink
+    from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+    case_uri = "viking://user/admin/memories/cases/case1.md"
+    exp_uri = "viking://user/admin/memories/experiences/exp1.md"
+    direct_exp_uri = "viking://user/admin/memories/experiences/direct.md"
+    case_content = MemoryFileUtils.write(
+        MemoryFile(
+            uri=case_uri,
+            content="# case1\n\n## Linked Experiences\n- exp1",
+            memory_type="cases",
+            links=[
+                StoredLink(
+                    from_uri=case_uri,
+                    to_uri=exp_uri,
+                    link_type="related_to",
+                    weight=1.0,
+                    match_text=None,
+                    description="",
+                ).model_dump()
+            ],
+        )
+    )
+
+    class _FakeClient:
+        admin_user_id = "admin"
+
+        def __init__(self):
+            self.search_calls = []
+            self.search_experience_calls = []
+            self.read_calls = []
+
+        async def search(self, *, query, target_uri, limit):
+            self.search_calls.append((query, target_uri, limit))
+            if target_uri.endswith("/cases/"):
+                return {"memories": [{"uri": case_uri, "score": 0.9}]}
+            return {"memories": []}
+
+        async def search_experiences(self, query, limit=5):
+            self.search_experience_calls.append((query, limit))
+            return [{"uri": direct_exp_uri, "score": 0.6}] if limit > 0 else []
+
+        async def read_content(self, uri, level="read"):
+            self.read_calls.append((uri, level))
+            if uri == case_uri and level == "raw":
+                return case_content
+            if uri == case_uri:
+                return "# case1\n\n## Linked Experiences\n- exp1"
+            if uri == exp_uri:
+                return "linked exp content"
+            if uri == direct_exp_uri:
+                return "direct exp content"
+            return ""
+
+        async def close(self):
+            return None
+
+    fake_client = _FakeClient()
+
+    async def _fake_create(**_kwargs):
+        return fake_client
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config(
+            "root",
+            case_recall_limit=1,
+            exp_recall_limit=2,
+            exp_recall_max_chars=4000,
+        ),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    content, uris = await MemoryStore(tmp_path).get_viking_experience_reminder(
+        query="hello",
+        workspace_id="workspace",
+    )
+
+    assert fake_client.search_calls == [("hello", "viking://user/admin/memories/cases/", 1)]
+    assert fake_client.search_experience_calls == []
+    assert (case_uri, "raw") in fake_client.read_calls
+    assert "linked exp content" in content
+    assert "direct exp content" not in content
+    assert exp_uri in uris
+    assert direct_exp_uri not in uris
+
+
+@pytest.mark.asyncio
+async def test_tau2_experience_reminder_loads_case_by_exact_task_not_query(monkeypatch, tmp_path):
+    from openviking.session.memory.dataclass import MemoryFile, StoredLink
+    from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+    matched_case_uri = "viking://user/admin/memories/cases/tau2_airline_train_1.md"
+    wrong_case_uri = "viking://user/admin/memories/cases/tau2_airline_train_9.md"
+    matched_exp_uri = "viking://user/admin/memories/experiences/matched.md"
+    wrong_exp_uri = "viking://user/admin/memories/experiences/wrong.md"
+
+    def _case_content(case_uri, exp_uri, *, task_no, task_id):
+        return MemoryFileUtils.write(
+            MemoryFile(
+                uri=case_uri,
+                content=f"# case {task_no}",
+                memory_type="cases",
+                extra_fields={
+                    "case_name": case_uri.rsplit("/", 1)[-1].removesuffix(".md"),
+                    "task_signature": f"tau2:airline:train:{task_id}",
+                    "input": json.dumps(
+                        {
+                            "domain": "airline",
+                            "split": "train",
+                            "data_split": "airline_train",
+                            "task_no": task_no,
+                            "task_id": str(task_id),
+                        }
+                    ),
+                },
+                links=[
+                    StoredLink(
+                        from_uri=case_uri,
+                        to_uri=exp_uri,
+                        link_type="related_to",
+                        weight=1.0,
+                        match_text=None,
+                        description="",
+                    ).model_dump()
+                ],
+            )
+        )
+
+    raw_cases = {
+        matched_case_uri: _case_content(matched_case_uri, matched_exp_uri, task_no=1, task_id=7),
+        wrong_case_uri: _case_content(wrong_case_uri, wrong_exp_uri, task_no=9, task_id=99),
+    }
+
+    class _FakeClient:
+        admin_user_id = "admin"
+
+        def __init__(self):
+            self.search_calls = []
+            self.read_calls = []
+
+        async def search(self, *, query, target_uri, limit):
+            self.search_calls.append((query, target_uri, limit))
+            return {"memories": [{"uri": wrong_case_uri, "score": 0.99}]}
+
+        async def read_content(self, uri, level="read"):
+            self.read_calls.append((uri, level))
+            if uri in raw_cases and level == "raw":
+                return raw_cases[uri]
+            if uri == matched_exp_uri:
+                return "matched exp content"
+            if uri == wrong_exp_uri:
+                return "wrong exp content"
+            return ""
+
+        async def close(self):
+            return None
+
+    fake_client = _FakeClient()
+
+    async def _fake_create(**_kwargs):
+        return fake_client
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config("root", case_recall_limit=3, exp_recall_max_chars=4000),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    content, uris = await MemoryStore(tmp_path).get_viking_experience_reminder(
+        query="same customer cancellation text could match wrong case",
+        workspace_id="workspace",
+        case_lookup={
+            "benchmark": "tau2",
+            "domain": "airline",
+            "split": "train",
+            "data_split": "airline_train",
+            "task_no": 1,
+            "task_id": "7",
+            "case_name": "tau2_airline_train_1",
+            "task_signature": "tau2:airline:train:7",
+            "strict": True,
+        },
+    )
+
+    assert fake_client.search_calls == []
+    assert (matched_case_uri, "raw") in fake_client.read_calls
+    assert (wrong_case_uri, "raw") not in fake_client.read_calls
+    assert "matched exp content" in content
+    assert "wrong exp content" not in content
+    assert uris == [matched_exp_uri]
+
+
+@pytest.mark.asyncio
+async def test_tau2_experience_reminder_returns_empty_when_exact_case_mismatches(
+    monkeypatch, tmp_path
+):
+    from openviking.session.memory.dataclass import MemoryFile, StoredLink
+    from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+    case_uri = "viking://user/admin/memories/cases/tau2_airline_train_1.md"
+    exp_uri = "viking://user/admin/memories/experiences/wrong.md"
+    raw_case = MemoryFileUtils.write(
+        MemoryFile(
+            uri=case_uri,
+            content="# mismatched",
+            memory_type="cases",
+            extra_fields={
+                "case_name": "tau2_airline_train_1",
+                "task_signature": "tau2:airline:train:99",
+                "input": json.dumps(
+                    {
+                        "domain": "airline",
+                        "split": "train",
+                        "data_split": "airline_train",
+                        "task_no": 1,
+                        "task_id": "99",
+                    }
+                ),
+            },
+            links=[
+                StoredLink(
+                    from_uri=case_uri,
+                    to_uri=exp_uri,
+                    link_type="related_to",
+                    weight=1.0,
+                    match_text=None,
+                    description="",
+                ).model_dump()
+            ],
+        )
+    )
+
+    class _FakeClient:
+        admin_user_id = "admin"
+
+        def __init__(self):
+            self.search_calls = []
+            self.read_calls = []
+
+        async def search(self, *, query, target_uri, limit):
+            self.search_calls.append((query, target_uri, limit))
+            return {"memories": [{"uri": case_uri, "score": 0.99}]}
+
+        async def read_content(self, uri, level="read"):
+            self.read_calls.append((uri, level))
+            if uri == case_uri and level == "raw":
+                return raw_case
+            if uri == exp_uri:
+                return "wrong exp content"
+            return ""
+
+        async def close(self):
+            return None
+
+    fake_client = _FakeClient()
+
+    async def _fake_create(**_kwargs):
+        return fake_client
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config("root", case_recall_limit=3, exp_recall_max_chars=4000),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    content, uris = await MemoryStore(tmp_path).get_viking_experience_reminder(
+        query="query would retrieve wrong case",
+        workspace_id="workspace",
+        case_lookup={
+            "benchmark": "tau2",
+            "domain": "airline",
+            "split": "train",
+            "data_split": "airline_train",
+            "task_no": 1,
+            "task_id": "7",
+            "case_name": "tau2_airline_train_1",
+            "task_signature": "tau2:airline:train:7",
+            "strict": True,
+        },
+    )
+
+    assert fake_client.search_calls == []
+    assert (case_uri, "raw") in fake_client.read_calls
+    assert content == ""
+    assert uris == []

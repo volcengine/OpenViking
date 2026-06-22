@@ -91,6 +91,7 @@ class TrajectoryRolloutAnalyzer:
             strict_extract_errors=context.strict_extract_errors,
             latest_archive_overview=context.latest_archive_overview,
             include_session_skills=context.include_session_skills,
+            case_name=getattr(rollout.case, "name", ""),
         )
         contexts = list((result or {}).get("contexts", []))
         skill_gradients = list((result or {}).get("skill_gradients", []))
@@ -137,6 +138,7 @@ class TrajectoryRolloutAnalyzer:
         strict_extract_errors: bool = False,
         latest_archive_overview: str = "",
         include_session_skills: bool = False,
+        case_name: str = "",
     ) -> dict[str, list[Any]]:
         """Extract and persist trajectory memories from rollout messages.
 
@@ -162,6 +164,7 @@ class TrajectoryRolloutAnalyzer:
             ctx=ctx,
             strict_extract_errors=strict_extract_errors,
             include_session_skills=include_session_skills,
+            case_name=case_name,
         )
         if phase_result is None:
             return empty_result
@@ -177,6 +180,7 @@ class TrajectoryRolloutAnalyzer:
         ctx: RequestContext,
         strict_extract_errors: bool,
         include_session_skills: bool = False,
+        case_name: str = "",
     ) -> tuple[list[str], list[str], list[Context], list[PatchSemanticGradient]] | None:
         config = get_openviking_config()
         vlm = self.vlm or config.vlm.get_vlm_instance()
@@ -228,6 +232,8 @@ class TrajectoryRolloutAnalyzer:
                 viking_fs=viking_fs,
                 ctx=ctx,
             )
+
+            _ensure_trajectory_case_name(traj_ops, case_name=case_name)
 
             memory_result = await self._apply_trajectory_operations(
                 operations=traj_ops,
@@ -303,8 +309,10 @@ class TrajectoryRolloutAnalyzer:
             )
             outcome = str(fields.get("outcome") or "unknown")
             retrieval_anchor = str(fields.get("retrieval_anchor") or "")
+            case_name = str(fields.get("case_name") or "")
             metadata = dict(fields)
             metadata.setdefault("memory_type", mf.memory_type or fields.get("memory_type"))
+            metadata.setdefault("case_name", case_name)
             trajectories.append(
                 Trajectory(
                     name=name,
@@ -356,6 +364,18 @@ def _evaluation_from_trajectories(trajectories: list[Trajectory]) -> RubricEvalu
         feedback=[] if passed else ["No trajectory was extracted from the rollout."],
         metadata={"trajectory_count": len(trajectories)},
     )
+
+
+def _ensure_trajectory_case_name(operations: ResolvedOperations, *, case_name: str) -> None:
+    case_name = str(case_name or "").strip()
+    if not case_name:
+        return
+    for op in getattr(operations, "upsert_operations", []) or []:
+        if getattr(op, "memory_type", None) != _TRAJECTORY_MEMORY_TYPE:
+            continue
+        fields = getattr(op, "memory_fields", None)
+        if isinstance(fields, dict):
+            fields["case_name"] = case_name
 
 
 def _messages_with_evaluation_feedback(

@@ -403,7 +403,7 @@ async def test_training_updates_execution_metadata_epoch_each_epoch():
         policy_optimizer=DummyOptimizer(),
         policy_updater=DummyUpdater(),
     )
-    context = PipelineContext(max_epochs=2, execution_metadata={"rollout_stage": "epoch_train_rollout"})
+    context = PipelineContext(max_epochs=2, execution_metadata={"rollout_stage": "eval_train_rollout"})
 
     result = await pipeline.train(
         case_loader=ListCaseLoader([_case()]),
@@ -469,7 +469,7 @@ async def test_train_epoch_eval_uses_configured_split_metadata():
             max_epochs=1,
             eval_each_epoch_case_loader=ListCaseLoader([_case()]),
             execution_metadata={
-                "rollout_stage": "epoch_train_rollout",
+                "rollout_stage": "eval_train_rollout",
                 "eval_split": "train",
             },
             lifecycle_hooks=[PipelineReportHook(), hook],
@@ -477,9 +477,9 @@ async def test_train_epoch_eval_uses_configured_split_metadata():
     )
 
     assert len(result.evaluation_passes) == 1
-    assert result.evaluation_passes[0].metadata.get("rollout_stage") == "epoch_train_rollout"
+    assert result.evaluation_passes[0].metadata.get("rollout_stage") == "eval_train_rollout"
     assert result.evaluation_passes[0].metadata.get("eval_split") == "train"
-    assert ("eval_report", "epoch_train_rollout", 0) in hook.events
+    assert ("eval_report", "eval_train_rollout", 0) in hook.events
 
 
 @pytest.mark.asyncio
@@ -691,13 +691,36 @@ async def test_batch_policy_trainer_trains_from_rollout_batch():
 
 @pytest.mark.asyncio
 async def test_streaming_policy_trainer_flushes_on_gradient_count():
-    from openviking.session.train import StreamingPolicyTrainer, StreamingPolicyTrainerConfig
+    from openviking.session.train import (
+        PolicyPlanItem,
+        StreamingPolicyTrainer,
+        StreamingPolicyTrainerConfig,
+    )
+
+    class LinkingOptimizer(DummyOptimizer):
+        async def plan(self, gradients, policy_set, context):
+            del policy_set, context
+            return PolicyUpdatePlan(
+                items=[
+                    PolicyPlanItem(
+                        kind="upsert",
+                        memory_type="experiences",
+                        target_name=f"exp_{idx}",
+                        target_uri=f"viking://user/u/memories/experiences/exp_{idx}.md",
+                        before_content=None,
+                        after_content=f"content {idx}",
+                        links=list(gradient.links),
+                    )
+                    for idx, gradient in enumerate(gradients)
+                ],
+                metadata={"gradient_count": len(gradients)},
+            )
 
     trainer = StreamingPolicyTrainer(
         policy_set=_policy_set(),
         rollout_analyzer=DummyAnalyzer(),
         gradient_estimator=DummyEstimator(),
-        policy_optimizer=DummyOptimizer(),
+        policy_optimizer=LinkingOptimizer(),
         policy_updater=DummyUpdater(),
         context=PipelineContext(),
         config=StreamingPolicyTrainerConfig(
@@ -721,15 +744,156 @@ async def test_streaming_policy_trainer_flushes_on_gradient_count():
         trainer.submit_rollout(rollout1),
         trainer.submit_rollout(rollout2),
     )
-    assert first is second
+    assert first is not second
+    assert first.batch_result is second.batch_result
+    assert len(first.analyses) == 1
+    assert len(second.analyses) == 1
+    assert [analysis.trajectories[0].uri for analysis in first.analyses] == [
+        "viking://user/u/memories/trajectories/duplicate_booking.md"
+    ]
+    assert len(first.plan.items) == 2
+    assert len(second.plan.items) == 2
     assert second.metadata["flush_reason"] == "count"
-    assert second.metadata["gradient_count"] == 2
+    assert second.metadata["gradient_count"] == 1
+    assert second.metadata["batch_gradient_count"] == 2
     assert second.apply_result.updated_policy_set.policies[0].version == 2
     assert await trainer.get_buffered_gradient_count() == 0
-    assert trainer.last_apply_result is second.apply_result
+    assert trainer.last_apply_result is second.batch_result.apply_result
 
     assert await trainer.close() is None
     assert trainer.closed is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_source_trajectory():
+    from openviking.session.train import (
+        PolicyPlanItem,
+        StreamingPolicyTrainer,
+        StreamingPolicyTrainerConfig,
+    )
+
+    class CaseAwareAnalyzer:
+        async def analyze(self, rollout, context):
+            del context
+            return RolloutAnalysis(
+                evaluation=RubricEvaluation(
+                    passed=True,
+                    score=1.0,
+                    criterion_results=[],
+                    feedback=[],
+                ),
+                trajectories=[
+                    Trajectory(
+                        name=rollout.case.name,
+                        uri=f"viking://user/u/memories/trajectories/{rollout.case.name}.md",
+                        content=f"trajectory {rollout.case.name}",
+                        outcome="success",
+                        retrieval_anchor="",
+                    )
+                ],
+            )
+
+    class NewExpEstimator:
+        async def estimate(self, analysis, experience_set, context):
+            del context
+            traj = analysis.trajectories[0]
+            target_uri = f"{experience_set.root_uri}/{traj.name}.md"
+            return [
+                DummyGradient(
+                    target_name=traj.name,
+                    target_uri=target_uri,
+                    base_version=None,
+                    rationale="new scoped experience",
+                    links=[
+                        StoredLink(
+                            from_uri=target_uri,
+                            to_uri=traj.uri,
+                            link_type="derived_from",
+                            weight=1.0,
+                        )
+                    ],
+                    confidence=0.9,
+                )
+            ]
+
+    class LinkingOptimizer:
+        async def plan(self, gradients, policy_set, context):
+            del policy_set, context
+            return PolicyUpdatePlan(
+                items=[
+                    PolicyPlanItem(
+                        kind="upsert",
+                        memory_type="experiences",
+                        target_name=gradient.target_name,
+                        target_uri=gradient.target_uri,
+                        before_content=None,
+                        after_content=f"content {gradient.target_name}",
+                        links=list(gradient.links),
+                    )
+                    for gradient in gradients
+                ],
+                metadata={"gradient_count": len(gradients)},
+            )
+
+    class PassthroughUpdater:
+        async def apply(self, plan, policy_set, context, *, transaction_handle=None):
+            del context, transaction_handle
+            return PolicyApplyResult(
+                updated_policy_set=policy_set,
+                written_uris=[item.target_uri for item in plan.items if item.target_uri],
+                errors=[],
+            )
+
+    def make_case(name: str) -> Case:
+        case = _case()
+        return Case(
+            name=name,
+            task_signature=case.task_signature,
+            input=case.input,
+            rubric=case.rubric,
+        )
+
+    trainer = StreamingPolicyTrainer(
+        policy_set=_policy_set(),
+        rollout_analyzer=CaseAwareAnalyzer(),
+        gradient_estimator=NewExpEstimator(),
+        policy_optimizer=LinkingOptimizer(),
+        policy_updater=PassthroughUpdater(),
+        context=PipelineContext(),
+        config=StreamingPolicyTrainerConfig(
+            max_gradients_per_update=2,
+            max_wait_seconds=60.0,
+            timer_check_interval_seconds=60.0,
+        ),
+    )
+    rollout_a = Rollout(
+        case=make_case("case_a"),
+        messages=[Message(id="a", role="user", parts=[TextPart(text="a")])],
+        policy_snapshot_id="snapshot-1",
+    )
+    rollout_b = Rollout(
+        case=make_case("case_b"),
+        messages=[Message(id="b", role="user", parts=[TextPart(text="b")])],
+        policy_snapshot_id="snapshot-1",
+    )
+
+    first, second = await asyncio.gather(
+        trainer.submit_rollout(rollout_a),
+        trainer.submit_rollout(rollout_b),
+    )
+
+    assert first.batch_result is second.batch_result
+    assert {item.target_name for item in first.batch_result.plan.items} == {"case_a", "case_b"}
+    assert [item.target_name for item in first.plan.items] == ["case_a"]
+    assert [item.target_name for item in second.plan.items] == ["case_b"]
+    assert first.apply_result.written_uris == [
+        "viking://user/u/memories/experiences/case_a.md"
+    ]
+    assert second.apply_result.written_uris == [
+        "viking://user/u/memories/experiences/case_b.md"
+    ]
+
+    assert await trainer.close() is None
 
 
 @pytest.mark.asyncio
@@ -1001,7 +1165,8 @@ async def test_streaming_policy_trainer_close_flushes_buffer_and_rejects_submit(
     assert result is not None
     assert result.metadata["flush_reason"] == "close"
     assert result.metadata["gradient_count"] == 1
-    assert await submit_task is result
+    submit_result = await submit_task
+    assert submit_result.batch_result is result
     assert trainer.closed is True
     assert await trainer.get_buffered_gradient_count() == 0
     assert trainer.last_apply_result is result.apply_result
@@ -1230,7 +1395,10 @@ async def test_rollout_artifact_recorder_writes_train_rollouts_before_commit(tmp
         messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
         policy_snapshot_id="snapshot-1",
         evaluation=RubricEvaluation(passed=False, score=0.0, criterion_results=[], feedback=[]),
-        metadata={"memory": "remember airline seat-change rules"},
+        metadata={
+            "memory": "remember airline seat-change rules",
+            "task_case_experience_skill": "# task_case_experience\nlinked exp content",
+        },
     )
 
     recorder.record_rollout_completion(
@@ -1255,10 +1423,14 @@ async def test_rollout_artifact_recorder_writes_train_rollouts_before_commit(tmp
     assert (rollout_dir / "evaluation.json").exists()
     assert (rollout_dir / "prompt_for_llm.md").exists()
     assert (rollout_dir / "memory_context.md").read_text() == "remember airline seat-change rules"
+    skill_path = rollout_dir / "task_case_experience_skill.md"
+    assert skill_path.read_text() == "# task_case_experience\nlinked exp content"
     assert (rollout_dir / "commit_messages.json").exists()
     assert not (rollout_dir / "commit_result.json").exists()
     status = json.loads((rollout_dir / "status.json").read_text())
     assert status["artifact_state"] == "rollout_done"
+    assert status["has_task_case_experience_skill"] is True
+    assert status["task_case_experience_skill_path"] == "task_case_experience_skill.md"
     index = json.loads((tmp_path / "rollouts_index.json").read_text())
     assert index["case_groups"][0]["rollouts"][0]["artifact_state"] == "rollout_done"
 
@@ -1314,7 +1486,7 @@ def test_rollout_artifact_recorder_separates_epoch_eval_dirs(tmp_path):
     assert rollout_stages == ["epoch_0/eval", "epoch_1/eval"]
 
 
-def test_rollout_artifact_recorder_maps_epoch_train_rollout_to_train_dir(tmp_path):
+def test_rollout_artifact_recorder_maps_eval_train_rollout_to_train_dir(tmp_path):
     from openviking.session.train import RolloutArtifactRecorder
     from openviking.session.train.context import ExecutionContext
 
@@ -1341,7 +1513,7 @@ def test_rollout_artifact_recorder_maps_epoch_train_rollout_to_train_dir(tmp_pat
         index=0,
         context=ExecutionContext(
             policy_snapshot_id="snapshot-1",
-            metadata={"epoch": 0, "training": True, "rollout_stage": "epoch_train_rollout"},
+            metadata={"epoch": 0, "training": True, "rollout_stage": "eval_train_rollout"},
         ),
     )
 

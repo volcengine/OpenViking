@@ -215,6 +215,8 @@ def test_case_loader_uses_sample_index_filter():
     assert eval_loader.limit is None
     assert train_loader.split == "train"
     assert eval_loader.split == "test"
+    assert config.train_index == [7]
+    assert config.eval_index == [3]
     assert train_loader.filters == {"task_indices": [7]}
     assert eval_loader.filters == {"task_indices": [3]}
     assert all_loader.filters == {}

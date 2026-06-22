@@ -27,6 +27,14 @@ content_template: |
 
   ## Evidence
   {{ evidence }}
+
+  ## Linked Experiences
+  {%- for link in links or [] %}
+  {%- set target_uri = link.to_uri or "" %}
+  {%- if "/memories/experiences/" in target_uri %}
+  - [{{ uri_basename(target_uri) }}]({{ link_target(target_uri) }})
+  {%- endif %}
+  {%- endfor %}
 embedding_template: |-
   {{ case_name }}
 

@@ -34,19 +34,9 @@ logger = get_logger(__name__)
 def _progress_stage_label(stage: Any, *, default: str) -> str:
     stage_text = str(stage or "")
     stage_name = stage_text.split(maxsplit=1)[0]
-    if stage_name in {
-        "train_rollout",
-        "test_rollout",
-        "baseline_test_rollout",
-        "final_test_rollout",
-    }:
+    if stage_name.endswith("_rollout"):
         return f"{stage_name}_start"
-    if stage_name in {
-        "train_rollout_start",
-        "test_rollout_start",
-        "baseline_test_rollout_start",
-        "final_test_rollout_start",
-    }:
+    if stage_name.endswith("_rollout_start"):
         return stage_name
     return default
 

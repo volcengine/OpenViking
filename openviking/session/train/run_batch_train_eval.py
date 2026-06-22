@@ -65,25 +65,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--train-index",
-        type=int,
         default=None,
-        help="Run only the train sample at this 0-based split index. Default runs all train samples.",
-    )
-    parser.add_argument(
-        "--train-indices",
-        default=None,
-        help="Comma-separated train sample indices. Overrides --train-index.",
+        help=(
+            "Run train sample(s) at 0-based split index/indices. "
+            "Accepts one index or comma-separated indices, e.g. 7 or 1,5,6."
+        ),
     )
     parser.add_argument(
         "--eval-index",
-        type=int,
         default=None,
-        help="Run only the eval/test sample at this 0-based split index. Default runs all eval samples.",
-    )
-    parser.add_argument(
-        "--eval-indices",
-        default=None,
-        help="Comma-separated eval/test sample indices. Overrides --eval-index.",
+        help=(
+            "Run eval/test sample(s) at 0-based split index/indices. "
+            "Accepts one index or comma-separated indices, e.g. 3 or 10,14,18."
+        ),
     )
     parser.add_argument(
         "--force-baseline-recompute",
@@ -190,10 +184,8 @@ async def main_async() -> int:
             result_dir_name=args.result_dir_name,
             keep_default_tools=True,
             max_iterations=args.max_iterations,
-            train_index=args.train_index,
-            train_indices=_parse_indices_arg(args.train_indices),
-            eval_index=args.eval_index,
-            eval_indices=_parse_indices_arg(args.eval_indices),
+            train_index=_parse_indices_arg(args.train_index),
+            eval_index=_parse_indices_arg(args.eval_index),
             benchmark_service_url=args.benchmark_service_url,
             baseline_force_recompute=args.force_baseline_recompute,
             eval_each_epoch=args.eval_each_epoch,

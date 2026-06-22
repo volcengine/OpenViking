@@ -107,7 +107,10 @@ class ExperienceGradientEstimator:
             trajectory_summary=trajectory.content,
             trajectory_uri=trajectory.uri,
         )
-        extract_context = provider.get_extract_context()
+        if hasattr(provider, "get_extract_context"):
+            extract_context = provider.get_extract_context()
+        else:
+            extract_context = context
         isolation_handler = MemoryIsolationHandler(
             context.request_context,
             extract_context,
@@ -187,6 +190,8 @@ def _operations_to_gradients(
                         to_uri=trajectory.uri,
                         link_type="derived_from",
                         weight=1.0,
+                        match_text=None,
+                        description="",
                     )
                 ],
                 confidence=_confidence(trajectory, analysis),

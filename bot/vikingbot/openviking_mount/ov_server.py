@@ -485,6 +485,14 @@ class VikingClient:
                 return await self.client.overview(uri)
             elif level == "read":
                 return await self.client.read(uri)
+            elif level == "raw":
+                read_raw = getattr(self.client, "read_raw", None)
+                if read_raw is not None:
+                    return await read_raw(uri)
+                try:
+                    return await self.client.read(uri, raw=True)
+                except TypeError:
+                    return await self.client.read(uri)
             else:
                 raise ValueError(f"Unsupported level: {level}")
         except FileNotFoundError:
