@@ -973,12 +973,25 @@ class VikingClient:
         memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         client = await self._session_client_for_user(user_id)
-        if await client.session_exists(session_id):
+        try:
             return await client.get_session(session_id)
+        except Exception as exc:
+            if not self._is_not_found_error(exc):
+                raise
+
         return await client.create_session(
             session_id=session_id,
             memory_policy=memory_policy,
         )
+
+    @staticmethod
+    def _is_not_found_error(exc: Exception) -> bool:
+        code = getattr(exc, "code", None)
+        if code == "NOT_FOUND":
+            return True
+        if exc.__class__.__name__ == "NotFoundError":
+            return True
+        return "not found" in str(exc).lower()
 
     async def get_session(self, session_id: str, user_id: Optional[str] = None) -> Dict[str, Any]:
         await self.ensure_session(session_id, user_id=user_id)
