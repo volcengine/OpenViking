@@ -547,13 +547,7 @@ def check_vikingbot() -> CheckResult:
             )
         return "pass", "bot.ov_server configured for trusted OpenViking auth", None
 
-    if (
-        bot_uses_current_server
-        and auth_mode == "dev"
-        and not api_key
-        and not root_api_key
-        and not explicit_api_key_type
-    ):
+    if bot_uses_current_server and auth_mode == "dev":
         return "pass", "VikingBot aligned with dev OpenViking auth", None
 
     ovcli_api_key = "" if not _is_placeholder_secret(api_key) else _load_ovcli_api_key_for_doctor()

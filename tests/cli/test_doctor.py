@@ -735,6 +735,7 @@ class TestCheckVikingBot:
         config.write_text(
             json.dumps(
                 {
+                    "server": {"root_api_key": "root-key"},
                     "bot": {
                         "ov_server": {
                             "api_key": "user-key",
@@ -763,6 +764,19 @@ class TestCheckVikingBot:
         assert "dev OpenViking auth" in detail
         assert fix is None
 
+    def test_pass_dev_mode_with_ignored_bot_api_key(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps({"bot": {"ov_server": {"api_key": "stale-key"}}})
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "dev OpenViking auth" in detail
+        assert fix is None
+
     def test_warn_when_bot_ov_server_missing_in_api_key_mode(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(json.dumps({"server": {"root_api_key": "root-key"}, "bot": {}}))
@@ -776,7 +790,14 @@ class TestCheckVikingBot:
 
     def test_warn_when_user_api_key_missing(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
-        config.write_text(json.dumps({"bot": {"ov_server": {"api_key_type": "user"}}}))
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {"root_api_key": "root-key"},
+                    "bot": {"ov_server": {"api_key_type": "user"}},
+                }
+            )
+        )
 
         with patch("openviking_cli.doctor._find_config", return_value=config):
             status, detail, fix = check_vikingbot()
@@ -806,7 +827,14 @@ class TestCheckVikingBot:
 
     def test_warn_with_legacy_root_api_key(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
-        config.write_text(json.dumps({"bot": {"ov_server": {"root_api_key": "root-key"}}}))
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {"root_api_key": "server-root-key"},
+                    "bot": {"ov_server": {"root_api_key": "root-key"}},
+                }
+            )
+        )
 
         with patch("openviking_cli.doctor._find_config", return_value=config):
             status, detail, fix = check_vikingbot()
