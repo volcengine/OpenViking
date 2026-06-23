@@ -32,8 +32,7 @@ class RerankConfig(BaseModel):
     )
 
     extra_headers: Optional[Dict[str, str]] = Field(
-        default=None,
-        description="Extra HTTP headers for OpenAI-compatible providers"
+        default=None, description="Extra HTTP headers for OpenAI-compatible providers"
     )
 
     timeout: float = Field(
