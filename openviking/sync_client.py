@@ -463,7 +463,6 @@ class SyncOpenViking:
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
         level_limit: int = 5,
-        remote_return_limit: int = 0,
     ) -> Dict:
         """Content search"""
         return run_async(
@@ -474,7 +473,6 @@ class SyncOpenViking:
                 node_limit,
                 exclude_uri,
                 level_limit,
-                remote_return_limit,
             )
         )
 

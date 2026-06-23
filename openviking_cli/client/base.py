@@ -219,7 +219,6 @@ class BaseClient(ABC):
         exclude_uri: Optional[str] = None,
         node_limit: Optional[int] = None,
         level_limit: int = 5,
-        remote_return_limit: int = 0,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         ...

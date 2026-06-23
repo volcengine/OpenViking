@@ -761,7 +761,6 @@ class VikingFS:
         node_limit: Optional[int] = None,
         level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
-        remote_return_limit: int = 0,
     ) -> Dict:
         """Content search by pattern or keywords.
 
@@ -780,9 +779,8 @@ class VikingFS:
             node_limit: Maximum number of results to return
             level_limit: Maximum depth level to traverse (default: 5)
             ctx: Request context
-            remote_return_limit: Maximum files recalled by vikingdb bm25.
-                0 means auto-adapt: use maximum limit (100000) to avoid
-                truncating bm25 recall results (default: 0, max: 100000)
+            Internal bm25 recall limit is auto-adapted from node_limit as
+            min(node_limit * 5, 100000); when node_limit is unset, use 100000.
 
         Returns:
             Dict with matches, count, match_count, files_scanned
@@ -791,12 +789,6 @@ class VikingFS:
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.
         await self.stat(uri, ctx=ctx, skip_count=True)
-
-        # Clamp remote_return_limit to valid range (0 = auto, 1-100000 = explicit)
-        if remote_return_limit < 0:
-            remote_return_limit = 0
-        elif remote_return_limit > 0:
-            remote_return_limit = max(1, min(remote_return_limit, 100000))
 
         # Read engine and threshold from grep_config (ov.conf)
         engine = self.grep_config.engine if self.grep_config else "auto"
@@ -826,7 +818,6 @@ class VikingFS:
                 case_insensitive=case_insensitive,
                 node_limit=node_limit,
                 level_limit=level_limit,
-                remote_return_limit=remote_return_limit,
                 ctx=ctx,
             )
 
@@ -955,7 +946,6 @@ class VikingFS:
         case_insensitive,
         node_limit,
         level_limit,
-        remote_return_limit,
         ctx,
     ):
         """VikingDB bm25 recall + local fs precise matching."""
@@ -967,11 +957,10 @@ class VikingFS:
         query = " ".join(kw.strip() for kw in pattern.split("|") if kw.strip())
         filter_expr = PathScope("uri", uri, depth=level_limit)
 
-        # Auto-adapt remote_return_limit: when 0 (default), recall up to
-        # 5x requested matches while capping at VikingDB's max limit. If
-        # node_limit is unset, use the maximum limit to avoid truncation.
-        if remote_return_limit == 0:
-            remote_return_limit = min(node_limit * 5, 100000) if node_limit else 100000
+        # Auto-adapt bm25 recall limit: recall up to 5x requested matches
+        # while capping at VikingDB's max limit. If node_limit is unset,
+        # use the maximum limit to avoid truncation.
+        remote_return_limit = min(node_limit * 5, 100000) if node_limit else 100000
 
         # Step 1: vikingdb recall candidate files
         try:

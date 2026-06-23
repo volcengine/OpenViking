@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for /api/v1/code/* endpoints."""
 
-
 from openviking_cli.exceptions import PermissionDeniedError
 
 PY_SAMPLE = '''"""Module top doc."""

@@ -560,7 +560,6 @@ class AsyncOpenViking:
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
         level_limit: int = 5,
-        remote_return_limit: int = 0,
     ) -> Dict:
         """Content search"""
         await self._ensure_initialized()
@@ -571,7 +570,6 @@ class AsyncOpenViking:
             node_limit=node_limit,
             exclude_uri=exclude_uri,
             level_limit=level_limit,
-            remote_return_limit=remote_return_limit,
         )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict:

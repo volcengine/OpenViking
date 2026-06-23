@@ -7,7 +7,7 @@ from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_selector
@@ -177,12 +177,6 @@ class GrepRequest(BaseModel):
     case_insensitive: bool = False
     node_limit: Optional[int] = None
     level_limit: int = 10
-    remote_return_limit: int = Field(
-        default=0,
-        ge=0,
-        le=100000,
-        description="Maximum files recalled by vikingdb bm25; 0 means auto-adapt",
-    )
 
 
 class GlobRequest(BaseModel):
@@ -306,7 +300,6 @@ async def grep(
             case_insensitive=request.case_insensitive,
             node_limit=request.node_limit,
             level_limit=request.level_limit,
-            remote_return_limit=request.remote_return_limit,
         )
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri, "file")

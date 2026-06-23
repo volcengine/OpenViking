@@ -71,7 +71,6 @@ async def test_grep_vikingdb_auto_remote_limit_uses_five_times_node_limit(
         case_insensitive=False,
         node_limit=node_limit,
         level_limit=10,
-        remote_return_limit=0,
         ctx=None,
     )
 
