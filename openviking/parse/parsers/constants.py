@@ -213,6 +213,7 @@ ADDITIONAL_TEXT_EXTENSIONS = {
     ".properties",
     ".toml",
     ".json",
+    ".jsonl",
     ".yaml",
     ".yml",
     ".xml",
