@@ -1401,13 +1401,12 @@ async def test_rollout_artifact_recorder_writes_train_rollouts_before_commit(tmp
         },
     )
 
-    recorder.record_rollout_completion(
-        rollout=rollout,
-        index=0,
-        context=ExecutionContext(
-            policy_snapshot_id="snapshot-1",
-            metadata={"epoch": 0, "training": True, "stage": "train_rollout epoch=0"},
-        ),
+    recorder.on_train_rollout_end(
+        epoch=0,
+        rollouts=[rollout],
+        snapshot_id="snapshot-1",
+        policy_set=None,
+        context=None,
     )
 
     rollout_dir = (
@@ -1415,7 +1414,7 @@ async def test_rollout_artifact_recorder_writes_train_rollouts_before_commit(tmp
         / "rollouts"
         / "airline_train_task_7_task-7"
         / "epoch_0"
-        / "train"
+        / "1.train_rollout"
         / "trial_0"
     )
     assert (rollout_dir / "status.json").exists()
@@ -1477,16 +1476,16 @@ def test_rollout_artifact_recorder_separates_epoch_eval_dirs(tmp_path):
         )
 
     group_dir = tmp_path / "rollouts" / "airline_test_task_0_2"
-    assert (group_dir / "epoch_0" / "eval" / "trial_0" / "status.json").exists()
-    assert (group_dir / "epoch_1" / "eval" / "trial_0" / "status.json").exists()
-    assert not (group_dir / "eval" / "trial_0").exists()
+    assert (group_dir / "epoch_0" / "4.test_rollout" / "trial_0" / "status.json").exists()
+    assert (group_dir / "epoch_1" / "4.test_rollout" / "trial_0" / "status.json").exists()
+    assert not (group_dir / "4.test_rollout" / "trial_0").exists()
 
     index = recorder.finalize().to_dict()
     rollout_stages = [item["stage"] for item in index["case_groups"][0]["rollouts"]]
-    assert rollout_stages == ["epoch_0/eval", "epoch_1/eval"]
+    assert rollout_stages == ["epoch_0/4.test_rollout", "epoch_1/4.test_rollout"]
 
 
-def test_rollout_artifact_recorder_maps_eval_train_rollout_to_train_dir(tmp_path):
+def test_rollout_artifact_recorder_uses_stage_name_dirs(tmp_path):
     from openviking.session.train import RolloutArtifactRecorder
     from openviking.session.train.context import ExecutionContext
 
@@ -1518,13 +1517,13 @@ def test_rollout_artifact_recorder_maps_eval_train_rollout_to_train_dir(tmp_path
     )
 
     group_dir = tmp_path / "rollouts" / "airline_train_task_7_task-7"
-    assert (group_dir / "epoch_0" / "train" / "trial_0" / "status.json").exists()
-    assert not (group_dir / "epoch_0" / "eval" / "trial_0").exists()
+    assert (group_dir / "epoch_0" / "3.eval_train_rollout" / "trial_0" / "status.json").exists()
+    assert not (group_dir / "epoch_0" / "2.train" / "trial_0").exists()
 
     index = recorder.finalize().to_dict()
     rollout_index = index["case_groups"][0]["rollouts"][0]
-    assert rollout_index["stage"] == "epoch_0/train"
-    assert rollout_index["path"].endswith("epoch_0/train/trial_0")
+    assert rollout_index["stage"] == "epoch_0/3.eval_train_rollout"
+    assert rollout_index["path"].endswith("epoch_0/3.eval_train_rollout/trial_0")
 
 
 def test_rollout_artifact_recorder_keeps_baseline_and_final_eval_dirs(tmp_path):
@@ -1559,8 +1558,8 @@ def test_rollout_artifact_recorder_keeps_baseline_and_final_eval_dirs(tmp_path):
     recorder.record_eval(label="final_test_rollout", epoch=2, analyses=[analysis])
 
     group_dir = tmp_path / "rollouts" / "airline_test_task_0_2"
-    assert (group_dir / "baseline" / "test" / "trial_0" / "status.json").exists()
-    assert (group_dir / "final" / "test" / "trial_0" / "status.json").exists()
+    assert (group_dir / "epoch_-1" / "0.baseline_test_rollout" / "trial_0" / "status.json").exists()
+    assert (group_dir / "epoch_2" / "5.final_test_rollout" / "trial_0" / "status.json").exists()
 
 
 def test_console_reporter_highlights_accuracy_and_prints_epoch_summary(capsys):
@@ -1616,6 +1615,7 @@ def test_console_reporter_highlights_accuracy_and_prints_epoch_summary(capsys):
     assert "epoch 1 summary" in output
     assert "TRAIN accuracy: \x1b[0m\x1b[1;33m60.00%\x1b[0m" in output
     assert "TEST  accuracy: \x1b[0m\x1b[1;33m58.13%\x1b[0m" in output
+    assert output.count("------------------------------------------------------------") >= 3
 
 
 def test_rollout_artifact_event_recorder_enriches_commit_result(tmp_path):
@@ -1666,7 +1666,7 @@ def test_rollout_artifact_event_recorder_enriches_commit_result(tmp_path):
         / "rollouts"
         / "airline_train_task_7_task-7"
         / "epoch_0"
-        / "train"
+        / "1.train_rollout"
         / "trial_0"
     )
     commit_dir = (
@@ -1674,7 +1674,7 @@ def test_rollout_artifact_event_recorder_enriches_commit_result(tmp_path):
         / "rollouts"
         / "airline_train_task_7_task-7"
         / "epoch_0"
-        / "commit"
+        / "2.train"
         / "trial_0"
     )
     assert not (rollout_dir / "commit_result.json").exists()
@@ -1743,7 +1743,7 @@ async def test_rollout_artifact_recorder_writes_epoch_commit_artifacts_under_com
         / "rollouts"
         / "airline_train_task_7_task-7"
         / "epoch_0"
-        / "train"
+        / "1.train_rollout"
         / "trial_0"
     )
     commit_dir = (
@@ -1751,7 +1751,7 @@ async def test_rollout_artifact_recorder_writes_epoch_commit_artifacts_under_com
         / "rollouts"
         / "airline_train_task_7_task-7"
         / "epoch_0"
-        / "commit"
+        / "2.train"
         / "trial_0"
     )
     assert (train_dir / "status.json").exists()

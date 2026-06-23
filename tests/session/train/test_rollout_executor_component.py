@@ -637,7 +637,7 @@ async def test_tau2_prepare_task_case_experience_skill_writes_required_skill(tmp
     content = skill_path.read_text(encoding="utf-8")
     assert context_builder.workspace == tmp_path
     assert "name: task_case_experience" in content
-    assert "MUST: read and apply this skill" in content
+    assert "下面是这个任务相关的经验，请认真阅读并吸取经验。" in content
     assert "linked exp content" in content
     assert "viking://user/u/memories/experiences/exp.md" in content
     assert fake_sandbox.writes

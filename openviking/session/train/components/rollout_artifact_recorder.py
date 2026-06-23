@@ -113,6 +113,19 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         for group_id, records in grouped.items():
             self._write_group(group_id, records)
 
+    def on_train_rollout_end(
+        self,
+        *,
+        epoch: int,
+        rollouts: list[Any],
+        snapshot_id: str,
+        policy_set: Any,
+        context: Any,
+    ) -> None:
+        del snapshot_id, policy_set, context
+        self.record_train_rollouts(epoch=epoch, rollouts=list(rollouts))
+        self._write_index()
+
     def record_train_rollouts(
         self,
         *,
@@ -123,7 +136,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
             _RolloutRecord(
                 rollout=rollout,
                 evaluation=_rollout_evaluation_or_default(rollout),
-                stage=f"epoch_{epoch}/train",
+                stage=_stage_dir("train_rollout", epoch=epoch),
                 epoch=epoch,
                 commit_index=idx,
                 artifact_state="rollout_done",
@@ -156,7 +169,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                 _RolloutRecord(
                     rollout=rollout,
                     evaluation=analysis.evaluation,
-                    stage=f"epoch_{epoch}/train",
+                    stage=_stage_dir("train_rollout", epoch=epoch),
                     epoch=epoch,
                     commit_result=commit_result,
                     commit_index=idx,
@@ -446,7 +459,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
             self.rollouts_root
             / _case_group_id(record.rollout)
             / f"epoch_{record.epoch}"
-            / "train"
+            / _stage_leaf("train_rollout")
             / _rollout_dir_name(record)
         )
 
@@ -455,15 +468,15 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
             self.rollouts_root
             / _case_group_id(record.rollout)
             / f"epoch_{record.epoch}"
-            / "commit"
+            / _stage_leaf("train")
             / _rollout_dir_name(record)
         )
 
     def _train_rollout_dir_from_event_fields(self, fields: dict[str, Any]) -> Path | None:
-        return self._rollout_dir_from_event_fields(fields, phase="train")
+        return self._rollout_dir_from_event_fields(fields, phase=_stage_leaf("train_rollout"))
 
     def _commit_rollout_dir_from_event_fields(self, fields: dict[str, Any]) -> Path | None:
-        return self._rollout_dir_from_event_fields(fields, phase="commit")
+        return self._rollout_dir_from_event_fields(fields, phase=_stage_leaf("train"))
 
     def _rollout_dir_from_event_fields(self, fields: dict[str, Any], *, phase: str) -> Path | None:
         split = fields.get("split")
@@ -594,12 +607,7 @@ def _stage_from_execution_metadata(metadata: dict[str, Any]) -> str:
     stage = str(metadata.get("rollout_stage") or metadata.get("stage") or "")
     epoch = int(metadata.get("epoch", 0) or 0)
     if not stage:
-        training = bool(metadata.get("training"))
-        if training:
-            return f"epoch_{epoch}/train"
-        return "baseline/test" if epoch < 0 else f"epoch_{epoch}/eval"
-    if stage.startswith("train_rollout"):
-        return f"epoch_{epoch}/train"
+        stage = "train_rollout" if bool(metadata.get("training")) else "test_rollout"
     return _stage_dir(stage.split(maxsplit=1)[0], epoch=epoch)
 
 
@@ -770,25 +778,21 @@ def _rollout_name(record: _RolloutRecord) -> str:
 
 
 def _stage_dir(label: str, *, epoch: int | None = None) -> str:
-    if label.startswith("baseline_") and label.endswith("_rollout"):
-        split = label.removeprefix("baseline_").removesuffix("_rollout")
-        return f"baseline/{_safe_fragment(split)}"
-    if label.startswith("final_") and label.endswith("_rollout"):
-        split = label.removeprefix("final_").removesuffix("_rollout")
-        return f"final/{_safe_fragment(split)}"
-    if label.startswith("eval_") and label.endswith("_rollout"):
-        split = label.removeprefix("eval_").removesuffix("_rollout")
-        if split == "train":
-            return "train" if epoch is None else f"epoch_{epoch}/train"
-        return "eval" if epoch is None else f"epoch_{epoch}/eval"
-    if label.startswith("epoch_") and label.endswith("_rollout"):
-        split = label.removeprefix("epoch_").removesuffix("_rollout")
-        if split == "train":
-            return "train" if epoch is None else f"epoch_{epoch}/train"
-        return "eval" if epoch is None else f"epoch_{epoch}/eval"
-    if label == "test_rollout":
-        return "eval" if epoch is None else f"epoch_{epoch}/eval"
-    return _safe_fragment(label)
+    stage = _stage_leaf(label)
+    return stage if epoch is None else f"epoch_{epoch}/{stage}"
+
+
+def _stage_leaf(label: str) -> str:
+    stage = _safe_fragment(label or "rollout")
+    order = {
+        "train_rollout": 1,
+        "train": 2,
+        "eval_train_rollout": 3,
+        "test_rollout": 4,
+        "baseline_test_rollout": 0,
+        "final_test_rollout": 5,
+    }.get(stage)
+    return f"{order}.{stage}" if order is not None else stage
 
 
 def _original_case_name(rollout: Rollout) -> str:

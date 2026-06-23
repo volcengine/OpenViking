@@ -868,10 +868,10 @@ def _task_case_experience_skill_content(
     return (
         "---\n"
         "name: task_case_experience\n"
-        "description: Required task-specific case-linked experiences. Read before any task action in the current controlled task.\n"
+        "description: 下面是这个任务相关的经验，请认真阅读并吸取经验。\n"
         "---\n\n"
         "# task_case_experience\n\n"
-        "MUST: read and apply this skill before calling any task tool or communicating a final answer.\n\n"
+        "下面是这个任务相关的经验，请认真阅读并吸取经验。\n\n"
         "## Linked Experience URIs\n"
         f"{uri_lines}\n\n"
         "## Case-Linked Experiences\n"

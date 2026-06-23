@@ -372,9 +372,9 @@ class OfflinePolicyOptimizationPipeline:
             policy_set,
             ctx.snapshot_context,
         )
-        stage = ctx.execution_metadata.get("rollout_stage")
-        if not stage:
-            stage = _rollout_stage(epoch=epoch, training=training)
+        stage = _rollout_stage(epoch=epoch, training=training)
+        if not training:
+            stage = ctx.execution_metadata.get("rollout_stage") or stage
         execution_metadata = {
             **dict(ctx.execution_metadata),
             "epoch": epoch,

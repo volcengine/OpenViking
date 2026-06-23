@@ -259,6 +259,7 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
             self._remember_eval_report(label, report)
             if _is_epoch_test_report(label, report):
                 self._print_epoch_summary(int(report["epoch"]))
+            self._print_stage_separator()
             return
         self._print_line(
             label,
@@ -282,6 +283,7 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
         self._remember_eval_report(label, report)
         if _is_epoch_test_report(label, report):
             self._print_epoch_summary(int(report["epoch"]))
+        self._print_stage_separator()
 
     def on_epoch_start(self, *, epoch: int, context: Any) -> None:
         del context
@@ -321,6 +323,7 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
                 *_cost_field(report),
             ],
         )
+        self._print_stage_separator()
 
     def on_train_report(
         self,
@@ -350,6 +353,7 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
                 print(f"[train] failed_commit_telemetry_ids={','.join(telemetry_ids)}")
         if not _has_epoch_eval(context):
             self._print_epoch_summary(int(report["epoch"]))
+        self._print_stage_separator()
 
     def on_run_summary(
         self,
@@ -382,6 +386,9 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
             print(f"rollouts_index: {rollouts_index_path}")
         if latest_failed_rollout:
             print(f"latest_failed_rollout: {latest_failed_rollout}")
+
+    def _print_stage_separator(self) -> None:
+        print("-" * 60)
 
     def _print_line(self, label: str, fields: list[tuple[Any, ...]]) -> None:
         if not self.use_rich:

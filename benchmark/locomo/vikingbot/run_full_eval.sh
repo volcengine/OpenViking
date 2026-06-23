@@ -11,7 +11,7 @@
 #   ./run_full_eval.sh 0 2 --group-chat                  # 单题群聊模式
 #   ./run_full_eval.sh --skip-import --auto-commit  # 评测全部，跳过导入，自动提交
 #   ./run_full_eval.sh --retry-wrong result/locomo_result_xxx.csv  # 只重跑错题
-#   ./run_full_eval.sh --parallel-import-sessions 20 0 1  # 并发导入 session
+#   ./run_full_eval.sh --parallel-import-sessions 20 0 1  # 覆盖默认 session 导入并发数
 
 set -e
 
@@ -31,7 +31,7 @@ for arg in "$@"; do
         echo "  --no-group-chat   非群聊模式（默认），使用 sample_id 作为 Peer"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
         echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
-        echo "  --parallel-import-sessions N  单 sample 内并发导入 sessions"
+        echo "  --parallel-import-sessions N  单 sample 内并发导入 sessions（默认 200）"
         exit 0
     fi
 done
@@ -41,7 +41,7 @@ SKIP_IMPORT=false
 GROUP_CHAT=false
 AUTO_COMMIT=false
 RETRY_WRONG=""
-PARALLEL_IMPORT_SESSIONS=""
+PARALLEL_IMPORT_SESSIONS="200"
 
 if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
