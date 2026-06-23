@@ -13,14 +13,47 @@
  * is just `{}`.
  */
 
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
+import {
+  buildCodexExecArgs,
+  fallbackRecallCompressorProfile,
+  loadCachedRecallCompressorProfile,
+  markRecallCompressorRuntimeFailed,
+} from "./recall-compressor-profile.mjs";
+import { deriveOvSessionId } from "./session-state.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
 
-function output(obj) {
-  process.stdout.write(JSON.stringify(obj) + "\n");
+let emitted = false;
+let activeCompressor = null;
+let recallDeadline = null;
+
+function output(obj, exitAfter = false) {
+  if (emitted) return;
+  emitted = true;
+  if (recallDeadline) clearTimeout(recallDeadline);
+  const line = JSON.stringify(obj) + "\n";
+  if (exitAfter) {
+    process.stdout.write(line, () => process.exit(0));
+    return;
+  }
+  process.stdout.write(line);
+}
+
+function wrapRecallContext(additionalContext) {
+  const body = sanitizeInjectedText(additionalContext).trim();
+  if (!body) return "";
+  return [
+    '<openviking-context source="auto-recall" format="digest">',
+    body,
+    "</openviking-context>",
+  ].join("\n");
 }
 
 function emit(additionalContext) {
@@ -28,13 +61,27 @@ function emit(additionalContext) {
     output({});
     return;
   }
+  const wrappedContext = wrapRecallContext(additionalContext);
+  if (!wrappedContext) {
+    output({});
+    return;
+  }
   output({
     hookSpecificOutput: {
       hookEventName: "UserPromptSubmit",
-      additionalContext,
+      additionalContext: wrappedContext,
     },
   });
 }
+
+recallDeadline = setTimeout(() => {
+  logError("recall_timeout", `timed out after ${cfg.recallTimeoutMs}ms`);
+  try {
+    activeCompressor?.kill("SIGKILL");
+  } catch { /* best effort */ }
+  output({}, true);
+}, cfg.recallTimeoutMs);
+recallDeadline.unref?.();
 
 async function fetchJSON(path, init = {}) {
   const controller = new AbortController();
@@ -45,8 +92,9 @@ async function fetchJSON(path, init = {}) {
       headers["Authorization"] = `Bearer ${cfg.apiKey}`;
       headers["X-API-Key"] = cfg.apiKey;
     }
-    if (cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.user) headers["X-OpenViking-User"] = cfg.user;
+    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
+    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
+    if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return null;
@@ -165,71 +213,22 @@ function postProcess(items, limit, threshold) {
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// User URI space resolution
-// ---------------------------------------------------------------------------
-
-const USER_RESERVED_DIRS = new Set(["memories", "skills"]);
-let _userSpaceCache = "";
-
-async function resolveUserSpace() {
-  if (_userSpaceCache) return _userSpaceCache;
-
-  let fallbackSpace = "default";
-  try {
-    const status = await fetchJSON("/api/v1/system/status");
-    if (status && typeof status.user === "string" && status.user.trim()) {
-      fallbackSpace = status.user.trim();
-    }
-  } catch { /* fallback */ }
-
-  try {
-    const entries = await fetchJSON(`/api/v1/fs/ls?uri=${encodeURIComponent("viking://user")}&output=original`);
-    if (Array.isArray(entries)) {
-      const spaces = entries
-        .filter((e) => e?.isDir)
-        .map((e) => (typeof e.name === "string" ? e.name.trim() : ""))
-        .filter((n) => n && !n.startsWith(".") && !USER_RESERVED_DIRS.has(n));
-      if (spaces.length > 0) {
-        if (spaces.includes(fallbackSpace)) { _userSpaceCache = fallbackSpace; return fallbackSpace; }
-        if (spaces.includes("default")) { _userSpaceCache = "default"; return "default"; }
-        if (spaces.length === 1) { _userSpaceCache = spaces[0]; return spaces[0]; }
-      }
-    }
-  } catch { /* fallback */ }
-
-  _userSpaceCache = fallbackSpace;
-  return fallbackSpace;
-}
-
-async function resolveTargetUri(targetUri) {
-  const trimmed = targetUri.trim().replace(/\/+$/, "");
-  const m = trimmed.match(/^viking:\/\/user(?:\/(.*))?$/);
-  if (!m) return trimmed;
-  const rawRest = (m[1] ?? "").trim();
-  if (!rawRest) return trimmed;
-  const parts = rawRest.split("/").filter(Boolean);
-  if (parts.length === 0) return trimmed;
-  if (!USER_RESERVED_DIRS.has(parts[0])) return trimmed;
-  const space = await resolveUserSpace();
-  return `viking://user/${space}/${parts.join("/")}`;
-}
-
-async function searchScope(query, targetUri, limit, bucket = "memories") {
-  const resolvedUri = await resolveTargetUri(targetUri);
-  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
-  if (cfg.peerId) body.peer_id = cfg.peerId;
-  const result = await fetchJSON("/api/v1/search/find", {
+async function searchScope(query, targetUri, limit, bucket = "memories", sessionId = null) {
+  // Keep current-user shorthand here; the server canonicalizes it using the
+  // authenticated/trusted request context.
+  const body = { query, target_uri: targetUri, limit, score_threshold: 0 };
+  if (sessionId) body.session_id = sessionId;
+  const result = await fetchJSON("/api/v1/search/search", {
     method: "POST",
     body: JSON.stringify(body),
   });
   return result?.[bucket] || [];
 }
 
-async function searchAll(query, limit) {
+async function searchAll(query, limit, sessionId = null) {
   const [userMems, userSkills] = await Promise.all([
-    searchScope(query, "viking://user/memories", limit),
-    searchScope(query, "viking://user/skills", limit, "skills"),
+    searchScope(query, "viking://user/memories", limit, "memories", sessionId),
+    searchScope(query, "viking://user/skills", limit, "skills", sessionId),
   ]);
   log("search_complete", { scope: "user", rawCount: userMems.length, topScores: userMems.slice(0, 3).map((m) => m.score) });
   log("search_complete", { scope: "skills", rawCount: userSkills.length, topScores: userSkills.slice(0, 3).map((m) => m.score) });
@@ -242,12 +241,202 @@ async function searchAll(query, limit) {
   });
 }
 
+function resolveRecallSessionId(codexSessionId) {
+  if (!codexSessionId) return null;
+  // Derive directly: the OV session id is deterministic (cx-<safe-id>), so
+  // recall does not need to read plugin state. This keeps the recall hook
+  // crash-free even if the state file is corrupt/missing, and stays in sync
+  // with capture, which now also derives cx-* unconditionally.
+  return deriveOvSessionId(codexSessionId);
+}
+
 async function readMemoryContent(uri) {
   try {
     const result = await fetchJSON(`/api/v1/content/read?uri=${encodeURIComponent(uri)}`);
     if (result && typeof result === "string" && result.trim()) return result.trim();
   } catch { /* fallback */ }
   return null;
+}
+
+function truncateText(text, maxChars) {
+  const value = String(text || "").trim();
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 20)).trimEnd()}\n[truncated]`;
+}
+
+function sanitizeInjectedText(text) {
+  return String(text || "")
+    .replace(/<\/?relevant-memor(?:y|ies)\b[^>]*>/gi, "legacy memory wrapper")
+    .replace(/<\/?openviking-context\b[^>]*>/gi, "openviking context marker");
+}
+
+function isNoRelevantMemory(text) {
+  const value = String(text || "")
+    .trim()
+    .replace(/^openviking memory digest:\s*/i, "")
+    .trim();
+  return !value || /^NO_RELEVANT_MEMORY\.?$/i.test(value) || /^no (?:directly )?relevant memor(?:y|ies)\.?$/i.test(value);
+}
+
+function hasDigestSignal(text) {
+  const body = String(text || "").replace(/^openviking memory digest:\s*/i, "").trim();
+  return /(^|\n)\s*[-*]\s+\S/.test(body) || /\bviking:\/\//i.test(body);
+}
+
+function appendMcpRetrievalHint(text) {
+  const value = String(text || "").trim();
+  if (!/\bviking:\/\//i.test(value) || /OpenViking MCP/i.test(value)) return value;
+  return `${value}\n\nMore detail: use the OpenViking MCP read/search tools with the cited viking:// URI if needed.`;
+}
+
+function fallbackDigest(items) {
+  const lines = items.slice(0, cfg.recallCompressMaxBullets).map((item) => {
+    const text = sanitizeInjectedText(truncateText(item.text, 260)).replace(/\s+/g, " ");
+    return `- [${item.category || "memory"}] ${text} (${item.uri})`;
+  });
+  return lines.length > 0 ? appendMcpRetrievalHint(`OpenViking memory digest:\n${lines.join("\n")}`) : "";
+}
+
+function normalizeCompressedContext(text) {
+  let value = String(text || "").trim();
+  if (!value) return "";
+  value = value.replace(/^```(?:text|markdown)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  value = sanitizeInjectedText(value);
+  if (isNoRelevantMemory(value)) return "";
+  if (!value.toLowerCase().startsWith("openviking memory digest:")) {
+    value = `OpenViking memory digest:\n${value}`;
+  }
+  if (!hasDigestSignal(value)) return "";
+  return truncateText(appendMcpRetrievalHint(value), 4000);
+}
+
+async function getRecallCompressorProfile() {
+  const cached = await loadCachedRecallCompressorProfile(cfg);
+  if (cached) return cached;
+  const fallback = fallbackRecallCompressorProfile(cfg);
+  log("compress_profile_cache_miss", fallback);
+  return fallback;
+}
+
+async function runCodexCompressor(prompt, profile) {
+  const tmp = await mkdtemp(join(tmpdir(), "ov-recall-compress-"));
+  const outputPath = join(tmp, "last-message.txt");
+  const args = buildCodexExecArgs(profile, outputPath);
+
+  try {
+    return await new Promise((resolve) => {
+      const env = {
+        ...process.env,
+        OPENVIKING_AUTO_RECALL: "0",
+        OPENVIKING_AUTO_CAPTURE: "0",
+        OPENVIKING_RECALL_COMPRESS: "0",
+      };
+      let done = false;
+      let timedOut = false;
+      let stderr = "";
+      const child = spawn("codex", args, { env, stdio: ["pipe", "ignore", "pipe"] });
+      activeCompressor = child;
+      const finish = (value, { runtimeFailed = false } = {}) => {
+        if (done) return;
+        done = true;
+        if (activeCompressor === child) activeCompressor = null;
+        clearTimeout(timer);
+        if (runtimeFailed) {
+          // Mark the profile as runtime_failed so subsequent UPS calls in
+          // this same codex session skip compress (avoids burning
+          // ~recallCompressTimeoutMs per turn on a guaranteed-to-fail
+          // spawn). Next SessionStart's cache-first detect treats this
+          // marker as a cache miss and re-resolves against the current
+          // catalogue, so a transient failure self-recovers across codex
+          // restarts. Best-effort write; failure is non-fatal.
+          markRecallCompressorRuntimeFailed(cfg, { failedModel: profile.model || "" })
+            .catch(() => {});
+        }
+        resolve(value);
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        logError("compress_timeout", `timed out after ${cfg.recallCompressTimeoutMs}ms`);
+        try {
+          child.kill("SIGKILL");
+        } catch { /* best effort */ }
+      }, cfg.recallCompressTimeoutMs);
+
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+        if (stderr.length > 4000) stderr = stderr.slice(-4000);
+      });
+      child.on("error", (err) => {
+        logError("compress_spawn", err);
+        finish(null, { runtimeFailed: true });
+      });
+      child.on("close", async (code) => {
+        if (timedOut) {
+          finish(null, { runtimeFailed: true });
+          return;
+        }
+        if (code !== 0) {
+          logError("compress_exit", {
+            profile,
+            error: stderr.trim().slice(-1000) || `codex exited ${code}`,
+          });
+          finish(null, { runtimeFailed: true });
+          return;
+        }
+        try {
+          finish(await readFile(outputPath, "utf-8"));
+        } catch (err) {
+          logError("compress_read", err);
+          finish(null, { runtimeFailed: true });
+        }
+      });
+      child.stdin.end(prompt);
+    });
+  } finally {
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function compressMemoryContext(userPrompt, items) {
+  if (!cfg.recallCompress) return null;
+  const profile = await getRecallCompressorProfile();
+  if (!profile.enabled) {
+    log("compress_skip", { reason: "profile disabled", profile });
+    return null;
+  }
+  const perItemChars = Math.max(500, Math.floor(cfg.recallCompressMaxInputChars / Math.max(1, items.length)));
+  const payload = {
+    user_prompt: userPrompt,
+    max_bullets: cfg.recallCompressMaxBullets,
+    memories: items.map((item) => ({
+      uri: item.uri,
+      category: item.category || "memory",
+      score: item.score,
+      text: truncateText(item.text, perItemChars),
+    })),
+  };
+  const prompt = `You are a memory relevance compressor for a Codex UserPromptSubmit hook.
+
+Task:
+- Keep only memories directly useful for answering the user's current prompt.
+- Drop stale, generic, duplicate, merely adjacent, or operationally unrelated memories.
+- Compress to at most ${cfg.recallCompressMaxBullets} short bullets.
+- Preserve concrete facts, dates, paths, repo names, commands, and user preferences.
+- Include the source viking:// URI when the agent may need to inspect more detail.
+- If the answer needs detail beyond the bullet, say to use OpenViking MCP read/search with the cited viking:// URI if needed.
+- Do not include XML/HTML wrappers.
+- Do not mention that you filtered memories.
+- Output either "OpenViking memory digest:" followed by useful bullets, or exactly: NO_RELEVANT_MEMORY.
+- If no memory is directly useful, output exactly: NO_RELEVANT_MEMORY.
+
+Input JSON:
+${JSON.stringify(payload, null, 2)}
+`;
+  const raw = await runCodexCompressor(prompt, profile);
+  if (raw === null) return null;
+  const compressed = normalizeCompressedContext(raw);
+  log("compressed", { inputCount: items.length, chars: compressed.length, profile });
+  return compressed;
 }
 
 async function main() {
@@ -269,7 +458,11 @@ async function main() {
   }
 
   const userPrompt = (input.prompt || "").trim();
+  const codexSessionId = typeof input.session_id === "string" ? input.session_id.trim() : "";
+  const recallSessionId = resolveRecallSessionId(codexSessionId);
   log("start", {
+    codexSessionId: codexSessionId || null,
+    recallSessionId,
     query: userPrompt.slice(0, 200),
     queryLength: userPrompt.length,
     config: { recallLimit: cfg.recallLimit, scoreThreshold: cfg.scoreThreshold },
@@ -289,7 +482,7 @@ async function main() {
   }
 
   const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-  const allMemories = await searchAll(userPrompt, candidateLimit);
+  const allMemories = await searchAll(userPrompt, candidateLimit, recallSessionId);
   if (allMemories.length === 0) {
     log("skip", { stage: "search", reason: "no results" });
     emit();
@@ -324,21 +517,24 @@ async function main() {
 
   log("picked", { pickedCount: memories.length, uris: memories.map((m) => m.uri) });
 
-  const lines = await Promise.all(
+  const memoryItems = await Promise.all(
     memories.map(async (item) => {
+      let text = (item.abstract || item.overview || item.uri).trim();
       if (item.level === 2) {
         const content = await readMemoryContent(item.uri);
-        if (content) return `- [${item.category || "memory"}] ${content}`;
+        if (content) text = content;
       }
-      return `- [${item.category || "memory"}] ${(item.abstract || item.overview || item.uri).trim()}`;
+      return {
+        uri: item.uri,
+        category: item.category || "memory",
+        score: clampScore(item.score),
+        text,
+      };
     }),
   );
 
-  const memoryContext =
-    "<relevant-memories>\n" +
-    "The following long-term memories from OpenViking may be relevant to this conversation:\n" +
-    lines.join("\n") + "\n" +
-    "</relevant-memories>";
+  const compressedContext = await compressMemoryContext(userPrompt, memoryItems);
+  const memoryContext = compressedContext === null ? fallbackDigest(memoryItems) : compressedContext;
 
   emit(memoryContext);
 }

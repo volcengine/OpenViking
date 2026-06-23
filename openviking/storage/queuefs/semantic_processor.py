@@ -12,7 +12,10 @@ from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
-from openviking.parse.image_rewrite import IMAGE_MAPPINGS_FILENAME, rewrite_image_uris
+from openviking.parse.image_rewrite import (
+    IMAGE_MAPPINGS_FILENAME,
+    rewrite_image_uris,
+)
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -167,7 +170,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
     @staticmethod
     def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:
-        role = Role(msg.role) if msg.role in {r.value for r in Role} else Role.ROOT
+        role = Role(msg.role or Role.ROOT)
         return RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=role,

@@ -54,7 +54,8 @@ pub async fn find(
     until: Option<&str>,
     time_field: Option<&str>,
     level: Option<Vec<i32>>,
-    peer_id: Option<&str>,
+    context_type: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -68,7 +69,8 @@ pub async fn find(
             until.map(|s| s.to_string()),
             time_field.map(|s| s.to_string()),
             level,
-            peer_id.map(|s| s.to_string()),
+            context_type,
+            tags,
         )
         .await?;
     output_search_results(
@@ -91,7 +93,8 @@ pub async fn search(
     until: Option<&str>,
     time_field: Option<&str>,
     level: Option<Vec<i32>>,
-    peer_id: Option<&str>,
+    context_type: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -106,7 +109,8 @@ pub async fn search(
             until.map(|s| s.to_string()),
             time_field.map(|s| s.to_string()),
             level,
-            peer_id.map(|s| s.to_string()),
+            context_type,
+            tags,
         )
         .await?;
     output_search_results(

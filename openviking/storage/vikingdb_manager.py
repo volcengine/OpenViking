@@ -182,8 +182,8 @@ class VikingDBManagerProxy:
         manager = VikingDBManager(...)
         proxy = VikingDBManagerProxy(manager, ctx)
 
-        # 使用（无需传 ctx，API 完全兼容）
-        await proxy.upsert(data)
+        # 使用（无需传 ctx；仅在需要保留未显式传入字段时开启 partial_update）
+        await proxy.upsert(data, partial_update=True)
         results = await proxy.search_similar_memories(...)
         ```
     """
@@ -286,8 +286,14 @@ class VikingDBManagerProxy:
     # 数据操作 API（自动携带 ctx）
     # =========================================================================
 
-    async def upsert(self, data: Dict[str, Any]) -> str:
-        return await self._manager.upsert(data, ctx=self._ctx)
+    async def upsert(self, data: Dict[str, Any], partial_update: bool = False):
+        """Bound write entrypoint.
+
+        ``partial_update=False`` keeps the legacy full-record upsert semantics.
+        ``partial_update=True`` reads the current record first and preserves
+        fields that are omitted from ``data`` before writing.
+        """
+        return await self._manager.upsert(data, ctx=self._ctx, partial_update=partial_update)
 
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         return await self._manager.get(ids, ctx=self._ctx)

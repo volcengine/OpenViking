@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.core.peer_id import normalize_peer_id
-from openviking.message.part import ContextPart, Part, TextPart, ToolPart
+from openviking.message.part import ContextPart, ImagePart, Part, TextPart, ToolPart
 from openviking.utils.token_estimation import estimate_text_tokens
 
 
@@ -40,6 +40,8 @@ class Message:
         Counts fields that actually appear in the assembled prompt:
         - TextPart.text: always emitted
         - ContextPart.abstract: injected as text (uri is not sent to the model)
+        - ImagePart: not counted here; image captioning/model usage is tracked
+          by the VLM call that converts images into text for extraction
         - ToolPart: tool_id (appears in toolUse.id / toolResult.toolCallId),
           tool_name, tool_input (JSON), tool_output
 
@@ -92,6 +94,14 @@ class Message:
                 "uri": part.uri,
                 "context_type": part.context_type,
                 "abstract": part.abstract,
+            }
+        elif isinstance(part, ImagePart):
+            image_url = {"url": part.url}
+            if part.detail is not None:
+                image_url["detail"] = part.detail
+            return {
+                "type": part.type,
+                "image_url": image_url,
             }
         elif isinstance(part, ToolPart):
             d = {
@@ -168,6 +178,18 @@ class Message:
                         abstract=p.get("abstract", ""),
                     )
                 )
+            elif p["type"] == "image_url":
+                image_url = p.get("image_url")
+                url = ""
+                detail = None
+                if isinstance(image_url, dict):
+                    url = str(image_url.get("url", "") or "")
+                    detail = image_url.get("detail")
+                elif isinstance(image_url, str):
+                    url = image_url
+                if not url.strip():
+                    raise ValueError("image_url part requires a non-empty URL")
+                parts.append(ImagePart(url=url, detail=detail))
             elif p["type"] == "tool":
                 parts.append(
                     ToolPart(

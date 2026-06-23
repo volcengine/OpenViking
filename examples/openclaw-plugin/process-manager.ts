@@ -22,7 +22,7 @@ export async function quickHealthCheck(
   timeoutMs: number,
 ): Promise<boolean> {
   try {
-    await client.healthCheck(agentId, timeoutMs);
+    await client.healthCheck(timeoutMs, agentId);
     return true;
   } catch {
     return false;

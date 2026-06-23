@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 from typing import Mapping
 
-SCM_TAG_REGEX = r"^(?:v)?(?:[a-zA-Z0-9_]+@)?(?P<version>[0-9]+(?:\.[0-9]+)*)$"
+SCM_TAG_REGEX = r"^v(?P<version>[0-9]+(?:\.[0-9]+)*)$"
+SCM_GIT_DESCRIBE_COMMAND = "git describe --dirty --tags --long --match v[0-9]*"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -16,6 +17,7 @@ def _get_scm_version(project_root: Path) -> str:
         relative_to=__file__,
         local_scheme="no-local-version",
         tag_regex=SCM_TAG_REGEX,
+        git_describe_command=SCM_GIT_DESCRIBE_COMMAND,
     )
 
 

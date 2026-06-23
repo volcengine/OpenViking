@@ -7,6 +7,8 @@ import httpx
 import pytest
 
 from openviking_cli.client.http import AsyncHTTPClient
+from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.retrieve.types import ContextType
 from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
 
 
@@ -39,6 +41,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
                 "api_key": "config-key",
                 "account": "config-account",
                 "user": "config-user",
+                "actor_peer_id": "config-actor",
                 "timeout": 12.5,
                 "profile": True,
             }
@@ -52,6 +55,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
     assert client._api_key == "config-key"
     assert client._account == "config-account"
     assert client._user_id == "config-user"
+    assert client._actor_peer_id == "config-actor"
     assert client._timeout == 12.5
     assert client._profile_enabled is True
 
@@ -84,6 +88,42 @@ def test_async_http_client_explicit_values_override_ovcli_config(tmp_path, monke
     assert client._account == "explicit-account"
     assert client._timeout == 33.0
     assert client._profile_enabled is False
+
+
+def test_async_http_client_loads_agent_id_from_ovcli_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://config-host:1933",
+                "api_key": "config-key",
+                "agent_id": "legacy-agent",
+            }
+        )
+    )
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    client = AsyncHTTPClient()
+
+    assert client._actor_peer_id == "legacy-agent"
+    assert client._legacy_agent_id == "legacy-agent"
+
+
+def test_async_http_client_rejects_mixed_config_agent_and_actor_peer(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://config-host:1933",
+                "actor_peer_id": "actor-a",
+                "agent_id": "legacy-agent",
+            }
+        )
+    )
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    with pytest.raises(ValueError, match="actor_peer_id cannot be used with legacy agent_id"):
+        AsyncHTTPClient()
 
 
 @pytest.mark.asyncio
@@ -131,6 +171,7 @@ async def test_async_http_client_sends_configured_identity_headers(tmp_path, mon
         api_key="explicit-key",
         account="explicit-account",
         user_id="explicit-user",
+        actor_peer_id="explicit-actor",
         timeout=33.0,
         extra_headers={},
     )
@@ -141,7 +182,33 @@ async def test_async_http_client_sends_configured_identity_headers(tmp_path, mon
         "X-API-Key": "explicit-key",
         "X-OpenViking-Account": "explicit-account",
         "X-OpenViking-User": "explicit-user",
+        "X-OpenViking-Actor-Peer": "explicit-actor",
     }
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_sends_agent_id_as_actor_peer_header(tmp_path, monkeypatch):
+    captured: dict[str, object] = {}
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("openviking_cli.client.http.httpx.AsyncClient", FakeAsyncClient)
+
+    client = AsyncHTTPClient(
+        url="http://explicit-host:1933",
+        api_key="explicit-key",
+        agent_id="legacy-agent",
+        timeout=33.0,
+        extra_headers={},
+    )
+    await client.initialize()
+
+    assert captured["headers"]["X-OpenViking-Actor-Peer"] == "legacy-agent"
 
 
 def test_async_http_client_rejects_unknown_ovcli_field(tmp_path, monkeypatch):
@@ -299,7 +366,7 @@ def test_async_http_client_prefers_extra_headers_over_alias(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_find_sends_peer_id(tmp_path, monkeypatch):
+async def test_async_http_client_find_does_not_send_peer_id(tmp_path, monkeypatch):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text("{}")
     monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
@@ -311,7 +378,6 @@ async def test_async_http_client_find_sends_peer_id(tmp_path, monkeypatch):
     await client.find(
         "invoice",
         target_uri="viking://user/memories",
-        peer_id="web:visitor:alice",
     )
 
     assert http.calls == [
@@ -323,15 +389,35 @@ async def test_async_http_client_find_sends_peer_id(tmp_path, monkeypatch):
                 "limit": 10,
                 "score_threshold": None,
                 "filter": None,
+                "context_type": None,
                 "telemetry": False,
-                "peer_id": "web:visitor:alice",
             },
         )
     ]
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_search_sends_peer_id(tmp_path, monkeypatch):
+async def test_async_http_client_legacy_agent_find_sends_agent_id(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    http = FakeSearchHTTP()
+    client = AsyncHTTPClient(
+        url="http://explicit-host:1933",
+        api_key="key",
+        agent_id="legacy-agent",
+    )
+    client._http = http
+
+    await client.find("invoice")
+
+    assert http.calls[0][1]["agent_id"] == "legacy-agent"
+    assert "peer_id" not in http.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_search_does_not_send_peer_id(tmp_path, monkeypatch):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text("{}")
     monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
@@ -344,7 +430,6 @@ async def test_async_http_client_search_sends_peer_id(tmp_path, monkeypatch):
         "invoice",
         target_uri="viking://user/memories",
         session_id="session-1",
-        peer_id="web:visitor:alice",
     )
 
     assert http.calls == [
@@ -357,8 +442,125 @@ async def test_async_http_client_search_sends_peer_id(tmp_path, monkeypatch):
                 "limit": 10,
                 "score_threshold": None,
                 "filter": None,
+                "context_type": None,
                 "telemetry": False,
-                "peer_id": "web:visitor:alice",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_legacy_agent_add_message_sends_agent_id_for_assistant(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    http = FakeSearchHTTP()
+    client = AsyncHTTPClient(
+        url="http://explicit-host:1933",
+        api_key="key",
+        agent_id="legacy-agent",
+    )
+    client._http = http
+
+    await client.add_message("session-1", "assistant", content="hello")
+    await client.add_message("session-1", "user", content="hi")
+
+    assert http.calls[0] == (
+        "/api/v1/sessions/session-1/messages",
+        {"role": "assistant", "content": "hello", "agent_id": "legacy-agent"},
+    )
+    assert http.calls[1] == (
+        "/api/v1/sessions/session-1/messages",
+        {"role": "user", "content": "hi"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_legacy_agent_add_message_rejects_peer_id(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    http = FakeSearchHTTP()
+    client = AsyncHTTPClient(
+        url="http://explicit-host:1933",
+        api_key="key",
+        agent_id="legacy-agent",
+    )
+    client._http = http
+
+    with pytest.raises(InvalidArgumentError, match="peer_id cannot be used"):
+        await client.add_message(
+            "session-1",
+            "assistant",
+            content="hello",
+            peer_id="legacy-agent",
+        )
+    assert http.calls == []
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_find_sends_context_type(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    http = FakeSearchHTTP()
+    client = AsyncHTTPClient(url="http://explicit-host:1933", api_key="key")
+    client._http = http
+
+    await client.find(
+        "invoice",
+        context_type=[ContextType.MEMORY, ContextType.RESOURCE],
+    )
+
+    assert http.calls == [
+        (
+            "/api/v1/search/find",
+            {
+                "query": "invoice",
+                "target_uri": "",
+                "limit": 10,
+                "score_threshold": None,
+                "filter": None,
+                "context_type": ["memory", "resource"],
+                "telemetry": False,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_search_sends_context_type(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text("{}")
+    monkeypatch.setenv(OPENVIKING_CLI_CONFIG_ENV, str(config_path))
+
+    http = FakeSearchHTTP()
+    client = AsyncHTTPClient(url="http://explicit-host:1933", api_key="key")
+    client._http = http
+
+    await client.search(
+        "invoice",
+        context_type="skill",
+    )
+
+    assert http.calls == [
+        (
+            "/api/v1/search/search",
+            {
+                "query": "invoice",
+                "target_uri": "",
+                "session_id": None,
+                "limit": 10,
+                "score_threshold": None,
+                "filter": None,
+                "context_type": "skill",
+                "telemetry": False,
             },
         )
     ]

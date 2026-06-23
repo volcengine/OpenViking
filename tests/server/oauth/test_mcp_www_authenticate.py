@@ -24,9 +24,17 @@ async def _noop_app(scope, receive, send):
 
 
 def _build_test_app(*, oauth_enabled: bool, tmp_path=None) -> FastAPI:
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.auth.registry import get_registry
+
     app = FastAPI()
     app.state.config = ServerConfig(auth_mode="api_key", root_api_key="root-test-1234567890abcd")
     app.state.api_key_manager = object()  # presence triggers API_KEY auth path
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("api_key") is None:
+        registry.register(ApiKeyAuthPlugin)
+    app.state.auth_plugin = registry.get("api_key")()
     if oauth_enabled:
         # Provider just needs to exist on app.state to flag oauth as enabled —
         # the bearer middleware emits WWW-Authenticate based on its presence,

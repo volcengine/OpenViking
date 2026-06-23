@@ -39,7 +39,7 @@ function normalizeBaseUrl(baseUrl?: string): string {
 }
 
 function readSessionStorage(key: string): string {
-  if (!isBrowser()) {
+  if (!key || !isBrowser()) {
     return ''
   }
 
@@ -51,7 +51,7 @@ function readSessionStorage(key: string): string {
 }
 
 function writeSessionStorage(key: string, value: string): void {
-  if (!isBrowser()) {
+  if (!key || !isBrowser()) {
     return
   }
 
@@ -151,7 +151,7 @@ function isEnvelopeError(value: unknown): value is OvErrorEnvelope & {
 export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
   const bindSdkClient = options.bindSdkClient ?? false
   let runtimeOptions = {
-    apiKeyStorageKey: options.apiKeyStorageKey || DEFAULT_API_KEY_STORAGE_KEY,
+    apiKeyStorageKey: options.apiKeyStorageKey ?? DEFAULT_API_KEY_STORAGE_KEY,
     baseUrl: normalizeBaseUrl(options.baseUrl),
     defaultTelemetry: options.defaultTelemetry ?? true,
   }
@@ -316,6 +316,7 @@ export function createOvClient(options: OvClientOptions = {}): OvClientAdapter {
 }
 
 export const ovClient = createOvClient({
+  apiKeyStorageKey: '',
   baseUrl: ENV_BASE_URL,
   bindSdkClient: true,
 })

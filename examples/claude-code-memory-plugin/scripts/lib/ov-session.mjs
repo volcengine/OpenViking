@@ -83,7 +83,7 @@ export function deriveOvSessionId(ccSessionId, suffix = "") {
  */
 export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
   const timeoutMs = Math.max(1000, cfg[timeoutKey] || cfg.timeoutMs || 10000);
-  return async function fetchJSON(path, init = {}) {
+  return async function fetchJSON(path, init = {}, options = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -91,6 +91,8 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
       if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
       if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
       if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
+      const actorPeerId = options.actorPeerId ?? "";
+      if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
       const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body.status === "error") {

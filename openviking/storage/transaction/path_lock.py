@@ -488,9 +488,8 @@ class PathLockEngine:
             logger.debug(f"[EXACT] Reusing owned ancestor TREE lock on: {path}")
             return True
         if timeout is None:
-            deadline = float("inf")
-        else:
-            deadline = asyncio.get_running_loop().time() + timeout
+            timeout = self._lock_expire
+        deadline = asyncio.get_running_loop().time() + timeout
         wait_start = asyncio.get_running_loop().time()
         next_wait_log_at = wait_start + _WAIT_LOG_INTERVAL
 
@@ -642,11 +641,8 @@ class PathLockEngine:
             logger.debug(f"[TREE] Reusing owned ancestor TREE lock on: {path}")
             return True
         if timeout is None:
-            # 无限等待
-            deadline = float("inf")
-        else:
-            # 有限超时
-            deadline = asyncio.get_running_loop().time() + timeout
+            timeout = self._lock_expire
+        deadline = asyncio.get_running_loop().time() + timeout
         wait_start = asyncio.get_running_loop().time()
         next_wait_log_at = wait_start + _WAIT_LOG_INTERVAL
 

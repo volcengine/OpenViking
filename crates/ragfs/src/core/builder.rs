@@ -230,4 +230,31 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
+
+    #[tokio::test]
+    async fn encrypted_mount_ignores_legacy_plaintext_task_records() {
+        let dir = TempDir::new().unwrap();
+        let account_task_dir = dir.path().join("default/_system/tasks/default");
+        let system_task_dir = dir.path().join("_system/tasks/root");
+        fs::create_dir_all(&account_task_dir).unwrap();
+        fs::create_dir_all(&system_task_dir).unwrap();
+        fs::write(
+            account_task_dir.join("00f676a8-b8cf-4b1a-a0a9-fe46ca3324d3.json"),
+            br#"{"task_id":"account-task"}"#,
+        )
+        .unwrap();
+        fs::write(
+            system_task_dir.join("00f676a8-b8cf-4b1a-a0a9-fe46ca3324d4.json"),
+            br#"{"task_id":"system-task"}"#,
+        )
+        .unwrap();
+
+        let stack = build_default_stack(enc_config()).await;
+        mount_local(&stack, "/local", dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+
+        let manifest = fs::read(dir.path().join("backend_meta.json")).unwrap();
+        assert!(crypto::is_encrypted(&manifest));
+    }
 }

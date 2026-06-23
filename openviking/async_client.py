@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -46,12 +47,16 @@ class AsyncOpenViking:
     def __init__(
         self,
         path: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
         """
         Initialize OpenViking client (embedded mode).
 
         Args:
             path: Local storage path (overrides ov.conf storage path).
+            actor_peer_id: Optional view filter for the current user's peer collection.
+            agent_id: Legacy alias for actor_peer_id.
         """
         # Singleton guard for repeated initialization
         if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
@@ -64,6 +69,8 @@ class AsyncOpenViking:
 
         self._client: BaseClient = LocalClient(
             path=path,
+            actor_peer_id=actor_peer_id,
+            agent_id=agent_id,
         )
         self._singleton_initialized = True
 
@@ -188,7 +195,7 @@ class AsyncOpenViking:
             session_id: Session ID
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
-            parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            parts: Parts array (full Part support: TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string)
             peer_id: Optional stable interaction peer identity.
 
@@ -239,6 +246,22 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.get_task(task_id)
 
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        await self._ensure_initialized()
+        return await self._client.list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+        )
+
     async def reindex(
         self,
         uri: str,
@@ -267,6 +290,7 @@ class AsyncOpenViking:
         build_index: bool = True,
         summarize: bool = False,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -301,6 +325,7 @@ class AsyncOpenViking:
             summarize=summarize,
             telemetry=telemetry,
             watch_interval=watch_interval,
+            args=args,
             **kwargs,
         )
 
@@ -365,12 +390,13 @@ class AsyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """
         Complex search with session context.
@@ -395,12 +421,13 @@ class AsyncOpenViking:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            context_type=context_type,
+            tags=tags,
             telemetry=telemetry,
             since=since,
             until=until,
             time_field=time_field,
             level=level,
-            peer_id=peer_id,
         )
 
     async def find(
@@ -410,12 +437,13 @@ class AsyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -425,12 +453,13 @@ class AsyncOpenViking:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            context_type=context_type,
+            tags=tags,
             telemetry=telemetry,
             since=since,
             until=until,
             time_field=time_field,
             level=level,
-            peer_id=peer_id,
         )
 
     # ============= FS methods =============
@@ -470,6 +499,24 @@ class AsyncOpenViking:
             telemetry=telemetry,
         )
 
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        await self._ensure_initialized()
+        return await self._client.set_tags(
+            uri=uri,
+            tags=tags,
+            mode=mode,
+            recursive=recursive,
+            telemetry=telemetry,
+        )
+
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.
@@ -494,10 +541,16 @@ class AsyncOpenViking:
             show_all_hidden=show_all_hidden,
         )
 
-    async def rm(self, uri: str, recursive: bool = False) -> None:
+    async def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource"""
         await self._ensure_initialized()
-        await self._client.rm(uri, recursive=recursive)
+        await self._client.rm(uri, recursive=recursive, wait=wait, timeout=timeout)
 
     async def grep(
         self,

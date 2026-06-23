@@ -27,6 +27,12 @@ class ExtractContextProvider(ABC):
         """
         pass
 
+    async def prepare_extraction_messages(self) -> None:
+        """
+        在构建 prompt、ranges 和 ExtractContext 之前准备 extraction-only messages。
+        """
+        return None
+
     @abstractmethod
     async def prefetch(
         self,

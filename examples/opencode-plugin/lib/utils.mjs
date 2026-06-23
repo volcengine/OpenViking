@@ -185,7 +185,11 @@ export function effectivePeerId(config) {
 
 export async function makeRequest(config, options) {
   const url = `${normalizeEndpoint(config.endpoint)}${options.endpoint}`
-  const headers = makeAuthHeaders(config, { "Content-Type": "application/json", ...(options.headers ?? {}) })
+  const headers = makeAuthHeaders(
+    config,
+    { "Content-Type": "application/json", ...(options.headers ?? {}) },
+    options.actorPeerId,
+  )
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
@@ -236,7 +240,7 @@ export async function makeRequest(config, options) {
 
 export async function makeMultipartRequest(config, options) {
   const url = `${normalizeEndpoint(config.endpoint)}${options.endpoint}`
-  const headers = makeAuthHeaders(config, options.headers ?? {})
+  const headers = makeAuthHeaders(config, options.headers ?? {}, options.actorPeerId)
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
@@ -285,11 +289,13 @@ export async function makeMultipartRequest(config, options) {
   }
 }
 
-function makeAuthHeaders(config, headers = {}) {
+function makeAuthHeaders(config, headers = {}, actorPeerId = "") {
   const result = { ...headers }
   if (config.apiKey) result["X-API-Key"] = config.apiKey
   if (config.account) result["X-OpenViking-Account"] = config.account
   if (config.user) result["X-OpenViking-User"] = config.user
+  const peerId = String(actorPeerId || "").trim()
+  if (peerId) result["X-OpenViking-Actor-Peer"] = peerId
   return result
 }
 

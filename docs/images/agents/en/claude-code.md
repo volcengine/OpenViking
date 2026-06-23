@@ -5,7 +5,7 @@ Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenV
 ## Step 1: Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/claude-code-memory-plugin/tos-install.sh)
 ```
 
 The installer checks dependencies, configures the OpenViking connection, and installs the plugin. Each step is idempotent, so it is safe to rerun.

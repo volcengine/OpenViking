@@ -106,6 +106,12 @@ class LinkRenderer:
         return LinkRenderer._RELATIVE_LINK_RE.sub(_replace_link, content)
 
     @staticmethod
+    def strip_all_links(content: str) -> str:
+        """Remove markdown links regardless of target scheme, keeping only link text."""
+
+        return LinkRenderer._RELATIVE_LINK_RE.sub(lambda m: m.group("text"), content)
+
+    @staticmethod
     def relative_path(source_uri: str, target_uri: str) -> Optional[str]:
         """Compute a relative path from source_uri to target_uri in the viking:// namespace.
 
@@ -122,7 +128,7 @@ class LinkRenderer:
             return None
 
         common = 0
-        for s, t in zip(src, tgt):
+        for s, t in zip(src, tgt, strict=False):
             if s == t:
                 common += 1
             else:

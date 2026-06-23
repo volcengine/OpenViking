@@ -53,22 +53,22 @@ This is a sample markdown document for server testing.
 
 def _install_fake_embedder(monkeypatch):
     """Use an in-process fake embedder so server tests never hit external APIs."""
-    dimension = 1024
 
     class FakeEmbedder(DenseEmbedderBase):
-        def __init__(self):
+        def __init__(self, dimension: int = 2048):
             super().__init__(model_name="test-fake-embedder")
+            self._dimension = dimension
 
         def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-            return EmbedResult(dense_vector=[0.1] * dimension)
+            return EmbedResult(dense_vector=[0.1] * self._dimension)
 
         def embed_batch(self, texts: list[str], is_query: bool = False) -> list[EmbedResult]:
             return [self.embed(text, is_query=is_query) for text in texts]
 
         def get_dimension(self) -> int:
-            return dimension
+            return self._dimension
 
-    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder())
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder(self.dimension))
     return FakeEmbedder
 
 
@@ -154,12 +154,21 @@ async def service(temp_dir: Path, monkeypatch):
 @pytest_asyncio.fixture(scope="function")
 async def app(service: OpenVikingService):
     """Create FastAPI app with pre-initialized service (no auth)."""
+    from openviking.server.auth.plugins import DevAuthPlugin
+    from openviking.server.auth.registry import get_registry
     from openviking.server.dependencies import set_service
 
     config = ServerConfig()
     fastapi_app = create_app(config=config, service=service)
     # ASGITransport doesn't trigger lifespan, so wire up the service manually
     set_service(service)
+    # Manually initialize auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("dev") is None:
+        registry.register(DevAuthPlugin)
+    plugin_cls = registry.get("dev")
+    if plugin_cls is not None:
+        fastapi_app.state.auth_plugin = plugin_cls()
     return fastapi_app
 
 

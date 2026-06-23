@@ -61,6 +61,7 @@ class TaskRecord:
         d["status"] = self.status.value
         d["created_at_iso"] = datetime.fromtimestamp(self.created_at, tz=timezone.utc).isoformat()
         d["updated_at_iso"] = datetime.fromtimestamp(self.updated_at, tz=timezone.utc).isoformat()
+        d["result"] = _sanitize_task_result(d.get("result"))
         d.pop("account_id", None)
         d.pop("user_id", None)
         return d
@@ -73,13 +74,20 @@ _init_lock = threading.Lock()
 
 
 def get_task_tracker() -> "TaskTracker":
-    """Get or create the global persistent TaskTracker singleton."""
-    global _instance
-    if _instance is None:
-        with _init_lock:
-            if _instance is None:
-                _instance = _build_default_task_tracker()
-    return _instance
+    """Get the global TaskTracker singleton installed by service storage initialization."""
+    with _init_lock:
+        if _instance is None:
+            logger.error(
+                "TaskTracker accessed before service storage initialization; refusing to create "
+                "a separate AGFS client. Ensure OpenVikingService installs the shared tracker "
+                "with set_task_tracker() before task APIs are used.",
+                stack_info=True,
+            )
+            raise RuntimeError(
+                "TaskTracker not initialized. OpenVikingService must install the shared "
+                "tracker with set_task_tracker() during storage initialization."
+            )
+        return _instance
 
 
 def set_task_tracker(tracker: "TaskTracker") -> None:
@@ -103,6 +111,7 @@ _SENSITIVE_PATTERNS = re.compile(
 )
 
 _MAX_ERROR_LEN = 500
+_SENSITIVE_RESULT_KEYS = {"user_key"}
 
 
 def _sanitize_error(error: str) -> str:
@@ -111,6 +120,19 @@ def _sanitize_error(error: str) -> str:
     if len(sanitized) > _MAX_ERROR_LEN:
         sanitized = sanitized[:_MAX_ERROR_LEN] + "...[truncated]"
     return sanitized
+
+
+def _sanitize_task_result(result: Any) -> Any:
+    """Remove sensitive fields from task results before exposing snapshots."""
+    if isinstance(result, dict):
+        return {
+            key: _sanitize_task_result(value)
+            for key, value in result.items()
+            if key not in _SENSITIVE_RESULT_KEYS
+        }
+    if isinstance(result, list):
+        return [_sanitize_task_result(item) for item in result]
+    return result
 
 
 # ── TaskTracker ──
@@ -342,6 +364,7 @@ class TaskTracker:
             task = await self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.COMPLETED
+                task.stage = "completed"
                 task.result = result
                 task.updated_at = time.time()
                 await self._store.update(task)
@@ -361,6 +384,7 @@ class TaskTracker:
             task = await self._load_for_update(task_id, account_id, user_id)
             if task:
                 task.status = TaskStatus.FAILED
+                task.stage = "failed"
                 task.error = _sanitize_error(error)
                 task.updated_at = time.time()
                 await self._store.update(task)
@@ -483,7 +507,9 @@ class TaskTracker:
     @staticmethod
     def _copy(task: TaskRecord) -> TaskRecord:
         """Return a defensive copy of a TaskRecord."""
-        return deepcopy(task)
+        copied = deepcopy(task)
+        copied.result = _sanitize_task_result(copied.result)
+        return copied
 
     def count(self) -> int:
         """Return total task count."""
@@ -500,13 +526,3 @@ class TaskTracker:
         for t in tasks:
             grouped[t.task_type][t.status.value] += 1
         return {k: dict(v) for k, v in grouped.items()}
-
-
-def _build_default_task_tracker() -> TaskTracker:
-    """Build the default persistent tracker from the active storage config."""
-    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
-    from openviking_cli.utils.config import get_openviking_config
-
-    config = get_openviking_config()
-    agfs = create_agfs_client(RagfsBindingConfig(agfs=config.storage.agfs))
-    return config.storage.build_task_tracker(agfs)

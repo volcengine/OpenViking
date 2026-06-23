@@ -17,6 +17,7 @@ from typing import Any
 
 DEFAULT_GATEWAY_URL = "http://127.0.0.1:19789"
 DEFAULT_OPENVIKING_URL = "http://127.0.0.1:1933"
+DEFAULT_ACTOR_PEER = "main"
 DEFAULT_SESSION_SCAN_LIMIT = 0
 META_FILE_SUFFIXES = (".abstract.md", ".overview.md")
 
@@ -194,6 +195,11 @@ def parse_args() -> argparse.Namespace:
         "--openviking-api-key",
         default="",
         help="OpenViking API key. Auto-discovered from plugin config when possible.",
+    )
+    parser.add_argument(
+        "--actor-peer",
+        default="",
+        help=f"OpenViking actor peer for direct inspection requests (default: {DEFAULT_ACTOR_PEER})",
     )
     parser.add_argument("--user-id", default="", help="User id for the real conversation session.")
     parser.add_argument(
@@ -657,15 +663,20 @@ def wait_for_commit_visibility(
 
 
 class OpenVikingInspector:
-    def __init__(self, base_url: str, api_key: str, *, insecure: bool = False) -> None:
+    def __init__(
+        self, base_url: str, api_key: str, actor_peer: str, *, insecure: bool = False
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.actor_peer = actor_peer or DEFAULT_ACTOR_PEER
         self.insecure = insecure
 
     def headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
         if self.api_key:
             headers["X-API-Key"] = self.api_key
+        if self.actor_peer:
+            headers["X-OpenViking-Actor-Peer"] = self.actor_peer
         return headers
 
     def health(self) -> bool:
@@ -1127,6 +1138,9 @@ def main() -> int:
         )
         or str(os.environ.get("OPENVIKING_API_KEY", "")).strip()
     )
+    actor_peer = (
+        args.actor_peer or str(plugin_config.get("peer_prefix", "")).strip() or DEFAULT_ACTOR_PEER
+    )
     user_id = args.user_id or f"ov-healthcheck-{uuid.uuid4().hex[:8]}"
     probe = f"probe-{uuid.uuid4().hex[:8]}"
     run_facts = build_run_facts(probe)
@@ -1195,7 +1209,9 @@ def main() -> int:
     else:
         recorder.add("WARN", "Gateway token not found", "continuing without Authorization header")
 
-    inspector = OpenVikingInspector(openviking_url, openviking_api_key, insecure=args.insecure)
+    inspector = OpenVikingInspector(
+        openviking_url, openviking_api_key, actor_peer, insecure=args.insecure
+    )
     try:
         sessions_before_probe = collect_session_ids(inspector.list_sessions())
     except Exception:

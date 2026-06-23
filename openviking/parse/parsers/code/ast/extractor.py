@@ -65,8 +65,17 @@ class ASTExtractor:
         self._cache: Dict[str, Optional[LanguageExtractor]] = {}
 
     def _detect_language(self, file_name: str) -> Optional[str]:
-        suffix = Path(file_name).suffix.lower()
-        return _EXT_MAP.get(suffix)
+        path = Path(file_name)
+        lang = _EXT_MAP.get(path.suffix.lower())
+        if lang is not None:
+            return lang
+        # Viking resource convention: a file uploaded as <NAME.ext> is stored as a
+        # directory <NAME.ext>/ containing the content under a "<NAME>.md" body
+        # (e.g. foo.py/foo.md).  When the file's own suffix is unsupported (.md),
+        # fall back to the parent directory's suffix to recover the language.
+        if path.suffix.lower() == ".md" and path.parent.name:
+            return _EXT_MAP.get(Path(path.parent.name).suffix.lower())
+        return None
 
     def _get_extractor(self, lang: Optional[str]) -> Optional[LanguageExtractor]:
         if lang is None or lang not in _EXTRACTOR_REGISTRY:
@@ -107,9 +116,7 @@ class ASTExtractor:
         try:
             return extractor.extract(file_name, content)
         except Exception as e:
-            logger.warning(
-                "AST extraction failed for '%s' (language: %s): %s", file_name, lang, e
-            )
+            logger.warning("AST extraction failed for '%s' (language: %s): %s", file_name, lang, e)
             return None
 
     def extract_skeleton(

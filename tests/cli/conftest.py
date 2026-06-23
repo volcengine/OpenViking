@@ -285,6 +285,10 @@ def _write_cli_config():
 
 
 CLI_CONFIG_PATH = _write_cli_config()
+ADD_RESOURCE_WAIT_TIMEOUT = "300"
+ADD_RESOURCE_COMMAND_TIMEOUT = 360
+WRITE_WAIT_TIMEOUT = "300"
+WRITE_COMMAND_TIMEOUT = 360
 
 
 def _env():
@@ -393,6 +397,80 @@ def ov(args, timeout=120):
     }
 
 
+def ov_add_resource(path, to_uri, *extra_args):
+    return ov(
+        [
+            "add-resource",
+            path,
+            "--to",
+            to_uri,
+            *extra_args,
+            "--wait",
+            "--timeout",
+            ADD_RESOURCE_WAIT_TIMEOUT,
+            "-o",
+            "json",
+        ],
+        timeout=ADD_RESOURCE_COMMAND_TIMEOUT,
+    )
+
+
+def ov_retry(args, *, attempts=5, interval=5, timeout=120, retry_if=None):
+    r = None
+    for attempt in range(attempts):
+        r = ov(args, timeout=timeout)
+        if r["exit_code"] == 0:
+            return r
+        if retry_if is not None and not retry_if(r):
+            return r
+        if attempt < attempts - 1:
+            time.sleep(interval)
+    return r
+
+
+def ov_rm(uri, *, recursive=True, attempts=5, interval=3):
+    args = ["rm", uri, "-o", "json"]
+    if recursive:
+        args.insert(2, "-r")
+    return ov_retry(args, attempts=attempts, interval=interval)
+
+
+def ov_mv(src_uri, dst_uri):
+    return ov_retry(["mv", src_uri, dst_uri, "-o", "json"], attempts=20, interval=15)
+
+
+def ov_write(uri, content, *extra_args):
+    return ov_retry(
+        [
+            "write",
+            uri,
+            "--content",
+            content,
+            *extra_args,
+            "--wait",
+            "--timeout",
+            WRITE_WAIT_TIMEOUT,
+            "-o",
+            "json",
+        ],
+        attempts=15,
+        interval=20,
+        timeout=WRITE_COMMAND_TIMEOUT,
+    )
+
+
+def ov_reindex(uri):
+    return ov_retry(["reindex", uri, "--wait", "true", "-o", "json"], attempts=15, interval=15)
+
+
+def ov_session_new():
+    return ov_retry(["session", "new", "-o", "json"], attempts=5, interval=5)
+
+
+def ov_session_delete(session_id):
+    return ov(["session", "delete", session_id, "-o", "json"])
+
+
 def _wait_for_resource_ready(uri, retries=20, interval=10):
     for _attempt in range(retries):
         r = ov(["read", uri, "-o", "json"], timeout=30)
@@ -450,11 +528,7 @@ def test_dir_uri(ensure_resources_dir):
         time.sleep(5)
     assert r["exit_code"] == 0, f"mkdir failed after retries: {r['stderr']}"
     yield uri
-    for _attempt in range(10):
-        r = ov(["rm", uri, "-r", "-o", "json"], timeout=120)
-        if r["exit_code"] == 0:
-            break
-        time.sleep(5)
+    ov_rm(uri, attempts=10, interval=5)
 
 
 @pytest.fixture(scope="session")
@@ -466,9 +540,7 @@ def test_pack_uri(test_dir_uri):
         pack_uri = f"{test_dir_uri}/test_pack"
         r = None
         for _attempt in range(10):
-            r = ov(
-                ["add-resource", temp_path, "--to", pack_uri, "--wait", "-o", "json"], timeout=120
-            )
+            r = ov_add_resource(temp_path, pack_uri)
             if r["exit_code"] == 0:
                 break
             if "CONFLICT" in (r.get("stderr") or "") or "busy" in (r.get("stderr") or "").lower():
@@ -497,13 +569,8 @@ def test_file_uri(test_pack_uri):
 
 @pytest.fixture(scope="session")
 def test_session_id():
-    r = None
-    for _attempt in range(5):
-        r = ov(["session", "new", "-o", "json"], timeout=120)
-        if r["exit_code"] == 0:
-            break
-        time.sleep(5)
+    r = ov_session_new()
     assert r["exit_code"] == 0, f"session new failed: {r['stderr']}"
     session_id = r["json"]["result"]["session_id"]
     yield session_id
-    ov(["session", "delete", session_id, "-o", "json"])
+    ov_session_delete(session_id)

@@ -74,6 +74,38 @@ client = ov.SyncHTTPClient(
 client.initialize()
 ```
 
+#### Go SDK 客户端
+
+Go SDK 是 Client-Server 模式下的 HTTP-only 客户端，作为主仓库的 `sdk/go` 独立 Go module 发布。
+
+```bash
+go get github.com/volcengine/OpenViking/sdk/go
+```
+
+```go
+client, err := openviking.NewClient(openviking.Config{
+    BaseURL: "http://localhost:1933",
+    APIKey:  "your-key",
+})
+if err != nil {
+    return err
+}
+defer client.CloseIdleConnections()
+```
+
+Go SDK 发送的身份请求头与 Python HTTP client 一致：
+
+| Config 字段 | HTTP Header |
+|-------------|-------------|
+| `APIKey` | `X-API-Key` |
+| `Account` | `X-OpenViking-Account` |
+| `User` | `X-OpenViking-User` |
+| `ActorPeerID` | `X-OpenViking-Actor-Peer` |
+
+普通 `api_key` 部署下只需要设置 `APIKey`，服务端会从 API key 推导租户身份。只有在 trusted 部署或网关显式透传租户身份时，才需要设置 `Account` 和 `User`。
+
+Go SDK 不支持 Python embedded 模式，也不保留旧 `agent_id` 兼容路径。更多示例见 [`sdk/go/README_CN.md`](../../../sdk/go/README_CN.md)。
+
 未显式传入 `url` 时，HTTP 客户端会自动从 `ovcli.conf` 读取连接信息。`ovcli.conf` 是 HTTP 客户端和 CLI 共享的配置文件，默认路径 `~/.openviking/ovcli.conf`，也可通过环境变量指定：
 
 ```bash
@@ -353,7 +385,31 @@ JSON 输出 - 错误：
 |------|------|------|
 | POST | `/api/v1/resources/temp_upload` | 临时文件上传（用于后续资源导入） |
 | POST | `/api/v1/resources` | 添加资源（支持 URL 或 temp_file_id） |
+
+### 技能端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/skills` | 列出已安装技能 |
 | POST | `/api/v1/skills` | 添加技能 |
+| POST | `/api/v1/skills/find` | 搜索已安装技能 |
+| POST | `/api/v1/skills/validate` | 校验技能 payload |
+| GET | `/api/v1/skills/{skill_name}` | 获取技能 |
+| PUT | `/api/v1/skills/{skill_name}` | 更新技能 |
+| DELETE | `/api/v1/skills/{skill_name}` | 删除技能 |
+
+### Watch 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/watches` | 列出 watch，或按 `to_uri` 查询单个 watch |
+| GET | `/api/v1/watches/{task_id}` | 获取 watch |
+| PATCH | `/api/v1/watches` | 按 `to_uri` 更新 watch |
+| PATCH | `/api/v1/watches/{task_id}` | 按 task ID 更新 watch |
+| DELETE | `/api/v1/watches` | 按 `to_uri` 删除 watch |
+| DELETE | `/api/v1/watches/{task_id}` | 按 task ID 删除 watch |
+| POST | `/api/v1/watches/trigger` | 按 `to_uri` 触发 watch |
+| POST | `/api/v1/watches/{task_id}/trigger` | 按 task ID 触发 watch |
 
 ### Pack 端点
 

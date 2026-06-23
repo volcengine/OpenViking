@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 # Error classification categories returned by classify_api_error()
-ERROR_CLASS_PERMANENT = "permanent"
+ERROR_CLASS_PERMANENT = "permanent"  # request-level 4xx (e.g. 400 invalid parameter)
+ERROR_CLASS_AUTH = "auth"  # credential-level 401/403 (key invalid / no permission / overdue)
+ERROR_CLASS_CONTENT_SAFETY = "content_safety"  # request content rejected by moderation
 ERROR_CLASS_INPUT_TOO_LARGE = "input_too_large"
 ERROR_CLASS_QUOTA_EXCEEDED = "quota_exceeded"
 ERROR_CLASS_TRANSIENT = "transient"
@@ -36,13 +38,29 @@ INPUT_TOO_LARGE_PATTERNS = (
     "expected maxlength",
 )
 
-PERMANENT_API_ERROR_PATTERNS = (
-    "400",
+PERMANENT_API_ERROR_PATTERNS = ("400",)
+
+# Credential-level errors: in multi-credential mode these advance to the next
+# credential (another key may be valid / have permission / have balance); with a
+# single credential or on the last credential they fail fast.
+AUTH_API_ERROR_PATTERNS = (
     "401",
     "403",
     "forbidden",
     "unauthorized",
     "accountoverdue",
+)
+
+# Content moderation rejections. Same request content fails on every credential
+# of the same model, so these fail fast (no point switching credentials).
+CONTENT_SAFETY_PATTERNS = (
+    "content policy",
+    "content_filter",
+    "contentfilter",
+    "moderation",
+    "sensitive content",
+    "内容安全",
+    "敏感",
 )
 
 QUOTA_EXCEEDED_PATTERNS = (
@@ -98,12 +116,18 @@ def _pattern_matches(text_lower: str, text_compact: str, pattern: str) -> bool:
 
 
 def classify_api_error(error: Exception) -> str:
-    """Classify an API error as permanent, quota_exceeded, transient, or unknown.
+    """Classify an API error into one of the ERROR_CLASS_* categories.
 
-    ``quota_exceeded`` is checked before ``transient`` because quota errors
-    typically include "429" / "TooManyRequests" which would otherwise match
-    the transient category.  Quota errors should not be retried; the caller
-    should fail over to a backup model instead.
+    Order matters:
+    - ``content_safety`` is checked before ``permanent`` so a moderation
+      rejection that happens to embed "400" in its message is not misclassified.
+    - ``auth`` (401/403) is separated from ``permanent`` (400): auth errors are
+      credential-level and may be resolved by switching credentials, whereas a
+      400 is a request-level error that fails on every credential of the same
+      model.
+    - ``quota_exceeded`` is checked before ``transient`` because quota errors
+      typically include "429" / "TooManyRequests" which would otherwise match
+      the transient category.
     """
     for exc in (error, getattr(error, "__cause__", None)):
         if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
@@ -120,12 +144,28 @@ def classify_api_error(error: Exception) -> str:
             if _pattern_matches(text_lower, text_compact, pattern):
                 return ERROR_CLASS_INPUT_TOO_LARGE
 
+    # Content safety before permanent so a moderation message containing "400"
+    # is not misclassified as a permanent parameter error.
+    for text in texts:
+        text_lower = text.lower()
+        text_compact = text_lower.replace(" ", "")
+        for pattern in CONTENT_SAFETY_PATTERNS:
+            if _pattern_matches(text_lower, text_compact, pattern):
+                return ERROR_CLASS_CONTENT_SAFETY
+
     for text in texts:
         text_lower = text.lower()
         text_compact = text_lower.replace(" ", "")
         for pattern in PERMANENT_API_ERROR_PATTERNS:
             if _pattern_matches(text_lower, text_compact, pattern):
                 return ERROR_CLASS_PERMANENT
+
+    for text in texts:
+        text_lower = text.lower()
+        text_compact = text_lower.replace(" ", "")
+        for pattern in AUTH_API_ERROR_PATTERNS:
+            if _pattern_matches(text_lower, text_compact, pattern):
+                return ERROR_CLASS_AUTH
 
     # Check quota_exceeded *before* transient so that "429 … AccountQuotaExceeded"
     # is classified as quota_exceeded, not transient.
@@ -305,10 +345,15 @@ class PrimaryBackupSwitcher:
     def record_primary_failure(self, error: Exception) -> bool:
         """Record a primary failure. Returns True if should switch to backup.
 
-        Switches to backup immediately for ERROR_CLASS_PERMANENT or ERROR_CLASS_QUOTA_EXCEEDED.
+        Switches to backup immediately for ERROR_CLASS_PERMANENT,
+        ERROR_CLASS_AUTH or ERROR_CLASS_QUOTA_EXCEEDED.
         """
         error_class = classify_api_error(error)
-        if error_class in (ERROR_CLASS_PERMANENT, ERROR_CLASS_QUOTA_EXCEEDED):
+        if error_class in (
+            ERROR_CLASS_PERMANENT,
+            ERROR_CLASS_AUTH,
+            ERROR_CLASS_QUOTA_EXCEEDED,
+        ):
             with self._lock:
                 if not self._using_backup:
                     logger.warning(f"Primary failed with {error_class}, switching to backup")
@@ -330,3 +375,210 @@ class PrimaryBackupSwitcher:
         """Check if currently using backup."""
         with self._lock:
             return self._using_backup
+
+
+class OrderedCredentialSwitcher:
+    """Thread-safe ordered N-credential switcher with hierarchical failback.
+
+    Supports ordered failover across multiple credentials. When a credential fails
+    with quota_exceeded or permanent error, it advances to the next credential.
+    After failback thresholds are met, it attempts to move back to a higher-priority
+    credential (one step at a time, not all the way back to index 0).
+
+    _active_idx == _n indicates all credentials are exhausted.
+    """
+
+    def __init__(
+        self,
+        n: int,
+        failback_timeout_seconds: float = 600.0,  # 10 minutes
+        failback_request_count: int = 50,
+    ):
+        """Initialize the switcher.
+
+        Args:
+            n: Number of credentials (must be >= 1)
+            failback_timeout_seconds: Time after which to attempt failback
+            failback_request_count: Number of requests after which to attempt failback
+
+        Note:
+            Failure handling is driven by the error class (see
+            ``classify_api_error``):
+
+            - request-level errors (``permanent`` 400 / ``input_too_large`` /
+              ``content_safety``) fail fast: the same request fails on every
+              credential of the same model, so switching is useless.
+            - credential-level ``auth`` errors (401/403) advance to the next
+              credential in multi-credential mode; the last (or single)
+              credential fails fast.
+            - ``quota_exceeded`` (and ``transient`` once its retries are
+              exhausted) and ``unknown`` advance to the next credential.
+        """
+        if n < 1:
+            raise ValueError("Number of credentials must be >= 1")
+
+        # Configuration (read-only after construction)
+        self._n = n
+        self._failback_timeout = failback_timeout_seconds
+        self._failback_request_count = failback_request_count
+
+        # Runtime state (protected by _lock)
+        self._lock = threading.Lock()
+        self._active_idx = 0
+        self._last_switch_time: float = 0.0
+        self._active_request_count = 0
+
+    @property
+    def n(self) -> int:
+        """Get the number of credentials."""
+        return self._n
+
+    def maybe_failback(self) -> int:
+        """Attempt a one-step failback toward higher-priority credentials.
+
+        If the active credential is not already the highest priority (index 0)
+        and a failback threshold (timeout or request count) is met, move the
+        active index back one step. This mutates state and must be called only
+        when about to issue a request, not for pure observation.
+
+        Returns the (possibly updated) active credential index.
+        """
+        with self._lock:
+            if self._active_idx > 0:
+                timer_hit = (time.monotonic() - self._last_switch_time) >= self._failback_timeout
+                count_hit = self._active_request_count >= self._failback_request_count
+                if timer_hit or count_hit:
+                    previous_idx = self._active_idx
+                    self._active_idx -= 1
+                    self._last_switch_time = time.monotonic()
+                    self._active_request_count = 0
+                    logger.info(
+                        f"Failback condition met (timer={timer_hit}, count={count_hit}), "
+                        f"switching active credential from {previous_idx} to {self._active_idx}"
+                    )
+            return self._active_idx
+
+    def get_active_index(self) -> int:
+        """Return the current active credential index (pure read, no side effects).
+
+        Use :meth:`maybe_failback` to trigger failback before issuing a request.
+        """
+        with self._lock:
+            return self._active_idx
+
+    def on_success(self, idx: int) -> None:
+        """Record a successful call on the given credential index.
+
+        Increments the request counter for active_idx if idx matches.
+        """
+        with self._lock:
+            if idx == self._active_idx and self._active_idx > 0:
+                self._active_request_count += 1
+
+    @staticmethod
+    def is_fail_fast(error_class: str) -> bool:
+        """Whether an error is request-level and must not try other credentials.
+
+        Request-level errors (400 parameter error, input too large, content
+        safety) fail on every credential of the same model, so the caller should
+        re-raise immediately instead of cycling through credentials.
+        """
+        return error_class in (
+            ERROR_CLASS_PERMANENT,
+            ERROR_CLASS_INPUT_TOO_LARGE,
+            ERROR_CLASS_CONTENT_SAFETY,
+        )
+
+    def commit_success(self, idx: int) -> None:
+        """Record that credential ``idx`` successfully served a request.
+
+        - If ``idx`` is the current active credential, advance the failback
+          request counter (so failback to a higher-priority credential can
+          eventually trigger).
+        - If ``idx`` differs (a lower/other-priority credential served the
+          request after the active one was unavailable), commit it as the new
+          active credential (fast failover) and reset failback timers/counters.
+        """
+        with self._lock:
+            if idx == self._active_idx:
+                if self._active_idx > 0:
+                    self._active_request_count += 1
+                return
+            logger.info(
+                f"Fast failover: credential {idx} served the request; "
+                f"switching active credential from {self._active_idx} to {idx}"
+            )
+            self._active_idx = idx
+            self._last_switch_time = time.monotonic()
+            self._active_request_count = 0
+
+    def on_failure(self, idx: int, error_class: str) -> bool:
+        """Record a failure and decide whether to advance to the next credential.
+
+        Args:
+            idx: The credential index that failed
+            error_class: One of ERROR_CLASS_* constants
+
+        Returns:
+            True if the caller should advance to the next credential (idx += 1)
+            False if fail-fast (caller should re-raise the original exception)
+        """
+        # Transient errors that have exhausted retries are treated as quota_exceeded
+        if error_class == ERROR_CLASS_TRANSIENT:
+            error_class = ERROR_CLASS_QUOTA_EXCEEDED
+
+        with self._lock:
+            # Request-level errors fail fast: the same request fails on every
+            # credential of the same model, so switching credentials is useless.
+            if error_class in (
+                ERROR_CLASS_PERMANENT,
+                ERROR_CLASS_INPUT_TOO_LARGE,
+                ERROR_CLASS_CONTENT_SAFETY,
+            ):
+                logger.warning(
+                    f"Credential {idx} failed with {error_class} (request-level), fail-fast"
+                )
+                return False
+
+            if error_class == ERROR_CLASS_AUTH:
+                # Credential-level error (key invalid / no permission / overdue).
+                # In multi-credential mode, advance to the next credential since
+                # another credential may have a valid key / permission / balance.
+                # The last credential (or single-credential mode) fails fast.
+                if idx == self._active_idx and self._active_idx + 1 < self._n:
+                    self._active_idx += 1
+                    self._last_switch_time = time.monotonic()
+                    self._active_request_count = 0
+                    logger.warning(
+                        f"Credential {idx} failed with auth error; "
+                        f"advancing to {self._active_idx} (multi-credential mode)"
+                    )
+                    return True
+                logger.warning(f"Credential {idx} failed with auth error, fail-fast")
+                return False
+
+            if error_class == ERROR_CLASS_QUOTA_EXCEEDED:
+                if idx == self._active_idx:
+                    self._active_idx = min(self._active_idx + 1, self._n)
+                    self._last_switch_time = time.monotonic()
+                    self._active_request_count = 0
+                    logger.warning(
+                        f"Credential {idx} failed with quota_exceeded, advancing to {self._active_idx}"
+                    )
+                return True
+
+            # Unknown error class: default to advancing (be conservative)
+            if idx == self._active_idx:
+                self._active_idx = min(self._active_idx + 1, self._n)
+                self._last_switch_time = time.monotonic()
+                self._active_request_count = 0
+                logger.warning(
+                    f"Credential {idx} failed with unknown error class: {error_class}, advancing to {self._active_idx}"
+                )
+            return True
+
+    @property
+    def is_exhausted(self) -> bool:
+        """Check if all credentials are exhausted."""
+        with self._lock:
+            return self._active_idx >= self._n

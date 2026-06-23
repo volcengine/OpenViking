@@ -1085,6 +1085,54 @@ class QdrantCollection(ICollection):
         )
         return [data.get("id") for data in data_list]
 
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        updated_records: List[Dict[str, Any]] = []
+        updated_ids: List[Any] = []
+
+        for raw_data in data_list:
+            if "id" not in raw_data or raw_data.get("id") in (None, ""):
+                raise ValueError("Qdrant update requires id")
+
+            original_id = raw_data.get("id")
+            response = self._client.request(
+                "POST",
+                f"/collections/{self._physical_collection_name}/points",
+                json_body={
+                    "ids": [_to_qdrant_point_id(original_id)],
+                    "with_payload": True,
+                    "with_vector": True,
+                },
+            )
+            points = _extract_points(response)
+            if not points:
+                raise ValueError(f"Qdrant point does not exist for update: {original_id}")
+
+            point = points[0]
+            existing_id, existing_payload = self._point_payload_for_read(point)
+            dense_vector, sparse_vector = self._extract_named_vectors(point)
+
+            merged_record: Dict[str, Any] = {"id": existing_id, **existing_payload}
+            if dense_vector is not None:
+                merged_record[self._dense_vector_name] = dense_vector
+            if sparse_vector is not None:
+                merged_record[self._sparse_vector_name] = sparse_vector
+
+            for field_name, field_value in raw_data.items():
+                merged_record[field_name] = field_value
+
+            updated_records.append(merged_record)
+            updated_ids.append(existing_id)
+
+        points = [self._make_point(data) for data in updated_records]
+        self._client.request(
+            "PUT",
+            f"/collections/{self._physical_collection_name}/points",
+            json_body={"points": points},
+            params={"wait": "true"},
+            expected_statuses=(200, 202),
+        )
+        return updated_ids
+
     def fetch_data(self, primary_keys: List[Any]):
         if not primary_keys:
             return FetchDataInCollectionResult()

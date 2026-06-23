@@ -2,10 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
-import {
-  createMemoryOpenVikingContextEngine,
-  openClawSessionToOvStorageId,
-} from "../../context-engine.js";
+import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
+import { openClawSessionToOvStorageId } from "../../routing/identity-routing.js";
 
 function makeLogger() {
   return {
@@ -15,16 +13,12 @@ function makeLogger() {
   };
 }
 
-function makeEngine(
-  commitResult: unknown,
-  opts?: { throwError?: Error; cfgOverrides?: Record<string, unknown> },
-) {
+function makeEngine(commitResult: unknown, opts?: { throwError?: Error }) {
   const cfg = memoryOpenVikingConfigSchema.parse({
     mode: "remote",
     baseUrl: "http://127.0.0.1:1933",
     autoCapture: false,
     autoRecall: false,
-    ...(opts?.cfgOverrides ?? {}),
   });
   const logger = makeLogger();
 
@@ -118,24 +112,6 @@ describe("context-engine commitOVSession()", () => {
     await engine.commitOVSession({ sessionId: "s1" });
 
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({ wait: true });
-  });
-
-  it("does not pass memory policy when committing peer-role sessions", async () => {
-    const { engine, client } = makeEngine(
-      {
-        status: "completed",
-        archived: false,
-        memories_extracted: {},
-      },
-      { cfgOverrides: { peer_role: "person" } },
-    );
-
-    await engine.commitOVSession({ sessionId: "s1" });
-
-    expect(client.commitSession.mock.calls[0][1]).toMatchObject({
-      wait: true,
-    });
-    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("memoryPolicy");
   });
 
   it("uses sessionKey-derived OV session ID for commitOVSession", async () => {
@@ -323,24 +299,6 @@ describe("context-engine compact()", () => {
 
     expect(client.commitSession).toHaveBeenCalledTimes(1);
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({ wait: true });
-  });
-
-  it("compact does not pass memory policy when committing peer-role sessions", async () => {
-    const { engine, client } = makeEngine(
-      {
-        status: "completed",
-        archived: true,
-        memories_extracted: {},
-      },
-      { cfgOverrides: { peer_role: "person" } },
-    );
-
-    await engine.compact({ sessionId: "s1", sessionFile: "" });
-
-    expect(client.commitSession.mock.calls[0][1]).toMatchObject({
-      wait: true,
-    });
-    expect(client.commitSession.mock.calls[0][1]).not.toHaveProperty("memoryPolicy");
   });
 
   it("logs memory extraction count on success", async () => {

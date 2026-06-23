@@ -1,0 +1,85 @@
+package openviking
+
+import (
+	"context"
+	"net/http"
+	"net/url"
+)
+
+// AdminCreateAccount creates an account with its first admin user.
+func (c *Client) AdminCreateAccount(ctx context.Context, accountID, adminUserID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts", nil, map[string]any{
+		"account_id":    accountID,
+		"admin_user_id": adminUserID,
+	}, &result)
+	return result, err
+}
+
+// AdminListAccounts lists accounts.
+func (c *Client) AdminListAccounts(ctx context.Context) ([]any, error) {
+	var result []any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts", nil, nil, &result)
+	return result, err
+}
+
+// AdminDeleteAccount deletes an account and all associated users.
+func (c *Client) AdminDeleteAccount(ctx context.Context, accountID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID), nil, nil, &result)
+	return result, err
+}
+
+// AdminRegisterUser registers a user in an account.
+func (c *Client) AdminRegisterUser(ctx context.Context, accountID, userID, role string) (map[string]any, error) {
+	if role == "" {
+		role = "user"
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users", nil, map[string]any{
+		"user_id": userID,
+		"role":    role,
+	}, &result)
+	return result, err
+}
+
+// AdminListUsers lists users in an account.
+func (c *Client) AdminListUsers(ctx context.Context, accountID string) ([]any, error) {
+	var result []any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users", nil, nil, &result)
+	return result, err
+}
+
+// AdminRemoveUser removes a user from an account.
+func (c *Client) AdminRemoveUser(ctx context.Context, accountID, userID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users/"+url.PathEscape(userID), nil, nil, &result)
+	return result, err
+}
+
+// AdminSetRole changes a user's role.
+func (c *Client) AdminSetRole(ctx context.Context, accountID, userID, role string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPut, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users/"+url.PathEscape(userID)+"/role", nil, map[string]any{
+		"role": role,
+	}, &result)
+	return result, err
+}
+
+// AdminRegenerateKey regenerates a user's API key.
+func (c *Client) AdminRegenerateKey(ctx context.Context, accountID, userID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users/"+url.PathEscape(userID)+"/key", nil, nil, &result)
+	return result, err
+}
+
+// AdminMigrate starts legacy data migration or cleanup.
+func (c *Client) AdminMigrate(ctx context.Context, opts *AdminMigrateOptions) (map[string]any, error) {
+	action := "migrate"
+	if opts != nil && opts.Cleanup {
+		action = "cleanup"
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/migrate", nil, map[string]any{"action": action}, &result)
+	return result, err
+}

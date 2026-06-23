@@ -22,6 +22,11 @@ async def test_write_endpoint_registered(client):
     assert resp.status_code == 405
 
 
+async def test_set_tags_endpoint_registered(client):
+    resp = await client.get("/api/v1/content/set_tags")
+    assert resp.status_code == 405
+
+
 async def test_write_rejects_directory_uri(client_with_resource):
     client, uri = client_with_resource
     resp = await client.post(
@@ -252,3 +257,80 @@ async def test_api_create_mode_regression_replace_unchanged(client_with_resource
     read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
     assert read_resp.status_code == 200
     assert read_resp.json()["result"] == "# Updated\n\nFresh content."
+
+
+async def test_set_tags_requires_tags_field(client_with_resource):
+    client, uri = client_with_resource
+    file_uri = await _first_file_uri(client, uri)
+    resp = await client.post("/api/v1/content/set_tags", json={"uri": file_uri})
+    assert resp.status_code == 400
+
+
+async def test_set_tags_passes_tags_to_service(client, service, monkeypatch):
+    captured = {}
+
+    async def fake_set_tags(
+        *,
+        uri,
+        tags,
+        ctx,
+        mode="replace",
+        recursive=False,
+    ):
+        del ctx
+        captured["uri"] = uri
+        captured["tags"] = tags
+        captured["mode"] = mode
+        captured["recursive"] = recursive
+        return {"uri": uri, "tags": tags}
+
+    monkeypatch.setattr(service.fs, "set_tags", fake_set_tags)
+
+    resp = await client.post(
+        "/api/v1/content/set_tags",
+        json={
+            "uri": "viking://resources/demo/file.md",
+            "tags": ["a", "b"],
+            "mode": "append",
+            "recursive": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured == {
+        "uri": "viking://resources/demo/file.md",
+        "tags": ["a", "b"],
+        "mode": "append",
+        "recursive": True,
+    }
+
+
+async def test_set_tags_rejects_wait_and_timeout_fields(client_with_resource):
+    client, uri = client_with_resource
+    file_uri = await _first_file_uri(client, uri)
+    resp = await client.post(
+        "/api/v1/content/set_tags",
+        json={
+            "uri": file_uri,
+            "tags": ["team=search"],
+            "wait": True,
+            "timeout": 3,
+        },
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+
+
+async def test_set_tags_rejects_invalid_kv_tag(client_with_resource):
+    client, uri = client_with_resource
+    file_uri = await _first_file_uri(client, uri)
+    resp = await client.post(
+        "/api/v1/content/set_tags",
+        json={"uri": file_uri, "tags": ["project-a"]},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"

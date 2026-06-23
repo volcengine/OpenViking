@@ -240,6 +240,10 @@ impl ConfigStore {
         write_config_file(&self.active_path, config)
     }
 
+    pub(crate) fn save_active_config(&self, config: &Config) -> Result<()> {
+        write_config_file(&self.active_path, config)
+    }
+
     pub fn save_edited_config(
         &self,
         old_name: &str,
@@ -574,6 +578,7 @@ pub(crate) async fn validate_candidate_config_with_role(
         auth.api_key.clone(),
         auth.account,
         auth.user,
+        config.actor_peer_id.clone(),
         timeout,
         config.profile,
         config.extra_headers.clone(),

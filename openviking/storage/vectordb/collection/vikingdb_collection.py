@@ -21,6 +21,9 @@ from openviking_cli.utils.logger import default_logger as logger
 class VikingDBCollection(ICollection):
     """
     VikingDB collection implementation for private deployment.
+
+    Data-plane operations in this class target the VikingDB V2 API surface
+    under /api/vikingdb/data/*.
     """
 
     def __init__(
@@ -155,6 +158,15 @@ class VikingDBCollection(ICollection):
             "collection_name": self.collection_name,
             "data": data_list,
             "ttl": ttl,
+        }
+        return self._data_post(path, data)
+
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        path = "/api/vikingdb/data/update"
+        data = {
+            "project": self.project_name,
+            "collection_name": self.collection_name,
+            "data": data_list,
         }
         return self._data_post(path, data)
 

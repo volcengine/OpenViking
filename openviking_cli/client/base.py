@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import SearchContextTypeInput
 
 
 class BaseClient(ABC):
@@ -42,6 +43,7 @@ class BaseClient(ABC):
         wait: bool = False,
         timeout: Optional[float] = None,
         watch_interval: float = 0,
+        args: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -112,7 +114,13 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def rm(self, uri: str, recursive: bool = False) -> None:
+    async def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource."""
         ...
 
@@ -157,6 +165,18 @@ class BaseClient(ABC):
         """Write text content to an existing file and refresh semantics/vectors."""
         ...
 
+    @abstractmethod
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Update explicit retrieval tags metadata for a file or directory."""
+        ...
+
     # ============= Search =============
 
     @abstractmethod
@@ -167,8 +187,9 @@ class BaseClient(ABC):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
         ...
@@ -182,8 +203,9 @@ class BaseClient(ABC):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
-        peer_id: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         ...
@@ -304,7 +326,7 @@ class BaseClient(ABC):
             session_id: Session ID
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
-            parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            parts: Parts array (full Part support: TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string)
             peer_id: Optional stable interaction peer identity.
             telemetry: Whether to attach operation telemetry data to the result.
@@ -331,6 +353,22 @@ class BaseClient(ABC):
         Returns:
             Result dict with session_id, message_count, and added count.
         """
+        ...
+
+    @abstractmethod
+    async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        ...
+
+    @abstractmethod
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List background tasks visible to the current caller."""
         ...
 
     # ============= Pack =============

@@ -100,6 +100,15 @@ class UnifiedResourceProcessor:
             self._accessor_registry = get_accessor_registry()
         return self._accessor_registry
 
+    def _get_parser_router(self):
+        """Get ParserRouter."""
+        if not hasattr(self, "_parser_router"):
+            from openviking.parse.parser_router import ParserRouter
+            from openviking.parse.registry import get_registry
+
+            self._parser_router = ParserRouter(get_registry())
+        return self._parser_router
+
     async def process(
         self,
         source: str,
@@ -188,8 +197,9 @@ class UnifiedResourceProcessor:
                     local_resource.is_temporary = False
                 return result
 
-            # For files, use the unified parse function (including .zip files via ZipParser)
-            return await parse(str(local_resource.path), **parse_kwargs)
+            # For files, use ParserRouter to decide which parser to use
+            parser_router = self._get_parser_router()
+            return await parser_router.parse(local_resource, **parse_kwargs)
         finally:
             # Clean up temporary resources unless they need to be preserved
             local_resource.cleanup()

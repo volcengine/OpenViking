@@ -622,6 +622,9 @@ class TestCompressorV2:
                 return uri
 
         class DummyProvider:
+            async def prepare_extraction_messages(self):
+                pass
+
             def get_memory_schemas(self, _ctx):
                 return []
 
@@ -828,6 +831,9 @@ class TestExtractLoopPatchRepair:
             def __init__(self):
                 self.extract_context = ExtractContext([])
 
+            async def prepare_extraction_messages(self):
+                pass
+
             def get_memory_schemas(self, _ctx):
                 return [schema]
 
@@ -925,6 +931,9 @@ class TestExtractLoopPatchRepair:
             def __init__(self):
                 self.extract_context = ExtractContext([])
 
+            async def prepare_extraction_messages(self):
+                pass
+
             def get_memory_schemas(self, _ctx):
                 return [schema]
 
@@ -1020,6 +1029,9 @@ class TestExtractLoopPatchRepair:
 
             def __init__(self):
                 self.extract_context = ExtractContext([])
+
+            async def prepare_extraction_messages(self):
+                pass
 
             def get_memory_schemas(self, _ctx):
                 return [schema]

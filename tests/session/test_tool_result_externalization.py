@@ -97,7 +97,7 @@ async def test_add_message_externalizes_large_tool_output(session: Session):
                 tool_status="completed",
             )
         ],
-        peer_id="web:visitor:alice",
+        peer_id="web-visitor-alice",
     )
 
     part = msg.get_tool_parts()[0]
@@ -111,7 +111,7 @@ async def test_add_message_externalizes_large_tool_output(session: Session):
     assert stored["content"] == raw
     assert stored["offset_unit"] == "unicode_code_point"
     assert stored["metadata"]["user_id"] == session.ctx.user.user_id
-    assert stored["metadata"]["peer_id"] == "web:visitor:alice"
+    assert stored["metadata"]["peer_id"] == "web-visitor-alice"
 
 
 async def test_hydrate_tool_outputs_for_extraction_uses_memory_copy(session: Session):

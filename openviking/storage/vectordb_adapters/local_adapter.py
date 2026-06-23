@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
@@ -55,3 +55,8 @@ class LocalCollectionAdapter(CollectionAdapter):
         if collection_path:
             os.makedirs(collection_path, exist_ok=True)
         return get_or_create_local_collection(meta_data=meta, path=collection_path)
+
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        collection = self.get_collection()
+        result = collection.update_data(data_list)
+        return list(result.ids or [])

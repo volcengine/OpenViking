@@ -8,7 +8,7 @@ import time
 import uuid
 
 import pytest
-from conftest import ov
+from conftest import ov, ov_add_resource
 
 pytestmark = pytest.mark.cli_remote
 
@@ -22,9 +22,7 @@ class TestAddResource:
             to_uri = f"{test_dir_uri}/res_{uuid.uuid4().hex[:6]}"
             r = None
             for _attempt in range(5):
-                r = ov(
-                    ["add-resource", temp_path, "--to", to_uri, "--wait", "-o", "json"], timeout=120
-                )
+                r = ov_add_resource(temp_path, to_uri)
                 if r["exit_code"] == 0:
                     break
                 if "CONFLICT" in (r.get("stderr") or "") or "Network error" in (
@@ -93,20 +91,7 @@ class TestAddSkill:
             to_uri = f"{test_dir_uri}/reason_{uuid.uuid4().hex[:6]}"
             r = None
             for _attempt in range(5):
-                r = ov(
-                    [
-                        "add-resource",
-                        temp_path,
-                        "--to",
-                        to_uri,
-                        "--reason",
-                        "CLI test reason",
-                        "--wait",
-                        "-o",
-                        "json",
-                    ],
-                    timeout=120,
-                )
+                r = ov_add_resource(temp_path, to_uri, "--reason", "CLI test reason")
                 if r["exit_code"] == 0:
                     break
                 if "CONFLICT" in (r.get("stderr") or "") or "Network error" in (

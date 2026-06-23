@@ -42,14 +42,15 @@ class _DummyHTTPClient:
         self.kwargs = kwargs
         self.find_calls = []
         self.ls_calls = []
+        self.read_calls = []
         self.closed = False
         _DummyHTTPClient.instances.append(self)
 
     async def initialize(self):
         return None
 
-    async def create_session(self, session_id=None):
-        return {"session_id": session_id or "s-1"}
+    async def create_session(self, session_id=None, memory_policy=None):
+        return {"session_id": session_id or "s-1", "memory_policy": memory_policy}
 
     async def session_exists(self, _session_id):
         return False
@@ -60,14 +61,11 @@ class _DummyHTTPClient:
     async def batch_add_messages(self, session_id, messages):
         return {"session_id": session_id, "added": len(messages), "message_count": len(messages)}
 
-    async def commit_session(
-        self, session_id, keep_recent_count=0, telemetry=False, memory_policy=None
-    ):
+    async def commit_session(self, session_id, keep_recent_count=0, telemetry=False):
         return {
             "session_id": session_id,
             "status": "committed",
             "keep_recent_count": keep_recent_count,
-            "memory_policy": memory_policy,
         }
 
     def session(self, _session_id):
@@ -75,15 +73,6 @@ class _DummyHTTPClient:
 
     async def admin_list_accounts(self):
         return []
-
-    async def admin_list_users(self, _account_id):
-        return []
-
-    async def admin_register_user(self, account_id, user_id, role="user"):
-        return {"account_id": account_id, "user_id": user_id, "role": role}
-
-    async def admin_remove_user(self, _account_id, _user_id):
-        return None
 
     async def find(self, *_args, **_kwargs):
         self.find_calls.append((_args, _kwargs))
@@ -95,6 +84,18 @@ class _DummyHTTPClient:
 
     async def search(self, *_args, **_kwargs):
         return {"memories": [], "resources": [], "skills": []}
+
+    async def abstract(self, uri):
+        self.read_calls.append(("abstract", uri))
+        return ""
+
+    async def overview(self, uri):
+        self.read_calls.append(("overview", uri))
+        return ""
+
+    async def read(self, uri):
+        self.read_calls.append(("read", uri))
+        return ""
 
     async def grep(self, *_args, **_kwargs):
         return {"matches": []}
@@ -120,8 +121,8 @@ def _make_config(api_key_type: str, mode: str = "remote", **ov_overrides):
         mode=mode,
         api_key_type=api_key_type,
         server_url="http://ov.local",
-        api_key="user-key",
-        root_api_key="root-key",
+        api_key="root-key" if api_key_type == "root" else "user-key",
+        root_api_key="legacy-root-key",
         account_id="acct",
         admin_user_id="admin",
         **ov_overrides,
@@ -144,6 +145,7 @@ def test_viking_client_init_root_mode_sets_account_and_user(monkeypatch):
 
     first = _DummyHTTPClient.instances[0]
     assert client.api_key_type == "root"
+    assert first.kwargs["api_key"] == "root-key"
     assert first.kwargs["account"] == "acct"
     assert first.kwargs["user"] == "admin"
     assert first.kwargs["profile_enabled"] is False
@@ -169,11 +171,35 @@ def test_viking_client_init_user_mode_does_not_set_user_or_account(monkeypatch):
     assert "agent_id" not in first.kwargs
 
 
+def test_viking_client_actor_peer_id_sets_actor_header(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+
+    client = VikingClient(actor_peer_id="sender with space")
+
+    first = _DummyHTTPClient.instances[0]
+    assert client.actor_peer_id == VikingClient._peer_id("sender with space")
+    assert first.kwargs["actor_peer_id"] == client.actor_peer_id
+
+
+def test_viking_client_uses_effective_auth_mode_for_dev(monkeypatch):
+    config = _make_config("user", mode="remote")
+    config.ov_server.effective_auth_mode = "dev"
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: config)
+
+    client = VikingClient()
+
+    first = _DummyHTTPClient.instances[0]
+    assert client.auth_mode == "dev"
+    assert client.mode == "local"
+    assert first.kwargs == {"url": "http://ov.local"}
+
+
 def test_openviking_config_api_key_type_empty_values_are_inferred():
     assert OpenVikingConfig(api_key_type=None, api_key="user-key").api_key_type == "user"
     assert OpenVikingConfig(api_key_type="", api_key="user-key").api_key_type == "user"
-    assert OpenVikingConfig(api_key_type=None, root_api_key="root-key").api_key_type == "root"
-    assert OpenVikingConfig(api_key_type="", root_api_key="root-key").api_key_type == "root"
+    config = OpenVikingConfig(api_key_type="root", api_key="root-key")
+    assert config.api_key_type == "root"
+    assert config.api_key == "root-key"
 
 
 def test_user_key_current_memory_targets_use_current_user_shorthand(monkeypatch):
@@ -187,8 +213,8 @@ def test_user_key_current_memory_targets_use_current_user_shorthand(monkeypatch)
     ]
 
 
-def test_ov_server_legacy_root_api_key_takes_precedence_over_ovcli(monkeypatch):
-    bot_data = {"root_api_key": "bot-user-key"}
+def test_ov_server_api_key_mode_ignores_bot_root_key_and_uses_ovcli_user_key(monkeypatch):
+    bot_data = {"root_api_key": "bot-root-key"}
     ov_data = {"root_api_key": "server-root-key"}
     monkeypatch.setattr(
         config_loader_module,
@@ -199,13 +225,13 @@ def test_ov_server_legacy_root_api_key_takes_precedence_over_ovcli(monkeypatch):
     config_loader_module._merge_ov_server_config(bot_data, ov_data)
 
     assert bot_data["mode"] == "remote"
-    assert bot_data["api_key"] == "bot-user-key"
-    assert bot_data["api_key_type"] == "root"
+    assert bot_data["api_key"] == "stale-ovcli-key"
+    assert bot_data["api_key_type"] == "user"
 
 
-def test_ov_server_top_level_root_api_key_backfills_legacy_root_mode(monkeypatch):
+def test_ov_server_trusted_mode_fills_api_key_from_top_level_root_key(monkeypatch):
     bot_data = {}
-    ov_data = {"root_api_key": "server-root-key"}
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
     monkeypatch.setattr(
         config_loader_module,
         "load_ovcli_config",
@@ -216,11 +242,113 @@ def test_ov_server_top_level_root_api_key_backfills_legacy_root_mode(monkeypatch
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "server-root-key"
-    assert bot_data["root_api_key"] == "server-root-key"
+    assert "root_api_key" not in bot_data
     assert bot_data["api_key_type"] == "root"
 
 
-def test_ov_server_api_key_implies_remote_mode(monkeypatch):
+def test_ov_server_current_trusted_prefers_top_level_root_key(monkeypatch):
+    bot_data = {"api_key": "stale-bot-key"}
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "server-root-key"
+    assert bot_data["api_key_type"] == "root"
+
+
+def test_ov_server_external_url_does_not_inherit_trusted_root_key(monkeypatch):
+    bot_data = {"server_url": "https://external.example"}
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="external-user-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "external-user-key"
+    assert bot_data["api_key_type"] == "user"
+    assert "root_api_key" not in bot_data
+
+
+def test_ov_server_explicit_url_is_external_even_if_it_matches_local_url(monkeypatch):
+    bot_data = {"server_url": "http://localhost:1933"}
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "stale-ovcli-key"
+    assert bot_data["api_key_type"] == "user"
+    assert "root_api_key" not in bot_data
+
+
+def test_ov_server_external_url_forces_remote_mode():
+    bot_data = {
+        "server_url": "https://external.example",
+        "mode": "local",
+        "api_key": "external-user-key",
+    }
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "external-user-key"
+    assert bot_data["api_key_type"] == "user"
+    assert "root_api_key" not in bot_data
+
+
+def test_ov_server_external_url_root_key_does_not_imply_root_mode(monkeypatch):
+    bot_data = {
+        "server_url": "https://external.example",
+        "root_api_key": "bot-root-key",
+    }
+    ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="external-user-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "external-user-key"
+    assert bot_data["api_key_type"] == "user"
+    assert bot_data["root_api_key"] == "bot-root-key"
+
+
+def test_ov_server_legacy_mode_is_ignored_for_current_api_key_server(monkeypatch):
+    bot_data = {"mode": "local"}
+    ov_data = {"root_api_key": "server-root-key"}
+    monkeypatch.setattr(
+        config_loader_module,
+        "load_ovcli_config",
+        lambda: SimpleNamespace(api_key="ovcli-user-key"),
+    )
+
+    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+
+    assert bot_data["mode"] == "remote"
+    assert bot_data["api_key"] == "ovcli-user-key"
+    assert bot_data["api_key_type"] == "user"
+
+
+def test_ov_server_current_dev_mode_ignores_legacy_api_key_for_mode(monkeypatch):
     bot_data = {"api_key": "bot-user-key"}
     monkeypatch.setattr(
         config_loader_module,
@@ -230,42 +358,260 @@ def test_ov_server_api_key_implies_remote_mode(monkeypatch):
 
     config_loader_module._merge_ov_server_config(bot_data, {})
 
-    assert bot_data["mode"] == "remote"
+    assert bot_data["mode"] == "local"
     assert bot_data["api_key"] == "bot-user-key"
 
 
-def test_validate_openviking_auth_allows_local_mode():
-    config = SimpleNamespace(ov_server=SimpleNamespace(mode="local", api_key="", root_api_key=""))
+def _auth_probe(*, ok=True, status_code=200, data=None, error=""):
+    return config_loader_module._OpenVikingHTTPResult(
+        ok=ok,
+        status_code=status_code,
+        data=data,
+        error=error,
+    )
 
-    config_loader_module.validate_openviking_auth(config)
 
-
-def test_validate_openviking_auth_allows_api_key():
+def test_validate_openviking_auth_warns_when_server_unavailable(monkeypatch, capsys):
     config = SimpleNamespace(
-        ov_server=SimpleNamespace(mode="remote", api_key="user-key", root_api_key="")
+        ov_server=SimpleNamespace(
+            mode="remote",
+            api_key_type="user",
+            api_key="user-key",
+            root_api_key="",
+            server_url="http://ov.local",
+        )
+    )
+    monkeypatch.setattr(
+        config_loader_module,
+        "_request_openviking_json",
+        lambda *_args, **_kwargs: _auth_probe(ok=False, error="ConnectError"),
     )
 
     config_loader_module.validate_openviking_auth(config)
 
+    captured = capsys.readouterr()
+    assert "OpenViking server at http://ov.local is unavailable" in captured.err
+    assert "Only basic VikingBot features are available" in captured.err
+    assert "user-key" not in captured.err
 
-def test_validate_openviking_auth_allows_legacy_root_api_key():
+
+def test_validate_openviking_auth_exits_for_auth_mode_mismatch(monkeypatch, capsys):
     config = SimpleNamespace(
-        ov_server=SimpleNamespace(mode="remote", api_key="", root_api_key="root-key")
+        ov_server=SimpleNamespace(
+            mode="remote",
+            api_key_type="user",
+            api_key="user-key",
+            root_api_key="",
+            server_url="http://ov.local",
+        )
     )
-
-    config_loader_module.validate_openviking_auth(config)
-
-
-def test_validate_openviking_auth_exits_with_migration_hint(capsys):
-    config = SimpleNamespace(ov_server=SimpleNamespace(mode="remote", api_key="", root_api_key=""))
+    monkeypatch.setattr(
+        config_loader_module,
+        "_request_openviking_json",
+        lambda *_args, **_kwargs: _auth_probe(data={"auth_mode": "trusted"}),
+    )
 
     with pytest.raises(SystemExit):
         config_loader_module.validate_openviking_auth(config)
 
     captured = capsys.readouterr()
+    assert "auth mode mismatch" in captured.err
+    assert "OpenViking server URL: http://ov.local" in captured.err
+    assert "Actual server auth_mode: trusted" in captured.err
+    assert "VikingBot current auth_mode: api_key" in captured.err
+    assert "bot.ov_server.api_key_type to 'root'" in captured.err
+    assert "user-key" not in captured.err
+
+
+def test_validate_openviking_auth_warns_for_api_key_mode_without_user_key(monkeypatch, capsys):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            mode="remote",
+            api_key_type="user",
+            api_key="",
+            root_api_key="root-key",
+            server_url="http://ov.local",
+        )
+    )
+    monkeypatch.setattr(
+        config_loader_module,
+        "_request_openviking_json",
+        lambda *_args, **_kwargs: _auth_probe(data={"auth_mode": "api_key"}),
+    )
+
+    config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert "Warning:" in captured.err
+    assert "OpenViking User API key" in captured.err
     assert "bot.ov_server.api_key" in captured.err
-    assert "User API key" in captured.err
-    assert "root_api_key is deprecated" in captured.err
+    assert "Root API keys cannot access" in captured.err
+
+
+def test_validate_openviking_auth_warns_when_user_key_is_root(monkeypatch, capsys):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            mode="remote",
+            api_key_type="user",
+            api_key="configured-key",
+            root_api_key="",
+            server_url="http://ov.local",
+        )
+    )
+    calls = []
+
+    def _fake_probe(_server_url, path, *, headers=None):
+        calls.append((path, headers))
+        if headers:
+            return _auth_probe(
+                data={
+                    "auth_mode": "api_key",
+                    "role": "root",
+                    "account_id": "default",
+                    "user_id": "default",
+                }
+            )
+        return _auth_probe(data={"auth_mode": "api_key"})
+
+    monkeypatch.setattr(config_loader_module, "_request_openviking_json", _fake_probe)
+
+    config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert "resolves to a ROOT API key" in captured.err
+    assert "configured-key" not in captured.err
+    assert calls[1][1] == {"X-API-Key": "configured-key"}
+
+
+def test_validate_openviking_auth_allows_user_key(monkeypatch, capsys):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            mode="remote",
+            api_key_type="user",
+            api_key="configured-key",
+            root_api_key="",
+            server_url="http://ov.local",
+        )
+    )
+
+    def _fake_probe(_server_url, _path, *, headers=None):
+        if headers:
+            return _auth_probe(
+                data={
+                    "auth_mode": "api_key",
+                    "role": "admin",
+                    "account_id": "acct",
+                    "user_id": "alice",
+                }
+            )
+        return _auth_probe(data={"auth_mode": "api_key"})
+
+    monkeypatch.setattr(config_loader_module, "_request_openviking_json", _fake_probe)
+
+    config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_validate_openviking_auth_uses_effective_auth_mode_not_legacy_mode(monkeypatch, capsys):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            effective_auth_mode="dev",
+            mode="remote",
+            api_key_type="user",
+            api_key="configured-key",
+            root_api_key="",
+            server_url="http://ov.local",
+        )
+    )
+    monkeypatch.setattr(
+        config_loader_module,
+        "_request_openviking_json",
+        lambda *_args, **_kwargs: _auth_probe(data={"auth_mode": "dev"}),
+    )
+
+    config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_validate_openviking_auth_warns_for_trusted_bad_root_key(monkeypatch, capsys):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            mode="remote",
+            api_key="configured-root",
+            api_key_type="root",
+            root_api_key="legacy-root",
+            account_id="acct",
+            admin_user_id="admin",
+            server_url="http://ov.local",
+        )
+    )
+
+    def _fake_probe(_server_url, path, *, headers=None):
+        if path == "/api/v1/system/status":
+            assert headers == {
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "admin",
+                "X-API-Key": "configured-root",
+            }
+            return _auth_probe(ok=False, status_code=401)
+        return _auth_probe(data={"auth_mode": "trusted"})
+
+    monkeypatch.setattr(config_loader_module, "_request_openviking_json", _fake_probe)
+
+    config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert "configured root API key was rejected" in captured.err
+    assert "configured-root" not in captured.err
+
+
+def test_validate_openviking_auth_allows_trusted_root(monkeypatch, capsys):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            mode="remote",
+            api_key="root-key",
+            api_key_type="root",
+            root_api_key="legacy-root",
+            account_id="acct",
+            admin_user_id="admin",
+            server_url="http://ov.local",
+        )
+    )
+
+    def _fake_probe(_server_url, path, *, headers=None):
+        if path == "/api/v1/system/status":
+            assert headers == {
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "admin",
+                "X-API-Key": "root-key",
+            }
+            return _auth_probe(data={"status": "ok", "result": {"user": "admin"}})
+        return _auth_probe(data={"auth_mode": "trusted"})
+
+    monkeypatch.setattr(config_loader_module, "_request_openviking_json", _fake_probe)
+
+    config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_warn_openviking_auth_config_uses_complete_validation(monkeypatch):
+    config = SimpleNamespace(ov_server=SimpleNamespace(server_url="http://ov.local"))
+    called = []
+    monkeypatch.setattr(
+        config_loader_module,
+        "validate_openviking_auth",
+        lambda value: called.append(value),
+    )
+
+    config_loader_module.warn_openviking_auth_config(config)
+
+    assert called == [config]
 
 
 def test_memory_user_cli_option_warns_at_runtime(capsys):
@@ -308,6 +654,7 @@ def test_viking_client_request_connection_uses_active_identity(monkeypatch):
             "user_id": "anonymous",
             "agent_id": "web-playground",
             "role": "user",
+            "api_key_type": "user",
             "namespace_policy": {
                 "isolate_user_scope_by_agent": True,
                 "isolate_agent_scope_by_user": True,
@@ -320,7 +667,6 @@ def test_viking_client_request_connection_uses_active_identity(monkeypatch):
     assert client.account_id == "acct"
     assert client.admin_user_id == "anonymous"
     assert client.agent_id == "web-playground"
-    assert client._apikey_manager is None
     assert client._namespace_policy_loaded is True
     assert client.should_sender_fanout() is False
     assert client._memory_target_uri(None) == "viking://user/memories/"
@@ -331,7 +677,7 @@ def test_viking_client_request_connection_uses_active_identity(monkeypatch):
     }
 
 
-def test_viking_client_request_connection_preserves_admin_scope(monkeypatch):
+def test_viking_client_request_connection_preserves_trusted_scope(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
 
     VikingClient(
@@ -343,6 +689,7 @@ def test_viking_client_request_connection_preserves_admin_scope(monkeypatch):
             "user_id": "default",
             "agent_id": "web-playground",
             "role": "admin",
+            "api_key_type": "root",
         },
     )
 
@@ -356,17 +703,34 @@ def test_viking_client_request_connection_preserves_admin_scope(monkeypatch):
     }
 
 
+def test_viking_client_request_connection_allows_trusted_no_key(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+
+    VikingClient(
+        agent_id="workspace#channel",
+        connection={
+            "server_url": "http://studio.local",
+            "account_id": "acct",
+            "user_id": "alice",
+            "agent_id": "web-playground",
+            "role": "user",
+            "api_key_type": "root",
+        },
+    )
+
+    first = _DummyHTTPClient.instances[0]
+    assert first.kwargs == {
+        "url": "http://studio.local",
+        "profile_enabled": False,
+        "account": "acct",
+        "user": "alice",
+    }
+
+
 @pytest.mark.asyncio
-async def test_commit_user_mode_ignores_user_specific_key_flow(monkeypatch):
+async def test_commit_user_mode_uses_user_key_client_only(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
     client = VikingClient()
-
-    async def _must_not_call(*_args, **_kwargs):
-        raise AssertionError("user mode should not call user management path")
-
-    monkeypatch.setattr(client, "_check_user_exists", _must_not_call)
-    monkeypatch.setattr(client, "_initialize_user", _must_not_call)
-    monkeypatch.setattr(client, "_get_or_create_user_apikey", _must_not_call)
 
     result = await client.commit(
         session_id="sess",
@@ -378,7 +742,7 @@ async def test_commit_user_mode_ignores_user_specific_key_flow(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_commit_request_connection_bypasses_cached_user_key_flow(monkeypatch):
+async def test_commit_request_connection_uses_request_client_only(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
     client = VikingClient(
         agent_id="workspace",
@@ -388,15 +752,9 @@ async def test_commit_request_connection_bypasses_cached_user_key_flow(monkeypat
             "account_id": "acct",
             "user_id": "anonymous",
             "agent_id": "web-playground",
+            "api_key_type": "user",
         },
     )
-
-    async def _must_not_call(*_args, **_kwargs):
-        raise AssertionError("request connection should not call user key management path")
-
-    monkeypatch.setattr(client, "_check_user_exists", _must_not_call)
-    monkeypatch.setattr(client, "_initialize_user", _must_not_call)
-    monkeypatch.setattr(client, "_get_or_create_user_apikey", _must_not_call)
 
     result = await client.commit(
         session_id="sess",
@@ -420,18 +778,13 @@ async def test_request_connection_search_memory_uses_request_client_only(monkeyp
             "user_id": "anonymous",
             "agent_id": "web-playground",
             "role": "user",
+            "api_key_type": "user",
             "namespace_policy": {
                 "isolate_user_scope_by_agent": False,
                 "isolate_agent_scope_by_user": False,
             },
         },
     )
-
-    async def _must_not_call(*_args, **_kwargs):
-        raise AssertionError("request connection should not call user management path")
-
-    monkeypatch.setattr(client, "_initialize_user", _must_not_call)
-    monkeypatch.setattr(client, "_get_or_create_user_apikey", _must_not_call)
 
     result = await client.search_memory(
         query="php",
@@ -448,19 +801,9 @@ async def test_request_connection_search_memory_uses_request_client_only(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_commit_root_mode_uses_sender_user_key(monkeypatch):
+async def test_commit_trusted_root_mode_uses_sender_identity_header(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
     client = VikingClient()
-
-    async def _exists(_user_id):
-        return True
-
-    async def _user_key(_user_id):
-        return "user-key-1"
-
-    monkeypatch.setattr(client, "_check_user_exists", _exists)
-    monkeypatch.setattr(client, "_get_or_create_user_apikey", _user_key)
-    client._apikey_manager = object()
 
     result = await client.commit(
         session_id="sess",
@@ -469,7 +812,12 @@ async def test_commit_root_mode_uses_sender_user_key(monkeypatch):
     )
 
     assert result["success"] is True
-    assert any(inst.kwargs.get("api_key") == "user-key-1" for inst in _DummyHTTPClient.instances)
+    assert any(
+        inst.kwargs.get("api_key") == "root-key"
+        and inst.kwargs.get("account") == "acct"
+        and inst.kwargs.get("user") == "sender-2"
+        for inst in _DummyHTTPClient.instances
+    )
 
 
 @pytest.mark.asyncio
@@ -1213,28 +1561,47 @@ async def test_viking_client_append_messages_chunks_batches_at_server_limit(monk
 
 
 @pytest.mark.asyncio
+async def test_viking_client_ensure_session_creates_after_legacy_not_found(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    client = VikingClient(workspace_id="workspace")
+
+    class NotFoundError(Exception):
+        code = "NOT_FOUND"
+
+    created = []
+
+    async def _get_session(_session_id):
+        raise NotFoundError("Resource not found")
+
+    async def _create_session(session_id=None, memory_policy=None):
+        created.append((session_id, memory_policy))
+        return {"session_id": session_id, "memory_policy": memory_policy}
+
+    monkeypatch.setattr(client.client, "get_session", _get_session)
+    monkeypatch.setattr(client.client, "create_session", _create_session)
+
+    result = await client.ensure_session(
+        "session-1",
+        memory_policy={"strategy": "compact"},
+    )
+
+    assert result == {"session_id": "session-1", "memory_policy": {"strategy": "compact"}}
+    assert created == [("session-1", {"strategy": "compact"})]
+
+
+@pytest.mark.asyncio
 async def test_search_memory_uses_user_namespace(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
     client = VikingClient()
 
-    calls = []
-
-    class _Result:
-        memories = []
-
-    async def _exists(_user_id):
-        return True
-
-    async def _find(*, query, target_uri, limit):
-        calls.append(target_uri)
-        return _Result()
-
-    monkeypatch.setattr(client, "_check_user_exists", _exists)
-    monkeypatch.setattr(client.client, "find", _find)
-
     await client.search_memory("hello", "sender-1", limit=5)
 
-    assert calls == ["viking://user/sender-1/memories/"]
+    scoped = _DummyHTTPClient.instances[1]
+    assert scoped.kwargs["api_key"] == "root-key"
+    assert scoped.kwargs["account"] == "acct"
+    assert scoped.kwargs["user"] == "sender-1"
+    assert scoped.find_calls[0][1]["target_uri"] == "viking://user/sender-1/memories/"
+    assert scoped.closed is True
 
 
 @pytest.mark.asyncio
@@ -1242,24 +1609,51 @@ async def test_search_memory_uses_user_namespace_without_agent_scope(monkeypatch
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
     client = VikingClient()
 
+    await client.search_memory("hello", "sender-1", limit=5)
+
+    scoped = _DummyHTTPClient.instances[1]
+    assert scoped.kwargs["user"] == "sender-1"
+    assert scoped.find_calls[0][1]["target_uri"] == "viking://user/sender-1/memories/"
+    assert scoped.closed is True
+
+
+@pytest.mark.asyncio
+async def test_read_content_trusted_owner_uri_uses_owner_identity(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("root"))
+    client = VikingClient()
+
+    await client.read_content("viking://user/sender-1/memories/profile.md", level="read")
+
+    scoped = _DummyHTTPClient.instances[1]
+    assert scoped.kwargs["api_key"] == "root-key"
+    assert scoped.kwargs["account"] == "acct"
+    assert scoped.kwargs["user"] == "sender-1"
+    assert scoped.read_calls == [("read", "viking://user/sender-1/memories/profile.md")]
+    assert scoped.closed is True
+
+
+@pytest.mark.asyncio
+async def test_search_memory_peer_ids_use_explicit_peer_uris(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+    client = VikingClient()
+
     calls = []
 
     class _Result:
         memories = []
 
-    async def _exists(_user_id):
-        return True
-
     async def _find(*, query, target_uri, limit):
-        calls.append(target_uri)
+        calls.append((query, target_uri, limit))
         return _Result()
 
-    monkeypatch.setattr(client, "_check_user_exists", _exists)
     monkeypatch.setattr(client.client, "find", _find)
 
-    await client.search_memory("hello", "sender-1", limit=5)
+    await client.search_memory("hello", peer_ids=["sender-1", "sender-2"], limit=5)
 
-    assert calls == ["viking://user/sender-1/memories/"]
+    assert calls == [
+        ("hello", "viking://user/peers/sender-1/memories/", 5),
+        ("hello", "viking://user/peers/sender-2/memories/", 5),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1371,9 +1765,449 @@ async def test_viking_memory_context_keeps_legacy_users_separate_from_peers(monk
             "query": "hello",
             "user_ids": ["legacy-user"],
             "peer_ids": ["sender-1", "speaker-a"],
-            "limit": 10,
+            "limit": 35,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_context_creates_actor_scoped_client(monkeypatch, tmp_path):
+    create_calls = []
+
+    class _FakeClient:
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            return []
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**kwargs):
+        create_calls.append(kwargs)
+        return _FakeClient()
+
+    monkeypatch.setattr("vikingbot.agent.memory.load_config", lambda: _make_config("user"))
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+
+    await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+    )
+
+    assert create_calls[0]["actor_peer_id"] == "sender-1"
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_type_quota_actor_scope_keeps_per_type_limits(tmp_path):
+    calls = []
+
+    class _ActorClient:
+        actor_peer_id = "sender-1"
+
+        def _current_peer_memory_target_uri(self, peer_id):
+            return f"viking://user/peers/{peer_id}/memories/"
+
+        async def find(self, *, query, target_uri, context_type=None, limit):
+            calls.append(
+                {
+                    "query": query,
+                    "target_uri": target_uri,
+                    "context_type": context_type,
+                    "limit": limit,
+                }
+            )
+            if target_uri.endswith("/events/"):
+                return {
+                    "memories": [
+                        {
+                            "uri": "viking://user/peers/sender-1/memories/events/e1.md",
+                            "abstract": "event",
+                            "score": 0.9,
+                        },
+                    ]
+                }
+            return {"memories": []}
+
+    store = MemoryStore(tmp_path)
+
+    result = await store._search_viking_memory_by_type_quota(
+        client=_ActorClient(),
+        query="hello",
+        peer_ids=["sender-1", "other"],
+        quotas={"events": 1, "entities": 1, "preferences": 1},
+    )
+
+    assert calls == [
+        {
+            "query": "hello",
+            "target_uri": "viking://user/peers/sender-1/memories/events/",
+            "context_type": "memory",
+            "limit": 1,
+        },
+        {
+            "query": "hello",
+            "target_uri": "viking://user/peers/sender-1/memories/entities/",
+            "context_type": "memory",
+            "limit": 1,
+        },
+        {
+            "query": "hello",
+            "target_uri": "viking://user/peers/sender-1/memories/preferences/",
+            "context_type": "memory",
+            "limit": 1,
+        },
+    ]
+    assert [item["_recall_type"] for item in result] == ["events"]
+
+
+@pytest.mark.asyncio
+async def test_viking_peer_profiles_use_target_peer_actor_clients(monkeypatch, tmp_path):
+    create_calls = []
+    closed = []
+
+    class _FakeClient:
+        def __init__(self, actor_peer_id):
+            self.actor_peer_id = actor_peer_id
+
+        async def read_peer_profile(self, peer_id):
+            return f"profile for {peer_id} via {self.actor_peer_id}"
+
+        async def close(self):
+            closed.append(self.actor_peer_id)
+
+    async def _fake_create(**kwargs):
+        create_calls.append(kwargs)
+        return _FakeClient(kwargs.get("actor_peer_id"))
+
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_peer_profiles(
+        workspace_id="workspace",
+        peer_ids=["speaker-a", "speaker-b"],
+        use_peer_actor_scope=True,
+    )
+
+    assert [call["actor_peer_id"] for call in create_calls] == ["speaker-a", "speaker-b"]
+    assert closed == ["speaker-a", "speaker-b"]
+    assert "profile for speaker-a via speaker-a" in result
+    assert "profile for speaker-b via speaker-b" in result
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_context_uses_target_peer_actor_for_additional_peer_reads(
+    monkeypatch, tmp_path
+):
+    create_actor_ids = []
+    read_calls = []
+    closed = []
+
+    class _FakeClient:
+        def __init__(self, actor_peer_id):
+            self.actor_peer_id = actor_peer_id
+
+        def _current_peer_memory_target_uri(self, peer_id):
+            return f"viking://user/peers/{peer_id}/memories/"
+
+        async def find(self, *, query, target_uri, context_type=None, limit):
+            if target_uri.endswith("/events/"):
+                return {
+                    "memories": [
+                        {
+                            "uri": (
+                                f"viking://user/peers/{self.actor_peer_id}/memories/events/e1.md"
+                            ),
+                            "score": 0.9,
+                        }
+                    ]
+                }
+            return {"memories": []}
+
+        async def read_content(self, uri, level="read"):
+            read_calls.append((self.actor_peer_id, uri, level))
+            return f"content via {self.actor_peer_id}"
+
+        async def close(self):
+            closed.append(self.actor_peer_id)
+
+    async def _fake_create(**kwargs):
+        create_actor_ids.append(kwargs.get("actor_peer_id"))
+        return _FakeClient(kwargs.get("actor_peer_id"))
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config(
+            "user",
+            memory_recall_events_limit=2,
+            memory_recall_entities_limit=0,
+            memory_recall_preferences_limit=0,
+            memory_recall_max_chars=1000,
+        ),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+        peer_ids=["speaker-a"],
+    )
+
+    assert create_actor_ids == ["sender-1", "speaker-a", "speaker-a"]
+    assert read_calls == [
+        ("sender-1", "viking://user/peers/sender-1/memories/events/e1.md", "read"),
+        ("speaker-a", "viking://user/peers/speaker-a/memories/events/e1.md", "read"),
+    ]
+    assert closed == ["speaker-a", "speaker-a", "sender-1"]
+    assert "content via sender-1" in result
+    assert "content via speaker-a" in result
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_type_quota_groups_with_event_summaries_and_uris(monkeypatch, tmp_path):
+    clients = []
+    base_uri = "viking://user/default/peers/sender-1/memories"
+
+    class _FakeClient:
+        def __init__(self):
+            self.find_calls = []
+            self.contents = {
+                f"{base_uri}/events/e1.md": "short event",
+                f"{base_uri}/events/e2.md": (
+                    "Summary: long event summary\n"
+                    "2023-01-01 (Sunday) ChatLog:\n"
+                    "full long event details " + ("x" * 800)
+                ),
+                f"{base_uri}/events/e3.md": "legacy event without summary",
+                f"{base_uri}/entities/en1.md": "short entity",
+                f"{base_uri}/entities/en2.md": "long entity " + ("y" * 500),
+                f"{base_uri}/preferences/p1.md": "first preference " + ("z" * 700),
+                f"{base_uri}/preferences/p2.md": "second preference",
+            }
+
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            return [base_uri]
+
+        async def find(self, *, query, target_uri, limit):
+            self.find_calls.append((query, target_uri, limit))
+            if target_uri.endswith("/events/"):
+                return {
+                    "memories": [
+                        {"uri": f"{base_uri}/events/e2.md", "score": 0.8},
+                        {"uri": f"{base_uri}/events/e1.md", "score": 0.9},
+                        {"uri": f"{base_uri}/events/e3.md", "score": 0.7},
+                    ]
+                }
+            if target_uri.endswith("/entities/"):
+                return {
+                    "memories": [
+                        {"uri": f"{base_uri}/entities/en2.md", "score": 0.8},
+                        {"uri": f"{base_uri}/entities/en1.md", "score": 0.9},
+                    ]
+                }
+            if target_uri.endswith("/preferences/"):
+                return {
+                    "memories": [
+                        {"uri": f"{base_uri}/preferences/p1.md", "score": 0.9},
+                        {"uri": f"{base_uri}/preferences/p2.md", "score": 0.8},
+                    ]
+                }
+            return {"memories": []}
+
+        async def read_content(self, uri, level="read"):
+            return self.contents[uri]
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**_kwargs):
+        client = _FakeClient()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config("root", memory_recall_max_chars=1100),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+    )
+
+    assert clients[0].find_calls == [
+        ("hello", f"{base_uri}/events/", 10),
+        ("hello", f"{base_uri}/entities/", 10),
+        ("hello", f"{base_uri}/preferences/", 3),
+    ]
+    assert 'type="snippet"' not in result
+    assert result.count('type="full"') == 3
+    assert result.count('type="summary"') == 1
+    assert result.count('type="uri"') == 3
+    assert '<memory_group type="events">' in result
+    assert '<memory_group type="entities">' in result
+    assert '<memory_group type="preferences">' in result
+    assert "Event memories. The URI path includes the event date." in result
+    assert result.index('<memory_group type="events"') < result.index(
+        '<memory_group type="entities"'
+    )
+    assert result.index('<memory_group type="entities"') < result.index(
+        '<memory_group type="preferences"'
+    )
+    assert result.index("/events/e1.md") < result.index("/events/e2.md")
+    assert result.index("/events/e2.md") < result.index("/events/e3.md")
+    assert result.index("/events/e3.md") < result.index("/entities/en1.md")
+    assert result.index("/entities/en1.md") < result.index("/entities/en2.md")
+    assert result.index("/entities/en2.md") < result.index("/preferences/p1.md")
+    assert result.index("/preferences/p1.md") < result.index("/preferences/p2.md")
+    assert '<memory index="1" type="full">' in result
+    assert '<memory index="2" type="summary">' in result
+    assert '<memory index="3" type="full">' in result
+    assert '<memory index="4" type="full">' in result
+    assert '<memory index="5" type="uri">' in result
+    assert '<memory index="6" type="uri">' in result
+    assert '<memory index="7" type="uri">' in result
+    assert "long event summary" in result
+    assert "full long event details" not in result
+    assert "legacy event without summary" in result
+    assert "long entity " not in result
+    assert "first preference " not in result
+    assert "second preference" not in result
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_type_quota_continues_after_oversized_entity(monkeypatch, tmp_path):
+    base_uri = "viking://user/default/peers/sender-1/memories"
+
+    class _FakeClient:
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            return [base_uri]
+
+        async def find(self, *, query, target_uri, limit):
+            if target_uri.endswith("/entities/"):
+                return {
+                    "memories": [
+                        {"uri": f"{base_uri}/entities/long.md", "score": 0.9},
+                        {"uri": f"{base_uri}/entities/short.md", "score": 0.8},
+                    ]
+                }
+            return {"memories": []}
+
+        async def read_content(self, uri, level="read"):
+            if uri.endswith("/long.md"):
+                return "long fact " + ("x" * 500)
+            return "short fact"
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**_kwargs):
+        return _FakeClient()
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config("root", memory_recall_max_chars=1200),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+    )
+
+    assert '<memory index="1" type="uri">' in result
+    assert "<uri>viking://user/default/peers/sender-1/memories/entities/long.md</uri>" in result
+    assert '<memory index="2" type="full">' in result
+    assert "<uri>viking://user/default/peers/sender-1/memories/entities/short.md</uri>" in result
+    assert "<content>short fact</content>" in result
+    assert "long fact " not in result
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_type_quota_does_not_overflow_preference_budget(monkeypatch, tmp_path):
+    base_uri = "viking://user/default/peers/sender-1/memories"
+
+    class _FakeClient:
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            return [base_uri]
+
+        async def find(self, *, query, target_uri, limit):
+            if target_uri.endswith("/preferences/"):
+                return {
+                    "memories": [
+                        {"uri": f"{base_uri}/preferences/long.md", "score": 0.9},
+                        {"uri": f"{base_uri}/preferences/short.md", "score": 0.8},
+                    ]
+                }
+            return {"memories": []}
+
+        async def read_content(self, uri, level="read"):
+            if uri.endswith("/long.md"):
+                return "very long preference " + ("x" * 500)
+            return "short preference"
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**_kwargs):
+        return _FakeClient()
+
+    monkeypatch.setattr(
+        "vikingbot.agent.memory.load_config",
+        lambda: _make_config("root", memory_recall_max_chars=100),
+    )
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+    )
+
+    assert 'type="full"' not in result
+    assert result.count('type="uri"') == 2
+    assert "very long preference" not in result
+    assert "short preference" not in result
+
+
+@pytest.mark.asyncio
+async def test_viking_memory_context_returns_empty_after_profile_filter(monkeypatch, tmp_path):
+    class _FakeClient:
+        async def search_memory(self, **_kwargs):
+            return [
+                {
+                    "uri": "viking://user/default/peers/sender-1/memories/profile.md",
+                    "score": 0.9,
+                }
+            ]
+
+        async def close(self):
+            return None
+
+    async def _fake_create(**_kwargs):
+        return _FakeClient()
+
+    monkeypatch.setattr("vikingbot.agent.memory.load_config", lambda: _make_config("root"))
+    monkeypatch.setattr("vikingbot.agent.memory.VikingClient.create", _fake_create)
+
+    store = MemoryStore(tmp_path)
+    result = await store.get_viking_memory_context(
+        current_message="hello",
+        workspace_id="workspace",
+        sender_id="sender-1",
+        user_ids=["legacy-user"],
+    )
+
+    assert result == ""
 
 
 @pytest.mark.asyncio
@@ -1384,8 +2218,8 @@ async def test_openviking_search_uses_user_namespace(monkeypatch):
 
     calls = []
 
-    async def _search(query, target_uri=None, limit=20, user_id=None, peer_id=None):
-        calls.append((target_uri, user_id, peer_id))
+    async def _search(query, target_uri=None, limit=20, user_id=None):
+        calls.append((target_uri, user_id))
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
     async def _fake_get_client(_tool_context):
@@ -1399,9 +2233,9 @@ async def test_openviking_search_uses_user_namespace(monkeypatch):
 
     assert "sender-1/memories" in result
     assert calls == [
-        ("viking://resources/", None, None),
-        ("viking://user/sender-1/memories/", None, None),
-        ("viking://user/sender-1/skills/", None, None),
+        ("viking://resources/", None),
+        ("viking://user/sender-1/memories/", "sender-1"),
+        ("viking://user/sender-1/skills/", "sender-1"),
     ]
 
 
@@ -1413,8 +2247,8 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
 
     calls = []
 
-    async def _search(query, target_uri=None, limit=20, user_id=None, peer_id=None):
-        calls.append((target_uri, user_id, peer_id))
+    async def _search(query, target_uri=None, limit=20, user_id=None):
+        calls.append((target_uri, user_id))
         return {"memories": [{"uri": target_uri, "abstract": "a", "score": 0.9, "is_leaf": True}]}
 
     async def _fake_get_client(_tool_context):
@@ -1432,10 +2266,65 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
 
     assert "sender-1/memories" in result
     assert calls == [
-        ("", None, "sender-0"),
-        ("viking://user/peers/sender-1/memories/", None, None),
-        ("viking://user/peers/sender-2/memories/", None, None),
+        ("viking://resources/", None),
+        ("viking://user/memories/", None),
+        ("viking://user/skills/", None),
+        ("viking://user/peers/sender-0/memories/", None),
+        ("viking://user/peers/sender-1/memories/", None),
+        ("viking://user/peers/sender-2/memories/", None),
     ]
+
+
+@pytest.mark.asyncio
+async def test_openviking_search_actor_client_uses_server_default_scope(monkeypatch):
+    tool = VikingSearchTool()
+    calls = []
+
+    class _ActorClient:
+        actor_peer_id = "sender-0"
+
+        def should_sender_fanout(self):
+            return True
+
+        async def search(self, query, target_uri=None, limit=20, user_id=None):
+            calls.append((target_uri, user_id))
+            return {
+                "memories": [{"uri": "viking://user/peers/sender-0/memories/a.md", "score": 0.9}]
+            }
+
+        async def close(self):
+            calls.append(("close", None))
+
+    async def _fake_get_client(_tool_context):
+        return _ActorClient()
+
+    monkeypatch.setattr(tool, "_get_client", _fake_get_client)
+
+    tool_context = SimpleNamespace(
+        workspace_id="workspace",
+        sender_id="sender-0",
+        memory_peer_ids=["sender-1", "sender-2"],
+    )
+    result = await tool.execute(tool_context, query="hello")
+
+    assert "sender-0/memories" in result
+    assert calls == [("", None), ("close", None)]
+
+
+@pytest.mark.asyncio
+async def test_openviking_tool_sender_uses_actor_scoped_one_shot_client(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+    tool = VikingSearchTool()
+
+    result = await tool.execute(
+        SimpleNamespace(workspace_id="workspace", sender_id="sender-1"),
+        query="hello",
+    )
+
+    first = _DummyHTTPClient.instances[0]
+    assert first.kwargs["actor_peer_id"] == "sender-1"
+    assert first.closed is True
+    assert "No results found" in result
 
 
 @pytest.mark.asyncio
@@ -1615,7 +2504,47 @@ async def test_context_reminds_agent_to_search_current_memory_question(tmp_path)
 
     assert "OpenViking Memory Retrieval" in user_info
     assert "use openviking_search for the current question" in user_info
-    assert "A previous empty search result does not prove" in user_info
+    assert "search again when the requested fact changes" in user_info
+    assert "grouped by memory_type" in user_info
+    assert "events contain atomic time-based facts" in user_info
+    assert "entities contain stable topic/entity facts" in user_info
+    assert "preferences contain likes, habits, and recurring tendencies" in user_info
+    assert "full means the full memory content is already shown" in user_info
+    assert "summary means only a summary is shown" in user_info
+    assert "uri means only the URI is shown" in user_info
+    assert "openviking_multi_read" in user_info
+
+
+@pytest.mark.asyncio
+async def test_context_memory_prefix_tells_agent_to_read_summary_and_uri_details(tmp_path):
+    class _Memory:
+        async def get_viking_memory_context(self, **_kwargs):
+            return (
+                "### user memories:\n"
+                '<memory index="1" type="summary">\n'
+                "  <uri>viking://user/default/peers/sender-1/memories/events/e.md</uri>\n"
+                "  <summary>important clue</summary>\n"
+                "</memory>"
+            )
+
+    context = ContextBuilder(workspace=tmp_path, sender_id="sender-1")
+    context._memory = _Memory()
+
+    user_info = await context._build_user_memory(
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="chat-1"),
+        current_message="问题",
+        sender_id="sender-1",
+        ov_tools_enable=True,
+        is_first_round=False,
+    )
+
+    assert "## openviking_search(query=[user_query])" in user_info
+    assert "grouped by memory_type" in user_info
+    assert "full means the full memory content is already shown" in user_info
+    assert "summary means only a summary is shown" in user_info
+    assert "uri means only the URI is shown" in user_info
+    assert "openviking_multi_read" in user_info
+    assert "important clue" in user_info
 
 
 @pytest.mark.asyncio
@@ -1628,7 +2557,7 @@ async def test_context_loads_profiles_for_memory_peers(tmp_path):
             return "sender profile"
 
         async def get_viking_peer_profiles(self, **kwargs):
-            calls["peers"].append(kwargs["peer_ids"])
+            calls["peers"].append(kwargs)
             return "\n".join(f"profile for {peer_id}" for peer_id in kwargs["peer_ids"])
 
     context = ContextBuilder(workspace=tmp_path, sender_id="sender-1")
@@ -1642,7 +2571,14 @@ async def test_context_loads_profiles_for_memory_peers(tmp_path):
     )
 
     assert calls["sender"] == ["sender-1"]
-    assert calls["peers"] == [["speaker-a", "speaker-b"]]
+    assert calls["peers"] == [
+        {
+            "workspace_id": "cli__default__chat-1",
+            "peer_ids": ["speaker-a", "speaker-b"],
+            "openviking_connection": None,
+            "use_peer_actor_scope": True,
+        }
+    ]
     assert "sender profile" in system_prompt
     assert "profile for speaker-a" in system_prompt
     assert "profile for speaker-b" in system_prompt
