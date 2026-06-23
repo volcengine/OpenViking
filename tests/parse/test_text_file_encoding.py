@@ -6,7 +6,7 @@ from openviking.parse.parsers.upload_utils import detect_and_convert_encoding
 
 
 def test_markdown_file_read_normalizes_gb18030_text(tmp_path):
-    content = "# 大奉打更人校对版\n\n这是一段中文正文，用于验证旧编码文本不会被解析成乱码。\n"
+    content = "# 编码兼容测试文档\n\n这是一段中文正文，用于验证旧编码文本不会被解析成乱码。\n"
     path = tmp_path / "legacy-chinese.md"
     path.write_bytes(content.encode("gb18030"))
 
