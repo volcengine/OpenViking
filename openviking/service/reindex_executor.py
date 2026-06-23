@@ -539,12 +539,14 @@ class ReindexExecutor:
         counters = run.counters
         ctx = run.ctx
         if mode == "semantic_and_vectors":
-            await self._run_semantic_processor(
-                uri=uri,
-                context_type="memory",
-                ctx=ctx,
-                lock=run.lock,
-            )
+            stat = await get_viking_fs().stat(uri, ctx=ctx)
+            if stat.get("isDir", stat.get("is_dir")):
+                await self._run_semantic_processor(
+                    uri=uri,
+                    context_type="memory",
+                    ctx=ctx,
+                    lock=run.lock,
+                )
             await self._reindex_memory_vectors(uri=uri, counters=counters, ctx=ctx)
             return
         await self._reindex_memory_vectors(uri=uri, counters=counters, ctx=ctx)
