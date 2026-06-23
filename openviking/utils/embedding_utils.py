@@ -126,6 +126,7 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         ".md",
         ".csv",
         ".json",
+        ".jsonl",
         ".xml",
         ".py",
         ".js",

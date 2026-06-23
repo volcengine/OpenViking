@@ -246,6 +246,22 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.get_task(task_id)
 
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        await self._ensure_initialized()
+        return await self._client.list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+        )
+
     async def reindex(
         self,
         uri: str,
@@ -375,6 +391,7 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -405,6 +422,7 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             context_type=context_type,
+            tags=tags,
             telemetry=telemetry,
             since=since,
             until=until,
@@ -420,6 +438,7 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -435,6 +454,7 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             context_type=context_type,
+            tags=tags,
             telemetry=telemetry,
             since=since,
             until=until,
@@ -487,6 +507,24 @@ class AsyncOpenViking:
             telemetry=telemetry,
         )
 
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        await self._ensure_initialized()
+        return await self._client.set_tags(
+            uri=uri,
+            tags=tags,
+            mode=mode,
+            recursive=recursive,
+            telemetry=telemetry,
+        )
+
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.
@@ -511,10 +549,16 @@ class AsyncOpenViking:
             show_all_hidden=show_all_hidden,
         )
 
-    async def rm(self, uri: str, recursive: bool = False) -> None:
+    async def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource"""
         await self._ensure_initialized()
-        await self._client.rm(uri, recursive=recursive)
+        await self._client.rm(uri, recursive=recursive, wait=wait, timeout=timeout)
 
     async def grep(
         self,

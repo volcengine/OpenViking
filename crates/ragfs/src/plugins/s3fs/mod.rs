@@ -901,6 +901,12 @@ impl S3FSPlugin {
                     "Disable batch delete (DeleteObjects) for S3-compatible services like OSS",
                 ),
                 ConfigParameter::optional(
+                    "auto_detect_content_type",
+                    "bool",
+                    "false",
+                    "Infer S3 object Content-Type from the object key filename extension",
+                ),
+                ConfigParameter::optional(
                     "cache_enabled",
                     "bool",
                     "true",
@@ -1072,6 +1078,14 @@ plugins:
             }
         }
 
+        if let Some(value) = config.params.get("auto_detect_content_type") {
+            if value.as_bool().is_none() {
+                return Err(Error::config(
+                    "invalid auto_detect_content_type: expected bool",
+                ));
+            }
+        }
+
         Ok(())
     }
 
@@ -1204,6 +1218,45 @@ mod tests {
         params.insert(
             "normalize_encoding_chars".to_string(),
             crate::core::ConfigValue::String("?#%+@".to_string()),
+        );
+        let config = PluginConfig {
+            name: "s3fs".to_string(),
+            mount_path: "/s3".to_string(),
+            params,
+            ..PluginConfig::default()
+        };
+        assert!(plugin.validate(&config).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_plugin_validate_auto_detect_content_type() {
+        let plugin = S3FSPlugin::new();
+
+        let mut params = std::collections::HashMap::new();
+        params.insert(
+            "bucket".to_string(),
+            crate::core::ConfigValue::String("test".to_string()),
+        );
+        params.insert(
+            "auto_detect_content_type".to_string(),
+            crate::core::ConfigValue::String("true".to_string()),
+        );
+        let config = PluginConfig {
+            name: "s3fs".to_string(),
+            mount_path: "/s3".to_string(),
+            params,
+            ..PluginConfig::default()
+        };
+        assert!(plugin.validate(&config).await.is_err());
+
+        let mut params = std::collections::HashMap::new();
+        params.insert(
+            "bucket".to_string(),
+            crate::core::ConfigValue::String("test".to_string()),
+        );
+        params.insert(
+            "auto_detect_content_type".to_string(),
+            crate::core::ConfigValue::Bool(true),
         );
         let config = PluginConfig {
             name: "s3fs".to_string(),

@@ -5,7 +5,7 @@ This plugin adds one unified OpenViking plugin for OpenCode:
 - Semantic retrieval for external repositories
 - Long-term memory, session synchronization, lifecycle commit, and automatic recall
 
-The older split examples remain available for now and will be deprecated in a future update. This plugin does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The capabilities from the former skill are exposed as OpenCode tools here.
+This is the only OpenCode plugin example maintained in this repository. It does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The former skill-style capabilities are exposed as OpenCode tools here.
 
 ## Prerequisites
 
@@ -37,8 +37,6 @@ Normal users are recommended to enable it through OpenCode's package plugin mech
   "plugin": ["openviking-opencode-plugin"]
 }
 ```
-
-Use the final published package name if it changes before release.
 
 ## Installation Method 2: Source Install
 
@@ -124,6 +122,30 @@ export OPENVIKING_API_KEY="your-api-key-here"
 
 For advanced setups, use `OPENVIKING_PLUGIN_CONFIG` to point to another configuration file path.
 
+## Verify
+
+Restart OpenCode after changing plugin or OpenViking configuration.
+
+In a new OpenCode session, ask the agent to browse OpenViking memory or search for a known indexed resource. The plugin should expose these tools:
+
+- `memsearch`, `memread`, `membrowse`
+- `memgrep`, `memglob`
+- `memadd`, `memremove`, `memqueue`
+- `memcommit`
+
+If anything looks wrong, check the runtime files:
+
+```bash
+ls ~/.config/opencode/openviking/
+tail -n 100 ~/.config/opencode/openviking/openviking-memory.log
+```
+
+For a local server, also confirm OpenViking is reachable:
+
+```bash
+curl http://localhost:1933/health
+```
+
 ## Available Tools
 
 The plugin exposes the following tools through the OpenCode `tool` hook:
@@ -181,3 +203,13 @@ Possible files include:
 You can change this directory with `runtime.dataDir` in the configuration.
 
 These are local runtime files and should not be committed to the repository.
+
+## Troubleshooting
+
+| Issue | What to check |
+|-------|---------------|
+| Plugin does not load | For package installs, confirm `~/.config/opencode/opencode.json` contains `openviking-opencode-plugin`; for source installs, confirm `~/.config/opencode/plugins/openviking.mjs` exists |
+| Tools call the wrong server | Check `endpoint` in `~/.config/opencode/openviking-config.json`, or set `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
+| 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
+| Recall is empty | Confirm OpenViking has indexed memories/resources and `autoRecall.enabled` is `true` |
+| Local `memadd` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |

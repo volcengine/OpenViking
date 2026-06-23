@@ -24,6 +24,10 @@ jobs:
         run: npm ci
         working-directory: docs
 
+      - name: Test docs search
+        run: npm run test:search
+        working-directory: docs
+
       - name: Build docs
         run: npm run docs:build
         working-directory: docs

@@ -10,12 +10,14 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.core.peer_id import normalize_peer_id, normalize_peer_selector
 from openviking.server.identity import RequestContext, Role
 from openviking.service import OpenVikingService
+from openviking.service.task_tracker import get_task_tracker
 from openviking.telemetry import TelemetryRequest
 from openviking.telemetry.execution import (
     attach_telemetry_payload,
     run_with_telemetry,
 )
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
+from openviking.utils.tags import normalize_search_tags
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -40,15 +42,23 @@ def _resolve_search_filter(
     since: Optional[str],
     until: Optional[str],
     time_field: Optional[str],
+    tags: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Merge public retrieval filter shortcuts into the metadata filter."""
-    return merge_search_filter(
+    merged = merge_search_filter(
         filter,
         context_type=context_type,
         since=since,
         until=until,
         time_field=time_field,
     )
+    normalized_tags = normalize_search_tags(tags)
+    if not normalized_tags:
+        return merged
+    tag_filter = {"op": "must", "field": "search_tags", "conds": normalized_tags}
+    if merged:
+        return {"op": "and", "conds": [merged, tag_filter]}
+    return tag_filter
 
 
 class LocalClient(BaseClient):
@@ -248,9 +258,21 @@ class LocalClient(BaseClient):
         """Create directory."""
         await self._service.fs.mkdir(uri, ctx=self._ctx, description=description)
 
-    async def rm(self, uri: str, recursive: bool = False) -> None:
+    async def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove resource."""
-        await self._service.fs.rm(uri, ctx=self._ctx, recursive=recursive)
+        await self._service.fs.rm(
+            uri,
+            ctx=self._ctx,
+            recursive=recursive,
+            wait=wait,
+            timeout=timeout,
+        )
 
     async def mv(self, from_uri: str, to_uri: str) -> None:
         """Move resource."""
@@ -307,6 +329,31 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        execution = await run_with_telemetry(
+            operation="content.set_tags",
+            telemetry=telemetry,
+            fn=lambda: self._service.fs.set_tags(
+                uri=uri,
+                tags=tags,
+                mode=mode,
+                recursive=recursive,
+                ctx=self._ctx,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
     # ============= Search =============
 
     async def find(
@@ -317,6 +364,7 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -324,7 +372,9 @@ class LocalClient(BaseClient):
         level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search without session context."""
-        resolved_filter = _resolve_search_filter(filter, context_type, since, until, time_field)
+        resolved_filter = _resolve_search_filter(
+            filter, context_type, since, until, time_field, tags
+        )
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -352,6 +402,7 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -359,7 +410,9 @@ class LocalClient(BaseClient):
         level: Optional[List[int]] = None,
     ) -> Any:
         """Semantic search with optional session context."""
-        resolved_filter = _resolve_search_filter(filter, context_type, since, until, time_field)
+        resolved_filter = _resolve_search_filter(
+            filter, context_type, since, until, time_field, tags
+        )
 
         async def _search():
             session = None
@@ -521,6 +574,24 @@ class LocalClient(BaseClient):
     async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""
         return await self._service.sessions.get_commit_task(task_id, self._ctx)
+
+    async def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        tasks = await get_task_tracker().list_tasks(
+            task_type=task_type,
+            status=status,
+            resource_id=resource_id,
+            limit=limit,
+            account_id=self._ctx.account_id,
+            user_id=self._ctx.user.user_id,
+        )
+        return [task.to_dict() for task in tasks]
 
     async def add_message(
         self,

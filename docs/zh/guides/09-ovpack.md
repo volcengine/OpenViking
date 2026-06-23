@@ -108,6 +108,16 @@ report = await client.check_consistency("viking://resources/my-project")
 print(report["ok"], report["missing_records"])
 ```
 
+Go SDK：
+
+```go
+report, err := client.CheckConsistency(ctx, "viking://resources/my-project")
+if err != nil {
+    return err
+}
+fmt.Println(report["ok"], report["missing_records"])
+```
+
 HTTP API：
 
 ```bash
@@ -165,6 +175,60 @@ await client.restore_ovpack(
     on_conflict="overwrite",
     vector_mode="auto",
 )
+```
+
+## Go SDK
+
+```go
+outPath, err := client.ExportOVPack(
+    ctx,
+    "viking://resources/my-project",
+    "./exports/my-project.ovpack",
+    &openviking.PackOptions{IncludeVectors: false},
+)
+if err != nil {
+    return err
+}
+
+importedURI, err := client.ImportOVPack(
+    ctx,
+    outPath,
+    "viking://resources/imported/",
+    &openviking.ImportPackOptions{
+        OnConflict: "overwrite",
+        VectorMode: "auto",
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(importedURI)
+```
+
+全量备份：
+
+```go
+backupPath, err := client.BackupOVPack(
+    ctx,
+    "./backups/openviking.ovpack",
+    &openviking.PackOptions{IncludeVectors: true},
+)
+if err != nil {
+    return err
+}
+
+restoredURI, err := client.RestoreOVPack(
+    ctx,
+    backupPath,
+    &openviking.ImportPackOptions{
+        OnConflict: "overwrite",
+        VectorMode: "auto",
+    },
+)
+if err != nil {
+    return err
+}
+fmt.Println(restoredURI)
 ```
 
 ## HTTP API

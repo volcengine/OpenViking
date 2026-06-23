@@ -191,8 +191,6 @@ function normalizeToolResultName(
   return message;
 }
 
-export { makeMissingToolResult };
-
 export type ToolCallInputRepairReport = {
   messages: AgentMessage[];
   droppedToolCalls: number;

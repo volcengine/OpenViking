@@ -391,12 +391,6 @@ def _resolve_user_uri(
 ) -> ResolvedNamespace:
     normalized = "viking://" + "/".join(parts)
     if len(parts) == 1:
-        if ctx is not None:
-            return ResolvedNamespace(
-                uri=canonical_user_root(ctx),
-                scope="user",
-                owner_user_id=ctx.user.user_id,
-            )
         return ResolvedNamespace(uri="viking://user", scope="user", is_container=True)
 
     if _is_current_user_relative_uri(parts, ctx):

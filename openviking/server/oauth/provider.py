@@ -33,10 +33,6 @@ from openviking.server.oauth.otp import generate_otp
 from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.utils import get_logger
 
-# Mirrors auth.py:_ROLE_RANK; duplicated here to avoid the import cycle
-# (auth.py already depends on this module via the Provider Protocol).
-_ROLE_RANK = {Role.USER: 0, Role.ADMIN: 1, Role.ROOT: 2}
-
 logger = get_logger(__name__)
 
 # Access tokens carry this prefix so the auth.py bearer router can cheaply
@@ -285,14 +281,14 @@ class OpenVikingOAuthProvider(
         if self._role_resolver is not None:
             try:
                 token_role = Role(refresh_token.role)
-                current_role = self._role_resolver(refresh_token.account_id, refresh_token.user_id)
+                current_role = Role(self._role_resolver(refresh_token.account_id, refresh_token.user_id))
             except (ValueError, Exception):  # noqa: BLE001
                 token_role = None
                 current_role = None
             if (
                 token_role is not None
                 and current_role is not None
-                and _ROLE_RANK[token_role] > _ROLE_RANK[current_role]
+                and token_role.rank > current_role.rank
             ):
                 raise TokenError(
                     error="invalid_grant",

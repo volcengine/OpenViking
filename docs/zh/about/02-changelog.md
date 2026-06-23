@@ -3,6 +3,36 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+## v0.4.2 (2026-06-17)
+
+### 重点更新
+
+- **OpenClaw 安装与运行时文档加固**：补充 OpenClaw installer 流程、运行时 setup/routing 模块和相关文档测试，确保插件安装契约持续受覆盖。
+- **Wiki 与 RAGFS 后续修复**：修正 wiki 链接，并让 RAGFS shape probe 忽略 legacy task 记录。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.1...v0.4.2)
+
+## v0.4.1 (2026-06-16)
+
+### 重点更新
+
+- **User / Peer 身份模型**：OpenViking 将数据 owner (`user`) 与交互对象 (`peer`) 分离，`agent_id` 仅作为 legacy 过渡配置映射到请求级 `actor_peer_id`。
+- **0.3.x legacy 迁移路径**：旧的 `viking://agent/...` 与 `viking://session/...` 数据可以兼容读取、迁移到新的 `viking://user/...` 布局、验证，并在确认不需要回滚后清理。
+- **多模态入库扩展**：会话与资源入库支持图片消息、Markdown 图片 URI 改写、飞书用户 token、外部 ParserRouter，以及更完整的图片向量化链路。
+- **OpenClaw 与检索诊断**：检索支持 `context_type`，OpenClaw 增加 Recall Trace、runtime query config、feature gates 和 actor peer scope wiring。
+- **Skills 与插件生命周期更新**：Skills 成为 user-scoped 上下文资产，Codex / Claude Code 插件路径补齐安装、pending queue、recall cache 和 failure cache 能力。
+- **模型与存储可靠性**：ordered VLM/Embedding credentials、failover/failback 错误分类、RAGFS multi-write、S3 content-type autodetect、vector migration 修复和 task 持久化提升生产可用性。
+
+### 升级说明
+
+- 新写入应迁移到 `viking://user/...`；`viking://agent/...` 仍可读取旧数据，但不再作为新的 memory、resource、session 或 skill 写入目标。
+- `agent_id` 是 legacy 过渡配置，会映射到请求级 `actor_peer_id`；不要同时配置 `agent_id` 与 `actor_peer_id`，legacy `agent_id` client 也不要再显式传 message-level `peer_id`。
+- legacy `role_id` 记忆隔离不再支持；请用 User / Peer 模型表达隔离边界。
+- 0.3.x 部署升级前应先备份数据，升级 server / CLI / SDK 到 0.4.1，验证 legacy 读取，再执行 `ov --sudo admin migrate --output json`，检查 task 结果后再 cleanup。
+- 使用新检索、skills、迁移或 OpenClaw surface 的集成，应重新生成固定的 client 或 schema。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.3.24...v0.4.1)
+
 ## v0.3.24 (2026-06-05)
 
 ### 重点更新

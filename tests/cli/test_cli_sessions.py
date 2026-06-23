@@ -3,14 +3,14 @@
 """CLI session operation tests (new, list, get, get-context, delete, add-message, commit)."""
 
 import pytest
-from conftest import ov
+from conftest import ov, ov_session_delete, ov_session_new
 
 pytestmark = pytest.mark.cli_remote
 
 
 class TestSessionNew:
     def test_session_new(self):
-        r = ov(["session", "new", "-o", "json"])
+        r = ov_session_new()
         assert r["exit_code"] == 0, (
             f"ov session new should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
@@ -22,7 +22,7 @@ class TestSessionNew:
         )
         assert isinstance(result["session_id"], str), "session_id should be a string"
         assert len(result["session_id"]) > 0, "session_id should not be empty"
-        ov(["session", "delete", result["session_id"], "-o", "json"])
+        ov_session_delete(result["session_id"])
 
 
 class TestSessionList:
@@ -63,13 +63,13 @@ class TestSessionGetContext:
 
 class TestSessionDelete:
     def test_session_delete(self):
-        create_r = ov(["session", "new", "-o", "json"])
+        create_r = ov_session_new()
         assert create_r["exit_code"] == 0, f"session new failed: {create_r['stderr'][:300]}"
         assert create_r["json"] is not None, (
             f"session new should return JSON, got: {create_r['stdout'][:200]}"
         )
         session_id = create_r["json"]["result"]["session_id"]
-        r = ov(["session", "delete", session_id, "-o", "json"])
+        r = ov_session_delete(session_id)
         assert r["exit_code"] == 0, (
             f"ov session delete should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )

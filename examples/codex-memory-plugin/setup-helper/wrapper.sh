@@ -5,12 +5,14 @@
 # reset --hard` of the plugin checkout — no need to re-run it to refresh.
 #
 # This wrapper exists because Codex's MCP runtime reads OPENVIKING_API_KEY
-# (and OPENVIKING_ACCOUNT / _USER / _AGENT_ID) from the process env at
+# (and OPENVIKING_ACCOUNT / _USER / _PEER_ID) from the process env at
 # codex launch. Rather than asking users to `export` secrets globally, we
 # wrap `codex` in a shell function that:
 #
-#   1. Reads the user's ovcli.conf (env > $OPENVIKING_CLI_CONFIG_FILE >
-#      ~/.openviking/ovcli.conf) and resolves URL / API key / identity.
+#   1. Resolves credentials through the plugin's shared resolver. By default
+#      active ovcli.conf wins, so `ov config switch` controls hooks, MCP, and
+#      in-process `ov` commands together. Set OPENVIKING_CREDENTIAL_SOURCE=env
+#      to force env-var credentials.
 #
 #   2. Rewrites the cached .mcp.json's URL and bearer_token_env_var to
 #      match the resolved state. Required because Codex 0.130 hard-fails
@@ -20,9 +22,9 @@
 #      configs targeting different OV servers would silently keep hitting
 #      the install-time URL.
 #
-#   3. Exec's the launcher with a dynamically built env prefix that omits
-#      any OPENVIKING_* whose resolved value is empty (so empty values
-#      never reach codex as empty strings).
+#   3. Exec's the launcher after stripping stale credential env vars and
+#      adding only the resolved OPENVIKING_* values (so empty values never
+#      reach codex as empty strings).
 #
 # Besides `codex`, any extra launch commands listed in
 # $OPENVIKING_CODEX_WRAP_EXTRA (set by the installer in your shell rc, one
@@ -32,6 +34,16 @@
 # that command passes through untouched.
 #
 # Targets bash and zsh (the only shells that source ~/.bashrc / ~/.zshrc).
+
+_openviking_codex_plugin_dir() {
+  local _ov_src
+  if [ -n "${BASH_SOURCE[0]-}" ]; then
+    _ov_src="${BASH_SOURCE[0]}"
+  else
+    _ov_src="${(%):-%x}"
+  fi
+  cd "$(dirname "$_ov_src")/.." >/dev/null 2>&1 && pwd -P
+}
 
 # Resolve OpenViking credentials, sync the cached .mcp.json, then exec the
 # given launch command with an OPENVIKING_* env prefix. $@ is the command to
@@ -43,29 +55,21 @@ _openviking_codex_exec() {
     return
   fi
 
-  # Resolve OV connection settings: existing env > ovcli.conf > nothing.
-  local _ov_url _ov_key _ov_account _ov_user
-  if [ -f "$_ov_conf" ]; then
-    local _ov_env
-    _ov_env=$(node -e '
-      try {
-        const c = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-        const out = (k, v) => v ? `${k}=${JSON.stringify(String(v))}\n` : "";
-        process.stdout.write(
-          out("OV_URL", c.url) +
-          out("OV_KEY", c.api_key) +
-          out("OV_ACCOUNT", c.account) +
-          out("OV_USER", c.user)
-        );
-      } catch {}
-    ' "$_ov_conf" 2>/dev/null)
-    eval "$_ov_env"
+  local _ov_plugin_dir _ov_creds_script
+  _ov_plugin_dir="$(_openviking_codex_plugin_dir 2>/dev/null || true)"
+  _ov_creds_script="$_ov_plugin_dir/scripts/ov-credentials.mjs"
+  if [ ! -f "$_ov_creds_script" ]; then
+    command "$@"
+    return
   fi
-  _ov_url="${OPENVIKING_URL:-${OV_URL:-}}"
-  _ov_key="${OPENVIKING_API_KEY:-${OV_KEY:-}}"
-  _ov_account="${OPENVIKING_ACCOUNT:-${OV_ACCOUNT:-}}"
-  _ov_user="${OPENVIKING_USER:-${OV_USER:-}}"
-  unset OV_URL OV_KEY OV_ACCOUNT OV_USER
+
+  local _ov_env
+  _ov_env=$(OPENVIKING_CLI_CONFIG_FILE="$_ov_conf" node "$_ov_creds_script" shell-env 2>/dev/null) || _ov_env=""
+  if [ -z "$_ov_env" ]; then
+    command "$@"
+    return
+  fi
+  eval "$_ov_env"
 
   # Sync cache .mcp.json to current OV connection state: rewrite both the
   # URL (so OPENVIKING_CLI_CONFIG_FILE swaps actually change the target)
@@ -73,58 +77,36 @@ _openviking_codex_exec() {
   # bearer env vars, so the field must be absent in no-auth mode). The
   # node script writes only when something actually changes — idempotent
   # fast-path so we don't bump file mtime on every codex launch.
-  local _has_key _mcp_url_from_conf
-  if [ -n "$_ov_key" ]; then _has_key=1; else _has_key=0; fi
-  if [ -n "$_ov_url" ]; then
-    if [ -n "${OPENVIKING_MCP_URL:-}" ]; then
-      _mcp_url_from_conf="$OPENVIKING_MCP_URL"
-    else
-      _mcp_url_from_conf="${_ov_url%/}/mcp"
-    fi
-  else
-    _mcp_url_from_conf=""
+  local _cache_root _cache_mcp
+  _cache_root="$HOME/.codex/plugins/cache/openviking-plugins-local/openviking-memory"
+  if [ -d "$_cache_root" ]; then
+    while IFS= read -r _cache_mcp; do
+      [ -f "$_cache_mcp" ] || continue
+      OPENVIKING_CLI_CONFIG_FILE="${OV_RESOLVED_CLI_CONFIG_FILE:-$_ov_conf}" \
+        node "$_ov_creds_script" sync-mcp "$_cache_mcp" 2>/dev/null || true
+    done < <(find "$_cache_root" -mindepth 2 -maxdepth 2 -name .mcp.json -type f 2>/dev/null)
   fi
-  local _cache_mcp
-  for _cache_mcp in "$HOME"/.codex/plugins/cache/openviking-plugins-local/openviking-memory/*/.mcp.json; do
-    [ -f "$_cache_mcp" ] || continue
-    node -e '
-      const fs = require("node:fs");
-      // node -e: argv is [node, file, hasKey, url] — no [eval] placeholder.
-      const file = process.argv[1];
-      const hasKey = process.argv[2];
-      const url = process.argv[3] || "";
-      const j = JSON.parse(fs.readFileSync(file, "utf8"));
-      const s = j.mcpServers && j.mcpServers["openviking-memory"];
-      if (s) {
-        let changed = false;
-        if (url && s.url !== url) {
-          s.url = url;
-          changed = true;
-        }
-        const cur = s.bearer_token_env_var || "";
-        if (hasKey === "1" && cur !== "OPENVIKING_API_KEY") {
-          s.bearer_token_env_var = "OPENVIKING_API_KEY";
-          changed = true;
-        } else if (hasKey !== "1" && cur) {
-          delete s.bearer_token_env_var;
-          changed = true;
-        }
-        if (changed) {
-          fs.writeFileSync(file, JSON.stringify(j, null, 2) + "\n");
-        }
-      }
-    ' "$_cache_mcp" "$_has_key" "$_mcp_url_from_conf" 2>/dev/null || true
-  done
 
   # Build env-prefix dynamically so empty values are NOT exported as empty
   # strings — Codex hard-fails on empty bearer_token_env_var targets.
   local -a _env_args=()
-  [ -n "$_ov_url" ]     && _env_args+=("OPENVIKING_URL=$_ov_url")
-  [ -n "$_ov_key" ]     && _env_args+=("OPENVIKING_API_KEY=$_ov_key")
-  [ -n "$_ov_account" ] && _env_args+=("OPENVIKING_ACCOUNT=$_ov_account")
-  [ -n "$_ov_user" ]    && _env_args+=("OPENVIKING_USER=$_ov_user")
+  [ -n "${OV_RESOLVED_CLI_CONFIG_FILE:-}" ] && _env_args+=("OPENVIKING_CLI_CONFIG_FILE=$OV_RESOLVED_CLI_CONFIG_FILE")
+  [ -n "${OV_RESOLVED_URL:-}" ]             && _env_args+=("OPENVIKING_URL=$OV_RESOLVED_URL")
+  [ -n "${OV_RESOLVED_API_KEY:-}" ]         && _env_args+=("OPENVIKING_API_KEY=$OV_RESOLVED_API_KEY")
+  [ -n "${OV_RESOLVED_ACCOUNT:-}" ]         && _env_args+=("OPENVIKING_ACCOUNT=$OV_RESOLVED_ACCOUNT")
+  [ -n "${OV_RESOLVED_USER:-}" ]            && _env_args+=("OPENVIKING_USER=$OV_RESOLVED_USER")
+  [ -n "${OV_RESOLVED_PEER_ID:-}" ]         && _env_args+=("OPENVIKING_PEER_ID=$OV_RESOLVED_PEER_ID")
 
-  env "${_env_args[@]}" "$@"
+  env \
+    -u OPENVIKING_URL \
+    -u OPENVIKING_BASE_URL \
+    -u OPENVIKING_MCP_URL \
+    -u OPENVIKING_API_KEY \
+    -u OPENVIKING_BEARER_TOKEN \
+    -u OPENVIKING_ACCOUNT \
+    -u OPENVIKING_USER \
+    -u OPENVIKING_PEER_ID \
+    "${_env_args[@]}" "$@"
 }
 
 # Runtime guard for a wrapped command. $1 = exec helper, $2 = command name,

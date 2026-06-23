@@ -307,6 +307,16 @@ async fn copy_file_state(
             while offset < size {
                 let chunk_len = (size - offset).min(DEFAULT_COPY_CHUNK_SIZE as u64);
                 let chunk = source.read(source_path, offset, chunk_len).await?;
+                if chunk.is_empty() {
+                    if offset == 0 {
+                        if destination.exists(destination_path).await {
+                            destination.truncate(destination_path, 0).await?;
+                        } else {
+                            destination.create(destination_path).await?;
+                        }
+                    }
+                    break;
+                }
                 let flag = if offset == 0 {
                     WriteFlag::Create
                 } else {
@@ -316,12 +326,6 @@ async fn copy_file_state(
                     .write(destination_path, &chunk, offset, flag)
                     .await?;
                 offset = offset.saturating_add(chunk.len() as u64);
-                if chunk.is_empty() {
-                    return Err(Error::internal(format!(
-                        "source returned empty chunk while copying '{}' -> '{}'",
-                        source_path, destination_path
-                    )));
-                }
             }
             Ok(())
         })

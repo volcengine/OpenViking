@@ -273,12 +273,11 @@ class FeishuAccessor(DataAccessor):
     def _is_feishu_url(url: str) -> bool:
         """Check if URL is a Feishu/Lark cloud document."""
         parsed = urlparse(url)
-        host = parsed.hostname or ""
+        host = (parsed.hostname or "").lower().rstrip(".")
         path = parsed.path
-        is_feishu_domain = (
-            host.endswith(".feishu.cn")
-            or host.endswith(".larksuite.com")
-            or host.endswith(".larkoffice.com")
+        is_feishu_domain = any(
+            host == allowed_host or host.endswith(f".{allowed_host}")
+            for allowed_host in ("feishu.cn", "larksuite.com", "larkoffice.com")
         )
         has_doc_path = any(
             path == f"/{t}" or path.startswith(f"/{t}/") for t in ("docx", "wiki", "sheets", "base")

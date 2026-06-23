@@ -8,10 +8,10 @@ use colored::Colorize;
 use crossterm::{
     ExecutableCommand,
     cursor::{Hide, MoveToColumn, MoveUp, Show},
-    event::{self, Event, KeyCode, KeyModifiers},
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    terminal::{self, Clear, ClearType, disable_raw_mode, enable_raw_mode},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 use uuid::Uuid;
 
 use crate::{
@@ -19,15 +19,16 @@ use crate::{
     config::{Config, DEFAULT_CUSTOM_URL},
     error::{Error, Result},
     i18n::{self, Language, copy},
+    terminal_ui::{RenderedRegion, display_width, rendered_line_rows, rendered_row_count},
     theme::{self, Rgb},
 };
 use serde_json::Value;
 
 use super::store::{
     ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore, IdentityField,
-    OPENVIKING_SERVICE_URL, build_config, custom_allows_empty_api_key, validate_candidate_config,
-    validate_candidate_config_with_role, validate_config_name, validate_identity_value,
-    validation_error_copy,
+    OPENVIKING_SERVICE_URL, build_config, custom_allows_empty_api_key, normalize_custom_url,
+    validate_candidate_config, validate_candidate_config_with_role, validate_config,
+    validate_config_name, validate_identity_value, validation_error_copy,
 };
 
 const OPENVIKING_SERVICE_API_KEY_URL: &str =
@@ -35,6 +36,7 @@ const OPENVIKING_SERVICE_API_KEY_URL: &str =
 const HEADER_TAGLINE: &str = "Context Database for AI Agents";
 const HEADER_TAGLINE_ZH: &str = "AI Agent 上下文数据库";
 const STATUS_BOX_PROBE_TIMEOUT_SECS: f64 = 3.0;
+const TEXT_INPUT_PROMPT: &str = "  > ";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum IdentityMode {
@@ -76,6 +78,10 @@ const OV_LOGO_LINES: [&str; 14] = [
     "            ⠈⠉⠉⠉⠁",
 ];
 
+// Full mode needs enough height for the standalone wordmark, logo art,
+// status box, and prompts without wrapping into each other.
+const FULL_STATUS_BOX_MIN_ROWS: u16 = 30;
+
 pub async fn run_config_wizard() -> Result<()> {
     let store = ConfigStore::new()?;
     run_config_wizard_with_store(store).await
@@ -86,7 +92,7 @@ async fn run_config_wizard_with_store(store: ConfigStore) -> Result<()> {
     if !ensure_language_selected(&mut ui)? {
         return Ok(());
     }
-    print_header();
+    print_full_header(live_status_box_frame().mode);
     print_status_box(&store).await?;
 
     loop {
@@ -109,12 +115,22 @@ async fn run_config_wizard_with_store(store: ConfigStore) -> Result<()> {
                 }
             }
             PromptResult::Value(1) => {
-                if run_edit_config(&store, &mut ui).await? {
+                if run_switch_config(&store, &mut ui).await? {
                     return Ok(());
                 }
             }
             PromptResult::Value(2) => {
+                if run_edit_config(&store, &mut ui).await? {
+                    return Ok(());
+                }
+            }
+            PromptResult::Value(3) => {
                 if run_delete_config(&store, &mut ui)? {
+                    return Ok(());
+                }
+            }
+            PromptResult::Value(4) => {
+                if run_user_management(&store, &mut ui).await? {
                     return Ok(());
                 }
             }
@@ -159,12 +175,11 @@ fn ensure_language_selected(ui: &mut LiveRegion) -> Result<bool> {
 }
 
 pub(crate) fn wizard_header_lines() -> Vec<String> {
-    let mut lines: Vec<String> = wordmark_lines()
-        .iter()
-        .map(|line| (*line).to_string())
-        .collect();
-    lines.push(String::new());
-    lines
+    wordmark_lines()
+        .into_iter()
+        .map(str::to_string)
+        .chain(std::iter::once(String::new()))
+        .collect()
 }
 
 pub(crate) fn wordmark_width() -> usize {
@@ -191,7 +206,71 @@ fn header_version_text() -> String {
 }
 
 fn status_box_width() -> usize {
-    wordmark_width()
+    preferred_status_box_width()
+}
+
+const COMPACT_STATUS_DETAIL_WIDTH: usize = 52;
+
+fn preferred_status_box_width() -> usize {
+    let title_width = 4 + display_width(status_box_title(StatusBoxMode::Full));
+
+    wordmark_width().max(title_width)
+}
+
+fn compact_status_box_width() -> usize {
+    let content_width = 4 + COMPACT_STATUS_DETAIL_WIDTH;
+    let title_width = 4 + display_width(status_box_title(StatusBoxMode::Compact));
+
+    content_width.max(title_width)
+}
+
+fn status_box_title(mode: StatusBoxMode) -> &'static str {
+    match mode {
+        StatusBoxMode::Full => copy(Language::current(), HEADER_TAGLINE, HEADER_TAGLINE_ZH),
+        StatusBoxMode::Compact => copy(
+            Language::current(),
+            "OpenViking | Context Database for AI Agents",
+            "OpenViking | AI Agent 上下文数据库",
+        ),
+    }
+}
+
+fn live_status_box_frame() -> StatusBoxFrame {
+    match terminal::size() {
+        Ok((columns, rows)) if columns > 4 => status_box_frame_for_size(columns, rows),
+        _ => StatusBoxFrame {
+            width: preferred_status_box_width(),
+            mode: StatusBoxMode::Full,
+        },
+    }
+}
+
+fn status_box_frame_for_size(columns: u16, rows: u16) -> StatusBoxFrame {
+    let available = usize::from(columns).saturating_sub(1);
+    let preferred = preferred_status_box_width();
+    if rows >= FULL_STATUS_BOX_MIN_ROWS && available >= preferred {
+        return StatusBoxFrame {
+            width: preferred.min(available),
+            mode: StatusBoxMode::Full,
+        };
+    }
+
+    StatusBoxFrame {
+        width: compact_status_box_width().min(available),
+        mode: StatusBoxMode::Compact,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StatusBoxFrame {
+    width: usize,
+    mode: StatusBoxMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatusBoxMode {
+    Full,
+    Compact,
 }
 
 fn nav_hint() -> &'static str {
@@ -226,11 +305,27 @@ fn section_edit() -> &'static str {
     )
 }
 
+fn section_switch() -> &'static str {
+    copy(
+        Language::current(),
+        "Switch to a saved config.",
+        "切换到已保存的配置。",
+    )
+}
+
 fn section_delete() -> &'static str {
     copy(
         Language::current(),
         "Delete a saved config.",
         "删除已保存的配置。",
+    )
+}
+
+fn section_user_management() -> &'static str {
+    copy(
+        Language::current(),
+        "Manage account and user credentials.",
+        "管理账户和用户凭证。",
     )
 }
 
@@ -432,14 +527,20 @@ fn has_normal_user_key(api_key: Option<&str>, root_api_key: Option<&str>) -> boo
         .is_none_or(|root_api_key| root_api_key != api_key)
 }
 
-pub(crate) fn main_action_labels() -> [&'static str; 3] {
-    ["Add config", "Edit config", "Delete config"]
+pub(crate) fn main_action_labels() -> [&'static str; 5] {
+    [
+        "Add Config",
+        "Switch Config",
+        "Edit Config",
+        "Delete Config",
+        "User Management",
+    ]
 }
 
-fn main_action_labels_for_language(language: Language) -> [&'static str; 3] {
+fn main_action_labels_for_language(language: Language) -> [&'static str; 5] {
     match language {
         Language::En => main_action_labels(),
-        Language::ZhCn => ["添加配置", "编辑配置", "删除配置"],
+        Language::ZhCn => ["添加配置", "切换配置", "编辑配置", "删除配置", "用户管理"],
     }
 }
 
@@ -512,12 +613,17 @@ pub(crate) fn should_prompt_root_identity(
         && (api_key_was_entered || is_blank(account) || is_blank(user))
 }
 
-fn print_header() {
+fn print_full_header(mode: StatusBoxMode) {
+    if mode != StatusBoxMode::Full {
+        return;
+    }
+
     let lines = wizard_header_lines();
     println!();
     for (index, line) in lines.iter().take(wordmark_lines().len()).enumerate() {
         println!("{}", styled_wordmark_line(index, line));
     }
+    println!();
 }
 
 fn styled_wordmark_line(_index: usize, line: &str) -> String {
@@ -657,14 +763,14 @@ async fn print_status_box(store: &ConfigStore) -> Result<()> {
         return Ok(());
     };
 
-    let rendered_lines = print_status_box_with_runtime(
+    let rendered_region = print_status_box_with_runtime(
         active.as_ref(),
         &configs,
         &config_home,
         &StatusBoxRuntime::checking(),
     )?;
     let runtime = status_box_runtime(Some(active_config)).await;
-    clear_live_region(rendered_lines, false)?;
+    clear_rendered_region(&rendered_region, false)?;
     print_status_box_with_runtime(active.as_ref(), &configs, &config_home, &runtime)?;
 
     Ok(())
@@ -675,29 +781,23 @@ fn print_status_box_with_runtime(
     configs: &[ConfigEntry],
     config_home: &str,
     runtime: &StatusBoxRuntime,
-) -> Result<usize> {
-    let width = status_box_width();
+) -> Result<RenderedRegion> {
+    let frame = live_status_box_frame();
+    let lines = styled_status_box_lines_with_runtime(active, configs, config_home, runtime, frame);
+    let render_columns = live_region_columns();
 
-    println!();
-    println!(
-        "{}",
-        styled_box_title_line(
-            copy(Language::current(), HEADER_TAGLINE, HEADER_TAGLINE_ZH),
-            width
-        )
-    );
-    let details = status_box_details(active, configs, config_home, runtime);
-    let rows = OV_LOGO_LINES.len().max(details.len());
-    let details = center_status_box_details(details, rows);
-    for index in 0..rows {
-        let logo = OV_LOGO_LINES.get(index).copied().unwrap_or("");
-        let detail = details.get(index).unwrap_or(&StatusBoxDetail::Empty);
-        println!("{}", styled_box_content_line(logo, detail, width, index));
+    for line in &lines {
+        println!("{line}");
     }
-    println!("{}", styled_box_footer_line(&header_version_text(), width));
-    println!();
     io::stdout().flush()?;
-    Ok(rows + 4)
+    Ok(RenderedRegion::from_lines(&lines, render_columns))
+}
+
+fn clear_rendered_region(region: &RenderedRegion, cursor_on_last_line: bool) -> io::Result<()> {
+    clear_live_region(
+        region.rows_to_clear(live_region_columns()),
+        cursor_on_last_line,
+    )
 }
 
 #[cfg(test)]
@@ -716,26 +816,98 @@ fn status_box_lines_with_runtime(
     config_home: &str,
     runtime: &StatusBoxRuntime,
 ) -> Vec<String> {
-    let width = status_box_width();
+    status_box_lines_with_runtime_width(
+        active,
+        configs,
+        config_home,
+        runtime,
+        StatusBoxFrame {
+            width: status_box_width(),
+            mode: StatusBoxMode::Full,
+        },
+    )
+}
+
+#[cfg(test)]
+fn status_box_lines_with_runtime_width(
+    active: Option<&Config>,
+    configs: &[ConfigEntry],
+    config_home: &str,
+    runtime: &StatusBoxRuntime,
+    frame: StatusBoxFrame,
+) -> Vec<String> {
     let details = status_box_details(active, configs, config_home, runtime);
-    let rows = OV_LOGO_LINES.len().max(details.len());
-    let details = center_status_box_details(details, rows);
+    let right_rows = status_box_right_rows(details, frame.mode);
+    let rows = status_box_row_count(right_rows.len(), frame.mode);
     let mut lines = Vec::with_capacity(rows + 2);
 
-    lines.push(box_title_line(HEADER_TAGLINE, width));
+    lines.push(box_title_line(status_box_title(frame.mode), frame.width));
     for index in 0..rows {
         lines.push(box_content_line(
-            OV_LOGO_LINES.get(index).copied().unwrap_or(""),
-            details
+            status_box_logo_line(index, frame.mode),
+            right_rows
                 .get(index)
-                .map(StatusBoxDetail::plain)
+                .map(|row| row.plain(frame.width, frame.mode))
                 .unwrap_or_default()
                 .as_str(),
-            width,
+            frame.width,
+            frame.mode,
         ));
     }
-    lines.push(box_footer_line(&header_version_text(), width));
+    lines.push(box_footer_line(&header_version_text(), frame.width));
     lines
+}
+
+fn styled_status_box_lines_with_runtime(
+    active: Option<&Config>,
+    configs: &[ConfigEntry],
+    config_home: &str,
+    runtime: &StatusBoxRuntime,
+    frame: StatusBoxFrame,
+) -> Vec<String> {
+    let details = status_box_details(active, configs, config_home, runtime);
+    let right_rows = status_box_right_rows(details, frame.mode);
+    let rows = status_box_row_count(right_rows.len(), frame.mode);
+    let mut lines = Vec::with_capacity(rows + 4);
+
+    lines.push(String::new());
+    lines.push(styled_box_title_line(
+        status_box_title(frame.mode),
+        frame.width,
+    ));
+    for index in 0..rows {
+        lines.push(styled_box_content_line(
+            status_box_logo_line(index, frame.mode),
+            right_rows.get(index).unwrap_or(&StatusBoxRightRow::Empty),
+            frame.width,
+            index,
+            frame.mode,
+        ));
+    }
+    lines.push(styled_box_footer_line(&header_version_text(), frame.width));
+    lines.push(String::new());
+    lines
+}
+
+fn status_box_row_count(right_rows: usize, mode: StatusBoxMode) -> usize {
+    match mode {
+        StatusBoxMode::Full => OV_LOGO_LINES.len().max(right_rows),
+        StatusBoxMode::Compact => right_rows,
+    }
+}
+
+fn status_box_logo_line(index: usize, mode: StatusBoxMode) -> &'static str {
+    status_box_logo_lines(mode)
+        .get(index)
+        .copied()
+        .unwrap_or("")
+}
+
+fn status_box_logo_lines(mode: StatusBoxMode) -> &'static [&'static str] {
+    match mode {
+        StatusBoxMode::Full => &OV_LOGO_LINES,
+        StatusBoxMode::Compact => &[],
+    }
 }
 
 async fn status_box_runtime(active: Option<&Config>) -> StatusBoxRuntime {
@@ -794,9 +966,7 @@ fn status_payload_health(value: &Value) -> Option<bool> {
         return Some(healthy);
     }
 
-    let Some(components) = value.get("components").and_then(Value::as_object) else {
-        return None;
-    };
+    let components = value.get("components").and_then(Value::as_object)?;
 
     if components.is_empty() {
         return None;
@@ -945,6 +1115,22 @@ impl StatusBoxRuntime {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StatusBoxRightRow {
+    Detail(StatusBoxDetail),
+    Empty,
+}
+
+#[cfg(test)]
+impl StatusBoxRightRow {
+    fn plain(&self, _width: usize, _mode: StatusBoxMode) -> String {
+        match self {
+            Self::Detail(detail) => detail.plain(),
+            Self::Empty => String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeConnectionStatus {
     Checking,
@@ -1015,7 +1201,6 @@ enum StatusBoxDetail {
     Model { label: &'static str, value: String },
     Saved { count: String },
     Home { path: String },
-    Empty,
 }
 
 impl StatusBoxDetail {
@@ -1031,7 +1216,6 @@ impl StatusBoxDetail {
             Self::Model { label, value } => format!("{label}: {value}"),
             Self::Saved { count } => format!("{} {count}", status_label("Saved configs:")),
             Self::Home { path } => format!("{} {path}", status_label("Config home:")),
-            Self::Empty => String::new(),
         }
     }
 
@@ -1078,7 +1262,6 @@ impl StatusBoxDetail {
                     theme::sky_value(path).bold()
                 )
             }
-            Self::Empty => String::new(),
         }
     }
 }
@@ -1157,18 +1340,46 @@ fn unknown_copy() -> &'static str {
     copy(Language::current(), "Unknown", "未知")
 }
 
-fn center_status_box_details(details: Vec<StatusBoxDetail>, rows: usize) -> Vec<StatusBoxDetail> {
-    let top_padding = rows.saturating_sub(details.len()) / 2;
-    let mut centered = Vec::with_capacity(rows);
-    centered.extend(std::iter::repeat_n(StatusBoxDetail::Empty, top_padding));
-    centered.extend(details);
-    centered.resize(rows, StatusBoxDetail::Empty);
+fn status_box_right_rows(
+    details: Vec<StatusBoxDetail>,
+    mode: StatusBoxMode,
+) -> Vec<StatusBoxRightRow> {
+    let rows = details
+        .into_iter()
+        .map(StatusBoxRightRow::Detail)
+        .collect::<Vec<_>>();
+
+    match mode {
+        StatusBoxMode::Full => center_status_box_rows(rows, OV_LOGO_LINES.len()),
+        StatusBoxMode::Compact => rows,
+    }
+}
+
+fn center_status_box_rows(
+    rows: Vec<StatusBoxRightRow>,
+    target_rows: usize,
+) -> Vec<StatusBoxRightRow> {
+    if rows.len() >= target_rows {
+        return rows;
+    }
+
+    let empty_rows = target_rows - rows.len();
+    let top = empty_rows / 2;
+    let bottom = empty_rows - top;
+    let mut centered = Vec::with_capacity(target_rows);
+    centered.extend(std::iter::repeat_n(StatusBoxRightRow::Empty, top));
+    centered.extend(rows);
+    centered.extend(std::iter::repeat_n(StatusBoxRightRow::Empty, bottom));
     centered
 }
 
 #[cfg(test)]
 fn box_title_line(title: &str, width: usize) -> String {
     let inner_width = width.saturating_sub(2);
+    if title.trim().is_empty() {
+        return format!("╭{}╮", "─".repeat(inner_width));
+    }
+
     let title = format!(" {title} ");
     let visible_title = truncate_to_width(&title, inner_width);
     let title_width = display_width(&visible_title);
@@ -1201,26 +1412,34 @@ fn box_footer_line(title: &str, width: usize) -> String {
 }
 
 #[cfg(test)]
-fn box_content_line(left: &str, right: &str, width: usize) -> String {
-    let logo_width = ov_logo_width();
-    let gutter = 3usize;
-    let right_width = width.saturating_sub(4 + logo_width + gutter);
+fn box_content_line(left: &str, right: &str, width: usize, mode: StatusBoxMode) -> String {
+    let layout = status_box_content_layout(width, mode);
     format!(
         "│ {}{}{} │",
-        pad_to_width(left, logo_width),
-        " ".repeat(gutter),
-        pad_to_width(right, right_width)
+        pad_to_width(left, layout.logo_width),
+        " ".repeat(layout.gutter),
+        pad_to_width(right, layout.right_width)
     )
 }
 
 fn styled_box_title_line(title: &str, width: usize) -> String {
     let inner_width = width.saturating_sub(2);
+    let border = theme::active_theme().border.rgb_fallback();
+
+    if title.trim().is_empty() {
+        return format!(
+            "{}{}{}",
+            theme::style_rgb("╭", border, false),
+            theme::style_rgb("─".repeat(inner_width), border, false),
+            theme::style_rgb("╮", border, false)
+        );
+    }
+
     let title = format!(" {title} ");
     let visible_title = truncate_to_width(&title, inner_width);
     let title_width = display_width(&visible_title);
     let left = inner_width.saturating_sub(title_width) / 2;
     let right = inner_width.saturating_sub(title_width + left);
-    let border = theme::active_theme().border.rgb_fallback();
 
     format!(
         "{}{}{}{}{}",
@@ -1254,32 +1473,86 @@ fn styled_box_footer_line(title: &str, width: usize) -> String {
 
 fn styled_box_content_line(
     left: &str,
-    detail: &StatusBoxDetail,
+    right: &StatusBoxRightRow,
     width: usize,
     logo_row: usize,
+    mode: StatusBoxMode,
 ) -> String {
-    let logo_width = ov_logo_width();
-    let gutter = 3usize;
-    let right_width = width.saturating_sub(4 + logo_width + gutter);
+    let layout = status_box_content_layout(width, mode);
     let border = theme::active_theme().border.rgb_fallback();
+    let logo_height = status_box_logo_lines(mode).len();
     format!(
         "{} {}{}{} {}",
         theme::style_rgb("│", border, false),
-        styled_logo_to_width(left, logo_width, logo_row),
-        " ".repeat(gutter),
-        styled_detail_to_width(detail, right_width),
+        styled_logo_to_width(left, layout.logo_width, logo_row, logo_height),
+        " ".repeat(layout.gutter),
+        styled_status_right_row_to_width(right, layout.right_width),
         theme::style_rgb("│", border, false)
     )
 }
 
-fn styled_logo_to_width(line: &str, width: usize, row: usize) -> String {
-    styled_logo_to_width_for_color_level(line, width, row, theme::terminal_color_level())
+#[derive(Debug, Clone, Copy)]
+struct StatusBoxContentLayout {
+    logo_width: usize,
+    gutter: usize,
+    right_width: usize,
 }
 
+fn status_box_content_layout(width: usize, mode: StatusBoxMode) -> StatusBoxContentLayout {
+    let inner_width = width.saturating_sub(4);
+    if mode == StatusBoxMode::Compact {
+        return StatusBoxContentLayout {
+            logo_width: 0,
+            gutter: 0,
+            right_width: inner_width,
+        };
+    }
+
+    let preferred_logo_width = match mode {
+        StatusBoxMode::Full => ov_logo_width(),
+        StatusBoxMode::Compact => 0,
+    };
+    let preferred_gutter = 3usize;
+
+    if inner_width <= preferred_logo_width {
+        return StatusBoxContentLayout {
+            logo_width: inner_width,
+            gutter: 0,
+            right_width: 0,
+        };
+    }
+
+    let room_after_logo = inner_width.saturating_sub(preferred_logo_width);
+    let gutter = preferred_gutter.min(room_after_logo.saturating_sub(1));
+    let logo_width = preferred_logo_width.min(inner_width.saturating_sub(gutter));
+    let right_width = inner_width.saturating_sub(logo_width + gutter);
+
+    StatusBoxContentLayout {
+        logo_width,
+        gutter,
+        right_width,
+    }
+}
+
+fn styled_logo_to_width(line: &str, width: usize, row: usize, logo_height: usize) -> String {
+    styled_logo_to_width_with_height(line, width, row, logo_height, theme::terminal_color_level())
+}
+
+#[cfg(test)]
 fn styled_logo_to_width_for_color_level(
     line: &str,
     width: usize,
     row: usize,
+    color_level: theme::ColorLevel,
+) -> String {
+    styled_logo_to_width_with_height(line, width, row, OV_LOGO_LINES.len(), color_level)
+}
+
+fn styled_logo_to_width_with_height(
+    line: &str,
+    width: usize,
+    row: usize,
+    logo_height: usize,
     color_level: theme::ColorLevel,
 ) -> String {
     let mut rendered = String::new();
@@ -1289,8 +1562,10 @@ fn styled_logo_to_width_for_color_level(
         if ch.is_whitespace() {
             rendered.push(ch);
         } else {
-            let rgb =
-                header_display_rgb(logo_glass_color(ch, column, row, width.max(1)), color_level);
+            let rgb = header_display_rgb(
+                logo_glass_color(ch, column, row, width.max(1), logo_height),
+                color_level,
+            );
             rendered.push_str(&theme::style_rgb_for_level(
                 ch.to_string(),
                 rgb,
@@ -1311,22 +1586,33 @@ fn header_display_rgb(rgb: Rgb, color_level: theme::ColorLevel) -> Rgb {
     }
 }
 
-fn logo_glass_color(_ch: char, column: usize, row: usize, width: usize) -> Rgb {
-    logo_glass_color_for_theme(theme::active_theme(), column, row, width)
+fn logo_glass_color(_ch: char, column: usize, row: usize, width: usize, logo_height: usize) -> Rgb {
+    logo_glass_color_for_theme_with_height(theme::active_theme(), column, row, width, logo_height)
 }
 
+#[cfg(test)]
 fn logo_glass_color_for_theme(
     palette: theme::CliTheme,
     column: usize,
     row: usize,
     width: usize,
 ) -> Rgb {
+    logo_glass_color_for_theme_with_height(palette, column, row, width, OV_LOGO_LINES.len())
+}
+
+fn logo_glass_color_for_theme_with_height(
+    palette: theme::CliTheme,
+    column: usize,
+    row: usize,
+    width: usize,
+    logo_height: usize,
+) -> Rgb {
     if width <= 1 {
         return palette.wordmark_start;
     }
 
     let column_ratio = column as f32 / (width - 1) as f32;
-    let row_height = OV_LOGO_LINES.len().saturating_sub(1).max(1);
+    let row_height = logo_height.saturating_sub(1).max(1);
     let row_ratio = row as f32 / row_height as f32;
     let ratio = (column_ratio * 0.4 + row_ratio * 0.6).clamp(0.0, 1.0);
 
@@ -1353,6 +1639,13 @@ fn styled_detail_to_width(detail: &StatusBoxDetail, width: usize) -> String {
         styled,
         " ".repeat(width.saturating_sub(display_width(&plain)))
     )
+}
+
+fn styled_status_right_row_to_width(row: &StatusBoxRightRow, width: usize) -> String {
+    match row {
+        StatusBoxRightRow::Detail(detail) => styled_detail_to_width(detail, width),
+        StatusBoxRightRow::Empty => " ".repeat(width),
+    }
 }
 
 fn ov_logo_width() -> usize {
@@ -1396,10 +1689,6 @@ fn truncate_to_width(text: &str, width: usize) -> String {
     }
     truncated.push('…');
     truncated
-}
-
-fn display_width(text: &str) -> usize {
-    UnicodeWidthStr::width(text)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1478,7 +1767,8 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
     let mut stage = Stage::Kind;
     let mut kind = ConfigKind::Custom;
     let mut name: Option<String> = None;
-    let mut url = DEFAULT_CUSTOM_URL.to_string();
+    let default_server_url = current_server_url_default(store)?;
+    let mut url = default_server_url.clone();
     let mut api_key: Option<String> = None;
     let mut root_api_key: Option<String> = None;
     let mut account: Option<String> = None;
@@ -1514,7 +1804,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 }
                 PromptResult::Value(1) => {
                     kind = ConfigKind::Custom;
-                    url = DEFAULT_CUSTOM_URL.to_string();
+                    url = default_server_url.clone();
                     name = None;
                     api_key = None;
                     root_api_key = None;
@@ -1532,7 +1822,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 PromptResult::Value(_) => unreachable!("selection is constrained by kind list"),
             },
             Stage::Name => {
-                match prompt_add_config_name(ui, section_add(), add_config_name_label())? {
+                match prompt_add_config_name(ui, section_add(), add_config_name_label(), store)? {
                     PromptResult::Value(value) => {
                         name = value;
                         stage = if kind == ConfigKind::OpenVikingService {
@@ -1549,7 +1839,7 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                         user = None;
                         identity_mode = None;
                         key_mode = None;
-                        url = DEFAULT_CUSTOM_URL.to_string();
+                        url = default_server_url.clone();
                         stage = Stage::Kind;
                     }
                     PromptResult::Quit => {
@@ -1730,10 +2020,39 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                 };
                 match validate_draft(ui, section_add(), &draft).await {
                     Ok(ValidatedConfig {
-                        config,
-                        api_key_role,
+                        mut config,
+                        mut api_key_role,
                         root_api_key_role,
                     }) => {
+                        if root_key_used_for_normal_commands(&config) {
+                            let root_key = config.root_api_key.clone().unwrap_or_default();
+                            match select_user_with_root_key(ui, section_add(), &config, &root_key)
+                                .await?
+                            {
+                                PromptResult::Value(updated_config) => {
+                                    config = updated_config;
+                                    api_key = config.api_key.clone();
+                                    root_api_key = config.root_api_key.clone();
+                                    account = config.account.clone();
+                                    user = config.user.clone();
+                                    identity_mode = None;
+                                    key_mode = Some(CustomKeyMode::UserKey);
+                                    api_key_role = Some(ApiKeyRole::Regular);
+                                }
+                                PromptResult::Back => {
+                                    stage = if kind == ConfigKind::Custom {
+                                        Stage::KeyMode
+                                    } else {
+                                        Stage::ApiKey
+                                    };
+                                    continue;
+                                }
+                                PromptResult::Quit => {
+                                    print_cancelled(ui)?;
+                                    return Ok(true);
+                                }
+                            }
+                        }
                         if should_confirm_detected_root_key(kind, key_mode, api_key_role) {
                             match prompt_select(
                                 ui,
@@ -1819,6 +2138,24 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                             stage = Stage::Account;
                             continue;
                         }
+                        let save_name =
+                            match ensure_add_config_save_name(store, ui, &mut name, &draft_name)? {
+                                PromptResult::Value(name) => name,
+                                PromptResult::Back => {
+                                    stage = if identity_mode.is_some() {
+                                        Stage::User
+                                    } else if kind == ConfigKind::Custom {
+                                        Stage::KeyMode
+                                    } else {
+                                        Stage::ApiKey
+                                    };
+                                    continue;
+                                }
+                                PromptResult::Quit => {
+                                    print_cancelled(ui)?;
+                                    return Ok(true);
+                                }
+                            };
                         match prompt_save_action(
                             ui,
                             section_add(),
@@ -1828,12 +2165,12 @@ async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool
                         )? {
                             PromptResult::Value(SaveAction::SaveAndActivate) => {
                                 ui.clear()?;
-                                save_config(store, &draft_name, &config, true)?;
+                                save_config(store, &save_name, &config, true)?;
                                 return Ok(true);
                             }
                             PromptResult::Value(SaveAction::SaveOnly) => {
                                 ui.clear()?;
-                                save_config(store, &draft_name, &config, false)?;
+                                save_config(store, &save_name, &config, false)?;
                                 return Ok(true);
                             }
                             PromptResult::Value(SaveAction::Cancel) => {
@@ -2013,11 +2350,13 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 }
             },
             Stage::Name => {
+                let original_name = configs[selected].name.clone();
                 match prompt_config_name(
                     ui,
                     section_edit(),
                     copy(Language::current(), "Config name", "配置名称"),
                     Some(&name),
+                    |value| validate_config_name_change(store, &original_name, value),
                 )? {
                     PromptResult::Value(value) => {
                         name = value;
@@ -2383,10 +2722,37 @@ async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<boo
                 };
                 match validate_draft(ui, section_edit(), &draft).await {
                     Ok(ValidatedConfig {
-                        config,
-                        api_key_role,
+                        mut config,
+                        mut api_key_role,
                         root_api_key_role,
                     }) => {
+                        if root_key_used_for_normal_commands(&config) {
+                            let root_key = config.root_api_key.clone().unwrap_or_default();
+                            match select_user_with_root_key(ui, section_edit(), &config, &root_key)
+                                .await?
+                            {
+                                PromptResult::Value(updated_config) => {
+                                    config = updated_config;
+                                    api_key = config.api_key.clone();
+                                    root_api_key = config.root_api_key.clone();
+                                    account = config.account.clone();
+                                    user = config.user.clone();
+                                    identity_mode = None;
+                                    key_mode = Some(CustomKeyMode::UserKey);
+                                    key_edit_action = Some(CustomEditKeyAction::SetUserKey);
+                                    api_key_was_entered = true;
+                                    api_key_role = Some(ApiKeyRole::Regular);
+                                }
+                                PromptResult::Back => {
+                                    stage = Stage::ApiKeyChoice;
+                                    continue;
+                                }
+                                PromptResult::Quit => {
+                                    print_cancelled(ui)?;
+                                    return Ok(true);
+                                }
+                            }
+                        }
                         if should_confirm_detected_root_key(kind, key_mode, api_key_role) {
                             match prompt_select(
                                 ui,
@@ -2714,6 +3080,1824 @@ fn run_delete_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool> {
     }
 }
 
+async fn run_switch_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool> {
+    enum Stage {
+        Select,
+        Confirm,
+    }
+
+    let configs = store.list_configs()?;
+    if configs.is_empty() {
+        let helper_lines = vec![
+            theme::warning(copy(
+                Language::current(),
+                "No saved configs to switch.",
+                "没有可切换的配置。",
+            ))
+            .to_string(),
+        ];
+        let _ = prompt_select(
+            ui,
+            section_switch(),
+            copy(Language::current(), "Nothing to switch.", "没有可切换项。"),
+            &[copy(Language::current(), "Back", "返回")],
+            0,
+            &helper_lines,
+        )?;
+        return Ok(false);
+    }
+
+    let mut stage = Stage::Select;
+    let mut selected = 0usize;
+
+    loop {
+        match stage {
+            Stage::Select => match prompt_config_select(
+                ui,
+                section_switch(),
+                copy(Language::current(), "Config to switch to", "要切换到的配置"),
+                &configs,
+            )? {
+                PromptResult::Value(index) => {
+                    selected = index;
+                    if configs[index].is_active {
+                        let helper_lines = vec![
+                            theme::muted(config_already_active_message(&configs[index].name))
+                                .to_string(),
+                        ];
+                        let _ = prompt_select(
+                            ui,
+                            section_switch(),
+                            copy(
+                                Language::current(),
+                                "Config already active.",
+                                "配置已是当前配置。",
+                            ),
+                            &[copy(Language::current(), "Back", "返回")],
+                            0,
+                            &helper_lines,
+                        )?;
+                        return Ok(false);
+                    }
+                    stage = Stage::Confirm;
+                }
+                PromptResult::Back => return Ok(false),
+                PromptResult::Quit => {
+                    print_cancelled(ui)?;
+                    return Ok(true);
+                }
+            },
+            Stage::Confirm => {
+                let selected_config = &configs[selected];
+                match confirm(
+                    ui,
+                    section_switch(),
+                    &switch_confirm_prompt(&selected_config.name),
+                    true,
+                )? {
+                    PromptResult::Value(true) => {
+                        ui.render(&status_live_lines(
+                            section_switch(),
+                            copy(
+                                Language::current(),
+                                "Validating target config...",
+                                "正在验证目标配置...",
+                            ),
+                        ))?;
+                        if let Err(error) = validate_config(&selected_config.config).await {
+                            ui.clear()?;
+                            print_switch_validation_error(
+                                &selected_config.name,
+                                selected_config.kind,
+                                &error,
+                            );
+                            return Ok(true);
+                        }
+
+                        ui.clear()?;
+                        store.activate_config(&selected_config.name)?;
+                        println!();
+                        println!(
+                            "{} {}",
+                            theme::success("✓"),
+                            theme::success(switched_config_message(&selected_config.name))
+                        );
+                        println!(
+                            "{} {}",
+                            theme::muted(copy(Language::current(), "Next:", "下一步：")),
+                            theme::body(copy(
+                                Language::current(),
+                                "Run ov status to inspect it.",
+                                "运行 ov status 查看状态。",
+                            ))
+                        );
+                        return Ok(true);
+                    }
+                    PromptResult::Value(false) => stage = Stage::Select,
+                    PromptResult::Back => stage = Stage::Select,
+                    PromptResult::Quit => {
+                        print_cancelled(ui)?;
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn run_user_management(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool> {
+    let UserManagementContext {
+        config_name,
+        mut config,
+    } = match user_management_config_context(store)? {
+        Some(context) => context,
+        None => match prompt_user_management_server_url(store, ui)? {
+            PromptResult::Value(context) => context,
+            PromptResult::Back => return Ok(false),
+            PromptResult::Quit => {
+                print_cancelled(ui)?;
+                return Ok(true);
+            }
+        },
+    };
+
+    let current_root_api_key = config.root_api_key.as_deref().and_then(non_empty_str);
+    let root_api_key = match prompt_text(
+        ui,
+        section_user_management(),
+        copy(Language::current(), "Root API key", "Root API Key"),
+        current_root_api_key,
+        current_root_api_key.map(|_| InputValueLabel::Current),
+        false,
+        true,
+        &root_api_key_helper_lines(&config.url),
+    )? {
+        PromptResult::Value(value) => value,
+        PromptResult::Back => return Ok(false),
+        PromptResult::Quit => {
+            print_cancelled(ui)?;
+            return Ok(true);
+        }
+    };
+    config.root_api_key = Some(root_api_key.clone());
+
+    let mut config_name = config_name;
+    run_user_management_menu(store, ui, &mut config_name, &mut config, &root_api_key).await
+}
+
+struct UserManagementContext {
+    config_name: Option<String>,
+    config: Config,
+}
+
+fn user_management_config_context(store: &ConfigStore) -> Result<Option<UserManagementContext>> {
+    let configs = store.list_configs()?;
+    if let Some(index) = active_config_index(&configs) {
+        let entry = &configs[index];
+        let config_name = if is_legacy_user_management_config_name(&entry.name) {
+            None
+        } else {
+            Some(entry.name.clone())
+        };
+        return Ok(Some(UserManagementContext {
+            config_name,
+            config: entry.config.clone(),
+        }));
+    }
+
+    if let Some(config) = store.load_active()? {
+        return Ok(Some(UserManagementContext {
+            config_name: None,
+            config,
+        }));
+    }
+
+    Ok(None)
+}
+
+fn prompt_user_management_config_name(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    current_name: Option<&str>,
+    config: &Config,
+) -> Result<PromptResult<String>> {
+    let default_name = match current_name {
+        Some(name) => name.to_string(),
+        None => allocate_config_name(store, ConfigKind::from_config(config))?,
+    };
+    let labels = user_management_config_name_choice_labels(current_name, &default_name);
+    match prompt_select(
+        ui,
+        section_user_management(),
+        copy(
+            Language::current(),
+            "Save managed config name",
+            "保存管理配置名称",
+        ),
+        &labels,
+        0,
+        &user_management_config_name_helper_lines(current_name),
+    )? {
+        PromptResult::Value(0) => prompt_unique_config_name(
+            ui,
+            section_user_management(),
+            store,
+            &default_name,
+            current_name,
+        ),
+        PromptResult::Value(1) => Ok(PromptResult::Value(default_name)),
+        PromptResult::Value(_) | PromptResult::Back => Ok(PromptResult::Back),
+        PromptResult::Quit => Ok(PromptResult::Quit),
+    }
+}
+
+fn ensure_add_config_save_name(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    name: &mut Option<String>,
+    generated_name: &str,
+) -> Result<PromptResult<String>> {
+    if let Some(name) = name.as_deref() {
+        return Ok(PromptResult::Value(name.to_string()));
+    }
+
+    match prompt_custom_or_generated_config_name(
+        store,
+        ui,
+        section_add(),
+        copy(
+            Language::current(),
+            "Save local config name",
+            "保存本地配置名称",
+        ),
+        generated_name,
+        &add_generated_config_name_helper_lines(),
+    )? {
+        PromptResult::Value(value) => {
+            *name = Some(value.clone());
+            Ok(PromptResult::Value(value))
+        }
+        PromptResult::Back => Ok(PromptResult::Back),
+        PromptResult::Quit => Ok(PromptResult::Quit),
+    }
+}
+
+fn prompt_custom_or_generated_config_name(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    section: &str,
+    prompt: &str,
+    generated_name: &str,
+    helper_lines: &[String],
+) -> Result<PromptResult<String>> {
+    let labels = local_config_name_choice_labels(generated_name);
+    match prompt_select(ui, section, prompt, &labels, 0, helper_lines)? {
+        PromptResult::Value(0) => {
+            prompt_unique_config_name(ui, section, store, generated_name, None)
+        }
+        PromptResult::Value(1) => Ok(PromptResult::Value(generated_name.to_string())),
+        PromptResult::Value(_) | PromptResult::Back => Ok(PromptResult::Back),
+        PromptResult::Quit => Ok(PromptResult::Quit),
+    }
+}
+
+fn prompt_unique_config_name(
+    ui: &mut LiveRegion,
+    section: &str,
+    store: &ConfigStore,
+    default: &str,
+    current_name: Option<&str>,
+) -> Result<PromptResult<String>> {
+    let mut error: Option<String> = None;
+    loop {
+        let mut helper_lines = unique_config_name_helper_lines();
+        if let Some(value) = error.as_ref() {
+            helper_lines.push(theme::error(value).to_string());
+        }
+        match prompt_text(
+            ui,
+            section,
+            copy(Language::current(), "Saved config name", "保存配置名称"),
+            Some(default),
+            Some(InputValueLabel::Default),
+            false,
+            false,
+            &helper_lines,
+        )? {
+            PromptResult::Value(value) => match match current_name {
+                Some(current_name) => validate_config_name_change(store, current_name, &value),
+                None => validate_new_config_name(store, &value),
+            } {
+                Ok(()) => return Ok(PromptResult::Value(value)),
+                Err(next_error) => error = Some(prompt_validation_error(next_error)),
+            },
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        }
+    }
+}
+
+pub(crate) fn validate_new_config_name(store: &ConfigStore, name: &str) -> Result<()> {
+    validate_config_name(name)?;
+    if is_legacy_user_management_config_name(name) {
+        return Err(Error::Config(reserved_user_management_config_name_error(
+            name,
+        )));
+    }
+    if config_name_exists(store, name)? {
+        return Err(Error::Config(config_name_exists_error(name)));
+    }
+    Ok(())
+}
+
+fn validate_config_name_change(
+    store: &ConfigStore,
+    original_name: &str,
+    candidate_name: &str,
+) -> Result<()> {
+    validate_config_name(candidate_name)?;
+    if candidate_name == original_name {
+        return Ok(());
+    }
+    validate_new_config_name(store, candidate_name)
+}
+
+fn config_name_exists(store: &ConfigStore, name: &str) -> Result<bool> {
+    let path = store.saved_config_path(name)?;
+    path.try_exists()
+        .map_err(|error| Error::Config(format!("Failed to inspect config '{name}': {error}")))
+}
+
+fn prompt_validation_error(error: Error) -> String {
+    match error {
+        Error::Config(message) => message,
+        other => other.to_string(),
+    }
+}
+
+fn prompt_user_management_server_url(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+) -> Result<PromptResult<UserManagementContext>> {
+    let default = current_server_url_default(store)?;
+    let mut error: Option<String> = None;
+    loop {
+        let mut helper_lines = user_management_server_url_helper_lines();
+        if let Some(value) = error.as_ref() {
+            helper_lines.push(theme::error(value).to_string());
+        }
+        match prompt_text(
+            ui,
+            section_user_management(),
+            copy(Language::current(), "Server URL", "服务器 URL"),
+            Some(&default),
+            Some(InputValueLabel::Default),
+            false,
+            false,
+            &helper_lines,
+        )? {
+            PromptResult::Value(value) => match user_management_config_from_server_url(&value) {
+                Ok(config) => {
+                    return Ok(PromptResult::Value(UserManagementContext {
+                        config_name: None,
+                        config,
+                    }));
+                }
+                Err(next_error) => error = Some(prompt_validation_error(next_error)),
+            },
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        }
+    }
+}
+
+fn user_management_config_from_server_url(value: &str) -> Result<Config> {
+    let url = normalize_custom_url(value);
+    if url.trim().is_empty() {
+        return Err(Error::Config("Server URL cannot be empty.".to_string()));
+    }
+    Ok(Config {
+        url: url.trim_end_matches('/').to_string(),
+        ..Config::default()
+    })
+}
+
+async fn run_user_management_menu(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    config_name: &mut Option<String>,
+    config: &mut Config,
+    root_api_key: &str,
+) -> Result<bool> {
+    let mut notice: Option<String> = None;
+
+    loop {
+        let client = root_admin_client(config, root_api_key);
+        ui.render(&status_live_lines(
+            section_user_management(),
+            copy(
+                Language::current(),
+                "Loading accounts...",
+                "正在加载账户...",
+            ),
+        ))?;
+        let accounts = list_root_accounts(&client).await?;
+
+        let mut labels = account_tree_labels(&accounts);
+        labels.push(add_account_label());
+        labels.push(back_label());
+        let helper_lines =
+            user_management_menu_helper_lines(config_name.as_deref(), config, notice.as_deref());
+        notice = None;
+
+        let account_index = match prompt_select(
+            ui,
+            section_user_management(),
+            copy(
+                Language::current(),
+                "Select account or action",
+                "选择账户或操作",
+            ),
+            &labels,
+            0,
+            &helper_lines,
+        )? {
+            PromptResult::Value(index) => index,
+            PromptResult::Back => return Ok(false),
+            PromptResult::Quit => {
+                print_cancelled(ui)?;
+                return Ok(true);
+            }
+        };
+
+        if account_index == accounts.len() {
+            match create_account_and_user(
+                ui,
+                section_user_management(),
+                config,
+                root_api_key,
+                &client,
+            )
+            .await?
+            {
+                PromptResult::Value(updated) => {
+                    notice = created_identity_notice(&updated);
+                }
+                PromptResult::Back => continue,
+                PromptResult::Quit => {
+                    print_cancelled(ui)?;
+                    return Ok(true);
+                }
+            }
+            continue;
+        }
+
+        if account_index == accounts.len() + 1 {
+            return Ok(false);
+        }
+
+        if run_account_management_menu(
+            store,
+            ui,
+            config_name,
+            config,
+            root_api_key,
+            &accounts[account_index],
+            &mut notice,
+        )
+        .await?
+        {
+            return Ok(true);
+        }
+    }
+}
+
+async fn run_account_management_menu(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    config_name: &mut Option<String>,
+    config: &mut Config,
+    root_api_key: &str,
+    account: &RootAccountSummary,
+    account_list_notice: &mut Option<String>,
+) -> Result<bool> {
+    let mut notice: Option<String> = None;
+
+    loop {
+        let client = root_admin_client(config, root_api_key);
+        ui.render(&status_live_lines(
+            section_user_management(),
+            copy(Language::current(), "Loading users...", "正在加载用户..."),
+        ))?;
+        let users = list_root_users(&client, &account.account_id).await?;
+
+        let mut labels = user_tree_labels(&account.account_id, &users);
+        labels.push(add_user_label(&account.account_id));
+        labels.push(delete_account_label(&account.account_id));
+        labels.push(back_label());
+        let helper_lines = account_management_menu_helper_lines(
+            config_name.as_deref(),
+            config,
+            &account.account_id,
+            notice.as_deref(),
+        );
+        notice = None;
+
+        let selected = match prompt_select(
+            ui,
+            section_user_management(),
+            &manage_account_prompt(&account.account_id),
+            &labels,
+            0,
+            &helper_lines,
+        )? {
+            PromptResult::Value(index) => index,
+            PromptResult::Back => return Ok(false),
+            PromptResult::Quit => {
+                print_cancelled(ui)?;
+                return Ok(true);
+            }
+        };
+
+        if selected < users.len() {
+            if run_user_action_menu(
+                store,
+                ui,
+                config_name,
+                config,
+                root_api_key,
+                &account.account_id,
+                &users[selected],
+                &mut notice,
+            )
+            .await?
+            {
+                return Ok(true);
+            }
+            continue;
+        }
+
+        let add_user_index = users.len();
+        let delete_account_index = users.len() + 1;
+        let back_index = users.len() + 2;
+
+        if selected == add_user_index {
+            match create_user_in_account(
+                ui,
+                section_user_management(),
+                config,
+                root_api_key,
+                &client,
+                &account.account_id,
+                &users,
+            )
+            .await?
+            {
+                PromptResult::Value(updated) => {
+                    notice = created_identity_notice(&updated);
+                }
+                PromptResult::Back => continue,
+                PromptResult::Quit => {
+                    print_cancelled(ui)?;
+                    return Ok(true);
+                }
+            }
+            continue;
+        }
+
+        if selected == delete_account_index {
+            match confirm(
+                ui,
+                section_user_management(),
+                &delete_account_prompt(&account.account_id),
+                false,
+            )? {
+                PromptResult::Value(true) => {
+                    ui.render(&status_live_lines(
+                        section_user_management(),
+                        copy(
+                            Language::current(),
+                            "Deleting account...",
+                            "正在删除账户...",
+                        ),
+                    ))?;
+                    delete_root_account(&client, &account.account_id).await?;
+                    if clear_config_account_selection(config, root_api_key, &account.account_id) {
+                        save_user_management_local_config(store, config_name.as_deref(), config)?;
+                    }
+                    *account_list_notice = Some(deleted_account_notice(&account.account_id));
+                    return Ok(false);
+                }
+                PromptResult::Value(false) | PromptResult::Back => continue,
+                PromptResult::Quit => {
+                    print_cancelled(ui)?;
+                    return Ok(true);
+                }
+            }
+        }
+
+        if selected == back_index {
+            return Ok(false);
+        }
+    }
+}
+
+async fn run_user_action_menu(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    config_name: &mut Option<String>,
+    config: &mut Config,
+    root_api_key: &str,
+    account_id: &str,
+    user: &RootUserSummary,
+    account_notice: &mut Option<String>,
+) -> Result<bool> {
+    #[derive(Clone, Copy)]
+    enum UserAction {
+        UseExisting,
+        RegenerateAndUse,
+        Delete,
+        Back,
+    }
+
+    loop {
+        let mut actions = Vec::new();
+        let mut labels = Vec::new();
+        if user.api_key.as_deref().and_then(non_empty_string).is_some() {
+            actions.push(UserAction::UseExisting);
+            labels.push(use_user_label());
+        }
+        actions.push(UserAction::RegenerateAndUse);
+        labels.push(regenerate_and_use_user_label());
+        actions.push(UserAction::Delete);
+        labels.push(delete_user_label(account_id, &user.user_id));
+        actions.push(UserAction::Back);
+        labels.push(back_label());
+
+        let helper_lines =
+            user_action_menu_helper_lines(config_name.as_deref(), config, account_id, user);
+        let selected = match prompt_select(
+            ui,
+            section_user_management(),
+            &manage_user_prompt(account_id, &user.user_id),
+            &labels,
+            0,
+            &helper_lines,
+        )? {
+            PromptResult::Value(index) => actions[index],
+            PromptResult::Back => return Ok(false),
+            PromptResult::Quit => {
+                print_cancelled(ui)?;
+                return Ok(true);
+            }
+        };
+
+        let (user_key, save_action) = match selected {
+            UserAction::UseExisting => (
+                user.api_key
+                    .as_deref()
+                    .and_then(non_empty_string)
+                    .ok_or_else(|| {
+                        Error::Config(
+                            "Server did not return a user API key for the selected user."
+                                .to_string(),
+                        )
+                    })?,
+                UserKeySaveAction::Selected,
+            ),
+            UserAction::RegenerateAndUse => {
+                let client = root_admin_client(config, root_api_key);
+                ui.render(&status_live_lines(
+                    section_user_management(),
+                    copy(
+                        Language::current(),
+                        "Generating user API key...",
+                        "正在生成用户 API Key...",
+                    ),
+                ))?;
+                let response = regenerate_user_key(&client, account_id, &user.user_id).await?;
+                let user_key = user_key_from_response(&response).ok_or_else(|| {
+                    Error::Config(
+                        "Server did not return a user API key for the selected user.".to_string(),
+                    )
+                })?;
+                (user_key, UserKeySaveAction::Regenerated)
+            }
+            UserAction::Delete => match confirm(
+                ui,
+                section_user_management(),
+                &delete_user_prompt(account_id, &user.user_id),
+                false,
+            )? {
+                PromptResult::Value(true) => {
+                    let client = root_admin_client(config, root_api_key);
+                    ui.render(&status_live_lines(
+                        section_user_management(),
+                        copy(Language::current(), "Deleting user...", "正在删除用户..."),
+                    ))?;
+                    delete_root_user(&client, account_id, &user.user_id).await?;
+                    if clear_config_user_selection(config, root_api_key, account_id, &user.user_id)
+                    {
+                        save_user_management_local_config(store, config_name.as_deref(), config)?;
+                    }
+                    *account_notice = Some(deleted_user_notice(account_id, &user.user_id));
+                    return Ok(false);
+                }
+                PromptResult::Value(false) | PromptResult::Back => continue,
+                PromptResult::Quit => {
+                    print_cancelled(ui)?;
+                    return Ok(true);
+                }
+            },
+            UserAction::Back => return Ok(false),
+        };
+
+        let updated =
+            config_with_selected_user(config, root_api_key, account_id, &user.user_id, &user_key);
+        let saved_name = match save_selected_user_to_config(
+            store,
+            ui,
+            section_user_management(),
+            config_name,
+            &updated,
+        )
+        .await?
+        {
+            PromptResult::Value(name) => name,
+            PromptResult::Back => continue,
+            PromptResult::Quit => {
+                print_cancelled(ui)?;
+                return Ok(true);
+            }
+        };
+        *account_notice = selected_user_notice(&saved_name, &updated, save_action);
+        *config = updated;
+        return Ok(false);
+    }
+}
+
+async fn save_selected_user_to_config(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    section: &str,
+    config_name: &mut Option<String>,
+    config: &Config,
+) -> Result<PromptResult<String>> {
+    ui.render(&status_live_lines(
+        section,
+        copy(
+            Language::current(),
+            "Validating selected user...",
+            "正在验证所选用户...",
+        ),
+    ))?;
+    validate_config(config).await?;
+    let config_name = match ensure_user_management_config_name(store, ui, config_name, config)? {
+        PromptResult::Value(name) => name,
+        PromptResult::Back => return Ok(PromptResult::Back),
+        PromptResult::Quit => return Ok(PromptResult::Quit),
+    };
+    ui.render(&status_live_lines(
+        section,
+        copy(
+            Language::current(),
+            "Saving user selection...",
+            "正在保存用户选择...",
+        ),
+    ))?;
+    store.save_and_activate(&config_name, config)?;
+    Ok(PromptResult::Value(config_name))
+}
+
+fn ensure_user_management_config_name(
+    store: &ConfigStore,
+    ui: &mut LiveRegion,
+    config_name: &mut Option<String>,
+    config: &Config,
+) -> Result<PromptResult<String>> {
+    match prompt_user_management_config_name(store, ui, config_name.as_deref(), config)? {
+        PromptResult::Value(name) => {
+            *config_name = Some(name.clone());
+            Ok(PromptResult::Value(name))
+        }
+        PromptResult::Back => Ok(PromptResult::Back),
+        PromptResult::Quit => Ok(PromptResult::Quit),
+    }
+}
+
+fn save_user_management_local_config(
+    store: &ConfigStore,
+    config_name: Option<&str>,
+    config: &Config,
+) -> Result<()> {
+    if let Some(name) = config_name {
+        store.save_and_activate(name, config)
+    } else {
+        store.save_active_config(config)
+    }
+}
+
+fn clear_config_account_selection(
+    config: &mut Config,
+    root_api_key: &str,
+    account_id: &str,
+) -> bool {
+    if config.account.as_deref() != Some(account_id) {
+        return false;
+    }
+    clear_config_user_fields(config, root_api_key);
+    true
+}
+
+fn clear_config_user_selection(
+    config: &mut Config,
+    root_api_key: &str,
+    account_id: &str,
+    user_id: &str,
+) -> bool {
+    if config.account.as_deref() != Some(account_id) || config.user.as_deref() != Some(user_id) {
+        return false;
+    }
+    clear_config_user_fields(config, root_api_key);
+    true
+}
+
+fn clear_config_user_fields(config: &mut Config, root_api_key: &str) {
+    config.root_api_key = Some(root_api_key.to_string());
+    config.api_key = None;
+    config.account = None;
+    config.user = None;
+}
+
+fn user_management_menu_helper_lines(
+    config_name: Option<&str>,
+    config: &Config,
+    notice: Option<&str>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    push_notice_helper_line(&mut lines, notice);
+    push_config_context_helper_lines(&mut lines, config_name, config);
+    lines.push(
+        theme::muted(copy(
+            Language::current(),
+            "Select an account to manage its users.",
+            "选择账户以管理其用户。",
+        ))
+        .to_string(),
+    );
+    lines
+}
+
+fn account_management_menu_helper_lines(
+    config_name: Option<&str>,
+    config: &Config,
+    account_id: &str,
+    notice: Option<&str>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    push_notice_helper_line(&mut lines, notice);
+    push_config_context_helper_lines(&mut lines, config_name, config);
+    lines.push(format!(
+        "{} {}",
+        theme::muted(copy(Language::current(), "Account:", "账户：")),
+        theme::value(account_id).bold()
+    ));
+    lines
+}
+
+fn user_action_menu_helper_lines(
+    config_name: Option<&str>,
+    config: &Config,
+    account_id: &str,
+    user: &RootUserSummary,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    push_config_context_helper_lines(&mut lines, config_name, config);
+    lines.push(format!(
+        "{} {}",
+        theme::muted(copy(Language::current(), "User:", "用户：")),
+        theme::value(format!("{account_id}/{}", user.user_id)).bold()
+    ));
+    if let Some(prefix) = user.key_prefix.as_deref().and_then(non_empty_string) {
+        lines.push(format!(
+            "{} {}",
+            theme::muted(copy(
+                Language::current(),
+                "Current key prefix:",
+                "当前 Key 前缀："
+            )),
+            theme::value(prefix).bold()
+        ));
+    }
+    lines.push(
+        theme::warning(copy(
+            Language::current(),
+            "Regenerating a user key invalidates the old key immediately.",
+            "重新生成用户 Key 会立即使旧 Key 失效。",
+        ))
+        .to_string(),
+    );
+    lines
+}
+
+fn push_notice_helper_line(lines: &mut Vec<String>, notice: Option<&str>) {
+    if let Some(notice) = notice {
+        lines.push(format!(
+            "{} {}",
+            theme::success("✓"),
+            theme::success(notice).bold()
+        ));
+    }
+}
+
+fn push_config_context_helper_lines(
+    lines: &mut Vec<String>,
+    config_name: Option<&str>,
+    config: &Config,
+) {
+    let config_name = config_name
+        .map(ToString::to_string)
+        .unwrap_or_else(|| unnamed_active_config_label().to_string());
+    lines.push(format!(
+        "{} {}",
+        theme::muted(copy(Language::current(), "Config:", "配置：")),
+        theme::value(config_name).bold()
+    ));
+    lines.push(format!(
+        "{} {}",
+        theme::muted(copy(Language::current(), "Server:", "服务端：")),
+        theme::value(config.url.as_str()).bold()
+    ));
+    if let (Some(account), Some(user)) = (
+        config.account.as_deref().and_then(non_empty_str),
+        config.user.as_deref().and_then(non_empty_str),
+    ) {
+        lines.push(format!(
+            "{} {}",
+            theme::muted(copy(Language::current(), "Selected user:", "已选用户：")),
+            theme::value(format!("{account}/{user}")).bold()
+        ));
+    }
+}
+
+fn unnamed_active_config_label() -> &'static str {
+    copy(
+        Language::current(),
+        "unnamed active config",
+        "未命名当前配置",
+    )
+}
+
+fn created_identity_notice(config: &Config) -> Option<String> {
+    let account = config.account.as_deref().and_then(non_empty_str)?;
+    let user = config.user.as_deref().and_then(non_empty_str)?;
+    Some(match Language::current() {
+        Language::En => {
+            format!("Created {account}/{user}. Choose that user and use it to save CLI config.")
+        }
+        Language::ZhCn => {
+            format!("已创建 {account}/{user}。选择该用户并使用它，才会保存 CLI 配置。")
+        }
+    })
+}
+
+#[derive(Clone, Copy)]
+enum UserKeySaveAction {
+    Selected,
+    Regenerated,
+}
+
+fn selected_user_notice(
+    config_name: &str,
+    config: &Config,
+    action: UserKeySaveAction,
+) -> Option<String> {
+    let account = config.account.as_deref().and_then(non_empty_str)?;
+    let user = config.user.as_deref().and_then(non_empty_str)?;
+    let target = user_management_save_target(config_name);
+    Some(match (Language::current(), action) {
+        (Language::En, UserKeySaveAction::Selected) => {
+            format!("Selected {account}/{user}; saved user key to {target}.")
+        }
+        (Language::En, UserKeySaveAction::Regenerated) => {
+            format!("Regenerated key for {account}/{user}; saved new key to {target}.")
+        }
+        (Language::ZhCn, UserKeySaveAction::Selected) => {
+            format!("已选择 {account}/{user}；用户 Key 已保存到 {target}。")
+        }
+        (Language::ZhCn, UserKeySaveAction::Regenerated) => {
+            format!("已为 {account}/{user} 重新生成 Key；新 Key 已保存到 {target}。")
+        }
+    })
+}
+
+fn user_management_save_target(config_name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("ovcli.conf and ovcli.conf.{config_name}"),
+        Language::ZhCn => format!("ovcli.conf 和 ovcli.conf.{config_name}"),
+    }
+}
+
+fn deleted_account_notice(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Deleted account {account_id}/."),
+        Language::ZhCn => format!("已删除账户 {account_id}/。"),
+    }
+}
+
+fn deleted_user_notice(account_id: &str, user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Deleted user {account_id}/{user_id}."),
+        Language::ZhCn => format!("已删除用户 {account_id}/{user_id}。"),
+    }
+}
+
+fn add_account_label() -> String {
+    match Language::current() {
+        Language::En => "+ Add account",
+        Language::ZhCn => "+ 添加账户",
+    }
+    .to_string()
+}
+
+fn add_user_label(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("+ Add user in {account_id}/"),
+        Language::ZhCn => format!("+ 在 {account_id}/ 下添加用户"),
+    }
+}
+
+fn local_config_name_choice_labels(generated_name: &str) -> Vec<String> {
+    match Language::current() {
+        Language::En => vec![
+            "Set custom local name".to_string(),
+            format!("Use generated name ({generated_name})"),
+            "Back".to_string(),
+        ],
+        Language::ZhCn => vec![
+            "设置自定义本地名称".to_string(),
+            format!("使用生成名称（{generated_name}）"),
+            "返回".to_string(),
+        ],
+    }
+}
+
+fn user_management_config_name_choice_labels(
+    current_name: Option<&str>,
+    default_name: &str,
+) -> Vec<String> {
+    if let Some(name) = current_name {
+        return match Language::current() {
+            Language::En => vec![
+                "Set custom local name".to_string(),
+                format!("Use current name ({name})"),
+                "Back".to_string(),
+            ],
+            Language::ZhCn => vec![
+                "设置自定义本地名称".to_string(),
+                format!("使用当前名称（{name}）"),
+                "返回".to_string(),
+            ],
+        };
+    }
+    local_config_name_choice_labels(default_name)
+}
+
+fn user_management_config_name_helper_lines(current_name: Option<&str>) -> Vec<String> {
+    let mut lines = Vec::new();
+    if current_name.is_none() {
+        lines.push(
+            theme::warning(copy(
+                Language::current(),
+                "The active config needs a saved profile name.",
+                "当前配置需要一个保存配置名称。",
+            ))
+            .to_string(),
+        );
+    }
+    lines.push(
+        theme::muted(copy(
+            Language::current(),
+            "User Management saves both ovcli.conf and ovcli.conf.<name>; 'active' is reserved.",
+            "用户管理会同时保存 ovcli.conf 和 ovcli.conf.<name>；'active' 已保留。",
+        ))
+        .to_string(),
+    );
+    lines
+}
+
+fn unique_config_name_helper_lines() -> Vec<String> {
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "Press Enter to use the default name, or type a custom one.",
+            "按 Enter 使用默认名称，或输入自定义名称。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn add_generated_config_name_helper_lines() -> Vec<String> {
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "Choose how to name this local CLI config.",
+            "选择这个本地 CLI 配置的名称。",
+        ))
+        .to_string(),
+        theme::muted(copy(
+            Language::current(),
+            "Saved as ovcli.conf.<name>; the active config is ovcli.conf.",
+            "保存为 ovcli.conf.<name>；当前配置为 ovcli.conf。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn config_name_exists_error(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Config '{name}' already exists. Enter another name."),
+        Language::ZhCn => format!("配置 '{name}' 已存在。请输入另一个名称。"),
+    }
+}
+
+fn reserved_user_management_config_name_error(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Config name '{name}' is reserved. Enter another name."),
+        Language::ZhCn => format!("配置名称 '{name}' 已保留。请输入另一个名称。"),
+    }
+}
+
+fn is_legacy_user_management_config_name(name: &str) -> bool {
+    name == "active"
+}
+
+fn delete_account_label(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("- Delete {account_id}/"),
+        Language::ZhCn => format!("- 删除 {account_id}/"),
+    }
+}
+
+fn delete_user_label(account_id: &str, user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("- Delete {account_id}/{user_id}"),
+        Language::ZhCn => format!("- 删除 {account_id}/{user_id}"),
+    }
+}
+
+fn use_user_label() -> String {
+    match Language::current() {
+        Language::En => "Use this user",
+        Language::ZhCn => "使用该用户",
+    }
+    .to_string()
+}
+
+fn regenerate_and_use_user_label() -> String {
+    match Language::current() {
+        Language::En => "Regenerate key and use this user",
+        Language::ZhCn => "重新生成 Key 并使用该用户",
+    }
+    .to_string()
+}
+
+fn back_label() -> String {
+    match Language::current() {
+        Language::En => "Back",
+        Language::ZhCn => "返回",
+    }
+    .to_string()
+}
+
+fn manage_account_prompt(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Manage {account_id}/"),
+        Language::ZhCn => format!("管理 {account_id}/"),
+    }
+}
+
+fn manage_user_prompt(account_id: &str, user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Manage {account_id}/{user_id}"),
+        Language::ZhCn => format!("管理 {account_id}/{user_id}"),
+    }
+}
+
+fn delete_account_prompt(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Delete account {account_id}/ and all of its users?"),
+        Language::ZhCn => format!("删除账户 {account_id}/ 及其所有用户？"),
+    }
+}
+
+fn delete_user_prompt(account_id: &str, user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Delete user {account_id}/{user_id}?"),
+        Language::ZhCn => format!("删除用户 {account_id}/{user_id}？"),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RootAccountSummary {
+    account_id: String,
+    user_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RootUserSummary {
+    user_id: String,
+    role: String,
+    api_key: Option<String>,
+    key_prefix: Option<String>,
+}
+
+async fn select_user_with_root_key(
+    ui: &mut LiveRegion,
+    section: &str,
+    config: &Config,
+    root_api_key: &str,
+) -> Result<PromptResult<Config>> {
+    let client = root_admin_client(config, root_api_key);
+
+    loop {
+        ui.render(&status_live_lines(
+            section,
+            copy(
+                Language::current(),
+                "Loading accounts...",
+                "正在加载账户...",
+            ),
+        ))?;
+        let accounts = list_root_accounts(&client).await?;
+
+        if accounts.is_empty() {
+            match confirm(
+                ui,
+                section,
+                copy(
+                    Language::current(),
+                    "No accounts found. Create an account and first user?",
+                    "未找到任何账户。是否创建账户和首个用户？",
+                ),
+                true,
+            )? {
+                PromptResult::Value(true) => {
+                    return create_account_and_user(ui, section, config, root_api_key, &client)
+                        .await;
+                }
+                PromptResult::Value(false) | PromptResult::Back => return Ok(PromptResult::Back),
+                PromptResult::Quit => return Ok(PromptResult::Quit),
+            }
+        }
+
+        let labels = root_key_account_selection_labels(&accounts);
+        let account_index = match prompt_select(
+            ui,
+            section,
+            copy(Language::current(), "Choose account", "选择账户"),
+            &labels,
+            0,
+            &account_select_helper_lines(),
+        )? {
+            PromptResult::Value(index) => index,
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        };
+
+        if account_index == accounts.len() {
+            return create_account_and_user(ui, section, config, root_api_key, &client).await;
+        }
+
+        let account = accounts[account_index].clone();
+        match select_user_in_account(ui, section, config, root_api_key, &client, &account).await? {
+            PromptResult::Value(config) => return Ok(PromptResult::Value(config)),
+            PromptResult::Back => continue,
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        }
+    }
+}
+
+async fn select_user_in_account(
+    ui: &mut LiveRegion,
+    section: &str,
+    config: &Config,
+    root_api_key: &str,
+    client: &BaseClient,
+    account: &RootAccountSummary,
+) -> Result<PromptResult<Config>> {
+    loop {
+        ui.render(&status_live_lines(
+            section,
+            copy(Language::current(), "Loading users...", "正在加载用户..."),
+        ))?;
+        let users = list_root_users(client, &account.account_id).await?;
+
+        if users.is_empty() {
+            match confirm(
+                ui,
+                section,
+                &empty_account_create_user_prompt(&account.account_id),
+                true,
+            )? {
+                PromptResult::Value(true) => {
+                    return create_user_in_account(
+                        ui,
+                        section,
+                        config,
+                        root_api_key,
+                        client,
+                        &account.account_id,
+                        &users,
+                    )
+                    .await;
+                }
+                PromptResult::Value(false) | PromptResult::Back => return Ok(PromptResult::Back),
+                PromptResult::Quit => return Ok(PromptResult::Quit),
+            }
+        }
+
+        let labels = root_key_user_selection_labels(&account.account_id, &users);
+        let user_index = match prompt_select(
+            ui,
+            section,
+            &choose_user_prompt(&account.account_id),
+            &labels,
+            0,
+            &user_select_helper_lines(),
+        )? {
+            PromptResult::Value(index) => index,
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        };
+
+        if user_index == users.len() {
+            return create_user_in_account(
+                ui,
+                section,
+                config,
+                root_api_key,
+                client,
+                &account.account_id,
+                &users,
+            )
+            .await;
+        }
+
+        let user = users[user_index].clone();
+        let user_key = match user.api_key.as_deref().and_then(non_empty_string) {
+            Some(key) => key,
+            None => {
+                let mut helper_lines = regenerate_user_key_helper_lines();
+                if let Some(prefix) = user.key_prefix.as_deref().and_then(non_empty_string) {
+                    helper_lines.push(format!(
+                        "{} {}",
+                        theme::muted(copy(
+                            Language::current(),
+                            "Current key prefix:",
+                            "当前 Key 前缀："
+                        )),
+                        theme::value(prefix).bold()
+                    ));
+                }
+                match prompt_select(
+                    ui,
+                    section,
+                    &regenerate_user_key_prompt(&account.account_id, &user.user_id),
+                    &regenerate_user_key_labels(),
+                    1,
+                    &helper_lines,
+                )? {
+                    PromptResult::Value(0) => {
+                        ui.render(&status_live_lines(
+                            section,
+                            copy(
+                                Language::current(),
+                                "Generating user API key...",
+                                "正在生成用户 API Key...",
+                            ),
+                        ))?;
+                        let response =
+                            regenerate_user_key(client, &account.account_id, &user.user_id).await?;
+                        user_key_from_response(&response).ok_or_else(|| {
+                            Error::Config(
+                                "Server did not return a user API key for the selected user."
+                                    .to_string(),
+                            )
+                        })?
+                    }
+                    PromptResult::Value(_) | PromptResult::Back => continue,
+                    PromptResult::Quit => return Ok(PromptResult::Quit),
+                }
+            }
+        };
+
+        return Ok(PromptResult::Value(config_with_selected_user(
+            config,
+            root_api_key,
+            &account.account_id,
+            &user.user_id,
+            &user_key,
+        )));
+    }
+}
+
+async fn create_account_and_user(
+    ui: &mut LiveRegion,
+    section: &str,
+    config: &Config,
+    root_api_key: &str,
+    client: &BaseClient,
+) -> Result<PromptResult<Config>> {
+    let account_id = match prompt_identity_value(
+        ui,
+        section,
+        copy(Language::current(), "New account ID", "新账户 ID"),
+        IdentityField::Account,
+        IdentityMode::RootKey,
+    )? {
+        PromptResult::Value(value) => value,
+        PromptResult::Back => return Ok(PromptResult::Back),
+        PromptResult::Quit => return Ok(PromptResult::Quit),
+    };
+    let user_id = match prompt_identity_value(
+        ui,
+        section,
+        copy(
+            Language::current(),
+            "First admin user ID",
+            "首个管理员用户 ID",
+        ),
+        IdentityField::User,
+        IdentityMode::RootKey,
+    )? {
+        PromptResult::Value(value) => value,
+        PromptResult::Back => return Ok(PromptResult::Back),
+        PromptResult::Quit => return Ok(PromptResult::Quit),
+    };
+
+    ui.render(&status_live_lines(
+        section,
+        copy(
+            Language::current(),
+            "Creating account and user...",
+            "正在创建账户和用户...",
+        ),
+    ))?;
+    let response = create_root_account(client, &account_id, &user_id).await?;
+    let user_key = user_key_from_response(&response).ok_or_else(|| {
+        Error::Config("Server did not return a user API key for the new account.".to_string())
+    })?;
+    Ok(PromptResult::Value(config_with_selected_user(
+        config,
+        root_api_key,
+        &account_id,
+        &user_id,
+        &user_key,
+    )))
+}
+
+async fn create_user_in_account(
+    ui: &mut LiveRegion,
+    section: &str,
+    config: &Config,
+    root_api_key: &str,
+    client: &BaseClient,
+    account_id: &str,
+    existing_users: &[RootUserSummary],
+) -> Result<PromptResult<Config>> {
+    let user_id = match prompt_new_user_id(
+        ui,
+        section,
+        copy(Language::current(), "New user ID", "新用户 ID"),
+        existing_users,
+    )? {
+        PromptResult::Value(value) => value,
+        PromptResult::Back => return Ok(PromptResult::Back),
+        PromptResult::Quit => return Ok(PromptResult::Quit),
+    };
+
+    ui.render(&status_live_lines(
+        section,
+        copy(Language::current(), "Creating user...", "正在创建用户..."),
+    ))?;
+    let response = create_root_user(client, account_id, &user_id).await?;
+    let user_key = user_key_from_response(&response).ok_or_else(|| {
+        Error::Config("Server did not return a user API key for the new user.".to_string())
+    })?;
+    Ok(PromptResult::Value(config_with_selected_user(
+        config,
+        root_api_key,
+        account_id,
+        &user_id,
+        &user_key,
+    )))
+}
+
+fn root_admin_client(config: &Config, root_api_key: &str) -> BaseClient {
+    BaseClient::new(
+        &config.url,
+        Some(root_api_key.to_string()),
+        None,
+        None,
+        None,
+        config.timeout.clamp(1.0, 60.0),
+        config.profile,
+        config.extra_headers.clone(),
+    )
+}
+
+async fn list_root_accounts(client: &BaseClient) -> Result<Vec<RootAccountSummary>> {
+    let value: Value = client.get("/api/v1/admin/accounts", &[]).await?;
+    Ok(root_accounts_from_value(&value))
+}
+
+async fn list_root_users(client: &BaseClient, account_id: &str) -> Result<Vec<RootUserSummary>> {
+    let path = format!("/api/v1/admin/accounts/{account_id}/users");
+    let value: Value = client
+        .get(&path, &[("limit".to_string(), "1000".to_string())])
+        .await?;
+    Ok(root_users_from_value(&value))
+}
+
+async fn create_root_account(
+    client: &BaseClient,
+    account_id: &str,
+    admin_user_id: &str,
+) -> Result<Value> {
+    client
+        .post(
+            "/api/v1/admin/accounts",
+            &serde_json::json!({
+                "account_id": account_id,
+                "admin_user_id": admin_user_id,
+            }),
+        )
+        .await
+}
+
+async fn create_root_user(client: &BaseClient, account_id: &str, user_id: &str) -> Result<Value> {
+    let path = format!("/api/v1/admin/accounts/{account_id}/users");
+    client
+        .post(
+            &path,
+            &serde_json::json!({
+                "user_id": user_id,
+                "role": "user",
+            }),
+        )
+        .await
+}
+
+async fn delete_root_account(client: &BaseClient, account_id: &str) -> Result<()> {
+    let path = format!("/api/v1/admin/accounts/{account_id}");
+    let _: Value = client.delete(&path, &[]).await?;
+    Ok(())
+}
+
+async fn delete_root_user(client: &BaseClient, account_id: &str, user_id: &str) -> Result<()> {
+    let path = format!("/api/v1/admin/accounts/{account_id}/users/{user_id}");
+    let _: Value = client.delete(&path, &[]).await?;
+    Ok(())
+}
+
+async fn regenerate_user_key(
+    client: &BaseClient,
+    account_id: &str,
+    user_id: &str,
+) -> Result<Value> {
+    let path = format!("/api/v1/admin/accounts/{account_id}/users/{user_id}/key");
+    client.post(&path, &serde_json::json!({})).await
+}
+
+fn root_accounts_from_value(value: &Value) -> Vec<RootAccountSummary> {
+    let mut accounts = value
+        .as_array()
+        .into_iter()
+        .flat_map(|items| items.iter())
+        .filter_map(|item| {
+            let account_id = item.get("account_id")?.as_str()?.trim();
+            if account_id.is_empty() {
+                return None;
+            }
+            Some(RootAccountSummary {
+                account_id: account_id.to_string(),
+                user_count: item.get("user_count").and_then(Value::as_u64).unwrap_or(0),
+            })
+        })
+        .collect::<Vec<_>>();
+    accounts.sort_by(|left, right| left.account_id.cmp(&right.account_id));
+    accounts
+}
+
+fn root_users_from_value(value: &Value) -> Vec<RootUserSummary> {
+    let mut users = value
+        .as_array()
+        .into_iter()
+        .flat_map(|items| items.iter())
+        .filter_map(|item| {
+            let user_id = item.get("user_id")?.as_str()?.trim();
+            if user_id.is_empty() {
+                return None;
+            }
+            Some(RootUserSummary {
+                user_id: user_id.to_string(),
+                role: item
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("user")
+                    .to_string(),
+                api_key: item
+                    .get("api_key")
+                    .and_then(Value::as_str)
+                    .and_then(non_empty_string),
+                key_prefix: item
+                    .get("key_prefix")
+                    .and_then(Value::as_str)
+                    .and_then(non_empty_string),
+            })
+        })
+        .collect::<Vec<_>>();
+    users.sort_by(|left, right| left.user_id.cmp(&right.user_id));
+    users
+}
+
+fn user_key_from_response(value: &Value) -> Option<String> {
+    ["user_key", "api_key"]
+        .iter()
+        .find_map(|field| {
+            value
+                .get(field)
+                .and_then(Value::as_str)
+                .and_then(non_empty_string)
+        })
+        .or_else(|| value.get("result").and_then(user_key_from_response))
+}
+
+fn config_with_selected_user(
+    config: &Config,
+    root_api_key: &str,
+    account_id: &str,
+    user_id: &str,
+    user_key: &str,
+) -> Config {
+    let mut updated = config.clone();
+    updated.root_api_key = Some(root_api_key.to_string());
+    updated.api_key = Some(user_key.to_string());
+    updated.account = Some(account_id.to_string());
+    updated.user = Some(user_id.to_string());
+    updated
+}
+
+fn account_tree_labels(accounts: &[RootAccountSummary]) -> Vec<String> {
+    accounts
+        .iter()
+        .map(|account| {
+            format!(
+                "{}/  {}",
+                account.account_id,
+                user_count_label(account.user_count)
+            )
+        })
+        .collect()
+}
+
+fn user_tree_labels(account_id: &str, users: &[RootUserSummary]) -> Vec<String> {
+    users
+        .iter()
+        .map(|user| format!("{account_id}/{}  {}", user.user_id, user.role))
+        .collect()
+}
+
+fn root_key_account_selection_labels(accounts: &[RootAccountSummary]) -> Vec<String> {
+    let mut labels = account_tree_labels(accounts);
+    labels.push(create_account_label());
+    labels
+}
+
+fn root_key_user_selection_labels(account_id: &str, users: &[RootUserSummary]) -> Vec<String> {
+    let mut labels = user_tree_labels(account_id, users);
+    labels.push(create_user_label(account_id));
+    labels
+}
+
+fn user_count_label(count: u64) -> String {
+    match (Language::current(), count) {
+        (Language::En, 1) => "1 user".to_string(),
+        (Language::En, _) => format!("{count} users"),
+        (Language::ZhCn, _) => format!("{count} 个用户"),
+    }
+}
+
+fn create_account_label() -> String {
+    match Language::current() {
+        Language::En => "+ Create new account",
+        Language::ZhCn => "+ 创建新账户",
+    }
+    .to_string()
+}
+
+fn create_user_label(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("+ Create new user in {account_id}/"),
+        Language::ZhCn => format!("+ 在 {account_id}/ 下创建新用户"),
+    }
+}
+
+fn root_api_key_helper_lines(server_url: &str) -> Vec<String> {
+    vec![
+        format!(
+            "{} {}",
+            theme::muted(copy(Language::current(), "Server URL:", "服务器 URL：")),
+            theme::value(server_url).bold()
+        ),
+        theme::muted(copy(
+            Language::current(),
+            "Used only to list or create accounts/users and store a normal user key.",
+            "仅用于列出或创建账户/用户，并保存普通用户 Key。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn user_management_server_url_helper_lines() -> Vec<String> {
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "User Management only needs the server URL and a Root API key.",
+            "用户管理只需要服务器 URL 和 Root API Key。",
+        ))
+        .to_string(),
+        theme::muted(copy(
+            Language::current(),
+            "Press Enter to use the local server default.",
+            "按 Enter 使用本地服务默认地址。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn account_select_helper_lines() -> Vec<String> {
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "Accounts are shown like directories.",
+            "账户以类似目录的方式展示。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn user_select_helper_lines() -> Vec<String> {
+    vec![
+        theme::muted(copy(
+            Language::current(),
+            "Pick the user normal commands should run as.",
+            "选择常规命令要使用的用户身份。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn regenerate_user_key_labels() -> [&'static str; 2] {
+    match Language::current() {
+        Language::En => ["Regenerate and use this user", "Back"],
+        Language::ZhCn => ["重新生成并使用该用户", "返回"],
+    }
+}
+
+fn regenerate_user_key_helper_lines() -> Vec<String> {
+    vec![
+        theme::warning(copy(
+            Language::current(),
+            "This server does not expose the existing user key. Regenerating invalidates the old key immediately.",
+            "服务端未返回现有用户 Key。重新生成会立即使旧 Key 失效。",
+        ))
+        .to_string(),
+    ]
+}
+
+fn choose_user_prompt(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Choose user in {account_id}/"),
+        Language::ZhCn => format!("选择 {account_id}/ 下的用户"),
+    }
+}
+
+fn empty_account_create_user_prompt(account_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("No users in {account_id}/. Create one?"),
+        Language::ZhCn => format!("{account_id}/ 下没有用户。是否创建？"),
+    }
+}
+
+fn regenerate_user_key_prompt(account_id: &str, user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Use {account_id}/{user_id} by generating a new user key?"),
+        Language::ZhCn => format!("为 {account_id}/{user_id} 生成新用户 Key 并使用？"),
+    }
+}
+
 struct ValidatedConfig {
     config: Config,
     api_key_role: Option<ApiKeyRole>,
@@ -2819,6 +5003,7 @@ async fn validate_root_api_key_role(
 }
 
 fn save_config(store: &ConfigStore, name: &str, config: &Config, activate: bool) -> Result<()> {
+    validate_new_config_name(store, name)?;
     if activate {
         store.save_and_activate(name, config)?;
         print_saved(store, name, SaveOutcome::Activated, config)
@@ -2933,7 +5118,7 @@ fn least_privilege_user_key_notice() -> String {
             theme::body(", run "),
             theme::command("ov config").bold(),
             theme::body(" -> "),
-            theme::strong("Edit config"),
+            theme::strong("Edit Config"),
             theme::body(" -> "),
             theme::strong("Set normal user API key"),
             theme::body("."),
@@ -2943,7 +5128,7 @@ fn least_privilege_user_key_notice() -> String {
             theme::body("为遵循最小权限原则，请运行 "),
             theme::command("ov config").bold(),
             theme::body(" -> "),
-            theme::strong("Edit config"),
+            theme::strong("Edit Config"),
             theme::body(" -> "),
             theme::strong("Set normal user API key"),
             theme::body("。"),
@@ -3061,6 +5246,7 @@ fn prompt_add_config_name(
     ui: &mut LiveRegion,
     section: &str,
     prompt: &str,
+    store: &ConfigStore,
 ) -> Result<PromptResult<Option<String>>> {
     let mut error: Option<String> = None;
     loop {
@@ -3075,9 +5261,9 @@ fn prompt_add_config_name(
                 if value.is_empty() {
                     return Ok(PromptResult::Value(None));
                 }
-                match validate_config_name(value) {
+                match validate_new_config_name(store, value) {
                     Ok(()) => return Ok(PromptResult::Value(Some(value.to_string()))),
-                    Err(next_error) => error = Some(next_error.to_string()),
+                    Err(next_error) => error = Some(prompt_validation_error(next_error)),
                 }
             }
             PromptResult::Back => return Ok(PromptResult::Back),
@@ -3095,7 +5281,7 @@ pub(crate) fn allocate_config_name(store: &ConfigStore, kind: ConfigKind) -> Res
     for _ in 0..32 {
         let suffix = Uuid::new_v4().simple().to_string();
         let candidate = format!("{prefix}-{}", &suffix[..6]);
-        if !store.saved_config_path(&candidate)?.exists() {
+        if !config_name_exists(store, &candidate)? {
             return Ok(candidate);
         }
     }
@@ -3110,6 +5296,7 @@ fn prompt_config_name(
     section: &str,
     prompt: &str,
     default: Option<&str>,
+    validate: impl Fn(&str) -> Result<()>,
 ) -> Result<PromptResult<String>> {
     let mut error: Option<String> = None;
     loop {
@@ -3127,9 +5314,9 @@ fn prompt_config_name(
             false,
             &helper_lines,
         )? {
-            PromptResult::Value(value) => match validate_config_name(&value) {
+            PromptResult::Value(value) => match validate(&value) {
                 Ok(()) => return Ok(PromptResult::Value(value)),
-                Err(next_error) => error = Some(next_error.to_string()),
+                Err(next_error) => error = Some(prompt_validation_error(next_error)),
             },
             PromptResult::Back => return Ok(PromptResult::Back),
             PromptResult::Quit => return Ok(PromptResult::Quit),
@@ -3168,6 +5355,45 @@ fn prompt_identity_value(
             PromptResult::Back => return Ok(PromptResult::Back),
             PromptResult::Quit => return Ok(PromptResult::Quit),
         }
+    }
+}
+
+fn prompt_new_user_id(
+    ui: &mut LiveRegion,
+    section: &str,
+    prompt: &str,
+    existing_users: &[RootUserSummary],
+) -> Result<PromptResult<String>> {
+    let (_, _, helper_lines) = identity_prompt_parts(IdentityMode::RootKey);
+    let mut error: Option<String> = None;
+    loop {
+        let mut lines = helper_lines.clone();
+        if let Some(value) = error.as_ref() {
+            lines.push(theme::error(value).to_string());
+        }
+        match prompt_text(ui, section, prompt, None, None, false, false, &lines)? {
+            PromptResult::Value(value) => match validate_new_user_id(&value, existing_users) {
+                Ok(()) => return Ok(PromptResult::Value(value)),
+                Err(next_error) => error = Some(next_error.to_string()),
+            },
+            PromptResult::Back => return Ok(PromptResult::Back),
+            PromptResult::Quit => return Ok(PromptResult::Quit),
+        }
+    }
+}
+
+fn validate_new_user_id(value: &str, existing_users: &[RootUserSummary]) -> Result<()> {
+    validate_identity_value(value, IdentityField::User)?;
+    if existing_users.iter().any(|user| user.user_id == value) {
+        return Err(Error::Config(duplicate_user_id_error(value)));
+    }
+    Ok(())
+}
+
+fn duplicate_user_id_error(user_id: &str) -> String {
+    match Language::current() {
+        Language::En => format!("User '{user_id}' already exists. Enter another user ID."),
+        Language::ZhCn => format!("用户 '{user_id}' 已存在。请输入另一个用户 ID。"),
     }
 }
 
@@ -3221,6 +5447,18 @@ fn config_select_label(entry: &ConfigEntry) -> String {
     }
 }
 
+fn active_config_index(configs: &[ConfigEntry]) -> Option<usize> {
+    configs.iter().position(|entry| entry.is_active)
+}
+
+fn current_server_url_default(store: &ConfigStore) -> Result<String> {
+    Ok(store
+        .load_active()?
+        .map(|config| config.url)
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CUSTOM_URL.to_string()))
+}
+
 fn active_badge() -> &'static str {
     copy(Language::current(), "[Active]", "[当前]")
 }
@@ -3255,6 +5493,13 @@ fn delete_confirm_prompt(name: &str) -> String {
     }
 }
 
+fn switch_confirm_prompt(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Switch active config to '{name}'?"),
+        Language::ZhCn => format!("切换当前配置为 '{name}'？"),
+    }
+}
+
 fn localized_validation_error(kind: ConfigKind, error: &Error) -> String {
     match Language::current() {
         Language::En => validation_error_copy(kind, error),
@@ -3269,6 +5514,53 @@ fn deleted_config_message(name: &str) -> String {
     match Language::current() {
         Language::En => format!("Deleted config '{name}'."),
         Language::ZhCn => format!("已删除配置 '{name}'。"),
+    }
+}
+
+fn switched_config_message(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Switched active config to '{name}'."),
+        Language::ZhCn => format!("已切换当前配置为 '{name}'。"),
+    }
+}
+
+fn config_already_active_message(name: &str) -> String {
+    match Language::current() {
+        Language::En => format!("Config '{name}' is already active."),
+        Language::ZhCn => format!("配置 '{name}' 已是当前配置。"),
+    }
+}
+
+fn switch_validation_error_lines(name: &str, kind: ConfigKind, error: &Error) -> Vec<String> {
+    vec![
+        String::new(),
+        format!(
+            "{} {}",
+            theme::error("✗"),
+            theme::error(match Language::current() {
+                Language::En => format!("Target config '{name}' failed validation."),
+                Language::ZhCn => format!("目标配置 '{name}' 验证失败。"),
+            })
+        ),
+        format!(
+            "  {}",
+            theme::muted(localized_validation_error(kind, error))
+        ),
+        format!(
+            "{} {}",
+            theme::muted(copy(Language::current(), "Next:", "下一步：")),
+            theme::body(copy(
+                Language::current(),
+                "Run ov config and edit this config before switching.",
+                "请运行 ov config 编辑该配置后再切换。",
+            ))
+        ),
+    ]
+}
+
+fn print_switch_validation_error(name: &str, kind: ConfigKind, error: &Error) {
+    for line in switch_validation_error_lines(name, kind, error) {
+        println!("{line}");
     }
 }
 
@@ -3346,42 +5638,61 @@ fn prompt_select<T: ToString>(
     let mut selected = default.min(items.len().saturating_sub(1));
     let raw = RawPrompt::enter(true)?;
 
-    loop {
-        ui.render(&select_live_lines(
-            section,
-            prompt,
-            &items,
-            selected,
-            helper_lines,
-        ))?;
+    ui.render(&select_live_lines(
+        section,
+        prompt,
+        &items,
+        selected,
+        helper_lines,
+    ))?;
 
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Up => {
-                    selected = if selected == 0 {
-                        items.len().saturating_sub(1)
-                    } else {
-                        selected - 1
-                    };
+    loop {
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                match key.code {
+                    KeyCode::Up => {
+                        selected = if selected == 0 {
+                            items.len().saturating_sub(1)
+                        } else {
+                            selected - 1
+                        };
+                    }
+                    KeyCode::Down => selected = (selected + 1) % items.len().max(1),
+                    KeyCode::Enter => {
+                        drop(raw);
+                        ui.clear()?;
+                        return Ok(PromptResult::Value(selected));
+                    }
+                    KeyCode::Esc => {
+                        drop(raw);
+                        ui.clear()?;
+                        return Ok(PromptResult::Back);
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        drop(raw);
+                        ui.clear()?;
+                        return Ok(PromptResult::Quit);
+                    }
+                    _ => continue,
                 }
-                KeyCode::Down => selected = (selected + 1) % items.len().max(1),
-                KeyCode::Enter => {
-                    drop(raw);
-                    ui.clear()?;
-                    return Ok(PromptResult::Value(selected));
-                }
-                KeyCode::Esc => {
-                    drop(raw);
-                    ui.clear()?;
-                    return Ok(PromptResult::Back);
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    drop(raw);
-                    ui.clear()?;
-                    return Ok(PromptResult::Quit);
-                }
-                _ => {}
+                ui.render(&select_live_lines(
+                    section,
+                    prompt,
+                    &items,
+                    selected,
+                    helper_lines,
+                ))?;
             }
+            Event::Resize(_, _) => {
+                ui.render(&select_live_lines(
+                    section,
+                    prompt,
+                    &items,
+                    selected,
+                    helper_lines,
+                ))?;
+            }
+            _ => {}
         }
     }
 }
@@ -3400,23 +5711,24 @@ fn prompt_text(
     'attempt: loop {
         let mut value = String::new();
         let default_copy = default.unwrap_or_default();
-        ui.render_input(
-            &input_live_lines(
+        render_text_prompt(
+            ui,
+            TextPromptView {
                 section,
                 prompt,
                 default,
                 value_label,
                 secret,
                 helper_lines,
-                error.as_deref(),
-            ),
-            "  > ",
+                error: error.as_deref(),
+                value: &value,
+            },
         )?;
 
         let raw = RawPrompt::enter(false)?;
         loop {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                     KeyCode::Enter => {
                         let chosen = if value.trim().is_empty() {
                             default_copy.trim().to_string()
@@ -3452,6 +5764,7 @@ fn prompt_text(
                     KeyCode::Backspace => {
                         if let Some(ch) = value.pop() {
                             raw_write(erase_sequence_for_char(ch, secret))?;
+                            ui.set_input_prompt(input_prompt_with_value(&value, secret));
                             io::stdout().flush()?;
                         }
                     }
@@ -3463,14 +5776,81 @@ fn prompt_text(
                             } else {
                                 raw_write(ch.to_string())?;
                             }
+                            ui.set_input_prompt(input_prompt_with_value(&value, secret));
                             io::stdout().flush()?;
                         }
                     }
                     _ => {}
+                },
+                Event::Key(_) => {}
+                Event::Resize(_, _) => {
+                    render_text_prompt(
+                        ui,
+                        TextPromptView {
+                            section,
+                            prompt,
+                            default,
+                            value_label,
+                            secret,
+                            helper_lines,
+                            error: error.as_deref(),
+                            value: &value,
+                        },
+                    )?;
                 }
+                _ => {}
             }
         }
     }
+}
+
+struct TextPromptView<'a> {
+    section: &'a str,
+    prompt: &'a str,
+    default: Option<&'a str>,
+    value_label: Option<InputValueLabel>,
+    secret: bool,
+    helper_lines: &'a [String],
+    error: Option<&'a str>,
+    value: &'a str,
+}
+
+fn render_text_prompt(ui: &mut LiveRegion, view: TextPromptView<'_>) -> Result<()> {
+    ui.render_input(
+        &input_live_lines(
+            view.section,
+            view.prompt,
+            view.default,
+            view.value_label,
+            view.secret,
+            view.helper_lines,
+            view.error,
+        ),
+        TEXT_INPUT_PROMPT,
+    )?;
+    let input_prompt = input_prompt_with_value(view.value, view.secret);
+    if input_prompt.len() > TEXT_INPUT_PROMPT.len() {
+        if view.secret {
+            raw_write("*".repeat(view.value.chars().count()))?;
+        } else {
+            raw_write(view.value)?;
+        }
+    }
+    ui.set_input_prompt(input_prompt);
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn input_prompt_with_value(value: &str, secret: bool) -> String {
+    if value.is_empty() {
+        return TEXT_INPUT_PROMPT.to_string();
+    }
+    let rendered_value = if secret {
+        "*".repeat(value.chars().count())
+    } else {
+        value.to_string()
+    };
+    format!("{TEXT_INPUT_PROMPT}{rendered_value}")
 }
 
 fn erase_sequence_for_char(ch: char, secret: bool) -> String {
@@ -3520,7 +5900,9 @@ fn confirm(
 
 #[derive(Default)]
 struct LiveRegion {
-    lines_drawn: usize,
+    lines: Vec<String>,
+    input_prompt: Option<String>,
+    rows_drawn: usize,
     cursor_on_last_line: bool,
 }
 
@@ -3531,7 +5913,13 @@ impl LiveRegion {
             raw_line(line)?;
         }
         io::stdout().flush()?;
-        self.lines_drawn = lines.len();
+        self.lines = lines.to_vec();
+        self.input_prompt = None;
+        self.rows_drawn = rendered_live_region_rows(
+            &self.lines,
+            self.input_prompt.as_deref(),
+            live_region_columns(),
+        );
         self.cursor_on_last_line = false;
         Ok(())
     }
@@ -3543,17 +5931,62 @@ impl LiveRegion {
         }
         raw_write(prompt)?;
         io::stdout().flush()?;
-        self.lines_drawn = lines.len() + 1;
+        self.lines = lines.to_vec();
+        self.input_prompt = Some(prompt.to_string());
+        self.rows_drawn = rendered_live_region_rows(
+            &self.lines,
+            self.input_prompt.as_deref(),
+            live_region_columns(),
+        );
         self.cursor_on_last_line = true;
         Ok(())
     }
 
     fn clear(&mut self) -> Result<()> {
-        clear_live_region(self.lines_drawn, self.cursor_on_last_line)?;
-        self.lines_drawn = 0;
+        clear_live_region(
+            self.rows_to_clear(live_region_columns()),
+            self.cursor_on_last_line,
+        )?;
+        self.lines.clear();
+        self.input_prompt = None;
+        self.rows_drawn = 0;
         self.cursor_on_last_line = false;
         Ok(())
     }
+
+    fn set_input_prompt(&mut self, prompt: String) {
+        self.input_prompt = Some(prompt);
+        self.rows_drawn = self.rows_drawn.max(rendered_live_region_rows(
+            &self.lines,
+            self.input_prompt.as_deref(),
+            live_region_columns(),
+        ));
+    }
+
+    fn rows_to_clear(&self, columns: usize) -> usize {
+        self.rows_drawn.max(rendered_live_region_rows(
+            &self.lines,
+            self.input_prompt.as_deref(),
+            columns,
+        ))
+    }
+}
+
+fn live_region_columns() -> usize {
+    terminal::size()
+        .map(|(columns, _)| usize::from(columns).saturating_sub(1).max(1))
+        .unwrap_or_else(|_| status_box_width())
+}
+
+fn rendered_live_region_rows(
+    lines: &[String],
+    input_prompt: Option<&str>,
+    columns: usize,
+) -> usize {
+    rendered_row_count(lines, columns)
+        + input_prompt
+            .map(|prompt| rendered_line_rows(prompt, columns))
+            .unwrap_or(0)
 }
 
 pub(crate) fn select_live_lines<T: ToString>(
@@ -3700,6 +6133,24 @@ fn empty_to_none(value: String) -> Option<String> {
     }
 }
 
+fn non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn non_empty_str(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 fn is_blank(value: Option<&str>) -> bool {
     value.is_none_or(|value| value.trim().is_empty())
 }
@@ -3751,30 +6202,43 @@ impl Drop for RawPrompt {
 #[cfg(test)]
 mod tests {
     use super::{
-        CustomKeyMode, IdentityMode, InputValueLabel, OV_LOGO_LINES, Rgb, StatusBoxRuntime,
-        active_delete_block_helper_lines, active_summary_lines, active_summary_render_parts,
-        add_config_name_label, add_save_action_labels, allocate_config_name, box_content_line,
-        box_footer_line, box_title_line, config_select_label, custom_api_key_helper_lines,
-        custom_api_key_input_helper_lines, custom_key_mode_labels,
-        custom_validation_failure_choices, display_config_home, display_width,
-        edit_api_key_choice_labels, edit_custom_key_action_labels, edit_save_action_labels,
-        erase_sequence_for_char, extract_models_from_status_payload, identity_prompt_parts,
-        input_live_lines, logo_glass_color_for_theme, main_action_labels, next_step_copy,
-        openviking_service_api_key_helper_lines, openviking_service_validation_failure_choices,
-        ov_logo_width, provider_labels, root_key_normal_command_notice_lines,
-        root_key_redirect_labels, saved_summary_render_parts, select_live_lines,
-        should_confirm_detected_user_key, should_prompt_root_identity, status_box_lines,
-        status_box_lines_with_runtime, status_box_width, status_payload_is_healthy,
-        styled_logo_to_width_for_color_level, styled_wordmark_line_for_color_level,
-        tagline_ice_color_for_theme, user_key_redirect_labels, validate_config_name,
-        validate_draft, wizard_header_lines, wordmark_gradient_color_for_theme, wordmark_lines,
-        wordmark_width,
+        COMPACT_STATUS_DETAIL_WIDTH, CustomKeyMode, FULL_STATUS_BOX_MIN_ROWS, IdentityMode,
+        InputValueLabel, LiveRegion, OV_LOGO_LINES, RenderedRegion, Rgb, RootAccountSummary,
+        RootUserSummary, StatusBoxFrame, StatusBoxMode, StatusBoxRuntime, account_tree_labels,
+        active_config_index, active_delete_block_helper_lines, active_summary_lines,
+        active_summary_render_parts, add_config_name_label, add_generated_config_name_helper_lines,
+        add_save_action_labels, allocate_config_name, box_content_line, box_footer_line,
+        box_title_line, compact_status_box_width, config_select_label, config_with_selected_user,
+        current_server_url_default, custom_api_key_helper_lines, custom_api_key_input_helper_lines,
+        custom_key_mode_labels, custom_validation_failure_choices, display_config_home,
+        display_width, edit_api_key_choice_labels, edit_custom_key_action_labels,
+        edit_save_action_labels, erase_sequence_for_char, extract_models_from_status_payload,
+        identity_prompt_parts, input_live_lines, input_prompt_with_value,
+        local_config_name_choice_labels, logo_glass_color_for_theme, main_action_labels,
+        next_step_copy, openviking_service_api_key_helper_lines,
+        openviking_service_validation_failure_choices, ov_logo_width, provider_labels,
+        rendered_live_region_rows, rendered_row_count, root_accounts_from_value,
+        root_api_key_helper_lines, root_key_account_selection_labels,
+        root_key_normal_command_notice_lines, root_key_redirect_labels,
+        root_key_used_for_normal_commands, root_key_user_selection_labels, root_users_from_value,
+        save_config, saved_summary_render_parts, select_live_lines,
+        should_confirm_detected_user_key, should_prompt_root_identity, status_box_frame_for_size,
+        status_box_lines, status_box_lines_with_runtime, status_box_lines_with_runtime_width,
+        status_box_width, status_payload_is_healthy, styled_logo_to_width_for_color_level,
+        styled_wordmark_line_for_color_level, switch_validation_error_lines,
+        tagline_ice_color_for_theme, user_key_from_response, user_key_redirect_labels,
+        user_management_config_context, user_management_config_from_server_url,
+        user_management_config_name_choice_labels, user_management_server_url_helper_lines,
+        user_tree_labels, validate_config_name, validate_config_name_change, validate_draft,
+        validate_new_config_name, validate_new_user_id, wizard_header_lines,
+        wordmark_gradient_color_for_theme, wordmark_lines, wordmark_width,
     };
     use crate::config::Config;
     use crate::config_wizard::store::{
         ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL,
         validate_account_id_value, validate_user_id_value,
     };
+    use crate::error::Error;
     use crate::i18n::Language;
     use crate::theme::{self, ThemeColor};
     use colored::Colorize;
@@ -3814,10 +6278,10 @@ mod tests {
     }
 
     #[test]
-    fn wizard_header_is_scrollback_branded() {
+    fn wizard_header_contains_standalone_wordmark() {
         let header = wizard_header_lines().join("\n");
 
-        assert!(header.contains("█████"));
+        assert!(header.contains("██████╗"));
         assert!(!header.contains("Context Database for AI Agents"));
         assert!(!header.contains(".openviking ~ ov config"));
         assert!(!header.contains("CLI config"));
@@ -3834,11 +6298,32 @@ mod tests {
     }
 
     #[test]
-    fn wizard_header_has_spaced_bands() {
+    fn input_prompt_tracks_visible_or_secret_value() {
+        assert_eq!(input_prompt_with_value("", false), "  > ");
+        assert_eq!(input_prompt_with_value("abc", false), "  > abc");
+        assert_eq!(input_prompt_with_value("secret", true), "  > ******");
+    }
+
+    #[test]
+    fn switch_validation_error_uses_selected_config_kind() {
+        let lines = switch_validation_error_lines(
+            "cloud",
+            ConfigKind::OpenVikingService,
+            &Error::Config("invalid".to_string()),
+        );
+        let plain = strip_ansi(&lines.join("\n"));
+
+        assert!(plain.contains("Target config 'cloud' failed validation."));
+        assert!(plain.contains("Check your API key"));
+        assert!(!plain.contains("server URL"));
+    }
+
+    #[test]
+    fn wizard_header_has_no_standalone_spaced_bands() {
         let lines = wizard_header_lines();
 
-        assert_eq!(lines[wordmark_lines().len()], "");
         assert_eq!(lines.len(), wordmark_lines().len() + 1);
+        assert_eq!(lines.last().map(String::as_str), Some(""));
     }
 
     #[test]
@@ -3851,7 +6336,7 @@ mod tests {
     }
 
     #[test]
-    fn status_box_lines_align_to_wordmark_width_with_tagline_title_and_version_footer() {
+    fn full_status_box_puts_motto_in_border_without_wordmark() {
         let config = Config {
             url: "http://127.0.0.1:1933".to_string(),
             ..Config::default()
@@ -3870,6 +6355,8 @@ mod tests {
 
         assert!(lines.len() >= 6);
         assert!(lines[0].contains("Context Database for AI Agents"));
+        assert!(!lines.iter().any(|line| line.contains("██████╗")));
+        assert!(lines.iter().any(|line| line.contains('⣿')));
         assert!(!lines[0].contains(&version));
         assert!(
             lines
@@ -3898,15 +6385,139 @@ mod tests {
     }
 
     #[test]
+    fn status_box_empty_title_uses_continuous_top_border() {
+        let width = 48;
+        let title = box_title_line("", width);
+
+        assert_eq!(title, format!("╭{}╮", "─".repeat(width - 2)));
+        assert_eq!(display_width(&title), width);
+    }
+
+    #[test]
+    fn compact_status_box_omits_logo_art_and_fits_status_details() {
+        let config = Config {
+            url: "http://127.0.0.1:1933".to_string(),
+            ..Config::default()
+        };
+        let width = compact_status_box_width();
+        let lines = status_box_lines_with_runtime_width(
+            Some(&config),
+            &[ConfigEntry {
+                name: "compact".to_string(),
+                config: config.clone(),
+                is_active: true,
+                kind: ConfigKind::Custom,
+            }],
+            "~/.openviking",
+            &StatusBoxRuntime::unknown(),
+            StatusBoxFrame {
+                width,
+                mode: StatusBoxMode::Compact,
+            },
+        );
+        let text = lines.join("\n");
+
+        assert!(width >= COMPACT_STATUS_DETAIL_WIDTH + 4);
+        assert!(width <= status_box_width());
+        assert!(lines[0].contains("OpenViking | Context Database for AI Agents"));
+        assert!(text.contains("Active:"));
+        assert!(!text.contains('⣿'));
+        assert!(!text.contains('⣶'));
+        assert!(!text.contains("██████╗"));
+        assert!(!text.contains("╚═════╝"));
+        assert!(!text.contains("OPENVIKING"));
+        assert!(!text.contains("⠠⣶⣾⣿⣿⣿⣶⣤⣀ ⠾⠟⠛⠉⠉   ⣀⣤⣾⡿⠃"));
+        for line in &lines {
+            assert_eq!(display_width(line), width, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn status_box_frame_uses_compact_mode_when_full_art_would_not_fit() {
+        let compact_width = compact_status_box_width();
+
+        assert_eq!(
+            status_box_frame_for_size(compact_width as u16 + 1, FULL_STATUS_BOX_MIN_ROWS - 1),
+            StatusBoxFrame {
+                width: compact_width,
+                mode: StatusBoxMode::Compact,
+            }
+        );
+        assert_eq!(
+            status_box_frame_for_size(status_box_width() as u16 - 1, FULL_STATUS_BOX_MIN_ROWS).mode,
+            StatusBoxMode::Compact
+        );
+        assert_eq!(
+            status_box_frame_for_size(status_box_width() as u16 + 1, FULL_STATUS_BOX_MIN_ROWS).mode,
+            StatusBoxMode::Full
+        );
+    }
+
+    #[test]
+    fn rendered_region_clears_render_time_rows_after_width_changes() {
+        let lines = vec!["x".repeat(90)];
+        let region = RenderedRegion::from_lines(&lines, 30);
+
+        assert_eq!(rendered_row_count(&lines, 30), 3);
+        assert_eq!(rendered_row_count(&lines, 90), 1);
+        assert_eq!(region.rows_to_clear(90), 3);
+    }
+
+    #[test]
+    fn live_region_recomputes_clear_rows_after_resize() {
+        let lines = vec!["x".repeat(90)];
+        let ui = LiveRegion {
+            lines: lines.clone(),
+            input_prompt: None,
+            rows_drawn: rendered_live_region_rows(&lines, None, 90),
+            cursor_on_last_line: false,
+        };
+
+        assert_eq!(ui.rows_to_clear(30), 3);
+    }
+
+    #[test]
+    fn live_region_keeps_largest_input_rows_until_clear() {
+        let mut ui = LiveRegion {
+            lines: vec!["Prompt".to_string()],
+            input_prompt: Some(format!("  > {}", "x".repeat(90))),
+            rows_drawn: 10,
+            cursor_on_last_line: true,
+        };
+
+        ui.set_input_prompt("  > x".to_string());
+
+        assert_eq!(ui.rows_to_clear(120), 10);
+    }
+
+    #[test]
     fn status_box_cjk_lines_align_to_display_width() {
         let width = status_box_width();
         let title = box_title_line("AI Agent 上下文数据库", width);
-        let content = box_content_line("", "当前配置： VPS_ROOT (自定义)", width);
+        let content = box_content_line(
+            "",
+            "当前配置： VPS_ROOT (自定义)",
+            width,
+            StatusBoxMode::Full,
+        );
         let footer = box_footer_line("v0.0.0", width);
 
         for line in [title, content, footer] {
             assert_eq!(display_width(&line), width, "{line:?}");
         }
+    }
+
+    #[test]
+    fn status_box_content_line_respects_narrow_terminal_width() {
+        let width = 40;
+        let content = box_content_line(
+            OV_LOGO_LINES[8],
+            "Context Database for AI Agents",
+            width,
+            StatusBoxMode::Full,
+        );
+
+        assert_eq!(display_width(&content), width, "{content:?}");
     }
 
     #[test]
@@ -4133,16 +6744,16 @@ mod tests {
     }
 
     #[test]
-    fn wordmark_is_subtly_wider_for_viking_readability() {
+    fn wordmark_preserves_original_standalone_block_art() {
         let width = wordmark_width();
 
-        assert!(
-            (79..=83).contains(&width),
-            "wordmark should widen only enough to make VIKING readable; got {width}"
+        assert_eq!(
+            width, 81,
+            "wordmark should preserve the original standalone width"
         );
         assert!(
-            wordmark_lines()[0].contains("██╗   ██╗ ██╗ ██╗  ██╗ ██╗"),
-            "VIKING should have subtle breathing room without obvious gaps"
+            wordmark_lines().iter().any(|line| line.contains("████")),
+            "wordmark should preserve block-art styling"
         );
     }
 
@@ -4169,8 +6780,7 @@ mod tests {
 
     #[test]
     fn wordmark_does_not_use_protruding_corner_glyphs() {
-        let lines = wizard_header_lines();
-        let wordmark = &lines[0..wordmark_lines().len()];
+        let wordmark = wordmark_lines();
 
         assert!(!wordmark[0].starts_with('◢'));
         assert!(!wordmark[0].ends_with('◣'));
@@ -4305,8 +6915,10 @@ mod tests {
 
     #[test]
     fn active_summary_hides_url_and_shows_kind() {
-        let mut config = Config::default();
-        config.url = "http://127.0.0.1:1933".to_string();
+        let config = Config {
+            url: "http://127.0.0.1:1933".to_string(),
+            ..Config::default()
+        };
         let lines = active_summary_lines(
             Some(&config),
             &[ConfigEntry {
@@ -4326,8 +6938,10 @@ mod tests {
 
     #[test]
     fn active_summary_uses_compact_openviking_service_kind() {
-        let mut config = Config::default();
-        config.url = OPENVIKING_SERVICE_URL.to_string();
+        let config = Config {
+            url: OPENVIKING_SERVICE_URL.to_string(),
+            ..Config::default()
+        };
         let lines = active_summary_lines(
             Some(&config),
             &[ConfigEntry {
@@ -4415,6 +7029,116 @@ mod tests {
         assert!(name.starts_with("custom-"));
         assert_eq!(name.len(), "custom-".len() + 6);
         validate_config_name(&name).expect("generated name should be valid");
+    }
+
+    #[test]
+    fn local_config_name_choices_offer_custom_local_name() {
+        assert_eq!(
+            local_config_name_choice_labels("custom-abc123"),
+            vec![
+                "Set custom local name".to_string(),
+                "Use generated name (custom-abc123)".to_string(),
+                "Back".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn user_management_config_name_choices_offer_custom_for_current_name() {
+        assert_eq!(
+            user_management_config_name_choice_labels(Some("managed"), "managed"),
+            vec![
+                "Set custom local name".to_string(),
+                "Use current name (managed)".to_string(),
+                "Back".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn add_config_generated_name_copy_mentions_local_config_name() {
+        let text = strip_ansi(&add_generated_config_name_helper_lines().join("\n"));
+
+        assert!(text.contains("Choose how to name this local CLI config."));
+        assert!(text.contains("ovcli.conf.<name>"));
+    }
+
+    #[test]
+    fn new_config_name_validation_rejects_existing_and_reserved_names() {
+        let dir = unique_dir("new-config-name-conflict");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        store
+            .save_named_config("taken", &Config::default())
+            .expect("existing config should be saved");
+
+        assert!(validate_new_config_name(&store, "available").is_ok());
+
+        let duplicate = validate_new_config_name(&store, "taken")
+            .expect_err("duplicate name should be rejected")
+            .to_string();
+        assert!(duplicate.contains("already exists"));
+
+        let reserved = validate_new_config_name(&store, "active")
+            .expect_err("reserved name should be rejected")
+            .to_string();
+        assert!(reserved.contains("reserved"));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn edit_config_name_validation_allows_current_name_only() {
+        let dir = unique_dir("edit-config-name-conflict");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        store
+            .save_named_config("current", &Config::default())
+            .expect("current config should be saved");
+        store
+            .save_named_config("taken", &Config::default())
+            .expect("other config should be saved");
+
+        assert!(validate_config_name_change(&store, "current", "current").is_ok());
+        assert!(validate_config_name_change(&store, "current", "available").is_ok());
+
+        let duplicate = validate_config_name_change(&store, "current", "taken")
+            .expect_err("renaming to another saved config should be rejected")
+            .to_string();
+        assert!(duplicate.contains("already exists"));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn add_save_rejects_existing_config_name_without_overwriting() {
+        let dir = unique_dir("add-save-name-conflict");
+        fs::create_dir_all(&dir).expect("dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        let existing = Config {
+            url: "https://existing.example.com".to_string(),
+            ..Config::default()
+        };
+        store
+            .save_named_config("taken", &existing)
+            .expect("existing config should be saved");
+
+        let replacement = Config {
+            url: "https://replacement.example.com".to_string(),
+            ..Config::default()
+        };
+        let error = save_config(&store, "taken", &replacement, false)
+            .expect_err("add save should reject existing config name")
+            .to_string();
+        assert!(error.contains("already exists"));
+
+        let saved = store
+            .load_saved_config("taken")
+            .expect("existing config should still load");
+        assert_eq!(saved.url, "https://existing.example.com");
+        assert!(store.load_active().unwrap().is_none());
+
+        fs::remove_dir_all(dir).ok();
     }
 
     #[test]
@@ -4584,6 +7308,205 @@ mod tests {
     }
 
     #[test]
+    fn user_management_targets_active_config_without_extra_picker() {
+        let configs = vec![
+            ConfigEntry {
+                name: "dev".to_string(),
+                config: Config::default(),
+                is_active: false,
+                kind: ConfigKind::Custom,
+            },
+            ConfigEntry {
+                name: "prod".to_string(),
+                config: Config::default(),
+                is_active: true,
+                kind: ConfigKind::Custom,
+            },
+        ];
+        assert_eq!(active_config_index(&configs), Some(1));
+
+        let configs_without_active = vec![ConfigEntry {
+            name: "dev".to_string(),
+            config: Config::default(),
+            is_active: false,
+            kind: ConfigKind::Custom,
+        }];
+        assert_eq!(active_config_index(&configs_without_active), None);
+
+        let dir = unique_dir("user-management-context");
+        fs::create_dir_all(&dir).expect("config dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        assert!(user_management_config_context(&store).unwrap().is_none());
+
+        let inactive_config = Config {
+            url: "https://inactive.example.com".to_string(),
+            ..Config::default()
+        };
+        store
+            .save_named_config("inactive", &inactive_config)
+            .expect("inactive config should be saved");
+        assert!(user_management_config_context(&store).unwrap().is_none());
+
+        let active_config = Config {
+            url: "https://active.example.com".to_string(),
+            ..Config::default()
+        };
+        store
+            .save_and_activate("prod", &active_config)
+            .expect("active config should be saved");
+        let context = user_management_config_context(&store)
+            .unwrap()
+            .expect("active config should be used");
+        assert_eq!(context.config_name.as_deref(), Some("prod"));
+        assert_eq!(context.config.url, "https://active.example.com");
+
+        let legacy_dir = unique_dir("user-management-legacy-active");
+        fs::create_dir_all(&legacy_dir).expect("config dir should exist");
+        let legacy_store = ConfigStore::for_config_dir(legacy_dir.clone());
+        let legacy_config = Config {
+            url: "https://legacy.example.com".to_string(),
+            ..Config::default()
+        };
+        legacy_store
+            .save_and_activate("active", &legacy_config)
+            .expect("legacy active config should be saved");
+        let legacy_context = user_management_config_context(&legacy_store)
+            .unwrap()
+            .expect("legacy active config should be used");
+        assert_eq!(legacy_context.config_name, None);
+        assert_eq!(legacy_context.config.url, "https://legacy.example.com");
+
+        let unnamed_dir = unique_dir("user-management-unnamed-active");
+        fs::create_dir_all(&unnamed_dir).expect("config dir should exist");
+        let unnamed_store = ConfigStore::for_config_dir(unnamed_dir.clone());
+        let unnamed_config = Config {
+            url: "https://unnamed.example.com".to_string(),
+            ..Config::default()
+        };
+        unnamed_store
+            .save_and_activate("temporary", &unnamed_config)
+            .expect("active config should be saved");
+        fs::remove_file(unnamed_store.saved_config_path("temporary").unwrap())
+            .expect("saved profile should be removed");
+        let unnamed_context = user_management_config_context(&unnamed_store)
+            .unwrap()
+            .expect("unnamed active config should be used");
+        assert_eq!(unnamed_context.config_name, None);
+        assert_eq!(unnamed_context.config.url, "https://unnamed.example.com");
+
+        fs::remove_dir_all(dir).ok();
+        fs::remove_dir_all(legacy_dir).ok();
+        fs::remove_dir_all(unnamed_dir).ok();
+    }
+
+    #[test]
+    fn user_management_config_from_server_url_normalizes_without_active_config() {
+        let config = user_management_config_from_server_url("127.0.0.1")
+            .expect("server URL should build a temporary config");
+
+        assert_eq!(config.url, "http://127.0.0.1:1933");
+        assert!(config.api_key.is_none());
+        assert!(config.root_api_key.is_none());
+
+        let error = user_management_config_from_server_url("  ")
+            .expect_err("empty server URL should be rejected")
+            .to_string();
+        assert!(error.contains("Server URL cannot be empty"));
+    }
+
+    #[test]
+    fn user_management_root_key_prompt_shows_current_server_url() {
+        let text =
+            strip_ansi(&root_api_key_helper_lines("https://openviking.example.com").join("\n"));
+
+        assert!(text.contains("Server URL:"));
+        assert!(text.contains("https://openviking.example.com"));
+        assert!(text.contains("Used only to list or create accounts/users"));
+    }
+
+    #[test]
+    fn user_management_server_url_prompt_copy_does_not_require_ovcli_conf() {
+        let text = strip_ansi(&user_management_server_url_helper_lines().join("\n"));
+
+        assert!(text.contains("only needs the server URL"));
+        assert!(!text.contains("current ovcli.conf"));
+    }
+
+    #[test]
+    fn user_management_save_writes_named_config_and_active_config() {
+        let dir = unique_dir("user-management-save");
+        fs::create_dir_all(&dir).expect("config dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        let config = Config {
+            url: "https://openviking.example.com".to_string(),
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        store
+            .save_and_activate("managed", &config)
+            .expect("user management config should save");
+
+        assert!(store.saved_config_path("managed").unwrap().exists());
+        let active = store
+            .load_active()
+            .expect("active should load")
+            .expect("active config should exist");
+        assert_eq!(active.api_key.as_deref(), Some("user-key"));
+        assert_eq!(active.root_api_key.as_deref(), Some("root-key"));
+        assert_eq!(active.account.as_deref(), Some("acme"));
+        assert_eq!(active.user.as_deref(), Some("alice"));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn custom_server_url_default_uses_active_config_or_loopback() {
+        let dir = unique_dir("server-url-default");
+        fs::create_dir_all(&dir).expect("config dir should exist");
+        let store = ConfigStore::for_config_dir(dir.clone());
+
+        assert_eq!(
+            current_server_url_default(&store).expect("default should resolve"),
+            "http://127.0.0.1:1933"
+        );
+
+        let active_config = Config {
+            url: "https://openviking.example.com".to_string(),
+            ..Config::default()
+        };
+        store
+            .save_and_activate("prod", &active_config)
+            .expect("active config should be saved");
+
+        assert_eq!(
+            current_server_url_default(&store).expect("active URL should resolve"),
+            "https://openviking.example.com"
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn new_user_id_validation_rejects_existing_users_before_admin_call() {
+        let existing_users = vec![RootUserSummary {
+            user_id: "alice".to_string(),
+            role: "user".to_string(),
+            api_key: None,
+            key_prefix: None,
+        }];
+
+        assert!(validate_new_user_id("bob", &existing_users).is_ok());
+
+        let error = validate_new_user_id("alice", &existing_users)
+            .expect_err("duplicate user should be rejected");
+        assert!(error.to_string().contains("already exists"));
+    }
+
+    #[test]
     fn active_delete_copy_mentions_switch_command() {
         let copy = active_delete_block_helper_lines().join("\n");
 
@@ -4623,7 +7546,7 @@ mod tests {
 
         assert!(text.contains("Root key configured."));
         assert!(text.contains("Normal commands will use this key"));
-        assert!(text.contains("ov config -> Edit config -> Set normal user API key"));
+        assert!(text.contains("ov config -> Edit Config -> Set normal user API key"));
     }
 
     #[test]
@@ -4654,7 +7577,7 @@ mod tests {
                 theme::body(", run "),
                 theme::command("ov config").bold(),
                 theme::body(" -> "),
-                theme::strong("Edit config"),
+                theme::strong("Edit Config"),
                 theme::body(" -> "),
                 theme::strong("Set normal user API key"),
                 theme::body(".")
@@ -5088,23 +8011,179 @@ mod tests {
         let lines = select_live_lines(
             "What would you like to configure?",
             "Choose action",
-            &["Add config", "Edit config", "Delete config"],
+            &[
+                "Add Config",
+                "Switch Config",
+                "Edit Config",
+                "Delete Config",
+            ],
             1,
             &[],
         );
 
         assert!(lines[0].contains("What would you like to configure?"));
-        assert!(lines.iter().any(|line| line.contains("› Edit config")));
+        assert!(lines.iter().any(|line| line.contains("› Switch Config")));
         assert!(!lines.iter().any(|line| line.contains("✓ Choose action")));
         assert!(!lines.iter().any(|line| line.contains("Back")));
-        assert_eq!(lines.len(), 8);
+        assert_eq!(lines.len(), 9);
     }
 
     #[test]
-    fn wizard_main_actions_stay_focused() {
+    fn wizard_main_actions_include_switch_config() {
         assert_eq!(
-            main_action_labels(),
-            ["Add config", "Edit config", "Delete config"]
+            main_action_labels().as_slice(),
+            [
+                "Add Config",
+                "Switch Config",
+                "Edit Config",
+                "Delete Config",
+                "User Management",
+            ]
+            .as_slice()
         );
+    }
+
+    #[test]
+    fn root_account_and_user_labels_render_like_directories() {
+        let account_labels = account_tree_labels(&[
+            RootAccountSummary {
+                account_id: "acme".to_string(),
+                user_count: 2,
+            },
+            RootAccountSummary {
+                account_id: "solo".to_string(),
+                user_count: 1,
+            },
+        ]);
+        assert_eq!(account_labels, vec!["acme/  2 users", "solo/  1 user"]);
+
+        let user_labels = user_tree_labels(
+            "acme",
+            &[
+                RootUserSummary {
+                    user_id: "alice".to_string(),
+                    role: "admin".to_string(),
+                    api_key: Some("alice-key".to_string()),
+                    key_prefix: None,
+                },
+                RootUserSummary {
+                    user_id: "bob".to_string(),
+                    role: "user".to_string(),
+                    api_key: None,
+                    key_prefix: Some("bob-pref".to_string()),
+                },
+            ],
+        );
+        assert_eq!(user_labels, vec!["acme/alice  admin", "acme/bob  user"]);
+    }
+
+    #[test]
+    fn root_key_add_config_selection_labels_offer_user_creation() {
+        let account_labels = root_key_account_selection_labels(&[RootAccountSummary {
+            account_id: "acme".to_string(),
+            user_count: 0,
+        }]);
+        assert_eq!(
+            account_labels,
+            vec!["acme/  0 users", "+ Create new account"]
+        );
+
+        let user_labels = root_key_user_selection_labels("acme", &[]);
+        assert_eq!(user_labels, vec!["+ Create new user in acme/"]);
+    }
+
+    #[test]
+    fn root_key_config_prompts_for_user_selection_before_save() {
+        let root_as_normal = Config {
+            api_key: Some("root-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            ..Config::default()
+        };
+        assert!(root_key_used_for_normal_commands(&root_as_normal));
+
+        let separate_user_key = Config {
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            ..Config::default()
+        };
+        assert!(!root_key_used_for_normal_commands(&separate_user_key));
+    }
+
+    #[test]
+    fn root_admin_response_parsers_sort_and_ignore_empty_items() {
+        let accounts = root_accounts_from_value(&json!([
+            {"account_id": "beta", "user_count": 0},
+            {"account_id": "", "user_count": 9},
+            {"account_id": "alpha", "user_count": 2}
+        ]));
+        assert_eq!(
+            accounts,
+            vec![
+                RootAccountSummary {
+                    account_id: "alpha".to_string(),
+                    user_count: 2,
+                },
+                RootAccountSummary {
+                    account_id: "beta".to_string(),
+                    user_count: 0,
+                },
+            ]
+        );
+
+        let users = root_users_from_value(&json!([
+            {"user_id": "zoe", "role": "admin", "api_key": "zoe-key"},
+            {"user_id": "amy", "key_prefix": "amy-pref"},
+            {"user_id": " ", "api_key": "ignored"}
+        ]));
+        assert_eq!(
+            users,
+            vec![
+                RootUserSummary {
+                    user_id: "amy".to_string(),
+                    role: "user".to_string(),
+                    api_key: None,
+                    key_prefix: Some("amy-pref".to_string()),
+                },
+                RootUserSummary {
+                    user_id: "zoe".to_string(),
+                    role: "admin".to_string(),
+                    api_key: Some("zoe-key".to_string()),
+                    key_prefix: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn selected_user_config_keeps_root_key_and_stores_user_key_identity() {
+        let mut config = Config::default();
+        config.url = "http://127.0.0.1:1933".to_string();
+        config.api_key = Some("root-key".to_string());
+        config.root_api_key = Some("root-key".to_string());
+
+        let updated = config_with_selected_user(&config, "root-key", "acme", "alice", "user-key");
+
+        assert_eq!(updated.root_api_key.as_deref(), Some("root-key"));
+        assert_eq!(updated.api_key.as_deref(), Some("user-key"));
+        assert_eq!(updated.account.as_deref(), Some("acme"));
+        assert_eq!(updated.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn user_key_from_response_requires_non_empty_key() {
+        assert_eq!(
+            user_key_from_response(&json!({"user_key": " new-user-key "})),
+            Some("new-user-key".to_string())
+        );
+        assert_eq!(
+            user_key_from_response(&json!({"api_key": " alt-user-key "})),
+            Some("alt-user-key".to_string())
+        );
+        assert_eq!(
+            user_key_from_response(&json!({"result": {"user_key": " wrapped-user-key "}})),
+            Some("wrapped-user-key".to_string())
+        );
+        assert_eq!(user_key_from_response(&json!({"user_key": "   "})), None);
+        assert_eq!(user_key_from_response(&json!({})), None);
     }
 }

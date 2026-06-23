@@ -170,6 +170,7 @@ Skills with available="false" need dependencies installed first - you can try in
                 workspace_id=workspace_id,
                 peer_id=self._sender_id,
                 openviking_connection=self._openviking_connection,
+                actor_peer_id=self._sender_id,
             )
             cost = round(_time.time() - start, 2)
             logger.info(
@@ -190,6 +191,7 @@ Skills with available="false" need dependencies installed first - you can try in
                     workspace_id=workspace_id,
                     peer_ids=additional_peer_ids,
                     openviking_connection=self._openviking_connection,
+                    use_peer_actor_scope=bool(self._sender_id),
                 )
                 if profiles:
                     parts.append(profiles)
@@ -265,6 +267,8 @@ Skills with available="false" need dependencies installed first - you can try in
                 "- Injected memory entries use three types: full means the full memory content is already shown; summary means only a summary is shown and the URI has more detail; uri means only the URI is shown and it may still point to key facts.\n"
                 "- For relevant summary or uri entries, use openviking_multi_read on their URIs to fetch full details to help you to resolve the query. "
             )
+
+
 
         parts.append(
             "Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:"

@@ -21,6 +21,7 @@ from openviking.session.memory.utils.language import (
     resolve_output_language_from_conversation,
     resolve_output_language_from_text,
     resolve_with_override,
+    strip_language_detection_noise,
 )
 from openviking.session.memory.utils.line_numbers import (
     add_line_numbers,
@@ -49,6 +50,7 @@ __all__ = [
     "resolve_output_language_from_conversation",
     "resolve_output_language_from_text",
     "resolve_with_override",
+    "strip_language_detection_noise",
     "add_line_numbers",
     "every_line_has_line_numbers",
     "extract_start_line_number",

@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use tracing::warn;
 
 use crate::crypto;
 use crate::shape::SHAPE_MANIFEST_PATH;
@@ -161,7 +162,25 @@ impl FileSystem for EncryptionWrappedFS {
         // the startup probe, so this layer always expects ciphertext.
         let data = self.inner.read(path, 0, 0).await?;
         let account_id = self.require_account_id()?;
-        let plaintext = self.decrypt_envelope(&account_id, &data)?;
+        let plaintext = match self.decrypt_envelope(&account_id, &data) {
+            Ok(plaintext) => plaintext,
+            Err(err) => {
+                if !crypto::is_encrypted(&data) {
+                    // ponytail: transitional plaintext fallback for backends that enabled
+                    // encryption after plaintext files already existed; remove after migration.
+                    return Ok(slice_bytes(data, offset, size));
+                }
+                warn!(
+                    path = %path,
+                    account_id = %account_id,
+                    ciphertext_len = data.len(),
+                    encrypted_magic = true,
+                    error = %err,
+                    "failed to decrypt encrypted RAGFS file"
+                );
+                return Err(err);
+            }
+        };
         Ok(slice_bytes(plaintext, offset, size))
     }
 

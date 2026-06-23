@@ -1,6 +1,6 @@
 # 认证
 
-OpenViking Server 支持三种认证模式，并带有基于角色的访问控制：`api_key`、`trusted` 和 `dev`。如果未显式配置，模式会自动推导。
+OpenViking Server 支持三种内置认证模式，并带有基于角色的访问控制：`api_key`、`trusted` 和 `dev`。如果未显式配置，模式会自动推导。此外，系统支持自定义认证插件，可对接任意身份源（如 LDAP、OIDC、mTLS 等）。
 
 ## 概述
 
@@ -45,6 +45,57 @@ OpenViking 使用两层 API Key 体系：
 ```bash
 openviking-server
 ```
+
+### 自定义认证插件
+
+服务端采用插件化认证架构。每种 `auth_mode` 对应一个 `AuthPlugin` 实现。内置插件（`dev`、`api_key`、`trusted`）会自动注册；第三方插件可通过继承 `AuthPlugin` 并在启动前注册来扩展。
+
+**插件接口（`openviking.server.auth.plugin.AuthPlugin`）**
+
+| 方法 | 用途 |
+|------|------|
+| `resolve_identity(request, api_key, x_openviking_account, x_openviking_user)` | 将凭据解析为 `ResolvedIdentity`。 |
+| `validate_config(config)` | 在启动时校验 `ServerConfig`；遇到致命错误应调用 `sys.exit(1)`。 |
+| `initialize(app, service, config)` | 在 `app.state` 上初始化运行时状态（如 `APIKeyManager`）。 |
+| `get_request_context_checks(path, identity)` | 可选的认证后路径/身份检查。 |
+| `requires_api_key_manager()` | Admin API 路由是否需要 `APIKeyManager`。 |
+| `can_skip_api_key_for_bot_proxy()` | Bot 代理是否可以跳过 API Key 校验（如 `dev` 模式）。 |
+
+**注册自定义插件**
+
+```python
+from openviking.server.auth.plugin import AuthPlugin
+from openviking.server.auth.registry import register_auth_plugin
+from openviking.server.identity import ResolvedIdentity, Role
+
+@register_auth_plugin
+class LDAPAuthPlugin(AuthPlugin):
+    auth_mode = "ldap"
+
+    async def resolve_identity(self, request, *, api_key=None, x_openviking_account=None, x_openviking_user=None):
+        # ... LDAP 绑定与身份解析 ...
+        return ResolvedIdentity(role=Role.USER, account_id="...", user_id="...")
+
+    def validate_config(self, config):
+        pass
+
+    async def initialize(self, app, service, config):
+        pass
+```
+
+然后在 `ov.conf` 中设置 `server.auth_mode = "ldap"`。
+
+**自定义角色**
+
+内置的 `Role` 类支持动态注册自定义角色及权限等级：
+
+```python
+from openviking.server.identity import Role
+
+Role.register("operator", rank=1)  # 权限介于 USER (0) 与 ADMIN (1) 之间
+```
+
+自定义角色可直接用于 `require_role()` 和 `require_auth_role()` 装饰器。
 
 ## 管理账户和用户
 

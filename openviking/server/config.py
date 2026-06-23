@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field, ValidationError
 
 from openviking.server.identity import AuthMode
 from openviking_cli.utils import get_logger
+
+# Import auth plugin registry for config validation
+from openviking.server.auth.registry import get_registry
 from openviking_cli.utils.config.config_loader import (
     load_json_config,
     resolve_config_path,
@@ -160,7 +163,7 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
-    auth_mode: Optional[AuthMode] = None  # If None, auto-detect based on root_api_key
+    auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
     profile_enabled: bool = False
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
@@ -183,17 +186,17 @@ class ServerConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    def get_effective_auth_mode(self) -> AuthMode:
+    def get_effective_auth_mode(self) -> str:
         """Get effective auth mode, auto-detecting if not explicitly set.
 
-        - If root_api_key is configured (non-empty) and auth_mode is None: API_KEY
-        - If root_api_key is not configured and auth_mode is None: DEV
+        - If root_api_key is configured (non-empty) and auth_mode is None: api_key
+        - If root_api_key is not configured and auth_mode is None: dev
         """
         if self.auth_mode is not None:
             return self.auth_mode
         if self.root_api_key is not None and self.root_api_key != "":
-            return AuthMode.API_KEY
-        return AuthMode.DEV
+            return AuthMode.API_KEY.value
+        return AuthMode.DEV.value
 
 
 def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
@@ -234,16 +237,14 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     if not isinstance(server_data, dict):
         raise ValueError("Invalid server config: 'server' section must be an object")
 
-    # Convert auth_mode string to enum if present
+    # Convert auth_mode string — built-in enums are converted to their string
+    # value; custom modes are kept as-is for plugin extensibility.
     if "auth_mode" in server_data and isinstance(server_data["auth_mode"], str):
         try:
-            server_data["auth_mode"] = AuthMode(server_data["auth_mode"])
-        except ValueError as e:
-            valid_modes = ", ".join(repr(m.value) for m in AuthMode)
-            raise ValueError(
-                f"Invalid server.auth_mode={server_data['auth_mode']!r}. "
-                f"Expected one of: {valid_modes}."
-            ) from e
+            server_data["auth_mode"] = AuthMode(server_data["auth_mode"]).value
+        except ValueError:
+            # Custom auth mode — keep as string for plugin registration
+            pass
 
     # Get encryption enabled from config data directly (for test compatibility)
     encryption_enabled = data.get("encryption", {}).get("enabled", False)
@@ -309,16 +310,13 @@ def load_bot_gateway_token(config_path: Optional[str] = None) -> str:
 def validate_server_config(config: ServerConfig) -> None:
     """Validate server config for safe startup.
 
-    - **dev mode**: No authentication required, always returns ROOT identity.
-      Only acceptable when binding to localhost.
-    - **api_key mode**: Authenticates via root_api_key or user keys.
-      Requires root_api_key to be configured.
-    - **trusted mode**: Trusts X-OpenViking-Account/User headers.
-      Requires root_api_key when binding to non-localhost.
+    Validation is delegated to the auth plugin registered for the effective
+    auth_mode. Built-in plugins (dev, api_key, trusted) preserve the original
+    validation behaviour.
 
     If auth_mode is not explicitly configured:
-    - If root_api_key is configured (non-empty): auto-select API_KEY mode
-    - If root_api_key is not configured: auto-select DEV mode
+    - If root_api_key is configured (non-empty): auto-select api_key mode
+    - If root_api_key is not configured: auto-select dev mode
 
     Raises:
         SystemExit: If the configuration is unsafe.
@@ -333,83 +331,38 @@ def validate_server_config(config: ServerConfig) -> None:
 
     effective_auth_mode = config.get_effective_auth_mode()
 
-    if effective_auth_mode == AuthMode.DEV:
-        # Dev mode: no authentication, only allowed on localhost
-        if _is_localhost(config.host):
-            if config.auth_mode is None:
-                logger.warning(
-                    "Dev mode (auto-detected): authentication disabled. "
-                    "This is allowed because the server is bound to localhost (%s). "
-                    "Do NOT expose this server to the network.",
-                    config.host,
-                )
-            else:
-                logger.warning(
-                    "Dev mode: authentication disabled. This is allowed because the "
-                    "server is bound to localhost (%s). Do NOT expose this server "
-                    "to the network.",
-                    config.host,
-                )
-            return
-        logger.error(
-            "SECURITY: server.auth_mode='dev' requires server.host to be localhost, "
-            "but it is set to '%s'. Dev mode exposes an unauthenticated ROOT "
-            "endpoint and must not be exposed to the network.",
-            config.host,
-        )
-        logger.error(
-            "To fix, either:\n"
-            '  1. Set server.auth_mode="api_key" and configure server.root_api_key, or\n'
-            '  2. Bind dev mode to localhost (server.host = "127.0.0.1")'
-        )
-        sys.exit(1)
-
-    if effective_auth_mode == AuthMode.TRUSTED:
-        if config.root_api_key and config.root_api_key != "":
-            return
-        if _is_localhost(config.host):
+    # Ensure built-in plugins are registered before validation.
+    # If a non-built-in plugin has already claimed a built-in mode name,
+    # log a security warning and forcefully override it.
+    from openviking.server.auth.plugins import DevAuthPlugin, ApiKeyAuthPlugin, TrustedAuthPlugin
+    registry = get_registry()
+    _BUILTIN_PLUGINS = {
+        "dev": DevAuthPlugin,
+        "api_key": ApiKeyAuthPlugin,
+        "trusted": TrustedAuthPlugin,
+    }
+    for mode, plugin_cls in _BUILTIN_PLUGINS.items():
+        existing = registry.get(mode)
+        if existing is None:
+            registry.register(plugin_cls)
+        elif existing is not plugin_cls:
             logger.warning(
-                "Trusted mode without API key: authentication trusts "
-                "X-OpenViking-Account/User headers. This is allowed because "
-                "the server is bound to localhost (%s).",
-                config.host,
+                "SECURITY: Auth mode %r was registered by %s but is being "
+                "overridden by the built-in %s.",
+                mode,
+                existing.__name__,
+                plugin_cls.__name__,
             )
-            return
+            registry._plugins[mode] = plugin_cls
+
+    plugin_cls = registry.get(effective_auth_mode)
+    if plugin_cls is None:
         logger.error(
-            "SECURITY: server.auth_mode='trusted' requires server.root_api_key when "
-            "server.host is '%s' (non-localhost). Only localhost trusted mode may run "
-            "without an API key.",
-            config.host,
-        )
-        logger.error(
-            "To fix, either:\n"
-            "  1. Set server.root_api_key in ov.conf, or\n"
-            '  2. Bind trusted mode to localhost (server.host = "127.0.0.1")'
+            "Unknown auth_mode: %r. No auth plugin registered for this mode. "
+            "Registered modes: %s.",
+            effective_auth_mode,
+            ", ".join(registry.list_modes()),
         )
         sys.exit(1)
 
-    # AuthMode.API_KEY
-    if config.root_api_key and config.root_api_key != "":
-        if config.auth_mode is None:
-            logger.info("Api key mode (auto-detected): using root_api_key for authentication")
-        return
-
-    # api_key mode without root_api_key is invalid - should use dev mode instead
-    if _is_localhost(config.host):
-        logger.error(
-            "server.auth_mode='api_key' requires server.root_api_key to be configured.\n"
-            'To run without authentication on localhost, either set server.auth_mode="dev" '
-            "or simply remove the server.auth_mode setting to auto-detect."
-        )
-    else:
-        logger.error(
-            "SECURITY: server.auth_mode='api_key' requires server.root_api_key "
-            "to be configured when server.host is '%s' (non-localhost).",
-            config.host,
-        )
-    logger.error(
-        "To fix, either:\n"
-        "  1. Set server.root_api_key in ov.conf, or\n"
-        '  2. Use server.auth_mode="dev" (localhost only)'
-    )
-    sys.exit(1)
+    plugin_cls().validate_config(config)

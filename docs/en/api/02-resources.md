@@ -126,7 +126,8 @@ This endpoint is the core entry point for resource management, supporting adding
 3. Call the corresponding Parser to parse content
 4. Build the directory tree and write to AGFS
 5. Wait for semantic processing completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
-6. Set up scheduled update task if `watch_interval` is specified
+6. If `reason` is non-empty, append it to the fixed resource reason session and commit through the normal memory extraction pipeline so suitable user memories can reference the resource URI
+7. Set up scheduled update task if `watch_interval` is specified
 
 **Code Entry Points**:
 - `openviking/client/local.py:LocalClient.add_resource` - SDK entry (embedded)
@@ -146,7 +147,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | to | string | No | - | Target Viking URI (exact location). Mutually exclusive with `parent` |
 | parent | string | No | - | Parent Viking URI (resource placed under this directory). Mutually exclusive with `to` |
 | create_parent | bool | No | False | Automatically create parent directory if it does not exist (server-side flag) |
-| reason | string | No | "" | Reason for adding the resource (for documentation and relevance improvement, experimental feature) |
+| reason | string | No | "" | Reason for adding the resource. When non-empty, OpenViking runs it through the normal session memory extraction pipeline with the resource URI and records resource references in the resulting memory |
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
 | wait | bool | No | False | Whether to wait for semantic processing and vectorization to complete before returning |
 | timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
@@ -168,6 +169,8 @@ This endpoint is the core entry point for resource management, supporting adding
 - Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
 - When `to` is specified and the target already exists, triggers incremental update
 - Only Git repository sources use full background import when `wait=false`; OpenViking performs repository preflight and target planning before returning the `task_id`.
+- Memory generated from `reason` is extracted through the same pipeline as `session.commit`. It uses `reason`, the resource URI, available source name, and available directory abstract; it does not inspect or expand the full resource content. OpenViking writes to existing memory types such as `entities`, `events`, or `preferences`, not a dedicated resource memory directory.
+- When deleting a resource, OpenViking scans the self or peer memories targeted by the current context before deletion, removes the matching resource URI and content introduced by that `reason`, and refreshes the semantic index for the affected memories.
 - Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - Feishu/Lark app-token imports do not pass `args.feishu_access_token`. OpenViking keeps the existing app credential flow and the SDK obtains an app/tenant token from `app_id` and `app_secret`. This mode supports both one-time imports and `watch_interval > 0`.
@@ -311,6 +314,19 @@ client.add_resource(
         "feishu_refresh_token": "r-...",
     },
 )
+```
+
+**Go SDK**
+
+```go
+result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
+    Reason: "User guide documentation",
+    Wait:   true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["root_uri"])
 ```
 
 **CLI**
@@ -505,6 +521,34 @@ curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/g
   -H "X-API-Key: your-key"
 ```
 
+**Python SDK**
+
+```python
+watches = client.list_watches(active_only=True)
+client.update_watch(to_uri="viking://resources/guide.md", is_active=False)
+client.trigger_watch(to_uri="viking://resources/guide.md")
+client.delete_watch(to_uri="viking://resources/guide.md")
+```
+
+**Go SDK**
+
+```go
+watches, err := client.ListWatches(ctx, &openviking.ListWatchesOptions{
+    ActiveOnly: true,
+})
+updated, err := client.UpdateWatch(ctx, openviking.UpdateWatchOptions{
+    ToURI:    "viking://resources/guide.md",
+    IsActive: openviking.Bool(false),
+})
+triggered, err := client.TriggerWatch(ctx, openviking.WatchRef{
+    ToURI: "viking://resources/guide.md",
+})
+deleted, err := client.DeleteWatch(ctx, openviking.WatchRef{
+    ToURI: "viking://resources/guide.md",
+})
+_, _, _, _ = watches, updated, triggered, deleted
+```
+
 **CLI** (subcommands of `ov task watch`)
 
 ```bash
@@ -628,6 +672,18 @@ result = client.add_skill("./skills/my-skill.json")
 
 # Wait for processing to complete
 client.wait_processed()
+```
+
+**Go SDK**
+
+```go
+result, err := client.AddSkill(ctx, "./skills/my-skill.json", &openviking.AddSkillOptions{
+    Wait: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["uri"])
 ```
 
 **CLI**
@@ -764,6 +820,12 @@ curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
 **Python SDK**
 
 The `add_resource`, `add_skill` and other endpoints in the Python SDK automatically handle local file uploads, no need to call this endpoint manually. To opt into distributed shared temporary uploads in HTTP client mode, set `upload.mode` to `"shared"` in `ovcli.conf`.
+
+**Go SDK**
+
+`client.AddResource`, `client.AddSkill`, `client.ImportOVPack`, and
+`client.RestoreOVPack` automatically call `temp_upload` for local files. Set
+`openviking.Config{UploadMode: "shared"}` to request shared temporary uploads.
 
 **CLI**
 

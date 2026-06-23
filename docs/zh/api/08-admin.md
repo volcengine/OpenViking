@@ -162,6 +162,16 @@ print(f"Admin user: {result['admin_user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 ```
 
+**Go SDK**
+
+```go
+result, err := client.AdminCreateAccount(ctx, "acme", "alice")
+if err != nil {
+    return err
+}
+fmt.Println(result["account_id"])
+```
+
 **CLI**
 
 ```bash
@@ -229,6 +239,16 @@ client.initialize()
 accounts = client.admin_list_accounts()
 for account in accounts:
     print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
+```
+
+**Go SDK**
+
+```go
+accounts, err := client.AdminListAccounts(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(accounts)
 ```
 
 **CLI**
@@ -305,6 +325,16 @@ client.initialize()
 
 result = client.admin_delete_account("acme")
 print(f"Account deleted: {result['deleted']}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminDeleteAccount(ctx, "acme")
+if err != nil {
+    return err
+}
+fmt.Println(result["deleted"])
 ```
 
 **CLI**
@@ -389,6 +419,16 @@ client.initialize()
 result = client.admin_register_user("acme", "bob", role="user")
 print(f"User registered: {result['user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminRegisterUser(ctx, "acme", "bob", "user")
+if err != nil {
+    return err
+}
+fmt.Println(result["user_id"])
 ```
 
 **CLI**
@@ -480,6 +520,16 @@ for user in users:
     print(f"User: {user['user_id']}, role: {user['role']}")
 ```
 
+**Go SDK**
+
+```go
+users, err := client.AdminListUsers(ctx, "acme")
+if err != nil {
+    return err
+}
+fmt.Println(users)
+```
+
 **CLI**
 
 ```bash
@@ -557,6 +607,16 @@ client.initialize()
 
 result = client.admin_remove_user("acme", "bob")
 print(f"User deleted: {result['deleted']}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminRemoveUser(ctx, "acme", "bob")
+if err != nil {
+    return err
+}
+fmt.Println(result["deleted"])
 ```
 
 **CLI**
@@ -640,6 +700,16 @@ result = client.admin_set_role("acme", "bob", "admin")
 print(f"User: {result['user_id']}, new role: {result['role']}")
 ```
 
+**Go SDK**
+
+```go
+result, err := client.AdminSetRole(ctx, "acme", "bob", "admin")
+if err != nil {
+    return err
+}
+fmt.Println(result["role"])
+```
+
 **CLI**
 
 ```bash
@@ -717,6 +787,16 @@ client.initialize()
 
 result = client.admin_regenerate_key("acme", "bob")
 print(f"New user key: {result['user_key']}")
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminRegenerateKey(ctx, "acme", "bob")
+if err != nil {
+    return err
+}
+fmt.Println(result["user_key"])
 ```
 
 **CLI**
@@ -812,6 +892,18 @@ curl -X POST http://localhost:1933/api/v1/admin/migrate \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-key>" \
   -d '{"action": "cleanup"}'
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminMigrate(ctx, &openviking.AdminMigrateOptions{
+    Cleanup: false,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["task_id"])
 ```
 
 **CLI**

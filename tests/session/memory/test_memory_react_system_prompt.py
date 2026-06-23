@@ -26,7 +26,7 @@ class TestProviderInstruction:
             in instruction
         )
         assert (
-            "ONLY read URIs that are explicitly listed in ls tool results or returned by previous tool calls"
+            "ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls"
             in instruction
         )
 
@@ -49,6 +49,41 @@ class TestProviderInstruction:
         assert "Peer Memory" in instruction
         assert "profile/preferences/entities/events" in instruction
         assert "cases/patterns/tools/skills" in instruction
+
+    def test_instruction_omits_resource_uri_handling_without_resource_uri(self):
+        provider = SessionExtractContextProvider(
+            messages=[Message(id="m1", role="user", parts=[TextPart("我喜欢越前龙马。")])]
+        )
+
+        instruction = provider.instruction()
+
+        assert "Resource URI Handling" not in instruction
+        assert "Affected memory URIs" not in instruction
+
+    def test_instruction_includes_resource_uri_handling_for_user_scoped_resource_uri(self):
+        provider = SessionExtractContextProvider(
+            messages=[
+                Message(
+                    id="m1",
+                    role="user",
+                    parts=[
+                        TextPart(
+                            "这张图是越前龙马："
+                            "viking://user/ryoma/peers/fuji/resources/images/yueqian_jpeg"
+                        )
+                    ],
+                )
+            ]
+        )
+
+        instruction = provider.instruction()
+
+        assert "Resource URI Handling" in instruction
+        assert "viking://user/{user_id}/resources/..." in instruction
+        assert "viking://user/{user_id}/peers/{peer_id}/resources/..." in instruction
+        assert (
+            "system-generated `## Resource Deletion` block's `Affected memory URIs`" in instruction
+        )
 
 
 class TestSessionConversationToolFiltering:

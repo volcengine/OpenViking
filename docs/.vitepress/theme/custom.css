@@ -63,3 +63,269 @@
     display: none !important;
   }
 }
+
+.VPNavBarSearch {
+  display: none !important;
+}
+
+.ov-docs-search {
+  display: flex;
+  align-items: center;
+  margin-right: 12px;
+}
+
+.ov-docs-search-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  min-width: 190px;
+  max-width: 260px;
+  padding: 0 10px 0 14px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background: var(--vp-c-bg-alt);
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ov-docs-search-trigger:hover {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-text-1);
+}
+
+.ov-docs-search-trigger-label {
+  flex: 1;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-docs-search-trigger-compact {
+  display: none;
+}
+
+.ov-docs-search-trigger kbd {
+  flex: 0 0 auto;
+  min-width: 46px;
+  padding: 4px 6px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-3);
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.ov-docs-search-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 84px 20px 24px;
+  background: rgba(0, 0, 0, 0.36);
+}
+
+.ov-docs-search-dialog {
+  width: min(720px, 100%);
+  max-height: min(720px, calc(100vh - 108px));
+  overflow: visible;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background: var(--vp-c-bg);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.28);
+}
+
+.ov-docs-search-bar {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.ov-docs-search-mode-button,
+.ov-docs-search-input {
+  height: 42px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-1);
+  font: inherit;
+}
+
+.ov-docs-search-mode-picker {
+  position: relative;
+}
+
+.ov-docs-search-mode-button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ov-docs-search-mode-button span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-docs-search-mode-caret {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  opacity: 0.7;
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.ov-docs-search-mode-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 2;
+  width: 210px;
+  overflow: hidden;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background: var(--vp-c-bg-elv);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+}
+
+.ov-docs-search-mode-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--vp-c-text-1);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.ov-docs-search-mode-option:hover,
+.ov-docs-search-mode-option.is-selected {
+  background: var(--vp-c-bg-soft);
+}
+
+.ov-docs-search-mode-option code {
+  color: var(--vp-c-text-3);
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+}
+
+.ov-docs-search-input {
+  min-width: 0;
+  padding: 0 13px;
+}
+
+.ov-docs-search-input:focus,
+.ov-docs-search-mode-button:focus {
+  border-color: var(--vp-c-brand-1);
+  outline: 2px solid var(--vp-c-brand-soft);
+}
+
+.ov-docs-search-notice {
+  margin: 0;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+}
+
+.ov-docs-search-results {
+  max-height: min(560px, calc(100vh - 218px));
+  overflow: auto;
+  padding: 8px;
+}
+
+.ov-docs-search-empty {
+  margin: 0;
+  padding: 34px 18px;
+  color: var(--vp-c-text-2);
+  text-align: center;
+}
+
+.ov-docs-search-result {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.ov-docs-search-result:hover {
+  background: var(--vp-c-bg-soft);
+}
+
+.ov-docs-search-result-title {
+  color: var(--vp-c-text-1);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ov-docs-search-result-snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ov-docs-search-result-path {
+  overflow: hidden;
+  color: var(--vp-c-text-3);
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .ov-docs-search-trigger {
+    min-width: 72px;
+    width: 72px;
+    padding: 0 12px;
+    justify-content: center;
+  }
+
+  .ov-docs-search-trigger-label,
+  .ov-docs-search-trigger kbd {
+    display: none;
+  }
+
+  .ov-docs-search-trigger-compact {
+    display: inline;
+    color: var(--vp-c-text-2);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .ov-docs-search-backdrop {
+    padding: 58px 12px 16px;
+  }
+
+  .ov-docs-search-bar {
+    grid-template-columns: 1fr;
+  }
+}

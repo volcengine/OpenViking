@@ -379,3 +379,63 @@ class TestExpandSymbol:
     def test_expand_qualified_missing_class(self):
         out = expand_symbol(PY_SAMPLE, "greeter.py", "NoSuchClass.greet")
         assert "symbol 'NoSuchClass.greet' not found" in out
+
+
+# ---------------------------------------------------------------------------
+# filter_code_uris
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from openviking.parse.parsers.code.ast.code_tools import (  # noqa: E402
+    CODE_SEARCH_FILE_CAP,
+    filter_code_uris,
+)
+
+
+class TestFilterCodeUris:
+    def test_keeps_supported_extensions(self):
+        entries = [
+            {"uri": "viking://r/a.py", "isDir": False},
+            {"uri": "viking://r/b.md", "isDir": False},
+            {"uri": "viking://r/c.ts", "isDir": False},
+            {"uri": "viking://r/d.txt", "isDir": False},
+        ]
+        uris, capped = filter_code_uris(entries)
+        assert uris == ["viking://r/a.py", "viking://r/c.ts"]
+        assert capped is False
+
+    def test_skips_directories(self):
+        entries = [
+            {"uri": "viking://r/sub", "isDir": True},
+            {"uri": "viking://r/a.py", "isDir": False},
+        ]
+        uris, capped = filter_code_uris(entries)
+        assert uris == ["viking://r/a.py"]
+        assert capped is False
+
+    def test_object_entries_snake_case(self):
+        entries = [
+            SimpleNamespace(uri="viking://r/a.py", is_dir=False),
+            SimpleNamespace(uri="viking://r/sub", is_dir=True),
+        ]
+        uris, capped = filter_code_uris(entries)
+        assert uris == ["viking://r/a.py"]
+        assert capped is False
+
+    def test_exactly_200_not_capped(self):
+        entries = [{"uri": f"viking://r/f{i}.py", "isDir": False} for i in range(200)]
+        uris, capped = filter_code_uris(entries)
+        assert len(uris) == 200
+        assert capped is False
+
+    def test_201_files_triggers_cap(self):
+        entries = [{"uri": f"viking://r/f{i}.py", "isDir": False} for i in range(201)]
+        uris, capped = filter_code_uris(entries)
+        assert len(uris) == CODE_SEARCH_FILE_CAP
+        assert capped is True
+
+    def test_empty_entries(self):
+        uris, capped = filter_code_uris([])
+        assert uris == []
+        assert capped is False

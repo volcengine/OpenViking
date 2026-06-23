@@ -6,7 +6,8 @@
   "scripts": {
     "docs:dev": "vitepress dev . --host 0.0.0.0",
     "docs:build": "vitepress build .",
-    "docs:preview": "vitepress preview . --host 0.0.0.0"
+    "docs:preview": "vitepress preview . --host 0.0.0.0",
+    "test:search": "node --experimental-strip-types --test .vitepress/theme/openviking-search-*.test.ts"
   },
   "devDependencies": {
     "vitepress": "1.6.4"

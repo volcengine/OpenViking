@@ -3,6 +3,36 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.4.2 (2026-06-17)
+
+### Highlights
+
+- **OpenClaw installer and runtime docs hardening**: the OpenClaw installer flow, runtime setup modules, and related documentation tests were refreshed so plugin setup contracts stay covered.
+- **Wiki and RAGFS follow-ups**: wiki links were corrected, and RAGFS shape probing now ignores legacy task records.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.1...v0.4.2)
+
+## v0.4.1 (2026-06-16)
+
+### Highlights
+
+- **User / Peer identity model**: OpenViking now separates data ownership (`user`) from interaction counterparts (`peer`), with legacy `agent_id` mapped as a transition setting.
+- **0.3.x legacy migration path**: legacy `viking://agent/...` and `viking://session/...` data can be read compatibly, migrated to the new `viking://user/...` layout, verified, and cleaned up after rollback is no longer needed.
+- **Multimodal ingestion expansion**: sessions and resources now cover image messages, Markdown image rewrites, Feishu user tokens, external parser routing, and richer image/vectorization flows.
+- **OpenClaw and retrieval diagnostics**: retrieval supports `context_type`, while OpenClaw adds Recall Trace, runtime query config, feature gates, and actor peer scope wiring.
+- **Skills and plugin lifecycle updates**: Skills are user-scoped context assets, and the Codex / Claude Code plugin path gains stronger install, pending-queue, recall-cache, and failure-cache support.
+- **Model and storage reliability**: ordered VLM/embedding credentials, failover/failback classification, RAGFS multi-write, S3 content-type autodetection, vector migration fixes, and task durability improve production operation.
+
+### Upgrade Notes
+
+- New writes should move to `viking://user/...`; `viking://agent/...` remains readable for old data but is no longer the target for new memory, resource, session, or skill writes.
+- `agent_id` is a legacy transition setting that maps to request-level `actor_peer_id`; do not configure `agent_id` and `actor_peer_id` together, and do not send message-level `peer_id` from a legacy `agent_id` client.
+- Legacy `role_id` memory isolation is no longer supported; use the User / Peer model for isolation boundaries.
+- Before upgrading a 0.3.x deployment, back up data, upgrade server / CLI / SDK to 0.4.1, verify legacy reads, run `ov --sudo admin migrate --output json`, inspect the task result, and only then run cleanup.
+- Regenerate clients or pinned schemas for integrations that use the new retrieval, skill, migration, or OpenClaw surfaces.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.3.24...v0.4.1)
+
 ## v0.3.24 (2026-06-05)
 
 ### Highlights

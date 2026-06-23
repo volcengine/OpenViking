@@ -118,7 +118,7 @@ class Summarizer:
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                     peer_id=ctx.user.user_id,
-                    role=ctx.role.value,
+                    role=str(ctx.role),
                     skip_vectorization=skip_vectorization,
                     telemetry_id=telemetry.telemetry_id,
                     target_uri=target_uri if target_uri != source_uri else None,

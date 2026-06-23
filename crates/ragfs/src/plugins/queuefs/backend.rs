@@ -336,6 +336,16 @@ impl SQLiteQueueBackend {
                 .map_err(|e| Error::internal(format!("sqlite busy_timeout error: {}", e)))?;
         }
 
+        if Self::is_new_database(&conn)? {
+            conn.execute_batch(
+                r#"
+                PRAGMA auto_vacuum=FULL;
+                VACUUM;
+                "#,
+            )
+            .map_err(|e| Error::internal(format!("sqlite auto_vacuum pragma error: {}", e)))?;
+        }
+
         conn.execute_batch(
             r#"
             PRAGMA journal_mode=WAL;
@@ -373,6 +383,17 @@ impl SQLiteQueueBackend {
         backend.run_migrations()?;
         backend.recover_stale(options.recover_stale_sec)?;
         Ok(backend)
+    }
+
+    fn is_new_database(conn: &Connection) -> Result<bool> {
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| Error::internal(format!("sqlite schema probe error: {}", e)))?;
+        Ok(table_count == 0)
     }
 
     fn run_migrations(&self) -> Result<()> {
@@ -1027,6 +1048,49 @@ mod tests {
                 "idx_queue_status".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn test_sqlite_backend_enables_full_auto_vacuum_for_new_databases() {
+        let (_dir, db_path, _backend) = sqlite_backend();
+
+        let conn = Connection::open(db_path).unwrap();
+        let auto_vacuum: i64 = conn.query_row("PRAGMA auto_vacuum", [], |row| row.get(0)).unwrap();
+        assert_eq!(auto_vacuum, 1);
+    }
+
+    #[test]
+    fn test_sqlite_backend_does_not_rewrite_existing_auto_vacuum_mode() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("legacy-auto-vacuum.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+
+        let conn = Connection::open(&db_path_str).unwrap();
+        conn.execute_batch(
+            r#"
+            PRAGMA auto_vacuum=NONE;
+            CREATE TABLE queue_metadata (
+                queue_name TEXT PRIMARY KEY,
+                created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                last_updated INTEGER DEFAULT (strftime('%s', 'now'))
+            );
+            CREATE TABLE queue_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                queue_name TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                data TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+
+        let _backend = SQLiteQueueBackend::open(&db_path_str, SQLiteQueueOptions::default()).unwrap();
+
+        let conn = Connection::open(&db_path_str).unwrap();
+        let auto_vacuum: i64 = conn.query_row("PRAGMA auto_vacuum", [], |row| row.get(0)).unwrap();
+        assert_eq!(auto_vacuum, 0);
     }
 
     #[test]

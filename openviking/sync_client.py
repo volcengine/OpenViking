@@ -160,6 +160,23 @@ class SyncOpenViking:
         """Query background task status."""
         return run_async(self._async_client.get_task(task_id))
 
+    def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        return run_async(
+            self._async_client.list_tasks(
+                task_type=task_type,
+                status=status,
+                resource_id=resource_id,
+                limit=limit,
+            )
+        )
+
     def reindex(
         self,
         uri: str,
@@ -241,6 +258,7 @@ class SyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -258,6 +276,7 @@ class SyncOpenViking:
                 score_threshold=score_threshold,
                 filter=filter,
                 context_type=context_type,
+                tags=tags,
                 telemetry=telemetry,
                 since=since,
                 until=until,
@@ -274,6 +293,7 @@ class SyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -289,6 +309,7 @@ class SyncOpenViking:
                 score_threshold,
                 filter,
                 context_type,
+                tags,
                 telemetry,
                 since,
                 until,
@@ -326,6 +347,25 @@ class SyncOpenViking:
                 mode=mode,
                 wait=wait,
                 timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
+
+    def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        return run_async(
+            self._async_client.set_tags(
+                uri=uri,
+                tags=tags,
+                mode=mode,
+                recursive=recursive,
                 telemetry=telemetry,
             )
         )
@@ -401,9 +441,15 @@ class SyncOpenViking:
         """Get relations"""
         return run_async(self._async_client.relations(uri))
 
-    def rm(self, uri: str, recursive: bool = False) -> None:
+    def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: float = None,
+    ) -> None:
         """Delete resource"""
-        return run_async(self._async_client.rm(uri, recursive))
+        return run_async(self._async_client.rm(uri, recursive, wait=wait, timeout=timeout))
 
     def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
         """Wait for all async operations to complete"""

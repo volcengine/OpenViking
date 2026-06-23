@@ -239,7 +239,7 @@ class WatchScheduler:
                     account_id=task.account_id,
                     user_id=task.user_id,
                 )
-                role_value = getattr(task, "original_role", None) or Role.USER.value
+                role_value = getattr(task, "original_role", None) or str(Role.USER)
                 try:
                     role = Role(role_value)
                 except Exception:
@@ -312,7 +312,7 @@ class WatchScheduler:
                                 task_id=task.task_id,
                                 account_id=task.account_id,
                                 user_id=task.user_id,
-                                role=getattr(task, "original_role", None) or Role.USER.value,
+                                role=getattr(task, "original_role", None) or str(Role.USER),
                                 is_active=False,
                             )
                         )

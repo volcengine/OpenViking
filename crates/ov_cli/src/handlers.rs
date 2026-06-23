@@ -5,6 +5,9 @@ use crate::commands;
 use crate::config::merge_csv_options;
 use crate::config_agent;
 use crate::error::{Error, Result};
+use crate::terminal_ui::{
+    RenderedRegion as RenderedSelectRegion, clear_rendered_lines, live_select_block,
+};
 use crate::theme;
 use crate::tui;
 use colored::Colorize;
@@ -967,9 +970,8 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
 
     use crossterm::{
         cursor,
-        event::{self, Event, KeyCode, KeyModifiers},
-        execute,
-        terminal::{self, Clear, ClearType},
+        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+        execute, terminal,
     };
 
     if items.is_empty() {
@@ -1000,80 +1002,71 @@ fn prompt_select(prompt: &str, items: &[String], default: usize) -> Result<Selec
     }
 
     let mut selected = default.min(items.len().saturating_sub(1));
-    let mut rendered_lines = 0usize;
     let _raw_guard = RawGuard::enter()?;
 
-    loop {
-        clear_rendered_lines(rendered_lines)?;
-        let lines = select_lines(prompt, items, selected);
-        rendered_lines = lines.len();
-        print!("{}", live_select_block(&lines));
-        io::stdout().flush()?;
+    // Initial render
+    let lines = select_lines(prompt, items, selected);
+    let mut rendered_region = RenderedSelectRegion::from_lines(&lines, live_select_columns());
+    print!("{}", live_select_block(&lines));
+    io::stdout().flush()?;
 
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Up => {
-                    selected = if selected == 0 {
-                        items.len().saturating_sub(1)
-                    } else {
-                        selected - 1
-                    };
+    loop {
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                match key.code {
+                    KeyCode::Up => {
+                        selected = if selected == 0 {
+                            items.len().saturating_sub(1)
+                        } else {
+                            selected - 1
+                        };
+                    }
+                    KeyCode::Down => selected = (selected + 1) % items.len(),
+                    KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
+                        clear_rendered_region(&rendered_region)?;
+                        return Ok(SelectOutcome::Selected(selected));
+                    }
+                    KeyCode::Esc => {
+                        clear_rendered_region(&rendered_region)?;
+                        return Ok(SelectOutcome::Back);
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        clear_rendered_region(&rendered_region)?;
+                        return Ok(SelectOutcome::Quit);
+                    }
+                    _ => continue,
                 }
-                KeyCode::Down => selected = (selected + 1) % items.len(),
-                KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r') => {
-                    clear_rendered_lines(rendered_lines)?;
-                    return Ok(SelectOutcome::Selected(selected));
-                }
-                KeyCode::Esc => {
-                    clear_rendered_lines(rendered_lines)?;
-                    return Ok(SelectOutcome::Back);
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    clear_rendered_lines(rendered_lines)?;
-                    return Ok(SelectOutcome::Quit);
-                }
-                _ => {}
+                clear_rendered_region(&rendered_region)?;
+                let lines = select_lines(prompt, items, selected);
+                rendered_region = RenderedSelectRegion::from_lines(&lines, live_select_columns());
+                print!("{}", live_select_block(&lines));
+                io::stdout().flush()?;
             }
+            Event::Resize(_, _) => {
+                clear_rendered_region(&rendered_region)?;
+                let lines = select_lines(prompt, items, selected);
+                rendered_region = RenderedSelectRegion::from_lines(&lines, live_select_columns());
+                print!("{}", live_select_block(&lines));
+                io::stdout().flush()?;
+            }
+            _ => {}
         }
     }
 
-    fn clear_rendered_lines(lines: usize) -> Result<()> {
-        if lines == 0 {
-            return Ok(());
-        }
-        let mut stdout = io::stdout();
-        execute!(
-            stdout,
-            cursor::MoveUp(lines as u16),
-            cursor::MoveToColumn(0)
-        )?;
-        for line in 0..lines {
-            execute!(
-                stdout,
-                cursor::MoveToColumn(0),
-                Clear(ClearType::CurrentLine)
-            )?;
-            if line + 1 < lines {
-                execute!(stdout, cursor::MoveDown(1))?;
-            }
-        }
-        execute!(
-            stdout,
-            cursor::MoveUp(lines.saturating_sub(1) as u16),
-            cursor::MoveToColumn(0)
-        )?;
-        Ok(())
+    fn clear_rendered_region(region: &RenderedSelectRegion) -> Result<()> {
+        clear_rendered_lines(region.rows_to_clear(live_select_columns()))
     }
 }
 
-fn live_select_block(lines: &[String]) -> String {
-    if lines.is_empty() {
-        return String::new();
-    }
+fn live_select_columns() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| usize::from(columns).saturating_sub(1).max(1))
+        .unwrap_or(80)
+}
 
-    let mut rendered = lines.join("\r\n");
-    rendered.push_str("\r\n");
-    rendered
+#[cfg(test)]
+fn rendered_select_rows(lines: &[String], columns: usize) -> usize {
+    crate::terminal_ui::rendered_row_count(lines, columns)
 }
 
 fn switch_confirmation_labels() -> Vec<String> {
@@ -1224,6 +1217,26 @@ pub async fn handle_write(
     .await
 }
 
+pub async fn handle_set_tags(
+    uri: String,
+    tags: Vec<String>,
+    mode: String,
+    recursive: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::set_tags(
+        &client,
+        &uri,
+        tags,
+        &mode,
+        recursive,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
 pub async fn handle_reindex(uri: String, mode: String, wait: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::reindex(&client, &uri, &mode, wait, ctx.output_format, ctx.compact).await
@@ -1243,6 +1256,7 @@ pub async fn handle_find(
     before: Option<String>,
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1262,6 +1276,9 @@ pub async fn handle_find(
     if let Some(ref context_types) = context_type {
         params.push(format!("--context-type {}", context_types.join(",")));
     }
+    if let Some(ref t) = tags {
+        params.push(format!("--tags {}", t.join(",")));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1276,6 +1293,7 @@ pub async fn handle_find(
         None,
         level,
         context_type,
+        tags,
         ctx.output_format,
         ctx.compact,
     )
@@ -1292,6 +1310,7 @@ pub async fn handle_search(
     before: Option<String>,
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1314,6 +1333,9 @@ pub async fn handle_search(
     if let Some(ref context_types) = context_type {
         params.push(format!("--context-type {}", context_types.join(",")));
     }
+    if let Some(ref t) = tags {
+        params.push(format!("--tags {}", t.join(",")));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1329,6 +1351,7 @@ pub async fn handle_search(
         None,
         level,
         context_type,
+        tags,
         ctx.output_format,
         ctx.compact,
     )
@@ -1444,9 +1467,24 @@ pub async fn handle_mkdir(uri: String, description: Option<String>, ctx: CliCont
     .await
 }
 
-pub async fn handle_rm(uri: String, recursive: bool, ctx: CliContext) -> Result<()> {
+pub async fn handle_rm(
+    uri: String,
+    recursive: bool,
+    wait: bool,
+    timeout: Option<f64>,
+    ctx: CliContext,
+) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::rm(&client, &uri, recursive, ctx.output_format, ctx.compact).await
+    commands::filesystem::rm(
+        &client,
+        &uri,
+        recursive,
+        wait,
+        timeout,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 pub async fn handle_mv(from_uri: String, to_uri: String, ctx: CliContext) -> Result<()> {
@@ -1570,6 +1608,26 @@ mod config_switch_prompt_tests {
 
         assert_eq!(rendered, "Choose config\r\n  › local\r\n");
         assert!(!rendered.contains("config\n"));
+    }
+
+    #[test]
+    fn switch_selector_counts_physical_rows_after_wrapping_and_ansi_styles() {
+        let lines = vec![
+            "\u{1b}[31m12345678901\u{1b}[0m".to_string(),
+            "short".to_string(),
+        ];
+
+        assert_eq!(rendered_select_rows(&lines, 10), 3);
+    }
+
+    #[test]
+    fn switch_selector_recomputes_clear_rows_after_resize() {
+        let lines = vec!["x".repeat(90)];
+        let region = RenderedSelectRegion::from_lines(&lines, 90);
+
+        assert_eq!(rendered_select_rows(&lines, 90), 1);
+        assert_eq!(rendered_select_rows(&lines, 30), 3);
+        assert_eq!(region.rows_to_clear(30), 3);
     }
 
     #[test]

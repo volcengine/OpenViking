@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from openviking.server.auth import get_request_context
-from openviking.server.identity import AuthMode, RequestContext
+from openviking.server.identity import RequestContext
 from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
@@ -84,12 +84,10 @@ def _attach_openviking_connection(
     """
     enriched = dict(body)
     api_key = _extract_forward_api_key(request)
-    auth_mode = AuthMode.API_KEY
     config = getattr(request.app.state, "config", None)
-    if config is not None and hasattr(config, "get_effective_auth_mode"):
-        auth_mode = config.get_effective_auth_mode()
+    plugin = getattr(request.app.state, "auth_plugin", None)
     if not api_key:
-        if auth_mode == AuthMode.DEV:
+        if plugin is not None and plugin.can_skip_api_key_for_bot_proxy():
             enriched.setdefault("user_id", ctx.user.user_id)
             return enriched
         raise HTTPException(

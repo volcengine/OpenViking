@@ -7,7 +7,7 @@ import tempfile
 import uuid
 
 import pytest
-from conftest import ov
+from conftest import ov, ov_add_resource, ov_rm
 
 pytestmark = pytest.mark.cli_remote
 
@@ -30,10 +30,7 @@ class TestLinkUnlink:
             f.write("# Link Target\n\nThis is a link target file.")
             temp_path = f.name
         try:
-            ov(
-                ["add-resource", temp_path, "--to", second_pack_uri, "--wait", "-o", "json"],
-                timeout=120,
-            )
+            ov_add_resource(temp_path, second_pack_uri)
         finally:
             os.unlink(temp_path)
 
@@ -53,4 +50,4 @@ class TestLinkUnlink:
         unlink_data = unlink_r["json"]
         assert unlink_data.get("ok") is True, f"Expected ok=true, got {unlink_data.get('ok')}"
 
-        ov(["rm", second_pack_uri, "-r", "-o", "json"])
+        ov_rm(second_pack_uri)

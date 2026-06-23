@@ -7,6 +7,7 @@ use crate::{
     error::Error,
     error_classifier::looks_like_auth_error,
     i18n::{Language, copy},
+    terminal_ui::{fit_to_display_width, truncate_to_display_width},
     theme,
 };
 
@@ -582,27 +583,56 @@ fn ensure_sentence(value: &str) -> String {
 }
 
 pub(crate) fn render_report(report: &ErrorReport, verbose: bool) -> String {
+    render_report_with_width(report, verbose, error_output_width())
+}
+
+fn render_report_with_width(report: &ErrorReport, verbose: bool, width: usize) -> String {
     let mut output = String::new();
     let language = Language::current();
     let try_command = try_command_for_report(report);
 
     if let Some(command) = report.command.as_deref() {
-        output.push_str(&format!("{}\n\n", theme::strong(command)));
+        if width >= CARD_WIDTH {
+            output.push_str(&format!("{}\n\n", theme::strong(command)));
+        } else {
+            output.push_str(&format!(
+                "{}\n\n",
+                theme::strong(truncate_to_display_width(command, width))
+            ));
+        }
     }
     if let Some(usage) = report.usage.as_deref() {
-        output.push_str(&format!(
-            "{} {}\n",
-            theme::warning(copy(language, "Usage:", "用法：")).bold(),
-            theme::strong(usage)
-        ));
-        output.push_str(&format!(
-            "{} {}\n\n",
-            theme::muted(copy(language, "Try:", "可尝试：")),
-            theme::command(&try_command)
-        ));
+        if width >= CARD_WIDTH {
+            output.push_str(&format!(
+                "{} {}\n",
+                theme::warning(copy(language, "Usage:", "用法：")).bold(),
+                theme::strong(usage)
+            ));
+            output.push_str(&format!(
+                "{} {}\n\n",
+                theme::muted(copy(language, "Try:", "可尝试：")),
+                theme::command(&try_command)
+            ));
+        } else {
+            output.push_str(&format!(
+                "{}\n",
+                theme::warning(truncate_to_display_width(
+                    &format!("{} {usage}", copy(language, "Usage:", "用法：")),
+                    width
+                ))
+                .bold()
+            ));
+            output.push_str(&format!(
+                "{}\n\n",
+                theme::muted(truncate_to_display_width(
+                    &format!("{} {try_command}", copy(language, "Try:", "可尝试：")),
+                    width
+                ))
+            ));
+        }
     }
 
-    output.push_str(&render_card(report, verbose));
+    output.push_str(&render_card(report, verbose, width));
 
     if !report.actions.is_empty() {
         output.push_str("\n\n");
@@ -610,19 +640,10 @@ pub(crate) fn render_report(report: &ErrorReport, verbose: bool) -> String {
             "{}\n",
             theme::strong(copy(language, "Next:", "下一步："))
         ));
-        let command_width = report
-            .actions
-            .iter()
-            .map(|action| action.command.width())
-            .max()
-            .unwrap_or_default();
+        let command_width = action_command_width(&report.actions, width);
         for action in &report.actions {
-            output.push_str(&format!(
-                "  {}{}  {}\n",
-                theme::command(action.command.clone()).bold(),
-                " ".repeat(command_width.saturating_sub(action.command.width())),
-                theme::muted(&action.description)
-            ));
+            output.push_str(&render_action_line(action, command_width, width));
+            output.push('\n');
         }
     } else {
         output.push('\n');
@@ -645,11 +666,12 @@ impl OptionalUsage for ErrorReport {
     }
 }
 
-fn render_card(report: &ErrorReport, verbose: bool) -> String {
+fn render_card(report: &ErrorReport, verbose: bool, width: usize) -> String {
     let language = Language::current();
-    let inner_width = CARD_WIDTH.saturating_sub(4);
+    let inner_width = width.saturating_sub(4).max(1);
     let title = format!("─ {} ", report.title);
-    let fill = CARD_WIDTH.saturating_sub(2 + title.width());
+    let title = truncate_to_display_width(&title, width.saturating_sub(2));
+    let fill = width.saturating_sub(2 + title.width());
     let mut lines = Vec::new();
 
     lines.extend(wrap_text(&report.message, inner_width));
@@ -657,11 +679,9 @@ fn render_card(report: &ErrorReport, verbose: bool) -> String {
         lines.push(String::new());
         lines.extend(wrap_text(&did_you_mean(language, suggestion), inner_width));
     }
-    if verbose {
-        if let Some(detail) = report.detail.as_deref() {
-            lines.push(String::new());
-            lines.extend(wrap_text(&detail_line(language, detail), inner_width));
-        }
+    if verbose && let Some(detail) = report.detail.as_deref() {
+        lines.push(String::new());
+        lines.extend(wrap_text(&detail_line(language, detail), inner_width));
     }
 
     let mut rendered = String::new();
@@ -679,10 +699,49 @@ fn render_card(report: &ErrorReport, verbose: bool) -> String {
     rendered.push_str(&format!(
         "{}{}{}",
         theme::error("╰"),
-        theme::error("─".repeat(CARD_WIDTH.saturating_sub(2))),
+        theme::error("─".repeat(width.saturating_sub(2))),
         theme::error("╯")
     ));
     rendered
+}
+
+#[cfg(not(test))]
+fn error_output_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| crate::terminal_ui::terminal_width(columns as usize, CARD_WIDTH))
+        .unwrap_or(CARD_WIDTH)
+}
+
+#[cfg(test)]
+fn error_output_width() -> usize {
+    CARD_WIDTH
+}
+
+fn action_command_width(actions: &[ErrorAction], width: usize) -> usize {
+    let available = width.saturating_sub(4);
+    let preferred = actions
+        .iter()
+        .map(|action| action.command.width())
+        .max()
+        .unwrap_or_default();
+
+    preferred.min(available / 2).max(1)
+}
+
+fn render_action_line(action: &ErrorAction, command_width: usize, width: usize) -> String {
+    if width <= 4 {
+        return truncate_to_display_width(&action.command, width);
+    }
+
+    let description_width = width.saturating_sub(command_width + 4);
+    let command = fit_to_display_width(&action.command, command_width);
+    let description = truncate_to_display_width(&action.description, description_width);
+
+    format!(
+        "  {}  {}",
+        theme::command(command).bold(),
+        theme::muted(description)
+    )
 }
 
 fn did_you_mean(language: Language, suggestion: &str) -> String {
@@ -700,12 +759,13 @@ fn detail_line(language: Language, detail: &str) -> String {
 }
 
 fn render_card_line(line: &str, inner_width: usize) -> String {
+    let line = truncate_to_display_width(line, inner_width);
     let width = line.width();
     let padding = inner_width.saturating_sub(width);
     format!(
         "{} {}{} {}",
         theme::error("│"),
-        theme::body(line),
+        theme::body(&line),
         " ".repeat(padding),
         theme::error("│")
     )
@@ -720,6 +780,11 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let mut current = String::new();
 
     for word in text.split_whitespace() {
+        if current.is_empty() && word.width() > width {
+            lines.push(truncate_to_display_width(word, width));
+            continue;
+        }
+
         let separator = if current.is_empty() { 0 } else { 1 };
         if !current.is_empty() && current.width() + separator + word.width() > width {
             lines.push(current);
@@ -898,9 +963,7 @@ fn help_command_from_usage(usage: &str) -> Option<String> {
         }
         parts.push(token);
     }
-    let Some(program) = parts.first() else {
-        return None;
-    };
+    let program = parts.first()?;
     if !program.starts_with("ov") {
         return None;
     }
@@ -914,7 +977,8 @@ fn help_command_from_usage(usage: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CARD_WIDTH, ErrorReport, render_report, report_for_clap_error, report_for_runtime_error,
+        CARD_WIDTH, ErrorAction, ErrorReport, render_report, render_report_with_width,
+        report_for_clap_error, report_for_runtime_error,
     };
     use crate::error::Error;
     use std::ffi::OsString;
@@ -1199,6 +1263,30 @@ Usage: ov config [OPTIONS] [COMMAND]
             .filter(|line| line.starts_with('╭') || line.starts_with('│') || line.starts_with('╰'))
         {
             assert_eq!(line.width(), CARD_WIDTH, "{line}");
+        }
+    }
+
+    #[test]
+    fn error_report_respects_narrow_terminal_width() {
+        let report = ErrorReport::new(
+            "Command Error",
+            "Plain help is not supported for this command. Use prefixed help instead.",
+        )
+        .with_command("ov very-long-command-name with many extra positional values")
+        .with_usage("ov very-long-command-name --with-a-long-option <long-value>")
+        .with_suggestion("ov --help")
+        .with_actions(vec![ErrorAction::new(
+            "ov --help",
+            "Show this command's help",
+        )]);
+        let width = 32;
+        let rendered = strip_ansi(&render_report_with_width(&report, false, width));
+
+        for line in rendered.lines() {
+            assert!(
+                line.width() <= width,
+                "line exceeded narrow width: {line:?}"
+            );
         }
     }
 }

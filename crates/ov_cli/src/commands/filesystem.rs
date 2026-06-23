@@ -385,10 +385,12 @@ pub async fn rm(
     client: &HttpClient,
     uri: &str,
     recursive: bool,
+    wait: bool,
+    timeout: Option<f64>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.rm(uri, recursive).await?;
+    let result = client.rm(uri, recursive, wait, timeout).await?;
 
     let message = if let Some(count) = result
         .get("estimated_deleted_count")

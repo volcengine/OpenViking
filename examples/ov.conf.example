@@ -69,6 +69,7 @@
                 "endpoint": null,
                 "prefix": "",
                 "use_ssl": true,
+                "auto_detect_content_type": false,
                 "disable_batch_delete": false,
             },
         },

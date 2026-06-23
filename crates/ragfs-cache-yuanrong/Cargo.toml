@@ -1,0 +1,24 @@
+[package]
+name = "ragfs-cache-yuanrong"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91.1"
+license = "Apache-2.0"
+description = "Yuanrong DataSystem cache provider adapter for RAGFS"
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1.5"
+ragfs = { path = "../ragfs", features = ["cache"] }
+ragfs-cache-yuanrong-sys = { path = "../ragfs-cache-yuanrong-sys", optional = true }
+sha2 = { version = "0.10", optional = true }
+thiserror = "1.0"
+tokio = { version = "1.38", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+[features]
+default = []
+yuanrong-native = [
+    "dep:ragfs-cache-yuanrong-sys",
+    "dep:sha2",
+    "ragfs-cache-yuanrong-sys/native",
+]

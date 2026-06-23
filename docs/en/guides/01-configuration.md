@@ -1082,6 +1082,7 @@ Legacy compatibility example:
 | `prefix` | str | Optional key prefix for namespace isolation | "" |
 | `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections. Also controls the scheme auto-prefixed onto bare-hostname `endpoint` values | true |
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
+| `auto_detect_content_type` | bool | Automatically infer MIME type from the object key / filename extension and set the S3 object `Content-Type` header during upload | false |
 | `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
 | `normalize_encoding_chars` | str | Characters to escape in S3 object keys as `!HH` hexadecimal bytes; empty string disables normalization | `"?#%+@"` |
 
@@ -1103,6 +1104,32 @@ Typical choices:
 - Escaped bytes are encoded as `!HH`, where `HH` is the uppercase hexadecimal value of the byte.
 - Characters not listed in `normalize_encoding_chars`, including Chinese and other Unicode characters, remain unchanged.
 - Set `normalize_encoding_chars` to `""` to keep original path segments in object keys.
+
+`auto_detect_content_type` is disabled by default for backward compatibility. When enabled, RAGFS infers the MIME type from the object key / filename extension and writes it to the S3 object `Content-Type`:
+
+- Detection is based on the object key / filename extension, not file content sniffing.
+- Directory markers whose keys end with `/` do not get a `Content-Type`.
+- Unknown extensions fall back to `application/octet-stream`.
+
+Example:
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "backend": "s3",
+      "s3": {
+        "bucket": "my-bucket",
+        "endpoint": "s3.amazonaws.com",
+        "region": "us-east-1",
+        "access_key": "your-ak",
+        "secret_key": "your-sk",
+        "auto_detect_content_type": true
+      }
+    }
+  }
+}
+```
 
 <details>
 <summary><b>PathStyle S3</b></summary>

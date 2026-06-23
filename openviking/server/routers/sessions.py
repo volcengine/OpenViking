@@ -12,7 +12,7 @@ from openviking.core.peer_id import normalize_peer_selector
 from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AuthMode, RequestContext
+from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
@@ -172,11 +172,11 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-def _request_auth_mode(request: Request) -> AuthMode:
+def _request_auth_mode(request: Request) -> str:
     config = getattr(request.app.state, "config", None)
     if config is not None and hasattr(config, "get_effective_auth_mode"):
         return config.get_effective_auth_mode()
-    return AuthMode.API_KEY
+    return "api_key"
 
 
 @router.post("")

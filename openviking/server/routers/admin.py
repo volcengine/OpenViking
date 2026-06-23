@@ -83,10 +83,7 @@ def _validate_register_user_role(ctx: RequestContext, role: str) -> Role:
     - ADMIN may create USER or ADMIN accounts in their own account.
     - ROOT role assignment must go through the dedicated ROOT-only set_role endpoint.
     """
-    try:
-        resolved_role = Role(role)
-    except ValueError as exc:
-        raise InvalidArgumentError(f"Unsupported role for register_user: {role}") from exc
+    resolved_role = Role(role)
 
     if resolved_role == Role.ROOT:
         raise PermissionDeniedError(
@@ -268,7 +265,7 @@ async def register_user(
     _check_account_access(ctx, account_id)
     resolved_role = _validate_register_user_role(ctx, body.role)
     manager = _get_api_key_manager(request)
-    user_key = await manager.register_user(account_id, body.user_id, resolved_role.value)
+    user_key = await manager.register_user(account_id, body.user_id, str(resolved_role))
     service = get_service()
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, body.user_id),

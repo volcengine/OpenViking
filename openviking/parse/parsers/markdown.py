@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.code.ast.extractor import get_extractor
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -359,7 +360,14 @@ class MarkdownParser(BaseParser):
             else "Document",
         )
         doc_name = self._sanitize_for_path(doc_title)
-        root_dir = f"{temp_uri}/{doc_name}"
+        # Preserve code source filenames as the temp document directory.
+        # This yields foo.py/foo.md, allowing AST language detection to recover
+        # ".py" from the parent directory while keeping the markdown body name tidy.
+        source_name = kwargs.get("source_name")
+        root_name = (
+            source_name if source_name and get_extractor().supports(source_name) else doc_name
+        )
+        root_dir = f"{temp_uri}/{self._sanitize_for_path(root_name)}"
 
         # Find all headings
         headings = self._find_headings(content)
@@ -619,7 +627,7 @@ class MarkdownParser(BaseParser):
             # Copy each local image next to the markdown file, deduplicating names
             used_names: set[str] = set()
             file_mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
-            for origin_link, resolved_path in zip(origin_images_links, local_images):
+            for origin_link, resolved_path in zip(origin_images_links, local_images, strict=False):
                 try:
                     if not await asyncio.to_thread(resolved_path.exists):
                         logger.warning(f"[MarkdownParser] Image file not found: {resolved_path}")

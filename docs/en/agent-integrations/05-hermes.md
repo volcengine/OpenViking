@@ -14,7 +14,7 @@ The wizard prompts for:
 
 - **OpenViking server URL** — your self-hosted server (default `http://127.0.0.1:1933`) or OpenViking Service (VolcEngine Cloud)
 - **API key** — leave blank for local dev mode
-- **Tenant account / user / agent IDs** — for multi-tenant deployments
+- **Tenant account / user / peer IDs** — for multi-tenant deployments. Legacy `agent_id` settings map to the request actor peer during migration.
 
 Configuration is saved to Hermes's `config.yaml` and `.env` files.
 

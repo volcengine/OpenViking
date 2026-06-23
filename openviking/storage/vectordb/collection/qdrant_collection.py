@@ -117,9 +117,7 @@ def _sparse_to_qdrant(sparse_vector: Optional[Dict[str, float]]) -> Optional[Dic
             hashed_terms[idx] = str(raw_term)
         merged[idx] = merged.get(idx, 0.0) + weight
     if collisions:
-        sample = ", ".join(
-            f"{left!r}<->{right!r}@{idx}" for left, right, idx in collisions[:3]
-        )
+        sample = ", ".join(f"{left!r}<->{right!r}@{idx}" for left, right, idx in collisions[:3])
         logger.warning(
             "Qdrant sparse term hash collision detected; colliding terms are merged into the same sparse index bucket. count=%s sample=%s",
             len(collisions),
@@ -135,7 +133,9 @@ def _sparse_to_qdrant(sparse_vector: Optional[Dict[str, float]]) -> Optional[Dic
 class QdrantIndex(IIndex):
     """Lightweight logical index facade backed by Qdrant payload/vector config."""
 
-    def __init__(self, collection: "QdrantCollection", index_name: str, meta: Dict[str, Any]) -> None:
+    def __init__(
+        self, collection: "QdrantCollection", index_name: str, meta: Dict[str, Any]
+    ) -> None:
         super().__init__(meta=meta)
         self._collection = collection
         self._index_name = index_name
@@ -160,7 +160,9 @@ class QdrantIndex(IIndex):
     def aggregate(self, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         raise NotImplementedError("QdrantIndex.aggregate is not exposed via raw index interface")
 
-    def update(self, scalar_index: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
+    def update(
+        self, scalar_index: Optional[Dict[str, Any]] = None, description: Optional[str] = None
+    ):
         self._collection.update_index(
             index_name=self._index_name,
             scalar_index=scalar_index,
@@ -629,7 +631,9 @@ class QdrantCollection(ICollection):
         field_type_map = self._field_type_map()
         scalar_fields = list(meta_data.get("ScalarIndex", []) or [])
         for field_name in scalar_fields:
-            field_schema = self._payload_field_schema(field_name, field_type_map.get(field_name, ""))
+            field_schema = self._payload_field_schema(
+                field_name, field_type_map.get(field_name, "")
+            )
             if not field_schema:
                 continue
             self._client.request(
@@ -804,9 +808,7 @@ class QdrantCollection(ICollection):
             points = points[offset:]
         if len(points) > limit:
             points = points[:limit]
-        return SearchResult(
-            data=self._parse_points_as_search_result(points, score=1.0).data
-        )
+        return SearchResult(data=self._parse_points_as_search_result(points, score=1.0).data)
 
     def search_by_id(
         self,
@@ -938,9 +940,7 @@ class QdrantCollection(ICollection):
             points = points[offset:]
         if len(points) > limit:
             points = points[:limit]
-        return SearchResult(
-            data=self._parse_points_as_search_result(points, score=1.0).data
-        )
+        return SearchResult(data=self._parse_points_as_search_result(points, score=1.0).data)
 
     def search_by_scalar(
         self,
@@ -1028,7 +1028,9 @@ class QdrantCollection(ICollection):
         for field_name in new_scalar_fields:
             if field_name in old_scalar_fields:
                 continue
-            field_schema = self._payload_field_schema(field_name, field_type_map.get(field_name, ""))
+            field_schema = self._payload_field_schema(
+                field_name, field_type_map.get(field_name, "")
+            )
             if not field_schema:
                 continue
             self._client.request(
@@ -1054,7 +1056,9 @@ class QdrantCollection(ICollection):
         return current_meta
 
     def get_index_meta_data(self, index_name: str):
-        return self._meta_store.get_index_meta(collection_key=self.collection_key, index_name=index_name)
+        return self._meta_store.get_index_meta(
+            collection_key=self.collection_key, index_name=index_name
+        )
 
     def list_indexes(self):
         return self._meta_store.list_indexes(collection_key=self.collection_key)
@@ -1063,7 +1067,9 @@ class QdrantCollection(ICollection):
         index_meta = self.get_index_meta_data(index_name) or {}
         for field_name in index_meta.get("ScalarIndex", []) or []:
             self._delete_field_index(field_name)
-        self._meta_store.delete_index_meta(collection_key=self.collection_key, index_name=index_name)
+        self._meta_store.delete_index_meta(
+            collection_key=self.collection_key, index_name=index_name
+        )
 
     def upsert_data(self, data_list: List[Dict[str, Any]], ttl=0):
         # Qdrant does not provide a collection-level per-point TTL primitive that
@@ -1078,6 +1084,54 @@ class QdrantCollection(ICollection):
             expected_statuses=(200, 202),
         )
         return [data.get("id") for data in data_list]
+
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        updated_records: List[Dict[str, Any]] = []
+        updated_ids: List[Any] = []
+
+        for raw_data in data_list:
+            if "id" not in raw_data or raw_data.get("id") in (None, ""):
+                raise ValueError("Qdrant update requires id")
+
+            original_id = raw_data.get("id")
+            response = self._client.request(
+                "POST",
+                f"/collections/{self._physical_collection_name}/points",
+                json_body={
+                    "ids": [_to_qdrant_point_id(original_id)],
+                    "with_payload": True,
+                    "with_vector": True,
+                },
+            )
+            points = _extract_points(response)
+            if not points:
+                raise ValueError(f"Qdrant point does not exist for update: {original_id}")
+
+            point = points[0]
+            existing_id, existing_payload = self._point_payload_for_read(point)
+            dense_vector, sparse_vector = self._extract_named_vectors(point)
+
+            merged_record: Dict[str, Any] = {"id": existing_id, **existing_payload}
+            if dense_vector is not None:
+                merged_record[self._dense_vector_name] = dense_vector
+            if sparse_vector is not None:
+                merged_record[self._sparse_vector_name] = sparse_vector
+
+            for field_name, field_value in raw_data.items():
+                merged_record[field_name] = field_value
+
+            updated_records.append(merged_record)
+            updated_ids.append(existing_id)
+
+        points = [self._make_point(data) for data in updated_records]
+        self._client.request(
+            "PUT",
+            f"/collections/{self._physical_collection_name}/points",
+            json_body={"points": points},
+            params={"wait": "true"},
+            expected_statuses=(200, 202),
+        )
+        return updated_ids
 
     def fetch_data(self, primary_keys: List[Any]):
         if not primary_keys:

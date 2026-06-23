@@ -390,7 +390,7 @@ function printHelp() {
   console.log("  node install.js --current-version");
   console.log("");
   console.log("  # Install a specific release version");
-  console.log("  node install.js --plugin-version=2026.5.8");
+  console.log("  node install.js --plugin-version=2026.6.18");
   console.log("");
   console.log("  # Install from a fork repository");
   console.log("  node install.js --github-repo=yourname/OpenViking --plugin-version=dev-branch");
@@ -1859,6 +1859,96 @@ async function downloadPluginFile(destDir, fileName, url, required, index, total
   process.exit(1);
 }
 
+function githubContentsUrl(pluginDir, fileName) {
+  const path = `examples/${pluginDir}/${fileName}`.replace(/\/+$/u, "");
+  const encodedPath = path.split("/").map((part) => encodeURIComponent(part)).join("/");
+  return `https://api.github.com/repos/${REPO}/contents/${encodedPath}?ref=${encodeURIComponent(PLUGIN_VERSION)}`;
+}
+
+async function fetchGitHubDirectoryEntries(pluginDir, dirName, required) {
+  const maxRetries = 3;
+  const url = githubContentsUrl(pluginDir, dirName);
+  let lastStatus = 0;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, { headers: { "User-Agent": "openviking-setup-helper" } });
+      lastStatus = response.status;
+      if (response.ok) {
+        const json = await response.json();
+        if (Array.isArray(json)) return json;
+        lastStatus = 0;
+      } else if (!required && response.status === 404) {
+        return null;
+      }
+    } catch {
+      lastStatus = 0;
+    }
+
+    if (attempt < maxRetries) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+
+  if (!required) {
+    err(tr(
+      `Optional directory failed after ${maxRetries} retries (HTTP ${lastStatus || "network"}): ${url}`,
+      `可选目录已重试 ${maxRetries} 次仍失败（HTTP ${lastStatus || "网络错误"}）: ${url}`,
+    ));
+    process.exit(1);
+  }
+
+  err(tr(
+    `Directory download failed after ${maxRetries} retries (HTTP ${lastStatus || "network"}): ${url}`,
+    `目录下载失败（已重试 ${maxRetries} 次，HTTP ${lastStatus || "网络错误"}）: ${url}`,
+  ));
+  process.exit(1);
+}
+
+async function collectGitHubDirectoryFiles(pluginDir, dirName, required) {
+  const entries = await fetchGitHubDirectoryEntries(pluginDir, dirName, required);
+  if (!entries) return [];
+
+  const prefix = `examples/${pluginDir}/`;
+  const files = [];
+  for (const entry of entries) {
+    if (entry?.type === "file" && entry.download_url) {
+      const relativePath = String(entry.path || "").startsWith(prefix)
+        ? String(entry.path).slice(prefix.length)
+        : `${dirName}${entry.name}`;
+      files.push({ fileName: relativePath, url: entry.download_url });
+      continue;
+    }
+
+    if (entry?.type === "dir" && entry.path) {
+      const relativeDir = String(entry.path).startsWith(prefix)
+        ? String(entry.path).slice(prefix.length)
+        : `${dirName}${entry.name}/`;
+      files.push(...await collectGitHubDirectoryFiles(pluginDir, `${relativeDir}/`, required));
+    }
+  }
+
+  return files;
+}
+
+async function downloadPluginDirectory(destDir, pluginDir, dirName, required, index, total) {
+  process.stdout.write(`  [${index}/${total}] ${dirName} `);
+  const files = await collectGitHubDirectoryFiles(pluginDir, dirName, required);
+  if (files.length === 0) {
+    console.log(required ? " empty" : tr(" skip", " 跳过"));
+    if (!required) return;
+    err(tr(`Required directory is empty or unavailable: ${dirName}`, `必需目录为空或不可用: ${dirName}`));
+    process.exit(1);
+  }
+  console.log(` OK (${files.length} files)`);
+
+  let fileIndex = 0;
+  for (const file of files) {
+    fileIndex++;
+    await downloadPluginFile(destDir, file.fileName, file.url, required, `${index}.${fileIndex}`, total);
+  }
+}
+
 function runtimeOutputCandidatesForEntry(entry) {
   const normalized = String(entry || "").replace(/\\/g, "/").replace(/^\.\//, "");
   if (!normalized.endsWith(".ts")) {
@@ -1998,6 +2088,10 @@ async function downloadPlugin(destDir) {
   for (const name of resolvedFilesRequired) {
     if (!name) continue;
     i++;
+    if (name.endsWith("/")) {
+      await downloadPluginDirectory(destDir, pluginDir, name, true, i, total);
+      continue;
+    }
     const url = `${ghRaw}/examples/${pluginDir}/${name}`;
     await downloadPluginFile(destDir, name, url, true, i, total);
   }
@@ -2006,6 +2100,10 @@ async function downloadPlugin(destDir) {
   for (const name of resolvedFilesOptional) {
     if (!name) continue;
     i++;
+    if (name.endsWith("/")) {
+      await downloadPluginDirectory(destDir, pluginDir, name, false, i, total);
+      continue;
+    }
     const url = `${ghRaw}/examples/${pluginDir}/${name}`;
     await downloadPluginFile(destDir, name, url, false, i, total);
   }

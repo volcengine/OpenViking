@@ -26,6 +26,7 @@ import httpx
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -460,7 +461,7 @@ class UnderstandingAPI(BaseParser):
 
         with tempfile.TemporaryDirectory() as extract_dir:
             with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(extract_dir)
+                safe_extract_zip(zf, extract_dir)
             extract_path = Path(extract_dir)
             items = [p for p in extract_path.iterdir() if p.name not in {".", ".."}]
             if len(items) == 1 and items[0].is_dir():
