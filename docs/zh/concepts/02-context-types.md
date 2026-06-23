@@ -140,12 +140,6 @@ results = await client.find(
     "网络搜索",
     target_uri="viking://agent/skills/"
 )
-
-# 搜索通信端点
-results = await client.find(
-    "a2a",
-    target_uri="viking://agent/endpoints/"
-)
 ```
 
 ## 统一检索
