@@ -710,4 +710,78 @@ mod tests {
             assert_eq!(size, 5);
         });
     }
+
+    // ---------- direct binding: account isolation ----------
+
+    /// Build a `GitService` over local backends, mirroring what the binding's
+    /// `build_git_service` does for the `local` backend. The `base_dir` does
+    /// not need to exist: a malicious account must be rejected at the
+    /// `GitService` boundary *before* any path under `base_dir` is built.
+    fn local_git_service() -> Arc<GitService> {
+        use ragfs::git::{LocalObjectStore, LocalRefStore};
+        let base = std::env::temp_dir().join("ov-git-account-validation-test");
+        let vfs = Arc::new(MountableFS::new()) as Arc<dyn ragfs::core::FileSystem>;
+        let object_store = Arc::new(LocalObjectStore::new(&base)) as Arc<dyn ObjectStore>;
+        let ref_store = Arc::new(LocalRefStore::new(&base)) as Arc<dyn RefStore>;
+        Arc::new(GitService::new(vfs, object_store, ref_store))
+    }
+
+    #[tokio::test]
+    async fn binding_commit_rejects_traversal_account() {
+        let svc = local_git_service();
+        let req = CommitRequest {
+            account: "../escape".into(),
+            branch: "main".into(),
+            message: "m".into(),
+            paths: None,
+            author_name: "n".into(),
+            author_email: "e".into(),
+        };
+        let err = svc.commit(req).await;
+        assert!(matches!(err, Err(GitError::InvalidAccountId(_))));
+    }
+
+    #[tokio::test]
+    async fn binding_commit_rejects_slash_account() {
+        let svc = local_git_service();
+        let req = CommitRequest {
+            account: "a/b".into(),
+            branch: "main".into(),
+            message: "m".into(),
+            paths: None,
+            author_name: "n".into(),
+            author_email: "e".into(),
+        };
+        let err = svc.commit(req).await;
+        assert!(matches!(err, Err(GitError::InvalidAccountId(_))));
+    }
+
+    #[tokio::test]
+    async fn binding_show_rejects_backslash_account() {
+        let svc = local_git_service();
+        let req = ShowRequest {
+            account: "a\\b".into(),
+            target_ref: "main".into(),
+            path: None,
+        };
+        let err = svc.show(req).await;
+        assert!(matches!(err, Err(GitError::InvalidAccountId(_))));
+    }
+
+    #[tokio::test]
+    async fn binding_restore_rejects_empty_account() {
+        let svc = local_git_service();
+        let req = RestoreRequest {
+            account: "".into(),
+            branch: "main".into(),
+            project_dir: Some("resources/x".into()),
+            source_commit: "deadbeef".into(),
+            dry_run: false,
+            message: None,
+            author_name: "n".into(),
+            author_email: "e".into(),
+        };
+        let err = svc.restore(req).await;
+        assert!(matches!(err, Err(GitError::InvalidAccountId(_))));
+    }
 }

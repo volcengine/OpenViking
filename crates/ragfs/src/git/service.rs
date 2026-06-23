@@ -126,6 +126,7 @@ impl GitService {
             author_name,
             author_email,
         } = req;
+        validate_account_id(&account)?;
         let ref_name = format!("refs/heads/{branch}");
 
         // 1. Resolve current HEAD (may not exist → root commit).
@@ -464,6 +465,8 @@ impl GitService {
     pub async fn show(&self, req: ShowRequest) -> Result<ShowResponse, GitError> {
         let ShowRequest { account, target_ref, path } = req;
 
+        validate_account_id(&account)?;
+
         let commit_oid = resolve_ref(
             self.ref_store.as_ref(),
             self.object_store.as_ref(),
@@ -542,6 +545,8 @@ impl GitService {
             author_name: _,
             author_email: _,
         } = &req;
+
+        validate_account_id(account)?;
 
         if let Some(project_dir) = project_dir {
             validate_project_dir(project_dir)?;
@@ -1057,6 +1062,48 @@ fn stat_signature(info: &FileInfo) -> Option<(u64, i128)> {
     let dur = info.mod_time.duration_since(UNIX_EPOCH).ok()?;
     let nanos: i128 = dur.as_nanos() as i128;
     Some((info.size, nanos))
+}
+
+/// Validate an `account` id before it is used to build any filesystem path
+/// (local backend) or S3 key prefix. This is the Rust-side equivalent of the
+/// Python `validate_account_id` and is the single choke point that keeps a
+/// crafted account (e.g. `../x`, `a/b`, `a\b`) from escaping its per-account
+/// directory / key prefix when a binding is called directly.
+///
+/// Rules (mirroring `openviking/core/identifiers.py`):
+/// - non-empty
+/// - not `.` or `..`
+/// - only `[A-Za-z0-9_.@-]` (rejects `/`, `\`, whitespace, control chars, …)
+/// - at most one `@`
+/// - must not start with `_`
+fn validate_account_id(account: &str) -> Result<(), GitError> {
+    if account.is_empty() {
+        return Err(GitError::InvalidAccountId("account_id is empty".into()));
+    }
+    if account == "." || account == ".." {
+        return Err(GitError::InvalidAccountId(
+            "account_id must not be '.' or '..'".into(),
+        ));
+    }
+    if !account
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'@' | b'-'))
+    {
+        return Err(GitError::InvalidAccountId(format!(
+            "account_id must be an alphanumeric string: {account:?}"
+        )));
+    }
+    if account.bytes().filter(|&b| b == b'@').count() > 1 {
+        return Err(GitError::InvalidAccountId(
+            "account_id must have at most one @".into(),
+        ));
+    }
+    if account.starts_with('_') {
+        return Err(GitError::InvalidAccountId(
+            "account_id cannot start with underscore _".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Validate `project_dir` matches the rules of `TreeEditor::upsert`:
@@ -3629,6 +3676,83 @@ mod tests {
             "resources/docs tree was fetched {} times, expected ≤1 (cache miss)",
             object_store.count_gets(&docs_oid)
         );
+    }
+
+    // ── account id validation ───────────────────────────────────────────
+    #[test]
+    fn validate_account_id_accepts_valid() {
+        for ok in ["acct", "a", "user-1", "u_2", "name.tag", "a@b", "ABC123"] {
+            assert!(validate_account_id(ok).is_ok(), "{ok:?} should be valid");
+        }
+    }
+
+    #[test]
+    fn validate_account_id_rejects_malicious() {
+        for bad in [
+            "",          // empty
+            ".",         // dot
+            "..",        // parent
+            "../x",      // traversal
+            "a/b",       // slash
+            "a\\b",      // backslash
+            "a\0b",      // NUL
+            "a\nb",      // newline / control
+            "a b",       // space
+            "a@b@c",     // multiple @
+            "_system",   // leading underscore
+        ] {
+            assert!(
+                matches!(validate_account_id(bad), Err(GitError::InvalidAccountId(_))),
+                "{bad:?} should be rejected",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_traversal_account() {
+        // A crafted account must be rejected before any path is built, so the
+        // ref store is never even touched.
+        let (_dir, _vfs, _object_store, _ref_store, svc) = make_service("acct");
+        let err = svc.commit(req("../escape", "main", "msg", None)).await;
+        assert!(matches!(err, Err(GitError::InvalidAccountId(_))));
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_slash_account() {
+        let (_dir, _vfs, _object_store, _ref_store, svc) = make_service("acct");
+        let err = svc.commit(req("a/b", "main", "msg", None)).await;
+        assert!(matches!(err, Err(GitError::InvalidAccountId(_))));
+    }
+
+    #[tokio::test]
+    async fn show_rejects_traversal_account() {
+        let (_dir, _vfs, _object_store, _ref_store, svc) = make_service("acct");
+        let err = svc
+            .show(ShowRequest {
+                account: "../escape".into(),
+                target_ref: "main".into(),
+                path: None,
+            })
+            .await;
+        assert!(matches!(err, Err(GitError::InvalidAccountId(_))));
+    }
+
+    #[tokio::test]
+    async fn restore_rejects_traversal_account() {
+        let (_dir, _vfs, _object_store, _ref_store, svc) = make_service("acct");
+        let err = svc
+            .restore(RestoreRequest {
+                account: "../escape".into(),
+                branch: "main".into(),
+                project_dir: Some("resources/x".into()),
+                source_commit: "deadbeef".into(),
+                dry_run: false,
+                message: None,
+                author_name: "n".into(),
+                author_email: "e".into(),
+            })
+            .await;
+        assert!(matches!(err, Err(GitError::InvalidAccountId(_))));
     }
 }
 

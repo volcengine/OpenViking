@@ -30,7 +30,7 @@ Multi-version management is **enabled** by default (`git.enabled` defaults to `t
     "author_name": "viking-bot",
     "author_email": "bot@viking.local",
     "local": {
-      "base_dir": "",
+      "base_dir": ""
     }
   }
 }
@@ -74,7 +74,7 @@ Stores Git objects and refs in S3-compatible object storage (e.g. Volcengine TOS
       "secret_key": "<your-volcengine-sk>",
       "prefix": "git",
       "use_path_style": false,
-      "cas_mode": "native",
+      "cas_mode": "native"
     }
   }
 }

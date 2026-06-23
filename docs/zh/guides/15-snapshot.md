@@ -74,7 +74,7 @@
       "secret_key": "<your-volcengine-sk>",
       "prefix": "git",
       "use_path_style": false,
-      "cas_mode": "native",
+      "cas_mode": "native"
     }
   }
 }
