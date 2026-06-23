@@ -197,6 +197,7 @@ def _choose_candidate(candidates: Iterable[_EncodingCandidate]) -> Optional[_Enc
     if first.encoding in _JAPANESE_ENCODINGS:
         return first
 
+    preferred_chinese = _preferred_chinese_candidate(consistent)
     for candidate in consistent:
         profile = _script_profile(candidate.decoded)
         if (
@@ -206,13 +207,29 @@ def _choose_candidate(candidates: Iterable[_EncodingCandidate]) -> Optional[_Enc
         ):
             return candidate
 
-    if first.encoding in _CHINESE_ENCODINGS:
-        for encoding in _CHINESE_ENCODING_PREFERENCE:
-            for candidate in consistent:
-                if candidate.encoding == encoding:
-                    return candidate
+    first_profile = _script_profile(first.decoded)
+    if (
+        first.encoding in _KOREAN_ENCODINGS
+        and preferred_chinese is not None
+        and first_profile.hangul_syllables > 0
+        and first_profile.cjk > 0
+    ):
+        return preferred_chinese
+
+    if first.encoding in _CHINESE_ENCODINGS and preferred_chinese is not None:
+        return preferred_chinese
 
     return first
+
+
+def _preferred_chinese_candidate(
+    candidates: Iterable[_EncodingCandidate],
+) -> Optional[_EncodingCandidate]:
+    for encoding in _CHINESE_ENCODING_PREFERENCE:
+        for candidate in candidates:
+            if candidate.encoding == encoding:
+                return candidate
+    return None
 
 
 def _is_script_consistent(candidate: _EncodingCandidate) -> bool:
