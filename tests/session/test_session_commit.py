@@ -47,6 +47,7 @@ class TestCommit:
         assert result.get("status") == "accepted"
         assert "session_id" in result
         assert result.get("task_id") is not None
+        assert "memory_diff_uri" not in result
         assert "memories_extracted" not in result
 
     async def test_commit_extracts_memories(
@@ -59,6 +60,17 @@ class TestCommit:
         # Wait for background memory extraction to complete
         task_result = await _wait_for_task(task_id)
         assert task_result["status"] == "completed"
+        assert (
+            task_result["result"]["memory_diff_uri"]
+            == f"{task_result['result']['archive_uri']}/memory_diff.json"
+        )
+        memory_diff = json.loads(
+            await session_with_messages._viking_fs.read_file(
+                task_result["result"]["memory_diff_uri"],
+                ctx=session_with_messages.ctx,
+            )
+        )
+        assert memory_diff["archive_uri"] == task_result["result"]["archive_uri"]
         assert "memories_extracted" in task_result["result"]
         memory_counts = task_result["result"]["memories_extracted"]
         assert isinstance(memory_counts, dict)
@@ -96,6 +108,7 @@ class TestCommit:
         assert task_result["result"]["session_skill_uris"] == [
             "viking://user/test/skills/code-review"
         ]
+        assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
         session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
         call_kwargs = (
@@ -131,6 +144,7 @@ class TestCommit:
         assert task_result["status"] == "completed"
         assert task_result["result"]["memories_extracted"] == {}
         assert task_result["result"]["session_skills_extracted"] == 0
+        assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
         session_with_messages._session_compressor.extract_execution_memories.assert_not_awaited()
 
@@ -156,6 +170,7 @@ class TestCommit:
         assert task_result["status"] == "completed"
         assert task_result["result"]["session_skills_extracted"] == 0
         assert task_result["result"]["session_skill_uris"] == []
+        assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
         session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
         call_kwargs = (

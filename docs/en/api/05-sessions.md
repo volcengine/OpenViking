@@ -1231,6 +1231,7 @@ if task != nil {
     "result": {
       "session_id": "a1b2c3d4",
       "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
+      "memory_diff_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001/memory_diff.json",
       "memories_extracted": {
         "profile": 1,
         "preferences": 2,
@@ -1379,7 +1380,7 @@ viking://user/{user_id}/sessions/{session_id}/
     |   +-- .abstract.md      # Written in Phase 2 (background)
     |   +-- .overview.md      # Written in Phase 2 (background)
     |   +-- .meta.json        # Archive metadata
-    |   +-- memory_diff.json  # Written in Phase 2 (background, on memory changes)
+    |   +-- memory_diff.json  # Written when long-term memory extraction completes
     |   +-- .done             # Phase 2 completion marker
     |   +-- .failed.json      # Phase 2 failure marker
     +-- archive_002/
@@ -1387,7 +1388,7 @@ viking://user/{user_id}/sessions/{session_id}/
 
 ### memory_diff.json Structure
 
-Each commit writes a `memory_diff.json` to the archive directory, recording all memory changes for auditing and rollback:
+When long-term memory extraction runs successfully, the commit writes a `memory_diff.json` to the archive directory, recording all memory changes for auditing and rollback:
 
 ```json
 {
@@ -1436,7 +1437,7 @@ Each commit writes a `memory_diff.json` to the archive directory, recording all 
 | `summary.total_updates` | int | Number of modified memories |
 | `summary.total_deletes` | int | Number of deleted memories |
 
-An empty `memory_diff.json` (all counts zero) is written even when no memory operations occurred.
+An empty `memory_diff.json` (all counts zero) is written when long-term memory extraction runs but produces no memory operations.
 
 ---
 

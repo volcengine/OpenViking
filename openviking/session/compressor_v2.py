@@ -283,7 +283,6 @@ class SessionCompressorV2:
         telemetry.set("memory.extract.skipped", 0)
 
         from openviking.storage.transaction import get_lock_manager, init_lock_manager
-        from openviking.storage.viking_fs import get_viking_fs
 
         # 初始化锁管理器（仅在有 AGFS 时使用锁机制）
         viking_fs = get_viking_fs()
@@ -381,33 +380,36 @@ class SessionCompressorV2:
 
             if operations is None:
                 tracer.info("No memory operations generated")
-                return []
+                result = MemoryUpdateResult()
+            else:
+                updater = self._get_or_create_updater(registry, transaction_handle)
 
-            updater = self._get_or_create_updater(registry, transaction_handle)
+                # Apply operations with isolation_handler
+                result = await updater.apply_operations(
+                    operations,
+                    ctx,
+                    extract_context=extract_context,
+                    isolation_handler=isolation_handler,
+                )
 
-            # Apply operations with isolation_handler
-            result = await updater.apply_operations(
-                operations,
-                ctx,
-                extract_context=extract_context,
-                isolation_handler=isolation_handler,
-            )
-
-            tracer.info(
-                f"Applied memory operations: written={len(result.written_uris)}, "
-                f"edited={len(result.edited_uris)}, deleted={len(result.deleted_uris)}, "
-                f"errors={len(result.errors)}"
-            )
+                tracer.info(
+                    f"Applied memory operations: written={len(result.written_uris)}, "
+                    f"edited={len(result.edited_uris)}, deleted={len(result.deleted_uris)}, "
+                    f"errors={len(result.errors)}"
+                )
 
             # Write memory_diff.json to archive directory
             if archive_uri and viking_fs:
-                memory_diff = await self._build_memory_diff(
-                    result=result,
-                    operations=operations,
-                    viking_fs=viking_fs,
-                    ctx=ctx,
-                    archive_uri=archive_uri,
-                )
+                if operations is None:
+                    memory_diff = self._empty_memory_diff(archive_uri)
+                else:
+                    memory_diff = await self._build_memory_diff(
+                        result=result,
+                        operations=operations,
+                        viking_fs=viking_fs,
+                        ctx=ctx,
+                        archive_uri=archive_uri,
+                    )
                 await viking_fs.write_file(
                     uri=f"{archive_uri}/memory_diff.json",
                     content=json.dumps(memory_diff, ensure_ascii=False, indent=4),
@@ -473,6 +475,23 @@ class SessionCompressorV2:
                     await lock_manager.release(transaction_handle)
                 except Exception as e:
                     logger.warning(f"Failed to release transaction lock: {e}")
+
+    @staticmethod
+    def _empty_memory_diff(archive_uri: str = "") -> Dict[str, Any]:
+        return {
+            "archive_uri": archive_uri,
+            "extracted_at": datetime.utcnow().isoformat() + "Z",
+            "operations": {
+                "adds": [],
+                "updates": [],
+                "deletes": [],
+            },
+            "summary": {
+                "total_adds": 0,
+                "total_updates": 0,
+                "total_deletes": 0,
+            },
+        }
 
     @tracer(ignore_result=True)
     async def extract_execution_memories(

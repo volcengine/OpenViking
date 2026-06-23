@@ -1272,6 +1272,7 @@ class Session:
         memories_extracted: Dict[str, int] = {}
         extracted_skill_results: list[dict] = []
         active_count_updated = 0
+        memory_diff_uri: Optional[str] = None
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
         archive_index = self._archive_index_from_uri(archive_uri)
         redo_task_id: Optional[str] = None
@@ -1483,6 +1484,14 @@ class Session:
                         if extraction_error is not None:
                             raise extraction_error
 
+                        if long_term_has_work and self._viking_fs:
+                            candidate_memory_diff_uri = f"{archive_uri}/memory_diff.json"
+                            if await self._viking_fs.exists(
+                                candidate_memory_diff_uri,
+                                ctx=self.ctx,
+                            ):
+                                memory_diff_uri = candidate_memory_diff_uri
+
                         total_extracted = 0
                         for label, result in zip(extraction_labels[1:], _results[1:], strict=True):
                             if isinstance(result, dict):
@@ -1580,30 +1589,34 @@ class Session:
             # would have raised above and marked the archive .failed.json.
             await self._write_done_file(archive_uri, first_message_id, last_message_id)
 
-            await tracker.complete(
-                task_id,
-                {
-                    "session_id": self.session_id,
-                    "archive_uri": archive_uri,
-                    "memories_extracted": memories_extracted,
-                    "session_skills_extracted": len(extracted_skill_results),
-                    "session_skill_uris": [
-                        item.get("uri") or item.get("root_uri")
-                        for item in extracted_skill_results
-                        if isinstance(item, dict) and (item.get("uri") or item.get("root_uri"))
-                    ],
-                    "active_count_updated": active_count_updated,
-                    "token_usage": {
-                        "llm": dict(self._meta.llm_token_usage),
-                        "embedding": dict(self._meta.embedding_token_usage),
-                        "total": {
-                            "total_tokens": self._meta.llm_token_usage["total_tokens"]
-                            + self._meta.embedding_token_usage["total_tokens"],
-                            "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
-                            "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
-                        },
+            result_payload = {
+                "session_id": self.session_id,
+                "archive_uri": archive_uri,
+                "memories_extracted": memories_extracted,
+                "session_skills_extracted": len(extracted_skill_results),
+                "session_skill_uris": [
+                    item.get("uri") or item.get("root_uri")
+                    for item in extracted_skill_results
+                    if isinstance(item, dict) and (item.get("uri") or item.get("root_uri"))
+                ],
+                "active_count_updated": active_count_updated,
+                "token_usage": {
+                    "llm": dict(self._meta.llm_token_usage),
+                    "embedding": dict(self._meta.embedding_token_usage),
+                    "total": {
+                        "total_tokens": self._meta.llm_token_usage["total_tokens"]
+                        + self._meta.embedding_token_usage["total_tokens"],
+                        "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
+                        "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
                     },
                 },
+            }
+            if memory_diff_uri:
+                result_payload["memory_diff_uri"] = memory_diff_uri
+
+            await tracker.complete(
+                task_id,
+                result_payload,
                 account_id=self.ctx.account_id,
                 user_id=self.ctx.user.user_id,
             )
