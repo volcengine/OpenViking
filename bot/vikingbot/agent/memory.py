@@ -928,11 +928,11 @@ class MemoryStore:
             if not uri:
                 continue
             try:
-                raw = await client.read_content(uri, level="raw")
+                content = await client.read_content(uri, level="read")
             except Exception as exc:
-                logger.warning(f"Failed to read raw case content from {uri}: {exc}")
+                logger.warning(f"Failed to read case content from {uri}: {exc}")
                 continue
-            if not self._case_matches_lookup(raw, lookup, uri=uri):
+            if not self._case_matches_lookup(content, lookup, uri=uri):
                 continue
             matched.append(self._with_recall_metadata(case, "cases", len(matched) + 1))
             if len(matched) >= max(1, int(limit or 1)):
@@ -950,11 +950,11 @@ class MemoryStore:
         matched: list[Any] = []
         for uri in self._case_uri_candidates(base_uri, lookup):
             try:
-                raw = await client.read_content(uri, level="raw")
+                content = await client.read_content(uri, level="read")
             except Exception as exc:
                 logger.warning(f"Failed to read exact case content from {uri}: {exc}")
                 continue
-            if not raw or not self._case_matches_lookup(raw, lookup, uri=uri):
+            if not content or not self._case_matches_lookup(content, lookup, uri=uri):
                 continue
             matched.append(
                 {
@@ -1091,6 +1091,8 @@ class MemoryStore:
             return False
 
         fields = dict(memory_file.extra_fields or {})
+        if not fields:
+            fields = cls._case_fields_from_markdown(memory_file.content or raw_content, uri=uri)
         case_input = cls._parse_json_object(fields.get("input"))
         case_name = str(fields.get("case_name") or cls._filename_from_uri(uri).removesuffix(".md"))
         task_signature = str(fields.get("task_signature") or "")
@@ -1100,7 +1102,8 @@ class MemoryStore:
             accepted_names.append(str(lookup["case_name"]))
         if lookup.get("original_case_name"):
             accepted_names.append(str(lookup["original_case_name"]))
-        if accepted_names and case_name not in accepted_names:
+        case_names = {case_name, cls._filename_from_uri(uri).removesuffix(".md")}
+        if accepted_names and not case_names.intersection(accepted_names):
             return False
         if lookup.get("task_signature") and str(lookup["task_signature"]) != task_signature:
             return False
@@ -1150,12 +1153,7 @@ class MemoryStore:
         *,
         limit: int,
     ) -> list[Any]:
-        """Read direct case -> experience links from case MEMORY_FIELDS.
-
-        The direct case -> experience edges are deterministically materialized
-        from the underlying case -> trajectory -> experience graph during
-        training, so recall does not need to perform a two-hop traversal.
-        """
+        """Read direct case -> experience links from the visible case markdown."""
         if not cases:
             return []
         max_links = int(limit or 0)
@@ -1167,11 +1165,11 @@ class MemoryStore:
             if not case_uri:
                 continue
             try:
-                raw = await client.read_content(case_uri, level="raw")
+                content = await client.read_content(case_uri, level="read")
             except Exception as exc:
-                logger.warning(f"Failed to read raw case content from {case_uri}: {exc}")
+                logger.warning(f"Failed to read case content from {case_uri}: {exc}")
                 continue
-            for exp_uri in self._extract_linked_experience_uris(raw):
+            for exp_uri in self._extract_linked_experience_uris(content, source_uri=case_uri):
                 if exp_uri in seen:
                     continue
                 seen.add(exp_uri)
@@ -1189,25 +1187,67 @@ class MemoryStore:
                     return linked
         return linked
 
-    @staticmethod
-    def _extract_linked_experience_uris(raw_content: str) -> list[str]:
-        try:
-            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+    @classmethod
+    def _case_fields_from_markdown(cls, content: str, *, uri: str = "") -> dict[str, str]:
+        fields = {"case_name": cls._filename_from_uri(uri).removesuffix(".md")}
+        title = re.search(r"(?m)^#\s+(.+?)\s*$", content or "")
+        if title:
+            fields["case_name"] = title.group(1).strip()
+        for field, heading in (
+            ("task_signature", "Task Signature"),
+            ("input", "Input"),
+            ("rubric", "Rubric"),
+            ("evidence", "Evidence"),
+        ):
+            value = cls._markdown_section(content, heading)
+            if value:
+                fields[field] = value
+        return fields
 
-            memory_file = MemoryFileUtils.read(raw_content or "")
-        except Exception:
+    @staticmethod
+    def _markdown_section(content: str, heading: str) -> str:
+        match = re.search(
+            rf"(?ims)^##\s+{re.escape(heading)}\s*\n(.*?)(?=^##\s+|\Z)",
+            content or "",
+        )
+        return match.group(1).strip() if match else ""
+
+    @classmethod
+    def _extract_linked_experience_uris(cls, content: str, *, source_uri: str = "") -> list[str]:
+        section = cls._markdown_section(content, "Linked Experiences")
+        if not section:
             return []
 
+        targets = re.findall(r"\[[^\]]+\]\(([^)\s]+)\)", section)
+        if not targets:
+            targets = [
+                line.lstrip("- ").strip()
+                for line in section.splitlines()
+                if line.strip().startswith("- ")
+            ]
+
         uris: list[str] = []
-        for link in list(memory_file.links or []):
-            uri = str(link.get("to_uri") or "")
-            if "/memories/experiences/" not in uri:
-                continue
-            if str(link.get("link_type") or "") != "related_to":
-                continue
-            if uri not in uris:
+        for target in targets:
+            uri = cls._resolve_case_link_uri(target, source_uri=source_uri)
+            if "/memories/experiences/" in uri and uri not in uris:
                 uris.append(uri)
         return uris
+
+    @staticmethod
+    def _resolve_case_link_uri(target: str, *, source_uri: str) -> str:
+        import posixpath
+
+        target = str(target or "").strip()
+        if not target:
+            return ""
+        if "://" in target:
+            return target
+        if "/" not in target:
+            target = f"../experiences/{target.removesuffix('.md')}.md"
+        if not source_uri.startswith("viking://"):
+            return target
+        source_dir = source_uri.removeprefix("viking://").rsplit("/", 1)[0]
+        return "viking://" + posixpath.normpath(f"{source_dir}/{target}")
 
     async def _search_memory_type(
         self,

@@ -2453,10 +2453,8 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
 
         async def read_content(self, uri, level="read"):
             self.read_calls.append((uri, level))
-            if uri == case_uri and level == "raw":
-                return case_content
             if uri == case_uri:
-                return "# case1\n\n## Linked Experiences\n- exp1"
+                return "# case1\n\n## Linked Experiences\n- [exp1](../experiences/exp1.md)"
             if uri == exp_uri:
                 return "linked exp content"
             if uri == direct_exp_uri:
@@ -2489,7 +2487,7 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
 
     assert fake_client.search_calls == [("hello", "viking://user/admin/memories/cases/", 1)]
     assert fake_client.search_experience_calls == []
-    assert (case_uri, "raw") in fake_client.read_calls
+    assert (case_uri, "read") in fake_client.read_calls
     assert "linked exp content" in content
     assert "direct exp content" not in content
     assert exp_uri in uris
@@ -2510,7 +2508,7 @@ async def test_tau2_experience_reminder_loads_case_by_exact_task_not_query(monke
         return MemoryFileUtils.write(
             MemoryFile(
                 uri=case_uri,
-                content=f"# case {task_no}",
+                content="",
                 memory_type="cases",
                 extra_fields={
                     "case_name": case_uri.rsplit("/", 1)[-1].removesuffix(".md"),
@@ -2535,12 +2533,24 @@ async def test_tau2_experience_reminder_loads_case_by_exact_task_not_query(monke
                         description="",
                     ).model_dump()
                 ],
-            )
+            ),
+            content_template=(
+                "# {{ case_name }}\n\n"
+                "## Task Signature\n{{ task_signature }}\n\n"
+                "## Input\n{{ input }}\n\n"
+                "## Linked Experiences\n"
+                "{% for link in links or [] %}"
+                "- [{{ uri_basename(link.to_uri) }}]({{ link_target(link.to_uri) }})\n"
+                "{% endfor %}"
+            ),
         )
 
     raw_cases = {
         matched_case_uri: _case_content(matched_case_uri, matched_exp_uri, task_no=1, task_id=7),
         wrong_case_uri: _case_content(wrong_case_uri, wrong_exp_uri, task_no=9, task_id=99),
+    }
+    visible_cases = {
+        uri: raw.split("<!-- MEMORY_FIELDS", 1)[0].strip() for uri, raw in raw_cases.items()
     }
 
     class _FakeClient:
@@ -2556,8 +2566,8 @@ async def test_tau2_experience_reminder_loads_case_by_exact_task_not_query(monke
 
         async def read_content(self, uri, level="read"):
             self.read_calls.append((uri, level))
-            if uri in raw_cases and level == "raw":
-                return raw_cases[uri]
+            if uri in visible_cases:
+                return visible_cases[uri]
             if uri == matched_exp_uri:
                 return "matched exp content"
             if uri == wrong_exp_uri:
@@ -2595,8 +2605,8 @@ async def test_tau2_experience_reminder_loads_case_by_exact_task_not_query(monke
     )
 
     assert fake_client.search_calls == []
-    assert (matched_case_uri, "raw") in fake_client.read_calls
-    assert (wrong_case_uri, "raw") not in fake_client.read_calls
+    assert (matched_case_uri, "read") in fake_client.read_calls
+    assert (wrong_case_uri, "read") not in fake_client.read_calls
     assert "matched exp content" in content
     assert "wrong exp content" not in content
     assert uris == [matched_exp_uri]
@@ -2614,7 +2624,7 @@ async def test_tau2_experience_reminder_returns_empty_when_exact_case_mismatches
     raw_case = MemoryFileUtils.write(
         MemoryFile(
             uri=case_uri,
-            content="# mismatched",
+            content="",
             memory_type="cases",
             extra_fields={
                 "case_name": "tau2_airline_train_1",
@@ -2639,8 +2649,18 @@ async def test_tau2_experience_reminder_returns_empty_when_exact_case_mismatches
                     description="",
                 ).model_dump()
             ],
-        )
+        ),
+        content_template=(
+            "# {{ case_name }}\n\n"
+            "## Task Signature\n{{ task_signature }}\n\n"
+            "## Input\n{{ input }}\n\n"
+            "## Linked Experiences\n"
+            "{% for link in links or [] %}"
+            "- [{{ uri_basename(link.to_uri) }}]({{ link_target(link.to_uri) }})\n"
+            "{% endfor %}"
+        ),
     )
+    visible_case = raw_case.split("<!-- MEMORY_FIELDS", 1)[0].strip()
 
     class _FakeClient:
         admin_user_id = "admin"
@@ -2655,8 +2675,8 @@ async def test_tau2_experience_reminder_returns_empty_when_exact_case_mismatches
 
         async def read_content(self, uri, level="read"):
             self.read_calls.append((uri, level))
-            if uri == case_uri and level == "raw":
-                return raw_case
+            if uri == case_uri:
+                return visible_case
             if uri == exp_uri:
                 return "wrong exp content"
             return ""
@@ -2692,6 +2712,6 @@ async def test_tau2_experience_reminder_returns_empty_when_exact_case_mismatches
     )
 
     assert fake_client.search_calls == []
-    assert (case_uri, "raw") in fake_client.read_calls
+    assert (case_uri, "read") in fake_client.read_calls
     assert content == ""
     assert uris == []
