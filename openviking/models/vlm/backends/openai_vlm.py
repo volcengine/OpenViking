@@ -35,17 +35,25 @@ _DASHSCOPE_HOSTS = {
 _REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
 
-# Default completion-token cap used when the VLM config does not set ``max_tokens``.
-# It must not exceed the completion-token limit of this backend's own default model
-# (``gpt-4o-mini`` / ``gpt-4o``, which cap completion at 16384 tokens). The previous
-# fallback of 32768 is rejected by those models with an HTTP 400 ("max_tokens is too
-# large ... supports at most 16384 completion tokens"); the memory-extraction path
-# swallows that 400 and returns 0 extracted memories with no surfaced error, so a
-# default-configured deployment silently extracts nothing (issue #2751). Memory
-# extraction emits small JSON, so 16384 introduces no real truncation while still
-# guarding against runaway generation. Callers that need a larger budget set
-# ``max_tokens`` explicitly, which is honored unchanged.
+# Default completion-token cap used when the VLM config does not set ``max_tokens``,
+# for this backend's own default *non-reasoning* model. It must not exceed the
+# completion-token limit of ``gpt-4o-mini`` / ``gpt-4o`` (which cap completion at
+# 16384 tokens). The previous fallback of 32768 is rejected by those models with an
+# HTTP 400 ("max_tokens is too large ... supports at most 16384 completion tokens");
+# the memory-extraction path swallows that 400 and returns 0 extracted memories with
+# no surfaced error, so a default-configured deployment silently extracts nothing
+# (issue #2751). Memory extraction emits small JSON, so 16384 introduces no real
+# truncation while still guarding against runaway generation. Callers that need a
+# larger budget set ``max_tokens`` explicitly, which is honored unchanged.
 _DEFAULT_MAX_TOKENS = 16384
+
+# Reasoning models (``gpt-5`` / ``o1`` / ``o3`` / ``o4``) advertise much larger
+# completion-token limits and additionally spend a hidden reasoning-token budget out
+# of ``max_completion_tokens``; the 16384 non-reasoning cap would needlessly truncate
+# them. They were never affected by #2751 (that 400 is specific to the gpt-4o family's
+# 16384 cap), so the unset fallback for reasoning models is left at its prior 32768
+# value rather than lowered. Explicitly configured ``max_tokens`` is still honored.
+_DEFAULT_REASONING_MAX_TOKENS = 32768
 
 
 def _is_reasoning_model(model: Optional[str]) -> bool:
@@ -248,9 +256,14 @@ class OpenAIVLM(VLMBase):
         self._apply_provider_specific_extra_body(kwargs, effective_thinking)
         # Fall back to the default only when max_tokens is genuinely unset (None);
         # an explicitly configured value (including a degenerate 0) is passed through
-        # so bad config surfaces loudly instead of being silently rewritten.
+        # so bad config surfaces loudly instead of being silently rewritten. Reasoning
+        # models keep their prior 32768 unset default (they were not hit by #2751 and
+        # accept larger completion budgets); only the gpt-4o-family default is lowered.
+        default_max_tokens = (
+            _DEFAULT_REASONING_MAX_TOKENS if is_reasoning else _DEFAULT_MAX_TOKENS
+        )
         max_tokens = (
-            self.max_tokens if self.max_tokens is not None else _DEFAULT_MAX_TOKENS
+            self.max_tokens if self.max_tokens is not None else default_max_tokens
         )
         kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
         if tools:
@@ -291,9 +304,14 @@ class OpenAIVLM(VLMBase):
         self._apply_provider_specific_extra_body(kwargs, effective_thinking)
         # Fall back to the default only when max_tokens is genuinely unset (None);
         # an explicitly configured value (including a degenerate 0) is passed through
-        # so bad config surfaces loudly instead of being silently rewritten.
+        # so bad config surfaces loudly instead of being silently rewritten. Reasoning
+        # models keep their prior 32768 unset default (they were not hit by #2751 and
+        # accept larger completion budgets); only the gpt-4o-family default is lowered.
+        default_max_tokens = (
+            _DEFAULT_REASONING_MAX_TOKENS if is_reasoning else _DEFAULT_MAX_TOKENS
+        )
         max_tokens = (
-            self.max_tokens if self.max_tokens is not None else _DEFAULT_MAX_TOKENS
+            self.max_tokens if self.max_tokens is not None else default_max_tokens
         )
         kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
         if tools:

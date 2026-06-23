@@ -10,7 +10,11 @@ fallback of 32768 produced an HTTP 400 ("max_tokens is too large ... supports at
 0 extracted memories for default-configured deployments.
 """
 
-from openviking.models.vlm.backends.openai_vlm import _DEFAULT_MAX_TOKENS, OpenAIVLM
+from openviking.models.vlm.backends.openai_vlm import (
+    _DEFAULT_MAX_TOKENS,
+    _DEFAULT_REASONING_MAX_TOKENS,
+    OpenAIVLM,
+)
 
 # gpt-4o / gpt-4o-mini (the backend default model) cap completion at 16384 tokens.
 _GPT_4O_COMPLETION_CAP = 16384
@@ -56,3 +60,24 @@ class TestDefaultMaxTokensFallback:
         vlm = _make_vlm(max_tokens=0)
         assert vlm._build_text_kwargs(prompt="hi")["max_tokens"] == 0
         assert vlm._build_vision_kwargs(prompt="x")["max_tokens"] == 0
+
+
+class TestReasoningModelDefaultUnchanged:
+    """Reasoning models keep their prior 32768 unset default (not lowered by #2751)."""
+
+    def test_reasoning_unset_keeps_prior_default(self):
+        # gpt-5 is a reasoning model: unset max_tokens -> prior 32768 via
+        # max_completion_tokens, NOT the lowered gpt-4o-family cap. Reasoning models
+        # advertise larger completion limits and spend hidden reasoning tokens from
+        # this budget, so the #2751 16384 cap must not apply to them.
+        for builder in ("_build_text_kwargs", "_build_vision_kwargs"):
+            kwargs = getattr(_make_vlm(model="gpt-5"), builder)(prompt="hi")
+            assert "max_tokens" not in kwargs
+            assert kwargs["max_completion_tokens"] == _DEFAULT_REASONING_MAX_TOKENS
+            assert _DEFAULT_REASONING_MAX_TOKENS > _DEFAULT_MAX_TOKENS
+
+    def test_reasoning_explicit_max_tokens_respected(self):
+        # An explicit budget on a reasoning model is still honored unchanged.
+        vlm = _make_vlm(model="o3", max_tokens=4096)
+        assert vlm._build_text_kwargs(prompt="hi")["max_completion_tokens"] == 4096
+        assert vlm._build_vision_kwargs(prompt="x")["max_completion_tokens"] == 4096
