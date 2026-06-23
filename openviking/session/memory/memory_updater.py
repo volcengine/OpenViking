@@ -44,6 +44,7 @@ from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
+_MEMORY_ABSTRACT_MAX_BYTES = 50_000
 _EXTRACTION_CHUNK_MIN_CHARS = 100
 _EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
 _RESOURCE_ADDITION_FIELD_RE = re.compile(
@@ -1070,6 +1071,7 @@ class MemoryUpdater:
                 from openviking.session.memory.utils.link_renderer import LinkRenderer
 
                 abstract = LinkRenderer.strip_all_links(mf.content or "")
+                abstract = self._truncate_memory_abstract(abstract)
                 embedding_text = abstract
 
                 memory_type = uri_memory_type_map.get(uri)
@@ -1148,6 +1150,14 @@ class MemoryUpdater:
             except Exception as e:
                 tracer.error(f"Failed to vectorize memory {uri}: {e}")
         return attempted_count
+
+    @staticmethod
+    def _truncate_memory_abstract(abstract: str) -> str:
+        """Cap memory vector-store abstract fields below backend byte limits."""
+        encoded = (abstract or "").encode("utf-8")
+        if len(encoded) <= _MEMORY_ABSTRACT_MAX_BYTES:
+            return abstract or ""
+        return encoded[:_MEMORY_ABSTRACT_MAX_BYTES].decode("utf-8", errors="ignore")
 
     async def generate_overview(
         self,
