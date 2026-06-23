@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -766,3 +767,173 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
     assert call_threads["build_agent"] != event_loop_thread
     assert call_threads["reward"] != event_loop_thread
     assert call_threads["run_agent"] == event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_tau2_run_agent_force_loads_task_case_skill_before_task_actions(monkeypatch):
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+    from vikingbot.providers.base import LLMResponse, ToolCallRequest
+
+    observed = {}
+    real_imports = module._vikingbot_imports()
+
+    class FakeSandbox:
+        content = ""
+
+        async def read_file(self, path):
+            observed.setdefault("sandbox_reads", []).append(path)
+            return self.content
+
+        async def write_file(self, path, content):
+            observed.setdefault("sandbox_writes", []).append((path, content))
+            type(self).content = content
+
+    class FakeSandboxManager:
+        def get_workspace_path(self, session_key):
+            return Path("/tmp/fake-workspace")
+
+        def to_workspace_id(self, session_key):
+            return "workspace"
+
+        async def get_sandbox(self, session_key):
+            return FakeSandbox()
+
+    class FakeMemoryStore:
+        def __init__(self, workspace):
+            self.workspace = workspace
+
+        async def get_task_case_experience_content(self, **kwargs):
+            return "linked exp content", ["viking://user/u/memories/experiences/exp.md"]
+
+    class FakeContextBuilder:
+        def __init__(self, workspace, *, sandbox_manager=None, eval=False, **kwargs):
+            self.workspace = workspace
+            self.sandbox_manager = sandbox_manager
+            self.latest_task_case_experience_skill_content = ""
+
+        async def build_messages(self, **kwargs):
+            return [
+                {"role": "system", "content": "ctx system"},
+                {"role": "user", "content": kwargs["current_message"]},
+            ]
+
+        def add_assistant_message(
+            self, messages, content, tool_calls=None, reasoning_content=None
+        ):
+            msg = {"role": "assistant", "content": content or "[tool call]"}
+            if tool_calls:
+                msg["tool_calls"] = tool_calls
+            if reasoning_content:
+                msg["reasoning_content"] = reasoning_content
+            messages.append(msg)
+            return messages
+
+        def add_tool_result(self, messages, tool_call_id, tool_name, result):
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "name": tool_name,
+                    "content": result,
+                }
+            )
+            return messages
+
+    class FakeProvider:
+        async def chat(self, messages, tools=None, **kwargs):
+            observed["llm_messages"] = list(messages)
+            return LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest("call-1", "done", {}, 0)],
+            )
+
+        async def chat_stream(self, **kwargs):
+            from vikingbot.providers.base import LLMStreamEvent
+
+            yield LLMStreamEvent(type="response", response=await self.chat(**kwargs))
+
+        def get_default_model(self):
+            return "fake"
+
+    class FakeAgent:
+        def __init__(self):
+            from vikingbot.agent.tools.filesystem import ReadFileTool
+            from vikingbot.agent.tools.registry import ToolRegistry
+
+            self.sandbox_manager = FakeSandboxManager()
+            self.context = FakeContextBuilder(Path("/tmp/fake-workspace"))
+            self.tools = ToolRegistry()
+            self.tools.register(ReadFileTool())
+            self.tools.register(_DoneTool())
+            self.provider = FakeProvider()
+            self.model = "fake"
+            self.max_iterations = 1
+
+        _chat_with_stream_events = real_imports["AgentLoop"]._chat_with_stream_events
+        _run_agent_loop = real_imports["AgentLoop"]._run_agent_loop
+
+    class _DoneTool:
+        @property
+        def name(self):
+            return "done"
+
+        @property
+        def description(self):
+            return "done"
+
+        @property
+        def parameters(self):
+            return {"type": "object", "properties": {}}
+
+        def to_schema(self):
+            return {
+                "type": "function",
+                "function": {
+                    "name": self.name,
+                    "description": self.description,
+                    "parameters": self.parameters,
+                },
+            }
+
+        def validate_params(self, params):
+            return []
+
+        async def execute(self, tool_context, **kwargs):
+            return ""
+
+    monkeypatch.setattr("vikingbot.agent.memory.MemoryStore", FakeMemoryStore)
+    monkeypatch.setattr(
+        module,
+        "_vikingbot_imports",
+        lambda: {"ContextBuilder": FakeContextBuilder, "AgentLoop": real_imports["AgentLoop"]},
+    )
+
+    result = await module._run_agent(
+        agent=FakeAgent(),
+        system_prompt="tau2 policy",
+        user_prompt="user query",
+        session_key=SimpleNamespace(safe_name=lambda: "session"),
+        sender_id="tau2_user",
+        keep_default_tools=True,
+        case_lookup={"benchmark": "tau2", "strict": True, "case_name": "case"},
+    )
+
+    tools_used = result[2]
+    messages = observed["llm_messages"]
+    read_call_index = next(
+        i
+        for i, msg in enumerate(messages)
+        if msg.get("role") == "assistant" and "read_file" in str(msg.get("tool_calls"))
+    )
+    tool_result_index = next(
+        i
+        for i, msg in enumerate(messages)
+        if msg.get("role") == "tool" and msg.get("name") == "read_file"
+    )
+
+    assert observed["sandbox_writes"][0][0] == "skills/task_case_experience/SKILL.md"
+    assert observed["sandbox_reads"] == ["skills/task_case_experience/SKILL.md"]
+    assert read_call_index < tool_result_index
+    assert "linked exp content" in messages[tool_result_index]["content"]
+    assert tools_used[0]["tool_name"] == "read_file"
+    assert tools_used[0]["required_skill"] == "task_case_experience"

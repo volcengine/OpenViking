@@ -789,6 +789,73 @@ async def _prepare_task_case_experience_skill(
     return context_builder
 
 
+async def _execute_required_task_case_skill_read(
+    *,
+    agent: Any,
+    messages: list[dict[str, Any]],
+    session_key: Any,
+    sender_id: str,
+) -> dict[str, Any]:
+    """Force-load the required per-task skill before the rollout starts.
+
+    The prompt still tells the model that this is a normal skill, but TAU2 rollouts
+    are controlled evaluations: the case-linked experience is a required input, not
+    an optional action.  Execute the read_file tool once up front so the actual
+    model conversation and artifacts include the skill content before any TAU2
+    task tool can be called.
+    """
+
+    path = "skills/task_case_experience/SKILL.md"
+    tool_id = "tau2-required-task-case-skill-read"
+    messages.append(
+        {
+            "role": "assistant",
+            "content": "Reading required task_case_experience skill before task actions.",
+            "tool_calls": [
+                {
+                    "id": tool_id,
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": json.dumps({"path": path}, ensure_ascii=False),
+                    },
+                }
+            ],
+        }
+    )
+    started_at = time.perf_counter()
+    result = await agent.tools.execute(
+        "read_file",
+        {"path": path},
+        session_key=session_key,
+        sandbox_manager=agent.sandbox_manager,
+        sender_id=sender_id,
+    )
+    duration_ms = _elapsed_ms(started_at)
+    messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": tool_id,
+            "name": "read_file",
+            "content": result,
+        }
+    )
+    execute_success = not (isinstance(result, str) and result.lstrip().startswith("Error"))
+    if not execute_success:
+        logger.warning("required task_case_experience skill read failed: %s", str(result)[:300])
+    return {
+        "tool_name": "read_file",
+        "args": json.dumps({"path": path}, ensure_ascii=False),
+        "result": result,
+        "duration": duration_ms,
+        "execute_success": execute_success,
+        "input_token": 0,
+        "output_token": 0,
+        "auto": True,
+        "required_skill": "task_case_experience",
+    }
+
+
 def _task_case_experience_skill_content(
     *,
     case_lookup: dict[str, Any],
@@ -898,6 +965,14 @@ async def _run_agent(
     )
     memory_content = _merge_memories(user_memory, exp_content)
     stage_started_at = time.perf_counter()
+    required_skill_tool = None
+    if task_case_experience_skill and task_case_experience_skill.strip():
+        required_skill_tool = await _execute_required_task_case_skill_read(
+            agent=agent,
+            messages=messages,
+            session_key=session_key,
+            sender_id=sender_id,
+        )
     result = await agent._run_agent_loop(
         messages=messages,
         session_key=session_key,
@@ -909,6 +984,8 @@ async def _run_agent(
     if timings is not None:
         timings.record("agent_loop", stage_started_at)
     final_content, final_reasoning_content, tools_used, token_usage, iteration = result
+    if required_skill_tool is not None:
+        tools_used = [required_skill_tool, *tools_used]
     if _last_tool_name(tools_used) == "done":
         final_content = None
         final_reasoning_content = None
