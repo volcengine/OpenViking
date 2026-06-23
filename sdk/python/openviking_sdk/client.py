@@ -760,6 +760,13 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        response = await self._http.get(
+            "/api/v1/content/read",
+            params={"uri": VikingURI.normalize(uri), "offset": offset, "limit": limit, "raw": True},
+        )
+        return self._handle_response(response)
+
     async def abstract(self, uri: str) -> str:
         response = await self._http.get(
             "/api/v1/content/abstract", params={"uri": VikingURI.normalize(uri)}
@@ -1500,6 +1507,9 @@ class SyncHTTPClient:
 
     def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         return run_async(self._async_client.read(uri, offset=offset, limit=limit))
+
+    def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        return run_async(self._async_client.read_raw(uri, offset=offset, limit=limit))
 
     def abstract(self, uri: str) -> str:
         return run_async(self._async_client.abstract(uri))

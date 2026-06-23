@@ -62,6 +62,38 @@ async def test_async_http_client_batch_add_messages_url_encodes_session_id():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_read_raw_requests_raw_content():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(get=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: "body <!-- MEMORY_FIELDS -->"
+
+    result = await client.read_raw("/user/default/memories/case.md", offset=2, limit=3)
+
+    assert result == "body <!-- MEMORY_FIELDS -->"
+    fake_http.get.assert_awaited_once_with(
+        "/api/v1/content/read",
+        params={
+            "uri": "viking://user/default/memories/case.md",
+            "offset": 2,
+            "limit": 3,
+            "raw": True,
+        },
+    )
+
+
+def test_sync_http_client_read_raw_forwards_to_async_client():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    with patch.object(client._async_client, "read_raw", return_value="raw") as mock_read_raw:
+        with patch("openviking_sdk.client.run_async", return_value="raw") as mock_run:
+            result = client.read_raw("viking://resources/demo.md", offset=1, limit=2)
+
+    assert result == "raw"
+    assert mock_run.called
+    mock_read_raw.assert_called_once_with("viking://resources/demo.md", offset=1, limit=2)
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_reindex_posts_content_reindex():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
