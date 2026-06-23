@@ -10,7 +10,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.core.namespace import canonical_session_uri
@@ -34,6 +34,7 @@ from openviking.session.tool_result_synopsis import (
 )
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import FailedPreconditionError
@@ -50,6 +51,9 @@ logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
+_MEMORY_EXTRACTION_MAX_RETRIES = 3
+_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
+_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
 
 
 def _wm_debug(msg: str) -> None:
@@ -1093,7 +1097,6 @@ class Session:
         """
         from openviking.service.task_tracker import get_task_tracker
         from openviking.storage.transaction import LockContext, get_lock_manager
-        from openviking_cli.exceptions import FailedPreconditionError
 
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
@@ -1121,14 +1124,6 @@ class Session:
                 "archived": False,
                 "trace_id": trace_id,
             }
-
-        blocking_archive = await self._get_blocking_failed_archive_ref()
-        if blocking_archive:
-            raise FailedPreconditionError(
-                f"Session {self.session_id} has unresolved failed archive "
-                f"{blocking_archive['archive_id']}; fix it before committing again.",
-                details={"archive_id": blocking_archive["archive_id"]},
-            )
 
         # Use filesystem-based distributed lock so this works across workers/processes.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
@@ -1171,38 +1166,35 @@ class Session:
                 }
 
             self._compression.compression_index += 1
+            archive_uri = (
+                f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+            )
             if keep_recent_count > 0:
                 split_idx = total - keep_recent_count
                 messages_to_archive = self._messages[:split_idx]
-                self._messages = self._messages[split_idx:]
+                retained_messages = self._messages[split_idx:]
             else:
                 messages_to_archive = self._messages.copy()
-                self._messages = []
+                retained_messages = []
 
             try:
-                # Persist the retained tail (may be empty when keep=0). This
-                # replaces messages.jsonl under the lock, consistent with the
-                # previous behavior of writing empty messages on full clear.
+                # Persist archive raw messages before trimming live messages so
+                # an archive write failure cannot drop live conversation history.
+                if self._viking_fs:
+                    lines = [m.to_jsonl() for m in messages_to_archive]
+                    await self._viking_fs.write_file(
+                        uri=f"{archive_uri}/messages.jsonl",
+                        content="\n".join(lines) + "\n",
+                        ctx=self.ctx,
+                    )
+                self._messages = retained_messages
                 await self._write_to_agfs_async(messages=self._messages)
             except Exception as e:
-                # Rollback: restore messages so they aren't lost
-                logger.error(f"[commit] Failed to write messages.jsonl: {e}")
-                self._messages = list(messages_to_archive) + list(self._messages)
+                logger.error(f"[commit] Failed to persist archive/live messages: {e}")
+                self._messages = list(messages_to_archive) + list(retained_messages)
                 self._compression.compression_index -= 1
                 raise
-        # Lock released — live session now contains only the retained tail.
-
-        # ===== Phase 1 continued: Write raw archive (no LLM calls, no lock needed) =====
-        archive_uri = (
-            f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
-        )
-        if self._viking_fs:
-            lines = [m.to_jsonl() for m in messages_to_archive]
-            await self._viking_fs.write_file(
-                uri=f"{archive_uri}/messages.jsonl",
-                content="\n".join(lines) + "\n",
-                ctx=self.ctx,
-            )
+        # Lock released; live session now contains only the retained tail.
 
         # WM v2: live session is now the retained tail; pending_tokens resets
         # because anything that was pending has been archived.
@@ -1288,24 +1280,7 @@ class Session:
         redo_log = lock_manager.redo_log
 
         try:
-            if not await self._wait_for_previous_archive_done(archive_index):
-                await self._write_failed_marker(
-                    archive_uri,
-                    stage="waiting_previous_done",
-                    error=(
-                        f"Previous archive archive_{archive_index - 1:03d} failed; "
-                        "this archive cannot proceed"
-                    ),
-                    blocked_by=f"archive_{archive_index - 1:03d}",
-                )
-                await tracker.fail(
-                    task_id,
-                    f"Previous archive archive_{archive_index - 1:03d} failed; "
-                    "cannot continue session commit",
-                    account_id=self.ctx.account_id,
-                    user_id=self.ctx.user.user_id,
-                )
-                return
+            await self._wait_for_previous_archive_done(archive_index)
 
             await tracker.start(
                 task_id,
@@ -1363,6 +1338,25 @@ class Session:
                                 ctx=self.ctx,
                             )
 
+                    async def _run_retryable_phase2_step(
+                        operation_name: str,
+                        fn: Callable[[], Awaitable[Any]],
+                    ) -> Any:
+                        # Secondary safety net on top of the per-call retry that the
+                        # VLM/embedding layer already performs. Reuses the shared
+                        # transient-error classifier so permanent failures (auth,
+                        # quota, content-safety, 400, oversized input) fail fast
+                        # instead of being retried pointlessly.
+                        return await retry_async(
+                            fn,
+                            max_retries=_MEMORY_EXTRACTION_MAX_RETRIES,
+                            base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
+                            max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
+                            is_retryable=is_retryable_api_error,
+                            logger=logger,
+                            operation_name=operation_name,
+                        )
+
                     # Summary, long-term memory, and execution-derived memory run concurrently.
                     ov_config = get_openviking_config()
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
@@ -1410,70 +1404,87 @@ class Session:
                             self._session_compressor, "extract_execution_memories"
                         )
 
-                        extraction_tasks: List[Any] = [_run_archive_summary()]
+                        extraction_tasks: List[Any] = [
+                            _run_retryable_phase2_step("archive_summary", _run_archive_summary)
+                        ]
                         extraction_labels = ["archive_summary"]
 
                         if long_term_has_work:
-                            extraction_tasks.append(
-                                self._session_compressor.extract_long_term_memories(
+
+                            async def _run_long_term_memory_extraction() -> Any:
+                                # strict_extract_errors=True lets transient failures
+                                # surface so _run_retryable_phase2_step can retry them
+                                # (and so a final failure is recorded as a skipped
+                                # archive instead of silently dropping the memory).
+                                return await self._session_compressor.extract_long_term_memories(
                                     messages=extraction_messages,
                                     user=self.user,
                                     session_id=self.session_id,
                                     ctx=self.ctx,
+                                    strict_extract_errors=True,
                                     latest_archive_overview=latest_archive_overview,
                                     archive_uri=archive_uri,
                                     allowed_memory_types=long_term_memory_types,
                                     allow_self_memory=self_memory_enabled,
                                     allowed_peer_ids=allowed_peer_ids,
                                 )
+
+                            extraction_tasks.append(
+                                _run_retryable_phase2_step(
+                                    "long_term_memory_extraction",
+                                    _run_long_term_memory_extraction,
+                                )
                             )
                             extraction_labels.append("long_term")
 
                         if has_execution_memory and execution_memory_has_work:
-                            try:
-                                extraction_tasks.append(
-                                    self._session_compressor.extract_execution_memories(
-                                        messages=extraction_messages,
-                                        ctx=self.ctx,
-                                        latest_archive_overview=latest_archive_overview,
-                                        archive_uri=archive_uri,
-                                        allowed_memory_types=execution_memory_types,
-                                        include_session_skills=session_skill_extraction_enabled,
-                                    )
+
+                            async def _run_execution_memory_extraction() -> Any:
+                                # See _run_long_term_memory_extraction: surface errors
+                                # so retries can engage and final failures are visible.
+                                return await self._session_compressor.extract_execution_memories(
+                                    messages=extraction_messages,
+                                    ctx=self.ctx,
+                                    strict_extract_errors=True,
+                                    latest_archive_overview=latest_archive_overview,
+                                    archive_uri=archive_uri,
+                                    allowed_memory_types=execution_memory_types,
+                                    include_session_skills=session_skill_extraction_enabled,
                                 )
-                                extraction_labels.append("execution")
-                            except Exception as exc:
-                                logger.error(
-                                    "Execution memory extraction failed: %s",
-                                    exc,
-                                    exc_info=exc,
+
+                            extraction_tasks.append(
+                                _run_retryable_phase2_step(
+                                    "execution_memory_extraction",
+                                    _run_execution_memory_extraction,
                                 )
+                            )
+                            extraction_labels.append("execution")
 
                         _results = await asyncio.gather(
                             *extraction_tasks,
                             return_exceptions=True,
                         )
-                        summary_result = _results[0]
-
-                        if isinstance(summary_result, Exception):
-                            logger.error(
-                                f"Archive summary generation failed: {summary_result}",
-                                exc_info=summary_result,
-                            )
-
-                        total_extracted = 0
-                        extraction_errors: list[BaseException] = []
-                        for label, result in zip(extraction_labels[1:], _results[1:], strict=True):
+                        # Binary archive outcome: if ANY Phase 2 step (Working
+                        # Memory summary, long-term, or execution memory) still
+                        # fails after retries, the whole archive is marked
+                        # .failed.json and skipped. There is no partial state.
+                        extraction_error: Optional[BaseException] = None
+                        for label, result in zip(extraction_labels, _results, strict=True):
                             if isinstance(result, Exception):
                                 logger.error(
-                                    "Memory extraction failed for %s: %s",
+                                    "Phase 2 step %s failed: %s",
                                     label,
                                     result,
                                     exc_info=result,
                                 )
-                                extraction_errors.append(result)
-                                continue
+                                if extraction_error is None:
+                                    extraction_error = result
 
+                        if extraction_error is not None:
+                            raise extraction_error
+
+                        total_extracted = 0
+                        for label, result in zip(extraction_labels[1:], _results[1:], strict=True):
                             if isinstance(result, dict):
                                 target_contexts = list(result.get("contexts", []))
                                 target_skills = list(result.get("session_skills", []))
@@ -1492,9 +1503,6 @@ class Session:
                             if target_skills:
                                 extracted_skill_results.extend(target_skills)
 
-                        if extraction_errors:
-                            raise extraction_errors[0]
-
                         if total_extracted:
                             self._stats.memories_extracted += total_extracted
                         if extracted_skill_results:
@@ -1509,7 +1517,7 @@ class Session:
                                 "Memory and session skill extraction skipped "
                                 "(disabled by config or memory_policy)"
                             )
-                        await _run_archive_summary()
+                        await _run_retryable_phase2_step("archive_summary", _run_archive_summary)
 
                     # Write relations (using snapshot, not self._usage_records)
                     if self._viking_fs:
@@ -1567,7 +1575,9 @@ class Session:
                 telemetry_snapshot=snapshot,
             )
 
-            # Write .done file last — signals that all state is finalized
+            # Write .done file last — signals that all state is finalized. We
+            # only reach here when every Phase 2 step succeeded; any failure
+            # would have raised above and marked the archive .failed.json.
             await self._write_done_file(archive_uri, first_message_id, last_message_id)
 
             await tracker.complete(
@@ -1658,6 +1668,7 @@ class Session:
         stage: str,
         error: str,
         blocked_by: str = "",
+        skipped: bool = True,
     ) -> None:
         """Persist a terminal failure marker for the archive."""
         if not self._viking_fs:
@@ -1666,6 +1677,7 @@ class Session:
             "stage": stage,
             "error": error,
             "failed_at": get_current_timestamp(),
+            "skipped": skipped,
         }
         if blocked_by:
             payload["blocked_by"] = blocked_by
@@ -1899,24 +1911,6 @@ class Session:
 
         return completed
 
-    async def _get_blocking_failed_archive_ref(self) -> Optional[Dict[str, Any]]:
-        """Return the earliest unresolved failed archive, if any."""
-        for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
-            try:
-                await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
-                continue
-            except Exception:
-                pass
-            try:
-                await self._viking_fs.read_file(
-                    f"{archive['archive_uri']}/.failed.json",
-                    ctx=self.ctx,
-                )
-            except Exception:
-                continue
-            return archive
-        return None
-
     async def _read_archive_overview(self, archive_uri: str) -> str:
         """Read archive overview text."""
         try:
@@ -2001,18 +1995,30 @@ class Session:
         return summary["overview"] if summary else ""
 
     async def _get_pending_archive_messages(self) -> List[Message]:
-        """Return messages from incomplete archives newer than the latest completed archive."""
+        """Return messages from in-progress archives newer than the latest completed archive."""
         latest_completed_index = max(0, self._meta.commit_count)
-        incomplete_archives: List[Dict[str, Any]] = []
+        pending_archives: List[Dict[str, Any]] = []
         for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
             try:
                 await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
                 latest_completed_index = max(latest_completed_index, archive["index"])
+                continue
             except Exception:
-                incomplete_archives.append(archive)
+                pass
+
+            try:
+                await self._viking_fs.read_file(
+                    f"{archive['archive_uri']}/.failed.json",
+                    ctx=self.ctx,
+                )
+                continue
+            except Exception:
+                pass
+
+            pending_archives.append(archive)
 
         pending_messages: List[Message] = []
-        for archive in incomplete_archives:
+        for archive in pending_archives:
             if archive["index"] <= latest_completed_index:
                 continue
             pending_messages.extend(await self._read_archive_messages(archive["archive_uri"]))
@@ -2028,7 +2034,7 @@ class Session:
         return int(match.group(1))
 
     async def _wait_for_previous_archive_done(self, archive_index: int) -> bool:
-        """Wait until the previous archive is done, or report dependency failure."""
+        """Wait until the previous archive reaches a terminal state."""
         if archive_index <= 1 or not self._viking_fs:
             return True
 
@@ -2045,7 +2051,11 @@ class Session:
                     f"{previous_archive_uri}/.failed.json",
                     ctx=self.ctx,
                 )
-                return False
+                logger.info(
+                    "Previous archive %s failed and is skipped; continuing",
+                    previous_archive_uri,
+                )
+                return True
             except Exception:
                 pass
 

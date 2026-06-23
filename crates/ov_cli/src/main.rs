@@ -2828,9 +2828,7 @@ async fn main() {
             } else {
                 format!("{}/bot/v1", ctx.config.url)
             };
-            let api_key = std::env::var("VIKINGBOT_API_KEY")
-                .ok()
-                .or_else(|| ctx.config.api_key.clone());
+            let api_key = std::env::var("VIKINGBOT_API_KEY").ok();
             let cmd = commands::chat::ChatCommand {
                 endpoint,
                 api_key,
@@ -3088,9 +3086,7 @@ mod tests {
     #[test]
     fn cli_find_and_search_reject_removed_peer_id_flag() {
         assert!(Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "peer-a"]).is_err());
-        assert!(
-            Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "peer-a"]).is_err()
-        );
+        assert!(Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "peer-a"]).is_err());
     }
 
     #[test]

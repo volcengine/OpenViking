@@ -98,7 +98,7 @@ openclaw config get plugins.entries.openviking.config --json
   "autoCapture": true,
   "logFindRequests": true,
   "emitStandardDiagnostics": true,
-  "commitTokenThreshold": 1
+  "commitTokenThresholdRatio": 0
 }
 ```
 

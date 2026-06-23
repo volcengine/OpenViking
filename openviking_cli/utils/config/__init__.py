@@ -49,6 +49,7 @@ from .consts import (
     OPENVIKING_WRITE_CHECK_URI_ENV,
     SYSTEM_CONFIG_DIR,
 )
+from . import embedding_config
 from .embedding_config import EmbeddingConfig
 from .log_config import LogConfig
 from .open_viking_config import (

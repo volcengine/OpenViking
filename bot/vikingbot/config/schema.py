@@ -4,7 +4,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -65,7 +65,7 @@ class BaseChannelConfig(BaseModel):
     enabled: bool = True
     ov_tools_enable: bool = True
     memory_peer: list[str] | None = None
-    memory_user: list[str] | None = None  # Deprecated legacy owner-user memory lookup.
+    memory_user: list[str] | None = None  # Deprecated alias for owner-user memory lookup.
 
     def channel_id(self) -> str:
         return "default"
@@ -515,11 +515,16 @@ class WebSearchConfig(BaseModel):
 class OpenVikingConfig(BaseModel):
     """Viking tools configuration."""
 
-    mode: str = "remote"  # local or remote
+    _effective_auth_mode: str = PrivateAttr(default="")
+
+    # Deprecated as user config. Kept for compatibility; load_config derives it
+    # from OpenViking's effective dev auth mode.
+    mode: str = "remote"
     api_key_type: Literal["root", "user"] | None = None
     server_url: str = ""
+    # User API key when api_key_type=user; root API key when api_key_type=root.
     api_key: str = ""
-    # 废弃，后续使用api_key
+    # Deprecated compatibility field. Use api_key with api_key_type=root instead.
     root_api_key: str = ""
     account_id: str = "default"
     admin_user_id: str = "default"
@@ -552,12 +557,17 @@ class OpenVikingConfig(BaseModel):
         return normalized or None
 
     @model_validator(mode="after")
-    def apply_api_key_compatibility(self):
+    def default_api_key_type(self):
         if not self.api_key_type:
-            self.api_key_type = "user" if not self.root_api_key or self.api_key else "root"
-        if self.root_api_key and not self.api_key:
-            self.api_key = self.root_api_key
+            self.api_key_type = "user"
         return self
+
+    @property
+    def effective_auth_mode(self) -> str:
+        return self._effective_auth_mode
+
+    def set_effective_auth_mode(self, auth_mode: str) -> None:
+        self._effective_auth_mode = str(auth_mode or "").strip().lower()
 
 
 class WebToolsConfig(BaseModel):

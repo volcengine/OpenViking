@@ -123,7 +123,7 @@ transformContext auto recall 流程：
 4. 清理 `<relevant-memories>`、metadata、时间戳、心跳等噪音。
 5. 逐条调用 `POST /api/v1/sessions/{sessionId}/messages`：`context-engine.ts:1378`、`client.ts:703`。
 6. 调 `GET /api/v1/sessions/{sessionId}` 读取 `pending_tokens`：`context-engine.ts:1389`、`client.ts:770`。
-7. 若 `pending_tokens < commitTokenThreshold`，本轮结束。
+7. 若 `pending_tokens < tokenBudget × commitTokenThresholdRatio`，本轮结束。
 8. 否则调用 `commitSession(wait=false, keepRecentCount=cfg.commitKeepRecentCount)`；服务端 Phase 2 记忆抽取异步继续执行：`context-engine.ts:1403`。
 9. 开启 `logFindRequests` 时，插件轮询 task 结果并打印 Phase 2 抽取状态：`context-engine.ts:1424`。
 
@@ -173,7 +173,7 @@ transformContext auto recall 流程：
 - `afterTurn` 路径：`wait=false`，异步 Phase 2，默认保留最近 10 条消息。
 - `compact` 路径：`wait=true`，同步等待 Phase 2，`keepRecentCount=0`，形成明确压缩边界。
 
-`commitKeepRecentCount` 默认 10，`commitTokenThreshold` 默认 20000：`config.ts:68`。
+`commitKeepRecentCount` 默认 10，`commitTokenThresholdRatio` 默认 0.5（模型上下文窗口的 50%）：`config.ts`。
 
 ### 5.3 显式记忆工具
 
@@ -730,7 +730,7 @@ openclaw config get plugins.slots.contextEngine
 | `recallLimit` | `6` | 召回条数 |
 | `recallScoreThreshold` | `0.15` | 召回阈值 |
 | `recallMaxInjectedChars` | `4000` | 注入字符预算 |
-| `commitTokenThreshold` | `20000` | `pending_tokens` 超过该值触发 afterTurn commit；设 0 可每轮 commit |
+| `commitTokenThresholdRatio` | `0.5` | `pending_tokens` 达到「模型上下文窗口 × 该比例」触发 afterTurn commit（0-1，例 0.5=50%）；设 0 可每轮 commit |
 | `commitKeepRecentCount` | `10` | afterTurn commit 后保留最近消息数；compact 固定 0 |
 | `bypassSessionPatterns` | `[]` | 匹配 sessionKey/sessionId 时完全绕过 OpenViking |
 | `emitStandardDiagnostics` | `false` | 输出 `openviking: diag {...}` 结构化诊断日志 |
@@ -1358,7 +1358,7 @@ python health_check_tools/ov-healthcheck.py
 - [ ] `X-OpenViking-Actor-Peer` 与预期 agent/session 一致。
 - [ ] `autoCapture/autoRecall` 未被关闭。
 - [ ] 当前 session 没有命中 `bypassSessionPatterns`。
-- [ ] `pending_tokens` 是否达到 `commitTokenThreshold`。
+- [ ] `pending_tokens` 是否达到 `tokenBudget × commitTokenThresholdRatio`。
 - [ ] Phase 2 task 是否 completed。
 - [ ] 需要细节时是否使用 archive 工具回查。
 

@@ -24,6 +24,7 @@ TELEGRAM_ALICE_PEER_ID = "ext-dGVsZWdyYW06YWxpY2U"
 def _client(api_key_type: str = "user") -> VikingClient:
     client = VikingClient.__new__(VikingClient)
     client.mode = "remote"
+    client.auth_mode = "trusted" if api_key_type == "root" else "api_key"
     client.api_key_type = api_key_type
     client.admin_user_id = "bot-user"
     client.agent_id = "agent-1"

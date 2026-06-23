@@ -9,7 +9,10 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from openviking_cli.doctor import (
     _probe_embedding_provider,
@@ -20,6 +23,7 @@ from openviking_cli.doctor import (
     check_native_engine,
     check_ollama,
     check_python,
+    check_vikingbot,
     check_vlm,
     run_doctor,
 )
@@ -721,6 +725,277 @@ class TestCheckOllama:
         assert "ollama serve" in fix
 
 
+class TestCheckVikingBot:
+    @pytest.fixture(autouse=True)
+    def _no_ovcli_config(self, monkeypatch):
+        monkeypatch.setattr("openviking_cli.doctor.load_ovcli_config", lambda: None)
+
+    def test_pass_with_user_api_key(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {"root_api_key": "root-key"},
+                    "bot": {
+                        "ov_server": {
+                            "api_key": "user-key",
+                            "api_key_type": "user",
+                        }
+                    }
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "api_key mode" in detail
+        assert fix is None
+
+    def test_pass_dev_mode_without_bot_ov_server(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({"bot": {}}))
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "dev OpenViking auth" in detail
+        assert fix is None
+
+    def test_pass_dev_mode_with_ignored_bot_api_key(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps({"bot": {"ov_server": {"api_key": "stale-key"}}})
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "dev OpenViking auth" in detail
+        assert fix is None
+
+    def test_warn_when_bot_ov_server_missing_in_api_key_mode(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({"server": {"root_api_key": "root-key"}, "bot": {}}))
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "warn"
+        assert "bot.ov_server not configured" in detail
+        assert "bot.ov_server.api_key" in fix
+
+    def test_warn_when_user_api_key_missing(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {"root_api_key": "root-key"},
+                    "bot": {"ov_server": {"api_key_type": "user"}},
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "warn"
+        assert "api_key" in detail
+        assert "ovcli.conf" in detail
+        assert "User API key" in fix
+
+    def test_pass_with_ovcli_user_api_key_fallback(self, tmp_path: Path, monkeypatch):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps({"server": {"root_api_key": "root-key"}, "bot": {"ov_server": {}}})
+        )
+        monkeypatch.setattr(
+            "openviking_cli.doctor.load_ovcli_config",
+            lambda: SimpleNamespace(api_key="ovcli-user-key"),
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "ovcli.conf api_key" in detail
+        assert "ovcli-user-key" not in detail
+        assert fix is None
+
+    def test_warn_with_legacy_root_api_key(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {"root_api_key": "server-root-key"},
+                    "bot": {"ov_server": {"root_api_key": "root-key"}},
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "warn"
+        assert "root_api_key is deprecated and ignored" in detail
+        assert "bot.ov_server.api_key" in fix
+
+    def test_pass_with_root_api_key_type_for_explicit_server_url(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "bot": {
+                        "ov_server": {
+                            "server_url": "https://trusted.example",
+                            "api_key": "root-looking-key",
+                            "api_key_type": "root",
+                        }
+                    }
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "trusted OpenViking auth" in detail
+        assert fix is None
+
+    def test_warn_when_external_root_key_omits_root_api_key_type(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "bot": {
+                        "ov_server": {
+                            "server_url": "https://trusted.example",
+                            "root_api_key": "root-key",
+                        }
+                    }
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "warn"
+        assert "root_api_key is deprecated and ignored" in detail
+        assert "api_key_type=root" not in detail
+        assert "User API key" in fix
+
+    def test_warn_when_root_api_key_type_inherits_api_key_server(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {"root_api_key": "root-key"},
+                    "bot": {
+                        "ov_server": {
+                            "api_key_type": "root",
+                            "api_key": "root-key",
+                        }
+                    },
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "warn"
+        assert "api_key_type=root" in detail
+        assert "http://127.0.0.1:1933" in detail
+        assert "auth_mode=api_key" in detail
+        assert "To use http://127.0.0.1:1933" in fix
+        assert "bot.ov_server.api_key_type to 'user'" in fix
+        assert "User API key" in fix
+        assert "server.auth_mode='trusted'" in fix
+        assert "bot.ov_server.server_url" in fix
+        assert "api_key_type='root'" in fix
+
+    def test_pass_when_explicit_same_url_is_treated_as_external_server(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {"host": "127.0.0.1", "port": 1933, "root_api_key": "root-key"},
+                    "bot": {
+                        "ov_server": {
+                            "server_url": "http://localhost:1933",
+                            "api_key_type": "root",
+                            "api_key": "root-key",
+                        }
+                    },
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "trusted OpenViking auth" in detail
+        assert fix is None
+
+    def test_pass_with_trusted_root_api_key(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {
+                        "auth_mode": "trusted",
+                        "root_api_key": "root-key",
+                    }
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "trusted OpenViking auth" in detail
+        assert fix is None
+
+    def test_pass_current_trusted_prefers_server_root_key(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "server": {
+                        "auth_mode": "trusted",
+                        "root_api_key": "server-root-key",
+                    },
+                    "bot": {"ov_server": {"api_key": "stale-bot-key"}},
+                }
+            )
+        )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "pass"
+        assert "trusted OpenViking auth" in detail
+        assert fix is None
+
+    def test_warn_with_trusted_missing_root_api_key(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(json.dumps({"server": {"auth_mode": "trusted"}}))
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            status, detail, fix = check_vikingbot()
+
+        assert status == "warn"
+        assert "server.auth_mode=trusted" in detail
+        assert "server.root_api_key" in fix
+
+
 class TestCheckDisk:
     def test_pass_normal_disk(self):
         ok, detail, fix = check_disk()
@@ -757,6 +1032,18 @@ class TestRunDoctor:
         assert code == 1
         captured = capsys.readouterr()
         assert "FAIL" in captured.out
+
+    def test_returns_zero_on_warning_only(self, capsys):
+        with patch(
+            "openviking_cli.doctor._CHECKS",
+            [("Warning", lambda: ("warn", "needs attention", "fix it"))],
+        ):
+            code = run_doctor()
+
+        assert code == 0
+        captured = capsys.readouterr()
+        assert "WARN" in captured.out
+        assert "1 warning(s)" in captured.out
 
 
 def _import_fail(blocked_name: str):

@@ -123,10 +123,12 @@ export type AfterTurnOpenVikingSessionParams = {
   messages?: AgentMessage[];
   prePromptMessageCount?: number;
   isHeartbeat?: boolean;
+  /** Model context window in tokens; the auto-commit threshold is a fraction of this. */
+  tokenBudget: number;
   runtimeContext?: Record<string, unknown>;
   cfg: {
     autoCapture: boolean;
-    commitTokenThreshold: number;
+    commitTokenThresholdRatio: number;
     commitKeepRecentCount: number;
     logFindRequests: boolean;
   };
@@ -753,6 +755,7 @@ export async function afterTurnOpenVikingSession({
   messages: rawMessages,
   prePromptMessageCount,
   isHeartbeat,
+  tokenBudget,
   runtimeContext,
   cfg,
   getClient,
@@ -880,11 +883,15 @@ export async function afterTurnOpenVikingSession({
     const session = await client.getSession(ovSessionId, agentId);
     const pendingTokens = session.pending_tokens ?? 0;
 
-    if (pendingTokens < cfg.commitTokenThreshold) {
+    const commitTokenThreshold = Math.floor(tokenBudget * cfg.commitTokenThresholdRatio);
+
+    if (pendingTokens < commitTokenThreshold) {
       diag("afterTurn_skip", ovSessionId, {
         reason: "below_threshold",
         pendingTokens,
-        commitTokenThreshold: cfg.commitTokenThreshold,
+        commitTokenThreshold,
+        commitTokenThresholdRatio: cfg.commitTokenThresholdRatio,
+        tokenBudget,
         senderIdFound: sender.found,
         senderId: sender.senderId ?? null,
       });
@@ -904,7 +911,9 @@ export async function afterTurnOpenVikingSession({
 
     diag("afterTurn_commit", ovSessionId, {
       pendingTokens,
-      commitTokenThreshold: cfg.commitTokenThreshold,
+      commitTokenThreshold,
+      commitTokenThresholdRatio: cfg.commitTokenThresholdRatio,
+      tokenBudget,
       status: commitResult.status,
       archived: commitResult.archived ?? false,
       taskId: commitResult.task_id ?? null,

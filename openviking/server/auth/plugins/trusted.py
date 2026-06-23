@@ -199,6 +199,9 @@ class TrustedAuthPlugin(AuthPlugin):
     def requires_api_key_manager(self) -> bool:
         return False
 
+    def can_skip_api_key_for_bot_proxy(self) -> bool:
+        return True
+
     def get_request_context_checks(
         self,
         path: str,

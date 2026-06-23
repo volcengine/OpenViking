@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 
 import openviking.server.routers.bot as bot_router_module
+from openviking.server.auth.plugins import DevAuthPlugin, TrustedAuthPlugin
 from openviking.server.config import ServerConfig
 from openviking.server.identity import AuthMode
 
@@ -63,6 +64,7 @@ async def test_feedback_proxy_forwards_request(monkeypatch):
 
     app = FastAPI()
     app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
 
@@ -117,7 +119,8 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
     monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
 
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode="trusted")
+    app.state.config = ServerConfig(auth_mode="trusted", host="127.0.0.1", port=1944)
+    app.state.auth_plugin = TrustedAuthPlugin()
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
 
@@ -140,6 +143,8 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
         "user_id": "alice",
         "agent_id": "web-playground",
         "role": "user",
+        "api_key_type": "root",
+        "server_url": "http://127.0.0.1:1944",
         "namespace_policy": {
             "isolate_user_scope_by_agent": False,
             "isolate_agent_scope_by_user": False,
@@ -150,7 +155,19 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_chat_proxy_rejects_authenticated_request_without_forwardable_api_key(monkeypatch):
+async def test_chat_proxy_forwards_trusted_request_without_root_api_key(monkeypatch):
+    forwarded = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"session_id": "session-1", "message": "ok"}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"session_id": "session-1", "message": "ok"}
+
     class FakeClient:
         async def __aenter__(self):
             return self
@@ -158,14 +175,20 @@ async def test_chat_proxy_rejects_authenticated_request_without_forwardable_api_
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        async def post(self, *args, **kwargs):
-            raise AssertionError("bot gateway should not be called without a forwardable key")
+        async def post(self, url, json, headers, timeout):
+            forwarded["url"] = url
+            forwarded["json"] = json
+            forwarded["headers"] = headers
+            forwarded["timeout"] = timeout
+            return FakeResponse()
 
     monkeypatch.setattr(bot_router_module, "BOT_API_URL", "http://127.0.0.1:18790")
+    monkeypatch.setattr(bot_router_module, "BOT_API_KEY", "")
     monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
 
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode="trusted")
+    app.state.config = ServerConfig(auth_mode="trusted", host="127.0.0.1", port=1955)
+    app.state.auth_plugin = TrustedAuthPlugin()
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
 
@@ -179,5 +202,20 @@ async def test_chat_proxy_rejects_authenticated_request_without_forwardable_api_
             json={"message": "hello"},
         )
 
-    assert response.status_code == 401
-    assert "forwardable OpenViking API key" in response.text
+    assert response.status_code == 200
+    assert forwarded["url"] == "http://127.0.0.1:18790/bot/v1/chat"
+    assert "api_key" not in forwarded["json"]["openviking_connection"]
+    assert forwarded["json"]["openviking_connection"] == {
+        "account_id": "acct",
+        "user_id": "alice",
+        "agent_id": "web-playground",
+        "role": "user",
+        "api_key_type": "root",
+        "server_url": "http://127.0.0.1:1955",
+        "namespace_policy": {
+            "isolate_user_scope_by_agent": False,
+            "isolate_agent_scope_by_user": False,
+        },
+    }
+    assert "X-Gateway-Token" not in forwarded["headers"]
+    assert forwarded["timeout"] == 300.0

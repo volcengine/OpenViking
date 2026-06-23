@@ -8,9 +8,9 @@ from typing import Any, Dict, List, Mapping, Optional
 from loguru import logger
 
 import openviking as ov
+from openviking.core.namespace import uri_parts
 from openviking.core.peer_id import normalize_peer_id
 from vikingbot.config.loader import load_config
-from vikingbot.openviking_mount.user_apikey_manager import UserApiKeyManager
 
 viking_resource_prefix = "viking://resources/"
 
@@ -56,12 +56,10 @@ class VikingClient:
         self.workspace_id = agent_id
         self.agent_id = agent_id
         self.ov_path = config.ov_data_path
-        self.mode = openviking_config.mode
-        self.api_key_type = (openviking_config.api_key_type or "user").strip().lower()
-        if self.api_key_type not in {"root", "user"}:
-            raise ValueError(f"Invalid ov_server.api_key_type: {self.api_key_type}")
+        self.auth_mode = self._resolve_auth_mode(openviking_config)
+        self.mode = "local" if self.auth_mode == "dev" else "remote"
+        self.api_key_type = self._resolve_api_key_type(openviking_config)
 
-        self._apikey_manager = None
         self.admin_user_client = None
         self._user_clients = {}
         self._namespace_policy = {
@@ -76,7 +74,7 @@ class VikingClient:
         )
         self.actor_peer_id = self._peer_id(actor_peer_id) or self._peer_id(connection_actor_peer_id)
 
-        if openviking_config.mode == "local":
+        if self._is_dev_mode():
             client_kwargs = {"url": openviking_config.server_url}
             self._apply_actor_peer_scope(client_kwargs)
             if agent_id is None or _is_session_key(agent_id):
@@ -96,7 +94,7 @@ class VikingClient:
         self.account_id = openviking_config.account_id
         self.admin_user_id = openviking_config.admin_user_id
 
-        api_key = openviking_config.api_key or openviking_config.root_api_key
+        api_key = openviking_config.api_key
         remote_client_kwargs = {
             "url": openviking_config.server_url,
             "api_key": api_key,
@@ -109,12 +107,31 @@ class VikingClient:
         self._apply_actor_peer_scope(remote_client_kwargs)
         self.client = ov.AsyncHTTPClient(**remote_client_kwargs)
 
-        if self._is_root_key_mode() and self.ov_path:
-            self._apikey_manager = UserApiKeyManager(
-                ov_path=self.ov_path,
-                server_url=openviking_config.server_url,
-                account_id=openviking_config.account_id,
-            )
+    @staticmethod
+    def _normalize_auth_value(value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def _resolve_auth_mode(self, openviking_config: Any) -> str:
+        effective_auth_mode = self._normalize_auth_value(
+            getattr(openviking_config, "effective_auth_mode", None)
+        )
+        if effective_auth_mode in {"trusted", "api_key", "dev"}:
+            return effective_auth_mode
+
+        api_key_type = self._normalize_auth_value(getattr(openviking_config, "api_key_type", None))
+        if api_key_type == "root":
+            return "trusted"
+        return "api_key"
+
+    def _resolve_api_key_type(self, openviking_config: Any) -> str:
+        api_key_type = self._normalize_auth_value(getattr(openviking_config, "api_key_type", None))
+        if self.auth_mode == "trusted":
+            api_key_type = "root"
+        elif self.auth_mode in {"api_key", "dev"}:
+            api_key_type = "user"
+        if api_key_type not in {"root", "user"}:
+            raise ValueError(f"Invalid ov_server.api_key_type: {api_key_type}")
+        return api_key_type
 
     @staticmethod
     def _normalize_connection(
@@ -129,6 +146,7 @@ class VikingClient:
             "user_id",
             "agent_id",
             "role",
+            "api_key_type",
             "server_url",
             "actor_peer_id",
         ):
@@ -146,6 +164,12 @@ class VikingClient:
                 ),
             }
         if not normalized.get("api_key"):
+            if (
+                normalized.get("api_key_type") == "root"
+                and normalized.get("account_id")
+                and normalized.get("user_id")
+            ):
+                return normalized
             return None
         return normalized
 
@@ -154,7 +178,8 @@ class VikingClient:
         self.mode = "remote"
         request_role = str(connection.get("role") or "").strip().lower()
         self._request_role = request_role or None
-        self.api_key_type = "user"
+        self.api_key_type = self._normalize_auth_value(connection.get("api_key_type")) or "user"
+        self.auth_mode = "trusted" if self.api_key_type == "root" else "api_key"
         self.agent_id = connection.get("agent_id") or agent_id
         self.workspace_id = self.agent_id
         self.account_id = connection.get("account_id") or self.openviking_config.account_id
@@ -167,12 +192,13 @@ class VikingClient:
 
         remote_client_kwargs = {
             "url": connection.get("server_url") or self.openviking_config.server_url,
-            "api_key": connection["api_key"],
             "profile_enabled": False,
         }
-        if request_role != "user" and self.account_id:
+        if connection.get("api_key"):
+            remote_client_kwargs["api_key"] = connection["api_key"]
+        if self.api_key_type == "root" and self.account_id:
             remote_client_kwargs["account"] = self.account_id
-        if request_role != "user" and self.admin_user_id:
+        if self.api_key_type == "root" and self.admin_user_id:
             remote_client_kwargs["user"] = self.admin_user_id
 
         self._apply_actor_peer_scope(remote_client_kwargs)
@@ -229,17 +255,20 @@ class VikingClient:
 
     def _is_root_key_mode(self) -> bool:
         return (
-            self.mode == "remote"
+            self.auth_mode == "trusted"
             and self.api_key_type == "root"
             and not self._has_request_connection()
         )
 
     def _is_user_key_mode(self) -> bool:
         return (
-            self.mode == "remote"
+            self.auth_mode == "api_key"
             and self.api_key_type == "user"
             and not self._has_request_connection()
         )
+
+    def _is_dev_mode(self) -> bool:
+        return self.auth_mode == "dev" and not self._has_request_connection()
 
     def _has_request_connection(self) -> bool:
         return self._request_connection is not None
@@ -255,7 +284,7 @@ class VikingClient:
         return user_id or self.admin_user_id
 
     def _effective_session_user_id(self, user_id: Optional[str] = None) -> Optional[str]:
-        if self._has_request_connection() or self.mode == "local" or self._is_user_key_mode():
+        if self._has_request_connection() or self._is_dev_mode() or self._is_user_key_mode():
             return None
         return user_id or self.admin_user_id
 
@@ -287,7 +316,7 @@ class VikingClient:
             "isolate_user_scope_by_agent": False,
             "isolate_agent_scope_by_user": False,
         }
-        if self._has_request_connection() or self.mode == "local" or self._is_user_key_mode():
+        if self._has_request_connection() or self._is_dev_mode() or self._is_user_key_mode():
             self._namespace_policy = policy
             self._namespace_policy_loaded = True
             return
@@ -327,6 +356,22 @@ class VikingClient:
         if user_space:
             return f"viking://user/{user_space}/memories/"
         return "viking://user/memories/"
+
+    def _owner_user_id_for_uri(self, uri: Optional[str]) -> Optional[str]:
+        if not self._is_root_key_mode():
+            return None
+        try:
+            parts = uri_parts(str(uri or ""))
+        except Exception:
+            return None
+        if len(parts) < 2 or parts[0] != "user":
+            return None
+        if parts[1] in {"memories", "resources", "skills", "peers", "privacy", "sessions"}:
+            return None
+        owner_user_id = parts[1]
+        if owner_user_id == self.admin_user_id:
+            return None
+        return owner_user_id
 
     def _peer_memory_target_uri(self, user_id: Optional[str], peer_id: str) -> str:
         user_space = self._user_space_fragment(user_id)
@@ -449,6 +494,23 @@ class VikingClient:
             deduped.append(target_uri)
         return deduped
 
+    def build_memory_search_targets(
+        self,
+        *,
+        user_ids: Optional[List[str]] = None,
+        owner_user_id: Optional[str] = None,
+        peer_ids: Optional[List[str]] = None,
+    ) -> List[tuple[str, Optional[str]]]:
+        target_uris = self.build_memory_search_target_uris(
+            user_ids=user_ids,
+            owner_user_id=owner_user_id,
+            peer_ids=peer_ids,
+        )
+        return [
+            (target_uri, self._owner_user_id_for_uri(target_uri))
+            for target_uri in target_uris
+        ]
+
     def _skill_memory_uri(self, skill_name: str, user_id: Optional[str] = None) -> str:
         return f"{self._memory_target_uri(user_id)}skills/{skill_name}.md"
 
@@ -484,20 +546,31 @@ class VikingClient:
         entries = await self.client.ls(path, recursive=recursive)
         return entries
 
-    async def read_content(self, uri: str, level: str = "abstract") -> str:
+    async def read_content(
+        self,
+        uri: str,
+        level: str = "abstract",
+        user_id: Optional[str] = None,
+    ) -> str:
         """读取内容
 
         Args:
             uri: Viking URI
             level: 读取级别 ("abstract" - L0摘要, "overview" - L1概览, "read" - L2完整内容)
         """
+        client = self.client
+        should_close = False
+        scoped_user_id = user_id or self._owner_user_id_for_uri(uri)
+        if scoped_user_id:
+            client, should_close = await self._get_user_scoped_client(scoped_user_id)
+
         try:
             if level == "abstract":
-                return await self.client.abstract(uri)
+                return await client.abstract(uri)
             elif level == "overview":
-                return await self.client.overview(uri)
+                return await client.overview(uri)
             elif level == "read":
-                return await self.client.read(uri)
+                return await client.read(uri)
             else:
                 raise ValueError(f"Unsupported level: {level}")
         except FileNotFoundError:
@@ -505,6 +578,9 @@ class VikingClient:
         except Exception as e:
             logger.warning(f"Failed to read content from {uri}: {e}")
             return ""
+        finally:
+            if should_close:
+                await client.close()
 
     async def read_user_profile(self, user_id: str) -> str:
         """读取用户 profile。"""
@@ -512,14 +588,8 @@ class VikingClient:
         if not effective_user_id:
             return await self.read_content(uri="viking://user/memories/profile.md", level="read")
 
-        user_exists = await self._check_user_exists(effective_user_id)
-
-        if not user_exists:
-            await self._initialize_user(effective_user_id)
-            return ""
-
         uri = f"{self._memory_target_uri(effective_user_id)}profile.md"
-        result = await self.read_content(uri=uri, level="read")
+        result = await self.read_content(uri=uri, level="read", user_id=effective_user_id)
         return result
 
     async def read_peer_profile(self, peer_id: str) -> str:
@@ -539,8 +609,11 @@ class VikingClient:
     ) -> Dict[str, Any]:
         client = self.client
         should_close = False
-        if user_id:
-            client, should_close = await self._get_user_scoped_client(user_id)
+        scoped_user_id = user_id
+        if scoped_user_id is None and isinstance(target_uri, str):
+            scoped_user_id = self._owner_user_id_for_uri(target_uri)
+        if scoped_user_id:
+            client, should_close = await self._get_user_scoped_client(scoped_user_id)
 
         try:
             result = await client.search(
@@ -570,87 +643,10 @@ class VikingClient:
 
     async def search_user_memory(self, query: str, user_id: str) -> list[Any]:
         effective_user_id = self._effective_user_id(user_id)
-        user_exists = await self._check_user_exists(effective_user_id)
-        if not user_exists:
-            return []
         uri_user_memory = self._memory_target_uri(effective_user_id)
-        result = await self.client.search(query, target_uri=uri_user_memory)
-        return (
-            [self._matched_context_to_dict(m) for m in result.memories]
-            if hasattr(result, "memories")
-            else []
-        )
-
-    async def _check_user_exists(self, user_id: str) -> bool:
-        """检查用户是否存在于账户中。"""
-        if self.mode == "local" or self._is_user_key_mode() or self._has_request_connection():
-            return True
-        if not user_id:
-            return False
-        try:
-            res = await self.client.admin_list_users(self.account_id)
-            if not res or len(res) == 0:
-                return False
-            return any(user.get("user_id") == user_id for user in res)
-        except Exception as e:
-            logger.warning(f"Failed to check user existence: {e}")
-            return False
-
-    async def _initialize_user(self, user_id: str, role: str = "user") -> bool:
-        """初始化用户。"""
-        if self.mode == "local" or self._is_user_key_mode() or self._has_request_connection():
-            return True
-        if not user_id:
-            return False
-        try:
-            result = await self.client.admin_register_user(
-                account_id=self.account_id, user_id=user_id, role=role
-            )
-
-            if self._apikey_manager and isinstance(result, dict):
-                api_key = result.get("user_key")
-                if api_key:
-                    self._apikey_manager.set_apikey(user_id, api_key)
-
-            return True
-        except Exception as e:
-            if "User already exists" in str(e):
-                return True
-            logger.warning(f"Failed to initialize user {user_id}: {e}")
-            return False
-
-    async def _get_or_create_user_apikey(self, user_id: str, role: str = "user") -> Optional[str]:
-        """获取或创建用户的 API key。"""
-        if (
-            self._has_request_connection()
-            or self._is_user_key_mode()
-            or not self._apikey_manager
-            or not user_id
-        ):
-            return None
-
-        api_key = self._apikey_manager.get_apikey(user_id)
-        if api_key:
-            return api_key
-
-        try:
-            user_exists = await self._check_user_exists(user_id)
-            if user_exists:
-                await self.client.admin_remove_user(self.account_id, user_id)
-            success = await self._initialize_user(user_id, role=role)
-            if not success:
-                logger.warning(f"Failed to recreate user {user_id}")
-                return None
-
-            api_key = self._apikey_manager.get_apikey(user_id)
-            if api_key:
-                return api_key
-            else:
-                return None
-
-        except Exception as e:
-            logger.error(f"Error getting or creating API key for user {user_id}: {e}")
-            return None
+        result = await self.search(query, target_uri=uri_user_memory, user_id=effective_user_id)
+        memories = result.get("memories") if isinstance(result, dict) else None
+        return memories if isinstance(memories, list) else []
 
     async def _get_user_scoped_client(self, user_id: Optional[str]) -> tuple[Any, bool]:
         effective_user_id = self._effective_user_id(user_id)
@@ -658,35 +654,23 @@ class VikingClient:
             return self.client, False
 
         if self._is_root_key_mode():
-            if not self._apikey_manager:
-                raise RuntimeError("User API key manager is unavailable for user-scoped client")
-
-            role = "admin" if effective_user_id == self.admin_user_id else "user"
-            user_exists = await self._check_user_exists(effective_user_id)
-            if not user_exists:
-                success = await self._initialize_user(effective_user_id, role=role)
-                if not success:
-                    raise RuntimeError(f"Failed to initialize user {effective_user_id}")
-
-            user_api_key = await self._get_or_create_user_apikey(effective_user_id, role=role)
-            if not user_api_key:
-                raise RuntimeError(f"Failed to get API key for user {effective_user_id}")
-
-            client_kwargs = {
-                "url": self.openviking_config.server_url,
-                "api_key": user_api_key,
-                "profile_enabled": False,
-            }
-            if effective_user_id == self.admin_user_id:
-                client_kwargs["account"] = self.account_id
-                client_kwargs["user"] = self.admin_user_id
-
-            self._apply_actor_peer_scope(client_kwargs)
-            client = ov.AsyncHTTPClient(**client_kwargs)
-            await client.initialize()
+            client = await self._create_trusted_user_client(effective_user_id)
             return client, True
 
         return self.client, False
+
+    async def _create_trusted_user_client(self, user_id: str):
+        client_kwargs = {
+            "url": self.openviking_config.server_url,
+            "api_key": self.openviking_config.api_key,
+            "account": self.account_id,
+            "user": user_id,
+            "profile_enabled": False,
+        }
+        self._apply_actor_peer_scope(client_kwargs)
+        client = ov.AsyncHTTPClient(**client_kwargs)
+        await client.initialize()
+        return client
 
     async def search_memory(
         self,
@@ -730,38 +714,31 @@ class VikingClient:
         )
         effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
 
-        user_ids_to_check = self._dedupe_strings(
-            [
-                *normalized_user_ids,
-                *( [effective_owner_user_id] if effective_owner_user_id else [] ),
-            ]
-        )
-
-        for user_id in user_ids_to_check:
-            effective_user_id = self._effective_user_id(user_id)
-            if not effective_user_id:
-                continue
-            user_exists = await self._check_user_exists(effective_user_id)
-            if not user_exists:
-                await self._initialize_user(effective_user_id)
-
-        target_uris = self.build_memory_search_target_uris(
+        search_targets = self.build_memory_search_targets(
             user_ids=normalized_user_ids,
             owner_user_id=effective_owner_user_id,
             peer_ids=normalized_peer_ids,
         )
-        if not target_uris:
+        if not search_targets:
             return []
 
         all_user_memories = []
-        for target_uri in target_uris:
+        for target_uri, scoped_user_id in search_targets:
             find_kwargs: Dict[str, Any] = {
                 "query": query,
                 "target_uri": target_uri,
                 "limit": limit,
             }
-            user_memory = await self.client.find(**find_kwargs)
-            all_user_memories.extend(_extract_memories(user_memory))
+            client = self.client
+            should_close = False
+            if scoped_user_id:
+                client, should_close = await self._get_user_scoped_client(scoped_user_id)
+            try:
+                user_memory = await client.find(**find_kwargs)
+                all_user_memories.extend(_extract_memories(user_memory))
+            finally:
+                if should_close:
+                    await client.close()
 
         if agent_user_id is not None:
             agent_uri = f"viking://agent/{self.agent_id or self.admin_user_id}/memories/"
@@ -833,33 +810,16 @@ class VikingClient:
     async def _session_client_for_user(self, user_id: Optional[str] = None):
         if self._has_request_connection():
             return self.client
-        if not user_id or self.mode == "local" or self._is_user_key_mode():
+        if not user_id or self._is_dev_mode() or self._is_user_key_mode():
             return self._session_client(user_id)
         if user_id == self.admin_user_id and self.admin_user_client:
             return self.admin_user_client
 
-        user_exists = await self._check_user_exists(user_id)
-        if not user_exists:
-            await self._initialize_user(user_id)
-
-        api_key = await self._get_or_create_user_apikey(user_id)
-        if not api_key:
-            return self._session_client(user_id)
-
         client = self._user_clients.get(user_id)
-        if client is None:
-            client_kwargs = {
-                "url": self.openviking_config.server_url,
-                "api_key": api_key,
-                "account": self.account_id,
-                "user": user_id,
-                "profile_enabled": False,
-            }
-            self._apply_actor_peer_scope(client_kwargs)
-            client = ov.AsyncHTTPClient(**client_kwargs)
-            await client.initialize()
+        if client is None and self._is_root_key_mode():
+            client = await self._create_trusted_user_client(user_id)
             self._user_clients[user_id] = client
-        return client
+        return client or self._session_client(user_id)
 
     def _assistant_peer_id(self) -> Optional[str]:
         return None
@@ -1136,11 +1096,6 @@ async def account_test():
     )
     await client.initialize()
 
-    # res = await client.admin_list_users("eval")
-    # res = await client.admin_remove_user("default", "")
-    # res = await client.admin_remove_user("default", "admin")
-    # res = await client.admin_list_accounts()
-    # res = await client.admin_create_account("eval", "default")
     res = await client.search("123")
 
     print(res)

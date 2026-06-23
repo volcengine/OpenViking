@@ -662,7 +662,7 @@ class AgentLoop:
             ov_tools_enable: Whether to enable OpenViking tools for this session
             memory_peer_ids: List of peer IDs for memory retrieval
             memory_owner_user_ids: List of explicit OpenViking user IDs for
-                legacy root-key fanout searches
+                trusted-mode owner-user memory lookup
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
 
