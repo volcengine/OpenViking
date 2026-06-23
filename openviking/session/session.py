@@ -1917,6 +1917,95 @@ class Session:
             return archive
         return None
 
+    async def clear_failed_archive(
+        self,
+        archive_id: str,
+        *,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Clear a ``.failed.json`` marker that is wedging this session.
+
+        A session commit can leave the on-disk pair (``.failed.json`` marker +
+        archive directory) in an inconsistent state if a write was interrupted
+        (crash, disk full, network mount loss). Once that happens every
+        subsequent commit raises ``FailedPreconditionError`` and there is no
+        way to recover without reaching into the storage layer manually.
+
+        This method removes the ``.failed.json`` marker for ``archive_id`` so
+        the session can be committed again. It is intentionally narrow:
+
+        - If no marker exists for ``archive_id``: raises ``NotFoundError``.
+        - If the archive data directory still exists and ``force`` is False:
+          raises ``FailedPreconditionError``. The caller is expected to look
+          at the data first (or pass ``force=True`` once they've decided the
+          residue can be ignored).
+        - Otherwise: removes the marker and returns a small status dict.
+
+        The actual archive data directory is **never** removed by this
+        method — only the marker — so a force-clear of a still-present
+        archive only suppresses the failure flag.
+        """
+        from openviking.storage.transaction import LockContext, get_lock_manager
+        from openviking_cli.exceptions import ConflictError, NotFoundError
+
+        if not self._viking_fs:
+            raise NotFoundError(archive_id, "session archive")
+
+        archive_uri = f"{self._session_uri}/history/{archive_id}"
+        marker_uri = f"{archive_uri}/.failed.json"
+
+        # Use the same path-lock the commit path uses so this can't race
+        # with an in-flight commit on the same session.
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        async with LockContext(get_lock_manager(), [session_path], lock_mode="exact"):
+            try:
+                await self._viking_fs.read_file(marker_uri, ctx=self.ctx)
+            except Exception as exc:
+                raise NotFoundError(
+                    f"no failed archive marker for archive_id={archive_id}",
+                    "failed archive marker",
+                ) from exc
+
+            data_present = await self._archive_data_present(archive_uri)
+            if data_present and not force:
+                raise ConflictError(
+                    f"archive data still present at {archive_uri}; "
+                    f"delete data manually first or pass force=true",
+                    resource=archive_id,
+                )
+
+            await self._viking_fs.rm(marker_uri, ctx=self.ctx)
+
+        return {
+            "session_id": self.session_id,
+            "archive_id": archive_id,
+            "archive_uri": archive_uri,
+            "data_present": data_present,
+            "force": force,
+            "cleared": True,
+        }
+
+    async def _archive_data_present(self, archive_uri: str) -> bool:
+        """Return True when the archive directory has on-disk data beyond the marker.
+
+        We treat the archive as "data present" if the directory listing
+        contains any entry other than the ``.failed.json`` marker itself.
+        Anything else (``messages.jsonl``, ``.done``, ``.overview.md``, ...)
+        means the operator should look at the residue before clearing.
+        """
+        if not self._viking_fs:
+            return False
+        try:
+            entries = await self._viking_fs.ls(archive_uri, ctx=self.ctx)
+        except Exception:
+            return False
+        for entry in entries:
+            name = entry.get("name") if isinstance(entry, dict) else entry
+            if not name or name in (".", "..", ".failed.json"):
+                continue
+            return True
+        return False
+
     async def _read_archive_overview(self, archive_uri: str) -> str:
         """Read archive overview text."""
         try:

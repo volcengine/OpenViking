@@ -346,6 +346,57 @@ async def get_session_archive(
     return Response(status="ok", result=_to_jsonable(result))
 
 
+@router.post("/{session_id}/archives/{archive_id}/clear-failed")
+async def clear_failed_archive(
+    session_id: str = Path(..., description="Session ID"),
+    archive_id: str = Path(..., description="Archive ID"),
+    force: bool = Query(
+        False,
+        description=(
+            "If true, clear the marker even when the archive data directory "
+            "is still present. By default the endpoint refuses with 409."
+        ),
+    ),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Clear a stale ``.failed.json`` marker that is wedging session commits.
+
+    A session can become permanently wedged when an archive operation fails
+    mid-flight: a ``.failed.json`` marker is persisted but the archive
+    directory itself is missing (disk full, crash, network mount loss). The
+    server correctly preserves that marker across restarts, so the only safe
+    way to recover is to explicitly resolve it.
+
+    Behavior:
+
+    - 200 — the marker existed and the archive data directory was missing
+      (or ``force=true`` was passed); the marker is removed and subsequent
+      commits will succeed.
+    - 404 — there is no marker for ``archive_id`` on this session.
+    - 409 — the marker exists but the archive data directory still has
+      contents; the operator should investigate before clearing. Pass
+      ``?force=true`` to override.
+
+    Audit: a WARNING log line is emitted on success including
+    ``session_id``, ``archive_id``, the calling user, and the ``force`` flag.
+    """
+    service = get_service()
+    result = await service.sessions.clear_failed_archive(
+        session_id,
+        archive_id,
+        _ctx,
+        force=force,
+    )
+    logger.warning(
+        "cleared failed-archive marker session=%s archive=%s by_user=%s force=%s",
+        session_id,
+        archive_id,
+        _ctx.user.user_id,
+        force,
+    )
+    return Response(status="ok", result=result)
+
+
 @router.delete("/{session_id}")
 async def delete_session(
     session_id: str = Path(..., description="Session ID"),
