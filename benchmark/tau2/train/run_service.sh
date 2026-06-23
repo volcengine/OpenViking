@@ -41,7 +41,7 @@ DATA_ROOT="${TAU2_DATA_ROOT:-}"
 CONFIG="${OPENVIKING_CONFIG_FILE:-${HOME}/.openviking/ov.conf}"
 KILL_EXISTING=1
 ROLLOUT_LANGUAGE="default"
-ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-native}"
+ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-vikingbot}"
 NATIVE_THREAD_WORKERS="${TAU2_NATIVE_THREAD_WORKERS:-128}"
 MAX_ROLLOUT_CONCURRENCY="${TAU2_MAX_ROLLOUT_CONCURRENCY:-32}"
 REPAIR_VIKINGBOT_GYM="${TAU2_REPAIR_VIKINGBOT_GYM:-1}"
@@ -70,7 +70,7 @@ Options:
   --rollout-language default|zh
                      Rollout response language. Use zh for Chinese user-facing replies.
   --rollout-backend native|vikingbot
-                     Rollout implementation backend. Default: native.
+                     Rollout implementation backend. Default: vikingbot.
   --native-thread-workers N
                      Default thread pool workers for native rollout. Default: 128.
   --max-rollout-concurrency N

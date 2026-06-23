@@ -103,19 +103,19 @@ bash benchmark/tau2/train/run_service.sh --host 127.0.0.1 --port 1944
 | `--data-root` | auto-detect / `$TAU2_DATA_ROOT` | Path to `tau2-bench/data/tau2` |
 | `--config` | `~/.openviking/ov.conf` | ov.conf for VikingBot / OpenViking access |
 | `--rollout-language` | `default` | Rollout response language. Use `zh` for Chinese user-facing replies. |
-| `--rollout-backend` | `native` | Rollout implementation backend. `native` for fast Python executor, `vikingbot` for full VikingBot AgentLoop. |
+| `--rollout-backend` | `vikingbot` | Rollout implementation backend. `native` for fast Python executor, `vikingbot` for full VikingBot AgentLoop. |
 | `--native-thread-workers` | `128` | Thread pool size for native rollout executor. |
 | `--no-kill-existing` | off | Don't kill existing process on the same port. |
 
-### Using vikingbot backend
+### Using native backend
 
-To run rollouts through the full VikingBot agent loop instead of the native fast executor:
+`vikingbot` is the default. To use the fast native executor instead:
 
 ```bash
 bash benchmark/tau2/train/run_service.sh \
   --host 127.0.0.1 \
   --port 1944 \
-  --rollout-backend vikingbot
+  --rollout-backend native
 ```
 
 The batch runner does **not** send a backend choice — it always uses whatever
