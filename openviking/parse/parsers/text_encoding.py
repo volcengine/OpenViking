@@ -63,6 +63,7 @@ class _EncodingCandidate:
     encoding: str
     decoded: str
     rank: int
+    from_detector: bool
 
 
 def normalize_text_bytes(content: bytes, file_path: Union[str, Path] = "") -> bytes:
@@ -126,7 +127,7 @@ def _iter_candidates(content: bytes) -> Iterable[_EncodingCandidate]:
     rank = 0
 
     for match in from_bytes(content, cp_isolation=_DETECTION_ENCODINGS):
-        candidate = _decode_candidate(content, match.encoding, rank)
+        candidate = _decode_candidate(content, match.encoding, rank, from_detector=True)
         if candidate is None or candidate.encoding in seen:
             continue
         seen.add(candidate.encoding)
@@ -134,7 +135,7 @@ def _iter_candidates(content: bytes) -> Iterable[_EncodingCandidate]:
         yield candidate
 
     for encoding in _DETECTION_ENCODINGS:
-        candidate = _decode_candidate(content, encoding, rank)
+        candidate = _decode_candidate(content, encoding, rank, from_detector=False)
         if candidate is None or candidate.encoding in seen:
             continue
         seen.add(candidate.encoding)
@@ -143,7 +144,7 @@ def _iter_candidates(content: bytes) -> Iterable[_EncodingCandidate]:
 
 
 def _decode_candidate(
-    content: bytes, encoding: Optional[str], rank: int
+    content: bytes, encoding: Optional[str], rank: int, *, from_detector: bool
 ) -> Optional[_EncodingCandidate]:
     if not encoding:
         return None
@@ -157,7 +158,12 @@ def _decode_candidate(
     if not _is_valid_text(decoded):
         return None
 
-    return _EncodingCandidate(encoding=canonical, decoded=decoded, rank=rank)
+    return _EncodingCandidate(
+        encoding=canonical,
+        decoded=decoded,
+        rank=rank,
+        from_detector=from_detector,
+    )
 
 
 def _is_valid_text(decoded: str) -> bool:
@@ -198,6 +204,7 @@ def _choose_candidate(candidates: Iterable[_EncodingCandidate]) -> Optional[_Enc
         return first
 
     preferred_chinese = _preferred_chinese_candidate(consistent)
+    detected_chinese = _preferred_chinese_candidate(consistent, from_detector_only=True)
     for candidate in consistent:
         profile = _script_profile(candidate.decoded)
         if (
@@ -208,13 +215,17 @@ def _choose_candidate(candidates: Iterable[_EncodingCandidate]) -> Optional[_Enc
             return candidate
 
     first_profile = _script_profile(first.decoded)
+    # Short Simplified Chinese can be misranked as mixed Hangul/CJK under CP949.
+    # Only rescue to Chinese when charset-normalizer also emitted a Chinese
+    # candidate and the Korean-looking decode is not Hanja-dominant.
     if (
         first.encoding in _KOREAN_ENCODINGS
-        and preferred_chinese is not None
+        and detected_chinese is not None
         and first_profile.hangul_syllables > 0
         and first_profile.cjk > 0
+        and first_profile.hangul_syllables >= first_profile.cjk
     ):
-        return preferred_chinese
+        return detected_chinese
 
     if first.encoding in _CHINESE_ENCODINGS and preferred_chinese is not None:
         return preferred_chinese
@@ -224,10 +235,14 @@ def _choose_candidate(candidates: Iterable[_EncodingCandidate]) -> Optional[_Enc
 
 def _preferred_chinese_candidate(
     candidates: Iterable[_EncodingCandidate],
+    *,
+    from_detector_only: bool = False,
 ) -> Optional[_EncodingCandidate]:
     for encoding in _CHINESE_ENCODING_PREFERENCE:
         for candidate in candidates:
-            if candidate.encoding == encoding:
+            if candidate.encoding == encoding and (
+                not from_detector_only or candidate.from_detector
+            ):
                 return candidate
     return None
 
