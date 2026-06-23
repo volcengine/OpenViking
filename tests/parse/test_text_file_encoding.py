@@ -21,6 +21,14 @@ def test_markdown_file_read_normalizes_gb18030_four_byte_text(tmp_path):
     assert MarkdownParser()._read_file(path) == content
 
 
+def test_markdown_file_read_preserves_detector_first_non_cjk_text(tmp_path):
+    content = "# Müller straße Zürich Köln Größe\n"
+    path = tmp_path / "legacy-german.md"
+    path.write_bytes(content.encode("cp1252"))
+
+    assert MarkdownParser()._read_file(path) == content
+
+
 def test_markdown_file_read_strips_utf8_bom(tmp_path):
     content = "# Heading\n\nBody\n"
     path = tmp_path / "utf8-bom.md"

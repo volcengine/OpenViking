@@ -37,10 +37,13 @@ _DETECTION_ENCODINGS = (
     "latin_1",
 )
 
+# These values use codecs.lookup(...).name canonical forms because candidates
+# are canonicalized before set membership checks.
 _CHINESE_ENCODINGS = {"gb18030", "gbk", "gb2312", "big5", "cp950"}
 _CHINESE_ENCODING_PREFERENCE = ("gb18030", "gbk", "gb2312", "big5", "cp950")
 _JAPANESE_ENCODINGS = {"cp932", "shift_jis", "euc_jp"}
 _KOREAN_ENCODINGS = {"euc_kr", "cp949"}
+_CJK_ENCODINGS = _CHINESE_ENCODINGS | _JAPANESE_ENCODINGS | _KOREAN_ENCODINGS
 # Very short CJK samples can decode into plausible text under several legacy
 # code pages. Require a few script-specific characters before overriding the
 # detector's rank with Korean script evidence.
@@ -103,7 +106,10 @@ def _normalize_text_bytes(content: bytes, file_path: Union[str, Path] = "") -> b
 def _decode_known_bom(content: bytes) -> Optional[bytes]:
     for bom, encoding in _BOM_ENCODINGS:
         if content.startswith(bom):
-            return content.decode(encoding).encode("utf-8")
+            try:
+                return content.decode(encoding).encode("utf-8")
+            except UnicodeDecodeError:
+                return None
     return None
 
 
@@ -183,6 +189,11 @@ def _choose_candidate(candidates: Iterable[_EncodingCandidate]) -> Optional[_Enc
     # Preserve detector rank for Japanese: short kanji-only Shift-JIS has no
     # kana signal, but charset-normalizer still ranks CP932 first.
     first = min(consistent, key=lambda candidate: candidate.rank)
+    if first.encoding not in _CJK_ENCODINGS:
+        return first
+
+    # Short CJK-only samples can remain ambiguous across Chinese, Japanese, and
+    # Korean encodings without source charset or language metadata.
     if first.encoding in _JAPANESE_ENCODINGS:
         return first
 
@@ -195,10 +206,11 @@ def _choose_candidate(candidates: Iterable[_EncodingCandidate]) -> Optional[_Enc
         ):
             return candidate
 
-    for encoding in _CHINESE_ENCODING_PREFERENCE:
-        for candidate in consistent:
-            if candidate.encoding == encoding:
-                return candidate
+    if first.encoding in _CHINESE_ENCODINGS:
+        for encoding in _CHINESE_ENCODING_PREFERENCE:
+            for candidate in consistent:
+                if candidate.encoding == encoding:
+                    return candidate
 
     return first
 
