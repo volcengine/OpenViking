@@ -6,6 +6,9 @@ import { getAllPosts, getPostBySlug, pickLocale } from './blog-components';
 import { SHELL_STRINGS, THEME_LIGHT, buildPath, makeFormatDate } from './shell-core';
 
 export const SITE_URL = 'https://blog.openviking.ai';
+export const SITE_SOCIAL_IMAGE = '/assets/covers/openviking-blog-social.png';
+export const SITE_SOCIAL_IMAGE_WIDTH = 1200;
+export const SITE_SOCIAL_IMAGE_HEIGHT = 630;
 
 function noop() {}
 
@@ -88,7 +91,9 @@ export function getPageMeta({ route, lang = 'en' }) {
       zh: 'OpenViking 团队的技术笔记。',
     }, lang),
     canonical: `${SITE_URL}/`,
-    image: `${SITE_URL}/assets/logo.png`,
+    image: `${SITE_URL}${SITE_SOCIAL_IMAGE}`,
+    imageWidth: SITE_SOCIAL_IMAGE_WIDTH,
+    imageHeight: SITE_SOCIAL_IMAGE_HEIGHT,
     posts: getAllPosts().map(post => ({
       title: pickLocale(post.meta.title, lang),
       description: pickLocale(post.meta.description, lang),
