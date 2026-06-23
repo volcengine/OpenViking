@@ -349,8 +349,8 @@ await client.add_resource(path, parent="viking://user/resources/project/")
 # 技能默认添加到当前用户技能根
 await client.add_skill(skill)  # canonical root: viking://user/skills/
 
-# 通过 --uri 指定写入全局 agent 技能根（公开共享）
-ov skills add xxx --uri viking://agent/skills/xxx
+# 通过 --parent 指定写入全局 agent 技能根（公开共享）
+ov skills add xxx --parent viking://agent/skills/
 ```
 
 ### resources 作用域约束

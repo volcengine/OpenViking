@@ -94,11 +94,15 @@ results = await client.find(
 ### 存储位置
 
 ```
-viking://agent/skills/{skill-name}/
+viking://user/skills/{skill-name}/  # 默认存储路径
 ├── .abstract.md          # L0: 简短描述
 ├── SKILL.md              # L1: 详细概览
 └── scripts               # L2: 完整定义
 
+viking://agent/skills/{skill-name}/  # 通过 --uri 覆盖，公开共享（account 全局）
+├── .abstract.md          # L0: 简短描述
+├── SKILL.md              # L1: 详细概览
+└── scripts               # L2: 完整定义
 ```
 
 ### AgentDefinedContextType 子类型
@@ -122,8 +126,8 @@ await client.add_skill({
     "content": "# search-web\n..."
 })
 
-# 通过 --uri 指定写入全局 agent 技能根（公开共享）
-ov skills add search-web --uri viking://agent/skills/search-web
+# 通过 --parent 指定写入全局 agent 技能根（公开共享）
+ov skills add search-web --parent viking://agent/skills
 
 # 搜索用户技能
 results = await client.find(
