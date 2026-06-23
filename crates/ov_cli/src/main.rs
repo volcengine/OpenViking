@@ -2830,9 +2830,7 @@ async fn main() {
             } else {
                 format!("{}/bot/v1", ctx.config.url)
             };
-            let api_key = std::env::var("VIKINGBOT_API_KEY")
-                .ok()
-                .or_else(|| ctx.config.api_key.clone());
+            let api_key = std::env::var("VIKINGBOT_API_KEY").ok();
             let cmd = commands::chat::ChatCommand {
                 endpoint,
                 api_key,

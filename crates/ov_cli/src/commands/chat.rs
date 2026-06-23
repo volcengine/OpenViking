@@ -124,13 +124,15 @@ struct ChatAuth {
 impl ChatCommand {
     /// Execute the chat command
     pub async fn execute(&self) -> Result<()> {
-        let auth = self.resolve_auth()?;
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()
             .map_err(|e| Error::Network(format!("Failed to create HTTP client: {}", e)))?;
 
-        self.warn_openviking_chat_auth(&client, &auth).await;
+        let health = self.fetch_openviking_health(&client, None).await;
+        let auth = self.resolve_auth(health.as_ref().map(health_auth_mode))?;
+        self.warn_openviking_chat_auth(&client, health.as_ref(), &auth)
+            .await;
 
         if let Some(message) = &self.message {
             // Single message mode
@@ -141,12 +143,27 @@ impl ChatCommand {
         }
     }
 
-    fn resolve_auth(&self) -> Result<ChatAuth> {
+    fn resolve_auth(&self, server_auth_mode: Option<&str>) -> Result<ChatAuth> {
         let config = Config::load()?;
-        Ok(self.resolve_auth_from_config(config))
+        Ok(self.resolve_auth_from_config(config, server_auth_mode))
     }
 
-    fn resolve_auth_from_config(&self, config: Config) -> ChatAuth {
+    fn resolve_auth_from_config(&self, config: Config, server_auth_mode: Option<&str>) -> ChatAuth {
+        if server_auth_mode
+            .map(|mode| mode.trim().eq_ignore_ascii_case("trusted"))
+            .unwrap_or(false)
+        {
+            return ChatAuth {
+                api_key: non_empty_string(self.api_key.clone())
+                    .or_else(|| non_empty_string(config.root_api_key.clone()))
+                    .or_else(|| non_empty_string(config.api_key.clone())),
+                account: non_empty_string(self.account.clone())
+                    .or_else(|| non_empty_string(config.account.clone())),
+                user: non_empty_string(self.user.clone())
+                    .or_else(|| non_empty_string(config.user.clone())),
+            };
+        }
+
         let auth = config.effective_auth_with_overrides(
             self.api_key.clone(),
             self.account.clone(),
@@ -202,11 +219,16 @@ impl ChatCommand {
         response.json::<OpenVikingHealth>().await.ok()
     }
 
-    async fn warn_openviking_chat_auth(&self, client: &Client, auth: &ChatAuth) {
-        let Some(health) = self.fetch_openviking_health(client, None).await else {
+    async fn warn_openviking_chat_auth(
+        &self,
+        client: &Client,
+        health: Option<&OpenVikingHealth>,
+        auth: &ChatAuth,
+    ) {
+        let Some(health) = health else {
             return;
         };
-        if health_auth_mode(&health) != "api_key" {
+        if health_auth_mode(health) != "api_key" {
             return;
         }
 
@@ -791,6 +813,16 @@ fn health_has_user_identity(health: &OpenVikingHealth) -> bool {
     matches!(role, "user" | "admin") && !account_id.is_empty() && !user_id.is_empty()
 }
 
+fn non_empty_string(value: Option<String>) -> Option<String> {
+    value.and_then(|text| {
+        if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -818,7 +850,7 @@ mod tests {
             ..Config::default()
         };
 
-        let auth = command.resolve_auth_from_config(config);
+        let auth = command.resolve_auth_from_config(config, None);
 
         assert_eq!(auth.api_key.as_deref(), Some("user-key"));
     }
@@ -831,9 +863,63 @@ mod tests {
             ..Config::default()
         };
 
-        let auth = command.resolve_auth_from_config(config);
+        let auth = command.resolve_auth_from_config(config, None);
 
         assert_eq!(auth.api_key.as_deref(), Some("override-key"));
+    }
+
+    #[test]
+    fn trusted_auth_uses_root_api_key_and_identity() {
+        let command = command_with_api_key(None);
+        let config = Config {
+            api_key: Some("stale-user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        let auth = command.resolve_auth_from_config(config, Some("trusted"));
+
+        assert_eq!(auth.api_key.as_deref(), Some("root-key"));
+        assert_eq!(auth.account.as_deref(), Some("acme"));
+        assert_eq!(auth.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn trusted_auth_honors_explicit_api_key_override_as_root_key() {
+        let command = command_with_api_key(Some("override-root-key"));
+        let config = Config {
+            api_key: Some("stale-user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        let auth = command.resolve_auth_from_config(config, Some("trusted"));
+
+        assert_eq!(auth.api_key.as_deref(), Some("override-root-key"));
+        assert_eq!(auth.account.as_deref(), Some("acme"));
+        assert_eq!(auth.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn api_key_auth_still_uses_user_key_and_omits_stale_identity() {
+        let command = command_with_api_key(None);
+        let config = Config {
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("stale-account".to_string()),
+            user: Some("stale-user".to_string()),
+            ..Config::default()
+        };
+
+        let auth = command.resolve_auth_from_config(config, Some("api_key"));
+
+        assert_eq!(auth.api_key.as_deref(), Some("user-key"));
+        assert!(auth.account.is_none());
+        assert!(auth.user.is_none());
     }
 
     #[test]
