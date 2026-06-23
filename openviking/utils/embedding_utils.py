@@ -22,6 +22,24 @@ from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+# The `abstract` scalar is persisted as a vector-store bytes_row string field,
+# which is length-prefixed with a uint16 (STRING_MAX_UINT16_LENGTH = 65535). An
+# oversized abstract raises "string field 'abstract' exceeds 65535 bytes" and
+# fails embedding enqueue, so the resource is silently never vectorized (and thus
+# not retrievable). Cap it with headroom, mirroring
+# memory_updater._truncate_memory_abstract introduced for the memory path (#2774).
+_ABSTRACT_MAX_BYTES = 50_000
+
+
+def _truncate_abstract_bytes(abstract: str) -> str:
+    """Cap an abstract scalar below the vector-store bytes_row byte limit."""
+    encoded = (abstract or "").encode("utf-8")
+    if len(encoded) <= _ABSTRACT_MAX_BYTES:
+        return abstract or ""
+    return encoded[:_ABSTRACT_MAX_BYTES].decode("utf-8", errors="ignore")
+
+
 _PORTABLE_SCALAR_FIELDS = frozenset(
     {
         "type",
@@ -262,6 +280,12 @@ async def vectorize_directory_meta(
 
         created_at, updated_at = await _resolve_context_timestamps(uri, ctx)
 
+        # Cap the abstract scalar below the bytes_row 65535-byte limit. #2774
+        # added this for the memory path; the resource indexing paths (here and
+        # index_resource, which feeds this function) were missed, so an
+        # .abstract.md / overview > 65535 UTF-8 bytes still fails embedding enqueue.
+        abstract = _truncate_abstract_bytes(abstract)
+
         # Vectorize L0: .abstract.md (abstract)
         context_abstract = Context(
             uri=uri,
@@ -367,6 +391,8 @@ async def vectorize_file(
 
         file_name = summary_dict.get("name") or os.path.basename(file_path)
         summary = summary_dict.get("summary", "")
+        # Cap below the bytes_row 65535-byte abstract-scalar limit (#2774 parity).
+        summary = _truncate_abstract_bytes(summary)
 
         created_at, updated_at = await _resolve_context_timestamps(
             file_path,
