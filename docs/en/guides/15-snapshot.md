@@ -14,7 +14,7 @@ Multi-version management is powered by [gitoxide](https://github.com/Byron/gitox
 
 ## Enabling Multi-Version Management
 
-Multi-version management is **disabled** by default. Add a top-level `git` section to `ov.conf` and set `enabled` to `true`. The Git object backend can be `local` (local filesystem) or `s3` (S3-compatible object storage).
+Multi-version management is **enabled** by default (`git.enabled` defaults to `true`). The Git object backend can be `local` (local filesystem) or `s3` (S3-compatible object storage); when `git.backend` is not set explicitly, it **inherits `storage.agfs.backend`** (a `memory` storage backend maps to `local`). To turn multi-version management off, set `git.enabled` to `false`.
 
 ### Local Backend (recommended for single-node deployments)
 
@@ -40,8 +40,8 @@ Configuration reference:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `git.enabled` | `false` | Whether multi-version management is on. Must be `true` to use snapshot commands |
-| `git.backend` | `local` | Git object backend: `local` or `s3` |
+| `git.enabled` | `true` | Whether multi-version management is on. Set to `false` to disable snapshot commands |
+| `git.backend` | inherits `storage.agfs.backend` | Git object backend: `local` or `s3`. When not set explicitly, inherits `storage.agfs.backend` (`memory` maps to `local`) |
 | `git.default_branch` | `main` | Default branch name when none is specified |
 | `git.author_name` | `viking-bot` | Default author name when callers omit `author_name` |
 | `git.author_email` | `bot@viking.local` | Default author email |
@@ -52,6 +52,8 @@ Configuration reference:
 ### S3 Backend (recommended for distributed / cloud deployments)
 
 Stores Git objects and refs in S3-compatible object storage (e.g. Volcengine TOS, MinIO, AWS S3). When `backend` is `s3`, the `git.s3` section is **required**, and `bucket` and `region` must not be empty.
+
+> Tip: the `git.s3` fields `bucket`, `region`, `endpoint`, `access_key`, and `secret_key` **inherit the matching `storage.agfs.s3`** values when not set explicitly. So when `storage.agfs` is already configured as an s3 backend, you usually don't need to repeat `git.s3` — as long as `git.backend` is not set explicitly, multi-version management reuses the bucket and credentials from `storage.agfs`.
 
 ```json
 {
@@ -82,11 +84,11 @@ Configuration reference:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `git.s3.bucket` | - | Bucket holding Git objects/refs. Required |
-| `git.s3.region` | `us-east-1` | Region the bucket is in. Required |
-| `git.s3.prefix` | `git` | Key prefix; all data is stored under `{prefix}/{account}/...` |
-| `git.s3.endpoint` | `""` | Custom S3 endpoint (MinIO/TOS, etc.); leave empty for standard AWS S3 |
-| `git.s3.access_key` / `git.s3.secret_key` | `null` | Credentials read directly; empty falls back to the SDK default credentials chain |
+| `git.s3.bucket` | inherits `storage.agfs.s3.bucket` | Bucket holding Git objects/refs. Required (may be inherited from `storage.agfs.s3`) |
+| `git.s3.region` | inherits `storage.agfs.s3.region`, else `us-east-1` | Region the bucket is in. Required |
+| `git.s3.prefix` | `.ovgit` | Key prefix; all data is stored under `{prefix}/{account}/...` |
+| `git.s3.endpoint` | inherits `storage.agfs.s3.endpoint`, else `""` | Custom S3 endpoint (MinIO/TOS, etc.); leave empty for standard AWS S3 |
+| `git.s3.access_key` / `git.s3.secret_key` | inherit the matching `storage.agfs.s3` fields, else `null` | Credentials read directly; empty falls back to the SDK default credentials chain |
 | `git.s3.use_path_style` | `true` | `true` uses path-style addressing (MinIO, etc.); `false` uses virtual-host style (TOS, etc.) |
 | `git.s3.cas_mode` | `native` | Ref CAS mode. `native` uses S3 conditional writes (If-Match) |
 
@@ -102,8 +104,6 @@ When the `local` backend is enabled and `base_dir` is left empty, OpenViking add
 data/                      # storage.workspace
 ├── viking/                # user-visible resource tree (viking:// maps here)
 │   └── ...
-├── .runtime/
-│   └── ragfs.toml         # runtime TOML rendered from the [git] config
 └── .ovgit/                # multi-version management data (new)
     └── {account_id}/      # one logical Git repository per account
         ├── objects/       # Git objects (commit/tree/blob), standard fanout aa/bb...

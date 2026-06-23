@@ -400,72 +400,50 @@ def _serialize_redirect_policy(policy: Any) -> Dict[str, Any]:
     return _dump_config_object(policy)
 
 
-def _render_git_toml(git_config: Any, storage_path: Path) -> str:
-    """Render a TOML body with [git] and a backend-specific section from a GitConfig.
+def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any]:
+    """Build an in-memory git config dict consumed by the ragfs binding.
 
-    For ``backend == "local"`` a ``[git.local]`` section is emitted (defaulting
-    ``base_dir`` to ``{storage_path}/.ovgit`` when empty). For ``backend == "s3"`` a
-    ``[git.s3]`` section is emitted with keys matching the Rust ``GitS3ConfigPy``
-    serde struct so the ragfs binding consumes it verbatim.
-
-    The format mirrors the working fixture used in the ragfs_python binding tests
-    (see tests/agfs/test_viking_fs_git.py).
+    The returned dict mirrors the Rust ``GitConfig`` serde struct so the binding
+    deserializes it verbatim from the ``config["git"]`` section, without writing
+    any TOML file. For ``backend == "local"`` a ``local`` sub-dict is emitted
+    (defaulting ``base_dir`` to ``{storage_path}/.ovgit`` when empty); for
+    ``backend == "s3"`` an ``s3`` sub-dict is emitted with keys matching the Rust
+    ``GitS3ConfigPy`` struct.
     """
-    def _q(s: str) -> str:
-        # Escape backslash first, then double-quote, then wrap in quotes.
-        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-    def _b(v: Any) -> str:
-        return "true" if v else "false"
-
-    enabled = "true" if getattr(git_config, "enabled", False) else "false"
     backend = getattr(git_config, "backend", "local")
-    default_branch = getattr(git_config, "default_branch", "main")
-    author_name = getattr(git_config, "author_name", "viking-bot")
-    author_email = getattr(git_config, "author_email", "bot@viking.local")
-
-    header = (
-        "[git]\n"
-        f"enabled = {enabled}\n"
-        f"backend = {_q(backend)}\n"
-        f"default_branch = {_q(default_branch)}\n"
-        f"author_name = {_q(author_name)}\n"
-        f"author_email = {_q(author_email)}\n"
-        "\n"
-    )
+    result: Dict[str, Any] = {
+        "enabled": bool(getattr(git_config, "enabled", False)),
+        "backend": backend,
+        "default_branch": getattr(git_config, "default_branch", "main"),
+        "author_name": getattr(git_config, "author_name", "viking-bot"),
+        "author_email": getattr(git_config, "author_email", "bot@viking.local"),
+    }
 
     if backend == "s3":
         s3_cfg = getattr(git_config, "s3", None)
         if s3_cfg is None:
             raise ValueError("git backend 's3' requires a [git.s3] section")
-        bucket = getattr(s3_cfg, "bucket", "")
-        region = getattr(s3_cfg, "region", "us-east-1")
-        prefix = getattr(s3_cfg, "prefix", ".ovgit")
-        endpoint = getattr(s3_cfg, "endpoint", "")
-        access_key = getattr(s3_cfg, "access_key", None)
-        secret_key = getattr(s3_cfg, "secret_key", None)
-        cas_mode = getattr(s3_cfg, "cas_mode", "native")
-        redis_lock_url = getattr(s3_cfg, "redis_lock_url", None)
-        use_path_style = getattr(s3_cfg, "use_path_style", True)
-
-        lines = [
-            "[git.s3]\n",
-            f"bucket = {_q(bucket)}\n",
-            f"region = {_q(region)}\n",
-            f"prefix = {_q(prefix)}\n",
-            f"endpoint = {_q(endpoint)}\n",
-        ]
+        s3_dict: Dict[str, Any] = {
+            "bucket": getattr(s3_cfg, "bucket", ""),
+            "region": getattr(s3_cfg, "region", "us-east-1"),
+            "prefix": getattr(s3_cfg, "prefix", ".ovgit"),
+            "endpoint": getattr(s3_cfg, "endpoint", ""),
+            "cas_mode": getattr(s3_cfg, "cas_mode", "native"),
+            "use_path_style": bool(getattr(s3_cfg, "use_path_style", True)),
+        }
         # Only emit credentials when provided; otherwise the binding falls back
         # to the SDK default credentials chain.
+        access_key = getattr(s3_cfg, "access_key", None)
+        secret_key = getattr(s3_cfg, "secret_key", None)
+        redis_lock_url = getattr(s3_cfg, "redis_lock_url", None)
         if access_key:
-            lines.append(f"access_key = {_q(access_key)}\n")
+            s3_dict["access_key"] = access_key
         if secret_key:
-            lines.append(f"secret_key = {_q(secret_key)}\n")
-        lines.append(f"cas_mode = {_q(cas_mode)}\n")
+            s3_dict["secret_key"] = secret_key
         if redis_lock_url:
-            lines.append(f"redis_lock_url = {_q(redis_lock_url)}\n")
-        lines.append(f"use_path_style = {_b(use_path_style)}\n")
-        return header + "".join(lines)
+            s3_dict["redis_lock_url"] = redis_lock_url
+        result["s3"] = s3_dict
+        return result
 
     # Default: local backend
     local_cfg = getattr(git_config, "local", None)
@@ -475,11 +453,8 @@ def _render_git_toml(git_config: Any, storage_path: Path) -> str:
     else:
         base_dir = str(Path(base_dir).expanduser())
 
-    return (
-        header
-        + "[git.local]\n"
-        f"base_dir = {_q(base_dir)}\n"
-    )
+    result["local"] = {"base_dir": base_dir}
+    return result
 
 
 def create_agfs_client(config: RagfsBindingConfig, *, git_config: Any = None) -> Any:
@@ -490,10 +465,10 @@ def create_agfs_client(config: RagfsBindingConfig, *, git_config: Any = None) ->
         config: Single runtime config object containing both backend mount settings and
             construction-time binding sections.
         git_config: Optional GitConfig. When provided and ``enabled`` is True,
-            a ragfs.toml is generated under ``{config.path}/.runtime/`` and
-            its path is passed to ``RAGFSBindingClient`` via ``git_config_path=`` so
-            the binding exposes git_* methods. When None or disabled, the client
-            is constructed with no args (legacy behavior).
+            the git config is built into an in-memory dict and injected into the
+            binding ``config`` under the ``git`` key so the binding exposes git_*
+            methods. No file is written to disk. When None or disabled, the client
+            is constructed without a git section (legacy behavior).
 
     Returns:
         A RAGFSBindingClient instance.
@@ -512,26 +487,21 @@ def create_agfs_client(config: RagfsBindingConfig, *, git_config: Any = None) ->
             "could not be loaded. Please run 'pip install -e .' in the project root "
             "to build and install the RAGFS SDK with native bindings."
         )
-    
-    git_config_path = None
+
     agfs_config = config.agfs if isinstance(config, RagfsBindingConfig) else config
+    binding_dict = config.to_binding_dict()
     if git_config is not None and getattr(git_config, "enabled", False):
         path_str = getattr(agfs_config, "path", None)
         if path_str is None:
             raise ValueError("agfs_config.path is required when git is enabled")
         storage_path = Path(path_str).resolve()
-        runtime_dir = storage_path / ".runtime"
-        runtime_dir.mkdir(parents=True, exist_ok=True)
-        toml_path = runtime_dir / "ragfs.toml"
-        toml_path.write_text(_render_git_toml(git_config, storage_path), encoding="utf-8")
-        git_config_path = str(toml_path)
+        binding_dict["git"] = _build_git_config_dict(git_config, storage_path)
 
     # Construction-time decides whether the stack includes the encryption layer.
     config_path = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
     client = RAGFSBindingClient(
         str(config_path) if config_path else None,
-        config=config.to_binding_dict(),
-        git_config_path=git_config_path,
+        config=binding_dict,
     )
 
     # Automatically mount backend for binding client

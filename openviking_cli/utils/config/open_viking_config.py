@@ -238,6 +238,58 @@ class OpenVikingConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="before")
+    @classmethod
+    def _inherit_git_defaults_from_agfs(cls, data: Any) -> Any:
+        """Let the `git` section inherit unset defaults from `storage.agfs`.
+
+        - `git.backend` defaults to `storage.agfs.backend` (a 'memory' storage
+          backend maps to 'local') when not set explicitly.
+        - When the effective git backend is 's3', the `git.s3` fields
+          bucket/region/endpoint/access_key/secret_key default to the matching
+          `storage.agfs.s3` values when not set explicitly and the source value
+          is non-empty.
+
+        Injecting into the raw dict keeps GitConfig's own validation intact.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        storage = data.get("storage")
+        agfs = storage.get("agfs", {}) if isinstance(storage, dict) else {}
+        if not isinstance(agfs, dict):
+            agfs = {}
+
+        git = data.get("git")
+        if not isinstance(git, dict):
+            if git is not None:
+                # git provided as a model instance; respect it as-is.
+                return data
+            git = {}
+        git = dict(git)
+
+        if "backend" not in git:
+            agfs_backend = agfs.get("backend", "local")
+            if agfs_backend == "memory":
+                agfs_backend = "local"
+            if agfs_backend in ("local", "s3"):
+                git["backend"] = agfs_backend
+
+        if git.get("backend", "local") == "s3":
+            agfs_s3 = agfs.get("s3", {})
+            if not isinstance(agfs_s3, dict):
+                agfs_s3 = {}
+            git_s3 = git.get("s3")
+            git_s3 = dict(git_s3) if isinstance(git_s3, dict) else {}
+            for field in ("bucket", "region", "endpoint", "access_key", "secret_key"):
+                if field not in git_s3 and agfs_s3.get(field):
+                    git_s3[field] = agfs_s3[field]
+            git["s3"] = git_s3
+
+        data = dict(data)
+        data["git"] = git
+        return data
+
     allow_private_networks: bool = Field(
         default=False,
         description=(

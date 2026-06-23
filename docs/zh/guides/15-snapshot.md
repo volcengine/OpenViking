@@ -14,7 +14,7 @@
 
 ## 启用多版本管理
 
-多版本管理默认**关闭**。需要在 `ov.conf` 顶层新增一个 `git` 配置段，并把 `enabled` 设为 `true`。Git 对象的存储后端可以选择 `local`（本地文件系统）或 `s3`（S3 兼容对象存储）。
+多版本管理默认**开启**（`git.enabled` 默认为 `true`）。Git 对象的存储后端可以选择 `local`（本地文件系统）或 `s3`（S3 兼容对象存储）；当不显式设置 `git.backend` 时，会**自动继承 `storage.agfs.backend`**（`storage.agfs.backend` 为 `memory` 时映射为 `local`）。如需关闭多版本管理，把 `git.enabled` 设为 `false` 即可。
 
 ### 本地后端（推荐用于单机部署）
 
@@ -40,8 +40,8 @@
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `git.enabled` | `false` | 是否启用多版本管理。必须设为 `true` 才能使用快照命令 |
-| `git.backend` | `local` | Git 对象后端：`local` 或 `s3` |
+| `git.enabled` | `true` | 是否启用多版本管理。设为 `false` 可关闭快照功能 |
+| `git.backend` | 继承 `storage.agfs.backend` | Git 对象后端：`local` 或 `s3`。不显式设置时继承 `storage.agfs.backend`（`memory` 映射为 `local`） |
 | `git.default_branch` | `main` | 未显式指定时使用的默认分支名 |
 | `git.author_name` | `viking-bot` | 调用方未传 `author_name` 时使用的默认提交者名字 |
 | `git.author_email` | `bot@viking.local` | 默认提交者邮箱 |
@@ -52,6 +52,8 @@
 ### S3 后端（推荐用于分布式/云端部署）
 
 把 Git 对象与引用存到 S3 兼容对象存储（如火山引擎 TOS、MinIO、AWS S3）。当 `backend` 为 `s3` 时，**必须**提供 `git.s3` 段，且 `bucket`、`region` 不能为空。
+
+> 提示：`git.s3` 的 `bucket`、`region`、`endpoint`、`access_key`、`secret_key` 在未显式设置时会**自动继承 `storage.agfs.s3`** 的对应字段。因此当 `storage.agfs` 已经配置为 s3 后端时，通常无需重复填写 `git.s3`——只要不显式设置 `git.backend`，多版本管理会直接复用 `storage.agfs` 的 bucket 与访问凭据。
 
 ```json
 {
@@ -82,11 +84,11 @@
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `git.s3.bucket` | - | 存放 Git 对象/引用的 bucket，必填 |
-| `git.s3.region` | `us-east-1` | bucket 所在区域，必填 |
-| `git.s3.prefix` | `git` | 键前缀，所有数据存放在 `{prefix}/{account}/...` 下 |
-| `git.s3.endpoint` | `""` | 自定义 S3 端点（MinIO/TOS 等）；标准 AWS S3 留空 |
-| `git.s3.access_key` / `git.s3.secret_key` | `null` | 直接读取的凭据；留空则走 SDK 默认凭据链 |
+| `git.s3.bucket` | 继承 `storage.agfs.s3.bucket` | 存放 Git 对象/引用的 bucket，必填（可由 `storage.agfs.s3` 继承） |
+| `git.s3.region` | 继承 `storage.agfs.s3.region`，否则 `us-east-1` | bucket 所在区域，必填 |
+| `git.s3.prefix` | `.ovgit` | 键前缀，所有数据存放在 `{prefix}/{account}/...` 下 |
+| `git.s3.endpoint` | 继承 `storage.agfs.s3.endpoint`，否则 `""` | 自定义 S3 端点（MinIO/TOS 等）；标准 AWS S3 留空 |
+| `git.s3.access_key` / `git.s3.secret_key` | 继承 `storage.agfs.s3` 对应字段，否则 `null` | 直接读取的凭据；留空则走 SDK 默认凭据链 |
 | `git.s3.use_path_style` | `true` | `true` 用 path-style 寻址（MinIO 等）；`false` 用 virtual-host 寻址（TOS 等） |
 | `git.s3.cas_mode` | `native` | 引用 CAS 模式。`native` 使用 S3 条件写（If-Match） |
 
@@ -102,8 +104,6 @@
 data/                      # storage.workspace
 ├── viking/                # 用户可见的资源树（viking:// 映射到这里）
 │   └── ...
-├── .runtime/
-│   └── ragfs.toml         # 由 [git] 配置渲染出的运行时 TOML
 └── .ovgit/                # 多版本管理数据（新增）
     └── {account_id}/      # 每个账号一个逻辑 Git 仓库
         ├── objects/       # Git 对象（commit/tree/blob），标准 fanout 布局 aa/bb...

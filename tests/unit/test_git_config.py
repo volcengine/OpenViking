@@ -11,13 +11,13 @@ from openviking_cli.utils.config import (
     GitS3Config,
     OpenVikingConfig,
 )
-from openviking.utils.agfs_utils import _render_git_toml
+from openviking.utils.agfs_utils import _build_git_config_dict
 
 
 class TestGitConfigDefaults:
-    def test_disabled_by_default(self):
+    def test_enabled_by_default(self):
         cfg = GitConfig()
-        assert cfg.enabled is False
+        assert cfg.enabled is True
         assert cfg.backend == "local"
         assert cfg.default_branch == "main"
         assert cfg.author_name == "viking-bot"
@@ -48,7 +48,7 @@ class TestGitConfigOnOpenVikingConfig:
     def test_open_viking_config_has_git_field_with_default(self):
         cfg = OpenVikingConfig(storage={"workspace": "/tmp/x"})
         assert isinstance(cfg.git, GitConfig)
-        assert cfg.git.enabled is False
+        assert cfg.git.enabled is True
         assert cfg.git.backend == "local"
         assert isinstance(cfg.git.local, GitLocalConfig)
 
@@ -90,6 +90,69 @@ class TestGitConfigOnOpenVikingConfig:
         assert cfg.git.local.base_dir == str(tmp_path / "git")
 
 
+class TestGitInheritsFromAgfs:
+    """git section inherits unset defaults from storage.agfs."""
+
+    FULL_S3 = {
+        "bucket": "B",
+        "region": "R",
+        "endpoint": "E",
+        "access_key": "AK",
+        "secret_key": "SK",
+    }
+
+    def test_no_git_section_local_agfs(self):
+        cfg = OpenVikingConfig(storage={"workspace": "/tmp/x"})
+        assert cfg.git.enabled is True
+        assert cfg.git.backend == "local"
+        assert cfg.git.s3 is None
+
+    def test_backend_inherits_s3_from_agfs(self):
+        cfg = OpenVikingConfig(
+            storage={"workspace": "/tmp/x", "agfs": {"backend": "s3", "s3": self.FULL_S3}}
+        )
+        assert cfg.git.backend == "s3"
+        assert cfg.git.s3.bucket == "B"
+        assert cfg.git.s3.region == "R"
+        assert cfg.git.s3.endpoint == "E"
+        assert cfg.git.s3.access_key == "AK"
+        assert cfg.git.s3.secret_key == "SK"
+
+    def test_memory_agfs_maps_to_local(self):
+        cfg = OpenVikingConfig(
+            storage={"workspace": "/tmp/x", "agfs": {"backend": "memory"}}
+        )
+        assert cfg.git.backend == "local"
+
+    def test_explicit_git_backend_overrides_inheritance(self):
+        cfg = OpenVikingConfig(
+            storage={"workspace": "/tmp/x", "agfs": {"backend": "s3", "s3": self.FULL_S3}},
+            git={"backend": "local"},
+        )
+        assert cfg.git.backend == "local"
+        assert cfg.git.s3 is None
+
+    def test_explicit_git_s3_field_overrides_only_that_field(self):
+        cfg = OpenVikingConfig(
+            storage={"workspace": "/tmp/x", "agfs": {"backend": "s3", "s3": self.FULL_S3}},
+            git={"s3": {"bucket": "GB"}},
+        )
+        assert cfg.git.s3.bucket == "GB"
+        # remaining fields inherited from agfs.s3
+        assert cfg.git.s3.region == "R"
+        assert cfg.git.s3.endpoint == "E"
+        assert cfg.git.s3.access_key == "AK"
+        assert cfg.git.s3.secret_key == "SK"
+
+    def test_disabled_git_still_inherits_backend(self):
+        cfg = OpenVikingConfig(
+            storage={"workspace": "/tmp/x", "agfs": {"backend": "s3", "s3": self.FULL_S3}},
+            git={"enabled": False},
+        )
+        assert cfg.git.enabled is False
+        assert cfg.git.backend == "s3"
+
+
 class TestGitS3ConfigParsing:
     """A5.1 — parsing of the s3 backend config."""
 
@@ -97,7 +160,7 @@ class TestGitS3ConfigParsing:
         s3 = GitS3Config()
         assert s3.bucket == ""
         assert s3.region == "us-east-1"
-        assert s3.prefix == "git"
+        assert s3.prefix == ".ovgit"
         assert s3.endpoint == ""
         assert s3.access_key is None
         assert s3.secret_key is None
@@ -146,73 +209,74 @@ class TestGitS3ConfigParsing:
             GitS3Config(cas_mode="invalid")
 
 
-class TestRenderGitTomlS3:
-    """A5.2 — _render_git_toml output for the s3 backend."""
+class TestBuildGitConfigDictS3:
+    """A5.2 — _build_git_config_dict output for the s3 backend."""
 
-    def _render_s3(self, **s3_kwargs):
+    def _build_s3(self, **s3_kwargs):
         s3_defaults = {"bucket": "my-bucket", "region": "cn-beijing"}
         s3_defaults.update(s3_kwargs)
         cfg = GitConfig(enabled=True, backend="s3", s3=GitS3Config(**s3_defaults))
-        return _render_git_toml(cfg, Path("/tmp/storage"))
+        return _build_git_config_dict(cfg, Path("/tmp/storage"))
 
-    def test_renders_header_and_s3_section(self):
-        out = self._render_s3()
-        assert 'backend = "s3"' in out
-        assert "[git.s3]" in out
-        assert "[git.local]" not in out
+    def test_builds_header_and_s3_section(self):
+        out = self._build_s3()
+        assert out["backend"] == "s3"
+        assert "s3" in out
+        assert "local" not in out
 
-    def test_renders_required_s3_keys(self):
-        out = self._render_s3(prefix="gitobj", endpoint="https://tos.example.com")
-        assert 'bucket = "my-bucket"' in out
-        assert 'region = "cn-beijing"' in out
-        assert 'prefix = "gitobj"' in out
-        assert 'endpoint = "https://tos.example.com"' in out
-        assert 'cas_mode = "native"' in out
+    def test_builds_required_s3_keys(self):
+        out = self._build_s3(prefix="gitobj", endpoint="https://tos.example.com")
+        s3 = out["s3"]
+        assert s3["bucket"] == "my-bucket"
+        assert s3["region"] == "cn-beijing"
+        assert s3["prefix"] == "gitobj"
+        assert s3["endpoint"] == "https://tos.example.com"
+        assert s3["cas_mode"] == "native"
 
-    def test_use_path_style_rendered_as_lowercase_bool(self):
-        out_true = self._render_s3(use_path_style=True)
-        assert "use_path_style = true" in out_true
-        out_false = self._render_s3(use_path_style=False)
-        assert "use_path_style = false" in out_false
+    def test_use_path_style_is_bool(self):
+        out_true = self._build_s3(use_path_style=True)
+        assert out_true["s3"]["use_path_style"] is True
+        out_false = self._build_s3(use_path_style=False)
+        assert out_false["s3"]["use_path_style"] is False
 
     def test_credentials_emitted_when_present(self):
-        out = self._render_s3(access_key="AK", secret_key="SK")
-        assert 'access_key = "AK"' in out
-        assert 'secret_key = "SK"' in out
+        out = self._build_s3(access_key="AK", secret_key="SK")
+        assert out["s3"]["access_key"] == "AK"
+        assert out["s3"]["secret_key"] == "SK"
 
     def test_credentials_omitted_when_empty(self):
-        out = self._render_s3()
-        assert "access_key" not in out
-        assert "secret_key" not in out
+        out = self._build_s3()
+        assert "access_key" not in out["s3"]
+        assert "secret_key" not in out["s3"]
 
     def test_redis_lock_url_omitted_when_none(self):
-        out = self._render_s3()
-        assert "redis_lock_url" not in out
+        out = self._build_s3()
+        assert "redis_lock_url" not in out["s3"]
 
     def test_redis_lock_url_emitted_when_present(self):
-        out = self._render_s3(cas_mode="redis_lock", redis_lock_url="redis://localhost:6379")
-        assert 'redis_lock_url = "redis://localhost:6379"' in out
+        out = self._build_s3(cas_mode="redis_lock", redis_lock_url="redis://localhost:6379")
+        assert out["s3"]["redis_lock_url"] == "redis://localhost:6379"
 
     def test_missing_s3_section_raises(self):
         # Build a disabled config (skips model validation) then force s3=None to
-        # exercise the renderer's own guard.
+        # exercise the builder's own guard.
         cfg = GitConfig(enabled=False, backend="s3", s3=None)
         with pytest.raises(ValueError):
-            _render_git_toml(cfg, Path("/tmp/storage"))
+            _build_git_config_dict(cfg, Path("/tmp/storage"))
 
 
-class TestRenderGitTomlLocal:
-    """A5.3 — regression: local backend still renders only [git.local]."""
+class TestBuildGitConfigDictLocal:
+    """A5.3 — regression: local backend still builds only a 'local' section."""
 
-    def test_local_renders_local_section_only(self):
+    def test_local_builds_local_section_only(self):
         cfg = GitConfig(enabled=True, backend="local", local=GitLocalConfig(base_dir="/tmp/g"))
-        out = _render_git_toml(cfg, Path("/tmp/storage"))
-        assert 'backend = "local"' in out
-        assert "[git.local]" in out
-        assert "[git.s3]" not in out
-        assert 'base_dir = "/tmp/g"' in out
+        out = _build_git_config_dict(cfg, Path("/tmp/storage"))
+        assert out["backend"] == "local"
+        assert "local" in out
+        assert "s3" not in out
+        assert out["local"]["base_dir"] == "/tmp/g"
 
     def test_local_base_dir_defaults_to_storage_git(self):
         cfg = GitConfig(enabled=True, backend="local")
-        out = _render_git_toml(cfg, Path("/tmp/storage"))
-        assert f'base_dir = "{Path("/tmp/storage") / ".ovgit"}"' in out
+        out = _build_git_config_dict(cfg, Path("/tmp/storage"))
+        assert out["local"]["base_dir"] == str(Path("/tmp/storage") / ".ovgit")

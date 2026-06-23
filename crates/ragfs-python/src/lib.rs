@@ -813,6 +813,18 @@ struct BindingConfig {
     git: Option<ragfs::git::GitConfig>,
 }
 
+fn build_git_from_cfg(
+    git_cfg: ragfs::git::GitConfig,
+    fs: &Arc<MountableFS>,
+    rt: &tokio::runtime::Runtime,
+) -> PyResult<(Option<Arc<ragfs::git::GitService>>, Option<String>)> {
+    let backend = git_cfg.backend.clone();
+    let vfs = fs.clone() as Arc<dyn ragfs::core::FileSystem>;
+    let _guard = rt.enter();
+    let svc = git::build_git_service(&git_cfg, vfs)?;
+    Ok((svc, Some(backend)))
+}
+
 fn load_git_from_config(
     path: &str,
     fs: &Arc<MountableFS>,
@@ -824,13 +836,7 @@ fn load_git_from_config(
     let cfg: BindingConfig = toml::from_str(&body)
         .map_err(|e| PyRuntimeError::new_err(format!("parse config_path: {}", e)))?;
     match cfg.git {
-        Some(git_cfg) => {
-            let backend = git_cfg.backend.clone();
-            let vfs = fs.clone() as Arc<dyn ragfs::core::FileSystem>;
-            let _guard = rt.enter();
-            let svc = git::build_git_service(&git_cfg, vfs)?;
-            Ok((svc, Some(backend)))
-        }
+        Some(git_cfg) => build_git_from_cfg(git_cfg, fs, rt),
         None => Ok((None, None)),
     }
 }
@@ -891,6 +897,7 @@ impl RAGFSBindingClient {
         // Phase A (holding GIL): parse the sectioned config into an owned RagfsConfig.
         let mut ragfs_cfg = RagfsConfig::default();
         let mut runtime_cache_config = None;
+        let mut inline_git_cfg: Option<ragfs::git::GitConfig> = None;
         if let Some(cfg) = config {
             if let Some(enc_obj) = cfg.get("encryption") {
                 let enc: HashMap<String, Py<PyAny>> = enc_obj.extract(py)?;
@@ -917,6 +924,12 @@ impl RAGFSBindingClient {
                     Some(cache_config_from_value(&cache_value).map_err(|error| {
                         PyRuntimeError::new_err(format!("Invalid cache config: {error}"))
                     })?);
+            }
+            if let Some(git_obj) = cfg.get("git") {
+                let git_value = py_to_json_value(git_obj.bind(py))?;
+                let git_cfg: ragfs::git::GitConfig = serde_json::from_value(git_value)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Invalid git config: {e}")))?;
+                inline_git_cfg = Some(git_cfg);
             }
         }
 
@@ -960,10 +973,14 @@ impl RAGFSBindingClient {
             rt.block_on(build_default_stack(ragfs_cfg))
         };
 
-        // Load [git] section if a config file was provided.
-        let (git_service, git_backend) = match git_config_path {
-            Some(path) => load_git_from_config(path, &stack.mountable, &rt)?,
-            None => (None, None),
+        // Build the git service from inline config when present; otherwise fall
+        // back to loading the [git] section from a config file path.
+        let (git_service, git_backend) = match inline_git_cfg {
+            Some(git_cfg) => build_git_from_cfg(git_cfg, &stack.mountable, &rt)?,
+            None => match git_config_path {
+                Some(path) => load_git_from_config(path, &stack.mountable, &rt)?,
+                None => (None, None),
+            },
         };
 
         Ok(Self {
