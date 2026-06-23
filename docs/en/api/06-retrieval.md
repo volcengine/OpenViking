@@ -533,7 +533,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | None | Maximum number of results |
-| level_limit | int | No | 5 | Maximum directory depth to traverse |
+| level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
 
 #### 3. Usage Examples
 
@@ -590,13 +590,13 @@ fmt.Println(result["count"])
 
 ```bash
 # Basic search
-openviking grep viking://resources "authentication"
+openviking grep "authentication" --uri viking://resources
 
 # Ignore case
-openviking grep viking://resources "authentication" --ignore-case
+openviking grep "authentication" --uri viking://resources --ignore-case
 
 # Specify depth limit
-openviking grep viking://resources "TODO" --level-limit 3
+openviking grep "TODO" --uri viking://resources --level-limit 3
 ```
 
 **Response Example**

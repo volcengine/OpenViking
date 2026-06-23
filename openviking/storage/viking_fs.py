@@ -777,7 +777,7 @@ class VikingFS:
             exclude_uri: Optional URI prefix to exclude from search
             case_insensitive: Whether to perform case-insensitive matching
             node_limit: Maximum number of results to return
-            level_limit: Maximum depth level to traverse (default: 5)
+            level_limit: Maximum depth level to traverse (default: 10)
             ctx: Request context
             Internal bm25 recall limit is auto-adapted from node_limit as
             min(node_limit * 5, 100000); when node_limit is unset, use 100000.
@@ -793,7 +793,7 @@ class VikingFS:
         # Read engine and threshold from grep_config (ov.conf)
         engine = self.grep_config.engine if self.grep_config else "auto"
         switch_to_remote_threshold = (
-            self.grep_config.switch_to_remote_threshold if self.grep_config else 1000
+            self.grep_config.switch_to_remote_threshold if self.grep_config else 10000
         )
 
         resolved_engine = await self._resolve_grep_engine(
@@ -822,7 +822,7 @@ class VikingFS:
             )
 
     async def _resolve_grep_engine(
-        self, engine: GrepEngine, uri: str, ctx, switch_to_remote_threshold: int = 1000
+        self, engine: GrepEngine, uri: str, ctx, switch_to_remote_threshold: int = 10000
     ) -> str:
         """Resolve the actual grep engine to use."""
         if engine == "fs":
@@ -1162,7 +1162,7 @@ class VikingFS:
             exclude_uri: Optional URI prefix to exclude from search
             case_insensitive: Whether to perform case-insensitive matching
             node_limit: Maximum number of results to return
-            level_limit: Maximum depth level to traverse (default: 5)
+            level_limit: Maximum depth level to traverse (default: 10)
             ctx: Request context
 
         Returns:

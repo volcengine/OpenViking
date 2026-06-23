@@ -49,6 +49,26 @@ def test_grep_config_default_switch_to_remote_threshold_is_10000():
 
 
 @pytest.mark.asyncio
+async def test_grep_without_config_uses_documented_remote_threshold(monkeypatch):
+    fs = VikingFS(agfs=_DummyAgfs())
+    vector_store = _DummyVectorStore()
+    vector_store._backend_type = "vikingdb"
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+
+    async def fake_collection_has_fulltext(vector_store, ctx):
+        return True
+
+    monkeypatch.setattr(fs, "_collection_has_fulltext", fake_collection_has_fulltext)
+
+    async def fake_count(uri, ctx):
+        return 5000
+
+    monkeypatch.setattr(fs, "_get_cached_count", fake_count)
+
+    assert await fs._resolve_grep_engine("auto", "viking://resources", None) == "fs"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("node_limit", "expected_remote_limit"),
     [
