@@ -122,10 +122,16 @@ await client.add_skill({
     "content": "# search-web\n..."
 })
 
-# 通过 --uri 指定写入用户私有目录（兼容旧版）
-ov skills add search-web --uri viking://user/skills/search-web
+# 通过 --uri 指定写入全局 agent 技能根（公开共享）
+ov skills add search-web --uri viking://agent/skills/search-web
 
-# 搜索 agent 能力
+# 搜索用户技能
+results = await client.find(
+    "网络搜索",
+    target_uri="viking://user/skills/"
+)
+
+# 搜索全局 agent 技能
 results = await client.find(
     "网络搜索",
     target_uri="viking://agent/skills/"
