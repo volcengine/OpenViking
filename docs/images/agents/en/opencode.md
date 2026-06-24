@@ -38,7 +38,7 @@ For development, debugging, or PR testing, copy the plugin from the OpenViking r
 git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -49,7 +49,7 @@ The source install creates:
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.mjs
+├── openviking.js
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -108,7 +108,7 @@ Ask OpenCode to browse OpenViking or commit the current session. Check runtime l
 
 | Symptom | Fix |
 |---------|-----|
-| Plugin is not loaded | Check `~/.config/opencode/opencode.json` for package installs, or `~/.config/opencode/plugins/openviking.mjs` for source installs |
+| Plugin is not loaded | Check `~/.config/opencode/opencode.json` for package installs, or `~/.config/opencode/plugins/openviking.js` for source installs |
 | Tools call the wrong server | Check `endpoint`, or set `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; trusted-mode deployments also need `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
 | Recall is empty | Confirm OpenViking has memories/resources and `autoRecall.enabled` is `true` |

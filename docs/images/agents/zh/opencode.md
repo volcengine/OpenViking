@@ -39,7 +39,7 @@ curl http://localhost:1933/health
 git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -50,7 +50,7 @@ npm install
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.mjs
+├── openviking.js
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -109,7 +109,7 @@ export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
 
 | 现象 | 修复 |
 |------|------|
-| 插件没有加载 | package 安装检查 `~/.config/opencode/opencode.json`；源码安装检查 `~/.config/opencode/plugins/openviking.mjs` |
+| 插件没有加载 | package 安装检查 `~/.config/opencode/opencode.json`；源码安装检查 `~/.config/opencode/plugins/openviking.js` |
 | Tools 连到了错误的 server | 检查 `endpoint`，或用 `OPENVIKING_PLUGIN_CONFIG` 指向正确配置文件 |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还需要 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
 | recall 为空 | 确认 OpenViking 中已有 memories/resources，并且 `autoRecall.enabled` 为 `true` |
