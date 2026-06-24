@@ -179,6 +179,7 @@ pub fn map_git_error(py: Python<'_>, e: ragfs::git::GitError) -> PyErr {
         GitError::SubtreeNotFoundInCommit { .. } => new_py_err_pub(py, "AGFSNotFoundError", msg),
         GitError::InvalidAccountId(_) => new_py_err_pub(py, "AGFSInvalidPathError", msg),
         GitError::InvalidProjectDir(_) => new_py_err_pub(py, "AGFSInvalidPathError", msg),
+        GitError::InvalidPath(_) => new_py_err_pub(py, "AGFSInvalidPathError", msg),
         GitError::BlobTooLarge { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
         GitError::TooManyFiles { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
         GitError::CorruptedObject(_) => new_py_err_pub(py, "AGFSInternalError", msg),

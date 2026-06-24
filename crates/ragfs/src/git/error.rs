@@ -89,9 +89,18 @@ pub enum GitError {
 
     /// `project_dir` is an empty / malformed path string.
     /// Same validation as `TreeEditor::upsert`: must be non-empty, no leading
-    /// or trailing `/`, no empty components.
+    /// or trailing `/`, no empty components, no `.` / `..` / backslash /
+    /// control char components.
     #[error("invalid project_dir: {0}")]
     InvalidProjectDir(String),
+
+    /// A user-supplied relative path in `CommitRequest.paths` or
+    /// `ShowRequest.path` failed validation. The Rust GitService is a native
+    /// boundary (PyO3 bindings, future SDK callers), so it cannot rely on
+    /// upstream HTTP / SDK layers to have already normalized away `..` /
+    /// `\` / control chars. Rejected before any VFS or object-store I/O.
+    #[error("invalid path: {0}")]
+    InvalidPath(String),
 
     /// The requested `project_dir` does not resolve to a subtree in the
     /// referenced commit's tree (either the path is missing entirely or it

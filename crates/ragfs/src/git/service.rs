@@ -134,6 +134,11 @@ impl GitService {
             author_email,
         } = req;
         validate_account_id(&account)?;
+        if let Some(ps) = &paths {
+            for p in ps {
+                validate_relative_path(p)?;
+            }
+        }
         let ref_name = format!("refs/heads/{branch}");
         // Whether the caller explicitly passed `paths`. A directory listed in
         // an explicit list is a user-facing error (see the loop below), but
@@ -490,6 +495,9 @@ impl GitService {
         let ShowRequest { account, target_ref, path } = req;
 
         validate_account_id(&account)?;
+        if let Some(p) = &path {
+            validate_relative_path(p)?;
+        }
 
         let commit_oid = resolve_ref(
             self.ref_store.as_ref(),
@@ -1186,7 +1194,12 @@ fn validate_account_id(account: &str) -> Result<(), GitError> {
 }
 
 /// Validate `project_dir` matches the rules of `TreeEditor::upsert`:
-/// non-empty, no leading/trailing `/`, no empty components.
+/// non-empty, no leading/trailing `/`, no empty components, no `.` / `..`
+/// segments, no backslash, no control characters. The traversal-related
+/// rules guard the same boundary as `validate_account_id`: a direct PyO3
+/// caller could otherwise pass `project_dir="../other"` and have the
+/// service splice or restore *outside* the account's tree once the path is
+/// concatenated into `/local/{account}/{project_dir}/...`.
 fn validate_project_dir(project_dir: &str) -> Result<(), GitError> {
     if project_dir.is_empty() {
         return Err(GitError::InvalidProjectDir(
@@ -1198,9 +1211,69 @@ fn validate_project_dir(project_dir: &str) -> Result<(), GitError> {
             "project_dir must not start or end with '/': {project_dir:?}"
         )));
     }
-    if project_dir.split('/').any(|c| c.is_empty()) {
+    for c in project_dir.split('/') {
+        if c.is_empty() {
+            return Err(GitError::InvalidProjectDir(format!(
+                "project_dir contains empty segment: {project_dir:?}"
+            )));
+        }
+        if c == "." || c == ".." {
+            return Err(GitError::InvalidProjectDir(format!(
+                "project_dir contains '.' or '..' segment: {project_dir:?}"
+            )));
+        }
+    }
+    if project_dir.contains('\\') {
         return Err(GitError::InvalidProjectDir(format!(
-            "project_dir contains empty segment: {project_dir:?}"
+            "project_dir must not contain backslash: {project_dir:?}"
+        )));
+    }
+    if project_dir.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return Err(GitError::InvalidProjectDir(format!(
+            "project_dir contains control character: {project_dir:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate a user-supplied relative path that will be concatenated with
+/// `/local/{account}/` (commit) or looked up in a Git tree (show). Same
+/// reasoning as `validate_account_id` / `validate_project_dir`: the Rust
+/// GitService is a native boundary, so it must defend against `..` /
+/// backslash / control chars itself rather than trust the caller (PyO3
+/// binding, future SDK consumer) to have normalized first.
+///
+/// Rules: non-empty; no leading/trailing `/`; no empty, `.`, or `..`
+/// segment; no backslash; no control character.
+fn validate_relative_path(path: &str) -> Result<(), GitError> {
+    if path.is_empty() {
+        return Err(GitError::InvalidPath("path must be non-empty".into()));
+    }
+    if path.starts_with('/') || path.ends_with('/') {
+        return Err(GitError::InvalidPath(format!(
+            "path must not start or end with '/': {path:?}"
+        )));
+    }
+    for c in path.split('/') {
+        if c.is_empty() {
+            return Err(GitError::InvalidPath(format!(
+                "path contains empty segment: {path:?}"
+            )));
+        }
+        if c == "." || c == ".." {
+            return Err(GitError::InvalidPath(format!(
+                "path contains '.' or '..' segment: {path:?}"
+            )));
+        }
+    }
+    if path.contains('\\') {
+        return Err(GitError::InvalidPath(format!(
+            "path must not contain backslash: {path:?}"
+        )));
+    }
+    if path.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return Err(GitError::InvalidPath(format!(
+            "path contains control character: {path:?}"
         )));
     }
     Ok(())
@@ -2401,37 +2474,31 @@ mod tests {
     }
 
     // ── 19 ─────────────────────────────────────────────────────────────
-    /// Pin the current per-shape behavior for malformed paths so any
-    /// future input normalization change is explicit:
-    ///   - `""`     → `Other` (empty path rejected by `lookup` up-front)
-    ///   - `"/x"`   → `Other` (first component is empty)
-    ///   - `"x/"`   → `PathNotFound` (lookup fails on missing "x" before
-    ///                ever inspecting the trailing empty component)
-    ///   - `"a//b"` → `PathNotFound` (lookup fails on missing "a" before
-    ///                ever inspecting the empty middle component)
+    /// `show()` validates the `path` argument up front. Empty string, a
+    /// leading or trailing `/`, and embedded `//` all fail
+    /// `validate_relative_path` before any tree lookup runs — callers see
+    /// `InvalidPath` rather than mixed `Other` / `PathNotFound` results.
+    /// This pins the contract guarding the native binding boundary against
+    /// traversal-style input (`..`, `/abs`, …) being silently accepted.
     #[tokio::test]
     async fn test_show_path_with_invalid_form() {
         let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
         vfs.put("resources/a.md", b"x");
         let _ = make_commit(&svc, "acct", "main", "first").await;
 
-        let cases: &[(&str, fn(&GitError) -> bool)] = &[
-            ("", |e| matches!(e, GitError::Other(_))),
-            ("/x", |e| matches!(e, GitError::Other(_))),
-            ("x/", |e| matches!(e, GitError::PathNotFound(p) if p == "x/")),
-            ("a//b", |e| matches!(e, GitError::PathNotFound(p) if p == "a//b")),
-        ];
-
-        for (bad, check) in cases {
+        for bad in ["", "/x", "x/", "a//b"] {
             let err = svc
                 .show(ShowRequest {
                     account: "acct".into(),
                     target_ref: "main".into(),
-                    path: Some((*bad).into()),
+                    path: Some(bad.into()),
                 })
                 .await
                 .unwrap_err();
-            assert!(check(&err), "path {bad:?}: unexpected error variant {err:?}");
+            assert!(
+                matches!(err, GitError::InvalidPath(_)),
+                "path {bad:?}: expected InvalidPath, got {err:?}",
+            );
         }
     }
 
@@ -4150,6 +4217,70 @@ mod tests {
             .await;
         assert!(matches!(err, Err(GitError::InvalidAccountId(_))));
     }
+
+    // ── direct-binding traversal defence: account is OK, but the caller
+    //    tries to escape via paths / project_dir / show path. These must be
+    //    rejected before any VFS / object-store I/O. ──────────────────────
+    #[tokio::test]
+    async fn commit_rejects_traversal_in_paths() {
+        let (_dir, _vfs, _object_store, _ref_store, svc) = make_service("acct");
+        for bad in [
+            "../other/file.md",
+            "a/../../other.md",
+            "/abs.md",
+            "a/./b.md",
+            "a\\b.md",
+        ] {
+            let err = svc
+                .commit(req("acct", "main", "msg", Some(vec![bad.to_string()])))
+                .await;
+            assert!(
+                matches!(err, Err(GitError::InvalidPath(_))),
+                "{bad:?} should yield InvalidPath, got {err:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn show_rejects_traversal_path() {
+        let (_dir, _vfs, _object_store, _ref_store, svc) = make_service("acct");
+        for bad in ["../other.md", ".", "..", "a/../b", ""] {
+            let err = svc
+                .show(ShowRequest {
+                    account: "acct".into(),
+                    target_ref: "main".into(),
+                    path: Some(bad.to_string()),
+                })
+                .await;
+            assert!(
+                matches!(err, Err(GitError::InvalidPath(_))),
+                "{bad:?} should yield InvalidPath, got {err:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_rejects_traversal_project_dir() {
+        let (_dir, _vfs, _object_store, _ref_store, svc) = make_service("acct");
+        for bad in ["../other", ".", "..", "a/../b", "a/./b", "a\\b"] {
+            let err = svc
+                .restore(RestoreRequest {
+                    account: "acct".into(),
+                    branch: "main".into(),
+                    project_dir: Some(bad.to_string()),
+                    source_commit: "deadbeef".into(),
+                    dry_run: false,
+                    message: None,
+                    author_name: "n".into(),
+                    author_email: "e".into(),
+                })
+                .await;
+            assert!(
+                matches!(err, Err(GitError::InvalidProjectDir(_))),
+                "{bad:?} should yield InvalidProjectDir, got {err:?}",
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -4285,6 +4416,76 @@ mod diff_tests {
     #[test]
     fn validate_accepts_single_segment() {
         validate_project_dir("resources").unwrap();
+    }
+
+    // ── project_dir hardening (traversal / backslash / control) ─────────
+    #[test]
+    fn validate_project_dir_rejects_dotdot_segment() {
+        for bad in ["..", "../other", "resources/../other", "a/.."] {
+            assert!(
+                matches!(
+                    validate_project_dir(bad),
+                    Err(GitError::InvalidProjectDir(_))
+                ),
+                "{bad:?} should be rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn validate_project_dir_rejects_dot_segment() {
+        for bad in [".", "./x", "a/./b"] {
+            assert!(matches!(
+                validate_project_dir(bad),
+                Err(GitError::InvalidProjectDir(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn validate_project_dir_rejects_backslash_and_control() {
+        for bad in ["a\\b", "a\0b", "a\nb"] {
+            assert!(
+                matches!(
+                    validate_project_dir(bad),
+                    Err(GitError::InvalidProjectDir(_))
+                ),
+                "{bad:?} should be rejected",
+            );
+        }
+    }
+
+    // ── relative path validation (commit / show) ────────────────────────
+    #[test]
+    fn validate_relative_path_accepts_normal_paths() {
+        for ok in ["a.md", "dir/a.md", "a/b/c/d.txt", "..hidden", "a..b"] {
+            validate_relative_path(ok).unwrap_or_else(|e| {
+                panic!("{ok:?} should be valid, got {e:?}")
+            });
+        }
+    }
+
+    #[test]
+    fn validate_relative_path_rejects_malicious() {
+        for bad in [
+            "",                     // empty
+            "/abs/path",            // leading slash
+            "trailing/",            // trailing slash
+            "a//b",                 // empty segment
+            ".",                    // dot
+            "..",                   // dotdot
+            "../escape",            // traversal at root
+            "a/../b",               // traversal mid-path
+            "a/./b",                // dot mid-path
+            "a\\b",                 // backslash
+            "a\0b",                 // NUL
+            "a\nb",                 // control char
+        ] {
+            assert!(
+                matches!(validate_relative_path(bad), Err(GitError::InvalidPath(_))),
+                "{bad:?} should be rejected",
+            );
+        }
     }
 }
 
