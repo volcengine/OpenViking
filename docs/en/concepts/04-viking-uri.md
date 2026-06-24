@@ -359,8 +359,8 @@ await client.add_resource(path, parent="viking://user/resources/project/")
 # Skills are added to the current user's skills root by default
 await client.add_skill(skill)  # canonical root: viking://user/skills/
 
-# Write to the global agent skills root (public/shared) via --parent override
-ov skills add xxx --parent viking://agent/skills/
+# Write to the global agent skills root (public/shared) via -p override
+ov skills add xxx -p viking://agent/skills/
 ```
 
 ### Resources Scope Constraint

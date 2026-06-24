@@ -126,8 +126,8 @@ await client.add_skill({
     "content": "# search-web\n..."
 })
 
-# Write to global agent skills root (public/shared) via --parent override
-ov skills add search-web --parent viking://agent/skills
+# Write to global agent skills root (public/shared) via -p override
+ov skills add search-web -p viking://agent/skills
 
 # Search user skills
 results = await client.find(

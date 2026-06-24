@@ -126,8 +126,8 @@ await client.add_skill({
     "content": "# search-web\n..."
 })
 
-# 通过 --parent 指定写入全局 agent 技能根（公开共享）
-ov skills add search-web --parent viking://agent/skills
+# 通过 -p 指定写入全局 agent 技能根（公开共享）
+ov skills add search-web -p viking://agent/skills
 
 # 搜索用户技能
 results = await client.find(
