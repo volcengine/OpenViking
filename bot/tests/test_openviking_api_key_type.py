@@ -213,6 +213,58 @@ def test_user_key_current_memory_targets_use_current_user_shorthand(monkeypatch)
     ]
 
 
+@pytest.mark.asyncio
+async def test_viking_client_search_preserves_serialized_group_results(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+    client = VikingClient()
+
+    async def _search(query, target_uri=None, limit=10):
+        return {
+            "memories": [
+                {
+                    "context_type": "memory",
+                    "uri": "viking://user/default/memories/profile.md",
+                    "abstract": "profile hit",
+                    "score": 0.3,
+                }
+            ],
+            "resources": [
+                {
+                    "context_type": "resource",
+                    "uri": "viking://resources/解释信-杜涛/解释信-杜涛.md",
+                    "abstract": "resource hit",
+                    "score": 0.4,
+                }
+            ],
+            "skills": [
+                {
+                    "context_type": "skill",
+                    "uri": "viking://user/default/skills/planner.md",
+                    "abstract": "skill hit",
+                    "score": 0.2,
+                }
+            ],
+            "total": 3,
+        }
+
+    monkeypatch.setattr(client.client, "search", _search)
+
+    result = await client.search("解释信", target_uri="", limit=10)
+
+    assert result["total"] == 3
+    assert result["query"] == "解释信"
+    assert result["target_uri"] == ""
+    assert [item["uri"] for item in result["memories"]] == [
+        "viking://user/default/memories/profile.md"
+    ]
+    assert [item["uri"] for item in result["resources"]] == [
+        "viking://resources/解释信-杜涛/解释信-杜涛.md"
+    ]
+    assert [item["uri"] for item in result["skills"]] == [
+        "viking://user/default/skills/planner.md"
+    ]
+
+
 def test_ov_server_api_key_mode_ignores_bot_root_key_and_uses_ovcli_user_key(monkeypatch):
     bot_data = {"root_api_key": "bot-root-key"}
     ov_data = {"root_api_key": "server-root-key"}
@@ -2276,7 +2328,7 @@ async def test_openviking_search_user_key_mode_uses_current_user_namespace(monke
 
 
 @pytest.mark.asyncio
-async def test_openviking_search_actor_client_uses_server_default_scope(monkeypatch):
+async def test_openviking_search_actor_client_expands_current_peer_scope(monkeypatch):
     tool = VikingSearchTool()
     calls = []
 
@@ -2285,6 +2337,14 @@ async def test_openviking_search_actor_client_uses_server_default_scope(monkeypa
 
         def should_sender_fanout(self):
             return True
+
+        def _memory_target_uri(self, _user_id=None):
+            return "viking://user/memories/"
+
+        def build_current_memory_target_uris(self, *, peer_ids=None, include_self=True):
+            uris = ["viking://user/memories/"] if include_self else []
+            uris.extend(f"viking://user/peers/{peer_id}/memories/" for peer_id in peer_ids or [])
+            return uris
 
         async def search(self, query, target_uri=None, limit=20, user_id=None):
             calls.append((target_uri, user_id))
@@ -2308,7 +2368,15 @@ async def test_openviking_search_actor_client_uses_server_default_scope(monkeypa
     result = await tool.execute(tool_context, query="hello")
 
     assert "sender-0/memories" in result
-    assert calls == [("", None), ("close", None)]
+    assert calls == [
+        ("viking://resources/", None),
+        ("viking://user/memories/", None),
+        ("viking://user/skills/", None),
+        ("viking://user/peers/sender-0/memories/", None),
+        ("viking://user/peers/sender-1/memories/", None),
+        ("viking://user/peers/sender-2/memories/", None),
+        ("close", None),
+    ]
 
 
 @pytest.mark.asyncio
