@@ -7,6 +7,20 @@ pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
 
+/// Percent-encode a query parameter value (RFC 3986 unreserved set).
+fn encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*byte as char);
+            }
+            _ => encoded.push_str(&format!("%{:02X}", byte)),
+        }
+    }
+    encoded
+}
+
 // ============ HttpClient ============
 
 /// High-level HTTP client for OpenViking API
@@ -687,6 +701,7 @@ impl HttpClient {
         show_progress: bool,
         verbose: bool,
         source_metadata: Option<Value>,
+        target_uri: Option<&str>,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(data);
 
@@ -712,6 +727,9 @@ impl HttpClient {
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
                 }
+                if let Some(target_uri) = target_uri {
+                    body["target_uri"] = serde_json::Value::String(target_uri.to_string());
+                }
                 let dynamic_timeout =
                     TimeoutConfig::for_resource_processing().calculate(zip_file.path())?;
                 self.base
@@ -733,6 +751,9 @@ impl HttpClient {
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
                 }
+                if let Some(target_uri) = target_uri {
+                    body["target_uri"] = serde_json::Value::String(target_uri.to_string());
+                }
                 let dynamic_timeout =
                     TimeoutConfig::for_resource_processing().calculate(path_obj)?;
                 self.base
@@ -747,6 +768,9 @@ impl HttpClient {
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
                 }
+                if let Some(target_uri) = target_uri {
+                    body["target_uri"] = serde_json::Value::String(target_uri.to_string());
+                }
                 self.post("/api/v1/skills", &body).await
             }
         } else {
@@ -758,12 +782,22 @@ impl HttpClient {
             if let Some(source_metadata) = source_metadata {
                 body["source_metadata"] = source_metadata;
             }
+            if let Some(target_uri) = target_uri {
+                body["target_uri"] = serde_json::Value::String(target_uri.to_string());
+            }
             self.post("/api/v1/skills", &body).await
         }
     }
 
-    pub async fn skills_list(&self, node_limit: i32) -> Result<serde_json::Value> {
-        let params = vec![("node_limit".to_string(), node_limit.to_string())];
+    pub async fn skills_list(
+        &self,
+        node_limit: i32,
+        target_uri: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let mut params = vec![("node_limit".to_string(), node_limit.to_string())];
+        if let Some(target_uri) = target_uri {
+            params.push(("target_uri".to_string(), target_uri.to_string()));
+        }
         self.get("/api/v1/skills", &params).await
     }
 
@@ -774,6 +808,7 @@ impl HttpClient {
         include_files: bool,
         include_source: bool,
         level: Option<i32>,
+        target_uri: Option<&str>,
     ) -> Result<serde_json::Value> {
         let path = format!("/api/v1/skills/{}", name);
         let mut params = vec![
@@ -784,6 +819,9 @@ impl HttpClient {
         if let Some(level) = level {
             params.push(("level".to_string(), level.to_string()));
         }
+        if let Some(target_uri) = target_uri {
+            params.push(("target_uri".to_string(), target_uri.to_string()));
+        }
         self.get(&path, &params).await
     }
 
@@ -793,6 +831,7 @@ impl HttpClient {
         node_limit: i32,
         threshold: Option<f64>,
         level: Option<Vec<i32>>,
+        target_uri: Option<&str>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "query": query,
@@ -800,7 +839,15 @@ impl HttpClient {
             "score_threshold": threshold,
             "level": level,
         });
-        self.post("/api/v1/skills/find", &body).await
+        let path = if let Some(target_uri) = target_uri {
+            format!(
+                "/api/v1/skills/find?target_uri={}",
+                encode_query_value(target_uri)
+            )
+        } else {
+            String::from("/api/v1/skills/find")
+        };
+        self.post(&path, &body).await
     }
 
     pub async fn skill_validate(&self, path: &str, strict: bool) -> Result<serde_json::Value> {
@@ -866,8 +913,17 @@ impl HttpClient {
         show_progress: bool,
         verbose: bool,
         source_metadata: Option<Value>,
+        target_uri: Option<&str>,
     ) -> Result<serde_json::Value> {
-        let endpoint = format!("/api/v1/skills/{}", name);
+        let endpoint = if let Some(target_uri) = target_uri {
+            format!(
+                "/api/v1/skills/{}?target_uri={}",
+                name,
+                encode_query_value(target_uri)
+            )
+        } else {
+            format!("/api/v1/skills/{}", name)
+        };
         let path_obj = Path::new(data);
 
         if path_obj.exists() {
@@ -932,9 +988,18 @@ impl HttpClient {
         }
     }
 
-    pub async fn skill_remove(&self, name: &str) -> Result<serde_json::Value> {
+    pub async fn skill_remove(
+        &self,
+        name: &str,
+        target_uri: Option<&str>,
+    ) -> Result<serde_json::Value> {
         let path = format!("/api/v1/skills/{}", name);
-        self.delete(&path, &[]).await
+        let params: Vec<(String, String)> = if let Some(target_uri) = target_uri {
+            vec![("target_uri".to_string(), target_uri.to_string())]
+        } else {
+            Vec::new()
+        };
+        self.delete(&path, &params).await
     }
 
     // ============ Task Methods ============

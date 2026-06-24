@@ -195,8 +195,21 @@ class ReindexExecutor:
         if classification.is_user_namespace_root:
             return "user_namespace"
         if parts[0] == "agent":
+            if len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}:
+                if classification.is_skill_namespace:
+                    return "skill_namespace"
+                if classification.is_skill_root:
+                    return "skill"
+                if classification.is_skill:
+                    raise OpenVikingError(
+                        f"Unsupported reindex URI: {uri}",
+                        code="UNSUPPORTED_URI",
+                        details={"uri": uri},
+                    )
+                return "resource"
             raise OpenVikingError(
-                "viking://agent is deprecated; use viking://user instead.",
+                "viking://agent/{agent_id}/... is no longer supported; "
+                "use viking://agent/skills/... or viking://user/... instead.",
                 code="UNSUPPORTED_URI",
                 details={"uri": uri},
             )

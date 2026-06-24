@@ -97,48 +97,61 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
         if not self._ctx or not self._viking_fs:
             return pre_fetch_messages
 
-        skill_root_uri = f"{canonical_user_root(self._ctx)}/skills"
-        try:
-            entries = await self._viking_fs.ls(
-                skill_root_uri,
-                output="agent",
-                abs_limit=256,
-                show_all_hidden=False,
-                node_limit=1000,
-                ctx=self._ctx,
-            )
-            listed_skills = []
-            for entry in entries:
-                if not entry.get("isDir", False):
-                    continue
-                skill_root = (
-                    entry.get("uri") or f"{skill_root_uri.rstrip('/')}/{entry.get('name', '')}"
+        user_skill_root = f"{canonical_user_root(self._ctx)}/skills"
+        agent_skill_root = "viking://agent/skills"
+        skill_roots = [user_skill_root, agent_skill_root]
+
+        listed_skills: List[Dict[str, Any]] = []
+        seen_names: set[str] = set()
+        errors: Dict[str, str] = {}
+        for skill_root_uri in skill_roots:
+            try:
+                entries = await self._viking_fs.ls(
+                    skill_root_uri,
+                    output="agent",
+                    abs_limit=256,
+                    show_all_hidden=False,
+                    node_limit=1000,
+                    ctx=self._ctx,
                 )
-                skill_name = entry.get("name") or skill_root.rstrip("/").split("/")[-1]
-                listed_skills.append(
-                    {
-                        "skill_name": skill_name,
-                        "uri": f"{skill_root.rstrip('/')}/SKILL.md",
-                        "abstract": entry.get("abstract", ""),
-                    }
-                )
-            add_tool_call_pair_to_messages(
-                messages=pre_fetch_messages,
-                call_id=0,
-                tool_name="ls",
-                params={"uri": skill_root_uri},
-                result=listed_skills
-                if listed_skills
-                else "Directory is empty. You can create a new skill if the conversation shows a reusable workflow.",
+                for entry in entries:
+                    if not entry.get("isDir", False):
+                        continue
+                    skill_root = (
+                        entry.get("uri")
+                        or f"{skill_root_uri.rstrip('/')}/{entry.get('name', '')}"
+                    )
+                    skill_name = entry.get("name") or skill_root.rstrip("/").split("/")[-1]
+                    if skill_name in seen_names:
+                        continue
+                    seen_names.add(skill_name)
+                    listed_skills.append(
+                        {
+                            "skill_name": skill_name,
+                            "uri": f"{skill_root.rstrip('/')}/SKILL.md",
+                            "abstract": entry.get("abstract", ""),
+                        }
+                    )
+            except Exception as exc:
+                errors[skill_root_uri] = str(exc)
+
+        if listed_skills:
+            tool_result: Any = listed_skills
+        elif errors:
+            tool_result = {"error": errors}
+        else:
+            tool_result = (
+                "Directory is empty. You can create a new skill if the conversation "
+                "shows a reusable workflow."
             )
-        except Exception as exc:
-            add_tool_call_pair_to_messages(
-                messages=pre_fetch_messages,
-                call_id=0,
-                tool_name="ls",
-                params={"uri": skill_root_uri},
-                result={"error": str(exc)},
-            )
+
+        add_tool_call_pair_to_messages(
+            messages=pre_fetch_messages,
+            call_id=0,
+            tool_name="ls",
+            params={"uri": skill_roots},
+            result=tool_result,
+        )
         return pre_fetch_messages
 
     async def execute_tool(self, tool_call) -> Any:

@@ -462,8 +462,11 @@ class AsyncHTTPClient:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: Any = False,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         request_data = {"wait": wait, "timeout": timeout, "telemetry": telemetry}
+        if target_uri is not None:
+            request_data["target_uri"] = target_uri
         if isinstance(data, str):
             path_obj = Path(data)
             if path_obj.exists():
@@ -484,8 +487,15 @@ class AsyncHTTPClient:
         response = await self._http.post("/api/v1/skills", json=request_data)
         return self._handle_response_data(response).get("result", {})
 
-    async def list_skills(self, node_limit: int = 1000) -> Dict[str, Any]:
-        response = await self._http.get("/api/v1/skills", params={"node_limit": node_limit})
+    async def list_skills(
+        self,
+        node_limit: int = 1000,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"node_limit": node_limit}
+        if target_uri is not None:
+            params["target_uri"] = target_uri
+        response = await self._http.get("/api/v1/skills", params=params)
         return self._handle_response(response)
 
     async def find_skills(
@@ -495,6 +505,7 @@ class AsyncHTTPClient:
         score_threshold: Optional[float] = None,
         level: Optional[List[int]] = None,
         telemetry: Any = False,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload = {
             "query": query,
@@ -503,6 +514,8 @@ class AsyncHTTPClient:
             "level": level,
             "telemetry": telemetry,
         }
+        if target_uri is not None:
+            payload["target_uri"] = target_uri
         response = await self._http.post("/api/v1/skills/find", json=payload)
         return self._handle_response_data(response).get("result", {})
 
@@ -512,12 +525,15 @@ class AsyncHTTPClient:
         strict: bool = False,
         source_path: Optional[str] = None,
         skill_dir_name: Optional[str] = None,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"data": data, "strict": strict}
         if source_path is not None:
             payload["source_path"] = source_path
         if skill_dir_name is not None:
             payload["skill_dir_name"] = skill_dir_name
+        if target_uri is not None:
+            payload["target_uri"] = target_uri
         response = await self._http.post("/api/v1/skills/validate", json=payload)
         return self._handle_response(response)
 
@@ -528,6 +544,7 @@ class AsyncHTTPClient:
         include_files: bool = True,
         include_source: bool = False,
         level: Optional[int] = None,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "include_files": include_files,
@@ -537,6 +554,8 @@ class AsyncHTTPClient:
             params["include_content"] = include_content
         if level is not None:
             params["level"] = level
+        if target_uri is not None:
+            params["target_uri"] = target_uri
         response = await self._http.get(f"/api/v1/skills/{skill_name}", params=params)
         return self._handle_response(response)
 
@@ -548,6 +567,7 @@ class AsyncHTTPClient:
         timeout: Optional[float] = None,
         source_metadata: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         request_data: Dict[str, Any] = {
             "wait": wait,
@@ -555,6 +575,8 @@ class AsyncHTTPClient:
             "source_metadata": source_metadata,
             "telemetry": telemetry,
         }
+        if target_uri is not None:
+            request_data["target_uri"] = target_uri
         if isinstance(data, str):
             path_obj = Path(data)
             if path_obj.exists():
@@ -575,8 +597,15 @@ class AsyncHTTPClient:
         response = await self._http.put(f"/api/v1/skills/{skill_name}", json=request_data)
         return self._handle_response_data(response).get("result", {})
 
-    async def delete_skill(self, skill_name: str) -> Dict[str, Any]:
-        response = await self._http.delete(f"/api/v1/skills/{skill_name}")
+    async def delete_skill(
+        self,
+        skill_name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {}
+        if target_uri is not None:
+            params["target_uri"] = target_uri
+        response = await self._http.delete(f"/api/v1/skills/{skill_name}", params=params)
         return self._handle_response(response)
 
     async def list_watches(
@@ -1303,13 +1332,26 @@ class SyncHTTPClient:
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: Any = False,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.add_skill(data, wait=wait, timeout=timeout, telemetry=telemetry)
+            self._async_client.add_skill(
+                data,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+                target_uri=target_uri,
+            )
         )
 
-    def list_skills(self, node_limit: int = 1000) -> Dict[str, Any]:
-        return run_async(self._async_client.list_skills(node_limit=node_limit))
+    def list_skills(
+        self,
+        node_limit: int = 1000,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.list_skills(node_limit=node_limit, target_uri=target_uri)
+        )
 
     def find_skills(
         self,
@@ -1318,6 +1360,7 @@ class SyncHTTPClient:
         score_threshold: Optional[float] = None,
         level: Optional[List[int]] = None,
         telemetry: Any = False,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.find_skills(
@@ -1326,6 +1369,7 @@ class SyncHTTPClient:
                 score_threshold=score_threshold,
                 level=level,
                 telemetry=telemetry,
+                target_uri=target_uri,
             )
         )
 
@@ -1335,6 +1379,7 @@ class SyncHTTPClient:
         strict: bool = False,
         source_path: Optional[str] = None,
         skill_dir_name: Optional[str] = None,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.validate_skill(
@@ -1342,6 +1387,7 @@ class SyncHTTPClient:
                 strict=strict,
                 source_path=source_path,
                 skill_dir_name=skill_dir_name,
+                target_uri=target_uri,
             )
         )
 
@@ -1352,6 +1398,7 @@ class SyncHTTPClient:
         include_files: bool = True,
         include_source: bool = False,
         level: Optional[int] = None,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.get_skill(
@@ -1360,6 +1407,7 @@ class SyncHTTPClient:
                 include_files=include_files,
                 include_source=include_source,
                 level=level,
+                target_uri=target_uri,
             )
         )
 
@@ -1371,6 +1419,7 @@ class SyncHTTPClient:
         timeout: Optional[float] = None,
         source_metadata: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.update_skill(
@@ -1380,11 +1429,18 @@ class SyncHTTPClient:
                 timeout=timeout,
                 source_metadata=source_metadata,
                 telemetry=telemetry,
+                target_uri=target_uri,
             )
         )
 
-    def delete_skill(self, skill_name: str) -> Dict[str, Any]:
-        return run_async(self._async_client.delete_skill(skill_name))
+    def delete_skill(
+        self,
+        skill_name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.delete_skill(skill_name, target_uri=target_uri)
+        )
 
     def list_watches(
         self,

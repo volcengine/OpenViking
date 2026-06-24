@@ -90,6 +90,7 @@ pub async fn add(
     verbose: bool,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
     let source = prepare_source(data)?;
     if list_only {
@@ -125,6 +126,7 @@ pub async fn add(
                 show_progress,
                 verbose,
                 source_metadata,
+                parent,
             )
             .await?;
         installed.push(result);
@@ -158,9 +160,10 @@ pub async fn list(
     node_limit: i32,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
-    let result = client.skills_list(node_limit).await?;
-    output_success(result, output_format, compact);
+    let result = client.skills_list(node_limit, parent).await?;
+    super::search::output_skills_list_results(&result, output_format, compact);
     Ok(())
 }
 
@@ -172,10 +175,18 @@ pub async fn show(
     include_source: bool,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
     let include_content = level.is_none() || level == Some(2);
     let mut result = client
-        .skill_show(name, include_content, include_files, include_source, level)
+        .skill_show(
+            name,
+            include_content,
+            include_files,
+            include_source,
+            level,
+            parent,
+        )
         .await?;
     if let Some(level) = level {
         filter_skill_show_level(&mut result, level);
@@ -192,11 +203,12 @@ pub async fn find(
     level: Option<Vec<i32>>,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
     let result = client
-        .skill_find(query, node_limit, threshold, level)
+        .skill_find(query, node_limit, threshold, level, parent)
         .await?;
-    output_success(result, output_format, compact);
+    super::search::output_skills_find_results(&result, output_format, compact, node_limit);
     Ok(())
 }
 
@@ -207,6 +219,7 @@ pub async fn update(
     yes: bool,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
     let update_all = skill_names.is_empty();
     let names = resolve_installed_skill_names(client, skill_names).await?;
@@ -253,6 +266,7 @@ pub async fn update(
                 false,
                 false,
                 source_metadata,
+                parent,
             )
             .await?;
         updated.push(result);
@@ -279,6 +293,7 @@ pub async fn remove(
     yes: bool,
     output_format: OutputFormat,
     compact: bool,
+    parent: Option<&str>,
 ) -> Result<()> {
     if all && !skill_names.is_empty() {
         return Err(Error::Client(
@@ -331,7 +346,7 @@ pub async fn remove(
     let removed_names = names.clone();
     let mut removed = Vec::new();
     for name in names {
-        removed.push(client.skill_remove(&name).await?);
+        removed.push(client.skill_remove(&name, parent).await?);
     }
     let total = removed.len();
     output_message_result(
@@ -1158,7 +1173,9 @@ async fn read_skill_source_record(
     client: &HttpClient,
     name: &str,
 ) -> Result<Option<SkillSourceRecord>> {
-    let result = client.skill_show(name, false, false, true, Some(0)).await?;
+    let result = client
+        .skill_show(name, false, false, true, Some(0), None)
+        .await?;
     let Some(source) = result.get("source") else {
         return Ok(None);
     };
@@ -1348,7 +1365,7 @@ async fn resolve_installed_skill_names(
 }
 
 async fn list_installed_skills(client: &HttpClient) -> Result<Vec<InstalledSkillSummary>> {
-    let result = client.skills_list(10000).await?;
+    let result = client.skills_list(10000, None).await?;
     let skills = result
         .get("skills")
         .and_then(Value::as_array)

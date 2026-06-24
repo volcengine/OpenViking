@@ -354,11 +354,22 @@ class VikingFS:
                 "or current-user content path instead.",
                 resource=normalized_uri,
             )
-        if parts and parts[0] in {"agent", "session"}:
+        if parts and parts[0] == "session":
             raise PermissionDeniedError(
                 f"Writing {normalized_uri} is not supported; use user-owned namespaces instead.",
                 resource=normalized_uri,
             )
+        if parts and parts[0] == "agent":
+            if len(parts) >= 2 and parts[1] not in {"skills", "endpoints", "tools", "payments"}:
+                raise PermissionDeniedError(
+                    f"viking://agent/{{agent_id}} is deprecated. Use viking://user/.../peers/{{agent_id}} instead.",
+                    resource=normalized_uri,
+                )
+            if len(parts) < 2:
+                raise PermissionDeniedError(
+                    "Writing to viking://agent root is not supported.",
+                    resource=normalized_uri,
+                )
 
     # ========== AGFS Basic Commands ==========
 
@@ -1811,7 +1822,8 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         account_id = real_ctx.account_id
         normalized_uri, legacy_parts = self._normalized_uri_parts(uri)
-        if legacy_parts and legacy_parts[0] == "agent":
+        if legacy_parts and legacy_parts[0] == "agent" and self._is_legacy_agent_id_uri(uri):
+            # Old format: viking://agent/{agent_id}/... — direct mapping for read-only compat
             safe_parts = [
                 self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in legacy_parts
             ]
@@ -1851,17 +1863,17 @@ class VikingFS:
         _, parts = self._normalized_uri_parts(uri)
         return parts == ["session"]
 
-    def _is_legacy_agent_uri(self, uri: str) -> bool:
+    def _is_legacy_agent_id_uri(self, uri: str) -> bool:
         _, parts = self._normalized_uri_parts(uri)
-        return bool(parts and parts[0] == "agent")
+        return bool(
+            parts and parts[0] == "agent"
+            and len(parts) >= 2
+            and parts[1] not in {"skills", "endpoints", "tools", "payments"}
+        )
 
     def _read_paths(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
         """Return read candidates for a URI, including legacy alias fallbacks."""
         paths = [self._uri_to_path(uri, ctx=ctx)]
-        for alias_uri in self._legacy_agent_alias_uris(uri, ctx=ctx):
-            alias_path = self._uri_to_path(alias_uri, ctx=ctx)
-            if alias_path not in paths:
-                paths.append(alias_path)
 
         if self._is_legacy_session_uri(uri):
             for candidate in (
@@ -1871,35 +1883,6 @@ class VikingFS:
                 if candidate and candidate not in paths:
                     paths.append(candidate)
         return paths
-
-    def _legacy_agent_alias_uris(
-        self,
-        uri: str,
-        ctx: Optional[RequestContext] = None,
-    ) -> List[str]:
-        """Return migrated user/peer URI aliases for a legacy viking://agent URI."""
-        _, parts = self._normalized_uri_parts(uri)
-        if not parts or parts[0] != "agent":
-            return []
-
-        user_root = canonical_user_root(self._ctx_or_default(ctx))
-        if len(parts) == 1:
-            return [f"{user_root}/peers"]
-
-        agent_id = parts[1]
-        suffix = parts[2:]
-        if not suffix:
-            return [f"{user_root}/peers/{agent_id}"]
-
-        if suffix[0] in {"memories", "resources"}:
-            return [f"{user_root}/peers/{agent_id}/{'/'.join(suffix)}"]
-        if suffix[0] == "skills":
-            skill_suffix = suffix[1:]
-            skill_uri = f"{user_root}/skills"
-            if skill_suffix:
-                skill_uri = f"{skill_uri}/{'/'.join(skill_suffix)}"
-            return [skill_uri]
-        return []
 
     async def _read_path_visible(
         self,
@@ -1923,7 +1906,20 @@ class VikingFS:
         ctx: Optional[RequestContext],
     ) -> str:
         normalized_request, request_parts = self._normalized_uri_parts(request_uri)
-        if not request_parts or request_parts[0] not in {"agent", "session"}:
+        # Only legacy namespaces need alias remapping:
+        # - Old format viking://agent/{agent_id}/...
+        # - viking://session/...
+        is_legacy_namespace = (
+            request_parts
+            and (
+                request_parts[0] == "session"
+                or (
+                    request_parts[0] == "agent"
+                    and self._is_legacy_agent_id_uri(request_uri)
+                )
+            )
+        )
+        if not is_legacy_namespace:
             return self._path_to_uri(entry_path, ctx=ctx)
         base = base_path.rstrip("/")
         rel_path = entry_path[len(base) :].strip("/") if entry_path.startswith(base) else ""
@@ -2084,7 +2080,7 @@ class VikingFS:
             return await self._session_root_items(uri, real_ctx)
 
         primary_path = self._uri_to_path(uri, ctx=ctx)
-        merge_paths = self._is_legacy_agent_uri(uri)
+        merge_paths = self._is_legacy_session_uri(uri)
         found_path = False
         last_not_found: Optional[Exception] = None
         by_uri: Dict[str, tuple[Dict[str, Any], str]] = {}
@@ -2192,14 +2188,14 @@ class VikingFS:
         if scope == "_system":
             return False
         if scope == "agent":
-            return self._is_legacy_agent_accessible(parts, ctx)
+            # New format: agent/skills/..., agent/endpoints/... — globally readable (account scope)
+            if len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}:
+                return True
+            # Old format: agent/{agent_id}/... — actor_peer_id match for read-only access
+            if not ctx.actor_peer_id or len(parts) < 2:
+                return True
+            return parts[1] == ctx.actor_peer_id
         return namespace_is_accessible(normalized_uri, ctx)
-
-    @staticmethod
-    def _is_legacy_agent_accessible(parts: List[str], ctx: RequestContext) -> bool:
-        if not ctx.actor_peer_id or len(parts) < 2:
-            return True
-        return parts[1] == ctx.actor_peer_id
 
     def _handle_agfs_read(self, result: Union[bytes, Any, None]) -> bytes:
         """Handle AGFSClient read return types consistently."""

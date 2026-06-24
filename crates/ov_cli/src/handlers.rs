@@ -238,6 +238,7 @@ pub async fn handle_add_skill(
     data: String,
     wait: bool,
     timeout: Option<f64>,
+    parent: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -246,6 +247,7 @@ pub async fn handle_add_skill(
         &data,
         wait,
         timeout,
+        parent.as_deref(),
         ctx.should_show_progress(),
         ctx.is_verbose(),
         ctx.output_format,

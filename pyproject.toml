@@ -17,7 +17,7 @@ requires-python = ">=3.10"
 authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
 ]
-license = { text = "AGPL-3.0" }
+license = "AGPL-3.0"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

@@ -22,7 +22,7 @@ class VikingURI:
     - user: User scope (viking://user/...), including sessions under
       viking://user/{user_id}/sessions/{session_id}
     - session: Legacy alias for user sessions (viking://session/{session_id}/...)
-    - agent: Legacy read-only agent scope (viking://agent/{agent_id}/...)
+    - agent: Agent capabilities scope (viking://agent/skills/..., viking://agent/endpoints/...)
     - queue: Queue scope (viking://queue/...)
 
     Examples:
@@ -37,9 +37,10 @@ class VikingURI:
     LISTABLE_SCOPES = {
         "resources",
         "user",
+        "agent",
     }
     PUBLIC_SCOPES = frozenset(LISTABLE_SCOPES)
-    LEGACY_SCOPES = frozenset({"agent", "session"})
+    LEGACY_SCOPES = frozenset({"session"})
     INTERNAL_SCOPES = frozenset({"temp", "queue", "upload"})
     # All valid scopes that can be addressed by the URI parser/storage internals.
     # Public API handlers must not use this as their external whitelist.

@@ -242,10 +242,127 @@ class SyncOpenViking:
         wait: bool = False,
         timeout: float = None,
         telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
         return run_async(
-            self._async_client.add_skill(data, wait=wait, timeout=timeout, telemetry=telemetry)
+            self._async_client.add_skill(
+                data,
+                wait=wait,
+                timeout=timeout,
+                telemetry=telemetry,
+                target_uri=target_uri,
+            )
+        )
+
+    def list_skills(
+        self,
+        node_limit: int = 1000,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List installed skills."""
+        return run_async(
+            self._async_client.list_skills(
+                node_limit=node_limit,
+                target_uri=target_uri,
+            )
+        )
+
+    def find_skills(
+        self,
+        query: str,
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        level: Optional[List[int]] = None,
+        telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Find skills by semantic search."""
+        return run_async(
+            self._async_client.find_skills(
+                query=query,
+                limit=limit,
+                score_threshold=score_threshold,
+                level=level,
+                telemetry=telemetry,
+                target_uri=target_uri,
+            )
+        )
+
+    def get_skill(
+        self,
+        skill_name: str,
+        include_content: Optional[bool] = None,
+        include_files: bool = True,
+        include_source: bool = False,
+        level: Optional[int] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get a skill by name."""
+        return run_async(
+            self._async_client.get_skill(
+                skill_name=skill_name,
+                include_content=include_content,
+                include_files=include_files,
+                include_source=include_source,
+                level=level,
+                target_uri=target_uri,
+            )
+        )
+
+    def update_skill(
+        self,
+        skill_name: str,
+        data: Any,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Update an existing skill."""
+        return run_async(
+            self._async_client.update_skill(
+                skill_name=skill_name,
+                data=data,
+                wait=wait,
+                timeout=timeout,
+                source_metadata=source_metadata,
+                telemetry=telemetry,
+                target_uri=target_uri,
+            )
+        )
+
+    def delete_skill(
+        self,
+        skill_name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Delete a skill."""
+        return run_async(
+            self._async_client.delete_skill(
+                skill_name=skill_name,
+                target_uri=target_uri,
+            )
+        )
+
+    def validate_skill(
+        self,
+        data: Any,
+        strict: bool = False,
+        source_path: Optional[str] = None,
+        skill_dir_name: Optional[str] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Validate skill data."""
+        return run_async(
+            self._async_client.validate_skill(
+                data=data,
+                strict=strict,
+                source_path=source_path,
+                skill_dir_name=skill_dir_name,
+                target_uri=target_uri,
+            )
         )
 
     def search(
