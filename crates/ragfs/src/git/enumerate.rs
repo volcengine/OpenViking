@@ -81,8 +81,27 @@ pub async fn collect_all(
     vfs: &Arc<dyn FileSystem>,
     account: &str,
 ) -> Result<Vec<String>, GitError> {
-    let root = format!("/local/{}", account);
-    let prefix = format!("{}/", root);
+    collect_under(vfs, account, "").await
+}
+
+/// Enumerate every versionable file under an account-relative subdirectory.
+///
+/// `sub_path` is account-relative (no leading "/", no trailing "/"). An empty
+/// `sub_path` enumerates the entire account tree (equivalent to
+/// [`collect_all`]). Returned paths are account-relative and include the
+/// `sub_path` prefix. Directories are filtered out; only file entries that
+/// survive [`prune_path`] (applied to the account-relative form) are returned.
+pub async fn collect_under(
+    vfs: &Arc<dyn FileSystem>,
+    account: &str,
+    sub_path: &str,
+) -> Result<Vec<String>, GitError> {
+    let root = if sub_path.is_empty() {
+        format!("/local/{}", account)
+    } else {
+        format!("/local/{}/{}", account, sub_path)
+    };
+    let account_prefix = format!("/local/{}/", account);
 
     let entries = vfs.tree_directory(&root, true, None, None).await?;
 
@@ -92,9 +111,10 @@ pub async fn collect_all(
             continue;
         }
 
-        // Strip "/local/{account}/" prefix. If path doesn't start with the
-        // prefix, skip it (defensive — shouldn't happen for a well-formed VFS).
-        let rel = match entry.path.strip_prefix(&prefix) {
+        // Strip "/local/{account}/" so pruning sees account-relative paths.
+        // If the entry doesn't carry that prefix, skip it (defensive — should
+        // not happen for a well-formed VFS).
+        let rel = match entry.path.strip_prefix(&account_prefix) {
             Some(r) => r,
             None => continue,
         };
@@ -192,11 +212,7 @@ mod tests {
             _node_limit: Option<usize>,
             _level_limit: Option<usize>,
         ) -> Result<Vec<TreeEntry>> {
-            let raw = self
-                .entries_by_root
-                .get(path)
-                .cloned()
-                .unwrap_or_default();
+            let raw = self.entries_by_root.get(path).cloned().unwrap_or_default();
 
             let prefix = if path == "/" {
                 "/".to_string()
@@ -288,10 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_collect_all_returns_account_relative_paths() {
-        let mock = MockFS::new(
-            "/local/acct",
-            vec![("/local/acct/resources/a.md", false)],
-        );
+        let mock = MockFS::new("/local/acct", vec![("/local/acct/resources/a.md", false)]);
         let fs: Arc<dyn FileSystem> = Arc::new(mock);
 
         let got = collect_all(&fs, "acct").await.unwrap();
@@ -305,6 +318,61 @@ mod tests {
                 p
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_collect_under_returns_paths_below_subdir_with_prefix() {
+        let mock = MockFS::new(
+            "/local/acct/resources",
+            vec![
+                ("/local/acct/resources/a.md", false),
+                ("/local/acct/resources/sub/b.md", false),
+                ("/local/acct/resources/x.faiss", false),
+            ],
+        );
+        let fs: Arc<dyn FileSystem> = Arc::new(mock);
+
+        let mut got = collect_under(&fs, "acct", "resources").await.unwrap();
+        got.sort();
+
+        let mut expected = vec![
+            "resources/a.md".to_string(),
+            "resources/sub/b.md".to_string(),
+        ];
+        expected.sort();
+
+        assert_eq!(got, expected);
+    }
+
+    #[tokio::test]
+    async fn test_collect_under_empty_sub_path_equivalent_to_collect_all() {
+        let mock = MockFS::new(
+            "/local/acct",
+            vec![
+                ("/local/acct/resources/a.md", false),
+                ("/local/acct/_system/lock", false),
+            ],
+        );
+        let fs: Arc<dyn FileSystem> = Arc::new(mock);
+
+        let got_under = collect_under(&fs, "acct", "").await.unwrap();
+        let got_all = collect_all(&fs, "acct").await.unwrap();
+        assert_eq!(got_under, got_all);
+        assert_eq!(got_under, vec!["resources/a.md".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_collect_under_applies_pruning_on_account_relative_form() {
+        // A `_system` sub_path is itself a pruned prefix — every file under it
+        // is pruned because the first account-relative segment is "_system".
+        let mock = MockFS::new(
+            "/local/acct/_system",
+            vec![("/local/acct/_system/lock", false)],
+        );
+        let fs: Arc<dyn FileSystem> = Arc::new(mock);
+
+        let got = collect_under(&fs, "acct", "_system").await.unwrap();
+        assert!(got.is_empty(), "everything under _system must be pruned");
     }
 
     #[test]

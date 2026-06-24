@@ -77,16 +77,6 @@ pub enum GitError {
     #[error("path is a directory, not a file: {0}")]
     PathIsDirectory(String),
 
-    /// A path supplied in `CommitRequest.paths` resolves to a directory in
-    /// the working-tree VFS. The commit API only accepts file paths today —
-    /// directory expansion is intentionally not implemented, so silently
-    /// dropping the entry would surprise callers expecting a recursive snapshot.
-    #[error(
-        "commit path is a directory, not a file: {0}; \
-         pass each file explicitly, or omit `paths` to snapshot the whole tree"
-    )]
-    PathIsDirectoryInCommit(String),
-
     /// `project_dir` is an empty / malformed path string.
     /// Same validation as `TreeEditor::upsert`: must be non-empty, no leading
     /// or trailing `/`, no empty components, no `.` / `..` / backslash /
@@ -120,7 +110,7 @@ pub enum GitError {
     ConcurrentCommit {
         ref_name: String,
         expected: Option<gix_hash::ObjectId>,
-        actual:   Option<gix_hash::ObjectId>,
+        actual: Option<gix_hash::ObjectId>,
     },
 
     /// `restore()` advanced the branch ref to the new commit, but at least

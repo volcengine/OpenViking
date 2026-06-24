@@ -12,7 +12,7 @@
 //! optimization (`write_object` is idempotent) and can be toggled off via
 //! [`GitService::with_blob_exists_precheck`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
@@ -108,11 +108,8 @@ impl GitService {
     /// `CommitResponse::Noop` is returned.
     ///
     /// When `paths` is `Some(...)`, every listed path must refer to a file in
-    /// the VFS. A path that resolves to a directory returns
-    /// `GitError::PathIsDirectoryInCommit` — the commit API does not currently
-    /// expand a directory into its contents, and silently skipping the entry
-    /// would surprise a caller expecting a recursive snapshot. To commit a
-    /// subtree, list each file explicitly or omit `paths` for full enumeration.
+    /// the VFS. To commit a subtree, list each file explicitly or omit `paths`
+    /// for full enumeration.
     ///
     /// On a CAS conflict, returns `GitError::ConcurrentCommit` so the
     /// caller can decide whether to retry. There is intentionally no
@@ -140,12 +137,6 @@ impl GitService {
             }
         }
         let ref_name = format!("refs/heads/{branch}");
-        // Whether the caller explicitly passed `paths`. A directory listed in
-        // an explicit list is a user-facing error (see the loop below), but
-        // full enumeration must stay defensive against a stray directory entry
-        // — collect_all/prev_tree should never emit one, yet a `continue`
-        // there costs nothing.
-        let paths_was_explicit = paths.is_some();
 
         // 1. Resolve current HEAD (may not exist → root commit).
         let prev_head: Option<ObjectId> = match self.ref_store.read(&account, &ref_name).await {
@@ -170,8 +161,10 @@ impl GitService {
                 Ok(Some(idx)) if idx.parent_oid == head => Some(idx),
                 Ok(_) => None,
                 Err(e) => {
-                    warn!("commit index load failed for {account}/{branch}: {e}; \
-                           falling back to slow path");
+                    warn!(
+                        "commit index load failed for {account}/{branch}: {e}; \
+                           falling back to slow path"
+                    );
                     None
                 }
             },
@@ -185,22 +178,135 @@ impl GitService {
         //    (The well-known empty-tree oid is not guaranteed to exist in the
         //    store, so we cannot blindly hand it to `from_tree`.)
         let mut editor = match prev_tree {
-            Some(t) => crate::git::tree_builder::TreeEditor::from_tree(
-                self.object_store.as_ref(),
-                &account,
-                t,
-            )
-            .await?,
+            Some(t) => {
+                crate::git::tree_builder::TreeEditor::from_tree(
+                    self.object_store.as_ref(),
+                    &account,
+                    t,
+                )
+                .await?
+            }
             None => crate::git::tree_builder::TreeEditor::empty(),
         };
 
-        // 3. Determine candidate paths.
+        // 2.5. Explicit paths: classify each entry as File / Directory /
+        //      NotFound via a single VFS stat, and assemble three locals:
+        //
+        //      * `candidates` - the deduped set of files this commit will
+        //        process. Directories contribute their recursive listing
+        //        (pruned) plus any prev_tree paths under the same prefix
+        //        (so deletions inside the directory surface as a remove).
+        //        A NotFound entry behaves the same way for any prev_tree
+        //        paths under its prefix, treating it as "delete whatever
+        //        used to live here".
+        //      * `cleanup_exact` - keys to drop from the new index seed
+        //        before the main loop re-fills them.
+        //      * `cleanup_prefixes` - directory-style prefixes ("docs/")
+        //        whose contents in the new index seed must also be dropped.
+        //
+        //      Pruning is applied uniformly: explicit files, expanded
+        //      directory contents, and prev_tree-derived entries all run
+        //      through `prune_path`. A path supplied by the caller that is
+        //      pruned is silently dropped (no error, no warn).
+        let mut cleanup_exact: HashSet<String> = HashSet::new();
+        let mut cleanup_prefixes: Vec<String> = Vec::new();
+
+        // Lazily flatten prev_tree once if any explicit path requires it.
+        let mut prev_paths_cache: Option<Vec<(String, ObjectId)>> = None;
+
         let candidates: Vec<String> = match &paths {
-            Some(ps) => ps
-                .iter()
-                .filter(|p| !crate::git::enumerate::prune_path(p))
-                .cloned()
-                .collect(),
+            Some(ps) => {
+                let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+                for p in ps {
+                    let abs = format!("/local/{}/{}", account, p);
+                    match self.vfs.stat(&abs).await {
+                        Ok(info) if info.is_dir => {
+                            // Directory: recursive listing + prev_tree subtree.
+                            cleanup_prefixes.push(format!("{}/", p));
+
+                            let listed =
+                                crate::git::enumerate::collect_under(&self.vfs, &account, p)
+                                    .await?;
+                            for rel in listed {
+                                set.insert(rel);
+                            }
+
+                            if let Some(t) = prev_tree {
+                                if prev_paths_cache.is_none() {
+                                    prev_paths_cache = Some(
+                                        crate::git::tree_builder::flatten(
+                                            self.object_store.as_ref(),
+                                            &account,
+                                            t,
+                                            &None,
+                                        )
+                                        .await?,
+                                    );
+                                }
+                                let pref = format!("{}/", p);
+                                for (path, _) in prev_paths_cache.as_ref().unwrap() {
+                                    if path.starts_with(&pref)
+                                        && !crate::git::enumerate::prune_path(path)
+                                    {
+                                        set.insert(path.clone());
+                                    }
+                                }
+                            }
+                        }
+                        Ok(_) => {
+                            // File: take it verbatim, subject to pruning.
+                            cleanup_exact.insert(p.clone());
+                            if !crate::git::enumerate::prune_path(p) {
+                                set.insert(p.clone());
+                            }
+                        }
+                        Err(e) if is_not_found(&e) => {
+                            // Neither file nor directory in the VFS. Treat
+                            // it as a delete-by-name: feed `p` into the main
+                            // loop (where the NotFound branch will remove it
+                            // from the tree if it was a file) AND union in
+                            // every prev_tree path under "p/" so a missing
+                            // directory drops its whole subtree.
+                            warn!(
+                                "commit path {:?} not found in VFS; \
+                                 treating as deletion of any matching subtree",
+                                p
+                            );
+                            cleanup_exact.insert(p.clone());
+                            cleanup_prefixes.push(format!("{}/", p));
+
+                            if !crate::git::enumerate::prune_path(p) {
+                                set.insert(p.clone());
+                            }
+                            if let Some(t) = prev_tree {
+                                if prev_paths_cache.is_none() {
+                                    prev_paths_cache = Some(
+                                        crate::git::tree_builder::flatten(
+                                            self.object_store.as_ref(),
+                                            &account,
+                                            t,
+                                            &None,
+                                        )
+                                        .await?,
+                                    );
+                                }
+                                let pref = format!("{}/", p);
+                                for (path, _) in prev_paths_cache.as_ref().unwrap() {
+                                    if path.starts_with(&pref)
+                                        && !crate::git::enumerate::prune_path(path)
+                                    {
+                                        set.insert(path.clone());
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+
+                set.into_iter().collect()
+            }
             // Full enumeration: union the files currently on disk with the
             // paths recorded in prev_tree. `collect_all` only sees files that
             // still exist, so a file deleted since the last commit would never
@@ -246,10 +352,15 @@ impl GitService {
             };
         // For partial commits we still need to drop entries for any explicitly
         // listed path before we re-fill it — otherwise a deleted path that
-        // was in the old index would linger.
-        if let Some(ps) = &paths {
-            for p in ps {
-                new_index_entries.remove(p);
+        // was in the old index would linger. Directory entries clean by
+        // prefix; file/NotFound entries clean by exact key.
+        if paths.is_some() {
+            for key in &cleanup_exact {
+                new_index_entries.remove(key);
+            }
+            if !cleanup_prefixes.is_empty() {
+                new_index_entries
+                    .retain(|k, _| !cleanup_prefixes.iter().any(|pref| k.starts_with(pref)));
             }
         }
 
@@ -273,24 +384,11 @@ impl GitService {
         // been changed (to the same size) within the same clock tick as the
         // last commit, and `(size, mtime_ns)` cannot detect it. `None` (backend
         // could not report a write time) forces every entry down the slow path.
-        let index_saved_at_ns: Option<i128> =
-            prev_index.as_ref().and_then(|idx| idx.saved_at_ns);
+        let index_saved_at_ns: Option<i128> = prev_index.as_ref().and_then(|idx| idx.saved_at_ns);
         let mut changed = 0usize;
         for rel_path in candidates {
             let abs = format!("/local/{}/{}", account, rel_path);
             match self.vfs.stat(&abs).await {
-                Ok(info) if info.is_dir => {
-                    if paths_was_explicit {
-                        // The caller asked for this exact path. We do not
-                        // expand directories — surface a clear error rather
-                        // than committing nothing under it.
-                        return Err(GitError::PathIsDirectoryInCommit(rel_path));
-                    }
-                    // Full enumeration: defensive skip. `collect_all` does not
-                    // emit directories, and the prev_tree union only contains
-                    // blob paths in a well-formed tree.
-                    continue;
-                }
                 Ok(info) => {
                     let stat = stat_signature(&info);
 
@@ -308,8 +406,7 @@ impl GitService {
                         (Some(entry), Some((size, mtime_ns)))
                             if entry.size == size
                                 && entry.mtime_ns == mtime_ns
-                                && index_saved_at_ns
-                                    .is_some_and(|saved| mtime_ns < saved) =>
+                                && index_saved_at_ns.is_some_and(|saved| mtime_ns < saved) =>
                         {
                             entry.oid
                         }
@@ -339,14 +436,16 @@ impl GitService {
                     // path+oid — re-writing the same blob is not an editor
                     // change and shouldn't count toward the no-op decision.
                     let prev_entry = match prev_tree {
-                        Some(t) => crate::git::tree_builder::lookup_cached(
-                            self.object_store.as_ref(),
-                            &account,
-                            t,
-                            &rel_path,
-                            &mut prev_lookup_cache,
-                        )
-                        .await?,
+                        Some(t) => {
+                            crate::git::tree_builder::lookup_cached(
+                                self.object_store.as_ref(),
+                                &account,
+                                t,
+                                &rel_path,
+                                &mut prev_lookup_cache,
+                            )
+                            .await?
+                        }
                         None => None,
                     };
                     if prev_entry.map(|(o, _)| o) != Some(oid) {
@@ -361,8 +460,14 @@ impl GitService {
                     // its (size, mtime_ns, oid) is the new ground truth.
                     if self.index_store.is_some() {
                         if let Some((size, mtime_ns)) = stat {
-                            new_index_entries
-                                .insert(rel_path.clone(), IndexEntry { size, mtime_ns, oid });
+                            new_index_entries.insert(
+                                rel_path.clone(),
+                                IndexEntry {
+                                    size,
+                                    mtime_ns,
+                                    oid,
+                                },
+                            );
                         } else {
                             // No usable mtime → don't poison the cache.
                             new_index_entries.remove(&rel_path);
@@ -375,14 +480,16 @@ impl GitService {
                     // for missing paths. With no prev_tree (root commit) a
                     // missing path is just irrelevant.
                     let prev_entry = match prev_tree {
-                        Some(t) => crate::git::tree_builder::lookup_cached(
-                            self.object_store.as_ref(),
-                            &account,
-                            t,
-                            &rel_path,
-                            &mut prev_lookup_cache,
-                        )
-                        .await?,
+                        Some(t) => {
+                            crate::git::tree_builder::lookup_cached(
+                                self.object_store.as_ref(),
+                                &account,
+                                t,
+                                &rel_path,
+                                &mut prev_lookup_cache,
+                            )
+                            .await?
+                        }
                         None => None,
                     };
                     if prev_entry.is_some() {
@@ -492,7 +599,11 @@ impl GitService {
     /// Missing ref → `GitError::RefStore(RefStoreError::NotFound)`.
     /// Missing commit object → `GitError::ObjectStore(ObjectStoreError::NotFound)`.
     pub async fn show(&self, req: ShowRequest) -> Result<ShowResponse, GitError> {
-        let ShowRequest { account, target_ref, path } = req;
+        let ShowRequest {
+            account,
+            target_ref,
+            path,
+        } = req;
 
         validate_account_id(&account)?;
         if let Some(p) = &path {
@@ -523,17 +634,16 @@ impl GitService {
                     &account,
                     meta.tree,
                     &p,
-                ).await?;
+                )
+                .await?;
                 let (blob_oid, mode) = entry.ok_or_else(|| GitError::PathNotFound(p.clone()))?;
                 // Reject trees masquerading as paths: callers asked for blob bytes.
                 if mode.is_tree() {
                     return Err(GitError::PathIsDirectory(p));
                 }
-                let raw = crate::git::util::read_object(
-                    self.object_store.as_ref(),
-                    &account,
-                    &blob_oid,
-                ).await?;
+                let raw =
+                    crate::git::util::read_object(self.object_store.as_ref(), &account, &blob_oid)
+                        .await?;
                 let (kind, payload_size, hdr) = crate::git::util::parse_object_header(&raw)?;
                 if kind != gix_object::Kind::Blob {
                     return Err(GitError::CorruptedObject(format!(
@@ -594,7 +704,8 @@ impl GitService {
         )
         .await?;
         let head_oid = self.ref_store.read(account, &ref_name).await?;
-        let source_meta = load_commit_meta(self.object_store.as_ref(), account, &source_oid).await?;
+        let source_meta =
+            load_commit_meta(self.object_store.as_ref(), account, &source_oid).await?;
         let head_meta = load_commit_meta(self.object_store.as_ref(), account, &head_oid).await?;
 
         // 2. Extract subtree from each (or use full tree if project_dir is None).
@@ -644,13 +755,8 @@ impl GitService {
         .await?;
         let head_entries = match head_tree_to_flatten {
             Some(oid) => {
-                crate::git::tree_builder::flatten(
-                    self.object_store.as_ref(),
-                    account,
-                    oid,
-                    &None,
-                )
-                .await?
+                crate::git::tree_builder::flatten(self.object_store.as_ref(), account, oid, &None)
+                    .await?
             }
             None => Vec::new(),
         };
@@ -777,7 +883,8 @@ impl GitService {
                         };
                         let r = async {
                             let bytes =
-                                read_blob_payload(object_store.as_ref(), &account, &blob_oid).await?;
+                                read_blob_payload(object_store.as_ref(), &account, &blob_oid)
+                                    .await?;
                             let abs = format!("{}/{}", abs_prefix, rel);
                             // The target's parent directory may have been removed out of
                             // band (e.g. an `rm -r` that a later commit recorded as a
@@ -826,16 +933,14 @@ impl GitService {
                         // already be absent from the VFS (e.g. derived files like
                         // `.abstract.md` that were removed or regenerated out of band).
                         // Treat NotFound as success rather than counting it as a failure.
-                        let r = match crate::core::filesystem::FileSystem::remove(
-                            vfs.as_ref(),
-                            &abs,
-                        )
-                        .await
-                        {
-                            Ok(_) => Ok::<(), GitError>(()),
-                            Err(crate::core::errors::Error::NotFound(_)) => Ok(()),
-                            Err(e) => Err(e.into()),
-                        };
+                        let r =
+                            match crate::core::filesystem::FileSystem::remove(vfs.as_ref(), &abs)
+                                .await
+                            {
+                                Ok(_) => Ok::<(), GitError>(()),
+                                Err(crate::core::errors::Error::NotFound(_)) => Ok(()),
+                                Err(e) => Err(e.into()),
+                            };
                         (account_rel, r)
                     }
                 })
@@ -878,8 +983,7 @@ impl GitService {
                 // Ignore failures: a concurrent writer may have repopulated the
                 // directory, or it may already be gone. Either way the restore
                 // itself has succeeded.
-                let _ =
-                    crate::core::filesystem::FileSystem::remove(self.vfs.as_ref(), &abs).await;
+                let _ = crate::core::filesystem::FileSystem::remove(self.vfs.as_ref(), &abs).await;
             }
         }
 
@@ -1311,7 +1415,11 @@ fn compute_subtree_diff(
     to_write.sort_by(|a, b| a.0.cmp(&b.0));
     to_delete.sort();
     unchanged.sort();
-    crate::git::types::RestoreDiff { to_write, to_delete, unchanged }
+    crate::git::types::RestoreDiff {
+        to_write,
+        to_delete,
+        unchanged,
+    }
 }
 
 #[cfg(test)]
@@ -1325,8 +1433,8 @@ mod tests {
     use crate::core::filesystem::FileSystem;
     use crate::core::types::{FileInfo, TreeEntry, WriteFlag};
     use crate::git::backends::local::{LocalObjectStore, LocalRefStore};
-    use crate::git::error::RefStoreError;
     use crate::git::error::ObjectStoreError;
+    use crate::git::error::RefStoreError;
     use crate::git::tree_builder::{flatten, lookup};
 
     /// In-memory VFS mock that owns a map from absolute path to bytes.
@@ -1454,11 +1562,7 @@ mod tests {
         async fn stat(&self, path: &str) -> Result<FileInfo> {
             let g = self.files.lock().unwrap();
             if let Some(bytes) = g.get(path) {
-                let name = path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(path)
-                    .to_string();
+                let name = path.rsplit('/').next().unwrap_or(path).to_string();
                 return Ok(FileInfo::new_file(name, bytes.len() as u64, 0o644));
             }
             Err(Error::not_found(path))
@@ -1563,11 +1667,7 @@ mod tests {
         parsed.parents().collect()
     }
 
-    async fn commit_tree(
-        store: &dyn ObjectStore,
-        account: &str,
-        commit_oid: ObjectId,
-    ) -> ObjectId {
+    async fn commit_tree(store: &dyn ObjectStore, account: &str, commit_oid: ObjectId) -> ObjectId {
         load_commit_meta(store, account, &commit_oid)
             .await
             .unwrap()
@@ -1575,12 +1675,7 @@ mod tests {
     }
 
     /// Make a commit and return its OID.
-    async fn make_commit(
-        svc: &GitService,
-        account: &str,
-        branch: &str,
-        msg: &str,
-    ) -> ObjectId {
+    async fn make_commit(svc: &GitService, account: &str, branch: &str, msg: &str) -> ObjectId {
         match svc.commit(req(account, branch, msg, None)).await.unwrap() {
             CommitResponse::Created { commit_oid, .. } => commit_oid,
             other => panic!("expected Created, got {other:?}"),
@@ -1599,7 +1694,10 @@ mod tests {
             .unwrap();
 
         match resp {
-            CommitResponse::Created { commit_oid, changed } => {
+            CommitResponse::Created {
+                commit_oid,
+                changed,
+            } => {
                 assert!(changed >= 1, "should record at least one change");
                 let parents = commit_parents(
                     object_store.as_ref() as &dyn ObjectStore,
@@ -1627,7 +1725,10 @@ mod tests {
     async fn test_commit_second_links_to_first() {
         let (_dir, vfs, object_store, _ref_store, svc) = make_service("acct");
         vfs.put("resources/a.md", b"hello");
-        let first = svc.commit(req("acct", "main", "first", None)).await.unwrap();
+        let first = svc
+            .commit(req("acct", "main", "first", None))
+            .await
+            .unwrap();
         let first_oid = match first {
             CommitResponse::Created { commit_oid, .. } => commit_oid,
             other => panic!("expected Created, got {other:?}"),
@@ -1657,7 +1758,10 @@ mod tests {
     async fn test_commit_noop_when_nothing_changed() {
         let (_dir, vfs, _object_store, ref_store, svc) = make_service("acct");
         vfs.put("resources/a.md", b"hello");
-        let first = svc.commit(req("acct", "main", "first", None)).await.unwrap();
+        let first = svc
+            .commit(req("acct", "main", "first", None))
+            .await
+            .unwrap();
         let first_oid = match first {
             CommitResponse::Created { commit_oid, .. } => commit_oid,
             other => panic!("expected Created, got {other:?}"),
@@ -1686,7 +1790,12 @@ mod tests {
 
         vfs.delete("resources/a.md");
         let resp = svc
-            .commit(req("acct", "main", "delete-a", Some(vec!["resources/a.md".to_string()])))
+            .commit(req(
+                "acct",
+                "main",
+                "delete-a",
+                Some(vec!["resources/a.md".to_string()]),
+            ))
             .await
             .unwrap();
         let second_oid = match resp {
@@ -1739,7 +1848,10 @@ mod tests {
             .await
             .unwrap();
         let oid = match resp {
-            CommitResponse::Created { commit_oid, changed } => {
+            CommitResponse::Created {
+                commit_oid,
+                changed,
+            } => {
                 assert_eq!(changed, 1, "exactly one path (a.md) was removed");
                 commit_oid
             }
@@ -1767,7 +1879,10 @@ mod tests {
             .await
             .unwrap();
         let oid = match resp {
-            CommitResponse::Created { commit_oid, changed } => {
+            CommitResponse::Created {
+                commit_oid,
+                changed,
+            } => {
                 assert_eq!(changed, 2, "both files under sub/ were removed");
                 commit_oid
             }
@@ -1871,12 +1986,7 @@ mod tests {
             other => panic!("expected Created, got {other:?}"),
         };
 
-        let tree = commit_tree(
-            object_store.as_ref() as &dyn ObjectStore,
-            "acct",
-            oid,
-        )
-        .await;
+        let tree = commit_tree(object_store.as_ref() as &dyn ObjectStore, "acct", oid).await;
         let all = flatten(
             object_store.as_ref() as &dyn ObjectStore,
             "acct",
@@ -1941,7 +2051,9 @@ mod tests {
                     actual: self.actual,
                 });
             }
-            self.inner.cas_update(account, ref_name, expected, new).await
+            self.inner
+                .cas_update(account, ref_name, expected, new)
+                .await
         }
 
         async fn list(
@@ -1997,17 +2109,16 @@ mod tests {
         vfs.put("resources/a.md", b"hello");
         vfs.put("agent/b.py", b"print('hi')");
 
-        let first = svc.commit(req("acct", "main", "first", None)).await.unwrap();
+        let first = svc
+            .commit(req("acct", "main", "first", None))
+            .await
+            .unwrap();
         let first_oid = match first {
             CommitResponse::Created { commit_oid, .. } => commit_oid,
             other => panic!("expected Created, got {other:?}"),
         };
-        let first_tree = commit_tree(
-            object_store.as_ref() as &dyn ObjectStore,
-            "acct",
-            first_oid,
-        )
-        .await;
+        let first_tree =
+            commit_tree(object_store.as_ref() as &dyn ObjectStore, "acct", first_oid).await;
         let agent_first = lookup(
             object_store.as_ref() as &dyn ObjectStore,
             "acct",
@@ -2021,7 +2132,10 @@ mod tests {
 
         // Touch only resources/a.md.
         vfs.put("resources/a.md", b"world");
-        let second = svc.commit(req("acct", "main", "second", None)).await.unwrap();
+        let second = svc
+            .commit(req("acct", "main", "second", None))
+            .await
+            .unwrap();
         let second_oid = match second {
             CommitResponse::Created { commit_oid, .. } => commit_oid,
             other => panic!("expected Created, got {other:?}"),
@@ -2069,12 +2183,7 @@ mod tests {
             other => panic!("expected Created, got {other:?}"),
         };
 
-        let tree = commit_tree(
-            object_store.as_ref() as &dyn ObjectStore,
-            "acct",
-            oid,
-        )
-        .await;
+        let tree = commit_tree(object_store.as_ref() as &dyn ObjectStore, "acct", oid).await;
         let all = flatten(
             object_store.as_ref() as &dyn ObjectStore,
             "acct",
@@ -2085,6 +2194,234 @@ mod tests {
         .unwrap();
         let paths: Vec<String> = all.into_iter().map(|(p, _)| p).collect();
         assert_eq!(paths, vec!["resources/a.md".to_string()]);
+    }
+
+    // ── commit: paths supports directories ──────────────────────────────
+    /// A directory in `paths` is expanded to every file under it that
+    /// survives pruning. Files under the directory that were in the
+    /// previous tree but have since been deleted from the VFS must drop
+    /// out of the new snapshot.
+    ///
+    /// Backed by `LocalFileSystem`: `MockVfs::stat` returns NotFound for
+    /// any directory entry, which would route this test through Step 2.5's
+    /// NotFound branch instead of the Directory branch. A real filesystem
+    /// is the only fixture where `stat("/local/acct/docs")` returns
+    /// `is_dir = true`.
+    #[tokio::test]
+    async fn test_commit_paths_expands_directory_and_drops_deleted_files() {
+        use crate::plugins::localfs::LocalFileSystem;
+
+        let store_dir = tempfile::tempdir().unwrap();
+        let object_store = Arc::new(LocalObjectStore::new(store_dir.path()));
+        let ref_store = Arc::new(LocalRefStore::new(store_dir.path()));
+        let work_dir = tempfile::tempdir().unwrap();
+        let acct_root = work_dir.path().join("local").join("acct");
+        std::fs::create_dir_all(acct_root.join("docs")).unwrap();
+        std::fs::create_dir_all(acct_root.join("other")).unwrap();
+        std::fs::write(acct_root.join("docs/a.md"), b"AA").unwrap();
+        std::fs::write(acct_root.join("docs/b.md"), b"BB").unwrap();
+        std::fs::write(acct_root.join("other/c.md"), b"CC").unwrap();
+        let vfs: Arc<dyn FileSystem> =
+            Arc::new(LocalFileSystem::new(work_dir.path().to_str().unwrap()).unwrap());
+        let svc = GitService::new(vfs, object_store.clone(), ref_store);
+
+        let _ = make_commit(&svc, "acct", "main", "first").await;
+
+        // Delete b.md from VFS, add d.md, leave a.md unchanged.
+        std::fs::remove_file(acct_root.join("docs/b.md")).unwrap();
+        std::fs::write(acct_root.join("docs/d.md"), b"DD").unwrap();
+
+        let resp = svc
+            .commit(req("acct", "main", "scoped", Some(vec!["docs".into()])))
+            .await
+            .unwrap();
+        let commit_oid = match resp {
+            CommitResponse::Created { commit_oid, .. } => commit_oid,
+            other => panic!("expected Created, got {other:?}"),
+        };
+
+        // Verify the new tree through show():
+        //   docs/a.md still present, docs/b.md gone, docs/d.md present,
+        //   other/c.md untouched.
+        let oid_hex = commit_oid.to_hex().to_string();
+        assert!(matches!(
+            svc.show(ShowRequest {
+                account: "acct".into(),
+                target_ref: oid_hex.clone(),
+                path: Some("docs/a.md".into()),
+            })
+            .await,
+            Ok(ShowResponse::Blob { .. })
+        ));
+        assert!(matches!(
+            svc.show(ShowRequest {
+                account: "acct".into(),
+                target_ref: oid_hex.clone(),
+                path: Some("docs/b.md".into()),
+            })
+            .await,
+            Err(GitError::PathNotFound(_))
+        ));
+        assert!(matches!(
+            svc.show(ShowRequest {
+                account: "acct".into(),
+                target_ref: oid_hex.clone(),
+                path: Some("docs/d.md".into()),
+            })
+            .await,
+            Ok(ShowResponse::Blob { .. })
+        ));
+        assert!(matches!(
+            svc.show(ShowRequest {
+                account: "acct".into(),
+                target_ref: oid_hex,
+                path: Some("other/c.md".into()),
+            })
+            .await,
+            Ok(ShowResponse::Blob { .. })
+        ));
+    }
+
+    /// If the directory passed in `paths` does not exist in the VFS at all,
+    /// every file under that prefix in prev_tree is dropped from the new
+    /// snapshot. A `warn!` is emitted but no error is returned.
+    /// Uses MockVfs: the directory is "missing" so Step 2.5 sees NotFound.
+    #[tokio::test]
+    async fn test_commit_paths_notfound_directory_drops_subtree() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("docs/a.md", b"AA");
+        vfs.put("docs/b.md", b"BB");
+        vfs.put("other/c.md", b"CC");
+        let _ = make_commit(&svc, "acct", "main", "first").await;
+
+        // Whole directory disappears.
+        vfs.delete("docs/a.md");
+        vfs.delete("docs/b.md");
+
+        let resp = svc
+            .commit(req("acct", "main", "drop dir", Some(vec!["docs".into()])))
+            .await
+            .unwrap();
+        let commit_oid = match resp {
+            CommitResponse::Created {
+                commit_oid,
+                changed,
+            } => {
+                assert_eq!(changed, 3, "three files removed from snapshot");
+                commit_oid
+            }
+            other => panic!("expected Created, got {other:?}"),
+        };
+
+        let oid_hex = commit_oid.to_hex().to_string();
+        assert!(matches!(
+            svc.show(ShowRequest {
+                account: "acct".into(),
+                target_ref: oid_hex.clone(),
+                path: Some("docs/a.md".into()),
+            })
+            .await,
+            Err(GitError::PathNotFound(_))
+        ));
+        assert!(matches!(
+            svc.show(ShowRequest {
+                account: "acct".into(),
+                target_ref: oid_hex,
+                path: Some("other/c.md".into()),
+            })
+            .await,
+            Ok(ShowResponse::Blob { .. })
+        ));
+    }
+
+    /// Pruning applies to explicit directories: passing `_system` results
+    /// in a Noop commit (the directory does not exist in the VFS, but even
+    /// if it did, every entry under it would be pruned).
+    #[tokio::test]
+    async fn test_commit_paths_pruned_directory_is_noop() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/a.md", b"AA");
+        let first = make_commit(&svc, "acct", "main", "first").await;
+
+        let resp = svc
+            .commit(req(
+                "acct",
+                "main",
+                "pruned dir",
+                Some(vec!["_system".into()]),
+            ))
+            .await
+            .unwrap();
+        match resp {
+            CommitResponse::Noop { commit_oid } => assert_eq!(commit_oid, first),
+            other => panic!("expected Noop, got {other:?}"),
+        }
+    }
+
+    /// Pruning applies to explicit files: passing a pruned file path is
+    /// equivalent to passing nothing. Noop on top of an existing commit.
+    #[tokio::test]
+    async fn test_commit_paths_pruned_file_is_noop() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/a.md", b"AA");
+        vfs.put("_system/lock", b"LL"); // pruned, never committed
+        let first = make_commit(&svc, "acct", "main", "first").await;
+
+        let resp = svc
+            .commit(req(
+                "acct",
+                "main",
+                "pruned file",
+                Some(vec!["_system/lock".into()]),
+            ))
+            .await
+            .unwrap();
+        match resp {
+            CommitResponse::Noop { commit_oid } => assert_eq!(commit_oid, first),
+            other => panic!("expected Noop, got {other:?}"),
+        }
+    }
+
+    /// Mixing a file and a directory containing that file processes each
+    /// candidate exactly once. The resulting commit must record exactly
+    /// the directory's content, not double-process the listed file. Uses
+    /// LocalFileSystem so the Directory branch actually runs.
+    #[tokio::test]
+    async fn test_commit_paths_mixed_file_and_dir_dedup() {
+        use crate::plugins::localfs::LocalFileSystem;
+
+        let store_dir = tempfile::tempdir().unwrap();
+        let object_store = Arc::new(LocalObjectStore::new(store_dir.path()));
+        let ref_store = Arc::new(LocalRefStore::new(store_dir.path()));
+        let work_dir = tempfile::tempdir().unwrap();
+        let acct_root = work_dir.path().join("local").join("acct");
+        std::fs::create_dir_all(acct_root.join("docs")).unwrap();
+        std::fs::write(acct_root.join("docs/a.md"), b"AA").unwrap();
+        std::fs::write(acct_root.join("docs/b.md"), b"BB").unwrap();
+        let vfs: Arc<dyn FileSystem> =
+            Arc::new(LocalFileSystem::new(work_dir.path().to_str().unwrap()).unwrap());
+        let svc = GitService::new(vfs, object_store, ref_store);
+
+        let _ = make_commit(&svc, "acct", "main", "first").await;
+
+        // Mutate one file, then commit with both an exact file path and
+        // its parent directory.
+        std::fs::write(acct_root.join("docs/a.md"), b"AA2").unwrap();
+        let resp = svc
+            .commit(req(
+                "acct",
+                "main",
+                "mixed",
+                Some(vec!["docs/a.md".into(), "docs".into()]),
+            ))
+            .await
+            .unwrap();
+        match resp {
+            CommitResponse::Created { changed, .. } => {
+                assert_eq!(changed, 1, "only docs/a.md content changed");
+            }
+            other => panic!("expected Created, got {other:?}"),
+        }
     }
 
     // ── 9: show ────────────────────────────────────────────────────────
@@ -2164,7 +2501,9 @@ mod tests {
                     path: None,
                 })
                 .await
-                .unwrap_or_else(|e| panic!("short oid {short} (len {len}) should resolve, got {e}"));
+                .unwrap_or_else(|e| {
+                    panic!("short oid {short} (len {len}) should resolve, got {e}")
+                });
             match resp {
                 ShowResponse::Commit { oid: returned, .. } => assert_eq!(returned, oid),
                 other => panic!("len {len}: expected Commit, got {other:?}"),
@@ -2238,7 +2577,11 @@ mod tests {
             .unwrap();
 
         match resp {
-            ShowResponse::Blob { bytes, size, oid: _ } => {
+            ShowResponse::Blob {
+                bytes,
+                size,
+                oid: _,
+            } => {
                 assert_eq!(bytes.as_ref(), body);
                 assert_eq!(size, body.len() as u64);
             }
@@ -2335,8 +2678,8 @@ mod tests {
         let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
         // NUL, invalid UTF-8 (0xC3 0x28 is an invalid 2-byte sequence), CRLF, LF.
         let body: Vec<u8> = vec![
-            b'h', b'i', 0x00, 0xC3, 0x28, b'\r', b'\n', b'l', b'i', b'n', b'e', b'2', b'\n',
-            0xFF, 0xFE, 0xFD,
+            b'h', b'i', 0x00, 0xC3, 0x28, b'\r', b'\n', b'l', b'i', b'n', b'e', b'2', b'\n', 0xFF,
+            0xFE, 0xFD,
         ];
         vfs.put("resources/bin.dat", &body);
         let _ = make_commit(&svc, "acct", "main", "first").await;
@@ -2373,10 +2716,11 @@ mod tests {
         vfs.put("resources/a.md", b"x");
         // First, create a normal commit just to get a real tree OID.
         let seed_oid = make_commit(&svc, "acct", "main", "seed").await;
-        let seed_tree = load_commit_meta(object_store.as_ref() as &dyn ObjectStore, "acct", &seed_oid)
-            .await
-            .unwrap()
-            .tree;
+        let seed_tree =
+            load_commit_meta(object_store.as_ref() as &dyn ObjectStore, "acct", &seed_oid)
+                .await
+                .unwrap()
+                .tree;
 
         // Build a commit with deliberately mismatched author/committer.
         let author = gix_actor::Signature {
@@ -2433,7 +2777,9 @@ mod tests {
             .unwrap();
 
         match resp {
-            ShowResponse::Commit { author, committer, .. } => {
+            ShowResponse::Commit {
+                author, committer, ..
+            } => {
                 assert_eq!(author.name, "Alice Author");
                 assert_eq!(author.email, "alice@example.com");
                 assert_eq!(author.time_seconds, 1_700_000_000);
@@ -2545,14 +2891,19 @@ mod tests {
     async fn test_mock_vfs_write_then_read_round_trip() {
         let vfs = MockVfs::new("acct");
         let path = "/local/acct/x.md";
-        vfs.files.lock().unwrap().insert(path.to_string(), Vec::new());
+        vfs.files
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), Vec::new());
         FileSystem::write(vfs.as_ref(), path, b"hello", 0, WriteFlag::Create)
             .await
             .unwrap();
         let got = FileSystem::read(vfs.as_ref(), path, 0, 0).await.unwrap();
         assert_eq!(got, b"hello");
         FileSystem::remove(vfs.as_ref(), path).await.unwrap();
-        let err = FileSystem::read(vfs.as_ref(), path, 0, 0).await.unwrap_err();
+        let err = FileSystem::read(vfs.as_ref(), path, 0, 0)
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::NotFound(_)));
     }
 
@@ -2723,12 +3074,8 @@ mod tests {
         );
         // New commit's parents = [head_oid] (NOT source_oid — this is the key
         // invariant of restore vs. plain checkout).
-        let parents = commit_parents(
-            object_store.as_ref() as &dyn ObjectStore,
-            "acct",
-            new_oid,
-        )
-        .await;
+        let parents =
+            commit_parents(object_store.as_ref() as &dyn ObjectStore, "acct", new_oid).await;
         assert_eq!(parents, vec![head_oid]);
 
         // VFS rolled back as expected.
@@ -2896,8 +3243,11 @@ mod tests {
             2,
             "stream must not short-circuit on the first failure"
         );
-        let mut failed: Vec<String> =
-            partial.failed_writes.iter().map(|(p, _)| p.clone()).collect();
+        let mut failed: Vec<String> = partial
+            .failed_writes
+            .iter()
+            .map(|(p, _)| p.clone())
+            .collect();
         failed.sort();
         assert_eq!(
             failed,
@@ -3025,8 +3375,15 @@ mod tests {
             .expect("idempotent delete must stay on the Applied path");
 
         match resp {
-            RestoreResponse::Applied { deleted_paths, deleted, .. } => {
-                assert_eq!(deleted, 1, "b.md counts as deleted even though already gone");
+            RestoreResponse::Applied {
+                deleted_paths,
+                deleted,
+                ..
+            } => {
+                assert_eq!(
+                    deleted, 1,
+                    "b.md counts as deleted even though already gone"
+                );
                 assert_eq!(deleted_paths, vec!["resources/proj_a/b.md"]);
             }
             other => panic!("expected Applied, got {other:?}"),
@@ -3098,8 +3455,12 @@ mod tests {
             other => panic!("expected Applied, got {other:?}"),
         };
 
-        assert_eq!(ref_store.read("acct", "refs/heads/main").await.unwrap(), new_oid);
-        let parents = commit_parents(object_store.as_ref() as &dyn ObjectStore, "acct", new_oid).await;
+        assert_eq!(
+            ref_store.read("acct", "refs/heads/main").await.unwrap(),
+            new_oid
+        );
+        let parents =
+            commit_parents(object_store.as_ref() as &dyn ObjectStore, "acct", new_oid).await;
         assert_eq!(parents, vec![head_oid]);
 
         let files = vfs.files.lock().unwrap();
@@ -3332,12 +3693,8 @@ mod tests {
             ref_store.read("acct", "refs/heads/main").await.unwrap(),
             new_oid
         );
-        let parents = commit_parents(
-            object_store.as_ref() as &dyn ObjectStore,
-            "acct",
-            new_oid,
-        )
-        .await;
+        let parents =
+            commit_parents(object_store.as_ref() as &dyn ObjectStore, "acct", new_oid).await;
         assert_eq!(parents, vec![head_oid]);
     }
 
@@ -3389,7 +3746,10 @@ mod tests {
                 "acct",
                 "main",
                 "head",
-                Some(vec!["resources/a.md".to_string(), "memory/new.md".to_string()]),
+                Some(vec![
+                    "resources/a.md".to_string(),
+                    "memory/new.md".to_string(),
+                ]),
             ))
             .await
             .unwrap()
@@ -3427,7 +3787,10 @@ mod tests {
         assert_eq!(files.get("/local/acct/resources/a.md").unwrap(), b"A v2");
         assert!(files.contains_key("/local/acct/memory/new.md"));
         drop(files);
-        assert_eq!(ref_store.read("acct", "refs/heads/main").await.unwrap(), head_oid);
+        assert_eq!(
+            ref_store.read("acct", "refs/heads/main").await.unwrap(),
+            head_oid
+        );
     }
 
     #[tokio::test]
@@ -3457,7 +3820,10 @@ mod tests {
             }
             other => panic!("expected Noop, got {other:?}"),
         }
-        assert_eq!(ref_store.read("acct", "refs/heads/main").await.unwrap(), head_oid);
+        assert_eq!(
+            ref_store.read("acct", "refs/heads/main").await.unwrap(),
+            head_oid
+        );
     }
 
     #[tokio::test]
@@ -3497,7 +3863,10 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(matches!(err, GitError::RefStore(RefStoreError::NotFound(_))));
+        assert!(matches!(
+            err,
+            GitError::RefStore(RefStoreError::NotFound(_))
+        ));
     }
 
     #[tokio::test]
@@ -3518,7 +3887,10 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(matches!(err, GitError::RefStore(RefStoreError::NotFound(_))));
+        assert!(matches!(
+            err,
+            GitError::RefStore(RefStoreError::NotFound(_))
+        ));
     }
 
     #[tokio::test]
@@ -3545,7 +3917,10 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            GitError::SubtreeNotFoundInCommit { project_dir, commit } => {
+            GitError::SubtreeNotFoundInCommit {
+                project_dir,
+                commit,
+            } => {
                 assert_eq!(project_dir, "resources/proj_a");
                 assert_eq!(commit, source_oid);
             }
@@ -3572,8 +3947,7 @@ mod tests {
         let head_oid = make_commit(&bootstrap_svc, "acct", "main", "head").await;
 
         // Now wrap the ref store to force the first cas_update to fail.
-        let bogus =
-            ObjectId::from_hex(b"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef").unwrap();
+        let bogus = ObjectId::from_hex(b"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef").unwrap();
         let conflict_ref = Arc::new(ConflictOnceRef {
             inner: inner_ref.clone(),
             fired: Mutex::new(false),
@@ -3599,7 +3973,11 @@ mod tests {
             .await
             .unwrap_err();
         match err {
-            GitError::ConcurrentCommit { ref_name, expected, actual } => {
+            GitError::ConcurrentCommit {
+                ref_name,
+                expected,
+                actual,
+            } => {
                 assert_eq!(ref_name, "refs/heads/main");
                 assert_eq!(expected, Some(head_oid));
                 assert_eq!(actual, Some(bogus));
@@ -3641,8 +4019,7 @@ mod tests {
         let before = vfs.files.lock().unwrap().clone();
 
         // Force the first cas_update to conflict.
-        let bogus =
-            ObjectId::from_hex(b"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef").unwrap();
+        let bogus = ObjectId::from_hex(b"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef").unwrap();
         let conflict_ref = Arc::new(ConflictOnceRef {
             inner: inner_ref.clone(),
             fired: Mutex::new(false),
@@ -3677,7 +4054,9 @@ mod tests {
         let after = vfs.files.lock().unwrap().clone();
         assert_eq!(after, before, "VFS must not change on a CAS conflict");
         assert_eq!(
-            after.get("/local/acct/resources/proj_a/a.md").map(|v| v.as_slice()),
+            after
+                .get("/local/acct/resources/proj_a/a.md")
+                .map(|v| v.as_slice()),
             Some(b"v2".as_slice()),
             "a.md must keep its HEAD content"
         );
@@ -3749,14 +4128,11 @@ mod tests {
         // of unrelated.py and new_skill.py at their original oids. The easiest
         // way: lookup the oid of agent/skills/unrelated.py in both source and
         // new — they must DIFFER (source had v1, new still has v2).
-        let new_tree = load_commit_meta(
-            object_store.as_ref() as &dyn ObjectStore,
-            "acct",
-            &new_oid,
-        )
-        .await
-        .unwrap()
-        .tree;
+        let new_tree =
+            load_commit_meta(object_store.as_ref() as &dyn ObjectStore, "acct", &new_oid)
+                .await
+                .unwrap()
+                .tree;
         let source_tree = load_commit_meta(
             object_store.as_ref() as &dyn ObjectStore,
             "acct",
@@ -3890,8 +4266,7 @@ mod tests {
             oid: &ObjectId,
             zlib_body: bytes::Bytes,
         ) -> std::result::Result<(), ObjectStoreError> {
-            self.puts
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.puts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.inner.put(account, oid, zlib_body).await
         }
         async fn get(
@@ -3931,7 +4306,9 @@ mod tests {
         );
 
         vfs.put("a.md", b"dup");
-        svc.commit(req("acct", "main", "first", None)).await.unwrap();
+        svc.commit(req("acct", "main", "first", None))
+            .await
+            .unwrap();
 
         // Commit a second file with identical content → same blob oid. The
         // blob `put` must be skipped (exists hit); only the new root tree and
@@ -3969,7 +4346,9 @@ mod tests {
         .with_blob_exists_precheck(false);
 
         vfs.put("a.md", b"dup");
-        svc.commit(req("acct", "main", "first", None)).await.unwrap();
+        svc.commit(req("acct", "main", "first", None))
+            .await
+            .unwrap();
         let exists_after_first = object_store.exists_calls.load(Ordering::SeqCst);
 
         vfs.put("b.md", b"dup");
@@ -4014,7 +4393,12 @@ mod tests {
 
     impl GetSpyObjectStore {
         fn count_gets(&self, oid: &ObjectId) -> usize {
-            self.gets.lock().unwrap().iter().filter(|o| *o == oid).count()
+            self.gets
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|o| *o == oid)
+                .count()
         }
         fn reset(&self) {
             self.gets.lock().unwrap().clear();
@@ -4152,17 +4536,17 @@ mod tests {
     #[test]
     fn validate_account_id_rejects_malicious() {
         for bad in [
-            "",          // empty
-            ".",         // dot
-            "..",        // parent
-            "../x",      // traversal
-            "a/b",       // slash
-            "a\\b",      // backslash
-            "a\0b",      // NUL
-            "a\nb",      // newline / control
-            "a b",       // space
-            "a@b@c",     // multiple @
-            "_system",   // leading underscore
+            "",        // empty
+            ".",       // dot
+            "..",      // parent
+            "../x",    // traversal
+            "a/b",     // slash
+            "a\\b",    // backslash
+            "a\0b",    // NUL
+            "a\nb",    // newline / control
+            "a b",     // space
+            "a@b@c",   // multiple @
+            "_system", // leading underscore
         ] {
             assert!(
                 matches!(validate_account_id(bad), Err(GitError::InvalidAccountId(_))),
@@ -4298,7 +4682,14 @@ mod diff_tests {
     #[test]
     fn diff_empty_both() {
         let got = compute_subtree_diff(&[], &[]);
-        assert_eq!(got, RestoreDiff { to_write: vec![], to_delete: vec![], unchanged: vec![] });
+        assert_eq!(
+            got,
+            RestoreDiff {
+                to_write: vec![],
+                to_delete: vec![],
+                unchanged: vec![]
+            }
+        );
     }
 
     #[test]
@@ -4331,7 +4722,7 @@ mod diff_tests {
     #[test]
     fn diff_overwrite_when_same_path_different_oid() {
         let source = vec![("a.md".to_string(), oid(0xAA))];
-        let head   = vec![("a.md".to_string(), oid(0xBB))];
+        let head = vec![("a.md".to_string(), oid(0xBB))];
         let got = compute_subtree_diff(&source, &head);
         assert_eq!(got.to_write, vec![("a.md".to_string(), oid(0xAA))]);
         assert!(got.to_delete.is_empty());
@@ -4370,10 +4761,7 @@ mod diff_tests {
         ];
         let head = vec![("docs/a.md".to_string(), oid(0xAA))];
         let got = compute_subtree_diff(&source, &head);
-        assert_eq!(
-            got.to_write,
-            vec![("docs/sub/b.md".to_string(), oid(0xBB))]
-        );
+        assert_eq!(got.to_write, vec![("docs/sub/b.md".to_string(), oid(0xBB))]);
         assert!(got.to_delete.is_empty());
         assert_eq!(got.unchanged, vec!["docs/a.md".to_string()]);
     }
@@ -4459,27 +4847,26 @@ mod diff_tests {
     #[test]
     fn validate_relative_path_accepts_normal_paths() {
         for ok in ["a.md", "dir/a.md", "a/b/c/d.txt", "..hidden", "a..b"] {
-            validate_relative_path(ok).unwrap_or_else(|e| {
-                panic!("{ok:?} should be valid, got {e:?}")
-            });
+            validate_relative_path(ok)
+                .unwrap_or_else(|e| panic!("{ok:?} should be valid, got {e:?}"));
         }
     }
 
     #[test]
     fn validate_relative_path_rejects_malicious() {
         for bad in [
-            "",                     // empty
-            "/abs/path",            // leading slash
-            "trailing/",            // trailing slash
-            "a//b",                 // empty segment
-            ".",                    // dot
-            "..",                   // dotdot
-            "../escape",            // traversal at root
-            "a/../b",               // traversal mid-path
-            "a/./b",                // dot mid-path
-            "a\\b",                 // backslash
-            "a\0b",                 // NUL
-            "a\nb",                 // control char
+            "",          // empty
+            "/abs/path", // leading slash
+            "trailing/", // trailing slash
+            "a//b",      // empty segment
+            ".",         // dot
+            "..",        // dotdot
+            "../escape", // traversal at root
+            "a/../b",    // traversal mid-path
+            "a/./b",     // dot mid-path
+            "a\\b",      // backslash
+            "a\0b",      // NUL
+            "a\nb",      // control char
         ] {
             assert!(
                 matches!(validate_relative_path(bad), Err(GitError::InvalidPath(_))),
@@ -4640,8 +5027,15 @@ mod fast_path1_tests {
                 if !full_path.starts_with(&prefix) {
                     continue;
                 }
-                let rel = full_path.strip_prefix(&prefix).unwrap_or(full_path).to_string();
-                let name = full_path.rsplit('/').next().unwrap_or(full_path).to_string();
+                let rel = full_path
+                    .strip_prefix(&prefix)
+                    .unwrap_or(full_path)
+                    .to_string();
+                let name = full_path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(full_path)
+                    .to_string();
                 out.push(TreeEntry {
                     path: full_path.clone(),
                     rel_path: rel,
@@ -4675,9 +5069,7 @@ mod fast_path1_tests {
         (dir, vfs, index_store, svc)
     }
 
-    fn make_service_no_index(
-        account: &str,
-    ) -> (tempfile::TempDir, Arc<CountingVfs>, GitService) {
+    fn make_service_no_index(account: &str) -> (tempfile::TempDir, Arc<CountingVfs>, GitService) {
         let dir = tempfile::tempdir().unwrap();
         let object_store = Arc::new(LocalObjectStore::new(dir.path()));
         let ref_store = Arc::new(LocalRefStore::new(dir.path()));
@@ -4865,7 +5257,11 @@ mod fast_path1_tests {
         // and keep b.md.
         vfs.delete("a.md");
         let _ = svc
-            .commit(req("acct", "main", Some(vec!["a.md".into(), "b.md".into()])))
+            .commit(req(
+                "acct",
+                "main",
+                Some(vec!["a.md".into(), "b.md".into()]),
+            ))
             .await
             .unwrap();
 
@@ -4888,7 +5284,9 @@ mod fast_path1_tests {
         // overwrite the corrupt file with a valid one.
         let (dir, vfs, idx, svc) = make_service_with_index("acct");
         let path = dir.path().join("acct").join("index").join("main.json");
-        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
         tokio::fs::write(&path, b"NOT-JSON-AT-ALL").await.unwrap();
 
         vfs.put("a.md", b"hi", 1_000_000_000_000_000_000);
@@ -4918,7 +5316,10 @@ mod fast_path1_tests {
             .unwrap();
 
         let saved = idx.load("acct", "main").await.unwrap().unwrap();
-        let a = saved.entries.get("a.md").expect("a.md must be in the index");
+        let a = saved
+            .entries
+            .get("a.md")
+            .expect("a.md must be in the index");
         let b = saved.entries.get("b.md").expect(
             "b.md was uncovered by paths=[a.md] but must be preserved \
              from the previous index",
@@ -4944,90 +5345,82 @@ mod fast_path1_tests {
         );
     }
 
-    // ── commit: directory in explicit `paths` ──────────────────────────
-    /// Passing a directory in `CommitRequest.paths` must produce a clear
-    /// error (`GitError::PathIsDirectoryInCommit`) rather than silently
-    /// skipping the entry. Regression test for the misleading CLI example
-    /// `ov snapshot commit -m "docs only" --paths viking://docs` that used
-    /// to noop instead of recursing.
+    /// Partial commit with a directory entry must purge `new_index_entries`
+    /// by prefix — otherwise a file deleted under that directory leaves a
+    /// stale row in the persisted commit index, which the *next* commit
+    /// might serve to fast-path 1 as a valid cached oid.
     ///
-    /// Backed by `LocalFileSystem` because the in-memory `MockVfs` does not
-    /// model directories: `MockVfs::stat` only returns Ok for paths it has
-    /// stored as a file. We need a real VFS where `stat("resources/proj")`
-    /// returns a `FileInfo` with `is_dir = true`.
+    /// Uses `LocalFileSystem` because the Directory branch of Step 2.5
+    /// only runs when `stat` returns `is_dir = true`. `CountingVfs::stat`
+    /// returns NotFound for any directory and so would route this test
+    /// through the NotFound branch — which has different prefix-cleanup
+    /// behavior (NotFound also clears the exact key).
     #[tokio::test]
-    async fn test_commit_rejects_directory_in_explicit_paths() {
+    async fn partial_commit_with_directory_path_purges_index_by_prefix() {
+        use crate::git::object_store::ObjectStore;
+        use crate::git::ref_store::RefStore;
         use crate::plugins::localfs::LocalFileSystem;
 
         let store_dir = tempfile::tempdir().unwrap();
         let object_store = Arc::new(LocalObjectStore::new(store_dir.path()));
         let ref_store = Arc::new(LocalRefStore::new(store_dir.path()));
+        let index_store = Arc::new(LocalIndexStore::new(store_dir.path()));
 
         let work_dir = tempfile::tempdir().unwrap();
         let acct_root = work_dir.path().join("local").join("acct");
-        std::fs::create_dir_all(acct_root.join("resources/proj")).unwrap();
-        std::fs::write(acct_root.join("resources/proj/a.md"), b"hello").unwrap();
+        std::fs::create_dir_all(acct_root.join("docs")).unwrap();
+        std::fs::create_dir_all(acct_root.join("other")).unwrap();
+        std::fs::write(acct_root.join("docs/a.md"), b"AA").unwrap();
+        std::fs::write(acct_root.join("docs/b.md"), b"BB").unwrap();
+        std::fs::write(acct_root.join("other/c.md"), b"CC").unwrap();
+
         let vfs: Arc<dyn FileSystem> =
             Arc::new(LocalFileSystem::new(work_dir.path().to_str().unwrap()).unwrap());
+        let svc = GitService::with_index(
+            vfs,
+            object_store as Arc<dyn ObjectStore>,
+            ref_store as Arc<dyn RefStore>,
+            Some(index_store.clone() as Arc<dyn IndexStore>),
+        );
 
-        let svc = GitService::new(vfs, object_store, ref_store);
+        let full = CommitRequest {
+            account: "acct".into(),
+            branch: "main".into(),
+            message: "m".into(),
+            paths: None,
+            author_name: "tester".into(),
+            author_email: "t@x".into(),
+        };
+        let _ = svc.commit(full).await.unwrap();
+        let loaded = index_store.load("acct", "main").await.unwrap().unwrap();
+        assert!(loaded.entries.contains_key("docs/a.md"));
+        assert!(loaded.entries.contains_key("docs/b.md"));
+        assert!(loaded.entries.contains_key("other/c.md"));
 
-        let err = svc
-            .commit(CommitRequest {
-                account: "acct".into(),
-                branch: "main".into(),
-                message: "dir please".into(),
-                paths: Some(vec!["resources/proj".to_string()]),
-                author_name: "tester".into(),
-                author_email: "tester@example.com".into(),
-            })
-            .await
-            .unwrap_err();
+        // Delete docs/b.md, partial-commit with paths=["docs"].
+        std::fs::remove_file(acct_root.join("docs/b.md")).unwrap();
+        let partial = CommitRequest {
+            account: "acct".into(),
+            branch: "main".into(),
+            message: "m".into(),
+            paths: Some(vec!["docs".into()]),
+            author_name: "tester".into(),
+            author_email: "t@x".into(),
+        };
+        let _ = svc.commit(partial).await.unwrap();
 
-        match err {
-            GitError::PathIsDirectoryInCommit(p) => assert_eq!(p, "resources/proj"),
-            other => panic!("expected PathIsDirectoryInCommit, got {other:?}"),
-        }
-    }
-
-    /// Full enumeration (`paths = None`) must still tolerate a directory
-    /// stat showing up — the loop's defensive `continue` survives the change.
-    /// `LocalFileSystem` plus an in-tree directory exercises the path
-    /// (collect_all itself filters dirs, but the prev_tree union code reads
-    /// stat for every entry, and we want to pin the non-error behaviour).
-    #[tokio::test]
-    async fn test_commit_full_enumeration_tolerates_directories() {
-        use crate::plugins::localfs::LocalFileSystem;
-
-        let store_dir = tempfile::tempdir().unwrap();
-        let object_store = Arc::new(LocalObjectStore::new(store_dir.path()));
-        let ref_store = Arc::new(LocalRefStore::new(store_dir.path()));
-
-        let work_dir = tempfile::tempdir().unwrap();
-        let acct_root = work_dir.path().join("local").join("acct");
-        std::fs::create_dir_all(acct_root.join("resources/proj")).unwrap();
-        std::fs::write(acct_root.join("resources/proj/a.md"), b"hello").unwrap();
-        let vfs: Arc<dyn FileSystem> =
-            Arc::new(LocalFileSystem::new(work_dir.path().to_str().unwrap()).unwrap());
-
-        let svc = GitService::new(vfs, object_store, ref_store);
-
-        // paths = None must succeed (and commit the single file under proj/).
-        let resp = svc
-            .commit(CommitRequest {
-                account: "acct".into(),
-                branch: "main".into(),
-                message: "full".into(),
-                paths: None,
-                author_name: "tester".into(),
-                author_email: "tester@example.com".into(),
-            })
-            .await
-            .unwrap();
-        match resp {
-            CommitResponse::Created { changed, .. } => assert_eq!(changed, 1),
-            other => panic!("expected Created, got {other:?}"),
-        }
+        let loaded = index_store.load("acct", "main").await.unwrap().unwrap();
+        assert!(
+            !loaded.entries.contains_key("docs/b.md"),
+            "stale entry for deleted docs/b.md must not survive prefix cleanup"
+        );
+        assert!(
+            loaded.entries.contains_key("docs/a.md"),
+            "surviving file under docs/ must have a fresh entry"
+        );
+        assert!(
+            loaded.entries.contains_key("other/c.md"),
+            "files outside the partial scope must be preserved verbatim"
+        );
     }
 }
-

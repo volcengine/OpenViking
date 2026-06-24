@@ -38,7 +38,7 @@ Save the current workspace state as a new snapshot.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | message | str | Yes | - | Commit message |
-| paths | List[str] | No | null | `viking://` **file** URIs to scope the snapshot to; `null` snapshots the whole account tree. An empty list `[]` is forwarded as an explicit empty path set (no-op). Each entry must point to a file — passing a directory raises `AGFSInvalidOperationError` (directories are not expanded into their contents) |
+| paths | List[str] | No | null | `viking://` URIs to scope the snapshot to; entries may be files or directories. Directories are expanded recursively with the snapshot pruning rules applied. `null` snapshots the whole account tree. An empty list `[]` is forwarded as an explicit empty path set (no-op). A path that exists in neither the VFS nor the previous snapshot logs a warning and is treated as a no-op deletion |
 | branch | str | No | `main` | Branch to advance |
 | author_name | str | No | null | Override the default author name (default `viking-bot`) |
 | author_email | str | No | null | Override the default author email |

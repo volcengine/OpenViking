@@ -132,9 +132,8 @@ fn build_s3_service(
         cas_mode,
     };
 
-    let rt = tokio::runtime::Handle::try_current().map_err(|_| {
-        PyRuntimeError::new_err("build_s3_service must run inside a tokio runtime")
-    })?;
+    let rt = tokio::runtime::Handle::try_current()
+        .map_err(|_| PyRuntimeError::new_err("build_s3_service must run inside a tokio runtime"))?;
     let os_cfg = s3_config.clone();
     let object_store = Arc::new(
         rt.block_on(async move { S3ObjectStore::from_config(os_cfg).await })
@@ -173,9 +172,6 @@ pub fn map_git_error(py: Python<'_>, e: ragfs::git::GitError) -> PyErr {
         GitError::ConcurrentCommit { .. } => new_py_err_pub(py, "GitConcurrentCommitError", msg),
         GitError::PathNotFound(_) => new_py_err_pub(py, "AGFSNotFoundError", msg),
         GitError::PathIsDirectory(_) => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
-        GitError::PathIsDirectoryInCommit(_) => {
-            new_py_err_pub(py, "AGFSInvalidOperationError", msg)
-        }
         GitError::SubtreeNotFoundInCommit { .. } => new_py_err_pub(py, "AGFSNotFoundError", msg),
         GitError::InvalidAccountId(_) => new_py_err_pub(py, "AGFSInvalidPathError", msg),
         GitError::InvalidProjectDir(_) => new_py_err_pub(py, "AGFSInvalidPathError", msg),
@@ -195,9 +191,10 @@ pub fn map_git_error(py: Python<'_>, e: ragfs::git::GitError) -> PyErr {
             new_py_err_pub(py, "AGFSNotFoundError", msg)
         }
         GitError::RestoreWritebackPartial(p) => writeback_partial_to_pyerr(py, *p, msg),
-        GitError::ObjectStore(_) | GitError::RefStore(_) | GitError::Vfs(_) | GitError::Other(_) => {
-            PyRuntimeError::new_err(msg)
-        }
+        GitError::ObjectStore(_)
+        | GitError::RefStore(_)
+        | GitError::Vfs(_)
+        | GitError::Other(_) => PyRuntimeError::new_err(msg),
     }
 }
 
@@ -205,11 +202,7 @@ pub fn map_git_error(py: Python<'_>, e: ragfs::git::GitError) -> PyErr {
 /// payload. Falls back to `PyRuntimeError` when `openviking.pyagfs` is not
 /// importable (e.g. cargo-test environment) — in that case the structured
 /// data is lost, but the error message still survives.
-fn writeback_partial_to_pyerr(
-    py: Python<'_>,
-    p: RestoreWritebackPartial,
-    msg: String,
-) -> PyErr {
+fn writeback_partial_to_pyerr(py: Python<'_>, p: RestoreWritebackPartial, msg: String) -> PyErr {
     let exc_class = match PyModule::import(py, "openviking.pyagfs")
         .and_then(|m| m.getattr("GitRestoreWritebackPartialError"))
     {
@@ -224,9 +217,8 @@ fn writeback_partial_to_pyerr(
     let payload = PyDict::new(py);
     // Strings + ints marshal trivially; (String, String) tuples become
     // Python tuples via pyo3's IntoPy impl.
-    let set_oid = |k: &str, oid: &gix_hash::ObjectId| -> PyResult<()> {
-        payload.set_item(k, oid_hex(oid))
-    };
+    let set_oid =
+        |k: &str, oid: &gix_hash::ObjectId| -> PyResult<()> { payload.set_item(k, oid_hex(oid)) };
 
     let build = || -> PyResult<()> {
         set_oid("new_commit_oid", &p.new_commit_oid)?;
@@ -279,9 +271,8 @@ fn require_str(kwargs: &Bound<PyDict>, key: &str) -> PyResult<String> {
     let val = kwargs
         .get_item(key)?
         .ok_or_else(|| PyValueError::new_err(format!("missing required kwarg: {}", key)))?;
-    val.extract::<String>().map_err(|_| {
-        PyValueError::new_err(format!("kwarg {} must be a string", key))
-    })
+    val.extract::<String>()
+        .map_err(|_| PyValueError::new_err(format!("kwarg {} must be a string", key)))
 }
 
 fn optional_str(kwargs: &Bound<PyDict>, key: &str) -> PyResult<Option<String>> {
@@ -303,17 +294,12 @@ fn optional_bool(kwargs: &Bound<PyDict>, key: &str, default: bool) -> PyResult<b
     }
 }
 
-fn optional_string_list(
-    kwargs: &Bound<PyDict>,
-    key: &str,
-) -> PyResult<Option<Vec<String>>> {
+fn optional_string_list(kwargs: &Bound<PyDict>, key: &str) -> PyResult<Option<Vec<String>>> {
     match kwargs.get_item(key)? {
         Some(v) if !v.is_none() => v
             .extract::<Vec<String>>()
             .map(Some)
-            .map_err(|_| {
-                PyValueError::new_err(format!("kwarg {} must be a list of strings", key))
-            }),
+            .map_err(|_| PyValueError::new_err(format!("kwarg {} must be a list of strings", key))),
         _ => Ok(None),
     }
 }
@@ -365,13 +351,13 @@ fn actor_to_dict(py: Python<'_>, a: &Actor) -> PyResult<Py<PyDict>> {
     Ok(d.into())
 }
 
-pub fn commit_response_to_pydict(
-    py: Python<'_>,
-    resp: CommitResponse,
-) -> PyResult<Py<PyAny>> {
+pub fn commit_response_to_pydict(py: Python<'_>, resp: CommitResponse) -> PyResult<Py<PyAny>> {
     let d = PyDict::new(py);
     match resp {
-        CommitResponse::Created { commit_oid, changed } => {
+        CommitResponse::Created {
+            commit_oid,
+            changed,
+        } => {
             d.set_item("result", "created")?;
             d.set_item("commit_oid", oid_hex(&commit_oid))?;
             d.set_item("changed", changed)?;
@@ -399,10 +385,7 @@ fn diff_to_dict(py: Python<'_>, diff: &RestoreDiff) -> PyResult<Py<PyDict>> {
     Ok(d.into())
 }
 
-pub fn restore_response_to_pydict(
-    py: Python<'_>,
-    resp: RestoreResponse,
-) -> PyResult<Py<PyAny>> {
+pub fn restore_response_to_pydict(py: Python<'_>, resp: RestoreResponse) -> PyResult<Py<PyAny>> {
     let d = PyDict::new(py);
     match resp {
         RestoreResponse::Applied {
@@ -440,10 +423,7 @@ pub fn restore_response_to_pydict(
     Ok(d.into_any().unbind())
 }
 
-pub fn show_response_to_pydict(
-    py: Python<'_>,
-    resp: ShowResponse,
-) -> PyResult<Py<PyAny>> {
+pub fn show_response_to_pydict(py: Python<'_>, resp: ShowResponse) -> PyResult<Py<PyAny>> {
     let d = PyDict::new(py);
     match resp {
         ShowResponse::Commit {
@@ -477,9 +457,9 @@ pub fn show_response_to_pydict(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use ragfs::core::MountableFS;
     use ragfs::git::GitError;
+    use std::sync::Arc;
 
     fn local_cfg(base_dir: &str) -> ragfs::git::GitConfig {
         ragfs::git::GitConfig {
@@ -595,17 +575,17 @@ mod tests {
                 )],
                 failed_deletes: vec![],
             };
-            let err = map_git_error(
-                py,
-                GitError::RestoreWritebackPartial(Box::new(payload)),
-            );
+            let err = map_git_error(py, GitError::RestoreWritebackPartial(Box::new(payload)));
             let s = err.to_string().to_lowercase();
             assert!(
                 s.contains("restore writeback partial"),
                 "expected partial message, got {s:?}"
             );
             // The Display includes counts derived from the payload.
-            assert!(s.contains("1 write"), "expected write count in message: {s:?}");
+            assert!(
+                s.contains("1 write"),
+                "expected write count in message: {s:?}"
+            );
         });
     }
 
@@ -615,20 +595,6 @@ mod tests {
         Python::attach(|py| {
             let err = map_git_error(py, GitError::PathNotFound("foo/bar".into()));
             assert!(err.to_string().contains("foo/bar"));
-        });
-    }
-
-    #[test]
-    fn map_git_error_path_is_directory_in_commit() {
-        pyo3::prepare_freethreaded_python();
-        Python::attach(|py| {
-            let err = map_git_error(
-                py,
-                GitError::PathIsDirectoryInCommit("resources/proj".into()),
-            );
-            let s = err.to_string();
-            assert!(s.contains("resources/proj"), "missing path in {s}");
-            assert!(s.contains("directory"), "missing 'directory' in {s}");
         });
     }
 
@@ -647,7 +613,10 @@ mod tests {
         Python::attach(|py| {
             let err = map_git_error(
                 py,
-                GitError::BlobTooLarge { size: 200, limit: 100 },
+                GitError::BlobTooLarge {
+                    size: 200,
+                    limit: 100,
+                },
             );
             assert!(err.to_string().contains("200"));
         });
@@ -685,7 +654,9 @@ mod tests {
             kwargs.set_item("message", "m").unwrap();
             kwargs.set_item("author_name", "n").unwrap();
             kwargs.set_item("author_email", "e").unwrap();
-            kwargs.set_item("paths", vec!["resources/a.md", "resources/b.md"]).unwrap();
+            kwargs
+                .set_item("paths", vec!["resources/a.md", "resources/b.md"])
+                .unwrap();
             let req = parse_commit_request(&kwargs).expect("parses");
             assert_eq!(req.paths.as_ref().unwrap().len(), 2);
             assert_eq!(req.paths.as_ref().unwrap()[0], "resources/a.md");
@@ -780,7 +751,10 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::attach(|py| {
             let oid = gix_hash::ObjectId::null(gix_hash::Kind::Sha1);
-            let resp = ragfs::git::CommitResponse::Created { commit_oid: oid, changed: 3 };
+            let resp = ragfs::git::CommitResponse::Created {
+                commit_oid: oid,
+                changed: 3,
+            };
             let obj = commit_response_to_pydict(py, resp).expect("converts");
             let d: &Bound<PyDict> = obj.bind(py).downcast().unwrap();
             let result: String = d.get_item("result").unwrap().unwrap().extract().unwrap();

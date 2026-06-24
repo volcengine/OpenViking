@@ -504,8 +504,8 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Commit the full workspace on the main branch.",
             },
             HelpItem {
-                label: "ov snapshot commit -m \"single file\" --paths viking://docs/spec.md",
-                description: "Commit only the listed file URIs. Directories are not expanded; pass each file explicitly.",
+                label: "ov snapshot commit -m \"docs only\" --paths viking://docs",
+                description: "Commit only the given viking:// URIs. Directories are expanded recursively (with snapshot pruning rules applied).",
             },
         ],
         next_steps: &[
