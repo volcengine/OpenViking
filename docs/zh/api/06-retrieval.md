@@ -535,7 +535,7 @@ openviking search "how to implement OAuth" -L 1,2
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | node_limit | int | 否 | None | 最大返回节点数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
-| level_limit | int | 否 | 5 | 最大目录遍历深度 |
+| level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
 
 #### 3. 使用示例
 
@@ -592,13 +592,13 @@ fmt.Println(result["count"])
 
 ```bash
 # 基础搜索
-openviking grep viking://resources "authentication"
+openviking grep "authentication" --uri viking://resources
 
 # 忽略大小写
-openviking grep viking://resources "authentication" --ignore-case
+openviking grep "authentication" --uri viking://resources --ignore-case
 
 # 指定深度限制
-openviking grep viking://resources "TODO" --level-limit 3
+openviking grep "TODO" --uri viking://resources --level-limit 3
 ```
 
 **响应示例**

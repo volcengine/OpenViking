@@ -559,6 +559,7 @@ class AsyncOpenViking:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
+        level_limit: int = 5,
     ) -> Dict:
         """Content search"""
         await self._ensure_initialized()
@@ -568,6 +569,7 @@ class AsyncOpenViking:
             case_insensitive=case_insensitive,
             node_limit=node_limit,
             exclude_uri=exclude_uri,
+            level_limit=level_limit,
         )
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict:

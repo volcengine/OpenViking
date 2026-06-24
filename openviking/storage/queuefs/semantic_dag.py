@@ -4,9 +4,9 @@
 
 import asyncio
 import threading
-from weakref import WeakKeyDictionary
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Optional, Set
+from weakref import WeakKeyDictionary
 
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars

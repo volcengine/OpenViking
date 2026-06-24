@@ -10,13 +10,14 @@ from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.vikingdb_clients import VIKINGDB_APIS, VikingDBClient
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 
-from .base import CollectionAdapter
+from .base import VIKINGDB_TEXT_FIELD_BYTE_LIMIT, CollectionAdapter
 
 
 class VikingDBPrivateCollectionAdapter(CollectionAdapter):
     """Adapter for private VikingDB deployment."""
 
     _DATA_BATCH_SIZE = 100
+    _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
 
     def __init__(
         self,

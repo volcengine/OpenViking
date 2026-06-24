@@ -104,8 +104,7 @@ async def _initialize_auth_plugin(
     plugin_cls = registry.get(effective_auth_mode)
     if plugin_cls is None:
         logger.error(
-            "Unknown auth_mode: %r. No auth plugin registered. "
-            "Registered modes: %s.",
+            "Unknown auth_mode: %r. No auth plugin registered. Registered modes: %s.",
             effective_auth_mode,
             ", ".join(registry.list_modes()),
         )

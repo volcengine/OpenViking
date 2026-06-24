@@ -242,9 +242,7 @@ class VLMProviderAdapter(LLMProvider):
         )
         cached = cls._usage_value(prompt_details, "cached_tokens") if prompt_details else 0
         reasoning = (
-            cls._usage_value(completion_details, "reasoning_tokens")
-            if completion_details
-            else 0
+            cls._usage_value(completion_details, "reasoning_tokens") if completion_details else 0
         )
         if cached:
             usage["cache_read_input_tokens"] = cached

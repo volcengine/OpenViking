@@ -12,10 +12,8 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-
 from openviking_openwebui.config import Settings
 from openviking_openwebui.server import create_app
-
 
 SETTINGS = Settings(
     endpoint="http://ov.test",
@@ -68,7 +66,6 @@ async def test_ov_search_calls_find(client: httpx.AsyncClient) -> None:
     assert route.called
     sent = route.calls.last.request
     _assert_headers(sent)
-    body = httpx.Request("POST", "x", json={}).read  # placeholder for typing
     assert b'"query":"hello"' in route.calls.last.request.content.replace(b" ", b"")
 
 

@@ -693,12 +693,15 @@ class ReindexExecutor:
                 counters.warnings.append(f"No vector source found for {file_uri}")
                 continue
             abstract = self._prefer_non_empty(summary, vector_text)
+            # Read full file content for BM25 content field (not embedding-truncated)
+            full_text = await self._safe_read_text(file_uri, ctx=ctx) or vector_text
             try:
                 await self._upsert_context(
                     uri=file_uri,
                     parent_uri=parent_uri,
                     abstract=abstract,
                     vector_text=vector_text,
+                    full_text=full_text,
                     is_leaf=True,
                     context_type=context_type_for_uri(file_uri),
                     level=ContextLevel.DETAIL,
@@ -1241,6 +1244,7 @@ class ReindexExecutor:
         parent_uri: str,
         abstract: str,
         vector_text: str,
+        full_text: str = "",
         is_leaf: bool,
         context_type: str,
         level: ContextLevel,
@@ -1270,7 +1274,7 @@ class ReindexExecutor:
             owner_space=owner_space_for_uri(uri, ctx),
             meta=merged_meta,
         )
-        context.set_vectorize(Vectorize(text=vector_text))
+        context.set_vectorize(Vectorize(text=vector_text, full_text=full_text or vector_text))
         msg = EmbeddingMsgConverter.from_context(context)
         if msg is None:
             raise OpenVikingError(

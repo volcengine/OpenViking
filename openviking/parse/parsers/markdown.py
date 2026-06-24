@@ -341,9 +341,7 @@ class MarkdownParser(BaseParser):
             content, frontmatter = self._extract_frontmatter(content)
             if frontmatter:
                 meta["frontmatter"] = frontmatter
-                logger.debug(
-                    f"[MarkdownParser] Extracted frontmatter: {list(frontmatter.keys())}"
-                )
+                logger.debug(f"[MarkdownParser] Extracted frontmatter: {list(frontmatter.keys())}")
 
         explicit_name = kwargs.get("resource_name")
         if not explicit_name and kwargs.get("source_name"):
@@ -601,7 +599,6 @@ class MarkdownParser(BaseParser):
             seen_paths = set()
 
             for path_str in image_refs:
-
                 # Skip remote URIs
                 if self._is_remote_uri(path_str):
                     continue
@@ -637,7 +634,9 @@ class MarkdownParser(BaseParser):
                     image_bytes = await asyncio.to_thread(resolved_path.read_bytes)
 
                     # Validate pixel size and file size; skip non-compliant images
-                    if not await asyncio.to_thread(self._is_valid_image, image_bytes, resolved_path):
+                    if not await asyncio.to_thread(
+                        self._is_valid_image, image_bytes, resolved_path
+                    ):
                         continue
 
                     # Get filename and deduplicate
@@ -657,7 +656,9 @@ class MarkdownParser(BaseParser):
                     logger.warning(f"[MarkdownParser] Failed to ingest image {resolved_path}: {e}")
 
             if file_mappings:
-                rel_md_path = md_uri[len(root_prefix) + 1 :] if md_uri.startswith(root_prefix) else md_uri
+                rel_md_path = (
+                    md_uri[len(root_prefix) + 1 :] if md_uri.startswith(root_prefix) else md_uri
+                )
                 mappings[rel_md_path] = file_mappings
 
         # Write a single mapping file at the root directory for rewrite_image_uris
@@ -696,9 +697,7 @@ class MarkdownParser(BaseParser):
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
-                logger.warning(
-                    f"[MarkdownParser] Rejected absolute image path: {path_str}"
-                )
+                logger.warning(f"[MarkdownParser] Rejected absolute image path: {path_str}")
                 return None
 
             # Build the list of allowed roots to confine resolution to.
@@ -768,9 +767,7 @@ class MarkdownParser(BaseParser):
         """
         # File size check (local file path limit: 10 MB)
         if len(image_bytes) > self.IMAGE_MAX_FILE_BYTES:
-            logger.warning(
-                f"[MarkdownParser] Image exceeds 10MB, skipping: {source_path}"
-            )
+            logger.warning(f"[MarkdownParser] Image exceeds 10MB, skipping: {source_path}")
             return False
 
         # Pixel size check
@@ -940,20 +937,15 @@ class MarkdownParser(BaseParser):
                     rel
                     for rel, text in layout.items()
                     if any(
-                        _gh_slug(h) == anchor
-                        for h in re.findall(r"^#{1,6}\s+(.+)$", text, re.M)
+                        _gh_slug(h) == anchor for h in re.findall(r"^#{1,6}\s+(.+)$", text, re.M)
                     )
                 ]
                 if len(hits) == 1:
-                    return _to_rel(
-                        os.path.join(target_parent, hits[0]), keep_suffix=True
-                    )
+                    return _to_rel(os.path.join(target_parent, hits[0]), keep_suffix=True)
             # B) Single-file document (a bare file, or a directory holding exactly one
             #    file) → the anchor/query lives in that one file; keep the suffix.
             if len(layout) == 1:
-                return _to_rel(
-                    os.path.join(target_parent, next(iter(layout))), keep_suffix=True
-                )
+                return _to_rel(os.path.join(target_parent, next(iter(layout))), keep_suffix=True)
 
         # C) Single bare file with no suffix to place (e.g. a future small .md kept as
         #    a file) → point at the file itself (empty suffix ⇒ no trailing slash).
@@ -979,9 +971,7 @@ class MarkdownParser(BaseParser):
             if resolved is not None:
                 try:
                     image_bytes = await asyncio.to_thread(resolved.read_bytes)
-                    handled = await asyncio.to_thread(
-                        self._is_valid_image, image_bytes, resolved
-                    )
+                    handled = await asyncio.to_thread(self._is_valid_image, image_bytes, resolved)
                 except Exception:
                     handled = False
             cache[link] = handled

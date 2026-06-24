@@ -127,13 +127,9 @@ class TrustedAuthPlugin(AuthPlugin):
         if _trusted_request_requires_explicit_identity(request.url.path):
             missing_fields = []
             if not effective_account_id:
-                missing_fields.append(
-                    "X-OpenViking-Account or explicit account_id in the URL"
-                )
+                missing_fields.append("X-OpenViking-Account or explicit account_id in the URL")
             if not effective_user_id:
-                missing_fields.append(
-                    "X-OpenViking-User or explicit user_id in the URL"
-                )
+                missing_fields.append("X-OpenViking-User or explicit user_id in the URL")
             if missing_fields:
                 raise InvalidArgumentError(
                     "Trusted mode requests must include " + " and ".join(missing_fields) + "."
@@ -142,9 +138,7 @@ class TrustedAuthPlugin(AuthPlugin):
         api_key_manager = getattr(request.app.state, "api_key_manager", None)
         trusted_role = Role.USER
         if api_key_manager and effective_account_id and effective_user_id:
-            looked_up_role = api_key_manager.get_user_role(
-                effective_account_id, effective_user_id
-            )
+            looked_up_role = api_key_manager.get_user_role(effective_account_id, effective_user_id)
             if looked_up_role is not None:
                 trusted_role = looked_up_role
 
@@ -214,6 +208,4 @@ class TrustedAuthPlugin(AuthPlugin):
                     "Trusted mode requests must include X-OpenViking-Account."
                 )
             if not identity.user_id:
-                raise InvalidArgumentError(
-                    "Trusted mode requests must include X-OpenViking-User."
-                )
+                raise InvalidArgumentError("Trusted mode requests must include X-OpenViking-User.")

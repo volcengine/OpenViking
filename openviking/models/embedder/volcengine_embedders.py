@@ -209,9 +209,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
         )
 
-    async def embed_async(
-        self, content: "EmbeddingInput", is_query: bool = False
-    ) -> EmbedResult:
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
 
         async def _embed_call() -> EmbedResult:
@@ -387,9 +385,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
         )
 
-    async def embed_async(
-        self, content: "EmbeddingInput", is_query: bool = False
-    ) -> EmbedResult:
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
 
         async def _embed_call() -> EmbedResult:
@@ -578,9 +574,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             lambda: volcenginesdkarkruntime.AsyncArk(**self._ark_kwargs)
         )
 
-    async def embed_async(
-        self, content: "EmbeddingInput", is_query: bool = False
-    ) -> EmbedResult:
+    async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
 
         async def _embed_call() -> EmbedResult:

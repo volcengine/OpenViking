@@ -150,6 +150,7 @@
         "threshold": 0.1,
     },
     "retrieval": {"hotness_alpha": 0.0, "score_propagation_alpha": 1.0},
+    "grep": {"engine": "auto", "switch_to_remote_threshold": 10000},
     "auto_generate_l0": true,
     "auto_generate_l1": true,
     "default_search_mode": "thinking",

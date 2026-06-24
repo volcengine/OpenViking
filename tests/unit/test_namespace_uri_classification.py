@@ -146,4 +146,3 @@ def test_current_user_short_content_roots_are_canonicalized_from_content_segment
     assert is_content_namespace_root_uri("viking://resources", ctx)
     assert is_content_root_uri("viking://resources", ctx, kind="resource")
     assert not is_content_namespace_root_uri("viking://user/resources/docs", ctx)
-

@@ -445,11 +445,7 @@ class VikingClient:
             uris.append(self._memory_target_uri(None))
 
         normalized_peer_ids = self._dedupe_strings(
-            [
-                pid
-                for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or []))
-                if pid
-            ]
+            [pid for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or [])) if pid]
         )
         for peer_id in normalized_peer_ids:
             try:
@@ -482,11 +478,7 @@ class VikingClient:
             [str(user_id).strip() for user_id in (user_ids or []) if str(user_id).strip()]
         )
         normalized_peer_ids = self._dedupe_strings(
-            [
-                pid
-                for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or []))
-                if pid
-            ]
+            [pid for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or [])) if pid]
         )
         effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
 
@@ -511,7 +503,9 @@ class VikingClient:
                 try:
                     target_uris.append(self._current_peer_memory_target_uri(peer_id))
                 except ValueError as exc:
-                    logger.warning(f"Skip invalid current peer memory target peer_id={peer_id}: {exc}")
+                    logger.warning(
+                        f"Skip invalid current peer memory target peer_id={peer_id}: {exc}"
+                    )
 
         if not target_uris:
             target_uris.append(self._memory_target_uri(None))
@@ -538,10 +532,7 @@ class VikingClient:
             owner_user_id=owner_user_id,
             peer_ids=peer_ids,
         )
-        return [
-            (target_uri, self._owner_user_id_for_uri(target_uri))
-            for target_uri in target_uris
-        ]
+        return [(target_uri, self._owner_user_id_for_uri(target_uri)) for target_uri in target_uris]
 
     def _skill_memory_uri(self, skill_name: str, user_id: Optional[str] = None) -> str:
         return f"{self._memory_target_uri(user_id)}skills/{skill_name}.md"
@@ -735,11 +726,7 @@ class VikingClient:
         ]
 
         normalized_peer_ids = self._dedupe_strings(
-            [
-                pid
-                for pid in (self._peer_id(peer_value) for peer_value in (peer_ids or []))
-                if pid
-            ]
+            [pid for pid in (self._peer_id(peer_value) for peer_value in (peer_ids or [])) if pid]
         )
         effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
 
@@ -1128,6 +1115,7 @@ async def account_test():
     res = await client.search("123")
 
     print(res)
+
 
 if __name__ == "__main__":
     asyncio.run(main_test())

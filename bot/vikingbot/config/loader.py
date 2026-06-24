@@ -9,12 +9,12 @@ from typing import Any
 
 import httpx
 from loguru import logger
+
 from openviking.server.config import (
     ServerConfig,
     get_server_url_from_server_data,
 )
 from openviking_cli.utils.config.ovcli_config import load_ovcli_config
-
 from vikingbot.config.schema import Config
 
 CONFIG_PATH = None
@@ -186,11 +186,7 @@ def _merge_current_ov_server_config(bot_data: dict, server_data: dict) -> str:
     bot_data["api_key_type"] = api_key_type
 
     server_root_api_key = str(server_data.get("root_api_key") or "").strip()
-    if (
-        api_key_type == "root"
-        and server_auth_mode == "trusted"
-        and server_root_api_key
-    ):
+    if api_key_type == "root" and server_auth_mode == "trusted" and server_root_api_key:
         bot_data["api_key"] = server_root_api_key
 
     effective_auth_mode = _bot_auth_mode_from_api_key_type(api_key_type, server_auth_mode)
