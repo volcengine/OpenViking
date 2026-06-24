@@ -422,9 +422,10 @@ class VikingSearchTool(OVFileTool):
             else:
                 peer_ids = self._memory_peer_ids(tool_context)
                 if not target_uri:
-                    if getattr(client, "actor_peer_id", None):
-                        target_uris = [""]
-                    elif peer_ids:
+                    actor_peer_id = getattr(client, "actor_peer_id", None)
+                    if actor_peer_id and not peer_ids:
+                        peer_ids = [actor_peer_id]
+                    if actor_peer_id or peer_ids:
                         target_uris = self._dedupe_strings(
                             [
                                 "viking://resources/",
