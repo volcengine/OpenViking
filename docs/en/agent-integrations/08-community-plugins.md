@@ -48,11 +48,11 @@ curl http://localhost:1933/health
 
 ### Install
 
-The published npm package is `openviking-opencode-plugin`; verify availability with `npm view openviking-opencode-plugin version`. For package installs, add the plugin to `~/.config/opencode/opencode.json`. If package installation is not available in your environment yet, use the source install path below.
+The published npm package is `@openviking/opencode-plugin`; verify availability with `npm view @openviking/opencode-plugin version`. For package installs, add the plugin to `~/.config/opencode/opencode.json`. If package installation is not available in your environment yet, use the source install path below.
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 
@@ -141,7 +141,7 @@ Ask OpenCode to search or browse OpenViking memory, or request a manual session 
 
 | Issue | What to check |
 |-------|---------------|
-| Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `openviking-opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
+| Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
 | Tools call the wrong server | Check `endpoint` in `~/.config/opencode/openviking-config.json`, or set `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
 | Recall is empty | Confirm the OpenViking server has indexed memories/resources and that `autoRecall.enabled` is `true` |

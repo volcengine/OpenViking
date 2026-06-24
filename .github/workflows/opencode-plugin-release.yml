@@ -1,0 +1,79 @@
+name: OpenCode Plugin Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/opencode-plugin/**"
+      - ".github/workflows/opencode-plugin-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: opencode-plugin-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish @openviking/opencode-plugin
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: examples/opencode-plugin
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Validate package
+        run: |
+          npm run check
+          npm test
+          npm pack --dry-run
+
+      - name: Resolve package version
+        id: package
+        run: |
+          node -e "
+            const pkg = require('./package.json')
+            if (pkg.name !== '@openviking/opencode-plugin') {
+              throw new Error('Unexpected package name: ' + pkg.name)
+            }
+            console.log('name=' + pkg.name)
+            console.log('version=' + pkg.version)
+          " >> "$GITHUB_OUTPUT"
+
+      - name: Check whether version already exists
+        id: published
+        env:
+          PACKAGE_NAME: ${{ steps.package.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$PACKAGE_NAME@$PACKAGE_VERSION is already published; skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish package
+        if: steps.published.outputs.exists == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::Missing NPM_TOKEN secret for npm publish."
+            exit 1
+          fi
+          npm publish --access public --provenance

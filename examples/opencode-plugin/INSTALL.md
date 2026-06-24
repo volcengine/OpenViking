@@ -34,7 +34,7 @@ Normal users are recommended to enable it through OpenCode's package plugin mech
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 
@@ -213,7 +213,7 @@ These are local runtime files and should not be committed to the repository.
 
 | Issue | What to check |
 |-------|---------------|
-| Plugin does not load | For package installs, confirm `~/.config/opencode/opencode.json` contains `openviking-opencode-plugin`; for source installs, confirm `~/.config/opencode/plugins/openviking.js` exists |
+| Plugin does not load | For package installs, confirm `~/.config/opencode/opencode.json` contains `@openviking/opencode-plugin`; for source installs, confirm `~/.config/opencode/plugins/openviking.js` exists |
 | Tools call the wrong server | Check `endpoint` in `~/.config/opencode/openviking-config.json`, or set `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
 | Recall is empty | Confirm OpenViking has indexed memories/resources and `autoRecall.enabled` is `true` |

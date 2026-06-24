@@ -1,6 +1,6 @@
 {
-  "name": "openviking-opencode-plugin",
-  "version": "0.1.0",
+  "name": "@openviking/opencode-plugin",
+  "version": "0.1.5",
   "author": "tanyouqing",
   "description": "Unified OpenCode plugin for OpenViking repository retrieval and long-term memory",
   "type": "module",
@@ -22,9 +22,13 @@
   "dependencies": {
     "@opencode-ai/plugin": "^1.14.37"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
-  "type": "git",
-  "url": "https://github.com/volcengine/OpenViking"
+    "type": "git",
+    "url": "git+https://github.com/volcengine/OpenViking.git",
+    "directory": "examples/opencode-plugin"
   },
   "keywords": [
     "opencode",

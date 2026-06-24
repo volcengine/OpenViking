@@ -24,11 +24,11 @@ For remote or multi-tenant deployments, prepare an OpenViking API key.
 
 ## Step 2: Install the plugin
 
-The published npm package is `openviking-opencode-plugin`; verify availability with `npm view openviking-opencode-plugin version`. For package installs, add the plugin to `~/.config/opencode/opencode.json`. If package installation is not available in your environment yet, use the source install path below.
+The published npm package is `@openviking/opencode-plugin`; verify availability with `npm view @openviking/opencode-plugin version`. For package installs, add the plugin to `~/.config/opencode/opencode.json`. If package installation is not available in your environment yet, use the source install path below.
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 

@@ -48,11 +48,11 @@ curl http://localhost:1933/health
 
 ### 安装
 
-已发布的 npm 包是 `openviking-opencode-plugin`，可以用 `npm view openviking-opencode-plugin version` 验证当前可用版本。使用 package 安装时，把插件加入 `~/.config/opencode/opencode.json`。如果当前环境还不能通过 package 安装，请使用下面的源码安装路径。
+已发布的 npm 包是 `@openviking/opencode-plugin`，可以用 `npm view @openviking/opencode-plugin version` 验证当前可用版本。使用 package 安装时，把插件加入 `~/.config/opencode/opencode.json`。如果当前环境还不能通过 package 安装，请使用下面的源码安装路径。
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 
@@ -141,7 +141,7 @@ export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
 
 | 问题 | 排查方向 |
 |------|----------|
-| 插件没有加载 | 确认 `~/.config/opencode/opencode.json` 引用了 `openviking-opencode-plugin`；源码安装时确认 `~/.config/opencode/plugins/openviking.js` 存在 |
+| 插件没有加载 | 确认 `~/.config/opencode/opencode.json` 引用了 `@openviking/opencode-plugin`；源码安装时确认 `~/.config/opencode/plugins/openviking.js` 存在 |
 | Tools 连到了错误的 server | 检查 `~/.config/opencode/openviking-config.json` 里的 `endpoint`，或用 `OPENVIKING_PLUGIN_CONFIG` 指向正确配置文件 |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还要检查 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
 | recall 为空 | 确认 OpenViking server 中已有 memories/resources，并且 `autoRecall.enabled` 为 `true` |

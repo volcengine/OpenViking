@@ -59,15 +59,15 @@ openviking-server --config ~/.openviking/ov.conf
 
 Normal users should enable it through OpenCode's package plugin mechanism:
 
-The published npm package is `openviking-opencode-plugin`; verify availability with:
+The published npm package is `@openviking/opencode-plugin`; verify availability with:
 
 ```bash
-npm view openviking-opencode-plugin version
+npm view @openviking/opencode-plugin version
 ```
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 

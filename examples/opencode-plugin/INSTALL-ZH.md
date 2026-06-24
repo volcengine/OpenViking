@@ -34,7 +34,7 @@ curl http://localhost:1933/health
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 
@@ -218,7 +218,7 @@ memadd path="file:///home/alice/project/notes.md" reason="project notes"
 
 | 问题 | 排查方向 |
 |------|----------|
-| 插件没有加载 | package 安装检查 `~/.config/opencode/opencode.json` 是否包含 `openviking-opencode-plugin`；源码安装检查 `~/.config/opencode/plugins/openviking.js` 是否存在 |
+| 插件没有加载 | package 安装检查 `~/.config/opencode/opencode.json` 是否包含 `@openviking/opencode-plugin`；源码安装检查 `~/.config/opencode/plugins/openviking.js` 是否存在 |
 | Tools 连到了错误的 server | 检查 `~/.config/opencode/openviking-config.json` 里的 `endpoint`，或用 `OPENVIKING_PLUGIN_CONFIG` 指向正确配置文件 |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还要检查 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
 | recall 为空 | 确认 OpenViking 中已有 memories/resources，并且 `autoRecall.enabled` 为 `true` |

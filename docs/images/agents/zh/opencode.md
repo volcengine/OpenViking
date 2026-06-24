@@ -25,11 +25,11 @@ curl http://localhost:1933/health
 
 ## 步骤 2：安装插件
 
-已发布的 npm 包是 `openviking-opencode-plugin`，可以用 `npm view openviking-opencode-plugin version` 验证当前可用版本。使用 package 安装时，把插件加入 `~/.config/opencode/opencode.json`。如果当前环境还不能通过 package 安装，请使用下面的源码安装路径。
+已发布的 npm 包是 `@openviking/opencode-plugin`，可以用 `npm view @openviking/opencode-plugin version` 验证当前可用版本。使用 package 安装时，把插件加入 `~/.config/opencode/opencode.json`。如果当前环境还不能通过 package 安装，请使用下面的源码安装路径。
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 
