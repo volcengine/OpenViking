@@ -154,9 +154,9 @@ async def service(temp_dir: Path, monkeypatch):
 @pytest_asyncio.fixture(scope="function")
 async def app(service: OpenVikingService):
     """Create FastAPI app with pre-initialized service (no auth)."""
-    from openviking.server.dependencies import set_service
     from openviking.server.auth.plugins import DevAuthPlugin
     from openviking.server.auth.registry import get_registry
+    from openviking.server.dependencies import set_service
 
     config = ServerConfig()
     fastapi_app = create_app(config=config, service=service)

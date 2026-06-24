@@ -223,7 +223,9 @@ def test_drop_index_removes_vector_and_scalar_indexes():
         "IndexName": index_name,
         "ScalarIndex": ["uri", "account_id"],
     }
-    collection._delete_index_meta = lambda index_name: statements.append(("delete_meta", index_name))
+    collection._delete_index_meta = lambda index_name: statements.append(
+        ("delete_meta", index_name)
+    )
     collection._execute = lambda sql, params=None, fetch=False: statements.append(sql)
 
     collection.drop_index("default")
@@ -260,7 +262,9 @@ def test_create_index_normalizes_metadata_to_hnsw():
     collection = object.__new__(OpenGaussCollection)
     saved = {}
 
-    collection._create_vector_index = lambda index_name, distance, meta: saved.setdefault("vector_meta", meta)
+    collection._create_vector_index = lambda index_name, distance, meta: saved.setdefault(
+        "vector_meta", meta
+    )
     collection._create_scalar_index = lambda index_name, field_name: None
     collection._save_index_meta = lambda index_name, meta: saved.setdefault("saved_meta", meta)
 
@@ -285,7 +289,9 @@ def test_create_index_does_not_save_metadata_when_vector_index_fails():
         raise RuntimeError("boom")
 
     collection._create_vector_index = fail_vector_index
-    collection._create_scalar_index = lambda index_name, field_name: saved.setdefault("scalar", field_name)
+    collection._create_scalar_index = lambda index_name, field_name: saved.setdefault(
+        "scalar", field_name
+    )
     collection._save_index_meta = lambda index_name, meta: saved.setdefault("saved_meta", meta)
 
     with pytest.raises(RuntimeError, match="boom"):

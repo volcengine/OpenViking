@@ -791,6 +791,7 @@ async def forget(uri: str, recursive: bool = False) -> str:
 
 # -- code navigation -------------------------------------------------------
 
+
 def _require_viking_uri(uri: str) -> Optional[str]:
     """Return error message if uri is not a viking:// URI, else None."""
     if not isinstance(uri, str) or not uri.startswith("viking://"):

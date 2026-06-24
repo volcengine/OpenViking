@@ -137,7 +137,7 @@ class GrepRequest(BaseModel):
     pattern: str
     case_insensitive: bool = False
     node_limit: Optional[int] = None
-    level_limit: int = 5
+    level_limit: int = 10
 
 
 class GlobRequest(BaseModel):

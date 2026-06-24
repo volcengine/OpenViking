@@ -406,6 +406,11 @@ function assemblePassthrough(
   return { messages: liveMessages, estimatedTokens: originalTokens };
 }
 
+function isSessionNotFoundError(err: unknown): boolean {
+  const errorMessage = String(err);
+  return errorMessage.includes("[NOT_FOUND]") && errorMessage.includes("Session not found");
+}
+
 export async function assembleOpenVikingSession({
   sessionId,
   sessionKey,
@@ -627,6 +632,27 @@ export async function assembleOpenVikingSession({
       ...(instruction.text ? { systemPromptAddition: instruction.text } : {}),
     };
   } catch (err) {
+    if (isSessionNotFoundError(err)) {
+      const errorMessage = String(err);
+      logger.info(
+        `openviking: assemble skipped because OV session does not exist ` +
+          `(session=${ovSessionId}, tokenBudget=${tokenBudget}, agentId=${resolveAgentId(ovSessionId)})`,
+      );
+      return assemblePassthrough({
+        diag,
+        ovSessionId,
+        reason: "session_not_found",
+        liveMessages: messages,
+        originalTokens,
+        extra: {
+          error: errorMessage,
+          tokenBudget,
+          agentId: resolveAgentId(ovSessionId),
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
+        },
+      });
+    }
     logger.warn?.(
       `openviking: assemble failed for session=${ovSessionId}, ` +
         `tokenBudget=${tokenBudget}, agentId=${resolveAgentId(ovSessionId)}: ${String(err)}`,
@@ -1192,7 +1218,7 @@ export async function compactOpenVikingSession({
     };
   } catch (err) {
     const errorMessage = String(err);
-    if (errorMessage.includes("[NOT_FOUND]") && errorMessage.includes("Session not found")) {
+    if (isSessionNotFoundError(err)) {
       logger.info(
         `openviking: compact skipped because OV session does not exist ` +
           `(session=${ovSessionId}, agentId=${agentId})`,

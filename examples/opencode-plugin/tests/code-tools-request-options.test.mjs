@@ -6,6 +6,7 @@ import { dirname, join } from "node:path"
 
 const testDir = dirname(fileURLToPath(import.meta.url))
 const codeToolsPath = join(testDir, "../lib/code-tools.mjs")
+const memoryRecallPath = join(testDir, "../lib/memory-recall.mjs")
 
 test("code tools propagate actorPeerId to every code request", async () => {
   const source = await readFile(codeToolsPath, "utf8")
@@ -24,4 +25,11 @@ test("code tool descriptions restrict use to confirmed viking code repositories"
   assert.match(source, /documentation-only resources/)
   assert.match(source, /chat\/session history/)
   assert.match(source, /local filesystem paths/)
+})
+
+test("memory recall search payload matches strict server schema", async () => {
+  const source = await readFile(memoryRecallPath, "utf8")
+
+  assert.match(source, /const body = \{ query: query\.slice\(0, 4000\), limit: 20 \}/)
+  assert.doesNotMatch(source, /mode:\s*"auto"/)
 })

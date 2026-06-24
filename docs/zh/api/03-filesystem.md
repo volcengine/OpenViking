@@ -818,7 +818,7 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | exclude_uri | str | 否 | None | 搜索时要排除的 URI 前缀 |
 | node_limit | int | 否 | None | 最大返回节点数 |
-| level_limit | int | 否 | 5 | 最大目录遍历深度 |
+| level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -867,7 +867,7 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
 **CLI**
 
 ```bash
-openviking grep viking://resources/ "authentication" [--ignore-case]
+openviking grep "authentication" --uri viking://resources/ [--ignore-case]
 ```
 
 **响应**

@@ -30,9 +30,7 @@ IMAGE_MAPPINGS_FILENAME = ".image_mappings.json"
 
 # HTML <img src="..."> embeds, common in markdown for sizing control. Shared
 # with the parser so ingestion and rewriting see the same references.
-HTML_IMG_PATTERN = re.compile(
-    r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE
-)
+HTML_IMG_PATTERN = re.compile(r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE)
 _FENCE_PATTERN = re.compile(r"^(\s{0,3})(`{3,}|~{3,})")
 _LIST_ITEM_PATTERN = re.compile(r"^(\s{0,3})([-*+]|\d{1,9}[.)])(\s+)")
 
@@ -103,7 +101,12 @@ def _protected_ranges(content: str):
         if in_fence:
             ranges.append((start, end))
             m = _FENCE_PATTERN.match(line_content)
-            if m and m.group(2)[0] == fence_char and len(m.group(2)) >= fence_len and stripped == m.group(2):
+            if (
+                m
+                and m.group(2)[0] == fence_char
+                and len(m.group(2)) >= fence_len
+                and stripped == m.group(2)
+            ):
                 in_fence = False
             prev_blank = is_blank
             continue
@@ -255,8 +258,7 @@ async def rewrite_image_uris(
         try:
             entries = await viking_fs.ls(md_dir, ctx=ctx)
             available_images = {
-                e["name"] for e in entries
-                if not e.get("isDir") and not e["name"].startswith(".")
+                e["name"] for e in entries if not e.get("isDir") and not e["name"].startswith(".")
             }
         except Exception:
             logger.debug(f"[image_rewrite] Failed to list directory {md_dir}")
@@ -267,25 +269,29 @@ async def rewrite_image_uris(
             logger.warning(f"[image_rewrite] Failed to read {md_uri}, skipping")
             continue
 
-        new_content, rewrite_count = _rewrite_content(content, md_dir, available_images, path_to_image_name)
+        new_content, rewrite_count = _rewrite_content(
+            content, md_dir, available_images, path_to_image_name
+        )
 
         if rewrite_count > 0:
             try:
                 await viking_fs.write_file(md_uri, new_content, ctx=ctx)
                 files_processed += 1
                 references_rewritten += rewrite_count
-                logger.debug(
-                    f"[image_rewrite] Rewrote {rewrite_count} image ref(s) in {md_uri}"
-                )
+                logger.debug(f"[image_rewrite] Rewrote {rewrite_count} image ref(s) in {md_uri}")
             except Exception:
                 logger.warning(f"[image_rewrite] Failed to write {md_uri}")
 
     # Clean up mapping sidecars — no longer needed after rewrite
     for map_dir in mappings_by_dir:
         try:
-            await viking_fs.rm(f"{map_dir}/{IMAGE_MAPPINGS_FILENAME}", ctx=ctx, lock_handle=lock_handle)
+            await viking_fs.rm(
+                f"{map_dir}/{IMAGE_MAPPINGS_FILENAME}", ctx=ctx, lock_handle=lock_handle
+            )
         except Exception as e:
-            logger.warning(f"[image_rewrite] Failed to delete {map_dir}/{IMAGE_MAPPINGS_FILENAME}: {e}")
+            logger.warning(
+                f"[image_rewrite] Failed to delete {map_dir}/{IMAGE_MAPPINGS_FILENAME}: {e}"
+            )
 
     logger.info(
         f"[image_rewrite] Processed {len(md_uris)} .md files, "

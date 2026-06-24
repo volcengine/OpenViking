@@ -18,13 +18,13 @@ from openviking.storage.collection_schemas import (
     _build_embedding_metadata,
     init_context_collection,
 )
-from openviking.storage.errors import EmbeddingRebuildRequiredError
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.vectordb.collection.result import UpsertDataResult
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
+    VIKINGDB_CONTENT_MAX_SIZE,
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
@@ -199,7 +199,10 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
 
 
 @pytest.mark.asyncio
-async def test_init_context_collection_rejects_mismatched_nonempty_collection(monkeypatch):
+async def test_init_context_collection_warns_on_mismatched_nonempty_collection(monkeypatch):
+    """When embedding metadata mismatches for a non-empty collection, the function
+    logs a warning and returns False (does not raise)."""
+
     class _FakeStorage:
         async def create_collection(self, name, schema):
             del name, schema
@@ -227,8 +230,8 @@ async def test_init_context_collection_rejects_mismatched_nonempty_collection(mo
         lambda: config,
     )
 
-    with pytest.raises(EmbeddingRebuildRequiredError, match="Rebuild is required"):
-        await init_context_collection(_FakeStorage())
+    result = await init_context_collection(_FakeStorage())
+    assert result is False
 
 
 def test_build_embedding_metadata_hashes_resolved_local_model_path(tmp_path):
@@ -792,6 +795,54 @@ async def test_single_account_backend_upsert_drops_legacy_parent_uri_before_writ
         "active_count": 2,
         "account_id": "acc1",
     }
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_truncates_content_only_at_vector_write():
+    captured = {}
+    full_content = "x" * (1024 * 1024 + 17)
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "content", "FieldType": "text"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+
+        def get_collection(self):
+            return _Collection()
+
+        def upsert(self, data):
+            captured["data"] = dict(data)
+            return [data["id"]]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+    source_data = {
+        "id": "rec-large",
+        "uri": "viking://resources/large.txt",
+        "abstract": "sample",
+        "content": full_content,
+        "account_id": "acc1",
+    }
+
+    record_id = await backend.upsert(source_data)
+
+    assert record_id == "rec-large"
+    assert source_data["content"] == full_content
+    assert VIKINGDB_CONTENT_MAX_SIZE == 1024 * 1024
+    assert captured["data"]["content"] == full_content[:VIKINGDB_CONTENT_MAX_SIZE]
 
 
 @pytest.mark.asyncio

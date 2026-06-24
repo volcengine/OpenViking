@@ -105,7 +105,9 @@ class OpenGaussConfig(BaseModel):
     )
     connect_timeout: int = Field(default=10, description="Database connection timeout in seconds")
     dense_vector_name: str = Field(default="vector", description="Dense vector column name")
-    sparse_vector_name: str = Field(default="sparse_vector", description="Sparse vector JSON column name")
+    sparse_vector_name: str = Field(
+        default="sparse_vector", description="Sparse vector JSON column name"
+    )
 
     model_config = {"extra": "forbid", "populate_by_name": True}
 

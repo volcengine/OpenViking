@@ -11,7 +11,6 @@ from fastapi import Request
 
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
-from openviking_cli.exceptions import InvalidArgumentError
 
 _LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
 

@@ -262,6 +262,7 @@ OpenViking groups signal-level observability configuration under `server.observa
 - `server.observability.traces`: trace export configuration
 - `server.observability.logs`: log export configuration
 - `server.observability.dump_body`: attaches HTTP request/response bodies (filtered by content-type, truncated by bytes) as attributes on the active trace span so they can be inspected in trace UIs. Off by default — bodies may contain secrets and high-cardinality content
+- `server.observability.usage_audit`: per-request usage/cost audit log, stored in SQLite. `sqlite_path` overrides the database location (use a per-instance local path for multi-instance deployments); `timezone` controls timestamp localization. Enabled by default
 
 Example:
 
@@ -311,6 +312,11 @@ Example:
       "dump_body": {
         "enabled": false,
         "max_bytes": 4096
+      },
+      "usage_audit": {
+        "enabled": true,
+        "sqlite_path": null,
+        "timezone": "local"
       }
     }
   }

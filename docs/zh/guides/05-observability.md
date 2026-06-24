@@ -261,6 +261,7 @@ OpenViking 将信号级别的可观测性配置统一放在 `server.observabilit
 - `server.observability.traces`：trace 导出配置
 - `server.observability.logs`：log 导出配置
 - `server.observability.dump_body`：把 HTTP 请求/响应 body（按 content-type 过滤、按字节截断）作为属性挂到当前 trace span 上，便于在 trace UI 中调试。默认关闭，因为 body 可能含密钥/高基数内容
+- `server.observability.usage_audit`：按请求记录用量/成本审计日志，使用 SQLite 存储。`sqlite_path` 可覆盖数据库位置（多实例部署时设为每实例独立的本地路径）；`timezone` 控制时间戳的时区本地化。默认开启
 
 示例：
 
@@ -310,6 +311,11 @@ OpenViking 将信号级别的可观测性配置统一放在 `server.observabilit
       "dump_body": {
         "enabled": false,
         "max_bytes": 4096
+      },
+      "usage_audit": {
+        "enabled": true,
+        "sqlite_path": null,
+        "timezone": "local"
       }
     }
   }

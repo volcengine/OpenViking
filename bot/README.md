@@ -167,6 +167,7 @@ The bot will connect to the remote OpenViking server. Please start the OpenVikin
 All configurations are under the `bot` field in `ov.conf`, with default values for configuration items. The optional manual configuration items are described as follows:
 - `agents`: Agent configuration
   - `model`: LLM model name used by the bot. When `provider` is set, use the provider-native model name (for example `doubao-seed-2-0-pro-260215`).
+  - `temperature`: Sampling temperature for LLM requests. Defaults to `0.7`.
   - `provider`: Optional model provider name. When set, vikingbot uses OpenViking's `VLMFactory` + adapter path to create the backend directly (for example `volcengine`, `openai`, `deepseek`).
   - `api_key`: Optional API key for the agent model provider. Can be configured here directly when you want bot-specific credentials.
   - `api_base`: Optional API base for the agent model provider. Useful for provider gateways or custom endpoints such as VolcEngine Ark.
@@ -208,6 +209,7 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
       "api_key": "<your-ark-api-key>",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "provider": "volcengine",
+      "temperature": 0.7,
       "max_tool_iterations": 50,
       "memory_window": 50
     },

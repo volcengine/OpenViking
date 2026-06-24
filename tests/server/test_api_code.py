@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for /api/v1/code/* endpoints."""
 
-import pytest
-
 from openviking_cli.exceptions import PermissionDeniedError
 
 PY_SAMPLE = '''"""Module top doc."""
@@ -54,9 +52,7 @@ class TestCodeOutlineEndpoint:
 
         monkeypatch.setattr(service.fs, "read", fake_read)
 
-        resp = await client.post(
-            "/api/v1/code/outline", json={"uri": "viking://resources/x.py"}
-        )
+        resp = await client.post("/api/v1/code/outline", json={"uri": "viking://resources/x.py"})
         assert resp.status_code == 403
         body = resp.json()
         assert body["status"] == "error"
@@ -80,9 +76,7 @@ class TestCodeOutlineEndpoint:
 
         monkeypatch.setattr(service.fs, "read", fake_read)
 
-        resp = await client.post(
-            "/api/v1/code/outline", json={"uri": "viking://resources/x.py"}
-        )
+        resp = await client.post("/api/v1/code/outline", json={"uri": "viking://resources/x.py"})
         assert resp.status_code == 200
         assert "is not text" in resp.json()["result"]
 
@@ -116,18 +110,14 @@ class TestCodeSearchEndpoint:
         assert "viking://r/a.py" in body["result"]
 
     async def test_invalid_uri(self, client):
-        resp = await client.post(
-            "/api/v1/code/search", json={"uri": "/tmp/dir", "query": "foo"}
-        )
+        resp = await client.post("/api/v1/code/search", json={"uri": "/tmp/dir", "query": "foo"})
         assert resp.status_code == 200
         body = resp.json()
         assert body["result"].startswith("Error:")
         assert "viking://" in body["result"]
 
     async def test_empty_query(self, client):
-        resp = await client.post(
-            "/api/v1/code/search", json={"uri": "viking://r", "query": ""}
-        )
+        resp = await client.post("/api/v1/code/search", json={"uri": "viking://r", "query": ""})
         assert resp.status_code == 200
         assert resp.json()["result"] == "Error: empty query"
 
@@ -137,9 +127,7 @@ class TestCodeSearchEndpoint:
 
         monkeypatch.setattr(service.fs, "ls", fake_ls)
 
-        resp = await client.post(
-            "/api/v1/code/search", json={"uri": "viking://r", "query": "foo"}
-        )
+        resp = await client.post("/api/v1/code/search", json={"uri": "viking://r", "query": "foo"})
         assert resp.status_code == 200
         assert "No supported source files" in resp.json()["result"]
 
@@ -149,9 +137,7 @@ class TestCodeSearchEndpoint:
 
         monkeypatch.setattr(service.fs, "ls", fake_ls)
 
-        resp = await client.post(
-            "/api/v1/code/search", json={"uri": "viking://r", "query": "foo"}
-        )
+        resp = await client.post("/api/v1/code/search", json={"uri": "viking://r", "query": "foo"})
         assert resp.status_code == 403
         body = resp.json()
         assert body["status"] == "error"
@@ -252,9 +238,7 @@ class TestCodeExpandEndpoint:
         assert "def greet" in resp.json()["result"]
 
     async def test_invalid_uri(self, client):
-        resp = await client.post(
-            "/api/v1/code/expand", json={"uri": "/tmp/x.py", "symbol": "foo"}
-        )
+        resp = await client.post("/api/v1/code/expand", json={"uri": "/tmp/x.py", "symbol": "foo"})
         assert resp.status_code == 200
         body = resp.json()
         assert body["result"].startswith("Error:")

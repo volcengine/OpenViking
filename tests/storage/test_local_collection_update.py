@@ -36,9 +36,10 @@ def _build_local_collection(
         ],
         ids_not_exist=[key for key in primary_keys if key not in existing_by_id],
     )
-    collection._write_data_list = lambda data_list, ttl=0: captured.append(
-        {"data_list": data_list, "ttl": ttl}
-    ) or UpsertDataResult(ids=[row["id"] for row in data_list])
+    collection._write_data_list = lambda data_list, ttl=0: (
+        captured.append({"data_list": data_list, "ttl": ttl})
+        or UpsertDataResult(ids=[row["id"] for row in data_list])
+    )
     return collection
 
 
