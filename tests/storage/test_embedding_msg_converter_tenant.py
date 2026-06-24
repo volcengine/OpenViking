@@ -48,7 +48,7 @@ def test_embedding_msg_converter_backfills_account_and_owner_fields(
 
 
 def test_embedding_msg_converter_preserves_full_content_without_vikingdb_truncation():
-    full_content = "x" * (64 * 1024 + 17)
+    full_content = "x" * (1024 * 1024 + 17)
     context = Context(uri="viking://resources/large.txt", abstract="short embedding text")
     context.set_vectorize(Vectorize(text="short embedding text", full_text=full_content))
 

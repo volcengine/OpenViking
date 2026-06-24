@@ -78,7 +78,7 @@ URI_REWRITE_OUTPUT_FIELDS = [
     "account_id",
 ]
 
-VIKINGDB_CONTENT_MAX_SIZE = 64 * 1024
+VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
 
 
 class _AsyncVectorAdapter:

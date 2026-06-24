@@ -24,6 +24,7 @@ from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.vectordb.collection.result import UpsertDataResult
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
+    VIKINGDB_CONTENT_MAX_SIZE,
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
@@ -799,7 +800,7 @@ async def test_single_account_backend_upsert_drops_legacy_parent_uri_before_writ
 @pytest.mark.asyncio
 async def test_single_account_backend_truncates_content_only_at_vector_write():
     captured = {}
-    full_content = "x" * (64 * 1024 + 17)
+    full_content = "x" * (1024 * 1024 + 17)
 
     class _Collection:
         def get_meta_data(self):
@@ -840,7 +841,8 @@ async def test_single_account_backend_truncates_content_only_at_vector_write():
 
     assert record_id == "rec-large"
     assert source_data["content"] == full_content
-    assert captured["data"]["content"] == full_content[: 64 * 1024]
+    assert VIKINGDB_CONTENT_MAX_SIZE == 1024 * 1024
+    assert captured["data"]["content"] == full_content[:VIKINGDB_CONTENT_MAX_SIZE]
 
 
 @pytest.mark.asyncio
