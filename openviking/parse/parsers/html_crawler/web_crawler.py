@@ -125,7 +125,6 @@ class WebCrawler:
         else:
             await queue.put((root_url, 0))
 
-        semaphore = asyncio.Semaphore(self.config.concurrency)
         active_tasks: Set[asyncio.Task[Any]] = set()
 
         while not queue.empty() or active_tasks:
@@ -141,7 +140,7 @@ class WebCrawler:
                     result.total_skipped += 1
                     continue
                 self._pages_scheduled += 1
-                task = asyncio.create_task(self._crawl_one(url, depth, semaphore))
+                task = asyncio.create_task(self._crawl_one(url, depth))
                 active_tasks.add(task)
 
             if not active_tasks:
@@ -179,117 +178,115 @@ class WebCrawler:
         self,
         url: str,
         depth: int,
-        semaphore: asyncio.Semaphore,
     ) -> tuple[CrawledPage, List[str]]:
-        async with semaphore:
-            try:
-                fetch_result: FetchResult = await self._fetcher.fetch(
-                    url, timeout=self.config.timeout
+        try:
+            fetch_result: FetchResult = await self._fetcher.fetch(
+                url, timeout=self.config.timeout
+            )
+            if not fetch_result.is_success:
+                return (
+                    CrawledPage(
+                        url=url, depth=depth, status="failed", content=fetch_result.error
+                    ),
+                    [],
                 )
-                if not fetch_result.is_success:
-                    return (
-                        CrawledPage(
-                            url=url, depth=depth, status="failed", content=fetch_result.error
-                        ),
-                        [],
-                    )
 
-                # Use the post-redirect URL for visited checks and child link extraction.
-                canonical_url = fetch_result.final_url or url
-                if (
-                    self._filter.normalize_url(canonical_url)
-                    != self._filter.normalize_url(url)
-                ):
-                    if self._filter.is_visited(canonical_url):
-                        logger.info(
-                            f"[Crawl][RedirectDedup] skipped duplicate final URL: "
-                            f"{url} -> {canonical_url}"
-                        )
-                        return (
-                            CrawledPage(
-                                url=canonical_url,
-                                depth=depth,
-                                status="skipped",
-                                content="Duplicate final URL after redirect",
-                            ),
-                            [],
-                        )
-                    self._filter.add_visited(canonical_url)
-                else:
-                    self._filter.add_visited(canonical_url)
-
-                if not self._filter.filter_by_content_type(canonical_url, fetch_result.content_type):
+            # Use the post-redirect URL for visited checks and child link extraction.
+            canonical_url = fetch_result.final_url or url
+            if (
+                self._filter.normalize_url(canonical_url)
+                != self._filter.normalize_url(url)
+            ):
+                if self._filter.is_visited(canonical_url):
                     logger.info(
-                        f"[Crawl][ContentTypeFilter] skipped non-HTML: {canonical_url} "
-                        f"(content-type: {fetch_result.content_type})"
+                        f"[Crawl][RedirectDedup] skipped duplicate final URL: "
+                        f"{url} -> {canonical_url}"
                     )
                     return (
                         CrawledPage(
                             url=canonical_url,
                             depth=depth,
                             status="skipped",
-                            content_type=fetch_result.content_type,
+                            content="Duplicate final URL after redirect",
                         ),
                         [],
                     )
+                self._filter.add_visited(canonical_url)
+            else:
+                self._filter.add_visited(canonical_url)
 
-                # Prefer structured SSR data when available; it is usually cleaner than DOM text.
-                ssr_result = self._ssr_extractor.extract(fetch_result.html, canonical_url)
-                if ssr_result:
-                    markdown_content = None
-                    if ssr_result.docs and ssr_result.docs[0].content:
-                        markdown_content = ssr_result.docs[0].content
-
-                    page = CrawledPage(
+            if not self._filter.filter_by_content_type(canonical_url, fetch_result.content_type):
+                logger.info(
+                    f"[Crawl][ContentTypeFilter] skipped non-HTML: {canonical_url} "
+                    f"(content-type: {fetch_result.content_type})"
+                )
+                return (
+                    CrawledPage(
                         url=canonical_url,
                         depth=depth,
-                        status="success",
-                        title=ssr_result.docs[0].title if ssr_result.docs else None,
-                        content=markdown_content or fetch_result.html,
-                        content_type="text/markdown" if markdown_content else "text/html",
-                        source="ssr" if markdown_content else "html"
-                    )
-                    child_urls = ssr_result.child_urls
-                    logger.info(
-                        f"[Crawl][SSR] depth={depth} url={canonical_url} "
-                        f"children={len(child_urls)} docs={len(ssr_result.docs)}"
-                    )
-                    return (page, child_urls)
+                        status="skipped",
+                        content_type=fetch_result.content_type,
+                    ),
+                    [],
+                )
 
-                if self._is_empty_spa_page(fetch_result.html):
-                    logger.info(
-                        f"[Crawl][EmptySPA] skipped empty SPA page: {canonical_url}"
-                    )
-                    return (
-                        CrawledPage(
-                            url=canonical_url,
-                            depth=depth,
-                            status="skipped",
-                            content="Empty SPA page - JavaScript required",
-                        ),
-                        [],
-                    )
+            # Prefer structured SSR data when available; it is usually cleaner than DOM text.
+            ssr_result = self._ssr_extractor.extract(fetch_result.html, canonical_url)
+            if ssr_result:
+                markdown_content = None
+                if ssr_result.docs and ssr_result.docs[0].content:
+                    markdown_content = ssr_result.docs[0].content
 
-                child_urls = self._extract_urls_from_html(fetch_result.html, canonical_url)
                 page = CrawledPage(
                     url=canonical_url,
                     depth=depth,
                     status="success",
-                    content=fetch_result.html,
-                    content_type="text/html",
-                    source="html"
+                    title=ssr_result.docs[0].title if ssr_result.docs else None,
+                    content=markdown_content or fetch_result.html,
+                    content_type="text/markdown" if markdown_content else "text/html",
+                    source="ssr" if markdown_content else "html"
                 )
+                child_urls = ssr_result.child_urls
                 logger.info(
-                    f"[Crawl][HTML] depth={depth} url={canonical_url} children={len(child_urls)}"
+                    f"[Crawl][SSR] depth={depth} url={canonical_url} "
+                    f"children={len(child_urls)} docs={len(ssr_result.docs)}"
                 )
                 return (page, child_urls)
 
-            except Exception as e:
-                logger.warning(f"[Crawl] Failed: {url} - {e}")
+            if self._is_empty_spa_page(fetch_result.html):
+                logger.info(
+                    f"[Crawl][EmptySPA] skipped empty SPA page: {canonical_url}"
+                )
                 return (
-                    CrawledPage(url=url, depth=depth, status="failed", content=str(e)),
+                    CrawledPage(
+                        url=canonical_url,
+                        depth=depth,
+                        status="skipped",
+                        content="Empty SPA page - JavaScript required",
+                    ),
                     [],
                 )
+
+            child_urls = self._extract_urls_from_html(fetch_result.html, canonical_url)
+            page = CrawledPage(
+                url=canonical_url,
+                depth=depth,
+                status="success",
+                content=fetch_result.html,
+                content_type="text/html",
+                source="html"
+            )
+            logger.info(
+                f"[Crawl][HTML] depth={depth} url={canonical_url} children={len(child_urls)}"
+            )
+            return (page, child_urls)
+
+        except Exception as e:
+            logger.warning(f"[Crawl] Failed: {url} - {e}")
+            return (
+                CrawledPage(url=url, depth=depth, status="failed", content=str(e)),
+                [],
+            )
 
     def _extract_urls_from_html(self, html: str, base_url: str) -> List[str]:
         extract_result = self._link_extractor.extract(html, base_url)

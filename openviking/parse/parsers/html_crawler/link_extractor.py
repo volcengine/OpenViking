@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Extract <a href> links from HTML content."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -15,12 +15,8 @@ logger = get_logger(__name__)
 
 @dataclass
 class LinkExtractResult:
-    urls: List[str] = None
+    urls: List[str] = field(default_factory=list)
     total_links_found: int = 0
-
-    def __post_init__(self):
-        if self.urls is None:
-            self.urls = []
 
 
 class LinkExtractor:

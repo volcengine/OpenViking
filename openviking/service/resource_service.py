@@ -599,9 +599,6 @@ class ResourceService:
         telemetry.set("resource.flags.summarize", summarize)
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
-        if max_pages < 1:
-            raise InvalidArgumentError("max_pages must be >= 1 for recursive web crawling.")
-
         try:
             # Resolve path variables before validation
             if to:

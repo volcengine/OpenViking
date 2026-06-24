@@ -22,7 +22,6 @@ class FilterStats:
     rejected_by_path: int = 0
     rejected_by_dedup: int = 0
     rejected_by_limit: int = 0
-    rejected_by_content_type: int = 0
 
 
 @dataclass
