@@ -72,7 +72,7 @@ Stores Git objects and refs in S3-compatible object storage (e.g. Volcengine TOS
       "endpoint": "https://tos-s3-cn-beijing.volces.com",
       "access_key": "<your-volcengine-ak>",
       "secret_key": "<your-volcengine-sk>",
-      "prefix": "git",
+      "prefix": ".ovgit",
       "use_path_style": false,
       "cas_mode": "native"
     }

@@ -987,7 +987,7 @@ base_dir = "/data/openviking/git" # objects/refs 存储根
 # 远程后端(与 plugins.s3fs_resources 配置同构)
 [git.s3]
 bucket            = "openviking-prod"
-prefix            = "git"          # 全部 key = {prefix}/{account}/...
+prefix            = ".ovgit"       # 全部 key = {prefix}/{account}/...
 region            = "us-east-1"
 endpoint          = "https://s3.amazonaws.com"
 access_key_env    = "OV_S3_AK"     # 从环境变量读

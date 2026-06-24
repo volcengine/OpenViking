@@ -24,7 +24,7 @@
 //!       "endpoint": "https://tos-s3-cn-beijing.volces.com",
 //!       "access_key": "<ak>",
 //!       "secret_key": "<sk>",
-//!       "prefix": "git",
+//!       "prefix": ".ovgit",
 //!       "use_path_style": false,
 //!       "cas_mode": "native"
 //!     }
@@ -119,7 +119,7 @@ fn load_s3_config() -> Option<S3Config> {
             .map(|s| s.to_string())
     };
 
-    let base_prefix = str_opt("prefix").unwrap_or_else(|| "git".to_string());
+    let base_prefix = str_opt("prefix").unwrap_or_else(|| ".ovgit".to_string());
     let prefix = format!(
         "{}/_it/{}",
         base_prefix.trim_end_matches('/'),

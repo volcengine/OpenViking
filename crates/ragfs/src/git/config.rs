@@ -99,7 +99,7 @@ fn default_author_email() -> String {
     "bot@openviking.local".to_string()
 }
 fn default_s3_prefix() -> String {
-    "git".to_string()
+    ".ovgit".to_string()
 }
 fn default_cas_mode() -> String {
     "native".to_string()
