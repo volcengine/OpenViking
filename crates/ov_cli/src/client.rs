@@ -7,6 +7,32 @@ pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
 
+/// Drop null-valued keys (and an empty `args` object) from a request body before
+/// sending it. Older, stricter servers use `extra="forbid"` and reject any field
+/// they do not yet define, so unconditionally attaching optional fields (even as
+/// `null`/`{}`) breaks against instances that predate that field. Omitting them is
+/// safe for read/create routes where a missing optional field and an explicit
+/// `null` are equivalent — do NOT use this for update/PATCH bodies where `null`
+/// may mean "clear this field".
+fn compact_request_body(body: &mut Value) {
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+    obj.retain(|key, value| {
+        if value.is_null() {
+            return false;
+        }
+        // `args` is always attached by the CLI but absent from pre-#2549 models;
+        // only forward it when the caller actually provided arguments.
+        if key == "args" {
+            if let Some(map) = value.as_object() {
+                return !map.is_empty();
+            }
+        }
+        true
+    });
+}
+
 // ============ HttpClient ============
 
 /// High-level HTTP client for OpenViking API
@@ -441,6 +467,7 @@ impl HttpClient {
             "tags": tags,
         });
         self.attach_legacy_agent_scope(&mut body);
+        compact_request_body(&mut body);
         self.post("/api/v1/search/find", &body).await
     }
 
@@ -472,6 +499,7 @@ impl HttpClient {
             "tags": tags,
         });
         self.attach_legacy_agent_scope(&mut body);
+        compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
     }
 
@@ -558,6 +586,7 @@ impl HttpClient {
                     .expect("add_resource request body must be an object")
                     .insert("create_parent".to_string(), serde_json::Value::Bool(true));
             }
+            compact_request_body(&mut body);
             body
         };
 
@@ -1431,6 +1460,37 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
+
+    #[test]
+    fn compact_request_body_drops_null_and_empty_args() {
+        let mut body = json!({
+            "query": "hi",
+            "score_threshold": null,
+            "tags": null,
+            "args": {},
+            "wait": false,
+            "create_parent": true,
+            "filter": {"k": "v"},
+        });
+        super::compact_request_body(&mut body);
+        let obj = body.as_object().unwrap();
+        // Non-null values are kept, including `false` and non-empty objects.
+        assert!(obj.contains_key("query"));
+        assert!(obj.contains_key("wait"));
+        assert!(obj.contains_key("create_parent"));
+        assert!(obj.contains_key("filter"));
+        // Null fields and an empty `args` are dropped so pre-field servers accept it.
+        assert!(!obj.contains_key("score_threshold"));
+        assert!(!obj.contains_key("tags"));
+        assert!(!obj.contains_key("args"));
+    }
+
+    #[test]
+    fn compact_request_body_keeps_non_empty_args() {
+        let mut body = json!({"path": "x", "args": {"feishu_access_token": "u-x"}});
+        super::compact_request_body(&mut body);
+        assert!(body.as_object().unwrap().contains_key("args"));
+    }
 
     #[test]
     fn timeout_config_calculation() {
