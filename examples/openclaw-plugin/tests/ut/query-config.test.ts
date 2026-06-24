@@ -175,4 +175,19 @@ describe("RuntimeQueryConfigStore", () => {
     expect(afterReset.recallLimit).toBe(6);
     expect(afterReset.scoreThreshold).toBe(0.15);
   });
+
+  it("merges incremental set calls within the same runtime scope", async () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({ recallLimit: 6, recallScoreThreshold: 0.15 });
+    const store = RuntimeQueryConfigStore.createInMemory(cfg);
+    const ctx = { peerId: "assistant-a", sessionId: "s1" };
+
+    await store.set("session", ctx, { recallLimit: 2 });
+    await store.set("session", ctx, { scoreThreshold: 0.4 });
+
+    const effective = await store.getEffective(ctx);
+    expect(effective.recallLimit).toBe(2);
+    expect(effective.scoreThreshold).toBe(0.4);
+    expect(effective.sources.recallLimit).toBe("session");
+    expect(effective.sources.scoreThreshold).toBe("session");
+  });
 });

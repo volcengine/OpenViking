@@ -661,3 +661,73 @@ func TestHealth(t *testing.T) {
 		t.Fatal("expected healthy")
 	}
 }
+
+func TestSetTagsSendsBody(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/content/set_tags" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		if got := body["uri"]; got != "viking://resources/docs" {
+			t.Fatalf("uri = %#v", got)
+		}
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 2 || tags[0] != "team=infra" || tags[1] != "tier=gold" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if got := body["mode"]; got != "append" {
+			t.Fatalf("mode = %#v", got)
+		}
+		if got := body["recursive"]; got != true {
+			t.Fatalf("recursive = %#v", got)
+		}
+		if got := body["telemetry"]; got != true {
+			t.Fatalf("telemetry = %#v", got)
+		}
+		writeOK(t, w, map[string]any{"updated": 3})
+	}))
+	defer closeServer()
+
+	result, err := client.SetTags(context.Background(), "resources/docs", []string{"team=infra", "tier=gold"}, &SetTagsOptions{
+		Mode:      "append",
+		Recursive: true,
+		Telemetry: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result["updated"]; got != float64(3) {
+		t.Fatalf("updated = %#v", got)
+	}
+}
+
+func TestSetTagsDefaultsModeAndOmitsTelemetry(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/content/set_tags" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		if got := body["mode"]; got != "replace" {
+			t.Fatalf("default mode = %#v", got)
+		}
+		if got := body["recursive"]; got != false {
+			t.Fatalf("recursive = %#v", got)
+		}
+		// nil tags must serialize as an empty JSON array, not null, to satisfy
+		// the server's tags:list[str] contract.
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 0 {
+			t.Fatalf("tags = %#v (want empty array)", body["tags"])
+		}
+		requireBodyKeysAbsent(t, body, "telemetry")
+		writeOK(t, w, map[string]any{"updated": 1})
+	}))
+	defer closeServer()
+
+	if _, err := client.SetTags(context.Background(), "resources/docs/readme.md", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -232,20 +232,3 @@ ADDITIONAL_TEXT_EXTENSIONS = {
     ".lock",
     ".in",
 }
-
-# Common text encodings to try for encoding detection (in order of likelihood)
-TEXT_ENCODINGS = [
-    "utf-8",  # Most common modern encoding
-    "utf-8-sig",  # UTF-8 with BOM
-    "gbk",  # Chinese GBK (simplified Chinese)
-    "gb2312",  # Chinese GB2312 (simplified Chinese)
-    "big5",  # Traditional Chinese
-    "shift_jis",  # Japanese
-    "euc-kr",  # Korean
-    "iso-8859-1",  # Latin-1 (Western European)
-    "cp1252",  # Windows Latin-1
-    "latin-1",  # Latin-1 alias
-]
-
-# UTF-8 variants that don't need conversion
-UTF8_VARIANTS = {"utf-8", "utf-8-sig"}

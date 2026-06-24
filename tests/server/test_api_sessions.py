@@ -771,6 +771,7 @@ async def test_compress_session(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["status"] == "accepted"
+    assert "memory_diff_uri" not in body["result"]
     assert "usage" not in body
     assert "telemetry" not in body
 

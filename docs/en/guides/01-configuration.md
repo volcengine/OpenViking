@@ -834,6 +834,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
     "api_key": "your-api-key",
     "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
     "model": "qwen3-vl-rerank",
+    "timeout": 120,
     "threshold": 0.1
   }
 }
@@ -850,6 +851,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 | `api_key` | str | API key (for `openai` or `cohere` providers) |
 | `api_base` | str | Endpoint URL (for `openai` provider) |
 | `model` | str | Model name (for `openai` providers) |
+| `timeout` | float | HTTP request timeout in seconds for OpenAI-compatible providers. Increase for slow or cold-starting local rerank servers. Default: `30.0` |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 

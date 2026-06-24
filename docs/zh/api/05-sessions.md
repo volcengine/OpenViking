@@ -1205,6 +1205,7 @@ if task != nil {
     "result": {
       "session_id": "a1b2c3d4",
       "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
+      "memory_diff_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001/memory_diff.json",
       "memories_extracted": {
         "profile": 1,
         "preferences": 2,
@@ -1351,7 +1352,7 @@ viking://user/{user_id}/sessions/{session_id}/
     │   ├── .abstract.md      # Phase 2 写入（后台）
     │   ├── .overview.md      # Phase 2 写入（后台）
     │   ├── .meta.json        # 归档元数据
-    │   ├── memory_diff.json  # Phase 2 写入（后台，记忆变更时）
+    │   ├── memory_diff.json  # 长记忆抽取完成时写入
     │   ├── .done             # Phase 2 完成标记
     │   └── .failed.json      # Phase 2 失败标记
     └── archive_002/
@@ -1359,7 +1360,7 @@ viking://user/{user_id}/sessions/{session_id}/
 
 ### memory_diff.json 数据结构
 
-每次提交会在归档目录写入 `memory_diff.json`，记录所有记忆变更，便于审计和回溯：
+长记忆抽取成功运行时，会在归档目录写入 `memory_diff.json`，记录所有记忆变更，便于审计和回溯：
 
 ```json
 {
@@ -1408,7 +1409,7 @@ viking://user/{user_id}/sessions/{session_id}/
 | `summary.total_updates` | int | 修改记忆数 |
 | `summary.total_deletes` | int | 删除记忆数 |
 
-即使没有记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
+如果长记忆抽取已运行但没有产生记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
 
 ---
 
