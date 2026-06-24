@@ -35,7 +35,7 @@ examples/opencode-plugin/
 │   └── utils.mjs
 ├── tests/
 └── wrappers/
-    └── openviking.mjs
+    └── openviking.js
 ```
 
 There is intentionally no `skills/openviking/SKILL.md`. The former skill behavior is implemented as tools.
@@ -59,6 +59,12 @@ openviking-server --config ~/.openviking/ov.conf
 
 Normal users should enable it through OpenCode's package plugin mechanism:
 
+The published npm package is `openviking-opencode-plugin`; verify availability with:
+
+```bash
+npm view openviking-opencode-plugin version
+```
+
 ```json
 {
   "plugin": ["openviking-opencode-plugin"]
@@ -71,7 +77,7 @@ For development or PR testing, copy the package into OpenCode's plugin directory
 
 ```bash
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -82,7 +88,7 @@ This creates a stable OpenCode plugin layout:
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.mjs
+├── openviking.js
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -90,13 +96,14 @@ This creates a stable OpenCode plugin layout:
     └── node_modules/
 ```
 
-The top-level `openviking.mjs` is only a wrapper:
+The top-level `openviking.js` is only a wrapper:
 
 ```js
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 ```
 
 This wrapper is only for source installs with the directory layout shown above. npm package installs load `index.mjs` directly through `package.json`.
+Use the `.js` wrapper for source installs; OpenCode's local plugin scanner discovers JavaScript/TypeScript plugin files.
 
 ## Configuration
 
@@ -225,6 +232,24 @@ This tool requires `confirm: true`. The user must explicitly confirm deletion be
 ### `memqueue`
 
 Return OpenViking observer queue status for embedding and semantic processing.
+
+### `codesearch`
+
+Search AST-supported symbol names across a confirmed ingested code repository or source subtree.
+
+Use this after you have evidence that a `viking://` URI contains supported source files.
+
+### `codeoutline`
+
+Show symbol structure for a confirmed `viking://` source file.
+
+Use this after `memglob`, `membrowse`, or `codesearch` finds an exact source file URI.
+
+### `codeexpand`
+
+Return the full source for one named symbol from a confirmed `viking://` source file.
+
+Use this after `codeoutline` or other evidence shows the symbol exists in that file.
 
 ## Runtime Files
 
