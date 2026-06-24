@@ -3,6 +3,29 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.4.4 (2026-06-18)
+
+### Highlights
+
+- **Plugin-based authentication architecture**: authentication was refactored into a plugin-based design so auth backends can be swapped and extended.
+- **Go SDK search filters**: the Go SDK now exposes the search `date` and `level` filters.
+- **RAGFS encryption fix**: fixed a root-directory acquire failure caused by a missing encryption `account_id`.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.3...v0.4.4)
+
+## v0.4.3 (2026-06-18)
+
+### Highlights
+
+- **RAGFS caching and storage reliability**: a `CachedFileSystem` with Redis / Mooncake / Yuanrong cache providers was added, alongside a plaintext fallback for the encrypted-read migration path and a faster, more defensive legacy shape probe (parallelized, skipping zero-byte files and path locks).
+- **Go HTTP SDK**: a Go HTTP SDK landed, with accompanying Go filesystem usage examples.
+- **Code navigation endpoints**: new code-navigation endpoints were added for the opencode plugin.
+- **Security hardening**: the `python-multipart` (GHSA-5rvq-cxj2-64vf) and `cryptography` (GHSA-537c-gmf6-5ccf) dependency floors were bumped for HIGH advisories, and UnderstandingAPI zip downloads now use `safe_extract_zip` to close a Zip Slip.
+- **Feishu parsing and task encryption**: Feishu URL host matching was tightened and task-tracker encryption binding was unified.
+- **Docs search**: documentation gained OpenViking-powered, localized search.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.2...v0.4.3)
+
 ## v0.4.2 (2026-06-17)
 
 ### Highlights

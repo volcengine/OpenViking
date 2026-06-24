@@ -3,6 +3,29 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+## v0.4.4 (2026-06-18)
+
+### 重点更新
+
+- **插件化认证架构**：认证重构为插件化设计，认证后端可替换、可扩展。
+- **Go SDK 检索过滤**：Go SDK 新增暴露检索 `date` 与 `level` 过滤参数。
+- **RAGFS 加密修复**：修复根目录 acquire 因缺少加密 `account_id` 导致的异常。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.3...v0.4.4)
+
+## v0.4.3 (2026-06-18)
+
+### 重点更新
+
+- **RAGFS 缓存与存储可靠性**：新增 `CachedFileSystem` 及 Redis / Mooncake / Yuanrong 缓存 provider，补充加密读迁移路径的明文回退，并让 legacy shape probe 更快更稳健（并行化，跳过零字节文件与 path lock）。
+- **Go HTTP SDK**：新增 Go HTTP SDK，并补充 Go filesystem 使用示例。
+- **代码导航端点**：为 opencode 插件新增代码导航端点。
+- **安全加固**：将 `python-multipart`（GHSA-5rvq-cxj2-64vf）与 `cryptography`（GHSA-537c-gmf6-5ccf）依赖下限提升以修复 HIGH 级公告，UnderstandingAPI 的 zip 下载改用 `safe_extract_zip` 关闭 Zip Slip。
+- **飞书解析与任务加密**：收紧飞书 URL host 匹配，统一 task tracker 加密绑定。
+- **文档检索**：文档新增 OpenViking 驱动的本地化检索。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.2...v0.4.3)
+
 ## v0.4.2 (2026-06-17)
 
 ### 重点更新
