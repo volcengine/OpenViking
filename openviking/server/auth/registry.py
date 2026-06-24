@@ -45,14 +45,10 @@ class AuthPluginRegistry:
         """
         mode = plugin_class.auth_mode
         if not mode:
-            raise ValueError(
-                f"AuthPlugin {plugin_class.__name__} must define 'auth_mode'"
-            )
+            raise ValueError(f"AuthPlugin {plugin_class.__name__} must define 'auth_mode'")
         if mode in self._plugins:
             existing = self._plugins[mode].__name__
-            raise ValueError(
-                f"Auth mode {mode!r} is already registered by {existing}"
-            )
+            raise ValueError(f"Auth mode {mode!r} is already registered by {existing}")
         self._plugins[mode] = plugin_class
         logger.info("Registered auth plugin: %s (%s)", mode, plugin_class.__name__)
         return plugin_class

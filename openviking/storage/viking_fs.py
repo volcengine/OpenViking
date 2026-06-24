@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -58,13 +59,14 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.grep_config import GrepEngine
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking.storage.transaction.lock_handle import LockHandle
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import RerankConfig, RetrievalConfig
+    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
 
 logger = get_logger(__name__)
 
@@ -126,6 +128,7 @@ def _get_abstract_worker_count() -> int:
 
 
 _ABSTRACT_WORKER_COUNT = _get_abstract_worker_count()
+_DEFAULT_GREP_FILE_CONCURRENCY = 32
 
 
 # ========== Dataclass ==========
@@ -164,6 +167,7 @@ def init_viking_fs(
     rerank_config: Optional["RerankConfig"] = None,
     vector_store: Optional["VikingVectorIndexBackend"] = None,
     retrieval_config: Optional["RetrievalConfig"] = None,
+    grep_config: Optional["GrepConfig"] = None,
     timeout: int = 10,
     enable_recorder: bool = False,
     encryptor: Optional[Any] = None,
@@ -172,10 +176,10 @@ def init_viking_fs(
 
     Args:
         agfs: Pre-initialized AGFS client (HTTP or Binding)
-        agfs_config: AGFS configuration object for backend settings
         query_embedder: Embedder instance
         rerank_config: Rerank configuration
         retrieval_config: Retrieval ranking configuration
+        grep_config: Grep engine configuration
         vector_store: Vector store instance
         enable_recorder: Whether to enable IO recording
         encryptor: FileEncryptor instance for encryption/decryption
@@ -188,6 +192,7 @@ def init_viking_fs(
         rerank_config=rerank_config,
         vector_store=vector_store,
         retrieval_config=retrieval_config,
+        grep_config=grep_config,
         encryptor=encryptor,
     )
 
@@ -260,6 +265,7 @@ class VikingFS:
         rerank_config: Optional["RerankConfig"] = None,
         vector_store: Optional["VikingVectorIndexBackend"] = None,
         retrieval_config: Optional["RetrievalConfig"] = None,
+        grep_config: Optional["GrepConfig"] = None,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
     ):
@@ -269,7 +275,11 @@ class VikingFS:
         self.rerank_config = rerank_config
         self.vector_store = vector_store
         self.retrieval_config = retrieval_config
+        self.grep_config = grep_config
         self._encryptor = encryptor
+        self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
+        self._count_cache_max_size = 1024
+        self._fulltext_available: Optional[bool] = None  # cached result of _collection_has_fulltext
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
@@ -749,13 +759,17 @@ class VikingFS:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
-        level_limit: int = 5,
+        level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """Content search by pattern or keywords.
 
+        Optimized implementation that uses agfs native grep when possible.
         The ragfs layer greps transparently over encrypted and plaintext files
         (it decrypts via account_id when an encryption layer is configured).
+        Falls back to VikingFS layer implementation if native grep is unavailable.
+        When engine="auto" and vikingdb is available with sufficient data,
+        uses vikingdb bm25 recall + local fs precise matching.
 
         Args:
             uri: Viking URI
@@ -763,16 +777,158 @@ class VikingFS:
             exclude_uri: Optional URI prefix to exclude from search
             case_insensitive: Whether to perform case-insensitive matching
             node_limit: Maximum number of results to return
-            level_limit: Maximum depth level to traverse (default: 5)
+            level_limit: Maximum depth level to traverse (default: 10)
             ctx: Request context
+            Internal bm25 recall limit is auto-adapted from node_limit as
+            min(node_limit * 5, 100000); when node_limit is unset, use 100000.
 
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
         self._ensure_access(uri, ctx)
-        await self.stat(uri, ctx=ctx)
+        # Skip vector_store.count() — the count field is not needed for grep,
+        # and avoiding it saves one VikingDB API call.
+        await self.stat(uri, ctx=ctx, skip_count=True)
 
-        return await self._grep_with_agfs(
+        # Read engine and threshold from grep_config (ov.conf)
+        engine = self.grep_config.engine if self.grep_config else "auto"
+        switch_to_remote_threshold = (
+            self.grep_config.switch_to_remote_threshold if self.grep_config else 10000
+        )
+
+        resolved_engine = await self._resolve_grep_engine(
+            engine, uri, ctx, switch_to_remote_threshold
+        )
+
+        if resolved_engine == "fs":
+            return await self._grep_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+        else:  # "vikingdb_then_fs"
+            return await self._grep_vikingdb_then_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+
+    async def _resolve_grep_engine(
+        self, engine: GrepEngine, uri: str, ctx, switch_to_remote_threshold: int = 10000
+    ) -> str:
+        """Resolve the actual grep engine to use."""
+        if engine == "fs":
+            return "fs"
+
+        # auto mode: check vikingdb availability
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return "fs"
+
+        backend_type = getattr(vector_store, "_backend_type", "unknown")
+        if backend_type not in ("volcengine", "vikingdb"):
+            return "fs"
+
+        # Check collection has content field and FullText config
+        if not await self._collection_has_fulltext(vector_store, ctx):
+            return "fs"
+
+        # switch_to_remote_threshold=0 means always use vikingdb
+        if switch_to_remote_threshold == 0:
+            return "vikingdb_then_fs"
+
+        # Check data volume threshold
+        try:
+            count = await self._get_cached_count(uri, ctx)
+            if count < switch_to_remote_threshold:
+                return "fs"
+        except Exception:
+            logger.debug(
+                "grep engine=auto: count() check failed, falling back to fs", exc_info=True
+            )
+            return "fs"
+
+        return "vikingdb_then_fs"
+
+    async def _collection_has_fulltext(self, vector_store, ctx) -> bool:
+        """Check if collection has content field and FullText config.
+
+        Result is cached on the VikingFS instance since collection schema
+        does not change at runtime.
+        """
+        if self._fulltext_available is not None:
+            return self._fulltext_available
+        try:
+            meta = None
+            if hasattr(vector_store, "get_collection_meta"):
+                meta = await vector_store.get_collection_meta(ctx=ctx)
+            if not meta:
+                self._fulltext_available = False
+                return False
+            fields = meta.get("Fields", [])
+            has_content = any(
+                f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields
+            )
+            fulltext = meta.get("FullText") or []
+            has_content_fulltext = any(ft.get("Field") == "content" for ft in fulltext)
+            result = has_content and has_content_fulltext
+            self._fulltext_available = result
+            return result
+        except Exception:
+            logger.debug(
+                "Failed to check collection fulltext config, assuming no fulltext", exc_info=True
+            )
+            return False
+
+    async def _get_cached_count(self, uri: str, ctx) -> int:
+        """Get cached count of records for a URI (TTL=1h)."""
+        _COUNT_CACHE_TTL = 3600
+        vector_store = self._get_vector_store()
+
+        # Include account_id in cache key for multi-tenant safety
+        account_id = getattr(ctx, "account_id", None) if ctx else None
+        cache_key = f"{account_id}:{uri}" if account_id else uri
+
+        now = time.time()
+        cached = self._count_cache.get(cache_key)
+        if cached and (now - cached[1]) < _COUNT_CACHE_TTL:
+            return cached[0]
+
+        count = await vector_store.count(filter=PathScope("uri", uri, depth=-1), ctx=ctx)
+        # Evict oldest entries if cache exceeds max size
+        if len(self._count_cache) >= self._count_cache_max_size:
+            oldest_keys = sorted(self._count_cache, key=lambda k: self._count_cache[k][1])
+            for k in oldest_keys[: len(oldest_keys) // 2]:
+                del self._count_cache[k]
+        self._count_cache[cache_key] = (count, now)
+        return count
+
+    async def _grep_fs(
+        self, uri, pattern, exclude_uri, case_insensitive, node_limit, level_limit, ctx
+    ):
+        """Filesystem grep path: prefer native agfs grep and fall back if unavailable."""
+        try:
+            return await self._grep_with_agfs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+        except (AttributeError, AGFSNotSupportedError, NotImplementedError) as e:
+            logger.debug(f"agfs grep unavailable, falling back to VikingFS implementation: {e}")
+
+        return await self._grep_encrypted(
             uri=uri,
             pattern=pattern,
             exclude_uri=exclude_uri,
@@ -782,6 +938,108 @@ class VikingFS:
             ctx=ctx,
         )
 
+    async def _grep_vikingdb_then_fs(
+        self,
+        uri,
+        pattern,
+        exclude_uri,
+        case_insensitive,
+        node_limit,
+        level_limit,
+        ctx,
+    ):
+        """VikingDB bm25 recall + local fs precise matching."""
+        vector_store = self._get_vector_store()
+
+        # Split regex alternation (e.g. "error|warning|fail") and join as a
+        # single query string for bm25 search. VikingDB's standard tokenizer
+        # will handle the tokenization of the query string.
+        query = " ".join(kw.strip() for kw in pattern.split("|") if kw.strip())
+        filter_expr = PathScope("uri", uri, depth=level_limit)
+
+        # Auto-adapt bm25 recall limit: recall up to 5x requested matches
+        # while capping at VikingDB's max limit. If node_limit is unset,
+        # use the maximum limit to avoid truncation.
+        remote_return_limit = min(node_limit * 5, 100000) if node_limit else 100000
+
+        # Step 1: vikingdb recall candidate files
+        try:
+            result = await vector_store.search_by_keywords(
+                query=query,
+                limit=remote_return_limit,
+                filter=filter_expr,
+                output_fields=["uri"],
+                ctx=ctx,
+            )
+        except Exception as e:
+            logger.warning(f"grep vikingdb step failed, falling back to fs: {e}")
+            return await self._grep_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+
+        candidate_uris = [r["uri"] for r in result if r.get("uri")]
+        if exclude_uri:
+            candidate_uris = [u for u in candidate_uris if not u.startswith(exclude_uri)]
+        if not candidate_uris:
+            # BM25 returned no candidates — the index confirms no matching content
+            return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+        # Step 2: local fs precise matching on candidate files
+        return await self._grep_in_files(
+            candidate_uris,
+            pattern,
+            case_insensitive,
+            node_limit,
+            ctx,
+        )
+
+    async def _grep_in_files(
+        self,
+        file_uris: List[str],
+        pattern: str,
+        case_insensitive: bool,
+        node_limit: Optional[int],
+        ctx: Optional[RequestContext],
+    ) -> Dict:
+        """Execute regex matching in specified file list (vikingdb_then_fs Step 2)."""
+        flags = re.IGNORECASE if case_insensitive else 0
+        compiled = re.compile(pattern, flags)
+
+        results = []
+        files_scanned = 0
+
+        for file_uri in file_uris:
+            files_scanned += 1
+            try:
+                content_bytes = await self.read(file_uri, ctx=ctx)
+                content = content_bytes.decode("utf-8", errors="replace")
+            except Exception:
+                continue
+
+            for line_no, line in enumerate(content.splitlines(), 1):
+                if compiled.search(line):
+                    results.append({"uri": file_uri, "line": line_no, "content": line})
+                    if node_limit and len(results) >= node_limit:
+                        return {
+                            "matches": results,
+                            "count": len(results),
+                            "match_count": len(results),
+                            "files_scanned": files_scanned,
+                        }
+
+        return {
+            "matches": results,
+            "count": len(results),
+            "match_count": len(results),
+            "files_scanned": files_scanned,
+        }
+
     async def _grep_with_agfs(
         self,
         uri: str,
@@ -789,7 +1047,7 @@ class VikingFS:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
-        level_limit: int = 5,
+        level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """Grep using agfs native implementation.
@@ -883,6 +1141,166 @@ class VikingFS:
             "files_scanned": files_scanned,
         }
 
+    async def _grep_encrypted(
+        self,
+        uri: str,
+        pattern: str,
+        exclude_uri: Optional[str] = None,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        level_limit: int = 10,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict:
+        """Grep implementation for encrypted files.
+
+        This implementation decrypts files at VikingFS layer before matching.
+        Used when encryption is enabled or when agfs.grep is not available.
+
+        Args:
+            uri: Viking URI
+            pattern: Regular expression pattern to search for
+            exclude_uri: Optional URI prefix to exclude from search
+            case_insensitive: Whether to perform case-insensitive matching
+            node_limit: Maximum number of results to return
+            level_limit: Maximum depth level to traverse (default: 10)
+            ctx: Request context
+
+        Returns:
+            Dict with matches, count, match_count, files_scanned
+        """
+        flags = re.IGNORECASE if case_insensitive else 0
+        compiled_pattern = re.compile(pattern, flags)
+        excluded_prefix = None
+        if exclude_uri:
+            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            self._ensure_access(excluded_prefix, ctx)
+        file_uris = await self._collect_grep_files(
+            uri,
+            excluded_prefix=excluded_prefix,
+            level_limit=level_limit,
+            ctx=ctx,
+        )
+        results, files_scanned = await self._grep_files_parallel(
+            file_uris,
+            compiled_pattern=compiled_pattern,
+            node_limit=node_limit,
+            ctx=ctx,
+        )
+
+        return {
+            "matches": results,
+            "count": len(results),
+            "match_count": len(results),
+            "files_scanned": files_scanned,
+        }
+
+    async def _collect_grep_files(
+        self,
+        uri: str,
+        excluded_prefix: Optional[str],
+        level_limit: int,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[str]:
+        file_uris: List[str] = []
+
+        async def search_recursive(current_uri: str, current_depth: int) -> None:
+            if current_depth > level_limit:
+                return
+
+            normalized_current_uri = self._normalize_uri(current_uri)
+            if excluded_prefix and (
+                normalized_current_uri == excluded_prefix
+                or normalized_current_uri.startswith(excluded_prefix + "/")
+            ):
+                logger.debug(f"Skipping excluded uri during grep: {normalized_current_uri}")
+                return
+
+            try:
+                entries = await self.ls(normalized_current_uri, ctx=ctx)
+            except Exception:
+                return
+
+            for entry in entries:
+                entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
+                if excluded_prefix and (
+                    entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
+                ):
+                    logger.debug(f"Skipping excluded uri during grep: {entry_uri}")
+                    continue
+
+                if entry.get("isDir"):
+                    await search_recursive(entry_uri, current_depth + 1)
+                else:
+                    file_uris.append(entry_uri)
+
+        normalized_uri = self._normalize_uri(uri)
+        if excluded_prefix and (
+            normalized_uri == excluded_prefix or normalized_uri.startswith(excluded_prefix + "/")
+        ):
+            logger.debug(f"Skipping excluded uri during grep: {normalized_uri}")
+            return file_uris
+        try:
+            root_stat = await self.stat(normalized_uri, ctx=ctx)
+        except Exception:
+            return file_uris
+        if not root_stat.get("isDir", False):
+            file_uris.append(normalized_uri)
+            return file_uris
+
+        await search_recursive(uri, 0)
+        return file_uris
+
+    async def _grep_files_parallel(
+        self,
+        file_uris: List[str],
+        compiled_pattern: re.Pattern,
+        node_limit: Optional[int],
+        ctx: Optional[RequestContext] = None,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        results: List[Dict[str, Any]] = []
+        files_scanned = 0
+        for start in range(0, len(file_uris), _DEFAULT_GREP_FILE_CONCURRENCY):
+            batch_uris = file_uris[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
+            batch_jobs = [
+                self._grep_single_file(entry_uri, compiled_pattern, ctx) for entry_uri in batch_uris
+            ]
+            batch_results = await asyncio.gather(*batch_jobs)
+            for matches, scanned_count in batch_results:
+                files_scanned += scanned_count
+                for match in matches:
+                    results.append(match)
+                    if node_limit and len(results) >= node_limit:
+                        return results, files_scanned
+
+        return results, files_scanned
+
+    async def _grep_single_file(
+        self,
+        entry_uri: str,
+        compiled_pattern: re.Pattern,
+        ctx: Optional[RequestContext] = None,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        try:
+            content = await self.read(entry_uri, ctx=ctx)
+            if isinstance(content, bytes):
+                content = content.decode("utf-8", errors="replace")
+
+            matches: List[Dict[str, Any]] = []
+            lines = content.split("\n")
+            for line_num, line in enumerate(lines, 1):
+                if compiled_pattern.search(line):
+                    matches.append(
+                        {
+                            "line": line_num,
+                            "uri": entry_uri,
+                            "content": line,
+                        }
+                    )
+            return matches, 1
+        except Exception as e:
+            logger.debug(f"Failed to grep {entry_uri}: {e}")
+            return [], 1
+
     def _resolve_grep_match_agfs_path(self, base_path: str, match_file: str) -> str:
         """Resolve a grep match path (relative to query root) into a full AGFS path."""
         if match_file == ".":
@@ -895,7 +1313,9 @@ class VikingFS:
             return 0
         return len([part for part in match_file.split("/") if part])
 
-    async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
+    async def stat(
+        self, uri: str, ctx: Optional[RequestContext] = None, skip_count: bool = False
+    ) -> Dict[str, Any]:
         """
         File/directory information.
 
@@ -909,6 +1329,13 @@ class VikingFS:
             count (int): For directories, the number of nodes in the vector index
                 under this directory (including subdirectories). For files, this
                 field is not included.
+
+        Args:
+            uri: Viking URI
+            ctx: Request context
+            skip_count: If True, skip the vector_store.count() call for directories.
+                Use this when the count field is not needed (e.g. in grep) to avoid
+                an extra VikingDB API call.
         """
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
@@ -942,7 +1369,7 @@ class VikingFS:
         if isinstance(result, dict):
             result["isLocked"] = await self._is_path_locked_async(path)
             # Add count for directories if vector store available
-            if result.get("isDir", False):
+            if not skip_count and result.get("isDir", False):
                 try:
                     vector_store = self._get_vector_store()
                     if vector_store:

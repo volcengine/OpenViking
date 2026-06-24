@@ -159,9 +159,7 @@ def search_symbols(query: str, files: List[Tuple[str, str]]) -> str:
     return "\n".join(out)
 
 
-def _resolve_symbol(
-    skeleton: CodeSkeleton, symbol: str
-) -> Optional[Tuple[str, int, int]]:
+def _resolve_symbol(skeleton: CodeSkeleton, symbol: str) -> Optional[Tuple[str, int, int]]:
     """Find a symbol by 'foo' (bare) or 'Foo.bar' (qualified). Case sensitive.
 
     Search priority for bare names (no dot):

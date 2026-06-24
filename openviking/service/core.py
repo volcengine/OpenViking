@@ -318,6 +318,7 @@ class OpenVikingService:
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
             retrieval_config=config.retrieval,
+            grep_config=config.grep,
             enable_recorder=enable_recorder,
             encryptor=self._encryptor,
         )

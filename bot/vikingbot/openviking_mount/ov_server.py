@@ -253,6 +253,38 @@ class VikingClient:
             "reason": getattr(relation, "reason", ""),
         }
 
+    def _matched_context_group_to_dicts(self, result: Any, group_name: str) -> List[Dict[str, Any]]:
+        if isinstance(result, dict):
+            group = result.get(group_name, [])
+        else:
+            group = getattr(result, group_name, [])
+
+        if not isinstance(group, list):
+            return []
+
+        items: List[Dict[str, Any]] = []
+        for item in group:
+            if isinstance(item, dict):
+                items.append(dict(item))
+            else:
+                items.append(self._matched_context_to_dict(item))
+        return items
+
+    def _matched_context_total(
+        self,
+        result: Any,
+        memories: List[Dict[str, Any]],
+        resources: List[Dict[str, Any]],
+        skills: List[Dict[str, Any]],
+    ) -> int:
+        if isinstance(result, dict):
+            total = result.get("total")
+        else:
+            total = getattr(result, "total", None)
+        if isinstance(total, int):
+            return total
+        return len(memories) + len(resources) + len(skills)
+
     def _is_root_key_mode(self) -> bool:
         return (
             self.auth_mode == "trusted"
@@ -413,11 +445,7 @@ class VikingClient:
             uris.append(self._memory_target_uri(None))
 
         normalized_peer_ids = self._dedupe_strings(
-            [
-                pid
-                for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or []))
-                if pid
-            ]
+            [pid for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or [])) if pid]
         )
         for peer_id in normalized_peer_ids:
             try:
@@ -450,11 +478,7 @@ class VikingClient:
             [str(user_id).strip() for user_id in (user_ids or []) if str(user_id).strip()]
         )
         normalized_peer_ids = self._dedupe_strings(
-            [
-                pid
-                for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or []))
-                if pid
-            ]
+            [pid for pid in (self._peer_id(peer_id) for peer_id in (peer_ids or [])) if pid]
         )
         effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
 
@@ -479,7 +503,9 @@ class VikingClient:
                 try:
                     target_uris.append(self._current_peer_memory_target_uri(peer_id))
                 except ValueError as exc:
-                    logger.warning(f"Skip invalid current peer memory target peer_id={peer_id}: {exc}")
+                    logger.warning(
+                        f"Skip invalid current peer memory target peer_id={peer_id}: {exc}"
+                    )
 
         if not target_uris:
             target_uris.append(self._memory_target_uri(None))
@@ -506,10 +532,7 @@ class VikingClient:
             owner_user_id=owner_user_id,
             peer_ids=peer_ids,
         )
-        return [
-            (target_uri, self._owner_user_id_for_uri(target_uri))
-            for target_uri in target_uris
-        ]
+        return [(target_uri, self._owner_user_id_for_uri(target_uri)) for target_uri in target_uris]
 
     def _skill_memory_uri(self, skill_name: str, user_id: Optional[str] = None) -> str:
         return f"{self._memory_target_uri(user_id)}skills/{skill_name}.md"
@@ -625,18 +648,15 @@ class VikingClient:
             if should_close:
                 await client.close()
 
-        # 将 FindResult 对象转换为 JSON map
+        # 将 FindResult 对象或已序列化的 JSON map 统一转换为 JSON map
+        memories = self._matched_context_group_to_dicts(result, "memories")
+        resources = self._matched_context_group_to_dicts(result, "resources")
+        skills = self._matched_context_group_to_dicts(result, "skills")
         return {
-            "memories": [self._matched_context_to_dict(m) for m in result.memories]
-            if hasattr(result, "memories")
-            else [],
-            "resources": [self._matched_context_to_dict(r) for r in result.resources]
-            if hasattr(result, "resources")
-            else [],
-            "skills": [self._matched_context_to_dict(s) for s in result.skills]
-            if hasattr(result, "skills")
-            else [],
-            "total": getattr(result, "total", len(getattr(result, "resources", []))),
+            "memories": memories,
+            "resources": resources,
+            "skills": skills,
+            "total": self._matched_context_total(result, memories, resources, skills),
             "query": query,
             "target_uri": target_uri,
         }
@@ -706,11 +726,7 @@ class VikingClient:
         ]
 
         normalized_peer_ids = self._dedupe_strings(
-            [
-                pid
-                for pid in (self._peer_id(peer_value) for peer_value in (peer_ids or []))
-                if pid
-            ]
+            [pid for pid in (self._peer_id(peer_value) for peer_value in (peer_ids or [])) if pid]
         )
         effective_owner_user_id = self._effective_user_id(owner_user_id) if owner_user_id else None
 
@@ -1099,6 +1115,7 @@ async def account_test():
     res = await client.search("123")
 
     print(res)
+
 
 if __name__ == "__main__":
     asyncio.run(main_test())

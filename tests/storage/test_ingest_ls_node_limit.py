@@ -33,9 +33,7 @@ class _TruncatingVikingFS:
     TARGET = "viking://resources/wixqa"
 
     def __init__(self, n_children: int):
-        self._children = [
-            {"name": f"doc{i:05d}", "isDir": True} for i in range(n_children)
-        ]
+        self._children = [{"name": f"doc{i:05d}", "isDir": True} for i in range(n_children)]
         self.moved: list[tuple[str, str]] = []
 
     async def exists(self, uri, ctx=None):
@@ -86,9 +84,7 @@ class _TruncatingLsFS:
 
     def __init__(self, dir_uri: str, n_children: int):
         self._dir_uri = dir_uri
-        self._children = [
-            {"name": f"doc{i:05d}", "isDir": True} for i in range(n_children)
-        ]
+        self._children = [{"name": f"doc{i:05d}", "isDir": True} for i in range(n_children)]
 
     async def ls(self, uri, node_limit=1000, ctx=None):
         entries = self._children if uri == self._dir_uri else []

@@ -21,6 +21,7 @@ from .consts import (
 )
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
+from .grep_config import GrepConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
 from .oauth_config import OAuthConfig
@@ -133,6 +134,11 @@ class OpenVikingConfig(BaseModel):
     retrieval: RetrievalConfig = Field(
         default_factory=RetrievalConfig,
         description="Retrieval ranking configuration",
+    )
+
+    grep: GrepConfig = Field(
+        default_factory=GrepConfig,
+        description="Grep engine configuration",
     )
 
     # Encryption configuration

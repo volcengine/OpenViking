@@ -542,8 +542,7 @@ def check_vikingbot() -> CheckResult:
             return (
                 "warn",
                 "bot.ov_server.api_key_type=root without root API key",
-                "Configure bot.ov_server.api_key with a root API key for trusted "
-                "OpenViking access",
+                "Configure bot.ov_server.api_key with a root API key for trusted OpenViking access",
             )
         return "pass", "bot.ov_server configured for trusted OpenViking auth", None
 
