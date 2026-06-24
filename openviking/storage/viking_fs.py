@@ -993,12 +993,11 @@ class VikingFS:
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive."""
         entries = await self.tree(uri, node_limit=1000000, level_limit=None, ctx=ctx)
-        base_uri = uri.rstrip("/")
         matches = []
         for entry in entries:
             rel_path = entry.get("rel_path", "")
             if PurePath(rel_path).match(pattern):
-                matches.append(f"{base_uri}/{rel_path}")
+                matches.append(entry["uri"])
         # Now apply node limit to the filtered matches
         if node_limit is not None and node_limit > 0:
             matches = matches[:node_limit]
