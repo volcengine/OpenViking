@@ -283,12 +283,16 @@ class ExtractContext:
                     continue
         return datetime.now().strftime("%Y%m%d%H%M%S")
 
-    def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.2) -> str:
+    def get_event_content(
+        self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2
+    ) -> str:
         """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
-        if not ranges_str or not summary:
+        if not ranges_str:
             return summary or ""
         msg_range = self.read_message_ranges(ranges_str)
         original = msg_range.pretty_print()
+        if not summary or not summary.strip():
+            return original or ""
         if not original:
             return summary
         if len(summary) / len(original) >= ratio_threshold:

@@ -139,6 +139,22 @@ class TestMemoryUpdater:
         assert "Resource abstract" not in content
         assert "User reason" not in content
 
+    def test_extract_context_event_content_falls_back_to_range_when_summary_empty(self):
+        extract_context = ExtractContext(
+            messages=[
+                Message(
+                    id="1",
+                    role="user",
+                    parts=[TextPart(text="Gina can expand her clothing store now.")],
+                    created_at="2023-02-01T00:48:00",
+                )
+            ]
+        )
+
+        content = extract_context.get_event_content("0", "")
+
+        assert "Gina can expand her clothing store now." in content
+
     def test_create(self):
         """Test creating a MemoryUpdater."""
         updater = MemoryUpdater()
