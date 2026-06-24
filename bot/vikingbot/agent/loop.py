@@ -680,6 +680,14 @@ class AgentLoop:
         }
         write_exp_injected = False
 
+        def accumulate_token_usage(response: Any) -> None:
+            if not response.usage:
+                return
+            cur_token = response.usage
+            token_usage["prompt_tokens"] += cur_token.get("prompt_tokens", 0)
+            token_usage["completion_tokens"] += cur_token.get("completion_tokens", 0)
+            token_usage["total_tokens"] += cur_token.get("total_tokens", 0)
+
         while iteration < self.max_iterations:
             iteration += 1
 
@@ -702,11 +710,7 @@ class AgentLoop:
                 session_key=session_key,
                 publish_events=publish_events,
             )
-            if response.usage:
-                cur_token = response.usage
-                token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
-                token_usage["completion_tokens"] += cur_token["completion_tokens"]
-                token_usage["total_tokens"] += cur_token["total_tokens"]
+            accumulate_token_usage(response)
 
             if publish_events and response.reasoning_content and not streamed_reasoning:
                 await self.bus.publish_outbound(
@@ -849,7 +853,43 @@ class AgentLoop:
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
             if iteration >= self.max_iterations:
-                final_content = f"Reached {self.max_iterations} iterations without completion."
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Tool-use iteration limit reached. Do not call any more tools. "
+                            "Answer the user's original request directly using only the "
+                            "conversation, tool calls, and tool results already available above. "
+                            "If the gathered information is incomplete, explain the best-known "
+                            "answer and clearly note what remains uncertain."
+                        ),
+                    }
+                )
+                response, _streamed_content, streamed_reasoning = await self._chat_with_stream_events(
+                    messages=messages,
+                    tools=[],
+                    session_key=session_key,
+                    publish_events=publish_events,
+                )
+                accumulate_token_usage(response)
+                final_content = response.content
+                final_reasoning_content = response.reasoning_content
+
+                if publish_events and response.reasoning_content and not streamed_reasoning:
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            session_key=session_key,
+                            content=response.reasoning_content,
+                            event_type=OutboundEventType.REASONING,
+                        )
+                    )
+
+        if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
+            if iteration >= self.max_iterations:
+                final_content = (
+                    "I reached the tool-use limit before completing every step, and the "
+                    "available tool results are not enough for a reliable final answer."
+                )
             else:
                 final_content = "I've completed processing but have no response to give."
 
