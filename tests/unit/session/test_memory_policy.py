@@ -10,12 +10,19 @@ from openviking.session.memory_policy import MemoryPolicy
 from openviking_cli.exceptions import InvalidArgumentError
 
 
-def test_memory_policy_defaults_to_self_only():
+def test_memory_policy_defaults_to_self_and_peer():
     policy = MemoryPolicy.from_dict(None)
 
     assert policy.self_enabled is True
-    assert policy.peer_enabled is False
+    assert policy.peer_enabled is True
     assert policy.memory_types is None
+
+
+def test_memory_policy_can_disable_peer_memory():
+    policy = MemoryPolicy.from_dict({"peer": {"enabled": False}})
+
+    assert policy.self_enabled is True
+    assert policy.peer_enabled is False
 
 
 def test_memory_policy_uses_top_level_memory_types():

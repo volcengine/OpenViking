@@ -1,23 +1,31 @@
 use std::ffi::OsString;
 
+use clap::{Arg, ArgAction, Command, CommandFactory};
 use colored::Colorize;
-use unicode_width::UnicodeWidthStr;
 
 use crate::{
+    Cli,
+    cli_arg_scan::ValueOptions,
     i18n::{Language, copy},
+    terminal_ui::{
+        display_width, fit_to_display_width, pad_to_display_width, truncate_to_display_width,
+    },
     theme,
 };
 
 const BOX_WIDTH: usize = 74;
 const COMMAND_WIDTH: usize = 16;
-const DESCRIPTION_WIDTH: usize = BOX_WIDTH - COMMAND_WIDTH - 5;
 const COMMAND_HELP_LEFT_WIDTH: usize = 34;
 
 #[derive(Debug, Clone, Copy)]
 struct HelpCommand {
     name: &'static str,
-    description: &'static str,
-    badge: Option<&'static str>,
+}
+
+macro_rules! help_commands {
+    ($($name:literal),+ $(,)?) => {
+        &[$(HelpCommand { name: $name }),+]
+    };
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -32,275 +40,59 @@ struct HelpItem {
     description: &'static str,
 }
 
+#[derive(Debug, Clone)]
+struct RenderedHelpItem {
+    label: String,
+    description: String,
+}
+
+#[derive(Debug, Clone)]
+struct RenderedHelpSection {
+    title: String,
+    items: Vec<RenderedHelpItem>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct CommandHelpSpec {
     path: &'static [&'static str],
     purpose: &'static str,
-    usage: &'static str,
     examples: &'static [HelpItem],
-    arguments: &'static [HelpItem],
-    common_options: &'static [HelpItem],
-    advanced_options: &'static [HelpItem],
-    subcommands: &'static [HelpItem],
     next_steps: &'static [HelpItem],
 }
 
-const CORE_WORKFLOW: &[HelpCommand] = &[
-    HelpCommand {
-        name: "add-resource",
-        description: "Add files, folders, URLs, or repos into OpenViking",
-        badge: None,
-    },
-    HelpCommand {
-        name: "add-skill",
-        description: "Add a skill into OpenViking",
-        badge: None,
-    },
-    HelpCommand {
-        name: "find",
-        description: "Retrieve relevant context semantically",
-        badge: None,
-    },
-    HelpCommand {
-        name: "read",
-        description: "Read exact resource content",
-        badge: None,
-    },
-    HelpCommand {
-        name: "write",
-        description: "Update an existing resource",
-        badge: None,
-    },
-    HelpCommand {
-        name: "add-memory",
-        description: "Add a memory directly",
-        badge: None,
-    },
+const CORE_WORKFLOW: &[HelpCommand] = help_commands![
+    "add-resource",
+    "add-skill",
+    "skills",
+    "find",
+    "read",
+    "write",
+    "add-memory",
 ];
 
-const FILESYSTEM: &[HelpCommand] = &[
-    HelpCommand {
-        name: "ls",
-        description: "List directory contents",
-        badge: None,
-    },
-    HelpCommand {
-        name: "tree",
-        description: "Show a scoped resource tree",
-        badge: None,
-    },
-    HelpCommand {
-        name: "mkdir",
-        description: "Create a directory",
-        badge: None,
-    },
-    HelpCommand {
-        name: "rm",
-        description: "Remove a resource",
-        badge: None,
-    },
-    HelpCommand {
-        name: "mv",
-        description: "Move or rename a resource",
-        badge: None,
-    },
-    HelpCommand {
-        name: "stat",
-        description: "Show resource metadata",
-        badge: None,
-    },
-    HelpCommand {
-        name: "get",
-        description: "Download a file",
-        badge: None,
-    },
+const FILESYSTEM: &[HelpCommand] = help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "get"];
+
+const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
+    "find", "search", "grep", "glob", "abstract", "overview", "read"
 ];
 
-const SEARCH_CONTEXT: &[HelpCommand] = &[
-    HelpCommand {
-        name: "find",
-        description: "Semantic retrieval",
-        badge: None,
-    },
-    HelpCommand {
-        name: "search",
-        description: "Context-aware retrieval",
-        badge: Some("experimental"),
-    },
-    HelpCommand {
-        name: "grep",
-        description: "Pattern search",
-        badge: None,
-    },
-    HelpCommand {
-        name: "glob",
-        description: "Glob search",
-        badge: None,
-    },
-    HelpCommand {
-        name: "abstract",
-        description: "Read Level 0 abstract",
-        badge: None,
-    },
-    HelpCommand {
-        name: "overview",
-        description: "Read Level 1 overview",
-        badge: None,
-    },
-    HelpCommand {
-        name: "read",
-        description: "Read Level 2 content",
-        badge: None,
-    },
+const CONFIG_STATUS: &[HelpCommand] = help_commands![
+    "config", "language", "health", "status", "observer", "wait", "task", "version",
 ];
 
-const CONFIG_STATUS: &[HelpCommand] = &[
-    HelpCommand {
-        name: "config",
-        description: "Manage configs",
-        badge: None,
-    },
-    HelpCommand {
-        name: "config show",
-        description: "Show active config",
-        badge: None,
-    },
-    HelpCommand {
-        name: "config validate",
-        description: "Validate active config",
-        badge: None,
-    },
-    HelpCommand {
-        name: "config switch",
-        description: "Switch active config",
-        badge: None,
-    },
-    HelpCommand {
-        name: "config add",
-        description: "Add a config non-interactively",
-        badge: None,
-    },
-    HelpCommand {
-        name: "config list",
-        description: "List saved configs",
-        badge: None,
-    },
-    HelpCommand {
-        name: "config delete",
-        description: "Delete a saved config",
-        badge: None,
-    },
-    HelpCommand {
-        name: "language",
-        description: "Choose CLI display language (alias: lang)",
-        badge: None,
-    },
-    HelpCommand {
-        name: "health",
-        description: "Quick health check",
-        badge: None,
-    },
-    HelpCommand {
-        name: "status",
-        description: "Full server status",
-        badge: None,
-    },
-    HelpCommand {
-        name: "observer",
-        description: "Inspect server subsystems",
-        badge: None,
-    },
-    HelpCommand {
-        name: "wait",
-        description: "Wait for async work",
-        badge: None,
-    },
-    HelpCommand {
-        name: "task",
-        description: "Track async tasks",
-        badge: None,
-    },
-    HelpCommand {
-        name: "version",
-        description: "Show CLI version",
-        badge: None,
-    },
+const IMPORT_EXPORT_SESSIONS: &[HelpCommand] = help_commands![
+    "import", "export", "backup", "restore", "session", "privacy"
 ];
 
-const IMPORT_EXPORT_SESSIONS: &[HelpCommand] = &[
-    HelpCommand {
-        name: "import",
-        description: "Import .ovpack",
-        badge: None,
-    },
-    HelpCommand {
-        name: "export",
-        description: "Export context as .ovpack",
-        badge: None,
-    },
-    HelpCommand {
-        name: "backup",
-        description: "Create restore-only backup",
-        badge: None,
-    },
-    HelpCommand {
-        name: "restore",
-        description: "Restore backup",
-        badge: None,
-    },
-    HelpCommand {
-        name: "session",
-        description: "Manage sessions",
-        badge: None,
-    },
-    HelpCommand {
-        name: "privacy",
-        description: "Manage privacy config",
-        badge: None,
-    },
-];
-
-const INTERACTIVE_ADMIN: &[HelpCommand] = &[
-    HelpCommand {
-        name: "tui",
-        description: "Interactive file explorer",
-        badge: None,
-    },
-    HelpCommand {
-        name: "chat",
-        description: "Chat with vikingbot",
-        badge: None,
-    },
-    HelpCommand {
-        name: "admin",
-        description: "Account and user management",
-        badge: None,
-    },
-    HelpCommand {
-        name: "system",
-        description: "System utilities",
-        badge: None,
-    },
-    HelpCommand {
-        name: "reindex",
-        description: "Reindex semantic/vector artifacts",
-        badge: None,
-    },
-    HelpCommand {
-        name: "relations",
-        description: "List resource relations",
-        badge: Some("experimental"),
-    },
-    HelpCommand {
-        name: "link",
-        description: "Create relation links",
-        badge: Some("experimental"),
-    },
-    HelpCommand {
-        name: "unlink",
-        description: "Remove relation links",
-        badge: Some("experimental"),
-    },
+const INTERACTIVE_ADMIN: &[HelpCommand] = help_commands![
+    "tui",
+    "chat",
+    "admin",
+    "system",
+    "reindex",
+    "relations",
+    "link",
+    "unlink"
 ];
 
 const HELP_SECTIONS: &[HelpSection] = &[
@@ -330,30 +122,10 @@ const HELP_SECTIONS: &[HelpSection] = &[
     },
 ];
 
-const GLOBAL_OPTIONS: &[HelpItem] = &[
-    HelpItem {
-        label: "-o, --output <table|json>",
-        description: "Choose human table output or machine-readable JSON.",
-    },
-    HelpItem {
-        label: "-c, --compact <bool>",
-        description: "Use compact table/JSON rendering.",
-    },
-    HelpItem {
-        label: "--account <account>",
-        description: "Override X-OpenViking-Account for this command.",
-    },
-    HelpItem {
-        label: "--user <user>",
-        description: "Override X-OpenViking-User for this command.",
-    },
-];
-
 const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["add-resource"],
         purpose: "Import a local file, folder, URL, or repository into OpenViking.",
-        usage: "ov add-resource <path-or-url> [--parent <uri>|--to <uri>] [--wait]",
         examples: &[
             HelpItem {
                 label: "ov add-resource ./docs --parent viking://projects/acme --wait",
@@ -363,64 +135,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov add-resource https://example.com/spec.md --to viking://specs/api.md",
                 description: "Import a URL to an exact target URI.",
             },
-            HelpItem {
-                label: "ov add-resource https://example.com --args='depth:1,max_pages:3'",
-                description: "Import a URL with parser-specific options.",
-            },
         ],
-        arguments: &[HelpItem {
-            label: "<path-or-url>",
-            description: "Local path, URL, or repository to import.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "--parent <uri>",
-                description: "Import under an existing directory URI.",
-            },
-            HelpItem {
-                label: "-p, --parent-auto-create <uri>",
-                description: "Create the parent directory if missing.",
-            },
-            HelpItem {
-                label: "--to <uri>",
-                description: "Import to an exact new resource URI.",
-            },
-            HelpItem {
-                label: "--wait",
-                description: "Wait until indexing/processing completes.",
-            },
-            HelpItem {
-                label: "--include / --exclude",
-                description: "Filter files during folder import.",
-            },
-        ],
-        advanced_options: &[
-            HelpItem {
-                label: "--reason <text>",
-                description: "Attach an import reason.",
-            },
-            HelpItem {
-                label: "--instruction <text>",
-                description: "Attach processing instructions.",
-            },
-            HelpItem {
-                label: "--watch-interval <minutes>",
-                description: "Set automatic refresh cadence.",
-            },
-            HelpItem {
-                label: "--args <key:value,...>",
-                description: "Pass parser-specific options; quote values containing commas.",
-            },
-            HelpItem {
-                label: "--progress / --no-progress",
-                description: "Override local upload progress display.",
-            },
-            HelpItem {
-                label: "-v, --verbose",
-                description: "Print upload diagnostics.",
-            },
-        ],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov task list",
@@ -439,7 +154,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["add-skill"],
         purpose: "Import a skill directory, SKILL.md file, or raw skill content.",
-        usage: "ov add-skill <skill-path-or-content> [--wait]",
         examples: &[
             HelpItem {
                 label: "ov add-skill ./skills/my-skill --wait",
@@ -450,31 +164,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Import a single skill definition.",
             },
         ],
-        arguments: &[HelpItem {
-            label: "<skill-path-or-content>",
-            description: "Skill folder, SKILL.md path, or raw content.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "--wait",
-                description: "Wait until skill processing completes.",
-            },
-            HelpItem {
-                label: "--timeout <seconds>",
-                description: "Maximum wait time when using --wait.",
-            },
-        ],
-        advanced_options: &[
-            HelpItem {
-                label: "--progress / --no-progress",
-                description: "Override local upload progress display.",
-            },
-            HelpItem {
-                label: "-v, --verbose",
-                description: "Print upload diagnostics.",
-            },
-        ],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov find \"skill topic\"",
@@ -487,9 +176,32 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
     },
     CommandHelpSpec {
+        path: &["skills"],
+        purpose: "Manage installed agent skills.",
+        examples: &[
+            HelpItem {
+                label: "ov skills list",
+                description: "List installed skills.",
+            },
+            HelpItem {
+                label: "ov skills find \"code review\"",
+                description: "Search installed skills semantically.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov skills <subcommand> --help",
+                description: "Show exact arguments for a skill operation.",
+            },
+            HelpItem {
+                label: "ov add-skill ./skills/my-skill",
+                description: "Import a new skill.",
+            },
+        ],
+    },
+    CommandHelpSpec {
         path: &["ls"],
         purpose: "List resources under a Viking URI.",
-        usage: "ov ls [uri] [--recursive] [--all]",
         examples: &[
             HelpItem {
                 label: "ov ls",
@@ -500,33 +212,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "List a subtree recursively.",
             },
         ],
-        arguments: &[HelpItem {
-            label: "[uri]",
-            description: "Directory URI to list. Defaults to viking://.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "-r, --recursive",
-                description: "List nested directories recursively.",
-            },
-            HelpItem {
-                label: "-s, --simple",
-                description: "Print only paths.",
-            },
-            HelpItem {
-                label: "-a, --all",
-                description: "Include hidden files.",
-            },
-            HelpItem {
-                label: "-n, --node-limit <n>",
-                description: "Limit number of listed nodes.",
-            },
-        ],
-        advanced_options: &[HelpItem {
-            label: "-l, --abs-limit <n>",
-            description: "Limit abstract text in agent-oriented output.",
-        }],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov tree <uri>",
@@ -541,34 +226,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["tree"],
         purpose: "Show a hierarchical view of resources under a URI.",
-        usage: "ov tree <uri> [--level-limit <n>] [--node-limit <n>]",
         examples: &[HelpItem {
             label: "ov tree viking://projects/acme -L 4",
             description: "Show a project tree up to depth 4.",
         }],
-        arguments: &[HelpItem {
-            label: "<uri>",
-            description: "Directory URI to inspect.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "-L, --level-limit <n>",
-                description: "Maximum traversal depth.",
-            },
-            HelpItem {
-                label: "-n, --node-limit <n>",
-                description: "Maximum number of nodes.",
-            },
-            HelpItem {
-                label: "-a, --all",
-                description: "Include hidden files.",
-            },
-        ],
-        advanced_options: &[HelpItem {
-            label: "-l, --abs-limit <n>",
-            description: "Limit abstract text in agent-oriented output.",
-        }],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov read <uri>",
@@ -583,21 +244,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["mkdir"],
         purpose: "Create a directory in OpenViking.",
-        usage: "ov mkdir <uri> [--description <text>]",
         examples: &[HelpItem {
             label: "ov mkdir viking://projects/acme --description \"ACME project context\"",
             description: "Create a project folder with a description.",
         }],
-        arguments: &[HelpItem {
-            label: "<uri>",
-            description: "Directory URI to create.",
-        }],
-        common_options: &[HelpItem {
-            label: "--description <text>",
-            description: "Initial directory description.",
-        }],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov add-resource ./docs --parent <uri>",
             description: "Import content into the new directory.",
@@ -606,7 +256,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["rm"],
         purpose: "Remove a resource from OpenViking.",
-        usage: "ov rm <uri> [--recursive]",
         examples: &[
             HelpItem {
                 label: "ov rm viking://scratch/old-note.md",
@@ -616,17 +265,11 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov rm viking://scratch --recursive",
                 description: "Remove a directory subtree.",
             },
+            HelpItem {
+                label: "ov rm viking://resources/images/foo --recursive --wait",
+                description: "Remove a subtree and wait for generated overviews to refresh.",
+            },
         ],
-        arguments: &[HelpItem {
-            label: "<uri>",
-            description: "Resource URI to remove.",
-        }],
-        common_options: &[HelpItem {
-            label: "-r, --recursive",
-            description: "Required for directory/subtree removal.",
-        }],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov ls <parent-uri>",
@@ -641,24 +284,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["mv"],
         purpose: "Move or rename a resource.",
-        usage: "ov mv <from-uri> <to-uri>",
         examples: &[HelpItem {
             label: "ov mv viking://notes/draft.md viking://notes/final.md",
             description: "Rename a file resource.",
         }],
-        arguments: &[
-            HelpItem {
-                label: "<from-uri>",
-                description: "Existing resource URI.",
-            },
-            HelpItem {
-                label: "<to-uri>",
-                description: "Destination URI.",
-            },
-        ],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov stat <to-uri>",
@@ -673,18 +302,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["stat"],
         purpose: "Show metadata for one resource.",
-        usage: "ov stat <uri>",
         examples: &[HelpItem {
             label: "ov stat viking://projects/acme/spec.md",
             description: "Inspect resource metadata.",
         }],
-        arguments: &[HelpItem {
-            label: "<uri>",
-            description: "Resource URI to inspect.",
-        }],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov read <uri>",
@@ -699,18 +320,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["read"],
         purpose: "Read exact Level 2 file content from a Viking URI.",
-        usage: "ov read <uri>",
         examples: &[HelpItem {
             label: "ov read viking://projects/acme/spec.md",
             description: "Print exact file content.",
         }],
-        arguments: &[HelpItem {
-            label: "<uri>",
-            description: "File resource URI.",
-        }],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov write <uri> --content \"...\"",
@@ -725,18 +338,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["abstract"],
         purpose: "Read Level 0 abstract content for a directory.",
-        usage: "ov abstract <directory-uri>",
         examples: &[HelpItem {
             label: "ov abstract viking://projects/acme",
             description: "Read the compact directory abstract.",
         }],
-        arguments: &[HelpItem {
-            label: "<directory-uri>",
-            description: "Directory URI.",
-        }],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov overview <directory-uri>",
             description: "Read a richer Level 1 overview.",
@@ -745,18 +350,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["overview"],
         purpose: "Read Level 1 overview content for a directory.",
-        usage: "ov overview <directory-uri>",
         examples: &[HelpItem {
             label: "ov overview viking://projects/acme",
             description: "Read the directory overview.",
         }],
-        arguments: &[HelpItem {
-            label: "<directory-uri>",
-            description: "Directory URI.",
-        }],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov read <file-uri>",
             description: "Open exact Level 2 content.",
@@ -765,7 +362,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["write"],
         purpose: "Update text content in an existing resource.",
-        usage: "ov write <uri> (--content <text>|--from-file <path>) [--append|--mode <mode>]",
         examples: &[
             HelpItem {
                 label: "ov write viking://notes/todo.md --content \"Ship config UX\"",
@@ -776,33 +372,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Write from disk and wait for processing.",
             },
         ],
-        arguments: &[HelpItem {
-            label: "<uri>",
-            description: "Existing resource URI.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "--content <text>",
-                description: "Inline replacement content.",
-            },
-            HelpItem {
-                label: "--from-file <path>",
-                description: "Read replacement content from disk.",
-            },
-            HelpItem {
-                label: "--append",
-                description: "Append instead of replacing.",
-            },
-            HelpItem {
-                label: "--wait",
-                description: "Wait for async processing.",
-            },
-        ],
-        advanced_options: &[HelpItem {
-            label: "--mode <replace|append|create>",
-            description: "Explicit write mode.",
-        }],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov read <uri>",
@@ -817,24 +386,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["get"],
         purpose: "Download a file resource to a local path.",
-        usage: "ov get <uri> <local-path>",
         examples: &[HelpItem {
             label: "ov get viking://assets/logo.png ./logo.png",
             description: "Download a binary or text file.",
         }],
-        arguments: &[
-            HelpItem {
-                label: "<uri>",
-                description: "File resource URI.",
-            },
-            HelpItem {
-                label: "<local-path>",
-                description: "Destination path that does not already exist.",
-            },
-        ],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov stat <uri>",
             description: "Inspect source metadata.",
@@ -843,7 +398,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["find"],
         purpose: "Retrieve relevant OpenViking context semantically.",
-        usage: "ov find <query> [--uri <uri>] [--node-limit <n>]",
         examples: &[
             HelpItem {
                 label: "ov find \"deployment rollback steps\"",
@@ -854,39 +408,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Search a subtree and include overview/file results.",
             },
         ],
-        arguments: &[HelpItem {
-            label: "<query>",
-            description: "Natural-language search query.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "-u, --uri <uri>",
-                description: "Limit search to a subtree.",
-            },
-            HelpItem {
-                label: "-n, --node-limit <n>",
-                description: "Maximum final results returned.",
-            },
-            HelpItem {
-                label: "-t, --threshold <score>",
-                description: "Minimum relevance score.",
-            },
-            HelpItem {
-                label: "-L, --level <0,1,2>",
-                description: "Filter abstract, overview, or file results.",
-            },
-        ],
-        advanced_options: &[
-            HelpItem {
-                label: "--after <time>",
-                description: "Only include newer results, e.g. 48h or 2026-03-10.",
-            },
-            HelpItem {
-                label: "--before <time>",
-                description: "Only include older results, e.g. 24h or ISO-8601.",
-            },
-        ],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov read <uri>",
@@ -901,44 +422,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["search"],
         purpose: "Run experimental context-aware retrieval, optionally scoped to a session.",
-        usage: "ov search <query> [--session-id <id>] [--uri <uri>]",
         examples: &[HelpItem {
             label: "ov search \"what changed last time?\" --session-id abc123",
             description: "Search with session context.",
         }],
-        arguments: &[HelpItem {
-            label: "<query>",
-            description: "Natural-language search query.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "--session-id <id>",
-                description: "Session context for retrieval.",
-            },
-            HelpItem {
-                label: "-u, --uri <uri>",
-                description: "Limit search to a subtree.",
-            },
-            HelpItem {
-                label: "-n, --node-limit <n>",
-                description: "Maximum results per search pass. Search may merge multiple passes.",
-            },
-        ],
-        advanced_options: &[
-            HelpItem {
-                label: "-t, --threshold <score>",
-                description: "Minimum relevance score.",
-            },
-            HelpItem {
-                label: "--after / --before",
-                description: "Time-bound results.",
-            },
-            HelpItem {
-                label: "-L, --level <0,1,2>",
-                description: "Filter by context level.",
-            },
-        ],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov session get-session-context <id>",
             description: "Inspect the session context directly.",
@@ -947,40 +434,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["grep"],
         purpose: "Search resource content with a text pattern.",
-        usage: "ov grep <pattern> [--uri <uri>] [--ignore-case]",
         examples: &[HelpItem {
             label: "ov grep \"TODO\" -u viking://projects/acme -i",
             description: "Find case-insensitive matches in a subtree.",
         }],
-        arguments: &[HelpItem {
-            label: "<pattern>",
-            description: "Text pattern to search for.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "-u, --uri <uri>",
-                description: "Search root. Defaults to viking://.",
-            },
-            HelpItem {
-                label: "-i, --ignore-case",
-                description: "Match case-insensitively.",
-            },
-            HelpItem {
-                label: "-n, --node-limit <n>",
-                description: "Maximum number of results.",
-            },
-        ],
-        advanced_options: &[
-            HelpItem {
-                label: "-x, --exclude-uri <uri>",
-                description: "Skip matches under a URI prefix.",
-            },
-            HelpItem {
-                label: "-L, --level-limit <n>",
-                description: "Maximum traversal depth.",
-            },
-        ],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov read <uri>",
             description: "Open a matching resource.",
@@ -989,27 +446,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["glob"],
         purpose: "Find resources by glob pattern.",
-        usage: "ov glob <pattern> [--uri <uri>]",
         examples: &[HelpItem {
             label: "ov glob \"**/*.md\" -u viking://projects/acme",
             description: "Find Markdown files in a project.",
         }],
-        arguments: &[HelpItem {
-            label: "<pattern>",
-            description: "Glob pattern to match resource paths.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "-u, --uri <uri>",
-                description: "Search root. Defaults to viking://.",
-            },
-            HelpItem {
-                label: "-n, --node-limit <n>",
-                description: "Maximum number of results.",
-            },
-        ],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov read <uri>",
             description: "Read one matched file.",
@@ -1018,7 +458,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["session"],
         purpose: "Manage sessions, messages, archives, and committed session context.",
-        usage: "ov session <subcommand>",
         examples: &[
             HelpItem {
                 label: "ov session new",
@@ -1029,35 +468,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Append a message.",
             },
         ],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[
-            HelpItem {
-                label: "new",
-                description: "Create a session.",
-            },
-            HelpItem {
-                label: "list",
-                description: "List sessions.",
-            },
-            HelpItem {
-                label: "get <id>",
-                description: "Show session details.",
-            },
-            HelpItem {
-                label: "get-session-context <id>",
-                description: "Read merged session context.",
-            },
-            HelpItem {
-                label: "add-message <id>",
-                description: "Append one message.",
-            },
-            HelpItem {
-                label: "commit <id>",
-                description: "Archive messages and extract memories.",
-            },
-        ],
         next_steps: &[HelpItem {
             label: "ov session <subcommand> --help",
             description: "Show exact arguments for a session operation.",
@@ -1066,7 +476,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["add-memory"],
         purpose: "Add a memory directly from text or JSON messages.",
-        usage: "ov add-memory <content>",
         examples: &[
             HelpItem {
                 label: "ov add-memory \"The deployment owner is Alice\"",
@@ -1077,13 +486,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Add one structured message.",
             },
         ],
-        arguments: &[HelpItem {
-            label: "<content>",
-            description: "Plain text, one JSON message, or a JSON message array.",
-        }],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov find \"memory topic\"",
             description: "Verify the memory is retrievable.",
@@ -1092,7 +494,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["privacy"],
         purpose: "Manage privacy config categories, targets, versions, and activation.",
-        usage: "ov privacy <subcommand>",
         examples: &[
             HelpItem {
                 label: "ov privacy categories",
@@ -1103,31 +504,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Show active values for one target.",
             },
         ],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[
-            HelpItem {
-                label: "categories",
-                description: "List categories.",
-            },
-            HelpItem {
-                label: "list <category>",
-                description: "List targets.",
-            },
-            HelpItem {
-                label: "get <category> <target>",
-                description: "Show active config.",
-            },
-            HelpItem {
-                label: "upsert <category> <target>",
-                description: "Update values.",
-            },
-            HelpItem {
-                label: "versions / version / activate",
-                description: "Inspect or activate versions.",
-            },
-        ],
         next_steps: &[HelpItem {
             label: "ov privacy <subcommand> --help",
             description: "Show exact arguments for a privacy operation.",
@@ -1136,18 +512,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["relations"],
         purpose: "List relation links for one resource. Experimental.",
-        usage: "ov relations <uri>",
         examples: &[HelpItem {
             label: "ov relations viking://projects/acme/spec.md",
             description: "Inspect linked resources.",
         }],
-        arguments: &[HelpItem {
-            label: "<uri>",
-            description: "Source resource URI.",
-        }],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov link <from-uri> <to-uri>",
@@ -1162,27 +530,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["link"],
         purpose: "Create one or more relation links between resources. Experimental.",
-        usage: "ov link <from-uri> <to-uri>... [--reason <text>]",
         examples: &[HelpItem {
             label: "ov link viking://a.md viking://b.md --reason \"related design\"",
             description: "Link two resources with a reason.",
         }],
-        arguments: &[
-            HelpItem {
-                label: "<from-uri>",
-                description: "Source resource URI.",
-            },
-            HelpItem {
-                label: "<to-uri>...",
-                description: "One or more target URIs.",
-            },
-        ],
-        common_options: &[HelpItem {
-            label: "--reason <text>",
-            description: "Why these resources are linked.",
-        }],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov relations <from-uri>",
             description: "Confirm the relation.",
@@ -1191,24 +542,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["unlink"],
         purpose: "Remove one relation link between resources. Experimental.",
-        usage: "ov unlink <from-uri> <to-uri>",
         examples: &[HelpItem {
             label: "ov unlink viking://a.md viking://b.md",
             description: "Remove a relation.",
         }],
-        arguments: &[
-            HelpItem {
-                label: "<from-uri>",
-                description: "Source resource URI.",
-            },
-            HelpItem {
-                label: "<to-uri>",
-                description: "Target URI to unlink.",
-            },
-        ],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov relations <from-uri>",
             description: "Confirm the relation is gone.",
@@ -1217,27 +554,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["export"],
         purpose: "Export context from a URI as an .ovpack file.",
-        usage: "ov export <uri> <output.ovpack> [--include-vectors]",
         examples: &[HelpItem {
             label: "ov export viking://projects/acme ./acme.ovpack",
             description: "Export a project subtree.",
         }],
-        arguments: &[
-            HelpItem {
-                label: "<uri>",
-                description: "Source URI to export.",
-            },
-            HelpItem {
-                label: "<output.ovpack>",
-                description: "Output file path.",
-            },
-        ],
-        common_options: &[HelpItem {
-            label: "--include-vectors",
-            description: "Include compatible dense vector snapshots.",
-        }],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov import ./file.ovpack <target-uri>",
             description: "Import the exported pack elsewhere.",
@@ -1246,21 +566,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["backup"],
         purpose: "Create a restore-only backup .ovpack for public OpenViking scopes.",
-        usage: "ov backup <output.ovpack> [--include-vectors]",
         examples: &[HelpItem {
             label: "ov backup ./openviking-backup.ovpack --include-vectors",
             description: "Create a backup with vectors when compatible.",
         }],
-        arguments: &[HelpItem {
-            label: "<output.ovpack>",
-            description: "Backup file path.",
-        }],
-        common_options: &[HelpItem {
-            label: "--include-vectors",
-            description: "Include compatible dense vector snapshots.",
-        }],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov restore ./openviking-backup.ovpack",
             description: "Restore this backup later.",
@@ -1269,33 +578,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["import"],
         purpose: "Import an .ovpack into a target URI.",
-        usage: "ov import <file.ovpack> <target-uri> [--on-conflict <policy>]",
         examples: &[HelpItem {
             label: "ov import ./acme.ovpack viking://imports/acme --on-conflict skip",
             description: "Import while keeping existing resources.",
         }],
-        arguments: &[
-            HelpItem {
-                label: "<file.ovpack>",
-                description: "Input pack file.",
-            },
-            HelpItem {
-                label: "<target-uri>",
-                description: "Target parent URI.",
-            },
-        ],
-        common_options: &[
-            HelpItem {
-                label: "--on-conflict <fail|overwrite|skip>",
-                description: "Choose how to handle existing resources.",
-            },
-            HelpItem {
-                label: "--vector-mode <auto|recompute|require>",
-                description: "Choose vector snapshot handling.",
-            },
-        ],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov tree <target-uri>",
@@ -1310,27 +596,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["restore"],
         purpose: "Restore a backup .ovpack to its original public scope roots.",
-        usage: "ov restore <backup.ovpack> [--on-conflict <policy>]",
         examples: &[HelpItem {
             label: "ov restore ./openviking-backup.ovpack --on-conflict fail",
             description: "Restore only if there are no conflicts.",
         }],
-        arguments: &[HelpItem {
-            label: "<backup.ovpack>",
-            description: "Backup pack file.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "--on-conflict <fail|overwrite|skip>",
-                description: "Choose how to handle existing resources.",
-            },
-            HelpItem {
-                label: "--vector-mode <auto|recompute|require>",
-                description: "Choose vector snapshot handling.",
-            },
-        ],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov status",
@@ -1345,18 +614,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["tui"],
         purpose: "Open the interactive file explorer.",
-        usage: "ov tui [uri]",
         examples: &[HelpItem {
             label: "ov tui viking://projects/acme",
             description: "Browse a project subtree interactively.",
         }],
-        arguments: &[HelpItem {
-            label: "[uri]",
-            description: "Start URI. Defaults to /.",
-        }],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov tree <uri>",
             description: "Use a non-interactive tree view instead.",
@@ -1365,7 +626,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["chat"],
         purpose: "Chat with the vikingbot agent.",
-        usage: "ov chat [--message <text>] [--session <id>]",
         examples: &[
             HelpItem {
                 label: "ov chat",
@@ -1376,36 +636,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Send one message.",
             },
         ],
-        arguments: &[],
-        common_options: &[
-            HelpItem {
-                label: "-m, --message <text>",
-                description: "Send one message instead of interactive input.",
-            },
-            HelpItem {
-                label: "-s, --session <id>",
-                description: "Use a specific chat session.",
-            },
-            HelpItem {
-                label: "--no-format",
-                description: "Disable rich formatting.",
-            },
-        ],
-        advanced_options: &[
-            HelpItem {
-                label: "--sender <id>",
-                description: "Set sender ID.",
-            },
-            HelpItem {
-                label: "--stream <bool>",
-                description: "Enable or disable streaming.",
-            },
-            HelpItem {
-                label: "--no-history",
-                description: "Disable command history.",
-            },
-        ],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov find \"topic\"",
             description: "Search context directly.",
@@ -1414,18 +644,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["wait"],
         purpose: "Wait for queued async processing to complete.",
-        usage: "ov wait [--timeout <seconds>]",
         examples: &[HelpItem {
             label: "ov wait --timeout 120",
             description: "Wait up to two minutes.",
         }],
-        arguments: &[],
-        common_options: &[HelpItem {
-            label: "--timeout <seconds>",
-            description: "Maximum wait time.",
-        }],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov task list",
@@ -1440,7 +662,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["task"],
         purpose: "Inspect and manage async processing tasks.",
-        usage: "ov task <subcommand>",
         examples: &[
             HelpItem {
                 label: "ov task list --status failed",
@@ -1451,32 +672,38 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Inspect one task.",
             },
         ],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[
-            HelpItem {
-                label: "status <task-id>",
-                description: "Show one task.",
-            },
-            HelpItem {
-                label: "list",
-                description: "List tracked tasks.",
-            },
-            HelpItem {
-                label: "watch <subcommand>",
-                description: "Manage auto-refresh subscriptions.",
-            },
-        ],
         next_steps: &[HelpItem {
             label: "ov wait",
             description: "Wait for queued work.",
         }],
     },
     CommandHelpSpec {
+        path: &["task", "watch"],
+        purpose: "Inspect and manage automatic resource refresh subscriptions.",
+        examples: &[
+            HelpItem {
+                label: "ov task watch ls",
+                description: "List watch subscriptions.",
+            },
+            HelpItem {
+                label: "ov task watch update <task-or-uri> --interval 30",
+                description: "Change a watch refresh interval.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov task watch <subcommand> --help",
+                description: "Show exact arguments for a watch operation.",
+            },
+            HelpItem {
+                label: "ov task list",
+                description: "Inspect async processing tasks.",
+            },
+        ],
+    },
+    CommandHelpSpec {
         path: &["status"],
         purpose: "Show OpenViking server readiness and component status.",
-        usage: "ov status [--verbose]",
         examples: &[
             HelpItem {
                 label: "ov status",
@@ -1487,13 +714,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Show full component tables.",
             },
         ],
-        arguments: &[],
-        common_options: &[HelpItem {
-            label: "--verbose",
-            description: "Show full component tables instead of the curated diagnostic view.",
-        }],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov health",
@@ -1508,7 +728,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["observer"],
         purpose: "Inspect specific OpenViking server subsystems.",
-        usage: "ov observer <subcommand>",
         examples: &[
             HelpItem {
                 label: "ov observer models",
@@ -1519,27 +738,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Inspect queue status.",
             },
         ],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[
-            HelpItem {
-                label: "queue",
-                description: "Queue status.",
-            },
-            HelpItem {
-                label: "models",
-                description: "Model status.",
-            },
-            HelpItem {
-                label: "transaction",
-                description: "Transaction system status.",
-            },
-            HelpItem {
-                label: "filesystem / retrieval / system",
-                description: "Operational metrics.",
-            },
-        ],
         next_steps: &[HelpItem {
             label: "ov status",
             description: "Return to the full status view.",
@@ -1548,15 +746,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["health"],
         purpose: "Run a quick server reachability check.",
-        usage: "ov health",
         examples: &[HelpItem {
             label: "ov health",
             description: "Check whether the active server is reachable.",
         }],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov config validate",
@@ -1571,7 +764,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config"],
         purpose: "Add, edit, delete, show, validate, or switch OpenViking CLI configs.",
-        usage: "ov config [show|validate|switch|list|add|edit|delete]",
         examples: &[
             HelpItem {
                 label: "ov config",
@@ -1590,39 +782,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Probe the active config.",
             },
         ],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[
-            HelpItem {
-                label: "show",
-                description: "Print active config with secrets redacted.",
-            },
-            HelpItem {
-                label: "validate",
-                description: "Probe the active server/auth config.",
-            },
-            HelpItem {
-                label: "switch",
-                description: "Switch the active saved config interactively or by name.",
-            },
-            HelpItem {
-                label: "list",
-                description: "List saved configs.",
-            },
-            HelpItem {
-                label: "add",
-                description: "Add an OpenViking Service or custom config without prompts.",
-            },
-            HelpItem {
-                label: "edit",
-                description: "Edit a saved config without prompts.",
-            },
-            HelpItem {
-                label: "delete",
-                description: "Delete a saved config without prompts.",
-            },
-        ],
         next_steps: &[
             HelpItem {
                 label: "ov config validate",
@@ -1637,15 +796,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "show"],
         purpose: "Print the active CLI config with secrets redacted.",
-        usage: "ov config show",
         examples: &[HelpItem {
             label: "ov config show",
             description: "Show the active server URL, config name, and safe fields.",
         }],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov config",
@@ -1660,15 +814,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "validate"],
         purpose: "Parse the active config and probe the configured OpenViking server.",
-        usage: "ov config validate",
         examples: &[HelpItem {
             label: "ov config validate",
             description: "Check active URL, auth, and server reachability.",
         }],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov config",
@@ -1683,7 +832,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "switch"],
         purpose: "Switch the active CLI config to a saved config.",
-        usage: "ov config switch [name]",
         examples: &[
             HelpItem {
                 label: "ov config switch",
@@ -1694,13 +842,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Activate a saved config without prompts.",
             },
         ],
-        arguments: &[HelpItem {
-            label: "name",
-            description: "Optional saved config name. Omit it for the interactive picker.",
-        }],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov config show",
@@ -1715,7 +856,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "list"],
         purpose: "List saved CLI configs and mark which one is active.",
-        usage: "ov config list",
         examples: &[
             HelpItem {
                 label: "ov config list",
@@ -1726,10 +866,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Return saved configs as JSON for automation.",
             },
         ],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov config switch <name>",
@@ -1744,7 +880,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "add"],
         purpose: "Create a saved CLI config without opening the interactive wizard.",
-        usage: "ov config add <ov-service|custom> [options]",
         examples: &[
             HelpItem {
                 label: "printf '%s' \"$OV_KEY\" | ov config add ov-service --api-key-stdin --activate",
@@ -1753,19 +888,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov config add custom --name local --url http://127.0.0.1:1933 --activate",
                 description: "Create and activate a local custom config.",
-            },
-        ],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[
-            HelpItem {
-                label: "ov-service",
-                description: "Use the fixed OpenViking Service endpoint.",
-            },
-            HelpItem {
-                label: "custom",
-                description: "Use a local or hosted custom endpoint.",
             },
         ],
         next_steps: &[
@@ -1782,7 +904,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "add", "ov-service"],
         purpose: "Create an OpenViking Service config without prompts.",
-        usage: "ov config add ov-service [--name <name>] (--api-key-stdin|--api-key-env <env>) [--account <account> --user <user>] [--activate] [--force]",
         examples: &[
             HelpItem {
                 label: "printf '%s' \"$OV_KEY\" | ov config add ov-service --name prod --api-key-stdin --activate",
@@ -1793,40 +914,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Read the API key from an environment variable and print JSON.",
             },
         ],
-        arguments: &[],
-        common_options: &[
-            HelpItem {
-                label: "--name <name>",
-                description: "Saved config name. Generated if omitted.",
-            },
-            HelpItem {
-                label: "--api-key-stdin",
-                description: "Read the API key from stdin.",
-            },
-            HelpItem {
-                label: "--api-key-env <env>",
-                description: "Read the API key from an environment variable.",
-            },
-            HelpItem {
-                label: "--activate",
-                description: "Also write the active ovcli.conf.",
-            },
-            HelpItem {
-                label: "--force",
-                description: "Replace an existing saved config.",
-            },
-        ],
-        advanced_options: &[
-            HelpItem {
-                label: "--account <account>",
-                description: "Optional account identity override.",
-            },
-            HelpItem {
-                label: "--user <user>",
-                description: "Optional user identity override.",
-            },
-        ],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov config validate",
@@ -1841,7 +928,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "add", "custom"],
         purpose: "Create a custom config without prompts.",
-        usage: "ov config add custom [--name <name>] [--url <url>] [--api-key-stdin|--api-key-env <env>] [--root-api-key-stdin|--root-api-key-env <env>] [--account <account>] [--user <user>] [--activate] [--force]",
         examples: &[
             HelpItem {
                 label: "ov config add custom --name local --url http://127.0.0.1:1933 --activate",
@@ -1852,44 +938,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Create a hosted custom config with an API key.",
             },
         ],
-        arguments: &[],
-        common_options: &[
-            HelpItem {
-                label: "--name <name>",
-                description: "Saved config name. Generated if omitted.",
-            },
-            HelpItem {
-                label: "--url <url>",
-                description: "Server URL. Defaults to http://127.0.0.1:1933.",
-            },
-            HelpItem {
-                label: "--api-key-stdin / --api-key-env <env>",
-                description: "Read a normal API key from stdin or an environment variable.",
-            },
-            HelpItem {
-                label: "--root-api-key-stdin / --root-api-key-env <env>",
-                description: "Read a root API key from stdin or an environment variable.",
-            },
-            HelpItem {
-                label: "--activate",
-                description: "Also write the active ovcli.conf.",
-            },
-            HelpItem {
-                label: "--force",
-                description: "Replace an existing saved config.",
-            },
-        ],
-        advanced_options: &[
-            HelpItem {
-                label: "--account <account>",
-                description: "Account identity. Required when only a root key is supplied.",
-            },
-            HelpItem {
-                label: "--user <user>",
-                description: "User identity. Required when only a root key is supplied.",
-            },
-        ],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov config validate",
@@ -1904,7 +952,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "edit"],
         purpose: "Edit a saved CLI config without prompts.",
-        usage: "ov config edit <name> [--new-name <name>] [--url <url>] [key options] [identity options] [--activate] [--force]",
         examples: &[
             HelpItem {
                 label: "ov config edit prod --new-name production --activate",
@@ -1919,47 +966,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Remove a normal API key from a saved config.",
             },
         ],
-        arguments: &[HelpItem {
-            label: "name",
-            description: "Existing saved config name.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "--new-name <name>",
-                description: "Rename the saved config.",
-            },
-            HelpItem {
-                label: "--url <url>",
-                description: "Replace the custom server URL.",
-            },
-            HelpItem {
-                label: "--api-key-stdin / --api-key-env <env> / --clear-api-key",
-                description: "Replace or clear the normal API key.",
-            },
-            HelpItem {
-                label: "--root-api-key-stdin / --root-api-key-env <env> / --clear-root-api-key",
-                description: "Replace or clear the root API key.",
-            },
-            HelpItem {
-                label: "--activate",
-                description: "Also make the edited config active.",
-            },
-            HelpItem {
-                label: "--force",
-                description: "Replace an existing target name when renaming.",
-            },
-        ],
-        advanced_options: &[
-            HelpItem {
-                label: "--account <account>",
-                description: "Replace account identity.",
-            },
-            HelpItem {
-                label: "--user <user>",
-                description: "Replace user identity.",
-            },
-        ],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov config validate",
@@ -1974,7 +980,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["config", "delete"],
         purpose: "Delete a saved CLI config without prompts.",
-        usage: "ov config delete <name> [--force]",
         examples: &[
             HelpItem {
                 label: "ov config delete old-local",
@@ -1985,16 +990,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Return a JSON no-op if the config is already absent.",
             },
         ],
-        arguments: &[HelpItem {
-            label: "name",
-            description: "Saved config name to delete.",
-        }],
-        common_options: &[HelpItem {
-            label: "--force",
-            description: "Reserved for future destructive delete behavior.",
-        }],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov config list",
@@ -2009,7 +1004,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["language"],
         purpose: "Choose the OpenViking CLI display language.",
-        usage: "ov language [en|zh-CN]",
         examples: &[
             HelpItem {
                 label: "ov language",
@@ -2024,13 +1018,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Use the short alias to switch display text to English.",
             },
         ],
-        arguments: &[HelpItem {
-            label: "language",
-            description: "Optional language code: en or zh-CN.",
-        }],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov config",
             description: "Open the config manager.",
@@ -2039,15 +1026,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["version"],
         purpose: "Print the OpenViking CLI version.",
-        usage: "ov version",
         examples: &[HelpItem {
             label: "ov version",
             description: "Show the installed CLI version.",
         }],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[HelpItem {
             label: "ov --help",
             description: "See all commands.",
@@ -2056,7 +1038,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["admin"],
         purpose: "Manage accounts, users, roles, and API keys. Admin/root access required.",
-        usage: "ov admin <subcommand> [--sudo]",
         examples: &[
             HelpItem {
                 label: "ov admin list-accounts --sudo",
@@ -2066,29 +1047,13 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov admin register-user <account> <user>",
                 description: "Register a user in an account.",
             },
-        ],
-        arguments: &[],
-        common_options: &[HelpItem {
-            label: "--sudo",
-            description: "Use root_api_key for root-only admin commands.",
-        }],
-        advanced_options: &[],
-        subcommands: &[
             HelpItem {
-                label: "create-account / delete-account",
-                description: "Create or remove an account.",
+                label: "ov admin migrate --sudo",
+                description: "Start legacy agent/session migration.",
             },
             HelpItem {
-                label: "list-accounts",
-                description: "List accounts.",
-            },
-            HelpItem {
-                label: "register-user / remove-user",
-                description: "Manage account users.",
-            },
-            HelpItem {
-                label: "set-role / regenerate-key",
-                description: "Manage roles and API keys.",
+                label: "ov admin migrate --cleanup --sudo",
+                description: "Remove legacy agent/session directories after verifying migration.",
             },
         ],
         next_steps: &[
@@ -2105,7 +1070,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["system"],
         purpose: "Run server utility, health, consistency, backend sync, and crypto commands.",
-        usage: "ov system <subcommand>",
         examples: &[
             HelpItem {
                 label: "ov system health",
@@ -2120,27 +1084,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Inspect multi-write backend sync lag.",
             },
         ],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[
-            HelpItem {
-                label: "wait / status / health",
-                description: "Operational checks.",
-            },
-            HelpItem {
-                label: "consistency <uri>",
-                description: "Check subtree consistency.",
-            },
-            HelpItem {
-                label: "backend <subcommand>",
-                description: "Inspect or repair multi-write backend sync state.",
-            },
-            HelpItem {
-                label: "crypto <subcommand>",
-                description: "Key management commands.",
-            },
-        ],
         next_steps: &[HelpItem {
             label: "ov status",
             description: "Use the standard status view.",
@@ -2149,7 +1092,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["system", "backend"],
         purpose: "Inspect and repair multi-write backend sync state.",
-        usage: "ov system backend <subcommand>",
         examples: &[
             HelpItem {
                 label: "ov system backend sync-status viking://resources",
@@ -2160,19 +1102,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Retry lagging backend sync targets.",
             },
         ],
-        arguments: &[],
-        common_options: &[],
-        advanced_options: &[],
-        subcommands: &[
-            HelpItem {
-                label: "sync-status <uri>",
-                description: "Show multi-write backend sync status for a subtree.",
-            },
-            HelpItem {
-                label: "sync-retry <uri>",
-                description: "Retry pending multi-write backend sync work.",
-            },
-        ],
         next_steps: &[HelpItem {
             label: "ov system backend sync-status <uri>",
             description: "Inspect the subtree again after retry.",
@@ -2181,31 +1110,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["reindex"],
         purpose: "Reindex semantic/vector artifacts for a URI.",
-        usage: "ov reindex <uri> [--mode <mode>] [--wait <bool>] [--sudo]",
         examples: &[HelpItem {
             label: "ov reindex viking://projects/acme --mode vectors_only --wait true",
             description: "Rebuild vector artifacts and wait.",
         }],
-        arguments: &[HelpItem {
-            label: "<uri>",
-            description: "Subtree URI to reindex.",
-        }],
-        common_options: &[
-            HelpItem {
-                label: "--mode <mode>",
-                description: "Reindex mode. Defaults to vectors_only.",
-            },
-            HelpItem {
-                label: "--wait <bool>",
-                description: "Wait for completion. Defaults to true.",
-            },
-            HelpItem {
-                label: "--sudo",
-                description: "Use root API key when required.",
-            },
-        ],
-        advanced_options: &[],
-        subcommands: &[],
         next_steps: &[
             HelpItem {
                 label: "ov task list",
@@ -2241,202 +1149,486 @@ pub(crate) fn render_top_level_help() -> String {
 }
 
 pub(crate) fn render_top_level_help_with_language(language: Language) -> String {
-    let mut lines = Vec::new();
+    render_top_level_help_with_language_and_width(language, help_output_width())
+}
 
-    lines.push(format!(
-        "{} {}",
-        theme::brand_title("OpenViking").bold(),
-        theme::version(version())
-    ));
-    lines.push(
-        theme::heading(copy(
-            language,
-            "Context Database for AI Agents",
-            "AI Agent 上下文数据库",
-        ))
-        .bold()
-        .to_string(),
+fn render_top_level_help_with_language_and_width(language: Language, width: usize) -> String {
+    let mut lines = Vec::new();
+    let mut root = Cli::command();
+    root.build();
+
+    let title = format!("OpenViking {}", version());
+    if width >= BOX_WIDTH || display_width(&title) <= width {
+        lines.push(format!(
+            "{} {}",
+            theme::brand_title("OpenViking").bold(),
+            theme::version(version())
+        ));
+    } else {
+        lines.push(
+            theme::brand_title(truncate_to_display_width(&title, width))
+                .bold()
+                .to_string(),
+        );
+    }
+    let motto = copy(
+        language,
+        "Context Database for AI Agents",
+        "AI Agent 上下文数据库",
     );
+    let motto = if width >= BOX_WIDTH {
+        motto.to_string()
+    } else {
+        truncate_to_display_width(motto, width)
+    };
+    lines.push(theme::heading(motto).bold().to_string());
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::warning(copy(language, "Usage:", "用法：")).bold()
-    ));
-    lines.push(format!("  {}", theme::strong("ov <command> [options]")));
+    lines.push(warning_line(copy(language, "Usage:", "用法："), width));
+    let usage = if width >= BOX_WIDTH {
+        "ov <command> [options]".to_string()
+    } else {
+        truncate_to_display_width("ov <command> [options]", width.saturating_sub(2))
+    };
+    lines.push(format!("  {}", theme::strong(usage)));
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::strong(copy(language, "Start here:", "从这里开始："))
+    lines.push(strong_line(
+        copy(language, "Start here:", "从这里开始："),
+        width,
     ));
-    lines.push(start_here_line(
-        "ov config",
-        copy(
-            language,
-            "Add, edit, or delete configs",
-            "添加、编辑或删除配置",
-        ),
-    ));
-    lines.push(start_here_line(
-        "ov health",
-        copy(language, "Check server reachability", "检查服务器连接"),
-    ));
-    lines.push(start_here_line(
-        "ov status",
-        copy(language, "Inspect server status", "查看服务器状态"),
-    ));
-    lines.push(start_here_line(
-        "ov tui",
-        copy(
-            language,
-            "Browse OpenViking interactively",
-            "交互式浏览 OpenViking",
-        ),
-    ));
+    for command in ["config", "health", "status", "tui"] {
+        if let Some(line) = top_level_start_here_line(&root, command, language, width) {
+            lines.push(line);
+        }
+    }
     lines.push(String::new());
 
     for section in HELP_SECTIONS {
-        lines.extend(section_lines(section));
+        lines.extend(section_lines(section, &root, language, width));
         lines.push(String::new());
     }
 
-    lines.push(format!(
-        "{}",
-        theme::strong(copy(language, "Global options:", "全局选项："))
+    lines.push(strong_line(
+        copy(language, "Global options:", "全局选项："),
+        width,
     ));
-    lines.push(option_line(
-        "-o, --output <table|json>",
-        copy(language, "Output format", "输出格式"),
-    ));
-    lines.push(option_line(
-        "-c, --compact",
-        copy(language, "Compact output", "紧凑输出"),
-    ));
-    lines.push(option_line(
-        "--account <account>",
-        copy(language, "Override account", "覆盖账户"),
-    ));
-    lines.push(option_line(
-        "--user <user>",
-        copy(language, "Override user", "覆盖用户"),
-    ));
-    lines.push(option_line(
-        "--sudo",
-        copy(
-            language,
-            "Use root API key for admin commands",
-            "管理命令使用 root API Key",
-        ),
-    ));
-    lines.push(option_line(
-        "-h, --help",
-        copy(language, "Show help", "显示帮助"),
-    ));
-    lines.push(option_line(
-        "-V, --version",
-        copy(language, "Show version", "显示版本"),
-    ));
+    for item in top_level_global_options(&root, language) {
+        lines.push(option_line(&item.label, &item.description, width));
+    }
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::strong(copy(language, "More:", "更多："))
-    ));
+    lines.push(strong_line(copy(language, "More:", "更多："), width));
     lines.push(start_here_line(
         "ov <command> --help",
         copy(language, "Show command details", "查看命令详情"),
+        width,
     ));
     lines.push(start_here_line(
         "ov config",
         copy(language, "Configure the CLI", "配置 CLI"),
+        width,
     ));
 
     format!("{}\n", lines.join("\n"))
 }
 
 fn render_command_help(spec: &CommandHelpSpec) -> String {
+    render_command_help_with_width(spec, help_output_width())
+}
+
+fn render_command_help_with_width(spec: &CommandHelpSpec, width: usize) -> String {
     let mut lines = Vec::new();
     let language = Language::current();
     let command = command_display(spec.path);
+    let clap_command = clap_command_for_path(spec.path)
+        .unwrap_or_else(|| panic!("curated help path missing from clap: {command}"));
 
-    lines.push(format!(
-        "{} {} {}",
-        theme::brand_title("OpenViking").bold(),
-        theme::version(version()),
-        theme::muted(format!("· {command}"))
-    ));
-    lines.push(theme::body(localized_command_purpose(spec, language)).to_string());
+    let plain_title_line = format!("OpenViking {} · {command}", version());
+    if width >= BOX_WIDTH || display_width(&plain_title_line) <= width {
+        lines.push(format!(
+            "{} {} {}",
+            theme::brand_title("OpenViking").bold(),
+            theme::version(version()),
+            theme::muted(format!("· {command}"))
+        ));
+    } else {
+        lines.push(
+            theme::brand_title(truncate_to_display_width(&plain_title_line, width))
+                .bold()
+                .to_string(),
+        );
+    }
+    let purpose = localized_command_purpose(spec, language);
+    let purpose = if width >= BOX_WIDTH {
+        purpose.to_string()
+    } else {
+        truncate_to_display_width(purpose, width)
+    };
+    lines.push(theme::body(purpose).to_string());
     lines.push(String::new());
-    lines.push(format!(
-        "{}",
-        theme::warning(copy(language, "Usage:", "用法：")).bold()
-    ));
-    lines.push(format!("  {}", theme::strong(spec.usage)));
+    lines.push(warning_line(copy(language, "Usage:", "用法："), width));
+    let usage = usage_for_command(clap_command.clone(), spec.path);
+    let usage = if width >= BOX_WIDTH {
+        usage
+    } else {
+        truncate_to_display_width(&usage, width.saturating_sub(2))
+    };
+    lines.push(format!("  {}", theme::strong(usage)));
     push_section(
         &mut lines,
         copy(language, "Examples", "示例"),
         spec.examples,
+        width,
     );
-    push_section(
+    let argument_items = arguments_from_command(&clap_command);
+    push_dynamic_section(
         &mut lines,
         copy(language, "Arguments", "参数"),
-        spec.arguments,
+        &argument_items,
+        width,
     );
-    push_section(
+    let subcommand_items = subcommands_from_command(&clap_command);
+    push_dynamic_section(
         &mut lines,
         copy(language, "Subcommands", "子命令"),
-        spec.subcommands,
+        &subcommand_items,
+        width,
     );
-    push_section(
-        &mut lines,
-        copy(language, "Common options", "常用选项"),
-        spec.common_options,
-    );
-    push_section(
-        &mut lines,
-        copy(language, "Advanced options", "高级选项"),
-        spec.advanced_options,
-    );
-    push_section(
+    for section in option_sections_from_command(&clap_command) {
+        push_dynamic_section(
+            &mut lines,
+            localized_option_section_title(&section.title, language),
+            &section.items,
+            width,
+        );
+    }
+    let global_items = global_options_for(spec);
+    push_dynamic_section(
         &mut lines,
         copy(language, "Global options", "全局选项"),
-        GLOBAL_OPTIONS,
+        &global_items,
+        width,
     );
     push_section(
         &mut lines,
         copy(language, "Next", "下一步"),
         spec.next_steps,
+        width,
     );
 
     format!("{}\n", lines.join("\n"))
 }
 
-fn push_section(lines: &mut Vec<String>, title: &str, items: &[HelpItem]) {
+fn clap_command_for_path(path: &[&str]) -> Option<Command> {
+    let mut root = Cli::command();
+    root.build();
+
+    let mut current = &root;
+    for token in path {
+        current = current.find_subcommand(token)?;
+    }
+    Some(current.clone())
+}
+
+fn usage_for_command(mut command: Command, path: &[&str]) -> String {
+    let usage = command.render_usage().to_string();
+    let usage = usage
+        .trim()
+        .strip_prefix("Usage:")
+        .unwrap_or(usage.trim())
+        .trim();
+
+    if let Some(rest) = usage.strip_prefix("openviking") {
+        return format!("ov{rest}");
+    }
+
+    let command_name = command.get_name();
+    if let Some(rest) = usage.strip_prefix(command_name) {
+        return format!("{}{}", command_display(path), rest);
+    }
+
+    usage.to_string()
+}
+
+fn arguments_from_command(command: &Command) -> Vec<RenderedHelpItem> {
+    command
+        .get_positionals()
+        .filter(|arg| is_visible_help_arg(arg))
+        .map(|arg| RenderedHelpItem {
+            label: positional_label(arg),
+            description: arg_help(arg),
+        })
+        .collect()
+}
+
+fn subcommands_from_command(command: &Command) -> Vec<RenderedHelpItem> {
+    command
+        .get_subcommands()
+        .filter(|subcommand| !subcommand.is_hide_set() && subcommand.get_name() != "help")
+        .map(|subcommand| RenderedHelpItem {
+            label: subcommand_label(subcommand),
+            description: command_about(subcommand),
+        })
+        .collect()
+}
+
+fn option_sections_from_command(command: &Command) -> Vec<RenderedHelpSection> {
+    let mut sections = Vec::<RenderedHelpSection>::new();
+
+    for arg in command
+        .get_arguments()
+        .filter(|arg| is_visible_help_arg(arg) && !arg.is_positional() && !arg.is_global_set())
+    {
+        let title = arg.get_help_heading().unwrap_or("Options").to_string();
+        let item = RenderedHelpItem {
+            label: option_label(arg),
+            description: arg_help(arg),
+        };
+
+        if let Some(section) = sections.iter_mut().find(|section| section.title == title) {
+            section.items.push(item);
+        } else {
+            sections.push(RenderedHelpSection {
+                title,
+                items: vec![item],
+            });
+        }
+    }
+
+    sections
+}
+
+fn global_options_for(spec: &CommandHelpSpec) -> Vec<RenderedHelpItem> {
+    let include_identity = !matches!(
+        spec.path,
+        ["config", "add", "ov-service"] | ["config", "add", "custom"] | ["config", "edit"]
+    );
+    let include_sudo = matches!(
+        spec.path,
+        ["admin"] | ["system"] | ["system", "backend"] | ["reindex"]
+    );
+
+    let mut root = Cli::command();
+    root.build();
+
+    let mut ids = vec!["output", "compact"];
+    if include_identity {
+        ids.extend(["account", "user"]);
+    }
+    if include_sudo {
+        ids.push("sudo");
+    }
+
+    rendered_global_options(&root, &ids, None)
+}
+
+fn is_visible_help_arg(arg: &Arg) -> bool {
+    !arg.is_hide_set()
+        && !matches!(
+            arg.get_action(),
+            ArgAction::Help | ArgAction::HelpShort | ArgAction::HelpLong | ArgAction::Version
+        )
+}
+
+fn positional_label(arg: &Arg) -> String {
+    let value = value_label(arg);
+    let mut label = if arg.is_required_set() {
+        format!("<{value}>")
+    } else {
+        format!("[{value}]")
+    };
+    if accepts_multiple_values(arg) {
+        label.push_str("...");
+    }
+    label
+}
+
+fn subcommand_label(command: &Command) -> String {
+    let mut names = vec![command.get_name().to_string()];
+    names.extend(command.get_visible_aliases().map(ToString::to_string));
+    let mut label = names.join(" / ");
+
+    let mut arguments: Vec<String> = command
+        .get_positionals()
+        .filter(|arg| is_visible_help_arg(arg))
+        .map(positional_label)
+        .collect();
+
+    if arguments.is_empty()
+        && command
+            .get_subcommands()
+            .any(|subcommand| !subcommand.is_hide_set() && subcommand.get_name() != "help")
+    {
+        arguments.push("<COMMAND>".to_string());
+    }
+
+    if !arguments.is_empty() {
+        label.push(' ');
+        label.push_str(&arguments.join(" "));
+    }
+
+    label
+}
+
+fn option_label(arg: &Arg) -> String {
+    let takes_value = takes_value(arg);
+    let value = if takes_value {
+        Some(value_label(arg))
+    } else {
+        None
+    };
+
+    let mut parts = Vec::new();
+    if let Some(short) = arg.get_short() {
+        parts.push(format!("-{short}"));
+    }
+
+    if let Some(long) = arg.get_long() {
+        parts.push(format!("--{long}{}", option_value_suffix(value.as_deref())));
+    }
+
+    let mut label = if parts.is_empty() {
+        arg.get_id().to_string()
+    } else {
+        parts.join(", ")
+    };
+
+    if let Some(aliases) = arg.get_all_aliases() {
+        for alias in aliases {
+            label.push_str(" / ");
+            label.push_str(&format!(
+                "--{alias}{}",
+                option_value_suffix(value.as_deref())
+            ));
+        }
+    }
+
+    label
+}
+
+fn option_value_suffix(value: Option<&str>) -> String {
+    value.map(|value| format!(" <{value}>")).unwrap_or_default()
+}
+
+fn value_label(arg: &Arg) -> String {
+    if let Some(possible_values) = possible_value_label(arg) {
+        return possible_values;
+    }
+
+    if let Some(value_names) = arg.get_value_names()
+        && let Some(value_name) = value_names.first()
+    {
+        return normalize_value_name(value_name.as_str());
+    }
+
+    normalize_value_name(arg.get_id().as_str())
+}
+
+fn possible_value_label(arg: &Arg) -> Option<String> {
+    let values: Vec<_> = arg
+        .get_possible_values()
+        .into_iter()
+        .filter(|value| !value.is_hide_set())
+        .map(|value| value.get_name().to_string())
+        .collect();
+
+    if values.is_empty() || values.len() > 6 {
+        None
+    } else {
+        Some(values.join("|"))
+    }
+}
+
+fn normalize_value_name(value: &str) -> String {
+    value.to_ascii_lowercase().replace('_', "-")
+}
+
+fn takes_value(arg: &Arg) -> bool {
+    arg.get_num_args().unwrap_or_default().takes_values()
+        && !matches!(arg.get_action(), ArgAction::SetTrue | ArgAction::SetFalse)
+}
+
+fn accepts_multiple_values(arg: &Arg) -> bool {
+    arg.get_num_args()
+        .map(|range| range.max_values() > 1)
+        .unwrap_or(false)
+}
+
+fn arg_help(arg: &Arg) -> String {
+    arg.get_help()
+        .or_else(|| arg.get_long_help())
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
+fn command_about(command: &Command) -> String {
+    command
+        .get_about()
+        .or_else(|| command.get_long_about())
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
+fn localized_option_section_title(title: &str, language: Language) -> &str {
+    match title {
+        "Common options" => copy(language, "Common options", "常用选项"),
+        "Advanced options" => copy(language, "Advanced options", "高级选项"),
+        "Options" => copy(language, "Options", "选项"),
+        _ => title,
+    }
+}
+
+fn push_section(lines: &mut Vec<String>, title: &str, items: &[HelpItem], width: usize) {
     if items.is_empty() {
         return;
     }
 
     lines.push(String::new());
-    lines.push(format!("{}", theme::heading(title).bold()));
+    lines.push(heading_line(title, width));
     for item in items {
-        lines.push(help_item_line(item));
+        lines.push(help_item_line(item, width));
     }
 }
 
-fn help_item_line(item: &HelpItem) -> String {
+fn push_dynamic_section(
+    lines: &mut Vec<String>,
+    title: &str,
+    items: &[RenderedHelpItem],
+    width: usize,
+) {
+    if items.is_empty() {
+        return;
+    }
+
+    lines.push(String::new());
+    lines.push(heading_line(title, width));
+    for item in items {
+        lines.push(help_item_line_parts(&item.label, &item.description, width));
+    }
+}
+
+fn help_item_line(item: &HelpItem, width: usize) -> String {
     let language = Language::current();
     let description = localized_help_item_description(item.label, item.description, language);
-    if display_width(item.label) > COMMAND_HELP_LEFT_WIDTH {
+    help_item_line_parts(item.label, description, width)
+}
+
+fn help_item_line_parts(label: &str, description: &str, width: usize) -> String {
+    if width >= BOX_WIDTH {
+        if display_width(label) > COMMAND_HELP_LEFT_WIDTH {
+            return format!(
+                "  {}\n      {}",
+                theme::command(label),
+                theme::body(description)
+            );
+        }
+
         return format!(
-            "  {}\n      {}",
-            theme::command(item.label),
+            "  {} {}",
+            theme::command(pad_to_display_width(label, COMMAND_HELP_LEFT_WIDTH)),
             theme::body(description)
         );
     }
 
-    format!(
-        "  {} {}",
-        theme::command(pad_to_display_width(item.label, COMMAND_HELP_LEFT_WIDTH)),
-        theme::body(description)
-    )
+    two_column_line(label, description, COMMAND_HELP_LEFT_WIDTH, width)
 }
 
 fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str {
@@ -2518,33 +1710,91 @@ fn localized_help_item_description<'a>(
         "-c, --compact <bool>" => "使用紧凑的表格或 JSON 输出。",
         "--account <account>" => "覆盖本次命令的 X-OpenViking-Account。",
         "--user <user>" => "覆盖本次命令的 X-OpenViking-User。",
-        "--sudo" => "使用 root API Key 执行管理命令。",
+        "--sudo" => "使用 root API Key 执行支持的管理和任务查询命令。",
         _ => description,
     }
 }
 
-fn start_here_line(command: &str, description: &str) -> String {
-    format!(
-        "  {} {}",
-        theme::command(pad_to_display_width(command, 22)).bold(),
-        theme::body(description)
-    )
+fn start_here_line(command: &str, description: &str, width: usize) -> String {
+    two_column_line_with_bold_label(command, description, 22, width)
 }
 
-fn option_line(option: &str, description: &str) -> String {
-    format!(
-        "  {} {}",
-        theme::command(pad_to_display_width(option, 26)),
-        theme::body(description)
-    )
+fn option_line(option: &str, description: &str, width: usize) -> String {
+    two_column_line(option, description, 26, width)
 }
 
-fn section_lines(section: &HelpSection) -> Vec<String> {
+fn top_level_start_here_line(
+    root: &Command,
+    command_name: &str,
+    language: Language,
+    width: usize,
+) -> Option<String> {
+    let command = root.find_subcommand(command_name)?;
+    Some(start_here_line(
+        &format!("ov {command_name}"),
+        &top_level_command_description(command, language),
+        width,
+    ))
+}
+
+fn top_level_global_options(root: &Command, language: Language) -> Vec<RenderedHelpItem> {
+    let mut items = rendered_global_options(
+        root,
+        &["output", "compact", "account", "user", "sudo"],
+        Some(language),
+    );
+
+    items.push(RenderedHelpItem {
+        label: "-h, --help".to_string(),
+        description: copy(language, "Show help", "显示帮助").to_string(),
+    });
+    items.push(RenderedHelpItem {
+        label: "-V, --version".to_string(),
+        description: copy(language, "Show version", "显示版本").to_string(),
+    });
+
+    items
+}
+
+fn rendered_global_options(
+    root: &Command,
+    ids: &[&str],
+    language: Option<Language>,
+) -> Vec<RenderedHelpItem> {
+    ids.iter()
+        .filter_map(|id| {
+            let id = *id;
+            root.get_arguments()
+                .find(|arg| arg.get_id().as_str() == id)
+                .map(|arg| {
+                    let description = arg_help(arg);
+                    let description = language
+                        .map(|language| {
+                            localized_global_option_description(id, &description, language)
+                                .to_string()
+                        })
+                        .unwrap_or(description);
+
+                    RenderedHelpItem {
+                        label: option_label(arg),
+                        description,
+                    }
+                })
+        })
+        .collect()
+}
+
+fn section_lines(
+    section: &HelpSection,
+    root: &Command,
+    language: Language,
+    width: usize,
+) -> Vec<String> {
     let mut lines = Vec::new();
-    let language = Language::current();
     let title_text = localized_section_title(section.title, language);
     let title = format!("─ {title_text} ");
-    let fill = BOX_WIDTH.saturating_sub(2 + display_width(&title));
+    let title = truncate_to_display_width(&title, width.saturating_sub(2));
+    let fill = width.saturating_sub(2 + display_width(&title));
     lines.push(format!(
         "{}{}{}{}",
         theme::border("╭"),
@@ -2554,60 +1804,243 @@ fn section_lines(section: &HelpSection) -> Vec<String> {
     ));
 
     for command in section.commands {
-        lines.push(command_line(command));
+        if let Some(clap_command) = root.find_subcommand(command.name) {
+            lines.push(command_line(command.name, clap_command, language, width));
+        }
     }
 
     lines.push(format!(
         "{}{}{}",
         theme::border("╰"),
-        theme::border("─".repeat(BOX_WIDTH.saturating_sub(2))),
+        theme::border("─".repeat(width.saturating_sub(2))),
         theme::border("╯")
     ));
     lines
 }
 
-fn command_line(command: &HelpCommand) -> String {
-    let language = Language::current();
-    let command_description =
-        localized_command_description(command.name, command.description, language);
-    let description = match command.badge {
+fn command_line(command_name: &str, command: &Command, language: Language, width: usize) -> String {
+    let command_description = top_level_command_description(command, language);
+    let badge = top_level_command_badge(command);
+    let command_width = boxed_command_width(width);
+    let description_width = boxed_description_width(width, command_width);
+    let description = match badge.as_deref() {
         Some(badge) => {
-            let used = display_width(command_description)
-                + display_width(localized_badge(badge, language));
-            let spacer = DESCRIPTION_WIDTH.saturating_sub(used).max(1);
+            let badge = localized_badge(badge, language);
+            let badge = truncate_to_display_width(badge, description_width);
+            let badge_width = display_width(&badge);
+            let description_text_width = description_width.saturating_sub(badge_width + 1);
+            let command_description =
+                truncate_to_display_width(&command_description, description_text_width);
+            let used = display_width(&command_description) + badge_width;
+            let spacer = description_width.saturating_sub(used);
             format!(
                 "{}{}{}",
                 command_description,
                 " ".repeat(spacer),
-                theme::muted(localized_badge(badge, language))
+                theme::muted(&badge)
             )
         }
-        None => format!(
-            "{}{}",
-            command_description,
-            " ".repeat(DESCRIPTION_WIDTH.saturating_sub(display_width(command_description)))
-        ),
+        None => {
+            let command_description =
+                truncate_to_display_width(&command_description, description_width);
+            format!(
+                "{}{}",
+                command_description,
+                " ".repeat(description_width.saturating_sub(display_width(&command_description)))
+            )
+        }
     };
 
     format!(
         "{} {} {} {}",
         theme::border("│"),
-        theme::command(pad_to_display_width(command.name, COMMAND_WIDTH)).bold(),
+        theme::command(fit_to_display_width(command_name, command_width)).bold(),
         theme::body(description),
         theme::border("│")
     )
 }
 
-fn display_width(value: &str) -> usize {
-    UnicodeWidthStr::width(value)
+fn top_level_command_description(command: &Command, language: Language) -> String {
+    let description = command_about_without_tags(command);
+    let mut description =
+        localized_command_description(command.get_name(), &description, language).to_string();
+    let aliases: Vec<_> = command.get_all_aliases().collect();
+
+    if !aliases.is_empty() {
+        description.push_str(&format!(
+            " ({}: {})",
+            copy(language, "alias", "别名"),
+            aliases.join(", ")
+        ));
+    }
+
+    description
 }
 
-fn pad_to_display_width(value: &str, width: usize) -> String {
-    format!(
-        "{}{}",
-        value,
-        " ".repeat(width.saturating_sub(display_width(value)))
-    )
+fn top_level_command_badge(command: &Command) -> Option<String> {
+    let about = command_about(command);
+    if command_about_tags(&about)
+        .iter()
+        .any(|tag| tag.eq_ignore_ascii_case("Experimental"))
+    {
+        Some("experimental".to_string())
+    } else {
+        None
+    }
+}
+
+fn command_about_without_tags(command: &Command) -> String {
+    let about = command_about(command);
+    strip_command_tags(&about).to_string()
+}
+
+fn command_about_tags(about: &str) -> Vec<&str> {
+    let mut tags = Vec::new();
+    let mut rest = about.trim_start();
+
+    while let Some(after_open) = rest.strip_prefix('[') {
+        let Some((tag, after_close)) = after_open.split_once(']') else {
+            break;
+        };
+        tags.push(tag);
+        rest = after_close.trim_start();
+    }
+
+    tags
+}
+
+fn strip_command_tags(about: &str) -> &str {
+    let mut rest = about.trim_start();
+
+    while let Some(after_open) = rest.strip_prefix('[') {
+        let Some((_, after_close)) = after_open.split_once(']') else {
+            break;
+        };
+        rest = after_close.trim_start();
+    }
+
+    rest
+}
+
+fn localized_global_option_description<'a>(
+    id: &str,
+    description: &'a str,
+    language: Language,
+) -> &'a str {
+    if language == Language::En {
+        return description;
+    }
+
+    match id {
+        "output" => "输出格式",
+        "compact" => "紧凑输出",
+        "account" => "覆盖账户",
+        "user" => "覆盖用户",
+        "sudo" => "admin、system、reindex、task status/list 使用 root API Key",
+        _ => description,
+    }
+}
+
+#[cfg(not(test))]
+fn help_output_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| crate::terminal_ui::terminal_width(columns as usize, BOX_WIDTH))
+        .unwrap_or(BOX_WIDTH)
+}
+
+#[cfg(test)]
+fn help_output_width() -> usize {
+    BOX_WIDTH
+}
+
+fn boxed_command_width(width: usize) -> usize {
+    let content_width = width.saturating_sub(5);
+    COMMAND_WIDTH.min(content_width / 2).max(1)
+}
+
+fn boxed_description_width(width: usize, command_width: usize) -> usize {
+    width.saturating_sub(command_width + 5)
+}
+
+fn two_column_line(
+    label: &str,
+    description: &str,
+    preferred_label_width: usize,
+    width: usize,
+) -> String {
+    two_column_line_with_style(label, description, preferred_label_width, width, false)
+}
+
+fn two_column_line_with_bold_label(
+    label: &str,
+    description: &str,
+    preferred_label_width: usize,
+    width: usize,
+) -> String {
+    two_column_line_with_style(label, description, preferred_label_width, width, true)
+}
+
+fn strong_line(text: &str, width: usize) -> String {
+    let text = if width >= BOX_WIDTH {
+        text.to_string()
+    } else {
+        truncate_to_display_width(text, width)
+    };
+    theme::strong(text).to_string()
+}
+
+fn warning_line(text: &str, width: usize) -> String {
+    let text = if width >= BOX_WIDTH {
+        text.to_string()
+    } else {
+        truncate_to_display_width(text, width)
+    };
+    theme::warning(text).bold().to_string()
+}
+
+fn heading_line(text: &str, width: usize) -> String {
+    let text = if width >= BOX_WIDTH {
+        text.to_string()
+    } else {
+        truncate_to_display_width(text, width)
+    };
+    theme::heading(text).bold().to_string()
+}
+
+fn two_column_line_with_style(
+    label: &str,
+    description: &str,
+    preferred_label_width: usize,
+    width: usize,
+    bold_label: bool,
+) -> String {
+    if width >= BOX_WIDTH {
+        let label = pad_to_display_width(label, preferred_label_width);
+        let label = if bold_label {
+            theme::command(label).bold().to_string()
+        } else {
+            theme::command(label).to_string()
+        };
+
+        return format!("  {} {}", label, theme::body(description));
+    }
+
+    if width <= 3 {
+        return truncate_to_display_width(label, width);
+    }
+
+    let content_width = width.saturating_sub(3);
+    let label_width = preferred_label_width.min(content_width / 2).max(1);
+    let description_width = width.saturating_sub(label_width + 3);
+    let label = fit_to_display_width(label, label_width);
+    let label = if bold_label {
+        theme::command(label).bold().to_string()
+    } else {
+        theme::command(label).to_string()
+    };
+    let description = truncate_to_display_width(description, description_width);
+
+    format!("  {} {}", label, theme::body(description))
 }
 
 fn localized_section_title(title: &str, language: Language) -> &str {
@@ -2643,6 +2076,7 @@ fn localized_command_description<'a>(
     match name {
         "add-resource" => "添加文件、文件夹、URL 或仓库",
         "add-skill" => "添加技能到 OpenViking",
+        "skills" => "管理已安装技能",
         "find" => "语义检索相关上下文",
         "read" => "读取精确资源内容",
         "write" => "更新已有资源",
@@ -2700,12 +2134,13 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
         return None;
     }
 
+    let value_options = cli_value_options();
     let has_help_flag = tokens.iter().skip(1).any(|token| is_help_flag(token));
     if has_help_flag {
-        if has_invalid_config_add_provider(&tokens) {
+        if has_invalid_config_add_provider(&tokens, &value_options) {
             return None;
         }
-        if let Some(path) = config_help_path(&tokens) {
+        if let Some(path) = config_help_path(&tokens, &value_options) {
             return Some(path);
         }
     }
@@ -2717,16 +2152,8 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
         if is_help_flag(token) {
             break;
         }
-        if token == "--sudo" || token == "--progress" || token == "--no-progress" || token == "-v" {
-            i += 1;
-            continue;
-        }
-        if consumes_value(token) {
-            i += if token.contains('=') { 1 } else { 2 };
-            continue;
-        }
-        if token.starts_with('-') {
-            i += 1;
+        if let Some(width) = option_token_width(&tokens, i, &value_options) {
+            i += width;
             continue;
         }
 
@@ -2735,8 +2162,14 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
             if is_help_flag(next) {
                 // Explicit help for this top-level command.
             } else if !next.starts_with('-') {
-                if has_help_flag && path.len() == 1 && allows_curated_nested(&path[0]) {
-                    path.push(canonical_command_token(next));
+                if has_help_flag && path.len() == 1 && is_bare_group_help_command(&path[0]) {
+                    let nested_path =
+                        command_path_until_help_flag(&tokens, i + 1, path, &value_options);
+                    return if command_spec(&nested_path).is_some() {
+                        Some(nested_path)
+                    } else {
+                        None
+                    };
                 }
                 return if has_help_flag { Some(path) } else { None };
             } else {
@@ -2757,23 +2190,37 @@ fn command_help_path(args: &[OsString]) -> Option<Vec<String>> {
     }
 }
 
-fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
+fn command_path_until_help_flag(
+    tokens: &[String],
+    mut i: usize,
+    mut path: Vec<String>,
+    value_options: &ValueOptions,
+) -> Vec<String> {
+    while i < tokens.len() {
+        let token = &tokens[i];
+        if is_help_flag(token) {
+            break;
+        }
+        if let Some(width) = option_token_width(tokens, i, value_options) {
+            i += width;
+            continue;
+        }
+
+        path.push(canonical_command_token(token));
+        i += 1;
+    }
+    path
+}
+
+fn config_help_path(tokens: &[String], value_options: &ValueOptions) -> Option<Vec<String>> {
     let mut i = 1;
     while i < tokens.len() {
         let token = &tokens[i];
         if is_help_flag(token) {
             return None;
         }
-        if token == "--sudo" || token == "--progress" || token == "--no-progress" || token == "-v" {
-            i += 1;
-            continue;
-        }
-        if consumes_value(token) {
-            i += if token.contains('=') { 1 } else { 2 };
-            continue;
-        }
-        if token.starts_with('-') {
-            i += 1;
+        if let Some(width) = option_token_width(tokens, i, value_options) {
+            i += width;
             continue;
         }
 
@@ -2788,23 +2235,8 @@ fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
             if is_help_flag(token) {
                 return Some(path);
             }
-            if consumes_value(token)
-                || matches!(
-                    token.as_str(),
-                    "--name"
-                        | "--new-name"
-                        | "--url"
-                        | "--api-key-env"
-                        | "--root-api-key-env"
-                        | "--account"
-                        | "--user"
-                )
-            {
-                i += if token.contains('=') { 1 } else { 2 };
-                continue;
-            }
-            if token.starts_with('-') {
-                i += 1;
+            if let Some(width) = option_token_width(tokens, i, value_options) {
+                i += width;
                 continue;
             }
 
@@ -2829,7 +2261,7 @@ fn config_help_path(tokens: &[String]) -> Option<Vec<String>> {
     None
 }
 
-fn has_invalid_config_add_provider(tokens: &[String]) -> bool {
+fn has_invalid_config_add_provider(tokens: &[String], value_options: &ValueOptions) -> bool {
     let mut i = 1;
     let mut saw_config = false;
     let mut saw_add = false;
@@ -2839,27 +2271,8 @@ fn has_invalid_config_add_provider(tokens: &[String]) -> bool {
         if is_help_flag(token) {
             return false;
         }
-        if token == "--sudo" || token == "--progress" || token == "--no-progress" || token == "-v" {
-            i += 1;
-            continue;
-        }
-        if consumes_value(token)
-            || matches!(
-                token.as_str(),
-                "--name"
-                    | "--new-name"
-                    | "--url"
-                    | "--api-key-env"
-                    | "--root-api-key-env"
-                    | "--account"
-                    | "--user"
-            )
-        {
-            i += if token.contains('=') { 1 } else { 2 };
-            continue;
-        }
-        if token.starts_with('-') {
-            i += 1;
+        if let Some(width) = option_token_width(tokens, i, value_options) {
+            i += width;
             continue;
         }
 
@@ -2913,14 +2326,10 @@ fn version() -> String {
     format!("v{}", env!("OPENVIKING_CLI_VERSION"))
 }
 
-fn allows_curated_nested(command: &str) -> bool {
-    matches!(command, "config")
-}
-
 fn is_bare_group_help_command(command: &str) -> bool {
     matches!(
         command,
-        "task" | "session" | "privacy" | "admin" | "system" | "observer"
+        "task" | "skills" | "session" | "privacy" | "admin" | "system" | "observer"
     )
 }
 
@@ -2928,23 +2337,62 @@ fn is_help_flag(token: &str) -> bool {
     matches!(token, "--help" | "-h" | "-help")
 }
 
-fn consumes_value(token: &str) -> bool {
+fn option_token_width(
+    tokens: &[String],
+    index: usize,
+    value_options: &ValueOptions,
+) -> Option<usize> {
+    let token = &tokens[index];
+    if matches!(
+        token.as_str(),
+        "--sudo" | "--progress" | "--no-progress" | "--verbose" | "-v"
+    ) {
+        return Some(1);
+    }
+    if token == "--compact" || token == "-c" {
+        return Some(compact_option_width(tokens, index));
+    }
+    if value_options.consumes_value(token) {
+        return Some(if token.contains('=') { 1 } else { 2 });
+    }
+    token.starts_with('-').then_some(1)
+}
+
+fn compact_option_width(tokens: &[String], index: usize) -> usize {
+    if tokens
+        .get(index + 1)
+        .is_some_and(|value| is_bool_arg(value))
+    {
+        2
+    } else {
+        1
+    }
+}
+
+fn is_bool_arg(value: &str) -> bool {
     matches!(
-        token,
-        "-o" | "--output" | "-c" | "--compact" | "--account" | "--user"
-    ) || token.starts_with("--output=")
-        || token.starts_with("--compact=")
-        || token.starts_with("--account=")
-        || token.starts_with("--user=")
+        value,
+        "true" | "false" | "True" | "False" | "TRUE" | "FALSE"
+    )
+}
+
+fn cli_value_options() -> ValueOptions {
+    let mut root = Cli::command();
+    root.build();
+    ValueOptions::from_command(&root)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         COMMAND_HELP_SPECS, HELP_SECTIONS, command_help_path, display_width,
-        render_command_help_request, render_top_level_help,
+        render_command_help_request, render_command_help_with_width, render_top_level_help,
+        render_top_level_help_with_language_and_width,
     };
     use super::{command_spec, is_top_level_help_request};
+    use crate::Cli;
+    use crate::i18n::Language;
+    use clap::CommandFactory;
     use std::ffi::OsString;
 
     fn os_args(args: &[&str]) -> Vec<OsString> {
@@ -3000,6 +2448,10 @@ mod tests {
         assert!(rendered.contains("ov health"));
         assert!(rendered.contains("ov status"));
         assert!(rendered.contains("ov tui"));
+        assert!(rendered.contains("-c, --compact <true|false>"));
+        assert!(
+            rendered.contains("Use root API key for admin, system, reindex, and task status/list")
+        );
     }
 
     #[test]
@@ -3018,9 +2470,38 @@ mod tests {
         }
 
         assert!(rendered.contains("search"));
+        assert!(rendered.contains("skills"));
         assert!(rendered.contains("experimental"));
         assert!(rendered.contains("ov <command> --help"));
         assert!(!rendered.contains("Commands:\n  add-resource"));
+    }
+
+    #[test]
+    fn top_level_help_lists_only_top_level_commands() {
+        for command in HELP_SECTIONS
+            .iter()
+            .flat_map(|section| section.commands.iter().map(|command| command.name))
+        {
+            assert!(
+                !command.contains(' '),
+                "top-level help must not list nested command {command}"
+            );
+        }
+
+        let rendered = strip_ansi(&render_top_level_help());
+        for nested in [
+            "config show",
+            "config validate",
+            "config switch",
+            "config add",
+            "config list",
+            "config delete",
+        ] {
+            assert!(
+                !rendered.contains(nested),
+                "top-level help leaked nested command {nested}"
+            );
+        }
     }
 
     #[test]
@@ -3035,11 +2516,41 @@ mod tests {
     }
 
     #[test]
-    fn every_top_level_command_in_help_map_has_command_help() {
+    fn top_level_help_respects_narrow_terminal_width() {
+        let width = 24;
+        let rendered = strip_ansi(&render_top_level_help_with_language_and_width(
+            Language::En,
+            width,
+        ));
+
+        for line in rendered.lines() {
+            assert!(
+                display_width(line) <= width,
+                "line exceeded narrow width: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_help_respects_narrow_terminal_width() {
+        let width = 24;
+        let path = vec!["config".to_string()];
+        let spec = command_spec(&path).expect("config command spec");
+        let rendered = strip_ansi(&render_command_help_with_width(spec, width));
+
+        for line in rendered.lines() {
+            assert!(
+                display_width(line) <= width,
+                "line exceeded narrow width: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_curated_top_level_command_in_help_map_has_command_help() {
         for command in HELP_SECTIONS
             .iter()
             .flat_map(|section| section.commands.iter().map(|command| command.name))
-            .filter(|name| !name.contains(' '))
         {
             assert!(
                 command_spec(&[command.to_string()]).is_some(),
@@ -3067,8 +2578,23 @@ mod tests {
         }
 
         let rendered = strip_ansi(&render_top_level_help());
-        for expected in ["add-skill", "observer", "version", "alias: lang"] {
+        for expected in ["add-skill", "skills", "observer", "version", "alias: lang"] {
             assert!(rendered.contains(expected), "missing {expected}");
+        }
+    }
+
+    #[test]
+    fn top_level_help_exposes_all_visible_clap_commands() {
+        let rendered = strip_ansi(&render_top_level_help());
+        let mut command = Cli::command();
+        command.build();
+
+        for subcommand in command
+            .get_subcommands()
+            .filter(|subcommand| !subcommand.is_hide_set() && subcommand.get_name() != "help")
+        {
+            let name = subcommand.get_name();
+            assert!(rendered.contains(name), "missing clap command {name}");
         }
     }
 
@@ -3080,11 +2606,32 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] <query>"));
         assert!(rendered.contains("Examples"));
         assert!(rendered.contains("Common options"));
         assert!(rendered.contains("Next"));
         assert!(rendered.contains("ov read <uri>"));
+    }
+
+    #[test]
+    fn curated_help_preserves_common_and_advanced_option_sections() {
+        for args in [
+            &["ov", "add-resource", "--help"][..],
+            &["ov", "find", "--help"][..],
+            &["ov", "config", "add", "custom", "--help"][..],
+        ] {
+            let rendered = strip_ansi(
+                &render_command_help_request(&os_args(args)).expect("help should render"),
+            );
+            assert!(
+                rendered.contains("Common options"),
+                "missing Common options in:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("Advanced options"),
+                "missing Advanced options in:\n{rendered}"
+            );
+        }
     }
 
     #[test]
@@ -3098,9 +2645,9 @@ mod tests {
                 .expect("search help should render"),
         );
 
-        assert!(find_help.contains("Maximum final results returned."));
+        assert!(find_help.contains("Maximum final results returned"));
         assert!(search_help.contains("Maximum results per search pass."));
-        assert!(search_help.contains("Search may merge multiple passes."));
+        assert!(search_help.contains("Search may merge multiple passes"));
     }
 
     #[test]
@@ -3111,7 +2658,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] <query>"));
         assert!(rendered.contains("Usage:"));
     }
 
@@ -3122,9 +2669,75 @@ mod tests {
                 .expect("status help should render"),
         );
 
-        assert!(rendered.contains("ov status [--verbose]"));
+        assert!(rendered.contains("ov status [OPTIONS]"));
         assert!(rendered.contains("ov status --verbose"));
         assert!(rendered.contains("Show full component tables"));
+    }
+
+    #[test]
+    fn curated_help_lists_timeout_for_waiting_commands() {
+        for args in [
+            ["ov", "add-resource", "--help"],
+            ["ov", "add-skill", "--help"],
+            ["ov", "rm", "--help"],
+            ["ov", "write", "--help"],
+        ] {
+            let rendered = strip_ansi(
+                &render_command_help_request(&os_args(&args)).expect("help should render"),
+            );
+            assert!(
+                rendered.contains("--timeout <seconds>"),
+                "missing timeout option in:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("seconds"),
+                "missing timeout description in:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn curated_help_lists_upload_filters_and_limit_aliases() {
+        let add_resource = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "add-resource", "--help"]))
+                .expect("add-resource help should render"),
+        );
+        for needle in [
+            "--strict",
+            "--ignore-dirs <dirs>",
+            "--include <pattern>",
+            "--exclude <pattern>",
+            "--no-directly-upload-media",
+            "--progress",
+            "--no-progress",
+            "-v, --verbose",
+        ] {
+            assert!(
+                add_resource.contains(needle),
+                "missing {needle} in:\n{add_resource}"
+            );
+        }
+
+        for command in ["ls", "tree", "find", "search", "grep", "glob"] {
+            let rendered = strip_ansi(
+                &render_command_help_request(&os_args(&["ov", command, "--help"]))
+                    .expect("help should render"),
+            );
+            assert!(
+                rendered.contains("--limit <n>"),
+                "missing --limit alias for {command} in:\n{rendered}"
+            );
+        }
+        for command in ["find", "search"] {
+            let rendered = strip_ansi(
+                &render_command_help_request(&os_args(&["ov", command, "--help"]))
+                    .expect("help should render"),
+            );
+            assert!(
+                rendered.contains("--context-type <type>"),
+                "missing --context-type for {command} in:\n{rendered}"
+            );
+        }
     }
 
     #[test]
@@ -3150,7 +2763,7 @@ mod tests {
             &render_command_help_request(&os_args(&["ov", "config", "add", "--help"]))
                 .expect("config add help should render"),
         );
-        assert!(config.contains("ov config add <ov-service|custom>"));
+        assert!(config.contains("ov config add"));
         assert!(config.contains("ov-service"));
         assert!(config.contains("custom"));
 
@@ -3175,6 +2788,9 @@ mod tests {
         assert!(custom.contains("ov config add custom"));
         assert!(custom.contains("--root-api-key-stdin"));
         assert!(!custom.contains("--use-root-key-for-normal-commands"));
+        assert!(custom.contains("--account <account>"));
+        assert!(!custom.contains("Override X-OpenViking-Account"));
+        assert!(custom.contains("-o, --output <table|json>"));
         assert!(
             render_command_help_request(&os_args(&["ov", "config", "add", "cloud", "--help"]))
                 .is_none()
@@ -3194,7 +2810,7 @@ mod tests {
             &render_command_help_request(&os_args(&["ov", "config", "edit", "prod", "--help"]))
                 .expect("config edit help should render"),
         );
-        assert!(edit.contains("ov config edit <name>"));
+        assert!(edit.contains("ov config edit [OPTIONS] <name>"));
         assert!(edit.contains("--clear-api-key"));
         assert!(!edit.contains("--use-root-key-for-normal-commands"));
 
@@ -3202,7 +2818,8 @@ mod tests {
             &render_command_help_request(&os_args(&["ov", "config", "delete", "prod", "--help"]))
                 .expect("config delete help should render"),
         );
-        assert!(delete.contains("ov config delete <name>"));
+        assert!(delete.contains("ov config delete [OPTIONS] <name>"));
+        assert!(delete.contains("Delete even when the saved config file cannot be parsed"));
     }
 
     #[test]
@@ -3228,6 +2845,29 @@ mod tests {
     }
 
     #[test]
+    fn command_group_help_shows_subcommand_positional_shapes() {
+        let session = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "session", "--help"]))
+                .expect("session help should render"),
+        );
+
+        assert!(session.contains("get <session-id>"));
+        assert!(session.contains("get-session-context <session-id>"));
+        assert!(session.contains("get-session-archive <session-id> <archive-id>"));
+        assert!(session.contains("add-message <session-id>"));
+        assert!(session.contains("add-messages <session-id> <messages-json>"));
+
+        let watch = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "task", "watch", "--help"]))
+                .expect("watch help should render"),
+        );
+
+        assert!(watch.contains("show <task-or-uri>"));
+        assert!(watch.contains("update <task-or-uri>"));
+        assert!(watch.contains("trigger <task-or-uri>"));
+    }
+
+    #[test]
     fn command_help_detection_allows_global_flags_before_command() {
         let path = command_help_path(&os_args(&[
             "ov",
@@ -3247,6 +2887,7 @@ mod tests {
     fn bare_command_groups_render_curated_help() {
         for (command, expected) in [
             ("task", "Inspect and manage async processing tasks."),
+            ("skills", "Manage installed agent skills."),
             (
                 "session",
                 "Manage sessions, messages, archives, and committed session context.",
@@ -3289,7 +2930,7 @@ mod tests {
             .expect("bare task help should render with global flags before command"),
         );
 
-        assert!(rendered.contains("ov task <subcommand>"));
+        assert!(rendered.contains("ov task"));
     }
 
     #[test]
@@ -3298,15 +2939,45 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_nested_prefixed_help_renders_parent_group_help() {
+    fn unsupported_nested_prefixed_help_falls_back_to_clap() {
+        for args in [
+            ["ov", "task", "list", "--help"],
+            ["ov", "session", "add-message", "--help"],
+            ["ov", "privacy", "upsert", "--help"],
+            ["ov", "admin", "list-users", "--help"],
+            ["ov", "system", "wait", "--help"],
+        ] {
+            assert!(
+                render_command_help_request(&os_args(&args)).is_none(),
+                "{args:?} should fall back to clap help"
+            );
+        }
+        assert!(
+            render_command_help_request(&os_args(&[
+                "ov",
+                "--compact",
+                "privacy",
+                "get",
+                "sample-policy",
+                "--help",
+            ]))
+            .is_none(),
+            "--compact without a value should not hide the privacy command from help detection"
+        );
+    }
+
+    #[test]
+    fn supported_nested_curated_help_still_renders() {
         let rendered = strip_ansi(
-            &render_command_help_request(&os_args(&["ov", "task", "list", "--help"]))
-                .expect("task list help should render parent task help"),
+            &render_command_help_request(&os_args(&["ov", "system", "backend", "--help"]))
+                .expect("system backend help should render curated nested help"),
         );
 
-        assert!(rendered.contains("ov task <subcommand>"));
-        assert!(rendered.contains("Inspect and manage async processing tasks."));
-        assert!(rendered.contains("Subcommands"));
+        assert!(rendered.contains("ov system backend"));
+        assert!(rendered.contains("sync-status"));
+        assert!(rendered.contains("sync-retry"));
+        assert!(!rendered.contains("help                               Print this message"));
+        assert!(rendered.contains("--sudo"));
     }
 
     #[test]
@@ -3316,7 +2987,7 @@ mod tests {
                 .expect("ls help with positional value should render curated ls help"),
         );
 
-        assert!(rendered.contains("ov ls [uri]"));
+        assert!(rendered.contains("ov ls [OPTIONS] [uri]"));
         assert!(rendered.contains("List resources under a Viking URI."));
     }
 }

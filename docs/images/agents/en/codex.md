@@ -5,7 +5,7 @@ Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/
 ## Step 1: Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/codex-memory-plugin/tos-install.sh)
 ```
 
 The installer checks dependencies, configures the OpenViking connection, and registers the plugin. Each step is idempotent, meaning it is safe to rerun the script at any time.

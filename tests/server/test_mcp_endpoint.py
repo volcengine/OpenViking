@@ -10,14 +10,18 @@ and service dependency, avoiding MCP protocol complexity.
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from fastapi import FastAPI
+from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.dependencies import set_service
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.mcp_endpoint import (
     StoreMessage,
     _get_ctx,
+    _IdentityASGIMiddleware,
     _mcp_ctx,
     add_resource,
     cancel_watch,
@@ -181,6 +185,55 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["session"] == session
     assert captured["limit"] == 4
     assert captured["score_threshold"] == 0.1
+
+
+async def test_mcp_middleware_sets_actor_peer_context():
+    async def downstream(scope, receive, send):
+        ctx = _get_ctx()
+        assert ctx.actor_peer_id == "peer-a"
+        response = httpx.Response(200, json={"ok": True})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": response.status_code,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": response.content})
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers={"X-OpenViking-Actor-Peer": "peer-a"},
+        )
+
+    assert response.status_code == 200
+
+
+async def test_mcp_middleware_rejects_invalid_actor_peer_header():
+    async def downstream(scope, receive, send):
+        raise AssertionError("invalid actor peer header should not reach downstream app")
+
+    app = FastAPI()
+    app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers={"X-OpenViking-Actor-Peer": "bad/peer"},
+        )
+
+    assert response.status_code == 400
+    assert "path separators" in response.text
 
 
 # ---------------------------------------------------------------------------

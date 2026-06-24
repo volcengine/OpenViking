@@ -49,6 +49,17 @@ pub async fn delete_account(
     Ok(())
 }
 
+pub async fn migrate(
+    client: &HttpClient,
+    cleanup: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response = client.admin_migrate(cleanup).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
 pub async fn register_user(
     client: &HttpClient,
     account_id: &str,

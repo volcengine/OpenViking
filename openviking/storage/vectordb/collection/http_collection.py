@@ -279,6 +279,23 @@ class HttpCollection(ICollection):
         result = json.loads(response.text)
         return result.get("data", [])
 
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        url = self.url_prefix + "api/vikingdb/data/update"
+        response = requests.post(
+            url,
+            headers=headers,
+            json={
+                "project": self.project_name,
+                "collection_name": self.collection_name,
+                "fields": json.dumps(data_list),
+            },
+            timeout=DEFAULT_TIMEOUT,
+        )
+        if response.status_code != 200:
+            return []
+        result = json.loads(response.text)
+        return result.get("data", [])
+
     def fetch_data(self, primary_keys: List[Any]) -> FetchDataInCollectionResult:
         url = self.url_prefix + "api/vikingdb/data/fetch_in_collection"
         response = requests.get(

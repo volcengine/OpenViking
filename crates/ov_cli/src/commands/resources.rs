@@ -1,6 +1,7 @@
 use crate::client::HttpClient;
 use crate::error::Result;
 use crate::output::{OutputFormat, output_success};
+use serde_json::{Map, Value};
 
 pub async fn add_resource(
     client: &HttpClient,
@@ -18,7 +19,7 @@ pub async fn add_resource(
     exclude: Option<String>,
     directly_upload_media: bool,
     watch_interval: f64,
-    resource_args: Option<serde_json::Map<String, serde_json::Value>>,
+    resource_args: Option<Map<String, Value>>,
     format: OutputFormat,
     compact: bool,
     show_progress: bool,
@@ -48,7 +49,9 @@ pub async fn add_resource(
 
     if !wait && matches!(format, OutputFormat::Table) {
         eprintln!("Note: Resource is being processed in the background.");
-        eprintln!("Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.");
+        eprintln!(
+            "Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks."
+        );
     }
 
     output_success(&result, format, compact);
@@ -71,7 +74,9 @@ pub async fn add_skill(
 
     if !wait && matches!(format, OutputFormat::Table) {
         eprintln!("Note: Skill is being processed in the background.");
-        eprintln!("Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.");
+        eprintln!(
+            "Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks."
+        );
     }
 
     output_success(&result, format, compact);

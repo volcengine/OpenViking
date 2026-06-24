@@ -1,8 +1,33 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, Literal, Optional, cast
+from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
 from pydantic import BaseModel, Field, model_validator
+
+
+class EmbeddingCredential(BaseModel):
+    """Single embedding credential configuration for multi-credential failover."""
+
+    id: Optional[str] = Field(default=None, description="Unique identifier for this credential")
+    provider: Optional[str] = Field(default=None, description="Provider type")
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model name (or endpoint id) for this credential. "
+            "Overrides the parent EmbeddingModelConfig.model when set, allowing "
+            "each credential to point to a different deployment / endpoint."
+        ),
+    )
+    api_key: Optional[str] = Field(default=None, description="API key")
+    api_base: Optional[str] = Field(default=None, description="API base URL")
+    api_version: Optional[str] = Field(default=None, description="API version")
+    ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
+    sk: Optional[str] = Field(default=None, description="Access Key Secret for VikingDB API")
+    region: Optional[str] = Field(default=None, description="Region for VikingDB API")
+    host: Optional[str] = Field(default=None, description="Host for VikingDB API")
+    extra_headers: Optional[dict[str, str]] = Field(default=None, description="Extra HTTP headers")
+
+    model_config = {"extra": "forbid"}
 
 
 class EmbeddingModelConfig(BaseModel):
@@ -94,6 +119,19 @@ class EmbeddingModelConfig(BaseModel):
         description="Maximum video frames for DashScope multimodal models (multimodal models only).",
     )
 
+    # New multi-credential configuration
+    credentials: List[EmbeddingCredential] = Field(
+        default_factory=list,
+        description="Ordered list of credentials for failover. Call order matches array index (0 is highest priority).",
+    )
+
+    failback_timeout_seconds: float = Field(
+        default=600.0, description="Time in seconds after which to attempt failback to primary"
+    )
+    failback_request_count: int = Field(
+        default=50, description="Number of backup requests after which to attempt failback"
+    )
+
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="before")
@@ -111,79 +149,148 @@ class EmbeddingModelConfig(BaseModel):
                     data[key] = value.lower()
         return data
 
+    _VALID_PROVIDERS: ClassVar[Tuple[str, ...]] = (
+        "openai",
+        "azure",
+        "volcengine",
+        "vikingdb",
+        "jina",
+        "ollama",
+        "gemini",
+        "voyage",
+        "dashscope",
+        "minimax",
+        "cohere",
+        "litellm",
+        "local",
+    )
+
+    @classmethod
+    def _validate_provider_auth(
+        cls,
+        *,
+        label: str,
+        provider: Optional[str],
+        api_key: Optional[str],
+        api_base: Optional[str],
+        ak: Optional[str],
+        sk: Optional[str],
+        region: Optional[str],
+    ) -> None:
+        """Validate provider name and provider-specific auth requirements.
+
+        Shared by both the top-level config validator (single-credential mode)
+        and the per-credential validator (multi-credential mode).
+
+        Args:
+            label: Prefix used in error messages, e.g. "Embedding" or
+                "credentials[ark-primary]".
+            provider: Provider name (already lowercased / normalized).
+            api_key, api_base, ak, sk, region: Resolved auth fields, with
+                credential values taking precedence over parent fallbacks
+                in multi-credential mode.
+        """
+        if not provider:
+            raise ValueError(f"{label}: provider is required")
+        if provider not in cls._VALID_PROVIDERS:
+            raise ValueError(
+                f"{label}: invalid provider '{provider}'. Must be one of: "
+                + ", ".join(f"'{p}'" for p in cls._VALID_PROVIDERS)
+            )
+
+        if provider == "openai":
+            # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
+            if not api_key and not api_base:
+                raise ValueError(f"{label}: OpenAI provider requires 'api_key' to be set")
+        elif provider == "azure":
+            if not api_key:
+                raise ValueError(f"{label}: Azure provider requires 'api_key' to be set")
+            if not api_base:
+                raise ValueError(
+                    f"{label}: Azure provider requires 'api_base' (Azure endpoint) to be set"
+                )
+        elif provider in {
+            "volcengine",
+            "jina",
+            "gemini",
+            "voyage",
+            "minimax",
+            "cohere",
+            "dashscope",
+        }:
+            if not api_key:
+                provider_label = {
+                    "volcengine": "Volcengine",
+                    "jina": "Jina",
+                    "gemini": "Gemini",
+                    "voyage": "Voyage",
+                    "minimax": "MiniMax",
+                    "cohere": "Cohere",
+                    "dashscope": "DashScope",
+                }[provider]
+                raise ValueError(f"{label}: {provider_label} provider requires 'api_key' to be set")
+        elif provider == "vikingdb":
+            missing = [n for n, v in (("ak", ak), ("sk", sk), ("region", region)) if not v]
+            if missing:
+                raise ValueError(
+                    f"{label}: VikingDB provider requires the following fields: "
+                    f"{', '.join(missing)}"
+                )
+        # ollama / litellm / local: no auth requirement enforced here
+
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
         if self.backend and not self.provider:
             self.provider = self.backend
 
-        if not self.model:
+        if not self.model and not any(c.model for c in self.credentials):
             raise ValueError("Embedding model name is required")
 
-        if not self.provider:
-            raise ValueError("Embedding provider is required")
+        # When credentials are configured, defer provider/api_key validation to
+        # per-credential checks; the parent-level provider/api_key may be left
+        # blank because each credential carries its own settings.
+        if self.credentials:
+            self._validate_credentials()
+            self._validate_credential_dimensions()
+            return self
 
-        if self.provider not in [
-            "openai",
-            "azure",
-            "volcengine",
-            "vikingdb",
-            "jina",
-            "ollama",
-            "gemini",
-            "voyage",
-            "dashscope",
-            "minimax",
-            "cohere",
-            "litellm",
-            "local",
-        ]:
-            raise ValueError(
-                f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'dashscope', 'minimax', 'cohere', 'litellm', 'local'"
-            )
+        self._validate_provider_auth(
+            label="Embedding",
+            provider=self.provider,
+            api_key=self.api_key,
+            api_base=self.api_base,
+            ak=self.ak,
+            sk=self.sk,
+            region=self.region,
+        )
 
-        # Provider-specific validation
-        if self.provider == "openai":
-            # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
-            if not self.api_key and not self.api_base:
-                raise ValueError("OpenAI provider requires 'api_key' to be set")
+        self._validate_provider_specific_options(
+            label="Embedding",
+            provider=self.provider,
+            model=self.model,
+        )
 
-        elif self.provider == "azure":
-            if not self.api_key:
-                raise ValueError("Azure provider requires 'api_key' to be set")
-            if not self.api_base:
-                raise ValueError("Azure provider requires 'api_base' (Azure endpoint) to be set")
+        return self
 
-        elif self.provider == "ollama":
-            # Ollama runs locally, no API key required
-            pass
+    def _validate_provider_specific_options(
+        self, *, label: str, provider: Optional[str], model: Optional[str]
+    ) -> None:
+        """Validate provider-specific options that go beyond auth.
 
-        elif self.provider == "volcengine":
-            if not self.api_key:
-                raise ValueError("Volcengine provider requires 'api_key' to be set")
+        These rules depend on the provider/model pair and on parent-level
+        fields (``query_param``, ``document_param``, ``input``, ``dimension``,
+        ``enable_fusion``, etc.) that are shared across all credentials. They
+        must run for both the single-credential path (using ``self.provider``)
+        and the multi-credential path (using each credential's resolved
+        provider/model), otherwise invalid configurations slip past startup
+        validation and surface only at runtime — after collection schema and
+        embedding metadata may already have been written.
+        """
+        if not provider:
+            return
 
-        elif self.provider == "vikingdb":
-            missing = []
-            if not self.ak:
-                missing.append("ak")
-            if not self.sk:
-                missing.append("sk")
-            if not self.region:
-                missing.append("region")
-
-            if missing:
-                raise ValueError(
-                    f"VikingDB provider requires the following fields: {', '.join(missing)}"
-                )
-
-        elif self.provider == "jina":
-            if not self.api_key:
-                raise ValueError("Jina provider requires 'api_key' to be set")
-
-        elif self.provider == "gemini":
-            if not self.api_key:
-                raise ValueError("Gemini provider requires 'api_key' to be set")
+        if provider == "gemini":
             _GEMINI_TASK_TYPES = {
                 "RETRIEVAL_QUERY",
                 "RETRIEVAL_DOCUMENT",
@@ -200,62 +307,207 @@ class EmbeddingModelConfig(BaseModel):
             ]:
                 if value and value.upper() not in _GEMINI_TASK_TYPES:
                     raise ValueError(
-                        f"Invalid {field_name} '{value}' for Gemini. "
+                        f"{label}: invalid {field_name} '{value}' for Gemini. "
                         f"Valid task_types: {', '.join(sorted(_GEMINI_TASK_TYPES))}"
                     )
 
-        elif self.provider == "voyage":
-            if not self.api_key:
-                raise ValueError("Voyage provider requires 'api_key' to be set")
-
-        elif self.provider == "minimax":
-            if not self.api_key:
-                raise ValueError("MiniMax provider requires 'api_key' to be set")
-
-        elif self.provider == "cohere":
-            if not self.api_key:
-                raise ValueError("Cohere provider requires 'api_key' to be set")
-
-        elif self.provider == "dashscope":
-            if not self.api_key:
-                raise ValueError("DashScope provider requires 'api_key' to be set")
+        elif provider == "dashscope":
             if self.input == "text" and (
                 self.enable_fusion is not None
                 or self.res_level is not None
                 or self.max_video_frames is not None
             ):
                 raise ValueError(
-                    "Parameters enable_fusion, res_level, and max_video_frames only apply to multimodal input mode"
+                    f"{label}: parameters enable_fusion, res_level, and max_video_frames "
+                    "only apply to multimodal input mode"
                 )
 
-        elif self.provider == "litellm":
+        elif provider == "litellm":
             # litellm handles auth via env vars or explicit api_key; no strict requirement
             if not self.dimension:
                 raise ValueError(
-                    "LiteLLM provider requires 'dimension' to be set explicitly. "
+                    f"{label}: LiteLLM provider requires 'dimension' to be set explicitly. "
                     "Check your embedding model's documentation for the correct dimension."
                 )
 
-        elif self.provider == "local":
+        elif provider == "local":
             from openviking.models.embedder.local_embedders import get_local_model_spec
 
-            get_local_model_spec(self.model)
+            get_local_model_spec(model)
 
-        return self
+    def _validate_credentials(self) -> None:
+        """Validate each credential when credentials list is non-empty.
+
+        Each credential must resolve a provider (from itself or the parent) and
+        meet that provider's required fields. The parent-level provider/api_key
+        are used as fallbacks where appropriate. Provider-specific options that
+        depend on parent-level fields (e.g. LiteLLM dimension, Gemini task
+        types, DashScope multimodal-only params) are also re-checked per
+        resolved credential so the credentials path enforces the same invariants
+        as the single-credential path.
+        """
+        for idx, cred in enumerate(self.credentials):
+            cred_id = cred.id or f"credential-{idx}"
+            label = f"credentials[{cred_id}]"
+            resolved_provider = (cred.provider or self.provider or "").lower() or None
+            resolved_model = cred.model or self.model
+            self._validate_provider_auth(
+                label=label,
+                provider=resolved_provider,
+                api_key=cred.api_key or self.api_key,
+                api_base=cred.api_base or self.api_base,
+                ak=cred.ak or self.ak,
+                sk=cred.sk or self.sk,
+                region=cred.region or self.region,
+            )
+            self._validate_provider_specific_options(
+                label=label,
+                provider=resolved_provider,
+                model=resolved_model,
+            )
+
+    def _validate_credential_dimensions(self) -> None:
+        """Ensure all credentials produce vectors of the same dimension.
+
+        Mixing credentials whose embedders return different vector lengths
+        causes ``dense vector dimension mismatch`` errors at write time and
+        silently breaks retrieval. We therefore reject such configurations at
+        startup. Dimensions are resolved using the same heuristics as
+        ``get_effective_dimension`` (provider + model), with the explicit
+        parent ``self.dimension`` always winning when set.
+        """
+        if len(self.credentials) <= 1:
+            return
+
+        resolved: list[tuple[str, int]] = []
+        for idx, cred in enumerate(self.credentials):
+            cred_id = cred.id or f"credential-{idx}"
+            provider = (cred.provider or self.provider or "").lower()
+            model = cred.model or self.model
+            try:
+                dim = self._resolve_dimension_for(provider, model)
+            except ValueError:
+                # Unknown dimension (e.g. ollama with no explicit dim and
+                # unknown model): skip - the per-credential validation above
+                # would have already required `dimension` if needed via
+                # parent.dimension, and resolution failures here are non-fatal
+                # because the credential may still work at runtime.
+                continue
+            if dim is None:
+                continue
+            resolved.append((cred_id, dim))
+
+        distinct = {dim for _, dim in resolved}
+        if len(distinct) > 1:
+            details = ", ".join(f"{cid}={dim}" for cid, dim in resolved)
+            raise ValueError(
+                "Embedding credentials have conflicting vector dimensions: "
+                f"{details}. All credentials must produce vectors of the same "
+                "dimension; mixing different dimensions corrupts the vector "
+                "store. Either align provider/model across credentials, or "
+                "set 'dimension' explicitly on the parent embedding config "
+                "to force a fixed schema dimension."
+            )
+
+    def _resolve_dimension_for(self, provider: str, model: Optional[str]) -> Optional[int]:
+        """Resolve dimension for a (provider, model) pair using the same
+        rules as ``get_effective_dimension``. The explicit parent dimension,
+        when set, always wins."""
+        if self.dimension is not None:
+            return self.dimension
+
+        provider = (provider or "").lower()
+        if provider in {"openai", "azure"}:
+            mapping = {
+                "text-embedding-ada-002": 1536,
+                "text-embedding-3-small": 1536,
+                "text-embedding-3-large": 3072,
+            }
+            return mapping.get((model or "").lower())
+
+        if provider == "voyage":
+            from openviking.models.embedder.voyage_embedders import (
+                get_voyage_model_default_dimension,
+            )
+
+            return get_voyage_model_default_dimension(model)
+
+        if provider == "cohere":
+            from openviking.models.embedder.cohere_embedders import (
+                get_cohere_model_default_dimension,
+            )
+
+            return get_cohere_model_default_dimension(model)
+
+        if provider == "gemini":
+            from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+            return GeminiDenseEmbedder._default_dimension(model)
+
+        if provider == "local":
+            from openviking.models.embedder.local_embedders import (
+                get_local_model_default_dimension,
+            )
+
+            return get_local_model_default_dimension(model)
+
+        if provider == "dashscope":
+            try:
+                from openviking.models.embedder.dashscope_embedders import (
+                    get_dashscope_model_default_dimension,
+                )
+
+                return get_dashscope_model_default_dimension(model)
+            except ImportError:
+                return 1024
+
+        # Providers without a known dimension lookup (volcengine, jina,
+        # vikingdb, ollama for unlisted models, etc.) cannot be cross-checked
+        # here without an explicit dimension. Return None so validation skips
+        # them; same-provider credentials are typically dimension-compatible
+        # by construction, and any real mismatch will surface at write time.
+        return None
+
+    def _effective_provider(self) -> Optional[str]:
+        """Resolve the provider that actually drives this config.
+
+        When credentials are configured, the first credential's provider takes
+        precedence over the parent's (which may still hold its default value of
+        ``volcengine``). Without this fallback, credential-only configurations
+        targeting a non-default provider would silently use the parent's
+        default for dimension/metadata resolution and produce a vector-space
+        mismatch (e.g. parent volcengine -> 2048 dim while the actual OpenAI
+        embedder returns 1536).
+        """
+        if self.credentials and self.credentials[0].provider:
+            return self.credentials[0].provider
+        return self.provider
+
+    def _effective_model(self) -> Optional[str]:
+        """Resolve the model that actually drives this config.
+
+        Same rationale as ``_effective_provider``: credential-level model wins
+        when present so dimension/metadata reflect the model the embedder will
+        actually call.
+        """
+        if self.credentials and self.credentials[0].model:
+            return self.credentials[0].model
+        return self.model
 
     def get_effective_dimension(self) -> int:
         """Resolve the dimension used for schema creation and validation."""
         if self.dimension is not None:
             return self.dimension
 
-        provider = (self.provider or "").lower()
+        provider = (self._effective_provider() or "").lower()
+        effective_model = self._effective_model()
         if provider in {"openai", "azure"}:
             openai_model_dimensions = {
                 "text-embedding-ada-002": 1536,
                 "text-embedding-3-small": 1536,
                 "text-embedding-3-large": 3072,
             }
-            model_lower = (self.model or "").lower()
+            model_lower = (effective_model or "").lower()
             if model_lower in openai_model_dimensions:
                 return openai_model_dimensions[model_lower]
 
@@ -264,19 +516,19 @@ class EmbeddingModelConfig(BaseModel):
                 get_voyage_model_default_dimension,
             )
 
-            return get_voyage_model_default_dimension(self.model)
+            return get_voyage_model_default_dimension(effective_model)
 
         if provider == "cohere":
             from openviking.models.embedder.cohere_embedders import (
                 get_cohere_model_default_dimension,
             )
 
-            return get_cohere_model_default_dimension(self.model)
+            return get_cohere_model_default_dimension(effective_model)
 
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
-            return GeminiDenseEmbedder._default_dimension(self.model)
+            return GeminiDenseEmbedder._default_dimension(effective_model)
 
         if provider == "ollama":
             # Common Ollama embedding models and their dimensions
@@ -298,12 +550,12 @@ class EmbeddingModelConfig(BaseModel):
                 "embeddinggemma": 768,
                 "embeddinggemma:300m": 768,
             }
-            model_lower = (self.model or "").lower()
+            model_lower = (effective_model or "").lower()
             if model_lower in ollama_model_dimensions:
                 return ollama_model_dimensions[model_lower]
             # For unknown Ollama models, require explicit dimension
             raise ValueError(
-                f"Unknown dimension for Ollama model '{self.model}'. "
+                f"Unknown dimension for Ollama model '{effective_model}'. "
                 f"Please set 'dimension' explicitly in your embedding config. "
                 f"Known models: {list(ollama_model_dimensions.keys())}"
             )
@@ -311,7 +563,7 @@ class EmbeddingModelConfig(BaseModel):
         if provider == "local":
             from openviking.models.embedder.local_embedders import get_local_model_default_dimension
 
-            return get_local_model_default_dimension(self.model)
+            return get_local_model_default_dimension(effective_model)
 
         if provider == "dashscope":
             try:
@@ -319,7 +571,7 @@ class EmbeddingModelConfig(BaseModel):
                     get_dashscope_model_default_dimension,
                 )
 
-                return get_dashscope_model_default_dimension(self.model)
+                return get_dashscope_model_default_dimension(effective_model)
             except ImportError:
                 # Fallback dimension if dashscope_embedders module doesn't exist yet
                 return 1024
@@ -381,21 +633,23 @@ class EmbeddingConfig(BaseModel):
         default="content_only",
         description="Text source for file vectorization: summary_first|summary_only|content_only",
     )
-    image_vectorization: str = Field(
-        default="summary_only",
-        description=(
-            "How IMAGE files are vectorized: "
-            "'summary_only' embeds only the generated text summary (text embedding); "
-            "'image_only' sends the image itself to a multimodal embedder; "
-            "'image_and_summary' sends both the image and its text summary together. "
-            "'image_only' and 'image_and_summary' require a multimodal-capable embedder "
-            "(e.g. Volcengine with input='multimodal')."
-        ),
-    )
     max_input_tokens: int = Field(
         default=4096,
         ge=100,
         description="Maximum estimated tokens sent to embeddings when raw text fallback is used",
+    )
+    allow_metadata_override: bool = Field(
+        default=False,
+        description=(
+            "When true, allow starting up against an existing collection whose "
+            "embedding metadata (provider/model) differs from the current config, "
+            "as long as dimension is unchanged. The collection metadata will be "
+            "rewritten to the new config and a warning will be logged. "
+            "Useful when migrating an existing index to a new model deployment "
+            "(e.g. switching ARK endpoint id) while keeping previously indexed "
+            "vectors. Note: vector semantics may drift if the underlying model "
+            "actually changed; only enable when you understand the implication."
+        ),
     )
 
     model_config = {"extra": "forbid"}
@@ -426,11 +680,6 @@ class EmbeddingConfig(BaseModel):
         if self.text_source not in {"summary_first", "summary_only", "content_only"}:
             raise ValueError(
                 "embedding.text_source must be one of: summary_first, summary_only, content_only"
-            )
-        if self.image_vectorization not in {"summary_only", "image_only", "image_and_summary"}:
-            raise ValueError(
-                "embedding.image_vectorization must be one of: "
-                "summary_only, image_only, image_and_summary"
             )
         return self
 
@@ -740,26 +989,82 @@ class EmbeddingConfig(BaseModel):
         from openviking.models.embedder.base import DenseEmbedderBase, SparseEmbedderBase
 
         if self.hybrid:
+            if self.hybrid.credentials:
+                return self._create_failover_embedder("hybrid", self.hybrid)
             provider = self._require_provider(self.hybrid.provider)
             return self._create_embedder(provider, "hybrid", self.hybrid)
 
         if self.dense and self.sparse:
-            dense_provider = self._require_provider(self.dense.provider)
-            dense_embedder = cast(
-                DenseEmbedderBase,
-                self._create_embedder(dense_provider, "dense", self.dense),
+            # Handle failover for both dense and sparse if credentials are configured
+            dense_embedder = self._create_single_or_failover_embedder("dense", self.dense)
+            sparse_embedder = self._create_single_or_failover_embedder("sparse", self.sparse)
+            return CompositeHybridEmbedder(
+                cast(DenseEmbedderBase, dense_embedder),
+                cast(SparseEmbedderBase, sparse_embedder),
             )
-            sparse_embedder = self._create_embedder(
-                self._require_provider(self.sparse.provider), "sparse", self.sparse
-            )
-            sparse_embedder = cast(SparseEmbedderBase, sparse_embedder)
-            return CompositeHybridEmbedder(dense_embedder, sparse_embedder)
 
         if self.dense:
-            provider = self._require_provider(self.dense.provider)
-            return self._create_embedder(provider, "dense", self.dense)
+            return self._create_single_or_failover_embedder("dense", self.dense)
 
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
+
+    def _create_single_or_failover_embedder(
+        self, embedder_type: str, config: "EmbeddingModelConfig"
+    ):
+        """Create either a single embedder or a FailoverEmbedder based on credentials config."""
+        if config.credentials:
+            return self._create_failover_embedder(embedder_type, config)
+        provider = self._require_provider(config.provider)
+        return self._create_embedder(provider, embedder_type, config)
+
+    def _create_failover_embedder(self, embedder_type: str, config: "EmbeddingModelConfig"):
+        """Create a FailoverEmbedder with multiple credentials."""
+        from openviking.models.embedder import FailoverEmbedder
+
+        embedders = []
+        credential_ids = []
+
+        for cred in config.credentials:
+            # Create a temporary config merged from the model config and credential
+            merged_config = EmbeddingModelConfig(
+                model=cred.model or config.model,
+                dimension=config.dimension,
+                batch_size=config.batch_size,
+                input=config.input,
+                query_param=config.query_param,
+                document_param=config.document_param,
+                provider=cred.provider or config.provider,
+                version=config.version,
+                ak=cred.ak or config.ak,
+                sk=cred.sk or config.sk,
+                region=cred.region or config.region,
+                host=cred.host or config.host,
+                api_key=cred.api_key or config.api_key,
+                api_base=cred.api_base or config.api_base,
+                api_version=cred.api_version or config.api_version,
+                extra_headers=cred.extra_headers or config.extra_headers,
+                # Model-behavior fields are shared by all credentials of the
+                # same model and live only on the parent config.
+                encoding_format=config.encoding_format,
+                model_path=config.model_path,
+                cache_dir=config.cache_dir,
+                enable_fusion=config.enable_fusion,
+                res_level=config.res_level,
+                max_video_frames=config.max_video_frames,
+            )
+            provider = self._require_provider(merged_config.provider)
+            embedders.append(self._create_embedder(provider, embedder_type, merged_config))
+            credential_ids.append(cred.id or f"credential-{len(credential_ids)}")
+
+        if len(embedders) == 1:
+            return embedders[0]
+
+        return FailoverEmbedder(
+            embedders=embedders,
+            credential_ids=credential_ids,
+            failback_timeout_seconds=config.failback_timeout_seconds,
+            failback_request_count=config.failback_request_count,
+        )
 
     @property
     def dimension(self) -> int:

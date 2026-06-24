@@ -24,7 +24,7 @@ def _install_package_stubs(monkeypatch):
 
 
 def _load_engine_module(
-    monkeypatch, *, machine, available_backends, cpu_variants, env_variant=None
+    monkeypatch, *, machine, available_backends, cpu_variants, env_variant=None, sys_platform=None
 ):
     _install_package_stubs(monkeypatch)
     for backend_name in available_backends:
@@ -76,6 +76,8 @@ def _load_engine_module(
 
     monkeypatch.setattr(importlib, "import_module", fake_import_module)
     monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    if sys_platform is not None:
+        monkeypatch.setattr(sys, "platform", sys_platform)
 
     spec = importlib.util.spec_from_file_location(
         "openviking.storage.vectordb.engine",
@@ -141,6 +143,43 @@ def test_engine_loader_auto_selects_best_supported_x86_backend(monkeypatch):
     assert module.AVAILABLE_ENGINE_VARIANTS == ("x86_sse3", "x86_avx2", "x86_avx512")
 
 
+def test_engine_loader_auto_prefers_avx2_over_avx512_on_windows(monkeypatch):
+    module = _load_engine_module(
+        monkeypatch,
+        machine="AMD64",
+        available_backends={"x86_sse3", "x86_avx2", "x86_avx512"},
+        cpu_variants={"x86_sse3", "x86_avx2", "x86_avx512"},
+        sys_platform="win32",
+    )
+
+    assert module.ENGINE_VARIANT == "x86_avx2"
+
+
+def test_engine_loader_auto_skips_avx512_on_windows(monkeypatch):
+    module = _load_engine_module(
+        monkeypatch,
+        machine="AMD64",
+        available_backends={"x86_sse3", "x86_avx512"},
+        cpu_variants={"x86_sse3", "x86_avx512"},
+        sys_platform="win32",
+    )
+
+    assert module.ENGINE_VARIANT == "x86_sse3"
+
+
+def test_engine_loader_allows_explicit_avx512_on_windows(monkeypatch):
+    module = _load_engine_module(
+        monkeypatch,
+        machine="AMD64",
+        available_backends={"x86_sse3", "x86_avx2", "x86_avx512"},
+        cpu_variants={"x86_sse3", "x86_avx2", "x86_avx512"},
+        env_variant="avx512",
+        sys_platform="win32",
+    )
+
+    assert module.ENGINE_VARIANT == "x86_avx512"
+
+
 def test_engine_loader_uses_native_backend_on_non_x86(monkeypatch):
     module = _load_engine_module(
         monkeypatch,
@@ -178,51 +217,55 @@ def test_engine_loader_wraps_abi3_backend_with_python_api(monkeypatch):
         _new_schema=lambda fields: calls.append(("new_schema", fields)) or schema_handle,
         _schema_get_total_byte_length=lambda handle: calls.append(("schema_total", handle)) or 123,
         _new_bytes_row=lambda handle: calls.append(("new_bytes_row", handle)) or bytes_row_handle,
-        _bytes_row_serialize=lambda handle, row: calls.append(("bytes_row_serialize", handle, row))
-        or b"blob",
-        _bytes_row_serialize_batch=lambda handle, rows: calls.append(
-            ("bytes_row_serialize_batch", handle, rows)
-        )
-        or [b"blob-a", b"blob-b"],
-        _bytes_row_deserialize=lambda handle, payload: calls.append(
-            ("bytes_row_deserialize", handle, payload)
-        )
-        or {"id": 42, "name": "viking"},
-        _bytes_row_deserialize_field=lambda handle, payload, field_name: calls.append(
-            ("bytes_row_deserialize_field", handle, payload, field_name)
-        )
-        or (42 if field_name == "id" else "viking"),
-        _new_index_engine=lambda config: calls.append(("new_index_engine", config))
-        or engine_handle,
+        _bytes_row_serialize=lambda handle, row: (
+            calls.append(("bytes_row_serialize", handle, row)) or b"blob"
+        ),
+        _bytes_row_serialize_batch=lambda handle, rows: (
+            calls.append(("bytes_row_serialize_batch", handle, rows)) or [b"blob-a", b"blob-b"]
+        ),
+        _bytes_row_deserialize=lambda handle, payload: (
+            calls.append(("bytes_row_deserialize", handle, payload)) or {"id": 42, "name": "viking"}
+        ),
+        _bytes_row_deserialize_field=lambda handle, payload, field_name: (
+            calls.append(("bytes_row_deserialize_field", handle, payload, field_name))
+            or (42 if field_name == "id" else "viking")
+        ),
+        _new_index_engine=lambda config: (
+            calls.append(("new_index_engine", config)) or engine_handle
+        ),
         _index_engine_add_data=lambda handle, items: calls.append(("add_data", handle, items)) or 3,
-        _index_engine_delete_data=lambda handle, items: calls.append(("delete_data", handle, items))
-        or 2,
-        _index_engine_search=lambda handle, req: calls.append(("search", handle, req))
-        or {
-            "result_num": 2,
-            "labels": [101, 202],
-            "scores": [0.9, 0.8],
-            "extra_json": '{"ok":true}',
-        },
+        _index_engine_delete_data=lambda handle, items: (
+            calls.append(("delete_data", handle, items)) or 2
+        ),
+        _index_engine_search=lambda handle, req: (
+            calls.append(("search", handle, req))
+            or {
+                "result_num": 2,
+                "labels": [101, 202],
+                "scores": [0.9, 0.8],
+                "extra_json": '{"ok":true}',
+            }
+        ),
         _index_engine_dump=lambda handle, path: calls.append(("dump", handle, path)) or 11,
-        _index_engine_get_state=lambda handle: calls.append(("get_state", handle))
-        or {"update_timestamp": 123, "element_count": 7},
+        _index_engine_get_state=lambda handle: (
+            calls.append(("get_state", handle)) or {"update_timestamp": 123, "element_count": 7}
+        ),
         _new_persist_store=lambda path: calls.append(("new_persist_store", path)) or store_handle,
         _new_volatile_store=lambda: calls.append(("new_volatile_store",)) or store_handle,
         _store_exec_op=lambda handle, ops: calls.append(("store_exec_op", handle, ops)) or 1,
-        _store_get_data=lambda handle, keys: calls.append(("store_get_data", handle, keys))
-        or [b"one", b"two"],
-        _store_put_data=lambda handle, keys, values: calls.append(
-            ("store_put_data", handle, keys, values)
-        )
-        or 0,
-        _store_delete_data=lambda handle, keys: calls.append(("store_delete_data", handle, keys))
-        or 0,
+        _store_get_data=lambda handle, keys: (
+            calls.append(("store_get_data", handle, keys)) or [b"one", b"two"]
+        ),
+        _store_put_data=lambda handle, keys, values: (
+            calls.append(("store_put_data", handle, keys, values)) or 0
+        ),
+        _store_delete_data=lambda handle, keys: (
+            calls.append(("store_delete_data", handle, keys)) or 0
+        ),
         _store_clear_data=lambda handle: calls.append(("store_clear_data", handle)) or 0,
-        _store_seek_range=lambda handle, start, end: calls.append(
-            ("store_seek_range", handle, start, end)
-        )
-        or [("aa", b"11"), ("ab", b"22")],
+        _store_seek_range=lambda handle, start, end: (
+            calls.append(("store_seek_range", handle, start, end)) or [("aa", b"11"), ("ab", b"22")]
+        ),
         _init_logging=lambda level, output, fmt: calls.append(("init_logging", level, output, fmt)),
     )
 

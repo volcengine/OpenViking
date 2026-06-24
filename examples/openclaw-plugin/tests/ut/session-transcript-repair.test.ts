@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
-  makeMissingToolResult,
   stripToolResultDetails,
   repairToolCallInputs,
   sanitizeToolCallInputs,
@@ -48,7 +47,9 @@ describe("sanitizeToolUseResultPairing", () => {
     const report = repairToolUseResultPairing(messages);
     expect(report.added).toHaveLength(1);
     expect(report.added[0]!.toolCallId).toBe("tc_orphan");
+    expect(report.added[0]!.toolName).toBe("bash");
     expect(report.added[0]!.isError).toBe(true);
+    expect((report.added[0]!.content as any)[0].text).toContain("missing tool result");
 
     const repaired = report.messages;
     expect(repaired[0]!.role).toBe("assistant");
@@ -165,24 +166,20 @@ describe("sanitizeToolUseResultPairing", () => {
     const report = repairToolUseResultPairing(messages);
     expect(report.added).toHaveLength(0);
   });
-});
 
-describe("makeMissingToolResult", () => {
-  it("creates synthetic error toolResult", () => {
-    const result = makeMissingToolResult({
-      toolCallId: "test-id",
-      toolName: "my_tool",
-    });
-    expect(result.role).toBe("toolResult");
-    expect(result.toolCallId).toBe("test-id");
-    expect(result.toolName).toBe("my_tool");
-    expect(result.isError).toBe(true);
-    expect((result.content as any)[0].text).toContain("missing tool result");
-  });
+  it("defaults synthesized missing toolResult names to unknown when the tool call lacks a name", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "tc_without_name", input: { cmd: "ls" } }],
+      },
+    ];
 
-  it("defaults toolName to 'unknown'", () => {
-    const result = makeMissingToolResult({ toolCallId: "x" });
-    expect(result.toolName).toBe("unknown");
+    const report = repairToolUseResultPairing(messages);
+
+    expect(report.added).toHaveLength(1);
+    expect(report.added[0]!.toolCallId).toBe("tc_without_name");
+    expect(report.added[0]!.toolName).toBe("unknown");
   });
 });
 

@@ -25,7 +25,9 @@ import {
   addMessage,
   commitSession,
   deriveOvSessionId,
+  enqueuePendingDirectly,
   isBypassed,
+  isRetryableFailure,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
@@ -227,10 +229,12 @@ function extractTurns(messages) {
   return turns;
 }
 
-async function pushTurns(ovSessionId, turns, peerId = null) {
+async function pushTurns(ovSessionId, turns, { peerId = null, enqueueOnly = false } = {}) {
   const fetchJSON = makeFetchJSON(cfg);
   let ok = 0;
+  let queued = 0;
   let failed = 0;
+  let enqueueFailed = 0;
   for (const turn of turns) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
@@ -240,18 +244,29 @@ async function pushTurns(ovSessionId, turns, peerId = null) {
     if (parts.length === 0) continue;
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;
-    const res = await addMessage(fetchJSON, ovSessionId, payload);
-    if (res.ok) ok++;
+    const res = enqueueOnly
+      ? await enqueuePendingDirectly("addMessage", ovSessionId, payload)
+      : await addMessage(fetchJSON, ovSessionId, payload);
+    if (enqueueOnly && res.ok) queued++;
+    else if (res.ok) ok++;
+    else if (res.pendingQueued) queued++;
+    else if (res.pendingEnqueueFailed || enqueueOnly) enqueueFailed++;
     else failed++;
   }
   // Commit once at the end; subagents are short-lived, so threshold tracking
   // adds little value.
   let committed = false;
-  if (ok > 0) {
-    const commitRes = await commitSession(fetchJSON, ovSessionId);
-    committed = commitRes.ok;
+  let commitQueued = false;
+  if (ok + queued > 0) {
+    const commitRes = enqueueOnly
+      ? await enqueuePendingDirectly("commitSession", ovSessionId, {})
+      : await commitSession(fetchJSON, ovSessionId);
+    committed = !enqueueOnly && commitRes.ok;
+    commitQueued = enqueueOnly ? Boolean(commitRes.ok) : Boolean(commitRes.pendingQueued);
+    if (enqueueOnly && !commitRes.ok) enqueueFailed++;
+    else if (!enqueueOnly && commitRes.pendingEnqueueFailed) enqueueFailed++;
   }
-  return { ok, failed, committed };
+  return { ok, queued, failed, enqueueFailed, committed, commitQueued };
 }
 
 async function main() {
@@ -292,14 +307,6 @@ async function main() {
   const state = await loadState(subagentId);
   const ovSessionId = state?.ovSessionId || deriveOvSessionId(sessionId, `subagent:${subagentId}`);
 
-  const fetchJSON = makeFetchJSON(cfg);
-  const health = await fetchJSON("/health");
-  if (!health.ok) {
-    logError("health_check", "server unreachable");
-    approve();
-    return;
-  }
-
   let transcript;
   try {
     transcript = await readFile(transcriptPath, "utf-8");
@@ -324,8 +331,26 @@ async function main() {
   }
 
   const peerId = peerIdFromSubagent(subagentId);
-  const result = await pushTurns(ovSessionId, turns, peerId);
+  const fetchJSON = makeFetchJSON(cfg);
+  const health = await fetchJSON("/health");
+  let result;
+  if (health.ok) {
+    result = await pushTurns(ovSessionId, turns, { peerId });
+  } else if (isRetryableFailure(health)) {
+    logError("health_check", "server unreachable; enqueuing subagent capture");
+    result = await pushTurns(ovSessionId, turns, { peerId, enqueueOnly: true });
+  } else {
+    logError("health_check", `non-retryable status ${health.status || "unknown"}`);
+    approve();
+    return;
+  }
   log("push_turns", { ovSessionId, ...result });
+
+  if (result.enqueueFailed > 0) {
+    logError("pending_enqueue", "some turns failed to enqueue; state file retained");
+    approve();
+    return;
+  }
 
   await unlink(stateFile(subagentId)).catch(() => {});
   approve();

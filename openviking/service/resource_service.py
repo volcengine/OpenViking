@@ -18,8 +18,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_optional_viking_uri
+from openviking.core.content_targets import ContentTargetSpec
+from openviking.core.uri_validation import validate_optional_content_target_uri
+from openviking.resource.feishu_watch_auth import (
+    FEISHU_ACCESS_TOKEN_ARG,
+    FEISHU_REFRESH_TOKEN_ARG,
+    create_feishu_auth_state,
+    load_feishu_app_credentials,
+)
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
@@ -54,29 +60,12 @@ from openviking_cli.utils import get_logger
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
     from openviking.resource.watch_scheduler import WatchScheduler
+    from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
 
 logger = get_logger(__name__)
 
 
-@dataclass
-class _ResourceSourceInfo:
-    source_name: Optional[str] = None
-    source_path: Optional[str] = None
-    source_format: Optional[str] = None
-
-
-_CRAWL_ARG_FIELDS = frozenset(
-    {
-        "depth",
-        "max_pages",
-        "include_paths",
-        "exclude_paths",
-        "allow_external_links",
-        "use_playwright",
-    }
-)
-
-_CORE_ADD_RESOURCE_ARG_FIELDS = frozenset(
+_ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
     {
         "path",
         "ctx",
@@ -92,6 +81,9 @@ _CORE_ADD_RESOURCE_ARG_FIELDS = frozenset(
         "skip_watch_management",
         "allow_local_path_resolution",
         "enforce_public_remote_targets",
+        "resource_lock",
+        "stage_callback",
+        "args",
         "strict",
         "source_name",
         "ignore_dirs",
@@ -104,7 +96,31 @@ _CORE_ADD_RESOURCE_ARG_FIELDS = frozenset(
         "request_validator",
         "original_source",
         "temp_file_id",
-        "args",
+    }
+)
+
+
+@dataclass
+class _ResourceSourceInfo:
+    source_name: Optional[str] = None
+    source_path: Optional[str] = None
+    source_format: Optional[str] = None
+
+
+@dataclass
+class _NormalizedAddResourceArgs:
+    processor_kwargs: Dict[str, Any]
+    watch_auth_state: Optional[Dict[str, Any]] = None
+
+
+_CRAWL_ARG_FIELDS = frozenset(
+    {
+        "depth",
+        "max_pages",
+        "include_paths",
+        "exclude_paths",
+        "allow_external_links",
+        "use_playwright",
     }
 )
 
@@ -149,12 +165,14 @@ class ResourceService:
         resource_processor: Optional[ResourceProcessor] = None,
         skill_processor: Optional[SkillProcessor] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
+        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._resource_processor = resource_processor
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
+        self._resource_memory_link_service = resource_memory_link_service
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
     def set_dependencies(
@@ -164,6 +182,7 @@ class ResourceService:
         resource_processor: ResourceProcessor,
         skill_processor: SkillProcessor,
         watch_scheduler: Optional["WatchScheduler"] = None,
+        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
@@ -171,6 +190,7 @@ class ResourceService:
         self._resource_processor = resource_processor
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
+        self._resource_memory_link_service = resource_memory_link_service
 
     def _get_watch_manager(self) -> Optional["WatchManager"]:
         if not self._watch_scheduler:
@@ -186,6 +206,63 @@ class ResourceService:
                 continue
             sanitized[key] = value
         return sanitized
+
+    def _normalize_add_resource_args(
+        self,
+        args: Optional[Dict[str, Any]],
+        *,
+        watch_interval: float,
+    ) -> _NormalizedAddResourceArgs:
+        if args is None:
+            return _NormalizedAddResourceArgs({})
+        if not isinstance(args, dict):
+            raise InvalidArgumentError("args must be an object.")
+        if not args:
+            return _NormalizedAddResourceArgs({})
+
+        reserved = sorted(set(args).intersection(_ADD_RESOURCE_ARGS_RESERVED_FIELDS))
+        if reserved:
+            raise InvalidArgumentError(
+                "args cannot include core add_resource fields: " + ", ".join(reserved)
+            )
+
+        normalized = dict(args)
+        token = normalized.get(FEISHU_ACCESS_TOKEN_ARG)
+        refresh_token = normalized.pop(FEISHU_REFRESH_TOKEN_ARG, None)
+        watch_auth_state = None
+        if token is not None:
+            if not isinstance(token, str) or not token.strip():
+                raise InvalidArgumentError("args.feishu_access_token must be a non-empty string.")
+            token = token.strip()
+            normalized[FEISHU_ACCESS_TOKEN_ARG] = token
+            if watch_interval > 0:
+                if not isinstance(refresh_token, str) or not refresh_token.strip():
+                    raise InvalidArgumentError(
+                        "args.feishu_refresh_token must be a non-empty string when "
+                        "args.feishu_access_token is used with watch_interval > 0."
+                    )
+                self._ensure_feishu_credentials_for_watch()
+                watch_auth_state = create_feishu_auth_state(token, refresh_token.strip())
+            elif refresh_token is not None:
+                raise InvalidArgumentError(
+                    "args.feishu_refresh_token is only supported with "
+                    "args.feishu_access_token and watch_interval > 0."
+                )
+        elif refresh_token is not None:
+            raise InvalidArgumentError(
+                "args.feishu_refresh_token requires args.feishu_access_token."
+            )
+
+        return _NormalizedAddResourceArgs(normalized, watch_auth_state)
+
+    def _ensure_feishu_credentials_for_watch(self) -> None:
+        try:
+            load_feishu_app_credentials()
+        except Exception as exc:
+            raise InvalidArgumentError(
+                "Feishu user-token watch requires FEISHU_APP_ID and "
+                "FEISHU_APP_SECRET, or feishu.app_id and feishu.app_secret in ov.conf."
+            ) from exc
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -221,24 +298,20 @@ class ResourceService:
         skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
+        args: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Start background ingestion for Git repositories while reserving the target URI."""
         self._ensure_initialized()
+        normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
+        kwargs.update(normalized_args.processor_kwargs)
 
-        if to:
-            to = resolve_path_variables(to)
-        if parent:
-            parent = resolve_path_variables(parent)
-        to = validate_optional_viking_uri(
-            to,
-            field_name="to",
-            allowed_scopes={"resources"},
-        )
-        parent = validate_optional_viking_uri(
-            parent,
-            field_name="parent",
-            allowed_scopes={"resources"},
+        target = ContentTargetSpec.from_fields(
+            ctx=ctx,
+            kind="resource",
+            to=to,
+            parent=parent,
+            create_parent=bool(kwargs.get("create_parent", False)),
         )
 
         from openviking.service.task_tracker import get_task_tracker
@@ -256,11 +329,9 @@ class ResourceService:
             root_uri, resource_lock = await self._plan_resource_target(
                 path=path,
                 ctx=ctx,
-                to=to,
-                parent=parent,
+                target=target,
                 source_name=source_name,
                 source_info=source_info,
-                create_parent=bool(kwargs.get("create_parent", False)),
             )
 
             task_tracker = get_task_tracker()
@@ -393,11 +464,9 @@ class ResourceService:
         *,
         path: str,
         ctx: RequestContext,
-        to: Optional[str],
-        parent: Optional[str],
+        target: ContentTargetSpec,
         source_name: Optional[str],
         source_info: _ResourceSourceInfo,
-        create_parent: bool,
     ) -> tuple[str, LockLease]:
         if not self._resource_processor or not self._viking_fs:
             raise NotInitializedError("ResourceProcessor")
@@ -408,11 +477,11 @@ class ResourceService:
             ctx=ctx,
             doc_name=doc_name,
             scope="resources",
-            to_uri=to,
-            parent_uri=parent,
+            to_uri=target.to,
+            parent_uri=target.parent,
             source_path=source_path,
             source_format=source_info.source_format,
-            create_parent=create_parent,
+            create_parent=target.create_parent,
         )
         if candidate_uri:
             return await self._resource_processor.reserve_unique_candidate(
@@ -528,8 +597,8 @@ class ResourceService:
                 avoid recursive watch task creation during scheduled execution)
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
-            args: Parser-specific or import-specific extension options. Recursive web
-                crawler options such as depth/max_pages/include_paths are passed here.
+            args: Parser-specific options forwarded to the parser chain. Recursive
+                web crawler options such as depth/max_pages/include_paths are handled here.
             **kwargs: Extra options forwarded to the parser chain
 
         Returns:
@@ -540,8 +609,7 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
-
-        # Keep crawler options under args so every entrypoint shares this validation.
+        normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         top_level_crawl_args = sorted(key for key in kwargs if key in _CRAWL_ARG_FIELDS)
         if top_level_crawl_args:
             raise InvalidArgumentError(
@@ -549,23 +617,14 @@ class ResourceService:
                 f"add_resource arguments: {', '.join(top_level_crawl_args)}"
             )
 
-        resource_args = dict(args or {})
-        reserved_args = sorted(
-            key for key in resource_args if key in _CORE_ADD_RESOURCE_ARG_FIELDS
-        )
-        if reserved_args:
-            raise InvalidArgumentError(
-                "args cannot include core add_resource fields: "
-                + ", ".join(reserved_args)
-            )
-        depth = _pop_int_arg(resource_args, "depth", 0)
-        max_pages = _pop_int_arg(resource_args, "max_pages", 100, min_value=1)
-        include_paths = _pop_optional_str_arg(resource_args, "include_paths")
-        exclude_paths = _pop_optional_str_arg(resource_args, "exclude_paths")
-        allow_external_links = _pop_bool_arg(resource_args, "allow_external_links", False)
-        use_playwright = _pop_bool_arg(resource_args, "use_playwright", False)
-        kwargs.update(resource_args)
-
+        processor_args = dict(normalized_args.processor_kwargs)
+        depth = _pop_int_arg(processor_args, "depth", 0)
+        max_pages = _pop_int_arg(processor_args, "max_pages", 100, min_value=1)
+        include_paths = _pop_optional_str_arg(processor_args, "include_paths")
+        exclude_paths = _pop_optional_str_arg(processor_args, "exclude_paths")
+        allow_external_links = _pop_bool_arg(processor_args, "allow_external_links", False)
+        use_playwright = _pop_bool_arg(processor_args, "use_playwright", False)
+        kwargs.update(processor_args)
         if not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
@@ -600,36 +659,23 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
-            # Resolve path variables before validation
-            if to:
-                to = resolve_path_variables(to)
-            if parent:
-                parent = resolve_path_variables(parent)
-
-            to = validate_optional_viking_uri(
-                to,
-                field_name="to",
-                allowed_scopes={"resources"},
-            )
-            parent = validate_optional_viking_uri(
-                parent,
-                field_name="parent",
-                allowed_scopes={"resources"},
+            if not to and not parent:
+                default_parent = self._default_parent_uri_for_url(path)
+                if default_parent:
+                    parent = default_parent
+                    kwargs["create_parent"] = True
+            target = ContentTargetSpec.from_fields(
+                ctx=ctx,
+                kind="resource",
+                to=to,
+                parent=parent,
+                create_parent=bool(kwargs.get("create_parent", False)),
             )
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
                 kwargs["request_validator"] = ensure_public_remote_target
             if resource_lock is not None:
                 kwargs["resource_lock"] = resource_lock
-            if not to and not parent:
-                default_parent = self._default_parent_uri_for_url(path)
-                if default_parent:
-                    parent = validate_optional_viking_uri(
-                        default_parent,
-                        field_name="parent",
-                        allowed_scopes={"resources"},
-                    )
-                    kwargs["create_parent"] = True
 
             result = await self._resource_processor.process_resource(
                 path=path,
@@ -637,8 +683,8 @@ class ResourceService:
                 reason=reason,
                 instruction=instruction,
                 scope="resources",
-                to=to,
-                parent=parent,
+                to=target.to,
+                parent=target.parent,
                 build_index=build_index,
                 summarize=summarize,
                 stage_callback=stage_callback,
@@ -653,10 +699,9 @@ class ResourceService:
             html_final_url = result.pop("_html_final_url", "")
 
             if depth != 0 and self._should_crawl(path, html_content):
-                # Crawl from the redirected final URL so relative links and dedup are correct.
                 crawl_root_url = html_final_url or path
                 root_uri = result.get("root_uri")
-                crawl_parent_uri = self._get_parent_resource_uri(root_uri) or parent
+                crawl_parent_uri = self._get_parent_resource_uri(root_uri) or target.parent
                 try:
                     crawl_result = await self._crawl_and_add_resources(
                         root_url=crawl_root_url,
@@ -685,7 +730,6 @@ class ResourceService:
                     }
                 except Exception as e:
                     logger.warning(f"[Crawl] Crawl failed for {path}: {e}")
-
             if wait:
                 if stage_callback is not None:
                     stage_result = stage_callback("processing_queue")
@@ -736,13 +780,14 @@ class ResourceService:
             if watch_manager and not skip_watch_management:
                 with telemetry.measure("resource.watch"):
                     if watch_interval > 0:
-                        watch_to = to
-                        parent_uri = parent
+                        watch_to = target.to
+                        parent_uri = target.parent
                         if not watch_to:
-                            watch_to = validate_optional_viking_uri(
+                            watch_to = validate_optional_content_target_uri(
                                 result.get("root_uri"),
+                                ctx,
+                                kind="resource",
                                 field_name="root_uri",
-                                allowed_scopes={"resources"},
                             )
                             parent_uri = None
                         if not watch_to:
@@ -752,6 +797,8 @@ class ResourceService:
                             )
                         try:
                             processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
+                            if normalized_args.watch_auth_state is not None:
+                                processor_kwargs.pop(FEISHU_ACCESS_TOKEN_ARG, None)
                             await self._handle_watch_task_creation(
                                 path=path,
                                 to_uri=watch_to,
@@ -762,6 +809,7 @@ class ResourceService:
                                 build_index=build_index,
                                 summarize=summarize,
                                 processor_kwargs=processor_kwargs,
+                                auth_state=normalized_args.watch_auth_state,
                                 ctx=ctx,
                             )
                         except ConflictError:
@@ -770,13 +818,21 @@ class ResourceService:
                             logger.warning(
                                 f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
                             )
-                    elif to:
+                    elif target.to:
                         try:
-                            await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
+                            await self._handle_watch_task_cancellation(to_uri=target.to, ctx=ctx)
                         except Exception as e:
                             logger.warning(
-                                f"[ResourceService] Failed to cancel watch task for {to}: {e}"
+                                f"[ResourceService] Failed to cancel watch task for {target.to}: {e}"
                             )
+            if wait:
+                await self._link_resource_reason_memory(
+                    result=result,
+                    ctx=ctx,
+                    reason=reason,
+                    source_name=kwargs.get("source_name"),
+                    timeout=timeout,
+                )
             if not wait:
                 from openviking.service.task_tracker import get_task_tracker
 
@@ -792,25 +848,33 @@ class ResourceService:
                 if telemetry_id:
                     monitor_started = True
                     background = asyncio.create_task(
-                        self._monitor_queue_processing(
+                        self._monitor_resource_queue_then_link_memory(
                             task.task_id,
                             telemetry_id,
-                            ctx.account_id,
-                            ctx.user.user_id,
+                            ctx,
+                            root_uri=root_uri,
+                            reason=reason,
+                            source_name=kwargs.get("source_name"),
+                            timeout=timeout,
                         )
                     )
                     self._background_tasks.add(background)
                     background.add_done_callback(self._background_tasks.discard)
                 else:
-                    await task_tracker.start(
-                        task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                    monitor_started = True
+                    background = asyncio.create_task(
+                        self._monitor_resource_queue_then_link_memory(
+                            task.task_id,
+                            None,
+                            ctx,
+                            root_uri=root_uri,
+                            reason=reason,
+                            source_name=kwargs.get("source_name"),
+                            timeout=timeout,
+                        )
                     )
-                    await task_tracker.complete(
-                        task.task_id,
-                        {"root_uri": root_uri},
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                    )
+                    self._background_tasks.add(background)
+                    background.add_done_callback(self._background_tasks.discard)
             return result
         except Exception as exc:
             telemetry.set_error(
@@ -875,10 +939,10 @@ class ResourceService:
         use_playwright: bool = False,
         **kwargs,
     ) -> Any:
+        from openviking.parse.parsers.html import HTMLParser
         from openviking.parse.parsers.html_crawler.crawl_filter import CrawlConfig
         from openviking.parse.parsers.html_crawler.web_crawler import CrawlResult, WebCrawler
 
-        # args carries path filters as comma-separated strings at API boundaries.
         include_list = [p.strip() for p in (include_paths or "").split(",") if p.strip()] or None
         exclude_list = [p.strip() for p in (exclude_paths or "").split(",") if p.strip()] or None
 
@@ -892,7 +956,6 @@ class ResourceService:
             request_validator=kwargs.get("request_validator"),
         )
 
-        # Remove keys that child imports override to avoid "multiple values" errors.
         kwargs.pop("source_name", None)
         kwargs.pop("original_source", None)
         kwargs.pop("depth", None)
@@ -916,9 +979,8 @@ class ResourceService:
                 nonlocal added_count, failed_count, root_updated
                 async with sem:
                     try:
-                        import tempfile
                         import os
-                        from openviking.parse.parsers.html import HTMLParser
+                        import tempfile
 
                         target_to = root_uri if page.depth == 0 and root_uri else None
                         target_parent = None if target_to else parent_uri
@@ -928,8 +990,8 @@ class ResourceService:
                             if page.source == "ssr" and page.content_type == "text/markdown":
                                 content_to_save = HTMLParser._clean_inline_images(content_to_save)
 
-                            # Persist fetched content directly so child imports do not refetch.
-                            fd, temp_path = tempfile.mkstemp(suffix=".md" if page.content_type == "text/markdown" else ".html")
+                            suffix = ".md" if page.content_type == "text/markdown" else ".html"
+                            fd, temp_path = tempfile.mkstemp(suffix=suffix)
                             try:
                                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                                     f.write(content_to_save)
@@ -953,7 +1015,6 @@ class ResourceService:
                                 if os.path.exists(temp_path):
                                     os.remove(temp_path)
                         else:
-                            # fallback (理论上不会发生)
                             add_result = await self.add_resource(
                                 path=page.url,
                                 to=target_to,
@@ -1010,6 +1071,95 @@ class ResourceService:
         )
         raise RuntimeError(f"Child resource import failed for {page_url}: {message}")
 
+    async def _link_resource_reason_memory(
+        self,
+        *,
+        result: Dict[str, Any],
+        ctx: RequestContext,
+        reason: str,
+        source_name: Optional[str],
+        timeout: Optional[float] = None,
+    ) -> None:
+        if not self._resource_memory_link_service:
+            return
+        if not (reason or "").strip():
+            return
+        root_uri = result.get("root_uri")
+        if not root_uri:
+            return
+        try:
+            link_result = await self._resource_memory_link_service.on_resource_added(
+                ctx=ctx,
+                resource_uri=root_uri,
+                reason=reason,
+                source_name=source_name,
+                timeout=timeout,
+            )
+            result["memory_linking"] = link_result
+        except Exception as exc:
+            logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
+            result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
+
+    async def _monitor_resource_queue_then_link_memory(
+        self,
+        task_id: str,
+        telemetry_id: Optional[str],
+        ctx: RequestContext,
+        *,
+        root_uri: str,
+        reason: str,
+        source_name: Optional[str],
+        timeout: Optional[float],
+    ) -> None:
+        from openviking.service.task_tracker import get_task_tracker
+
+        task_tracker = get_task_tracker()
+        request_wait_tracker = get_request_wait_tracker()
+        await task_tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
+        try:
+            if telemetry_id:
+                await request_wait_tracker.wait_for_request(telemetry_id)
+                status = request_wait_tracker.build_queue_status(telemetry_id)
+            else:
+                status = build_queue_status_payload(
+                    await get_queue_manager().wait_complete(timeout=timeout)
+                )
+            errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
+            if errors:
+                await task_tracker.fail(
+                    task_id,
+                    f"queue processing failed: {status}",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                return
+
+            result: Dict[str, Any] = {"root_uri": root_uri, "queue_status": status}
+            await self._link_resource_reason_memory(
+                result=result,
+                ctx=ctx,
+                reason=reason,
+                source_name=source_name,
+                timeout=timeout,
+            )
+            await task_tracker.complete(
+                task_id,
+                result,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        except Exception as exc:
+            await task_tracker.fail(
+                task_id,
+                str(exc),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        finally:
+            if telemetry_id:
+                request_wait_tracker.cleanup(telemetry_id)
+                unregister_wait_telemetry(telemetry_id)
+
     async def _monitor_queue_processing(
         self,
         task_id: str,
@@ -1057,6 +1207,7 @@ class ResourceService:
         build_index: bool,
         summarize: bool,
         processor_kwargs: Dict[str, Any],
+        auth_state: Optional[Dict[str, Any]],
         ctx: RequestContext,
     ) -> None:
         """Handle creation or update of watch task.
@@ -1081,7 +1232,7 @@ class ResourceService:
             to_uri=to_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            role=ctx.role.value,
+            role=str(ctx.role),
         )
         if existing_task:
             if existing_task.is_active:
@@ -1094,7 +1245,7 @@ class ResourceService:
                 task_id=existing_task.task_id,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
-                role=ctx.role.value,
+                role=str(ctx.role),
                 path=path,
                 to_uri=to_uri,
                 parent_uri=parent_uri,
@@ -1104,6 +1255,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processor_kwargs=processor_kwargs,
+                auth_state=auth_state,
                 is_active=True,
             )
             logger.info(
@@ -1114,7 +1266,7 @@ class ResourceService:
                 path=path,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
-                original_role=ctx.role.value,
+                original_role=str(ctx.role),
                 to_uri=to_uri,
                 parent_uri=parent_uri,
                 reason=reason,
@@ -1123,6 +1275,7 @@ class ResourceService:
                 build_index=build_index,
                 summarize=summarize,
                 processor_kwargs=processor_kwargs,
+                auth_state=auth_state,
             )
             logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
 
@@ -1141,14 +1294,14 @@ class ResourceService:
             to_uri=to_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            role=ctx.role.value,
+            role=str(ctx.role),
         )
         if existing_task:
             await watch_manager.update_task(
                 task_id=existing_task.task_id,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
-                role=ctx.role.value,
+                role=str(ctx.role),
                 is_active=False,
             )
             logger.info(

@@ -15,9 +15,9 @@ embedding_template: |-
 
 overview_template: |-
   # Entities Overview
-  {% if items %}**Category:** {{ items[0].file_content.category }}{% endif %}
+  {% if items %}**Category:** {{ items[0].file_content.category|default(directory_name, true) }}{% endif %}
   {% for item in items %}
-  - [{{ item.file_content.name }}](./{{ item.file_name }})
+  - [{{ item.file_content.name|default(item.file_name, true) }}](./{{ item.file_name }})
   {% endfor %}
 
 fields:

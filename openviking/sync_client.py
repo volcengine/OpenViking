@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from openviking.async_client import AsyncOpenViking
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import SearchContextTypeInput
 from openviking_cli.utils import run_async
 
 
@@ -22,8 +23,17 @@ class SyncOpenViking:
     Wraps AsyncOpenViking with synchronous methods.
     """
 
-    def __init__(self, path: Optional[str] = None):
-        self._async_client = AsyncOpenViking(path=path)
+    def __init__(
+        self,
+        path: Optional[str] = None,
+        actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ):
+        self._async_client = AsyncOpenViking(
+            path=path,
+            actor_peer_id=actor_peer_id,
+            agent_id=agent_id,
+        )
         self._initialized = False
 
     def initialize(self) -> None:
@@ -97,7 +107,7 @@ class SyncOpenViking:
             session_id: Session ID
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
-            parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            parts: Parts array (full Part support: TextPart, ContextPart, ImagePart, ToolPart)
             created_at: Message creation time (ISO format string). If not provided, current time is used.
             peer_id: Optional stable interaction peer identity.
 
@@ -150,6 +160,23 @@ class SyncOpenViking:
         """Query background task status."""
         return run_async(self._async_client.get_task(task_id))
 
+    def list_tasks(
+        self,
+        task_type: Optional[str] = None,
+        status: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List background tasks visible to the current caller."""
+        return run_async(
+            self._async_client.list_tasks(
+                task_type=task_type,
+                status=status,
+                resource_id=resource_id,
+                limit=limit,
+            )
+        )
+
     def reindex(
         self,
         uri: str,
@@ -176,8 +203,8 @@ class SyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
-        telemetry: TelemetryRequest = False,
         args: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)
@@ -203,8 +230,8 @@ class SyncOpenViking:
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
-                telemetry=telemetry,
                 args=args,
+                telemetry=telemetry,
                 **kwargs,
             )
         )
@@ -230,12 +257,13 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
@@ -247,12 +275,13 @@ class SyncOpenViking:
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=filter,
+                context_type=context_type,
+                tags=tags,
                 telemetry=telemetry,
                 since=since,
                 until=until,
                 time_field=time_field,
                 level=level,
-                peer_id=peer_id,
             )
         )
 
@@ -263,12 +292,13 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
-        peer_id: Optional[str] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -278,12 +308,13 @@ class SyncOpenViking:
                 limit,
                 score_threshold,
                 filter,
+                context_type,
+                tags,
                 telemetry,
                 since,
                 until,
                 time_field,
                 level,
-                peer_id=peer_id,
             )
         )
 
@@ -316,6 +347,25 @@ class SyncOpenViking:
                 mode=mode,
                 wait=wait,
                 timeout=timeout,
+                telemetry=telemetry,
+            )
+        )
+
+    def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        return run_async(
+            self._async_client.set_tags(
+                uri=uri,
+                tags=tags,
+                mode=mode,
+                recursive=recursive,
                 telemetry=telemetry,
             )
         )
@@ -391,9 +441,15 @@ class SyncOpenViking:
         """Get relations"""
         return run_async(self._async_client.relations(uri))
 
-    def rm(self, uri: str, recursive: bool = False) -> None:
+    def rm(
+        self,
+        uri: str,
+        recursive: bool = False,
+        wait: bool = False,
+        timeout: float = None,
+    ) -> None:
         """Delete resource"""
-        return run_async(self._async_client.rm(uri, recursive))
+        return run_async(self._async_client.rm(uri, recursive, wait=wait, timeout=timeout))
 
     def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
         """Wait for all async operations to complete"""

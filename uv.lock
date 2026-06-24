@@ -3509,6 +3509,7 @@ source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
     { name = "argon2-cffi" },
+    { name = "charset-normalizer" },
     { name = "cryptography" },
     { name = "ebooklib" },
     { name = "fastapi" },
@@ -3733,6 +3734,7 @@ requires-dist = [
     { name = "beautifulsoup4", marker = "extra == 'bot'", specifier = ">=4.12.0" },
     { name = "boto3", marker = "extra == 'test'", specifier = ">=1.42.44" },
     { name = "build", marker = "extra == 'build'" },
+    { name = "charset-normalizer", specifier = ">=3.4,<4" },
     { name = "cmake", marker = "extra == 'build'", specifier = ">=3.15" },
     { name = "croniter", marker = "extra == 'bot'", specifier = ">=2.0.0" },
     { name = "cryptography", specifier = ">=42.0.0" },

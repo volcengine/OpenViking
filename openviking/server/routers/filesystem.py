@@ -149,6 +149,8 @@ async def mkdir(
 async def rm(
     uri: str = Query(..., description="Viking URI"),
     recursive: bool = Query(False, description="Remove recursively"),
+    wait: bool = Query(False, description="Wait for semantic refresh to complete"),
+    timeout: Optional[float] = Query(None, description="Wait timeout in seconds"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove resource."""
@@ -156,7 +158,7 @@ async def rm(
     # Resolve path variables
     uri = resolve_path_variables(uri)
     try:
-        result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive)
+        result = await service.fs.rm(uri, ctx=_ctx, recursive=recursive, wait=wait, timeout=timeout)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -173,6 +175,14 @@ async def rm(
     response_result = {"uri": uri}
     if isinstance(result, dict) and "estimated_deleted_count" in result:
         response_result["estimated_deleted_count"] = result["estimated_deleted_count"]
+    if isinstance(result, dict) and "memory_cleanup" in result:
+        response_result["memory_cleanup"] = result["memory_cleanup"]
+    if isinstance(result, dict) and "semantic_root_uri" in result:
+        response_result["semantic_root_uri"] = result["semantic_root_uri"]
+    if isinstance(result, dict) and "semantic_status" in result:
+        response_result["semantic_status"] = result["semantic_status"]
+    if isinstance(result, dict) and "queue_status" in result:
+        response_result["queue_status"] = result["queue_status"]
     return Response(status="ok", result=response_result)
 
 

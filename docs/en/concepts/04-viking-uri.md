@@ -26,7 +26,8 @@ Public API and CLI filesystem/content operations accept the public scopes
 `resources` and `user` (plus the root URI `viking://`). `session` is retained
 as a backward-compatible alias for user session paths; new session data lives
 under `viking://user/{user_id}/sessions`.
-`agent` is deprecated. `temp`, `queue`, and `upload` are internal implementation
+`agent` is deprecated but remains as a read-only compatibility entry for legacy
+agent data. `temp`, `queue`, and `upload` are internal implementation
 scopes and cannot be addressed directly through public API URI parameters.
 
 ## Initial Directory Structure
@@ -39,7 +40,12 @@ viking://
 │   └── {user_id}/
 │       ├── profile.md        # User profile
 │       ├── memories/         # User memory storage
+│       ├── resources/        # User-owned private resources
 │       ├── skills/           # User skills
+│       ├── peers/
+│       │   └── {peer_id}/
+│       │       ├── memories/  # Memory about a specific interaction peer
+│       │       └── resources/ # Resources scoped to that peer
 │       └── sessions/         # User session storage
 │           └── {session_id}/
 │               ├── .abstract.md
@@ -72,9 +78,11 @@ viking://user/memories/preferences/           # User preferences
 viking://user/memories/preferences/coding     # Specific preference
 viking://user/memories/entities/              # Entity memories
 viking://user/memories/events/                # Event memories
+viking://user/resources/                      # Current user's resources
+viking://user/resources/docs/                 # Current user's resource directory
 ```
 
-### User Skills and Memories
+### User Skills and Peer Content
 
 ```
 viking://user/skills/                         # Current user's skills
@@ -82,11 +90,15 @@ viking://user/skills/search-web               # Specific skill
 viking://user/memories/                       # Current user's memories
 viking://user/memories/cases/                 # Learned cases
 viking://user/memories/patterns/              # Learned patterns
+viking://user/{user_id}/peers/{peer_id}/memories/
+viking://user/{user_id}/peers/{peer_id}/resources/
 ```
 
 The short `viking://user/...` form is relative to the current request identity.
 OpenViking expands it internally to explicit namespace paths such as
 `viking://user/{user_id}/...` before storage and retrieval.
+Identity path segments such as `{user_id}` and `{peer_id}` must be safe single
+segments, for example `alice` or `web-visitor-alice`.
 
 ### Session Data
 
@@ -189,10 +201,16 @@ viking://
 │
 ├── user/{user_id}/
 │   ├── profile.md                # User basic info
-│   └── memories/
-│       ├── preferences/          # By topic
-│       ├── entities/             # Each independent
-│       └── events/               # Each independent
+│   ├── memories/
+│   │   ├── preferences/          # By topic
+│   │   ├── entities/             # Each independent
+│   │   └── events/               # Each independent
+│   ├── resources/
+│   │   └── {project}/
+│   ├── skills/
+│   └── peers/{peer_id}/
+│       ├── memories/
+│       └── resources/
 │
 └── user/{user_id}/sessions/{session_id}/
     ├── messages.jsonl
@@ -200,7 +218,9 @@ viking://
     └── history/
 ```
 
-`viking://agent/...` is deprecated and rejected by current namespace resolution.
+`viking://agent/...` is deprecated and only kept for read-only legacy agent
+compatibility. New data should be written under
+`viking://user/{user_id}/peers/{peer_id}/...`.
 
 ## URI Operations
 
@@ -235,6 +255,12 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 results = client.find(
     "authentication",
     target_uri="viking://resources/"
+)
+
+# Search only in current-user resources
+results = client.find(
+    "private project notes",
+    target_uri="viking://user/resources/"
 )
 
 # Search only in user memories
@@ -292,11 +318,14 @@ Each directory may contain special files:
 ### Scope-Specific Operations
 
 ```python
-# Add resources only to resources scope
+# Add resources to the shared account resource scope
 await client.add_resource(url, to="viking://resources/project/")
 
-# Skills go to user scope
-await client.add_skill(skill)  # Automatically to viking://user/skills/
+# Add private resources to the current user's resource root
+await client.add_resource(path, parent="viking://user/resources/project/")
+
+# Skills always go to the current user's skills root
+await client.add_skill(skill)  # Canonical root: viking://user/{user_id}/skills/
 ```
 
 ## Related Documents

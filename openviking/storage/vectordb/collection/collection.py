@@ -152,6 +152,10 @@ class ICollection(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        raise NotImplementedError
+
+    @abstractmethod
     def fetch_data(self, primary_keys: List[Any]):
         raise NotImplementedError
 
@@ -578,6 +582,21 @@ class Collection:
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
         return self.__collection.upsert_data(data_list, ttl)
+
+    def update_data(self, data_list: List[Dict[str, Any]]) -> Any:
+        """
+        Update existing data in the collection using only explicitly provided fields.
+
+        Args:
+            data_list (List[Dict[str, Any]]): List of partial data documents to update.
+                Each document must contain the primary key.
+
+        Returns:
+            Any: Implementation-specific result for the updated records.
+        """
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        return self.__collection.update_data(data_list)
 
     def fetch_data(self, primary_keys: List[Any]) -> List[Dict[str, Any]]:
         """

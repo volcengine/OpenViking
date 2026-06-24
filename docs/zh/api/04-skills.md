@@ -14,10 +14,11 @@ OpenViking 支持多种技能定义格式：
 
 ### 技能存储结构
 
-技能存储在 `viking://user/skills/` 路径下：
+技能存储在当前用户的 skills 根。短 URI `viking://user/skills/` 会按认证请求身份解析为
+`viking://user/{user_id}/skills/`：
 
 ```
-viking://user/skills/
+viking://user/{user_id}/skills/
 +-- search-web/
 |   +-- .abstract.md      # L0：简要描述
 |   +-- .overview.md      # L1：参数和使用概览
@@ -152,7 +153,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 1. 接收技能数据或上传的临时文件
 2. 检测数据格式（结构化数据、SKILL.md 内容、MCP 格式）
 3. 解析技能定义
-4. 存储到 `viking://user/skills/` 路径下
+4. 存储到当前用户的 `viking://user/{user_id}/skills/` 路径下
 5. 如指定 `wait=True`，等待向量化完成
 
 **代码入口**：
@@ -184,6 +185,11 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
     3. 先调用 `POST /api/v1/resources/temp_upload` 上传本地 `SKILL.md` 文件/zip 目录，再调用 `POST /api/v1/skills` 并传入 `temp_file_id`
     4. `temp_upload` 默认使用本地临时存储；只有在明确需要分布式共享临时上传时，才传 `upload_mode=shared`。在 Python HTTP client / CLI 流程里，也可以通过 `ovcli.conf` 的 `upload.mode = "shared"` 驱动这一行为
   - `POST /api/v1/skills` 不接受在 `data` 中直接传宿主机本地路径。
+
+- **目标规则**：
+  - Skills 始终是 user-scoped；`add_skill` 不接受 `to`、`parent` 或 `root_uri`。
+  - 不支持 peer-scoped skill 根；actor peer 过滤只作用于 peer memories/resources，不作用于 peer skills。
+  - 列出、读取、删除或搜索技能时，可以使用 `viking://user/skills/...` 作为当前用户短写。
 
 - **支持的数据格式**：
   1. **字典（技能格式）**：包含 `name`、`description`、`content` 等字段
@@ -315,6 +321,18 @@ result = client.add_skill("./skills/my-skill/", wait=True)
 client.wait_processed()
 ```
 
+**Go SDK**
+
+```go
+result, err := client.AddSkill(ctx, "./skills/my-skill/", &openviking.AddSkillOptions{
+    Wait: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["uri"])
+```
+
 **CLI**：
 
 ```bash
@@ -338,8 +356,8 @@ ov add-skill ./skills/my-skill/ -o json
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://user/skills/my-skill/",
-    "uri": "viking://user/skills/my-skill/",
+    "root_uri": "viking://user/alice/skills/my-skill",
+    "uri": "viking://user/alice/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
     "queue_status": {
@@ -360,8 +378,8 @@ ov add-skill ./skills/my-skill/ -o json
 Note: Skill is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
 status          success
-root_uri        viking://user/skills/my-skill
-uri             viking://user/skills/my-skill
+root_uri        viking://user/alice/skills/my-skill
+uri             viking://user/alice/skills/my-skill
 name            my-skill
 auxiliary_files 2
 ```
@@ -370,8 +388,8 @@ auxiliary_files 2
 ```json
 {
   "status": "success",
-  "root_uri": "viking://user/skills/my-skill",
-  "uri": "viking://user/skills/my-skill",
+  "root_uri": "viking://user/alice/skills/my-skill",
+  "uri": "viking://user/alice/skills/my-skill",
   "name": "my-skill",
   "auxiliary_files": 2
 }
@@ -382,8 +400,8 @@ auxiliary_files 2
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `status` | string | 处理状态：`success` 成功，`error` 失败 |
-| `root_uri` | string | 技能在 OpenViking 中的最终 URI（同 `uri`）|
-| `uri` | string | 技能在 OpenViking 中的最终 URI（同 `root_uri`）|
+| `root_uri` | string | 技能在 OpenViking 中的 canonical 最终 URI（同 `uri`）|
+| `uri` | string | 技能在 OpenViking 中的 canonical 最终 URI（同 `root_uri`）|
 | `name` | string | 技能名称 |
 | `auxiliary_files` | number | 技能附带的辅助文件数量 |
 | `queue_status` | object | （可选，仅当 `wait=True` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
@@ -408,61 +426,59 @@ Python HTTP SDK 会把该响应映射为对应异常（`ProcessingError`）。
 
 ## 技能管理操作
 
+Python HTTP SDK 和 Go SDK 都暴露专用技能管理方法。Python 方法包括
+`list_skills`、`find_skills`、`validate_skill`、`get_skill`、`update_skill`
+和 `delete_skill`；Go 方法包括 `ListSkills`、`FindSkills`、`ValidateSkill`、
+`GetSkill`、`UpdateSkill` 和 `DeleteSkill`。通用文件系统、内容和检索方法仍可用于 URI 级访问。
+
 ### 列出技能
 
 **Python SDK**：
 
 ```python
-# 列出所有技能
-skills = client.ls("viking://user/skills/")
-for skill in skills:
-    print(f"{skill['name']}")
+skills = client.list_skills(node_limit=1000)
+for skill in skills["skills"]:
+    print(skill["name"])
+```
 
-# 简单列表（仅名称）
-names = client.ls("viking://user/skills/", simple=True)
-print(names)
+**Go SDK**：
+
+```go
+skills, err := client.ListSkills(ctx, nil)
+_ = skills
 ```
 
 **HTTP API**：
 
 ```bash
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://user/skills/" \
+curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
   -H "X-API-Key: your-key"
 ```
 
-### 读取技能内容
+### 读取技能
 
 **Python SDK**：
 
 ```python
-uri = "viking://user/skills/search-web/"
+skill = client.get_skill("search-web", include_content=True, include_files=True)
+print(skill["name"])
+print(skill.get("content"))
+```
 
-# L0：简要描述
-abstract = client.abstract(uri)
-print(f"Abstract: {abstract}")
+**Go SDK**：
 
-# L1：参数和使用概览
-overview = client.overview(uri)
-print(f"Overview: {overview}")
-
-# L2：完整技能文档
-content = client.read(uri)
-print(f"Content: {content}")
+```go
+skill, err := client.GetSkill(ctx, "search-web", &openviking.GetSkillOptions{
+    IncludeContent: openviking.Bool(true),
+    IncludeFiles:   openviking.Bool(true),
+})
+_ = skill
 ```
 
 **HTTP API**：
 
 ```bash
-# L0：简要描述
-curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://user/skills/search-web/" \
-  -H "X-API-Key: your-key"
-
-# L1：参数和使用概览
-curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://user/skills/search-web/" \
-  -H "X-API-Key: your-key"
-
-# L2：完整技能文档
-curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://user/skills/search-web/" \
+curl -X GET "http://localhost:1933/api/v1/skills/search-web?include_content=true&include_files=true" \
   -H "X-API-Key: your-key"
 ```
 
@@ -471,30 +487,62 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://user/skills/
 **Python SDK**：
 
 ```python
-# 语义搜索技能
-results = client.find(
-    "search the internet",
-    target_uri="viking://user/skills/",
-    limit=5
-)
+results = client.find_skills("search the internet", limit=5)
 
-for ctx in results.skills:
-    print(f"Skill: {ctx.uri}")
-    print(f"Score: {ctx.score:.3f}")
-    print(f"Description: {ctx.abstract}")
+for skill in results["skills"]:
+    print(skill["name"], skill["score"])
+```
+
+**Go SDK**：
+
+```go
+results, err := client.FindSkills(ctx, "search the internet", &openviking.FindSkillsOptions{
+    Limit: 5,
+})
+_ = results
 ```
 
 **HTTP API**：
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/search/find \
+curl -X POST http://localhost:1933/api/v1/skills/find \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
     "query": "search the internet",
-    "target_uri": "viking://user/skills/",
     "limit": 5
   }'
+```
+
+### 校验和更新技能
+
+**Python SDK**：
+
+```python
+validated = client.validate_skill({"name": "search-web", "description": "..."})
+updated = client.update_skill("search-web", "./skills/search-web", wait=True)
+```
+
+**Go SDK**：
+
+```go
+validated, err := client.ValidateSkill(ctx, map[string]any{
+    "name":        "search-web",
+    "description": "...",
+}, nil)
+updated, err := client.UpdateSkill(ctx, "search-web", "./skills/search-web", &openviking.UpdateSkillOptions{
+    Wait: true,
+})
+_, _ = validated, updated
+```
+
+**HTTP API**：
+
+```bash
+curl -X POST http://localhost:1933/api/v1/skills/validate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"data": {"name": "search-web", "description": "..."}}'
 ```
 
 ### 删除技能
@@ -502,13 +550,20 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 **Python SDK**：
 
 ```python
-client.rm("viking://user/skills/old-skill/", recursive=True)
+client.delete_skill("old-skill")
+```
+
+**Go SDK**：
+
+```go
+deleted, err := client.DeleteSkill(ctx, "old-skill")
+_ = deleted
 ```
 
 **HTTP API**：
 
 ```bash
-curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://user/skills/old-skill/&recursive=true" \
+curl -X DELETE "http://localhost:1933/api/v1/skills/old-skill" \
   -H "X-API-Key: your-key"
 ```
 

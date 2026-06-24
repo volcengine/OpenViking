@@ -11,8 +11,8 @@ import openviking.storage.vectordb.collection.qdrant_collection as qdrant_collec
 from openviking.storage.vectordb.collection.qdrant_collection import (
     ORIGINAL_ID_FIELD,
     QdrantCollection,
-    _to_qdrant_point_id,
     _sparse_to_qdrant,
+    _to_qdrant_point_id,
 )
 from openviking.storage.vectordb.collection.qdrant_rest import QdrantRestError
 
@@ -212,6 +212,56 @@ def test_fetch_data_maps_ids_and_returns_original_ids():
     assert result.items[0].id == "doc_1"
     assert result.items[0].fields == {"name": "Document"}
     assert result.ids_not_exist == ["doc_2"]
+
+
+def test_update_data_preserves_omitted_fields_and_overwrites_explicit_fields():
+    point_id = _to_qdrant_point_id("doc_1")
+    client = _StubClient(
+        [
+            {
+                "result": [
+                    {
+                        "id": point_id,
+                        "payload": {
+                            ORIGINAL_ID_FIELD: "doc_1",
+                            "name": "Before",
+                            "status": "active",
+                        },
+                        "vector": {"vector": [0.1, 0.2, 0.3]},
+                    }
+                ]
+            },
+            {"status": "ok"},
+        ]
+    )
+    collection = _build_collection_stub(client)
+
+    updated_ids = collection.update_data([{"id": "doc_1", "name": "After"}])
+
+    assert updated_ids == ["doc_1"]
+    assert client.calls[0]["method"] == "POST"
+    assert client.calls[0]["path"] == "/collections/proj__context/points"
+    assert client.calls[0]["json_body"]["ids"] == [point_id]
+    assert client.calls[0]["json_body"]["with_vector"] is True
+
+    assert client.calls[1]["method"] == "PUT"
+    assert client.calls[1]["path"] == "/collections/proj__context/points"
+    point = client.calls[1]["json_body"]["points"][0]
+    assert point["id"] == point_id
+    assert point["vector"]["vector"] == [0.1, 0.2, 0.3]
+    assert point["payload"] == {
+        ORIGINAL_ID_FIELD: "doc_1",
+        "name": "After",
+        "status": "active",
+    }
+
+
+def test_update_data_requires_existing_record():
+    client = _StubClient([{"result": []}])
+    collection = _build_collection_stub(client)
+
+    with pytest.raises(ValueError, match="Qdrant point does not exist for update: doc_404"):
+        collection.update_data([{"id": "doc_404", "name": "After"}])
 
 
 def test_search_by_id_uses_stored_vector_for_similarity_query():

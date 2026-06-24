@@ -8,7 +8,7 @@ import time
 import uuid
 
 import pytest
-from conftest import ov
+from conftest import ov, ov_add_resource, ov_reindex, ov_write
 
 pytestmark = pytest.mark.cli_remote
 
@@ -56,29 +56,7 @@ class TestContentDownload:
 
 class TestContentWrite:
     def test_write_replace(self, test_file_uri):
-        time.sleep(15)
-        r = None
-        for _attempt in range(15):
-            r = ov(
-                [
-                    "write",
-                    test_file_uri,
-                    "--content",
-                    "Updated via CLI write.",
-                    "--mode",
-                    "replace",
-                    "--wait",
-                    "-o",
-                    "json",
-                ],
-                timeout=120,
-            )
-            if r["exit_code"] == 0:
-                break
-            if "busy" in r["stderr"].lower() or "internal" in r["stderr"].lower():
-                time.sleep(20)
-                continue
-            time.sleep(10)
+        r = ov_write(test_file_uri, "Updated via CLI write.", "--mode", "replace")
         assert r["exit_code"] == 0, (
             f"ov write replace should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
@@ -86,28 +64,7 @@ class TestContentWrite:
         assert data is not None and data.get("ok") is True, "Expected ok=true"
 
     def test_write_append(self, test_file_uri):
-        time.sleep(15)
-        r = None
-        for _attempt in range(15):
-            r = ov(
-                [
-                    "write",
-                    test_file_uri,
-                    "--content",
-                    "\nAppended via CLI.",
-                    "--append",
-                    "--wait",
-                    "-o",
-                    "json",
-                ],
-                timeout=120,
-            )
-            if r["exit_code"] == 0:
-                break
-            if "busy" in r["stderr"].lower() or "internal" in r["stderr"].lower():
-                time.sleep(20)
-                continue
-            time.sleep(10)
+        r = ov_write(test_file_uri, "\nAppended via CLI.", "--append")
         assert r["exit_code"] == 0, (
             f"ov write append should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
@@ -124,10 +81,7 @@ class TestContentReindex:
         try:
             r = None
             for _attempt in range(10):
-                r = ov(
-                    ["add-resource", temp_path, "--to", reindex_pack, "--wait", "-o", "json"],
-                    timeout=120,
-                )
+                r = ov_add_resource(temp_path, reindex_pack)
                 if r["exit_code"] == 0:
                     break
                 if (
@@ -141,16 +95,7 @@ class TestContentReindex:
         finally:
             os.unlink(temp_path)
 
-        time.sleep(15)
-        r = None
-        for _attempt in range(15):
-            r = ov(["reindex", reindex_pack, "--wait", "true", "-o", "json"], timeout=120)
-            if r["exit_code"] == 0:
-                break
-            if "INTERNAL" in r["stderr"]:
-                time.sleep(20)
-                continue
-            time.sleep(15)
+        r = ov_reindex(reindex_pack)
         assert r["exit_code"] == 0, (
             f"ov reindex should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )

@@ -42,7 +42,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 云文档类
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable，需要配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET |
+| 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
 
 ### 资源处理流程
 
@@ -121,7 +121,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 3. 调用对应 Parser 解析内容
 4. 构建目录树并写入 AGFS
 5. `wait=true` 时等待语义处理完成；`wait=false` 时返回 `task_id` 用于队列跟踪
-6. 如指定 `--watch-interval`，设置定时更新任务
+6. 如果 `reason` 非空，将其追加到固定的资源 reason session 并 commit，复用常规记忆抽取链路，让合适的用户记忆引用该资源 URI
+7. 如指定 `--watch-interval`，设置定时更新任务
 
 **代码入口**：
 - `openviking/client/local.py:LocalClient.add_resource` - SDK 入口（嵌入式）
@@ -141,7 +142,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | to | string | 否 | - | 目标 Viking URI（精确位置）。与 `parent` 互斥 |
 | parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 互斥 |
 | create_parent | bool | 否 | False | 如果父目录不存在，自动创建父目录（服务端标志） |
-| reason | string | 否 | "" | 添加资源的原因（用于文档化和相关性提升，实验特性） |
+| reason | string | 否 | "" | 添加资源的原因；非空时会随资源 URI 进入常规 session 记忆抽取链路，并在生成的记忆中记录资源引用 |
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
 | wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
 | timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
@@ -151,15 +152,25 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | exclude | string | 否 | None | 排除的文件模式（glob） |
 | directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
+| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 创建任务；≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：
 - `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
+- 资源目标可以使用公共 `viking://resources/...`、当前用户短写 `viking://user/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。当前用户短写会按请求身份 canonicalize。
+- `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
 - 只有 Git 仓库来源在 `wait=false` 时使用完整后台导入；OpenViking 会先完成仓库 preflight 和目标规划，再返回 `task_id`。
+- `reason` 触发的记忆生成复用 `session.commit` 的抽取链路，只使用 `reason`、资源 URI、可用的资源名称和目录摘要，不会读取或展开完整资源正文；系统会写入 `entities`、`events`、`preferences` 等已有记忆类型，不创建独立的资源记忆目录。
+- 删除资源时，系统会在删除前扫描本次上下文对应的 self 或 peer 记忆中的 `resource_refs`，清理对应资源 URI 和由该 `reason` 引入的内容，并重新刷新相关记忆的语义索引。
 - 其他来源在 `wait=false` 时会在响应前完成来源解析、目标解析和 AGFS 写入，仅 semantic 与 embedding 队列继续异步处理。
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
+- 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
+- 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
+- 飞书/Lark 用户 token watch 通过 `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` 传入，且 `watch_interval > 0`。OpenViking 会把 token 状态保存在 watch task 私有状态里，用配置的飞书应用凭证刷新，并在后续 watch 重跑中使用刷新后的用户 token。
+- 飞书/Lark 用户 token watch 需要 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此传入的用户 token 必须来自 OpenViking 当前配置的同一个飞书应用。
+- Watch task 的 token 状态保存在内部控制文件 `viking://resources/.watch_tasks.json` 中，不会出现在 watch API/MCP/CLI 返回里。若启用了 VikingFS 文件加密，该控制文件会静态加密；否则服务端控制文件中会包含明文 token 状态。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
@@ -199,6 +210,41 @@ curl -X POST http://localhost:1933/api/v1/resources \
     \"to\": \"viking://resources/guide.md\",
     \"reason\": \"User guide\"
   }"
+
+# 添加到当前用户私有资源根
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://user/resources/docs\",
+    \"create_parent\": true
+  }"
+
+# 使用一次性用户 access token 添加飞书文档
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/docx/doc_token",
+    "args": {
+      "feishu_access_token": "u-..."
+    }
+  }'
+
+# 使用用户 token 自动刷新添加飞书文档
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/docx/doc_token",
+    "to": "viking://resources/feishu/doc",
+    "watch_interval": 1440,
+    "args": {
+      "feishu_access_token": "u-...",
+      "feishu_refresh_token": "r-..."
+    }
+  }'
 ```
 
 **Python SDK**
@@ -228,6 +274,13 @@ result = client.add_resource(
     reason="External API docs"
 )
 
+## 添加到当前用户私有资源根
+result = client.add_resource(
+    "./documents/guide.md",
+    parent="viking://user/resources/docs",
+    create_parent=True,
+)
+
 ## 等待处理完成
 client.wait_processed()
 
@@ -237,6 +290,36 @@ client.add_resource(
     to="viking://resources/guide.md",
     watch_interval=60  # 每60分钟更新一次
 )
+
+# 使用一次性用户 access token 添加飞书文档
+client.add_resource(
+    "https://example.feishu.cn/docx/doc_token",
+    args={"feishu_access_token": "u-..."},
+)
+
+# 使用用户 token 自动刷新添加飞书文档
+client.add_resource(
+    "https://example.feishu.cn/docx/doc_token",
+    to="viking://resources/feishu/doc",
+    watch_interval=1440,
+    args={
+        "feishu_access_token": "u-...",
+        "feishu_refresh_token": "r-...",
+    },
+)
+```
+
+**Go SDK**
+
+```go
+result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
+    Reason: "User guide documentation",
+    Wait:   true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["root_uri"])
 ```
 
 **CLI**
@@ -260,8 +343,25 @@ ov add-resource https://github.com/example/repo.git --watch-interval 60
 # 取消定时更新
 ov add-resource https://github.com/example/repo.git --to viking://resources/my_repo --watch-interval 0
 
+# 使用一次性用户 access token 添加飞书文档
+ov add-resource https://example.feishu.cn/docx/doc_token --args feishu_access_token:u-...
+
+# 使用用户 token 自动刷新添加飞书文档
+ov add-resource https://example.feishu.cn/docx/doc_token \
+  --to viking://resources/feishu/doc \
+  --watch-interval 1440 \
+  --args feishu_access_token:u-... \
+  --args feishu_refresh_token:r-...
+
 # 添加到指定父目录（父目录必须存在）
 ov add-resource ./documents/guide.md --parent viking://resources/docs
+
+# 添加到当前用户私有资源根
+ov add-resource ./documents/guide.md --parent viking://user/resources/docs
+
+# 添加到指定 peer 的私有资源根
+ov add-resource ./documents/guide.md \
+  --parent viking://user/alice/peers/web-visitor-alice/resources/docs
 
 # 添加到指定父目录（父目录不存在时自动创建）
 ov add-resource ./documents/guide.md -p viking://resources/docs/2026/05/07
@@ -350,6 +450,7 @@ task_id      uuid-xxx
 | `errors` | array | 处理过程中的错误列表 |
 | `warnings` | array | （可选）处理过程中的警告列表（仅在 `strict=False` 时可能出现） |
 | `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
+| `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果 |
 
 对于 `wait=false` 的 Git 仓库来源，后台任务的 `task_type="add_resource"`，`resource_id` 等于返回的 `root_uri`。运行中的任务记录可能包含 `stage`；完成后的任务 `result` 会包含带有 semantic 和 embedding 汇总的 `queue_status`。
 
@@ -412,6 +513,34 @@ curl -X POST "http://localhost:1933/api/v1/watches/<task_id>/trigger" \
 # 按 URI 而非 task_id 定位任务
 curl -X DELETE "http://localhost:1933/api/v1/watches?to_uri=viking://resources/guide.md" \
   -H "X-API-Key: your-key"
+```
+
+**Python SDK**
+
+```python
+watches = client.list_watches(active_only=True)
+client.update_watch(to_uri="viking://resources/guide.md", is_active=False)
+client.trigger_watch(to_uri="viking://resources/guide.md")
+client.delete_watch(to_uri="viking://resources/guide.md")
+```
+
+**Go SDK**
+
+```go
+watches, err := client.ListWatches(ctx, &openviking.ListWatchesOptions{
+    ActiveOnly: true,
+})
+updated, err := client.UpdateWatch(ctx, openviking.UpdateWatchOptions{
+    ToURI:    "viking://resources/guide.md",
+    IsActive: openviking.Bool(false),
+})
+triggered, err := client.TriggerWatch(ctx, openviking.WatchRef{
+    ToURI: "viking://resources/guide.md",
+})
+deleted, err := client.DeleteWatch(ctx, openviking.WatchRef{
+    ToURI: "viking://resources/guide.md",
+})
+_, _, _, _ = watches, updated, triggered, deleted
 ```
 
 **CLI**（`ov task watch` 子命令）
@@ -481,6 +610,10 @@ cancel_watch(to_uri="viking://resources/guide.md")        # 按 URI 幂等删除
 | timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
+技能始终安装到当前用户的 skills 根。公共短写 `viking://user/skills` 可用于文件系统和检索操作，
+会解析为 `viking://user/{user_id}/skills`；`add_skill` 不接受 `to`、`parent`、`root_uri`
+或 peer-scoped skill 目标。
+
 #### 3. 使用示例
 
 **HTTP API**
@@ -534,6 +667,18 @@ result = client.add_skill("./skills/my-skill.json")
 client.wait_processed()
 ```
 
+**Go SDK**
+
+```go
+result, err := client.AddSkill(ctx, "./skills/my-skill.json", &openviking.AddSkillOptions{
+    Wait: true,
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["uri"])
+```
+
 **CLI**
 
 ```bash
@@ -553,8 +698,8 @@ ov add-skill ./skills/my-skill.json --wait
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://user/skills/my-skill",
-    "uri": "viking://user/skills/my-skill",
+    "root_uri": "viking://user/alice/skills/my-skill",
+    "uri": "viking://user/alice/skills/my-skill",
     "name": "my-skill",
     "auxiliary_files": 2,
     "queue_status": {
@@ -575,8 +720,8 @@ ov add-skill ./skills/my-skill.json --wait
 Note: Skill is being processed in the background.
 Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
 status          success
-root_uri        viking://user/skills/my-skill
-uri             viking://user/skills/my-skill
+root_uri        viking://user/alice/skills/my-skill
+uri             viking://user/alice/skills/my-skill
 name            my-skill
 auxiliary_files 2
 ```
@@ -586,8 +731,8 @@ auxiliary_files 2
 ```json
 {
   "status": "success",
-  "root_uri": "viking://user/skills/my-skill",
-  "uri": "viking://user/skills/my-skill",
+  "root_uri": "viking://user/alice/skills/my-skill",
+  "uri": "viking://user/alice/skills/my-skill",
   "name": "my-skill",
   "auxiliary_files": 2
 }
@@ -598,8 +743,8 @@ auxiliary_files 2
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `status` | string | 处理状态："success" 成功，"error" 失败 |
-| `root_uri` | string | 技能在 OpenViking 中的最终 URI（同 `uri`） |
-| `uri` | string | 技能在 OpenViking 中的最终 URI（同 `root_uri`） |
+| `root_uri` | string | 技能在 OpenViking 中的 canonical 最终 URI（同 `uri`） |
+| `uri` | string | 技能在 OpenViking 中的 canonical 最终 URI（同 `root_uri`） |
 | `name` | string | 技能名称 |
 | `auxiliary_files` | number | 技能附带的辅助文件数量 |
 | `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
@@ -668,6 +813,12 @@ curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
 **Python SDK**
 
 Python SDK 中的 `add_resource`、`add_skill` 等接口会自动处理本地文件上传，无需手动调用此接口。在 Python HTTP client 模式下，如果要启用分布式 shared 临时上传，可以在 `ovcli.conf` 中设置 `upload.mode = "shared"`。
+
+**Go SDK**
+
+`client.AddResource`、`client.AddSkill`、`client.ImportOVPack` 和
+`client.RestoreOVPack` 会为本地文件自动调用 `temp_upload`。如需 shared 临时上传，设置
+`openviking.Config{UploadMode: "shared"}`。
 
 **CLI**
 

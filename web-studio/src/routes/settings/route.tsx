@@ -295,7 +295,7 @@ function AccountFilterChips({
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <div className="flex max-w-full flex-wrap gap-2">
+      <div className="flex max-w-full min-w-0 flex-wrap gap-2">
         {options.map((accountId) => {
           const isSelected = selected.has(accountId)
 
@@ -306,8 +306,9 @@ function AccountFilterChips({
               aria-pressed={isSelected}
               disabled={disabled}
               onClick={() => toggle(accountId)}
+              title={accountId}
               className={cn(
-                'h-8 rounded-full border px-3 font-mono text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                'h-8 max-w-full truncate rounded-full border px-3 font-mono text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-72',
                 isSelected
                   ? 'border-primary bg-primary text-primary-foreground'
                   : 'border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground',
@@ -646,22 +647,6 @@ function SettingsRoute() {
     serverMode !== 'dev' && (hasAdminAccess || hasSavedAdminApiKey)
   const canQueryAdmin = Boolean(controlApiKey) && hasAdminAccess
   const showDevApiKeyPlaceholder = serverMode === 'dev'
-  const shouldPromoteApiKeyToAdmin =
-    hasAdminAccess && !draft.adminApiKey.trim() && Boolean(draft.apiKey.trim())
-
-  React.useEffect(() => {
-    if (!hasAdminAccess || draft.adminApiKey.trim() || !draft.apiKey.trim()) {
-      return
-    }
-
-    const next = {
-      ...draft,
-      adminApiKey: draft.apiKey,
-      apiKey: '',
-    }
-    setDraft(next)
-    saveConnection(next)
-  }, [draft, hasAdminAccess, saveConnection])
 
   const accountsQuery = useQuery({
     enabled: canQueryAdmin,
@@ -775,8 +760,7 @@ function SettingsRoute() {
         Boolean(current.userId) && userIds.includes(current.userId)
       const userId = hasCurrentUser ? current.userId : preferred
       const selectedUser = users.find((user) => user.userId === userId)
-      const apiKey =
-        selectedUser?.apiKey || (hasCurrentUser ? current.apiKey : '')
+      const apiKey = selectedUser?.apiKey || ''
       const next = { ...current, apiKey, userId }
 
       if (next.apiKey !== current.apiKey || next.userId !== current.userId) {
@@ -886,6 +870,25 @@ function SettingsRoute() {
   ).length
   const adminUnavailable = !canQueryAdmin || managedUsersQuery.isError
 
+  function findSelectedUser(
+    accountId: string,
+    preferredUserId: string,
+  ): AdminUser | undefined {
+    const normalizedAccountId = accountId || DEFAULT_ACCOUNT_ID
+    const candidates = [...users, ...managedUsers]
+      .filter((user) => user.accountId === normalizedAccountId)
+      .filter(
+        (user, index, list) =>
+          list.findIndex((item) => item.userId === user.userId) === index,
+      )
+
+    return (
+      candidates.find((user) => user.userId === preferredUserId) ||
+      candidates.find((user) => user.userId === DEFAULT_USER_ID) ||
+      candidates[0]
+    )
+  }
+
   function updateDraft(next: Partial<ConnectionDraft>): void {
     const updated = { ...draft, ...next }
     setDraft(updated)
@@ -893,15 +896,19 @@ function SettingsRoute() {
   }
 
   function updateConnectionAccount(accountId: string): void {
+    const selectedUser = findSelectedUser(accountId, draft.userId)
+    setManagedAccountIds((current) =>
+      sortedAccountIds([...current, accountId], ''),
+    )
     updateDraft({
       accountId,
-      apiKey: '',
-      userId: DEFAULT_USER_ID,
+      apiKey: selectedUser?.apiKey || '',
+      userId: selectedUser?.userId || DEFAULT_USER_ID,
     })
   }
 
   function updateConnectionUser(userId: string): void {
-    const selectedUser = users.find((user) => user.userId === userId)
+    const selectedUser = findSelectedUser(draft.accountId, userId)
     updateDraft({
       apiKey: selectedUser?.apiKey || '',
       userId,
@@ -1074,11 +1081,7 @@ function SettingsRoute() {
                     <Input
                       id="settings-admin-api-key"
                       type="password"
-                      value={
-                        shouldPromoteApiKeyToAdmin
-                          ? draft.apiKey
-                          : draft.adminApiKey
-                      }
+                      value={draft.adminApiKey}
                       onChange={(event) =>
                         updateDraft({ adminApiKey: event.target.value })
                       }
@@ -1095,7 +1098,7 @@ function SettingsRoute() {
                       accountId={draft.accountId || DEFAULT_ACCOUNT_ID}
                       id="settings-user-api-key"
                       userId={draft.userId || DEFAULT_USER_ID}
-                      value={shouldPromoteApiKeyToAdmin ? '' : draft.apiKey}
+                      value={draft.apiKey}
                       onChange={(apiKey) => updateDraft({ apiKey })}
                       placeholder={t('placeholders.userApiKey')}
                     />
@@ -1161,48 +1164,54 @@ function SettingsRoute() {
       {hasAdminAccess ? (
         <Card className="overflow-hidden">
           <CardHeader className="gap-4 border-b bg-muted/20">
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+            <div className="flex min-w-0 flex-col gap-4">
               <div className="min-w-0">
                 <CardTitle>{t('management.title')}</CardTitle>
-                <CardDescription>{t('management.description')}</CardDescription>
+                <CardDescription className="max-w-3xl">
+                  {t('management.description')}
+                </CardDescription>
               </div>
-              <div className="flex flex-wrap items-end gap-2 lg:justify-end">
-                <AccountFilterChips
-                  accounts={accountOptions}
-                  disabled={!canQueryAdmin || accountsQuery.isLoading}
-                  label={t('management.accountFilter')}
-                  selectedAccountIds={selectedManagedAccountIds}
-                  onChange={setManagedAccountIds}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void refreshAdmin()}
-                  disabled={!canQueryAdmin || managedUsersQuery.isFetching}
-                >
-                  <RefreshCwIcon
-                    className={cn(
-                      managedUsersQuery.isFetching && 'animate-spin',
-                    )}
+              <div className="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+                <div className="min-w-0 flex-1">
+                  <AccountFilterChips
+                    accounts={accountOptions}
+                    disabled={!canQueryAdmin || accountsQuery.isLoading}
+                    label={t('management.accountFilter')}
+                    selectedAccountIds={selectedManagedAccountIds}
+                    onChange={setManagedAccountIds}
                   />
-                  {t('actions.refresh')}
-                </Button>
-                <Button
-                  type="button"
-                  onClick={() => setAddAccountOpen(true)}
-                  disabled={!canQueryAdmin}
-                >
-                  <PlusIcon />
-                  {t('actions.addAccount')}
-                </Button>
-                <Button
-                  type="button"
-                  onClick={() => setAddUserOpen(true)}
-                  disabled={!canQueryAdmin}
-                >
-                  <PlusIcon />
-                  {t('actions.addUser')}
-                </Button>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2 xl:justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void refreshAdmin()}
+                    disabled={!canQueryAdmin || managedUsersQuery.isFetching}
+                  >
+                    <RefreshCwIcon
+                      className={cn(
+                        managedUsersQuery.isFetching && 'animate-spin',
+                      )}
+                    />
+                    {t('actions.refresh')}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => setAddAccountOpen(true)}
+                    disabled={!canQueryAdmin}
+                  >
+                    <PlusIcon />
+                    {t('actions.addAccount')}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => setAddUserOpen(true)}
+                    disabled={!canQueryAdmin}
+                  >
+                    <PlusIcon />
+                    {t('actions.addUser')}
+                  </Button>
+                </div>
               </div>
             </div>
           </CardHeader>

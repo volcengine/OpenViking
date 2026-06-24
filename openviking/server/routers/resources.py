@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from openviking.core.path_variables import resolve_path_variables
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
@@ -50,8 +49,9 @@ class AddResourceRequest(BaseModel):
         exclude: Glob pattern for files to exclude during parsing.
         directly_upload_media: Whether to directly upload media files. Default is True.
         preserve_structure: Whether to preserve directory structure when adding directories.
-        args: Parser-specific or import-specific extension options. Recursive web
-            crawler options such as depth/max_pages/include_paths are passed here.
+        args: Parser-specific import options. For Feishu one-time user-token imports,
+            pass {"feishu_access_token": "..."}. For Feishu user-token watches,
+            pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
         watch_interval: Watch interval in minutes for automatic resource monitoring.
             - watch_interval > 0: Creates or updates a watch task. The resource will be
               automatically re-processed at the specified interval.
@@ -83,9 +83,9 @@ class AddResourceRequest(BaseModel):
     exclude: Optional[str] = None
     directly_upload_media: bool = True
     preserve_structure: Optional[bool] = None
+    args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
-    args: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -196,8 +196,6 @@ async def add_resource(
 ):
     """Add resource to OpenViking."""
     service = get_service()
-    if request.to and request.parent:
-        raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
 
     path = request.path
     allow_local_path_resolution = False
@@ -230,20 +228,18 @@ async def add_resource(
         "watch_interval": request.watch_interval,
         "create_parent": request.create_parent,
     }
+    if request.temp_file_id:
+        kwargs["temp_file_id"] = request.temp_file_id
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
-
-    # Resolve path variables before passing to service
-    to = resolve_path_variables(request.to) if request.to else None
-    parent = resolve_path_variables(request.parent) if request.parent else None
 
     async def _add() -> dict[str, Any]:
         try:
             result = await service.resources.add_resource(
                 path=path,
                 ctx=_ctx,
-                to=to,
-                parent=parent,
+                to=request.to,
+                parent=request.parent,
                 reason=request.reason,
                 instruction=request.instruction,
                 wait=request.wait,

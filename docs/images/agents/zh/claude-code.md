@@ -5,7 +5,7 @@
 ## 步骤 1：安装
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/claude-code-memory-plugin/tos-install.sh)
 ```
 
 该脚本将自动检查依赖项、配置 OpenViking 连接并完成插件安装，支持重复运行（幂等操作）。

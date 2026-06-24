@@ -4,7 +4,8 @@
 
 Unlike ``ov health`` (which pings a running server), ``openviking-server doctor`` checks
 local prerequisites without requiring a server: config file, Python version,
-native vector engine, AGFS, embedding provider, VLM provider, and disk space.
+native vector engine, AGFS, embedding provider, VLM provider, VikingBot auth,
+and disk space.
 """
 
 from __future__ import annotations
@@ -17,11 +18,19 @@ import platform
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
+from openviking.server.config import (
+    ServerConfig,
+    get_server_url_from_server_data,
+)
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
+from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
+
+CheckStatus = Literal["pass", "warn", "fail"]
+CheckResult = tuple[bool | CheckStatus, str, Optional[str]]
 
 # ANSI helpers (disabled when stdout is not a terminal)
 _USE_COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
@@ -60,6 +69,18 @@ def _load_config_json(config_path: Path) -> Optional[dict]:
         return json.loads(raw)
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _normalize_check_result(result: CheckResult) -> tuple[CheckStatus, str, Optional[str]]:
+    """Normalize legacy bool checks and newer tri-state checks."""
+    status, detail, fix = result
+    if status is True:
+        return "pass", detail, fix
+    if status is False:
+        return "fail", detail, fix
+    if status in {"pass", "warn", "fail"}:
+        return status, detail, fix
+    return "fail", f"Invalid check status: {status!r}", None
 
 
 def check_config() -> tuple[bool, str, Optional[str]]:
@@ -418,6 +439,146 @@ def check_ollama() -> tuple[bool, str, Optional[str]]:
     )
 
 
+def _is_placeholder_secret(value: str) -> bool:
+    stripped = value.strip()
+    return (
+        not stripped
+        or stripped.startswith("{")
+        or stripped.startswith("<")
+        or stripped.startswith("$")
+    )
+
+
+def _load_ovcli_api_key_for_doctor() -> str:
+    try:
+        cli_config = load_ovcli_config()
+    except ValueError:
+        return ""
+    if cli_config is None:
+        return ""
+    return str(getattr(cli_config, "api_key", "") or "").strip()
+
+
+def _bot_openviking_server_url(ov_server: dict[str, Any], server: dict[str, Any]) -> str:
+    configured_url = str(ov_server.get("server_url") or "").strip()
+    if configured_url:
+        return configured_url
+    return get_server_url_from_server_data(server)
+
+
+def check_vikingbot() -> CheckResult:
+    """Check VikingBot OpenViking Server auth config.
+
+    VikingBot is optional, so missing auth configuration is a warning rather
+    than a hard failure. In api_key mode VikingBot must use a User API key; in
+    trusted mode it uses a root API key through bot.ov_server.api_key plus
+    trusted identity headers.
+    """
+    config_path = _find_config()
+    if config_path is None:
+        return "warn", "Cannot check (no config file)", None
+
+    data = _load_config_json(config_path)
+    if data is None:
+        return "warn", "Cannot check (config unreadable)", None
+
+    server = data.get("server") if isinstance(data.get("server"), dict) else {}
+    auth_mode = ServerConfig(
+        auth_mode=server.get("auth_mode"),
+        root_api_key=server.get("root_api_key"),
+    ).get_effective_auth_mode()
+    server_root_api_key = str(server.get("root_api_key") or "").strip()
+
+    bot = data.get("bot")
+    if not isinstance(bot, dict):
+        bot = {}
+
+    ov_server = bot.get("ov_server")
+    if not isinstance(ov_server, dict):
+        ov_server = {}
+
+    api_key = str(ov_server.get("api_key") or "").strip()
+    root_api_key = str(ov_server.get("root_api_key") or "").strip()
+    explicit_api_key_type = str(ov_server.get("api_key_type") or "").strip().lower()
+    bot_server_url = _bot_openviking_server_url(ov_server, server)
+    bot_uses_current_server = not str(ov_server.get("server_url") or "").strip()
+    if explicit_api_key_type:
+        api_key_type = explicit_api_key_type
+    elif bot_uses_current_server:
+        api_key_type = "root" if auth_mode == "trusted" else "user"
+    else:
+        api_key_type = "user"
+
+    if api_key_type == "root":
+        if bot_uses_current_server and auth_mode != "trusted":
+            return (
+                "warn",
+                f"bot.ov_server targets {bot_server_url} with api_key_type=root, "
+                f"but that server is auth_mode={auth_mode}",
+                f"To use {bot_server_url}, set bot.ov_server.api_key_type to 'user' "
+                "and configure a User API key in bot.ov_server.api_key or ovcli.conf api_key.\n"
+                "To use root mode, change that OpenViking server to server.auth_mode='trusted'.\n"
+                "To use another trusted server, set bot.ov_server.server_url to that server "
+                "and keep api_key_type='root'.",
+            )
+        trusted_root_key = (
+            server_root_api_key if bot_uses_current_server and auth_mode == "trusted" else api_key
+        )
+        if _is_placeholder_secret(trusted_root_key):
+            if root_api_key:
+                return (
+                    "warn",
+                    "bot.ov_server.root_api_key is deprecated and ignored",
+                    "Move the root API key to bot.ov_server.api_key and keep "
+                    "bot.ov_server.api_key_type='root'",
+                )
+            if auth_mode == "trusted" and not ov_server:
+                return (
+                    "warn",
+                    "server.auth_mode=trusted without server.root_api_key",
+                    "Configure server.root_api_key for VikingBot trusted OpenViking calls "
+                    "outside localhost",
+                )
+            return (
+                "warn",
+                "bot.ov_server.api_key_type=root without root API key",
+                "Configure bot.ov_server.api_key with a root API key for trusted "
+                "OpenViking access",
+            )
+        return "pass", "bot.ov_server configured for trusted OpenViking auth", None
+
+    if bot_uses_current_server and auth_mode == "dev":
+        return "pass", "VikingBot aligned with dev OpenViking auth", None
+
+    ovcli_api_key = "" if not _is_placeholder_secret(api_key) else _load_ovcli_api_key_for_doctor()
+    if not _is_placeholder_secret(api_key):
+        return "pass", "bot.ov_server.api_key configured for api_key mode", None
+    if not _is_placeholder_secret(ovcli_api_key):
+        return "pass", "ovcli.conf api_key configured for VikingBot api_key mode", None
+
+    if _is_placeholder_secret(api_key):
+        if root_api_key:
+            return (
+                "warn",
+                "bot.ov_server.root_api_key is deprecated and ignored",
+                "Use bot.ov_server.api_key for the active key. In api_key mode configure "
+                "a User API key in bot.ov_server.api_key or ovcli.conf api_key.",
+            )
+        if not bot or not ov_server:
+            return (
+                "warn",
+                "bot.ov_server not configured and ovcli.conf api_key not configured",
+                "Configure bot.ov_server.api_key or ovcli.conf api_key with an "
+                "OpenViking User API key",
+            )
+        return (
+            "warn",
+            "bot.ov_server.api_key and ovcli.conf api_key not configured",
+            "Create an OpenViking User API key and set bot.ov_server.api_key or ovcli.conf api_key",
+        )
+    return "pass", "bot.ov_server.api_key configured for api_key mode", None
+
+
 def check_disk() -> tuple[bool, str, Optional[str]]:
     """Check free disk space in the workspace directory."""
     config_path = _find_config()
@@ -457,6 +618,7 @@ _CHECKS = [
     ("Embedding", check_embedding),
     ("VLM", check_vlm),
     ("Ollama", check_ollama),
+    ("VikingBot", check_vikingbot),
     ("Disk", check_disk),
 ]
 
@@ -469,18 +631,26 @@ def run_doctor() -> int:
     print("\nOpenViking Doctor\n")
 
     failed = 0
+    warned = 0
     max_label = max(len(label) for label, _ in _CHECKS)
 
     for label, check_fn in _CHECKS:
         try:
-            ok, detail, fix = check_fn()
+            status_key, detail, fix = _normalize_check_result(check_fn())
         except Exception as exc:
-            ok, detail, fix = False, f"Unexpected error: {type(exc).__name__}: {exc}", None
+            status_key, detail, fix = "fail", f"Unexpected error: {type(exc).__name__}: {exc}", None
 
         pad = " " * (max_label - len(label) + 1)
-        if ok:
+        if status_key == "pass":
             status = _green("PASS")
             print(f"  {label}:{pad}{status}  {detail}")
+        elif status_key == "warn":
+            status = _yellow("WARN")
+            print(f"  {label}:{pad}{status}  {detail}")
+            warned += 1
+            if fix:
+                for line in fix.split("\n"):
+                    print(f"  {' ' * (max_label + 2)}{_dim('Fix: ' + line)}")
         else:
             status = _red("FAIL")
             print(f"  {label}:{pad}{status}  {detail}")
@@ -493,6 +663,10 @@ def run_doctor() -> int:
     if failed:
         print(f"  {_red(f'{failed} check(s) failed.')} See above for fix suggestions.\n")
         return 1
+
+    if warned:
+        print(f"  {_yellow(f'{warned} warning(s).')} Review the suggestions above.\n")
+        return 0
 
     print(f"  {_green('All checks passed.')}\n")
     return 0

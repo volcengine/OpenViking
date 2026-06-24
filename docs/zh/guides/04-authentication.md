@@ -1,6 +1,6 @@
 # 认证
 
-OpenViking Server 支持三种认证模式，并带有基于角色的访问控制：`api_key`、`trusted` 和 `dev`。如果未显式配置，模式会自动推导。
+OpenViking Server 支持三种内置认证模式，并带有基于角色的访问控制：`api_key`、`trusted` 和 `dev`。如果未显式配置，模式会自动推导。此外，系统支持自定义认证插件，可对接任意身份源（如 LDAP、OIDC、mTLS 等）。
 
 ## 概述
 
@@ -46,6 +46,57 @@ OpenViking 使用两层 API Key 体系：
 openviking-server
 ```
 
+### 自定义认证插件
+
+服务端采用插件化认证架构。每种 `auth_mode` 对应一个 `AuthPlugin` 实现。内置插件（`dev`、`api_key`、`trusted`）会自动注册；第三方插件可通过继承 `AuthPlugin` 并在启动前注册来扩展。
+
+**插件接口（`openviking.server.auth.plugin.AuthPlugin`）**
+
+| 方法 | 用途 |
+|------|------|
+| `resolve_identity(request, api_key, x_openviking_account, x_openviking_user)` | 将凭据解析为 `ResolvedIdentity`。 |
+| `validate_config(config)` | 在启动时校验 `ServerConfig`；遇到致命错误应调用 `sys.exit(1)`。 |
+| `initialize(app, service, config)` | 在 `app.state` 上初始化运行时状态（如 `APIKeyManager`）。 |
+| `get_request_context_checks(path, identity)` | 可选的认证后路径/身份检查。 |
+| `requires_api_key_manager()` | Admin API 路由是否需要 `APIKeyManager`。 |
+| `can_skip_api_key_for_bot_proxy()` | Bot 代理是否可以跳过 API Key 校验（如 `dev` 模式）。 |
+
+**注册自定义插件**
+
+```python
+from openviking.server.auth.plugin import AuthPlugin
+from openviking.server.auth.registry import register_auth_plugin
+from openviking.server.identity import ResolvedIdentity, Role
+
+@register_auth_plugin
+class LDAPAuthPlugin(AuthPlugin):
+    auth_mode = "ldap"
+
+    async def resolve_identity(self, request, *, api_key=None, x_openviking_account=None, x_openviking_user=None):
+        # ... LDAP 绑定与身份解析 ...
+        return ResolvedIdentity(role=Role.USER, account_id="...", user_id="...")
+
+    def validate_config(self, config):
+        pass
+
+    async def initialize(self, app, service, config):
+        pass
+```
+
+然后在 `ov.conf` 中设置 `server.auth_mode = "ldap"`。
+
+**自定义角色**
+
+内置的 `Role` 类支持动态注册自定义角色及权限等级：
+
+```python
+from openviking.server.identity import Role
+
+Role.register("operator", rank=1)  # 权限介于 USER (0) 与 ADMIN (1) 之间
+```
+
+自定义角色可直接用于 `require_role()` 和 `require_auth_role()` 装饰器。
+
 ## 管理账户和用户
 
 普通读写、检索、会话等数据请求在 `api_key` 和 `trusted` 两种模式下都不依赖 Admin API 预注册。Admin API 仍然负责创建 account、注册用户、修改角色以及签发 user key。
@@ -70,10 +121,10 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 
 受信部署也可以通过受信网关调用 Admin API，目前支持两种方式：
 
-- 只携带受信部署自身的 `root_api_key`。对于 `/api/v1/admin/*`，即使没有 `X-OpenViking-Account` / `X-OpenViking-User`，服务端也会将请求视为 ROOT。
-- 携带 `X-OpenViking-Account` + `X-OpenViking-User`，并使用一个已注册的网关用户。此时服务端会从用户注册表查询该身份的实际角色。
+- 携带受信部署自身的 `root_api_key`。对于 `/api/v1/admin/*`，服务端校验该 key 后会将请求视为 ROOT。
+- 如果 Admin 路由指向具体 account/user，也可以同时携带 `X-OpenViking-Account` + `X-OpenViking-User`。这些 header 必须与目标 URL 匹配，并会保留为请求身份；授权仍来自受信 `root_api_key`。
 
-下面是“已注册网关用户”这种方式的示例：
+下面是“受信上游身份”这种方式的示例：
 
 ```bash
 # 首先，注册网关管理员（在 api_key 模式下执行一次）
@@ -217,9 +268,9 @@ Trusted 模式规则：
 
 - 普通数据访问不需要先注册 user key，也不依赖 user key 分发流程
 - 租户级请求必须包含 `X-OpenViking-Account` 和 `X-OpenViking-User`
-- `/api/v1/admin/*` 是特例：如果没有显式身份，trusted 模式会将请求视为 ROOT，用于只通过部署级 root API key 认证的受信上游
-- 角色通过在 APIKeyManager 中查找 account/user 确定。如果用户存在，使用其配置的角色；否则默认为 `USER`
-- trusted 身份完全来自请求头，而不是 user key；如果同时配置了 `root_api_key`，它仍然只是“这个上游是被允许的 trusted 调用方”的证明
+- `/api/v1/admin/*` 是特例：当请求携带已配置的 `root_api_key` 时，trusted 模式会将请求视为 ROOT。显式 account/user header 只有在完整且与目标 URL 匹配时才允许
+- 普通 trusted 数据 API 的角色通过在 APIKeyManager 中查找 account/user 确定。如果用户存在，使用其配置的角色；否则默认为 `USER`
+- trusted 身份完全来自请求头，而不是 user key；如果同时配置了 `root_api_key`，它表示“这个上游是被允许的 trusted 调用方”
 - 如果同时配置了 `root_api_key`，每个请求仍然必须带匹配的 API Key
 - 只应部署在受信网络边界之后，或由身份注入网关统一转发
 
@@ -227,10 +278,10 @@ Trusted 模式规则：
 
 - `trusted` 不是开发模式
 - `trusted` 下的普通读写、检索、会话访问不需要先走 Admin API 注册流程
-- `trusted` 模式下，已注册并具有适当角色（root/admin）的用户仍然可以调用 Admin API
+- `trusted` 模式下，携带已配置 `root_api_key` 的受信上游可以调用 Admin API
 - `trusted` 模式下，创建 account 或注册用户的 Admin API 响应不会返回 `user_key`
 - `root` 可以创建/删除 account 并修改角色；`admin` 可以管理自己 account 下的用户；`user` 不能调用 Admin API
-- 要在 trusted 模式下使用 Admin API，首先需要在 api_key 模式下使用 Admin API 注册网关服务账户并赋予适当角色
+- 非 localhost 部署要在 trusted 模式下使用 Admin API，需要配置 `root_api_key`，并在每个管理请求中携带它
 
 **curl**
 

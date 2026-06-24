@@ -297,6 +297,14 @@ print(render_table(["metric", "value"], summary_rows, align_right={1}))
 PY
 }
 
+prepare_bot_log_dir() {
+    local output_file="$1"
+    local base="${output_file%.csv}"
+    export LOCOMO_VIKINGBOT_LOG_DIR="${base}_bot_logs"
+    mkdir -p "$LOCOMO_VIKINGBOT_LOG_DIR"
+    echo "[eval] vikingbot logs: $LOCOMO_VIKINGBOT_LOG_DIR"
+}
+
 # ========== 重跑错题模式（优先） ==========
 if [ -n "$RETRY_WRONG" ]; then
     if [ ! -f "$RETRY_WRONG" ]; then
@@ -331,6 +339,7 @@ if [ -n "$RETRY_WRONG" ]; then
 
     # 评估错题
     echo "[2/3] 重新评估错题..."
+    prepare_bot_log_dir "$RESULT_FILE"
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \
         --output "$RESULT_FILE" \
@@ -377,6 +386,7 @@ if [ -z "$SAMPLE" ]; then
 
     # 评估
     echo "[2/4] 评估..."
+    prepare_bot_log_dir "$RESULT_FILE"
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" "$INPUT_FILE" --output "$RESULT_FILE" --config "$OPENVIKING_CONFIG_FILE" "${COMMON_OPTS[@]}"
 
     # 裁判打分
@@ -464,6 +474,7 @@ if [ -n "$QUESTION_INDEX" ]; then
     else
         OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}.csv
     fi
+    prepare_bot_log_dir "$OUTPUT_FILE"
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
@@ -569,11 +580,12 @@ PY
     else
         OUTPUT_FILE=./result/locomo_${SAMPLE}_result_${TIMESTAMP}.csv
     fi
+    prepare_bot_log_dir "$OUTPUT_FILE"
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
         --output "$OUTPUT_FILE" \
-        --threads 5 \
+        --threads 10 \
         --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 

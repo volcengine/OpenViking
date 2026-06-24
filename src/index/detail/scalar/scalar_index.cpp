@@ -14,7 +14,8 @@ int get_type_id(const std::string& field_type) {
     return BitmapGroupBase::kBitmapGroupBothBitmapsAndRange;
   } else if (field_type == "float32") {
     return BitmapGroupBase::kBitmapGroupRangedMap;
-  } else if (field_type == "string" || field_type == "bool") {
+  } else if (field_type == "string" || field_type == "bool" ||
+             field_type == "list<string>" || field_type == "list<int64>") {
     return BitmapGroupBase::kBitmapGroupBitmaps;
   } else if (field_type == "path") {
     return BitmapGroupBase::kBitmapGroupDir;

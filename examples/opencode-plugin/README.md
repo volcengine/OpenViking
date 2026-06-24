@@ -2,10 +2,7 @@
 
 A unified OpenCode plugin for OpenViking repository retrieval and long-term memory.
 
-This PR adds a unified plugin package alongside the older split examples. The older examples remain available for now and will be deprecated in a future update:
-
-- `examples/opencode`: indexed repository prompt injection and CLI-oriented guidance
-- `examples/opencode-memory-plugin`: long-term memory, session sync, commit, and recall
+This is the only OpenCode plugin example maintained in this repository. It supersedes the former split examples for indexed repository prompt injection and long-term memory.
 
 The new plugin exposes everything through OpenCode tool hooks and talks to OpenViking through HTTP APIs. It does not install or require an OpenCode skill, and agents do not need to run `ov` shell commands.
 
@@ -64,8 +61,6 @@ Normal users should enable it through OpenCode's package plugin mechanism:
   "plugin": ["openviking-opencode-plugin"]
 }
 ```
-
-Use the final published package name if it changes before release.
 
 ### Source Install
 
@@ -128,9 +123,9 @@ Create `~/.config/opencode/openviking-config.json`:
 `apiKey` is sent as `X-API-Key`. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty
 when using API-key mode with user/admin API keys.
-`peerId` is sent as request-level `peer_id` for memory recall/search and
-captured session messages. Configure `peerId` explicitly when peer-scoped
-memory routing is needed.
+`peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource
+requests; captured session messages store it as body `peer_id`. Configure
+`peerId` explicitly when peer-scoped memory routing is needed.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`,
 and `OPENVIKING_PEER_ID` take

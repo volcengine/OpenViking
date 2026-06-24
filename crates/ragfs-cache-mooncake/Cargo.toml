@@ -1,0 +1,20 @@
+[package]
+name = "ragfs-cache-mooncake"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91.1"
+license = "Apache-2.0"
+description = "Mooncake cache provider adapter for RAGFS"
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1.5"
+futures = "0.3"
+mooncake_store = { git = "https://github.com/kvcache-ai/Mooncake.git", rev = "1352bbec43081e461356aaecf6c70cddd826b455", optional = true }
+ragfs = { path = "../ragfs", features = ["cache"] }
+thiserror = "1.0"
+tokio = { version = "1.38", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+[features]
+default = []
+mooncake-native = ["dep:mooncake_store"]

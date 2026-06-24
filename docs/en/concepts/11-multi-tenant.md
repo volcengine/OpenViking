@@ -73,9 +73,12 @@ If `auth_mode = "api_key"` and `root_api_key` is not configured, the server runs
 
 | Data type | Shared across accounts | Shared inside one account | Default isolation boundary |
 |-----------|------------------------|---------------------------|----------------------------|
-| `resources` | No | Yes | account |
-| `user` | No | No | user |
-| `session` | No | No | user / session |
+| Shared resources (`viking://resources`) | No | Yes | account |
+| User resources (`viking://user/{user_id}/resources`) | No | No | user |
+| Peer resources (`viking://user/{user_id}/peers/{peer_id}/resources`) | No | No | user / peer |
+| Memories | No | No | user / peer |
+| Skills | No | No | user |
+| Sessions | No | No | user / session |
 
 ### Storage Layer
 
@@ -84,6 +87,8 @@ For users, URIs still look like normal `viking://...` paths:
 ```text
 viking://resources/project-a/
 viking://user/alice/memories/
+viking://user/alice/resources/
+viking://user/alice/peers/web-visitor-alice/resources/
 ```
 
 But the underlying storage automatically gains an account prefix:
@@ -91,19 +96,36 @@ But the underlying storage automatically gains an account prefix:
 ```text
 /local/{account_id}/resources/project-a/
 /local/{account_id}/user/alice/memories/
+/local/{account_id}/user/alice/resources/
+/local/{account_id}/user/alice/peers/web-visitor-alice/resources/
 ```
 
 So multi-tenant isolation does not rely on a special public URI format. It relies on request context, `account_id` and `user_id`, applied consistently through the stack.
 
-### Retrieval Layer
+### Filesystem And Retrieval Layer
 
-Semantic retrieval is tenant-aware as well:
+Filesystem operations and semantic retrieval are tenant-aware:
 
 - Non-ROOT requests are automatically filtered by `account_id`
 - `resources` can include account-shared resources
-- `memory` and `skill` are further filtered by the current `user space`
+- `memory`, user resources, and `skill` are further filtered by the current user space
+- An actor peer filters `viking://user/{user}/peers` to one peer for filesystem and retrieval operations
 
 This keeps "what you can search" aligned with "what you can read."
+
+### Peer Collection Filter
+
+`peer_id` is a content scope inside the current user boundary. It never changes the
+tenant or user identity.
+
+Set `X-OpenViking-Actor-Peer: <peer_id>` (or SDK/CLI `actor_peer_id`) when a request
+should only see one peer from the current user's peer collection:
+
+- Empty-target retrieval still includes the current user root and shared `viking://resources`.
+- When retrieval resolves `viking://user/{user}/peers`, only that peer's memories/resources are selected.
+- Filesystem operations cannot read, list/tree, grep/find/search, write, move, or delete another peer under `viking://user/{user}/peers`.
+- User-scoped memories, resources, skills, shared resources, and session ownership are otherwise unchanged.
+- The peer ID must be a safe single path segment, for example `web-visitor-alice`.
 
 ## Standard Usage Flow
 
@@ -268,10 +290,14 @@ caller identity it should run as.
 
 ### 2. `peer_id` does not define the tenant
 
-`peer_id` identifies the message peer in shared conversations. It does not create a tenant or filesystem namespace.
+`peer_id` identifies an interaction peer under the current user. It does not create a tenant,
+but peer content can be selected through explicit peer URIs or the peer collection filter, such as
+`viking://user/{user_id}/peers/{peer_id}/memories` or
+`viking://user/{user_id}/peers/{peer_id}/resources`.
 
 - The tenant boundary is `account_id`
 - The user boundary is `user_id`
+- Peer content remains inside that user boundary
 
 ### 3. No `root_api_key` does not mean "formal single-tenant production mode"
 

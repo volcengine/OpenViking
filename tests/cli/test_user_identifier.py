@@ -1,5 +1,7 @@
 """Tests for account/user-only UserIdentifier."""
 
+import pytest
+
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -22,3 +24,8 @@ class TestUserIdentifier:
         assert u.user_space_name() == "user1"
         assert u.memory_space_uri() == "viking://user/user1/memories"
         assert u.to_dict() == {"account_id": "acct", "user_id": "user1"}
+
+    @pytest.mark.parametrize("user_id", [".", "..", "team:alice"])
+    def test_user_id_rejects_unsafe_path_segments(self, user_id):
+        with pytest.raises(ValueError):
+            UserIdentifier("acct", user_id)

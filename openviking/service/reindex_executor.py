@@ -539,12 +539,14 @@ class ReindexExecutor:
         counters = run.counters
         ctx = run.ctx
         if mode == "semantic_and_vectors":
-            await self._run_semantic_processor(
-                uri=uri,
-                context_type="memory",
-                ctx=ctx,
-                lock=run.lock,
-            )
+            stat = await get_viking_fs().stat(uri, ctx=ctx)
+            if stat.get("isDir", stat.get("is_dir")):
+                await self._run_semantic_processor(
+                    uri=uri,
+                    context_type="memory",
+                    ctx=ctx,
+                    lock=run.lock,
+                )
             await self._reindex_memory_vectors(uri=uri, counters=counters, ctx=ctx)
             return
         await self._reindex_memory_vectors(uri=uri, counters=counters, ctx=ctx)
@@ -565,7 +567,7 @@ class ReindexExecutor:
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             peer_id=ctx.user.user_id,
-            role=ctx.role.value,
+            role=str(ctx.role),
             skip_vectorization=True,
         )
         await processor.on_dequeue({"data": msg.to_json()}, lock=lock.as_borrowed())
@@ -1247,6 +1249,14 @@ class ReindexExecutor:
     ) -> None:
         service = get_service()
         assert service.vikingdb_manager is not None
+        merged_meta = dict(meta or {})
+        existing = await self._fetch_existing_record(uri=uri, level=int(level), ctx=ctx)
+        if (
+            existing
+            and existing.get("search_tags") is not None
+            and "search_tags" not in merged_meta
+        ):
+            merged_meta["search_tags"] = existing.get("search_tags")
 
         context = Context(
             uri=uri,
@@ -1258,7 +1268,7 @@ class ReindexExecutor:
             user=ctx.user,
             account_id=ctx.account_id,
             owner_space=owner_space_for_uri(uri, ctx),
-            meta=meta or {},
+            meta=merged_meta,
         )
         context.set_vectorize(Vectorize(text=vector_text))
         msg = EmbeddingMsgConverter.from_context(context)

@@ -1,0 +1,137 @@
+name: Python SDK Release
+
+on:
+  push:
+    tags:
+      - "python-sdk@*"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Publish target"
+        required: true
+        type: choice
+        default: "testpypi"
+        options:
+          - testpypi
+          - pypi
+          - both
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-sdk:
+    name: Build openviking-sdk
+    runs-on: ubuntu-24.04
+    outputs:
+      sdk_version: ${{ steps.version.outputs.sdk_version }}
+      publish_target: ${{ steps.target.outputs.publish_target }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all tags
+        run: git fetch --force --tags
+
+      - name: Set publish target
+        id: target
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "publish_target=${{ inputs.target }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish_target=pypi" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install build dependencies
+        working-directory: sdk/python
+        run: uv pip install --system build setuptools setuptools-scm wheel
+
+      - name: Resolve SDK version
+        id: version
+        working-directory: sdk/python
+        run: |
+          SDK_VERSION=$(python -m setuptools_scm)
+          echo "sdk_version=$SDK_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved SDK version: $SDK_VERSION"
+
+      - name: Validate tag matches SDK version
+        if: github.event_name == 'push'
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          SDK_VERSION: ${{ steps.version.outputs.sdk_version }}
+        run: |
+          EXPECTED_TAG="python-sdk@${SDK_VERSION}"
+          if [ "$TAG_NAME" != "$EXPECTED_TAG" ]; then
+            echo "Tag $TAG_NAME does not match resolved SDK version $SDK_VERSION"
+            exit 1
+          fi
+
+      - name: Build SDK distributions
+        working-directory: sdk/python
+        run: python -m build
+
+      - name: Upload SDK distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-sdk-distributions
+          path: sdk/python/dist/*
+
+  publish-testpypi:
+    name: Publish SDK to TestPyPI
+    needs: [build-sdk]
+    if: needs.build-sdk.outputs.publish_target == 'testpypi' || needs.build-sdk.outputs.publish_target == 'both'
+    runs-on: ubuntu-24.04
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/openviking-sdk
+    permissions:
+      id-token: write
+    steps:
+      - name: Download SDK distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-sdk-distributions
+          path: dist/
+
+      - name: Publish SDK to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+          verbose: true
+
+  publish-pypi:
+    name: Publish SDK to PyPI
+    needs: [build-sdk]
+    if: needs.build-sdk.outputs.publish_target == 'pypi' || needs.build-sdk.outputs.publish_target == 'both'
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/openviking-sdk
+    permissions:
+      id-token: write
+    steps:
+      - name: Download SDK distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-sdk-distributions
+          path: dist/
+
+      - name: Publish SDK to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+          verbose: true

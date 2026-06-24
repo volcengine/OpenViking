@@ -1,5 +1,5 @@
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::env;
 use std::path::Path;
 
@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 #[derive(Clone)]
 pub struct HttpClient {
     base: BaseClient,
+    legacy_agent_id: Option<String>,
 }
 
 impl HttpClient {
@@ -21,6 +22,8 @@ impl HttpClient {
         api_key: Option<String>,
         account: Option<String>,
         user: Option<String>,
+        actor_peer_id: Option<String>,
+        legacy_agent_id: Option<String>,
         timeout_secs: f64,
         profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
@@ -31,15 +34,25 @@ impl HttpClient {
                 api_key,
                 account,
                 user,
+                actor_peer_id,
                 timeout_secs,
                 profile_enabled,
                 extra_headers,
             ),
+            legacy_agent_id,
         }
     }
 
     pub fn user_id(&self) -> Option<&str> {
         self.base.user_id()
+    }
+
+    pub fn actor_peer_id(&self) -> Option<&str> {
+        self.base.actor_peer_id()
+    }
+
+    pub fn legacy_agent_id(&self) -> Option<&str> {
+        self.legacy_agent_id.as_deref()
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -140,7 +153,8 @@ impl HttpClient {
         verbose: bool,
         ignore_dirs: Option<&str>,
     ) -> Result<tempfile::NamedTempFile> {
-        self.create_uploader().zip_directory_with_progress(dir_path, verbose, ignore_dirs)
+        self.create_uploader()
+            .zip_directory_with_progress(dir_path, verbose, ignore_dirs)
     }
 
     async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
@@ -199,6 +213,22 @@ impl HttpClient {
     ) -> Result<serde_json::Value> {
         let body = Self::build_write_body(uri, content, mode, wait, timeout);
         self.post("/api/v1/content/write", &body).await
+    }
+
+    pub async fn set_tags(
+        &self,
+        uri: &str,
+        tags: Vec<String>,
+        mode: &str,
+        recursive: bool,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+            "tags": tags,
+            "mode": mode,
+            "recursive": recursive,
+        });
+        self.post("/api/v1/content/set_tags", &body).await
     }
 
     fn build_write_body(
@@ -352,11 +382,21 @@ impl HttpClient {
         self.post("/api/v1/fs/mkdir", &body).await
     }
 
-    pub async fn rm(&self, uri: &str, recursive: bool) -> Result<serde_json::Value> {
-        let params = vec![
+    pub async fn rm(
+        &self,
+        uri: &str,
+        recursive: bool,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Result<serde_json::Value> {
+        let mut params = vec![
             ("uri".to_string(), uri.to_string()),
             ("recursive".to_string(), recursive.to_string()),
+            ("wait".to_string(), wait.to_string()),
         ];
+        if let Some(timeout) = timeout {
+            params.push(("timeout".to_string(), timeout.to_string()));
+        }
         self.delete("/api/v1/fs", &params).await
     }
 
@@ -385,9 +425,10 @@ impl HttpClient {
         until: Option<String>,
         time_field: Option<String>,
         level: Option<Vec<i32>>,
-        peer_id: Option<String>,
+        context_type: Option<Vec<String>>,
+        tags: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "query": query,
             "target_uri": uri,
             "limit": node_limit,
@@ -396,8 +437,10 @@ impl HttpClient {
             "until": until,
             "time_field": time_field,
             "level": level,
-            "peer_id": peer_id,
+            "context_type": context_type,
+            "tags": tags,
         });
+        self.attach_legacy_agent_scope(&mut body);
         self.post("/api/v1/search/find", &body).await
     }
 
@@ -412,9 +455,10 @@ impl HttpClient {
         until: Option<String>,
         time_field: Option<String>,
         level: Option<Vec<i32>>,
-        peer_id: Option<String>,
+        context_type: Option<Vec<String>>,
+        tags: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "query": query,
             "target_uri": uri,
             "session_id": session_id,
@@ -424,9 +468,17 @@ impl HttpClient {
             "until": until,
             "time_field": time_field,
             "level": level,
-            "peer_id": peer_id,
+            "context_type": context_type,
+            "tags": tags,
         });
+        self.attach_legacy_agent_scope(&mut body);
         self.post("/api/v1/search/search", &body).await
+    }
+
+    fn attach_legacy_agent_scope(&self, body: &mut Value) {
+        if let Some(agent_id) = self.legacy_agent_id() {
+            body["agent_id"] = serde_json::json!(agent_id);
+        }
     }
 
     pub async fn grep(
@@ -481,11 +533,12 @@ impl HttpClient {
         exclude: Option<String>,
         directly_upload_media: bool,
         watch_interval: f64,
-        resource_args: Option<serde_json::Map<String, serde_json::Value>>,
+        resource_args: Option<Map<String, Value>>,
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
+        let args = Value::Object(resource_args.unwrap_or_default());
 
         // Determine effective parent and create_parent flag.
         // Only send create_parent when the user explicitly selected
@@ -504,14 +557,6 @@ impl HttpClient {
                 body.as_object_mut()
                     .expect("add_resource request body must be an object")
                     .insert("create_parent".to_string(), serde_json::Value::Bool(true));
-            }
-            if let Some(resource_args) = &resource_args {
-                body.as_object_mut()
-                    .expect("add_resource request body must be an object")
-                    .insert(
-                        "args".to_string(),
-                        serde_json::Value::Object(resource_args.clone()),
-                    );
             }
             body
         };
@@ -549,6 +594,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "args": args.clone(),
                 }));
 
                 let dynamic_timeout =
@@ -583,6 +629,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "args": args.clone(),
                 }));
 
                 let dynamic_timeout =
@@ -605,6 +652,7 @@ impl HttpClient {
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
                     "watch_interval": watch_interval,
+                    "args": args.clone(),
                 }));
 
                 self.post("/api/v1/resources", &body).await
@@ -624,6 +672,7 @@ impl HttpClient {
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
                 "watch_interval": watch_interval,
+                "args": args,
             }));
 
             self.post("/api/v1/resources", &body).await
@@ -1180,6 +1229,15 @@ impl HttpClient {
         self.post(&path, &serde_json::json!({})).await
     }
 
+    pub async fn admin_migrate(&self, cleanup: bool) -> Result<Value> {
+        let action = if cleanup { "cleanup" } else { "migrate" };
+        self.post(
+            "/api/v1/admin/migrate",
+            &serde_json::json!({ "action": action }),
+        )
+        .await
+    }
+
     // ============ Debug Vector Methods ============
 
     /// Get paginated vector records
@@ -1358,7 +1416,8 @@ impl HttpClient {
     pub async fn trigger_watch_by_uri(&self, to_uri: &str) -> Result<serde_json::Value> {
         let params = vec![("to_uri".to_string(), to_uri.to_string())];
         let empty = serde_json::json!({});
-        self.post_with_query("/api/v1/watches/trigger", &empty, &params).await
+        self.post_with_query("/api/v1/watches/trigger", &empty, &params)
+            .await
     }
 }
 
@@ -1369,6 +1428,9 @@ mod tests {
     use reqwest::StatusCode;
     use serde_json::json;
     use std::collections::HashMap;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
 
     #[test]
     fn timeout_config_calculation() {
@@ -1396,6 +1458,7 @@ mod tests {
             Some("test-key".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
+            Some("peer-a".to_string()),
             5.0,
             true,
             Some(extra_headers),
@@ -1408,6 +1471,24 @@ mod tests {
                 .get("X-API-Key")
                 .and_then(|value| value.to_str().ok()),
             Some("test-key")
+        );
+        assert_eq!(
+            headers
+                .get("X-OpenViking-Account")
+                .and_then(|value| value.to_str().ok()),
+            Some("acme")
+        );
+        assert_eq!(
+            headers
+                .get("X-OpenViking-User")
+                .and_then(|value| value.to_str().ok()),
+            Some("alice")
+        );
+        assert_eq!(
+            headers
+                .get("X-OpenViking-Actor-Peer")
+                .and_then(|value| value.to_str().ok()),
+            Some("peer-a")
         );
         assert_eq!(
             headers
@@ -1439,6 +1520,58 @@ mod tests {
         );
         assert!(body.get("regenerate_semantics").is_none());
         assert!(body.get("revectorize").is_none());
+    }
+
+    #[tokio::test]
+    async fn ls_does_not_send_display_time_query() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, None, 5.0, false, None);
+
+        client
+            .ls("viking://resources", false, false, "agent", 256, false, 1)
+            .await
+            .expect("ls request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("GET /api/v1/fs/ls?"));
+        assert!(!request.contains("tz="));
+        assert!(!request.contains("include_mod_time_iso="));
+    }
+
+    #[tokio::test]
+    async fn tree_does_not_send_display_time_query() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, None, 5.0, false, None);
+
+        client
+            .tree("viking://resources", "agent", 256, false, 1, 3)
+            .await
+            .expect("tree request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("GET /api/v1/fs/tree?"));
+        assert!(!request.contains("tz="));
+        assert!(!request.contains("include_mod_time_iso="));
+    }
+
+    #[test]
+    fn search_body_includes_legacy_agent_id() {
+        let client = HttpClient::new(
+            "http://localhost:1933",
+            None,
+            None,
+            None,
+            Some("legacy-agent".to_string()),
+            Some("legacy-agent".to_string()),
+            5.0,
+            false,
+            None,
+        );
+        let mut body = json!({"query": "invoice"});
+
+        client.attach_legacy_agent_scope(&mut body);
+
+        assert_eq!(body["agent_id"], json!("legacy-agent"));
     }
 
     #[test]
@@ -1499,5 +1632,35 @@ mod tests {
         let result = crate::base_client::unwrap_success_envelope(body, false);
 
         assert_eq!(result, json!("content"));
+    }
+
+    async fn spawn_request_capture_server() -> (String, oneshot::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        let (request_tx, request_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0; 4096];
+            let Ok(read) = stream.read(&mut buffer).await else {
+                return;
+            };
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let _ = request_tx.send(request);
+
+            let body = r#"{"status":"ok","result":[]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+
+        (format!("http://{addr}"), request_rx)
     }
 }

@@ -58,12 +58,12 @@ class OpenVikingSessionContextAssembler:
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
+        actor_peer_id: str | None = None,
         path: str | None = None,
         timeout: float = 60.0,
         extra_headers: dict[str, str] | None = None,
         auto_initialize: bool = True,
         target_uri: str | list[str] = "",
-        peer_id: str | None = None,
         limit: int = 5,
         score_threshold: float | None = None,
         token_budget: int = 128_000,
@@ -79,6 +79,7 @@ class OpenVikingSessionContextAssembler:
             account=account,
             user=user,
             user_id=user_id,
+            actor_peer_id=actor_peer_id,
             path=path,
             timeout=timeout,
             extra_headers=extra_headers,
@@ -91,18 +92,17 @@ class OpenVikingSessionContextAssembler:
             account=account,
             user=user,
             user_id=user_id,
+            actor_peer_id=actor_peer_id,
             path=path,
             timeout=timeout,
             extra_headers=extra_headers,
             auto_initialize=auto_initialize,
             target_uri=target_uri,
-            peer_id=peer_id,
             limit=limit,
             score_threshold=score_threshold,
             search_mode="search",
         )
         self.token_budget = token_budget
-        self.peer_id = peer_id if peer_id is not None else getattr(self.retriever, "peer_id", None)
         self.include_session_context = include_session_context
         self.include_active_messages = include_active_messages
         self.include_recall = include_recall
@@ -114,7 +114,6 @@ class OpenVikingSessionContextAssembler:
         *,
         session_id: str,
         query: str = "",
-        peer_id: str | None = None,
     ) -> OpenVikingAssembledContext:
         client = self._get_client()
         self._ensure_session(client, session_id)
@@ -122,7 +121,6 @@ class OpenVikingSessionContextAssembler:
         recall_documents = self._get_recall_documents(
             session_id,
             query,
-            peer_id if peer_id is not None else self.peer_id,
         )
         block = self._format_context_block(session_context, recall_documents)
         return OpenVikingAssembledContext(
@@ -162,7 +160,6 @@ class OpenVikingSessionContextAssembler:
         self,
         session_id: str,
         query: str,
-        peer_id: str | None,
     ) -> list[Any]:
         if not self.include_recall or not query:
             return []
@@ -171,7 +168,6 @@ class OpenVikingSessionContextAssembler:
                 _retriever_for_session(
                     self.retriever,
                     session_id,
-                    peer_id=peer_id,
                 ).invoke(query)
             )
         except Exception:
@@ -234,6 +230,7 @@ def with_openviking_context(
     auto_initialize: bool = True,
     session_id: str | None = None,
     peer_id: str | None = None,
+    actor_peer_id: str | None = None,
     target_uri: str | list[str] = "",
     limit: int = 5,
     score_threshold: float | None = None,
@@ -255,12 +252,12 @@ def with_openviking_context(
         account=account,
         user=user,
         user_id=user_id,
+        actor_peer_id=actor_peer_id,
         path=path,
         timeout=timeout,
         extra_headers=extra_headers,
         auto_initialize=auto_initialize,
         target_uri=target_uri,
-        peer_id=peer_id,
         limit=limit,
         score_threshold=score_threshold,
         token_budget=token_budget,
@@ -284,6 +281,7 @@ def with_openviking_context(
             account=account,
             user=user,
             user_id=user_id,
+            actor_peer_id=actor_peer_id,
             path=path,
             timeout=timeout,
             extra_headers=extra_headers,
@@ -342,7 +340,6 @@ def with_openviking_context(
         assembled = assembler.assemble(
             session_id=resolved_session_id,
             query=query,
-            peer_id=resolved_peer_id,
         )
         if not assembled.block:
             return input_value
@@ -398,16 +395,12 @@ def _validate_session_id(value: Any, *, key: str) -> str:
 def _retriever_for_session(
     retriever: Any,
     session_id: str,
-    *,
-    peer_id: str | None = None,
 ) -> Any:
     if hasattr(retriever, "model_copy"):
         update = {
             "session_id": session_id,
             "search_mode": "search",
         }
-        if peer_id is not None:
-            update["peer_id"] = peer_id
         return retriever.model_copy(update=update)
     return retriever
 

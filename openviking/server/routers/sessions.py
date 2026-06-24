@@ -4,15 +4,15 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, Path, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.peer_id import normalize_peer_id
+from openviking.core.peer_id import normalize_peer_selector
 from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AuthMode, RequestContext
+from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
@@ -85,6 +85,8 @@ class AddMessageRequest(BaseModel):
 
     role: str
     peer_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    agent_uri: Optional[str] = None
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[str] = None
@@ -94,7 +96,11 @@ class AddMessageRequest(BaseModel):
     def validate_content_or_parts(self) -> "AddMessageRequest":
         if self.content is None and self.parts is None:
             raise ValueError("Either 'content' or 'parts' must be provided")
-        self.peer_id = normalize_peer_id(self.peer_id)
+        self.peer_id = normalize_peer_selector(
+            self.peer_id,
+            agent_id=self.agent_id,
+            agent_uri=self.agent_uri,
+        )
         return self
 
 
@@ -123,19 +129,35 @@ class CreateSessionRequest(BaseModel):
 def _resolve_message_parts(msg_request: AddMessageRequest) -> List[Part]:
     """Resolve parts from an AddMessageRequest, handling path variables."""
     if msg_request.parts is not None:
-        resolved_parts = []
-        for p in msg_request.parts:
-            part_copy = dict(p)
-            if part_copy.get("type") == "context" and "uri" in part_copy:
-                part_copy["uri"] = resolve_path_variables(part_copy["uri"])
-            if part_copy.get("type") == "tool":
-                if "tool_uri" in part_copy:
-                    part_copy["tool_uri"] = resolve_path_variables(part_copy["tool_uri"])
-                if "skill_uri" in part_copy:
-                    part_copy["skill_uri"] = resolve_path_variables(part_copy["skill_uri"])
-            resolved_parts.append(part_copy)
-        return [part_from_dict(p) for p in resolved_parts]
+        return [_part_request_to_part(p) for p in msg_request.parts]
     return [TextPart(text=msg_request.content or "")]
+
+
+def _part_request_to_part(raw_part: Dict[str, Any]) -> Part:
+    """Convert request part payload into an internal Part."""
+    if not isinstance(raw_part, dict):
+        return TextPart(text=str(raw_part))
+
+    part_copy = dict(raw_part)
+    if part_copy.get("type") == "context" and "uri" in part_copy:
+        part_copy["uri"] = resolve_path_variables(part_copy["uri"])
+    if part_copy.get("type") == "tool":
+        if "tool_uri" in part_copy:
+            part_copy["tool_uri"] = resolve_path_variables(part_copy["tool_uri"])
+        if "skill_uri" in part_copy:
+            part_copy["skill_uri"] = resolve_path_variables(part_copy["skill_uri"])
+    if part_copy.get("type") == "image_url":
+        image_url = part_copy.get("image_url")
+        if isinstance(image_url, dict) and "url" in image_url:
+            image_url = dict(image_url)
+            image_url["url"] = resolve_path_variables(image_url["url"])
+            part_copy["image_url"] = image_url
+        elif isinstance(image_url, str):
+            part_copy["image_url"] = resolve_path_variables(image_url)
+    try:
+        return part_from_dict(part_copy)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -150,11 +172,11 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
-def _request_auth_mode(request: Request) -> AuthMode:
+def _request_auth_mode(request: Request) -> str:
     config = getattr(request.app.state, "config", None)
     if config is not None and hasattr(config, "get_effective_auth_mode"):
         return config.get_effective_auth_mode()
-    return AuthMode.API_KEY
+    return "api_key"
 
 
 @router.post("")

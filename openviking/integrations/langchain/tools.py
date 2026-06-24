@@ -52,6 +52,7 @@ def create_openviking_tools(
     account: str | None = None,
     user: str | None = None,
     user_id: str | None = None,
+    actor_peer_id: str | None = None,
     path: str | None = None,
     timeout: float = 60.0,
     extra_headers: dict[str, str] | None = None,
@@ -81,6 +82,7 @@ def create_openviking_tools(
                     account=account,
                     user=user,
                     user_id=user_id,
+                    actor_peer_id=actor_peer_id,
                     path=path,
                     timeout=timeout,
                     extra_headers=extra_headers,
@@ -108,7 +110,6 @@ def create_openviking_tools(
             "find",
             query=query,
             target_uri=target_uri,
-            peer_id=peer_id,
             limit=limit,
             score_threshold=min_score,
         )
@@ -138,7 +139,6 @@ def create_openviking_tools(
             query=query,
             target_uri=target_uri,
             session_id=session_id,
-            peer_id=peer_id,
             limit=limit,
             score_threshold=min_score,
         )

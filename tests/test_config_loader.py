@@ -3,6 +3,7 @@
 """Tests for config_loader utilities."""
 
 import logging
+from logging.handlers import QueueHandler
 
 import pytest
 
@@ -389,6 +390,7 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
         logger.propagate = True
     logger_module._shared_log_handler = None
     logger_module._shared_log_handler_key = None
+    logger_module._stop_std_stream_listeners()
 
     OpenVikingConfigSingleton.reset_instance()
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
@@ -396,7 +398,7 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
     early_logger = logger_module.get_logger(logger_name)
     openviking_root = logging.getLogger("openviking")
     assert early_logger.handlers == []
-    assert any(isinstance(h, logging.StreamHandler) for h in openviking_root.handlers)
+    assert any(isinstance(h, QueueHandler) for h in openviking_root.handlers)
 
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
@@ -442,4 +444,5 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
             logger.propagate = True
         logger_module._shared_log_handler = None
         logger_module._shared_log_handler_key = None
+        logger_module._stop_std_stream_listeners()
         OpenVikingConfigSingleton.reset_instance()

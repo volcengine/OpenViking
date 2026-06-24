@@ -156,7 +156,7 @@ class ToolRegistry:
             sender_id: Sender id for the current session.
             memory_peer_ids: List of peer IDs for memory retrieval.
             memory_owner_user_ids: List of explicit OpenViking user IDs for
-                legacy root-key fanout searches.
+                trusted-mode owner-user memory lookup.
             memory_user_ids: Deprecated alias for memory_owner_user_ids.
             openviking_connection: Request-scoped OpenViking identity.
 

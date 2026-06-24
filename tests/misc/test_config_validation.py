@@ -14,6 +14,7 @@ from openviking.utils.agfs_utils import (
     create_agfs_client,
     mount_agfs_backend,
 )
+from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
@@ -67,6 +68,40 @@ def test_agfs_s3_normalize_encoding_chars_is_forwarded_to_ragfs_plugin_config():
     plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
 
     assert plugins["s3fs"]["config"]["normalize_encoding_chars"] == "?#"
+
+
+def test_agfs_s3_auto_detect_content_type_defaults_to_false():
+    config = AGFSConfig(
+        backend="s3",
+        s3=S3Config(
+            bucket="my-bucket",
+            region="us-west-1",
+            access_key="fake-access-key-for-testing",
+            secret_key="fake-secret-key-for-testing-12345",
+            endpoint="https://s3.amazonaws.com",
+        ),
+    )
+
+    assert config.s3.auto_detect_content_type is False
+
+
+def test_agfs_s3_auto_detect_content_type_is_forwarded_to_ragfs_plugin_config():
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="s3",
+        s3=S3Config(
+            bucket="my-bucket",
+            region="us-west-1",
+            access_key="fake-access-key-for-testing",
+            secret_key="fake-secret-key-for-testing-12345",
+            endpoint="https://s3.amazonaws.com",
+            auto_detect_content_type=True,
+        ),
+    )
+
+    plugins = _generate_plugin_config(config, Path("/tmp/ov-test"))
+
+    assert plugins["s3fs"]["config"]["auto_detect_content_type"] is True
 
     # Test 2: invalid backend
     print("\n2. Test invalid backend...")
@@ -150,6 +185,93 @@ def test_agfs_queuefs_validation_accepts_supported_shapes(queuefs, expected):
 def test_agfs_queuefs_validation_rejects_invalid_shapes(queuefs, match):
     with pytest.raises(ValueError, match=match):
         AGFSConfig(path="/tmp/ov-test", backend="local", queuefs=queuefs)
+
+
+def test_agfs_cache_defaults_to_disabled_memory_provider():
+    config = AGFSConfig(path="/tmp/ov-test", backend="local")
+
+    assert config.cache.enabled is False
+    assert config.cache.provider == "memory"
+    assert config.cache.namespace == "openviking"
+    assert config.cache.traversal_mode == "backend"
+
+
+def test_agfs_cache_accepts_yuanrong_provider_config():
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        cache={
+            "enabled": True,
+            "provider": "yuanrong",
+            "namespace": "ov-test",
+            "max_file_size_bytes": 4096,
+            "traversal_mode": "cached_traversal",
+            "bypass_prefixes": ["/queue"],
+            "yuanrong": {
+                "host": "10.0.0.1",
+                "port": 31501,
+                "connect_timeout_ms": 1000,
+                "request_timeout_ms": 2000,
+                "sdk_concurrency": 2,
+            },
+        },
+    )
+
+    assert config.cache.enabled is True
+    assert config.cache.provider == "yuanrong"
+    assert config.cache.namespace == "ov-test"
+    assert config.cache.max_file_size_bytes == 4096
+    assert config.cache.traversal_mode == "cached_traversal"
+    assert config.cache.bypass_prefixes == ["/queue"]
+    assert config.cache.yuanrong.host == "10.0.0.1"
+    assert config.cache.yuanrong.sdk_concurrency == 2
+
+
+def test_agfs_cache_accepts_redis_provider_config():
+    config = AGFSConfig(
+        path="/tmp/ov-test",
+        backend="local",
+        cache={
+            "enabled": True,
+            "provider": "redis",
+            "namespace": "ov-test",
+            "redis": {
+                "mode": "standalone",
+                "endpoints": ["redis://127.0.0.1:6379"],
+                "pool_size": 8,
+                "connect_timeout_ms": 1000,
+                "command_timeout_ms": 20,
+                "key_prefix": "ragfs-cache",
+                "default_ttl_seconds": 3600,
+                "read_from_replica": False,
+            },
+        },
+    )
+
+    assert config.cache.enabled is True
+    assert config.cache.provider == "redis"
+    assert config.cache.redis.mode == "standalone"
+    assert config.cache.redis.endpoints == ["redis://127.0.0.1:6379"]
+    assert config.cache.redis.pool_size == 8
+    assert config.cache.redis.default_ttl_seconds == 3600
+
+
+def test_agfs_cache_rejects_invalid_provider():
+    with pytest.raises(ValueError, match="provider"):
+        AGFSConfig(
+            path="/tmp/ov-test",
+            backend="local",
+            cache={"provider": "bogus"},
+        )
+
+
+def test_agfs_cache_rejects_invalid_traversal_mode():
+    with pytest.raises(ValueError, match="traversal_mode"):
+        AGFSConfig(
+            path="/tmp/ov-test",
+            backend="local",
+            cache={"traversal_mode": "bogus"},
+        )
 
 
 @pytest.mark.parametrize(
@@ -364,6 +486,7 @@ def test_generate_plugin_config_materializes_multiwrite_backups(tmp_path):
         "directory_marker_mode": None,
         "disable_batch_delete": False,
         "normalize_encoding_chars": "#?",
+        "auto_detect_content_type": False,
     }
 
 
@@ -384,7 +507,8 @@ class _FailingMountClient(_FakeMountClient):
 
 
 class _FakeBindingClient:
-    def __init__(self, *, config):
+    def __init__(self, config_arg=None, *, config=None):
+        self.config_arg = config_arg
         self.config = config
         self.mount_calls = []
 
@@ -440,7 +564,15 @@ def test_mount_agfs_backend_raises_mount_error(tmp_path):
 
 
 def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_path):
-    agfs_config = AGFSConfig(path=str(tmp_path), backend="local")
+    agfs_config = AGFSConfig(
+        path=str(tmp_path),
+        backend="local",
+        cache={
+            "enabled": True,
+            "provider": "memory",
+            "namespace": "runtime-cache",
+        },
+    )
 
     config = RagfsBindingConfig(
         agfs=agfs_config,
@@ -452,16 +584,20 @@ def test_ragfs_binding_config_builds_single_binding_dict_for_local_backend(tmp_p
         "encryption": {
             "root_key": b"\x01" * 32,
             "provider_type": 7,
-        }
+        },
+        "cache": agfs_config.cache.model_dump(mode="json"),
     }
 
 
 def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_path):
-    agfs_config = AGFSConfig(path=str(tmp_path), backend="memory")
-    fake_client = _FakeBindingClient(config={})
+    agfs_config = AGFSConfig(
+        path=str(tmp_path),
+        backend="memory",
+        cache={"enabled": True, "provider": "memory", "namespace": "runtime-cache"},
+    )
 
     def _fake_get_binding_client():
-        return (lambda *, config: fake_client.__class__(config=config), None)
+        return (_FakeBindingClient, None)
 
     monkeypatch.setattr("openviking.pyagfs.get_binding_client", _fake_get_binding_client)
 
@@ -469,8 +605,29 @@ def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_p
     client = create_agfs_client(config)
 
     assert isinstance(client, _FakeBindingClient)
-    assert client.config == {}
+    assert client.config["cache"]["enabled"] is True
+    assert client.config["cache"]["namespace"] == "runtime-cache"
     assert any(call[0] == "memfs" for call in client.mount_calls)
+
+
+def test_create_agfs_client_passes_resolved_ov_conf_path(monkeypatch, tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text('{"storage": {"agfs": {"cache": {"enabled": false}}}}')
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
+
+    class FakeRAGFSBindingClient(_FakeBindingClient):
+        pass
+
+    monkeypatch.setattr(
+        "openviking.pyagfs.get_binding_client",
+        lambda: (FakeRAGFSBindingClient, None),
+    )
+
+    config = RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path), backend="memory"))
+    client = create_agfs_client(config)
+
+    assert isinstance(client, FakeRAGFSBindingClient)
+    assert client.config_arg == str(config_path)
 
 
 def test_vectordb_validation():

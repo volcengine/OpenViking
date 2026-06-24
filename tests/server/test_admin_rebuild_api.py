@@ -3,6 +3,7 @@
 import httpx
 import pytest
 
+from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
@@ -185,8 +186,13 @@ async def test_reindex_memory_semantic_and_vectors_rebuilds_full_subtree(monkeyp
     async def fake_reindex_memory_vectors(self, *, uri, counters, ctx):
         seen["vectors"].append(uri)
 
+    class FakeVikingFS:
+        async def stat(self, uri, ctx=None):
+            return {"isDir": True}
+
     monkeypatch.setattr(ReindexExecutor, "_run_semantic_processor", fake_run_semantic_processor)
     monkeypatch.setattr(ReindexExecutor, "_reindex_memory_vectors", fake_reindex_memory_vectors)
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
 
     service = ReindexExecutor()
     counters = _ReindexCounters()
@@ -603,6 +609,65 @@ async def test_reindex_fetch_existing_record_uses_get_context_by_uri(monkeypatch
     assert record["abstract"] == "from-lookup"
     assert not fake_service.vikingdb_manager.fetch_calls
     assert fake_service.vikingdb_manager.lookup_calls
+
+
+@pytest.mark.asyncio
+async def test_reindex_upsert_context_preserves_existing_search_tags(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    captured = {}
+
+    class FakeVikingDB:
+        async def get_context_by_uri(self, uri, owner_space=None, level=None, limit=1, *, ctx=None):
+            del owner_space, limit, ctx
+            return [
+                {
+                    "uri": uri,
+                    "level": level,
+                    "abstract": "existing",
+                    "search_tags": ["team-a", "project-x"],
+                }
+            ]
+
+        async def enqueue_embedding_msg(self, msg):
+            captured["msg"] = msg
+            return True
+
+    fake_service = type("Svc", (), {"vikingdb_manager": FakeVikingDB()})()
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: fake_service)
+
+    class _FakeMsg:
+        def __init__(self):
+            self.telemetry_id = ""
+            self.id = "msg-1"
+
+    def fake_from_context(context):
+        captured["meta"] = dict(context.meta or {})
+        return _FakeMsg()
+
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.EmbeddingMsgConverter.from_context",
+        fake_from_context,
+    )
+
+    service = ReindexExecutor()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    await service._upsert_context(
+        uri="viking://resources/demo.txt",
+        parent_uri="viking://resources",
+        abstract="new abstract",
+        vector_text="new vector text",
+        is_leaf=True,
+        context_type="resource",
+        level=ContextLevel.DETAIL,
+        ctx=ctx,
+    )
+
+    assert captured["meta"]["search_tags"] == ["team-a", "project-x"]
 
 
 @pytest.mark.asyncio

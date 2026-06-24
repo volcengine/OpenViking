@@ -4,7 +4,6 @@
 
 import asyncio
 import os
-import re
 from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple, Union
 
@@ -15,9 +14,9 @@ from openviking.parse.parsers.constants import (
     DOCUMENTATION_EXTENSIONS,
     IGNORE_DIRS,
     IGNORE_EXTENSIONS,
-    TEXT_ENCODINGS,
-    UTF8_VARIANTS,
 )
+from openviking.parse.parsers.text_encoding import normalize_text_bytes
+from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -63,50 +62,7 @@ def detect_and_convert_encoding(content: bytes, file_path: Union[str, Path] = ""
     """Detect text encoding and normalize content to UTF-8 when needed."""
     if not is_text_file(file_path):
         return content
-
-    try:
-        # Check for potential binary content (null bytes in first 8KB)
-        # Binary files often contain null bytes which can cause issues
-        sample_size = min(8192, len(content))
-        if b"\x00" in content[:sample_size]:
-            null_count = content[:sample_size].count(b"\x00")
-            # If more than 5% null bytes in sample, likely binary - don't process
-            if null_count / sample_size > 0.05:
-                logger.debug(
-                    f"Detected binary content in {file_path} (null bytes: {null_count}), skipping encoding detection"
-                )
-                return content
-
-        detected_encoding: Optional[str] = None
-        for encoding in TEXT_ENCODINGS:
-            try:
-                decoded = content.decode(encoding)
-                # Additional validation: check for control characters that suggest binary
-                control_chars = sum(1 for c in decoded[:1000] if ord(c) < 32 and c not in "\t\n\r")
-                if control_chars / min(1000, len(decoded)) > 0.05:  # More than 5% control chars
-                    continue
-                detected_encoding = encoding
-                break
-            except UnicodeDecodeError:
-                continue
-
-        if detected_encoding is None:
-            logger.warning(f"Encoding detection failed for {file_path}: no matching encoding found")
-            return content
-
-        if detected_encoding not in UTF8_VARIANTS:
-            decoded_content = content.decode(detected_encoding, errors="replace")
-            # Remove null bytes from decoded content as they can cause issues downstream
-            if "\x00" in decoded_content:
-                decoded_content = decoded_content.replace("\x00", "")
-                logger.debug(f"Removed null bytes from decoded content in {file_path}")
-            content = decoded_content.encode("utf-8")
-            logger.debug(f"Converted {file_path} from {detected_encoding} to UTF-8")
-
-        return content
-    except Exception as exc:
-        logger.warning(f"Encoding detection failed for {file_path}: {exc}")
-        return content
+    return normalize_text_bytes(content, file_path)
 
 
 def should_skip_file(
@@ -150,29 +106,9 @@ def should_skip_directory(
     return dir_name in effective_ignore_dirs or dir_name.startswith(".")
 
 
-_UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
-_DRIVE_RE = re.compile(r"^[A-Za-z]:")
-
-
 def _sanitize_rel_path(rel_path: str) -> str:
-    """Normalize a relative path and reject unsafe components.
-
-    Uses OS-independent checks so that Windows-style drive prefixes and
-    backslash separators are rejected even when running on Linux/macOS.
-    """
-    if not rel_path:
-        raise ValueError(f"Unsafe relative path rejected: {rel_path!r}")
-    # Reject absolute paths (Unix or Windows style)
-    if rel_path.startswith("/") or rel_path.startswith("\\"):
-        raise ValueError(f"Unsafe relative path rejected: {rel_path}")
-    # Reject Windows drive letters (C:\..., C:foo)
-    if _DRIVE_RE.match(rel_path):
-        raise ValueError(f"Unsafe relative path rejected: {rel_path}")
-    # Reject parent-directory traversal (../ or ..\)
-    if _UNSAFE_PATH_RE.search(rel_path):
-        raise ValueError(f"Unsafe relative path rejected: {rel_path}")
-    # Normalize to forward slashes
-    return rel_path.replace("\\", "/")
+    """Compatibility wrapper for existing upload utility callers/tests."""
+    return sanitize_relative_viking_path(rel_path)
 
 
 async def upload_text_files(
@@ -186,8 +122,7 @@ async def upload_text_files(
 
     for file_path, rel_path in file_paths:
         try:
-            safe_rel = _sanitize_rel_path(rel_path)
-            target_uri = f"{viking_uri_base}/{safe_rel}"
+            target_uri = safe_join_viking_uri(viking_uri_base, rel_path)
             content = file_path.read_bytes()
             content = detect_and_convert_encoding(content, file_path)
             await viking_fs.write_file_bytes(target_uri, content)
@@ -262,13 +197,12 @@ async def upload_directory(
 
             rel_path_str = str(file_path.relative_to(local_dir)).replace(os.sep, "/")
             try:
-                safe_rel = _sanitize_rel_path(rel_path_str)
+                target_uri = safe_join_viking_uri(viking_uri_base, rel_path_str)
             except ValueError as exc:
                 warning = f"Skipping {file_path}: {exc}"
                 warnings.append(warning)
                 logger.warning(warning)
                 continue
-            target_uri = f"{viking_uri_base}/{safe_rel}"
             files_to_upload.append((file_path, target_uri))
             parent_uris.add(target_uri.rsplit("/", 1)[0])
 

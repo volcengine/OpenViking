@@ -82,13 +82,13 @@ def test_message_range_uses_peer_id_when_present():
                     id="msg-peer",
                     role="user",
                     parts=[TextPart(text="invoice follow-up")],
-                    peer_id="web:visitor:alice",
+                    peer_id="web-visitor-alice",
                 )
             ]
         ]
     )
 
-    assert "[web:visitor:alice]: invoice follow-up" in msg_range.pretty_print()
+    assert "[web-visitor-alice]: invoice follow-up" in msg_range.pretty_print()
     assert "[default]: invoice follow-up" not in msg_range.pretty_print()
 
 
@@ -130,13 +130,13 @@ def test_message_range_merges_adjacent_chunks_for_same_speaker():
         id="msg-long#chunk_0",
         role="user",
         parts=[TextPart(text="first chunk. ")],
-        peer_id="web:visitor:alice",
+        peer_id="web-visitor-alice",
     )
     second = Message(
         id="msg-long#chunk_1",
         role="user",
         parts=[TextPart(text="second chunk.")],
-        peer_id="web:visitor:alice",
+        peer_id="web-visitor-alice",
     )
     msg_range = MessageRange(
         [[first, second]],
@@ -154,7 +154,7 @@ def test_message_range_merges_adjacent_chunks_for_same_speaker():
         },
     )
 
-    assert msg_range.pretty_print() == "[web:visitor:alice]: first chunk. second chunk."
+    assert msg_range.pretty_print() == "[web-visitor-alice]: first chunk. second chunk."
 
 
 def test_message_range_keeps_regular_same_speaker_messages_separate():
@@ -165,20 +165,20 @@ def test_message_range_keeps_regular_same_speaker_messages_separate():
                     id="msg-a",
                     role="user",
                     parts=[TextPart(text="first message")],
-                    peer_id="web:visitor:alice",
+                    peer_id="web-visitor-alice",
                 ),
                 Message(
                     id="msg-b",
                     role="user",
                     parts=[TextPart(text="second message")],
-                    peer_id="web:visitor:alice",
+                    peer_id="web-visitor-alice",
                 ),
             ]
         ]
     )
 
     assert msg_range.pretty_print() == (
-        "[web:visitor:alice]: first message\n[web:visitor:alice]: second message"
+        "[web-visitor-alice]: first message\n[web-visitor-alice]: second message"
     )
 
 
@@ -187,13 +187,13 @@ def test_message_range_keeps_different_source_chunks_separate():
         id="msg-a#chunk_0",
         role="user",
         parts=[TextPart(text="first source chunk")],
-        peer_id="web:visitor:alice",
+        peer_id="web-visitor-alice",
     )
     second = Message(
         id="msg-b#chunk_0",
         role="user",
         parts=[TextPart(text="second source chunk")],
-        peer_id="web:visitor:alice",
+        peer_id="web-visitor-alice",
     )
     msg_range = MessageRange(
         [[first, second]],
@@ -212,7 +212,7 @@ def test_message_range_keeps_different_source_chunks_separate():
     )
 
     assert msg_range.pretty_print() == (
-        "[web:visitor:alice]: first source chunk...\n[web:visitor:alice]: second source chunk..."
+        "[web-visitor-alice]: first source chunk...\n[web-visitor-alice]: second source chunk..."
     )
 
 
@@ -224,14 +224,14 @@ def test_message_range_does_not_treat_original_chunk_like_id_as_chunk():
                     id="msg-long#chunk_0",
                     role="user",
                     parts=[TextPart(text="original message id contains chunk marker")],
-                    peer_id="web:visitor:alice",
+                    peer_id="web-visitor-alice",
                 ),
             ]
         ]
     )
 
     assert msg_range.pretty_print() == (
-        "[web:visitor:alice]: original message id contains chunk marker"
+        "[web-visitor-alice]: original message id contains chunk marker"
     )
 
 
@@ -240,7 +240,7 @@ def test_message_range_marks_middle_chunk_as_abbreviated():
         id="msg-long#chunk_1",
         role="user",
         parts=[TextPart(text="middle chunk")],
-        peer_id="web:visitor:alice",
+        peer_id="web-visitor-alice",
     )
     msg_range = MessageRange(
         [[message]],
@@ -253,7 +253,7 @@ def test_message_range_marks_middle_chunk_as_abbreviated():
         },
     )
 
-    assert msg_range.pretty_print() == "[web:visitor:alice]: ...middle chunk..."
+    assert msg_range.pretty_print() == "[web-visitor-alice]: ...middle chunk..."
 
 
 def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_config):
@@ -262,7 +262,7 @@ def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_co
             id="msg-peer",
             role="user",
             parts=[TextPart(text="I am Alice. Please contact me by email for invoices.")],
-            peer_id="web:visitor:alice",
+            peer_id="web-visitor-alice",
         )
     ]
     extract_context = ExtractContext(messages)
@@ -273,7 +273,7 @@ def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_co
     handler = MemoryIsolationHandler(
         ctx,
         extract_context,
-        allowed_peer_ids={"web:visitor:alice"},
+        allowed_peer_ids={"web-visitor-alice"},
     )
     role_scope = handler.get_read_scope()
     fields = {"ranges": "0"}
@@ -290,7 +290,7 @@ def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_co
         ResolvedOperation(memory_fields=fields, memory_type="profile", uris=[]),
         extract_context,
     )
-    assert profile_uris == ["viking://user/support_bot/peers/web:visitor:alice/memories/profile.md"]
+    assert profile_uris == ["viking://user/support_bot/peers/web-visitor-alice/memories/profile.md"]
 
     tool_schema = MemoryTypeSchema(
         memory_type="tools",
@@ -305,7 +305,7 @@ def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_co
         extract_context,
     )
     assert tool_uris == [
-        "viking://user/support_bot/peers/web:visitor:alice/memories/tools/email.md"
+        "viking://user/support_bot/peers/web-visitor-alice/memories/tools/email.md"
     ]
 
 
@@ -315,7 +315,7 @@ def test_peer_id_range_does_not_route_without_allowed_peer_ids(stub_provider_con
             id="msg-peer",
             role="user",
             parts=[TextPart(text="I am Alice. Please contact me by email for invoices.")],
-            peer_id="web:visitor:alice",
+            peer_id="web-visitor-alice",
         )
     ]
     extract_context = ExtractContext(messages)

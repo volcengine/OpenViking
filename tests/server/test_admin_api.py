@@ -3,9 +3,12 @@
 
 """Tests for Admin API endpoints (openviking/server/routers/admin.py)."""
 
+import asyncio
+import json
 import uuid
 
 import httpx
+import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
@@ -16,9 +19,14 @@ from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
-from openviking_cli.exceptions import OpenVikingError
+from openviking.service.task_store import (
+    SYSTEM_TASK_ACCOUNT_ID,
+    SYSTEM_TASK_USER_ID,
+)
+from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -40,10 +48,20 @@ class _FakeAGFS:
         return self._files[path]
 
     def write(self, path, content, **_kwargs):
+        self.ensure_parent_dirs(path)
         self._files[path] = content
 
     def mkdir(self, path, **_kwargs):
         self._dirs.add(path)
+
+    def ensure_parent_dirs(self, path, **_kwargs):
+        parent = path.rsplit("/", 1)[0]
+        if not parent:
+            return
+        current = ""
+        for part in [part for part in parent.strip("/").split("/") if part]:
+            current = f"{current}/{part}" if current else f"/{part}"
+            self._dirs.add(current)
 
 
 class _FakeVikingFS:
@@ -64,6 +82,8 @@ class _FakeService:
 
 def _build_lightweight_admin_test_app() -> FastAPI:
     from openviking.server.routers import admin as admin_router
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.auth.registry import get_registry
 
     app = FastAPI()
     app.state.config = ServerConfig(root_api_key=ROOT_KEY)
@@ -83,6 +103,13 @@ def _build_lightweight_admin_test_app() -> FastAPI:
 
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=fake_service.viking_fs)
     app.state.api_key_manager = manager
+
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("api_key") is None:
+        registry.register(ApiKeyAuthPlugin)
+    app.state.auth_plugin = registry.get("api_key")()
+
     app.include_router(admin_router.router)
     return app
 
@@ -113,6 +140,9 @@ async def admin_service(temp_dir):
 
 @pytest_asyncio.fixture(scope="function")
 async def admin_app(admin_service):
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.auth.registry import get_registry
+
     config = ServerConfig(root_api_key=ROOT_KEY)
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
@@ -120,6 +150,12 @@ async def admin_app(admin_service):
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
+
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("api_key") is None:
+        registry.register(ApiKeyAuthPlugin)
+    app.state.auth_plugin = registry.get("api_key")()
 
     return app
 
@@ -150,10 +186,53 @@ def trusted_headers(
     return headers
 
 
+async def _agfs_exists(service: OpenVikingService, path: str) -> bool:
+    try:
+        await service.viking_fs._async_agfs.stat(path)
+    except Exception:
+        return False
+    return True
+
+
+async def _agfs_mkdirp(service: OpenVikingService, path: str) -> None:
+    parts = [part for part in path.strip("/").split("/") if part]
+    current = ""
+    for part in parts:
+        current = f"{current}/{part}" if current else f"/{part}"
+        if await _agfs_exists(service, current):
+            continue
+        await service.viking_fs._async_agfs.mkdir(current)
+
+
+async def _agfs_write(service: OpenVikingService, path: str, content: str) -> None:
+    await _agfs_mkdirp(service, path.rsplit("/", 1)[0])
+    await service.viking_fs._async_agfs.write(path, content.encode("utf-8"))
+
+
+async def _agfs_read_text(service: OpenVikingService, path: str) -> str:
+    raw = await service.viking_fs._async_agfs.read(path)
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8")
+    if hasattr(raw, "content"):
+        return raw.content.decode("utf-8")
+    return str(raw)
+
+
+async def _wait_for_task(client: httpx.AsyncClient, task_id: str) -> dict:
+    for _ in range(100):
+        resp = await client.get(f"/api/v1/tasks/{task_id}", headers=root_headers())
+        assert resp.status_code == 200
+        task = resp.json()["result"]
+        if task["status"] in {"completed", "failed"}:
+            return task
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"Task {task_id} did not finish")
+
+
 # ---- Account CRUD ----
 
 
-async def test_create_account(admin_client: httpx.AsyncClient):
+async def test_create_account(admin_client: httpx.AsyncClient, admin_service: OpenVikingService):
     """ROOT can create an account with first admin."""
     acct = _uid()
     resp = await admin_client.post(
@@ -166,6 +245,10 @@ async def test_create_account(admin_client: httpx.AsyncClient):
     assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
     assert "user_key" in body["result"]
+
+    ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
+    assert await admin_service.viking_fs.abstract("viking://resources", ctx=ctx)
+    assert await admin_service.viking_fs.abstract("viking://user", ctx=ctx)
 
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):
@@ -561,8 +644,418 @@ async def test_no_auth_admin_api_returns_401(admin_client: httpx.AsyncClient):
     assert resp.status_code == 401
 
 
+# ---- Legacy migration ----
+
+
+async def test_user_role_cannot_run_legacy_migration(admin_client: httpx.AsyncClient):
+    """Legacy migration is ROOT-only."""
+    acct = _uid()
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    resp = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user"},
+        headers=root_headers(),
+    )
+    bob_key = resp.json()["result"]["user_key"]
+
+    resp = await admin_client.post(
+        "/api/v1/admin/migrate",
+        headers={"X-API-Key": bob_key},
+    )
+    assert resp.status_code == 403
+
+
+async def test_legacy_migration_preflight_failure_does_not_create_task(
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+):
+    """Ambiguous session ownership fails preflight before task creation."""
+    acct = _uid()
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user"},
+        headers=root_headers(),
+    )
+    await _agfs_write(admin_service, f"/local/{acct}/session/orphan/messages.jsonl", "{}\n")
+
+    resp = await admin_client.post("/api/v1/admin/migrate", headers=root_headers())
+    assert resp.status_code == 412
+    error = resp.json()["error"]
+    assert error["code"] == "FAILED_PRECONDITION"
+    assert error["details"]["operation_count"] == 0
+    assert error["details"]["errors"][0]["session_id"] == "orphan"
+
+    tasks_resp = await admin_client.get(
+        "/api/v1/tasks?task_type=legacy_migration",
+        headers=root_headers(),
+    )
+    assert tasks_resp.status_code == 200
+    assert tasks_resp.json()["result"] == []
+
+
+async def test_legacy_migration_task_migrates_legacy_data(
+    admin_client: httpx.AsyncClient,
+    admin_app,
+    admin_service: OpenVikingService,
+):
+    """ROOT migrate fans out shared agent data and moves sessions under users."""
+    acct = _uid()
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    register_bob = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user"},
+        headers=root_headers(),
+    )
+    bob_key = register_bob.json()["result"]["user_key"]
+
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/agent/code-agent/memories/facts/project.md",
+        "shared fact",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/agent/code-agent/skills/code-review/SKILL.md",
+        "legacy skill",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/agent/code-agent/instructions/system.md",
+        "do not migrate",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/user/bob/skills/code-review/SKILL.md",
+        "existing skill",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/session/sess-001/.meta.json",
+        json.dumps({"created_by_user_id": "alice"}),
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/session/sess-001/messages.jsonl",
+        '{"role":"user"}\n',
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/session/sess-002/.meta.json",
+        json.dumps({"user_id": "charlie"}),
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/session/sess-002/messages.jsonl",
+        '{"role":"assistant"}\n',
+    )
+
+    resp = await admin_client.post("/api/v1/admin/migrate", headers=root_headers())
+    assert resp.status_code == 200
+    task_id = resp.json()["result"]["task_id"]
+    assert await _agfs_exists(
+        admin_service,
+        f"/local/{SYSTEM_TASK_ACCOUNT_ID}/tasks/{SYSTEM_TASK_USER_ID}/{task_id}.json",
+    )
+    hidden_resp = await admin_client.get(f"/api/v1/tasks/{task_id}", headers={"X-API-Key": bob_key})
+    assert hidden_resp.status_code == 404
+
+    task = await _wait_for_task(admin_client, task_id)
+    assert task["status"] == "completed"
+    result = task["result"]
+    created_user = next(item for item in result["created_users"] if item["user_id"] == "charlie")
+    assert created_user["account_id"] == acct
+    assert "user_key" not in created_user
+    assert result["migrated"]["operations"]["agent_memories"] == 3
+    assert result["migrated"]["operations"]["agent_skills"] == 2
+    assert result["migrated"]["operations"]["sessions"] == 2
+    assert any(item["reason"] == "target skill already exists" for item in result["skipped"])
+    assert any("Skipped legacy instructions" in item for item in result["warnings"])
+
+    manager = admin_app.state.api_key_manager
+    assert manager.has_user(acct, "charlie")
+    for user_id in ("alice", "bob", "charlie"):
+        assert (
+            await _agfs_read_text(
+                admin_service,
+                f"/local/{acct}/user/{user_id}/peers/code-agent/memories/facts/project.md",
+            )
+            == "shared fact"
+        )
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{acct}/user/alice/skills/code-review/SKILL.md",
+        )
+        == "legacy skill"
+    )
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{acct}/user/bob/skills/code-review/SKILL.md",
+        )
+        == "existing skill"
+    )
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{acct}/user/alice/sessions/sess-001/messages.jsonl",
+        )
+        == '{"role":"user"}\n'
+    )
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{acct}/user/charlie/sessions/sess-002/messages.jsonl",
+        )
+        == '{"role":"assistant"}\n'
+    )
+    assert not await _agfs_exists(
+        admin_service,
+        f"/local/{acct}/user/alice/peers/code-agent/instructions/system.md",
+    )
+
+
+async def test_legacy_migration_covers_all_accounts_and_agent_user_layout(
+    admin_client: httpx.AsyncClient,
+    admin_app,
+    admin_service: OpenVikingService,
+):
+    """One ROOT migration scans all accounts and handles agent/user scoped legacy data."""
+    acct = _uid()
+    other_acct = _uid()
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "admin"},
+        headers=root_headers(),
+    )
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": other_acct, "admin_user_id": "dana"},
+        headers=root_headers(),
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/user/charlie/memories/.overview.md",
+        "legacy physical user",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/agent/code-agent/memories/facts/shared.md",
+        "shared fact",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/agent/review-agent/user/charlie/memories/facts/private.md",
+        "private fact",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/agent/review-agent/user/charlie/skills/review/SKILL.md",
+        "review skill",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{other_acct}/agent/code-agent/memories/facts/other.md",
+        "other account fact",
+    )
+
+    resp = await admin_client.post("/api/v1/admin/migrate", headers=root_headers())
+    assert resp.status_code == 200
+    task = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
+    assert task["status"] == "completed"
+
+    result = task["result"]
+    assert any(
+        item["account_id"] == acct and item["user_id"] == "charlie"
+        for item in result["created_users"]
+    )
+    manager = admin_app.state.api_key_manager
+    assert manager.has_user(acct, "charlie")
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{acct}/user/admin/peers/code-agent/memories/facts/shared.md",
+        )
+        == "shared fact"
+    )
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{acct}/user/charlie/peers/code-agent/memories/facts/shared.md",
+        )
+        == "shared fact"
+    )
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{acct}/user/charlie/peers/review-agent/memories/facts/private.md",
+        )
+        == "private fact"
+    )
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{acct}/user/charlie/skills/review/SKILL.md",
+        )
+        == "review skill"
+    )
+    assert not await _agfs_exists(
+        admin_service,
+        f"/local/{acct}/user/admin/peers/review-agent/memories/facts/private.md",
+    )
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{other_acct}/user/dana/peers/code-agent/memories/facts/other.md",
+        )
+        == "other account fact"
+    )
+
+
+async def test_legacy_cleanup_removes_only_legacy_namespaces(
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+):
+    """Cleanup removes legacy agent/session roots without deleting migrated user data."""
+    acct = _uid()
+    other_acct = _uid()
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": other_acct, "admin_user_id": "dana"},
+        headers=root_headers(),
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/agent/code-agent/memories/facts/old.md",
+        "legacy agent",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/session/sess-001/messages.jsonl",
+        '{"role":"user"}\n',
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/user/alice/agent/review-agent/memories/facts/old.md",
+        "legacy user agent",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/user/alice/peers/code-agent/memories/facts/new.md",
+        "new peer data",
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{acct}/user/alice/sessions/sess-001/messages.jsonl",
+        '{"role":"assistant"}\n',
+    )
+    await _agfs_write(
+        admin_service,
+        f"/local/{other_acct}/agent/code-agent/memories/facts/old.md",
+        "other legacy agent",
+    )
+
+    resp = await admin_client.post(
+        "/api/v1/admin/migrate",
+        json={"action": "cleanup"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    task = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
+    assert task["status"] == "completed"
+    assert task["task_type"] == "legacy_cleanup"
+    assert task["result"]["cleanup"]["directories"] == 4
+    removed = {
+        (item["account_id"], item["source"]) for item in task["result"]["cleanup"]["targets"]
+    }
+    assert (acct, "viking://agent") in removed
+    assert (acct, "viking://session") in removed
+    assert (acct, "viking://user/alice/agent") in removed
+    assert (other_acct, "viking://agent") in removed
+
+    assert not await _agfs_exists(admin_service, f"/local/{acct}/agent")
+    assert not await _agfs_exists(admin_service, f"/local/{acct}/session")
+    assert not await _agfs_exists(admin_service, f"/local/{acct}/user/alice/agent")
+    assert not await _agfs_exists(admin_service, f"/local/{other_acct}/agent")
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{acct}/user/alice/peers/code-agent/memories/facts/new.md",
+        )
+        == "new peer data"
+    )
+    assert (
+        await _agfs_read_text(
+            admin_service,
+            f"/local/{acct}/user/alice/sessions/sess-001/messages.jsonl",
+        )
+        == '{"role":"assistant"}\n'
+    )
+
+
+async def test_legacy_agent_and_session_uri_reads_are_read_only(
+    admin_service: OpenVikingService,
+):
+    """Old agent/session URIs remain readable but not mutable."""
+    ctx = RequestContext(user=UserIdentifier("default", "admin_user"), role=Role.USER)
+    await _agfs_write(
+        admin_service,
+        "/local/default/agent/code-agent/memories/facts/project.md",
+        "legacy agent fact",
+    )
+    await _agfs_write(
+        admin_service,
+        "/local/default/session/old-session/messages.jsonl",
+        '{"role":"user"}\n',
+    )
+
+    assert (
+        await admin_service.viking_fs.read_file(
+            "viking://agent/code-agent/memories/facts/project.md",
+            ctx=ctx,
+        )
+        == "legacy agent fact"
+    )
+    assert (
+        await admin_service.viking_fs.read_file(
+            "viking://session/old-session/messages.jsonl",
+            ctx=ctx,
+        )
+        == '{"role":"user"}\n'
+    )
+    with pytest.raises(PermissionDeniedError):
+        await admin_service.viking_fs.write_file(
+            "viking://agent/code-agent/memories/facts/new.md",
+            "blocked",
+            ctx=ctx,
+        )
+    with pytest.raises(PermissionDeniedError):
+        await admin_service.viking_fs.mkdir("viking://session/new-session", ctx=ctx)
+
+
 @pytest_asyncio.fixture(scope="function")
 async def trusted_admin_app(admin_service):
+    from openviking.server.auth.plugins import TrustedAuthPlugin
+    from openviking.server.auth.registry import get_registry
+
     config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
@@ -572,6 +1065,13 @@ async def trusted_admin_app(admin_service):
     if "platform" not in manager._accounts:
         await manager.create_account("platform", "gateway-admin")
     app.state.api_key_manager = manager
+
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("trusted") is None:
+        registry.register(TrustedAuthPlugin)
+    app.state.auth_plugin = registry.get("trusted")()
+
     return app
 
 

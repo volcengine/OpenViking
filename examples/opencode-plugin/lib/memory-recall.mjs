@@ -43,13 +43,12 @@ export function createMemoryRecall({ config }) {
   async function performRecallSearch(query) {
     try {
       const body = { query: query.slice(0, 4000), limit: 20, mode: "auto" }
-      const peerId = effectivePeerId(config)
-      if (peerId) body.peer_id = peerId
       const response = await makeRequest(config, {
         method: "POST",
         endpoint: "/api/v1/search/find",
         body,
         timeoutMs: AUTO_RECALL_TIMEOUT_MS,
+        actorPeerId: effectivePeerId(config),
       })
       const result = unwrapResponse(response)
       return result?.memories ?? result?.results ?? []
