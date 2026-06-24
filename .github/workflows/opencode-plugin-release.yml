@@ -70,10 +70,11 @@ jobs:
       - name: Publish package
         if: steps.published.outputs.exists == 'false'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::error::Missing NPM_TOKEN secret for npm publish."
-            exit 1
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          else
+            echo "::notice::NPM_TOKEN is not set; npm publish will use Trusted Publishing/OIDC. For first-time packages, publish once with an npm token or configure npm trusted publishing after the package exists."
           fi
           npm publish --access public --provenance
