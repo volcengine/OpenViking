@@ -153,6 +153,43 @@ TEST_CONFIG = {
 
 ## 🧪 运行测试
 
+### 插件契约测试
+
+`tests/plugins/` 是快速、低成本的 Agent 集成契约测试入口，用来在真正跑
+OpenCode、Hermes 或 OpenClaw E2E 前先验证安装文档、插件入口、工具注册和
+Hermes OpenViking preflight 是否仍然完整。
+
+当前覆盖：
+
+- OpenCode source install 使用 `openviking.js` wrapper，避免本地插件扫描器跳过 `.mjs` 文件
+- `opencode-plugin` 暴露核心 memory tools、code tools、`memwrite` 和 `viking://` URI guard
+- OpenCode 文档包含安装、健康检查、工具使用和本地 `read/glob/grep` 防误用说明
+- Hermes 文档明确 OpenViking 是内置 memory provider，无需安装插件
+- Hermes LoCoMo `e2e` benchmark 在正式导入/评测前会用 preflight 验证 Hermes 写入了目标 OpenViking
+
+推荐作为变更插件、agent 集成文档或 benchmark preflight 时的第一道 ovtest：
+
+```bash
+python run_tests.py --type plugins -v
+# 或
+./run.sh --plugins -v
+```
+
+插件相关变更推荐按这个顺序验证：
+
+1. 在 `tests/oc2ov_test` 运行 `python run_tests.py --type plugins -v`，先确认
+   OpenCode / Hermes + OpenViking 的轻量契约没有漂移。
+2. 如果改了 `examples/opencode-plugin` 代码，在 `examples/opencode-plugin` 运行
+   `npm run check && npm test`，验证 package 自身导出、工具定义和 guard 行为。
+3. 如果改了 OpenCode 安装文档或 wrapper，用 source install 方式把
+   `wrappers/openviking.js` 放到 `.opencode/plugins/` 或
+   `~/.config/opencode/plugins/`，给同级 `openviking/` 运行 `npm install`，
+   启动 OpenCode 后检查 `/experimental/tool/ids` 里有 `memwrite`、`memsearch`
+   和 `codeoutline`。
+4. 如果改了 Hermes 集成或 LoCoMo benchmark，带 `HERMES_URL` 和 `OPENVIKING_URL`
+   运行 `--suite e2e`，确认 preflight 能在导入和评测前发现 Hermes 没有写入目标
+   OpenViking 的配置错误。
+
 ### 推荐：使用 CLI 方式（更稳定）
 
 ```bash
@@ -190,6 +227,12 @@ pytest test_pytest.py -v --html=reports/test_report.html --self-contained-html
 
 # 仅运行复杂场景测试
 ./run.sh -x
+
+# 仅运行插件契约测试（OpenCode / Hermes + OpenViking）
+./run.sh --plugins
+
+# 或使用 unittest runner
+python run_tests.py --type plugins -v
 
 # 详细输出模式
 ./run.sh -v

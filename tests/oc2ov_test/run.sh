@@ -4,7 +4,7 @@
 set -e
 
 # 检查是否在虚拟环境中
-if [[ "$VIRTUAL_ENV" == "" ]]; then
+if [[ "$VIRTUAL_ENV" == "" && -f venv/bin/activate ]]; then
     echo "激活虚拟环境..."
     source venv/bin/activate
 fi
@@ -24,6 +24,7 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  -p, --p0            仅运行 P0 级测试"
     echo "  -c, --crud          仅运行 CRUD 操作测试"
     echo "  -x, --complex       仅运行复杂场景测试"
+    echo "  -g, --plugins       仅运行 Agent 插件契约测试"
     echo "  -v, --verbose       详细输出模式"
     echo "  -r, --report        生成 HTML 测试报告"
     echo ""
@@ -34,6 +35,7 @@ fi
 VERBOSE=""
 REPORT=""
 TEST_TYPE=""
+PLUGIN_TEST=""
 
 # 解析参数
 while [[ $# -gt 0 ]]; do
@@ -62,6 +64,10 @@ while [[ $# -gt 0 ]]; do
             TEST_TYPE="tests/complex/"
             shift
             ;;
+        -g|--plugins)
+            PLUGIN_TEST="1"
+            shift
+            ;;
         *)
             echo "未知选项: $1"
             echo "使用 -h 查看帮助"
@@ -74,7 +80,14 @@ done
 mkdir -p reports logs
 
 # 运行测试
-if [ -n "$TEST_TYPE" ]; then
+if [ "$PLUGIN_TEST" = "1" ]; then
+    echo "运行 Agent 插件契约测试..."
+    if [ -n "$REPORT" ]; then
+        echo "插件契约测试使用 unittest runner，不生成 HTML 报告。"
+        REPORT=""
+    fi
+    python run_tests.py --type plugins $VERBOSE
+elif [ -n "$TEST_TYPE" ]; then
     echo "运行 $TEST_TYPE 目录下的测试..."
     pytest $TEST_TYPE $VERBOSE $REPORT
 else

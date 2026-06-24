@@ -7,7 +7,11 @@ import argparse
 import sys
 import unittest
 
-from utils.logger import setup_logger
+try:
+    from utils.logger import setup_logger
+except ModuleNotFoundError:
+    def setup_logger():
+        return None
 
 
 def get_test_suite(test_type: str = None):
@@ -17,7 +21,9 @@ def get_test_suite(test_type: str = None):
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
 
-    if test_type == "p0":
+    if test_type == "plugins":
+        suite.addTests(loader.loadTestsFromName("tests.plugins.test_agent_plugin_contracts"))
+    elif test_type == "p0":
         suite.addTests(loader.loadTestsFromName("tests.p0.test_memory_write"))
         suite.addTests(loader.loadTestsFromName("tests.p0.test_memory_crud"))
         suite.addTests(loader.loadTestsFromName("tests.p0.test_context_engine"))
@@ -28,6 +34,7 @@ def get_test_suite(test_type: str = None):
         suite.addTests(loader.loadTestsFromName("tests.p0.test_memory_crud"))
         suite.addTests(loader.loadTestsFromName("tests.p0.test_context_engine"))
         suite.addTests(loader.loadTestsFromName("tests.p0.test_memory_v2_full_suite"))
+        suite.addTests(loader.loadTestsFromName("tests.plugins.test_agent_plugin_contracts"))
 
     return suite
 
@@ -37,9 +44,9 @@ def main():
     parser.add_argument(
         "--type",
         "-t",
-        choices=["all", "p0", "v2"],
+        choices=["all", "p0", "v2", "plugins"],
         default="all",
-        help="测试类型: all(全部), p0(P0核心), v2(V2文件验证)",
+        help="测试类型: all(全部), p0(P0核心), v2(V2文件验证), plugins(Agent 插件契约)",
     )
     parser.add_argument(
         "--test",

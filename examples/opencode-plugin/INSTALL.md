@@ -50,7 +50,7 @@ Run the following commands from the repository root:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -61,7 +61,7 @@ After installation, the layout should look like this:
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.mjs
+├── openviking.js
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -69,13 +69,14 @@ After installation, the layout should look like this:
     └── node_modules/
 ```
 
-The top-level `openviking.mjs` forwards the first-level `.mjs` entry that OpenCode can discover to the actual plugin directory:
+The top-level `openviking.js` forwards the first-level `.js` entry that OpenCode can discover to the actual plugin directory:
 
 ```js
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 ```
 
 This wrapper is only for source installs with the directory layout shown above. npm package installs load `index.mjs` directly through `package.json`.
+Use the `.js` wrapper for source installs; OpenCode's local plugin scanner discovers JavaScript/TypeScript plugin files.
 
 If you install through an npm package, you can also use `examples/opencode-plugin` as a normal OpenCode plugin package.
 
@@ -211,7 +212,7 @@ These are local runtime files and should not be committed to the repository.
 
 | Issue | What to check |
 |-------|---------------|
-| Plugin does not load | For package installs, confirm `~/.config/opencode/opencode.json` contains `openviking-opencode-plugin`; for source installs, confirm `~/.config/opencode/plugins/openviking.mjs` exists |
+| Plugin does not load | For package installs, confirm `~/.config/opencode/opencode.json` contains `openviking-opencode-plugin`; for source installs, confirm `~/.config/opencode/plugins/openviking.js` exists |
 | Tools call the wrong server | Check `endpoint` in `~/.config/opencode/openviking-config.json`, or set `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
 | Recall is empty | Confirm OpenViking has indexed memories/resources and `autoRecall.enabled` is `true` |

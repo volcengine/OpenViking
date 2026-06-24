@@ -1,0 +1,1 @@
+"""Agent plugin contract tests."""
