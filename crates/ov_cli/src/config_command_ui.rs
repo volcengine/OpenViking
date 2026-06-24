@@ -5,7 +5,7 @@ use crate::{
     config::{Config, display_config_home},
     config_wizard::ConfigKind,
     error::Error,
-    error_classifier::looks_like_auth_error,
+    error_classifier::{ApiErrorKind, api_error_kind},
     i18n::{Language, copy},
     theme,
 };
@@ -406,6 +406,9 @@ fn unknown_value(value: &str) -> String {
 enum ValidationFailureKind {
     Network,
     Auth,
+    Permission,
+    Timeout,
+    Response,
     Unhealthy,
     Other,
 }
@@ -413,9 +416,15 @@ enum ValidationFailureKind {
 impl ValidationFailureKind {
     fn from_error(error: &Error) -> Self {
         match error {
-            Error::Network(message) if message.contains("unhealthy") => Self::Unhealthy,
+            Error::ServerUnhealthy(_) => Self::Unhealthy,
             Error::Network(_) => Self::Network,
-            Error::Api { message, .. } if looks_like_auth_error(message) => Self::Auth,
+            Error::Timeout(_) => Self::Timeout,
+            Error::Response(_) => Self::Response,
+            Error::Api { code, status, .. } => match api_error_kind(code.as_deref(), *status) {
+                ApiErrorKind::Authentication => Self::Auth,
+                ApiErrorKind::Permission => Self::Permission,
+                _ => Self::Other,
+            },
             _ => Self::Other,
         }
     }
@@ -423,25 +432,34 @@ impl ValidationFailureKind {
     fn server_check(self, language: Language) -> String {
         match self {
             Self::Network => fail_value(copy(language, "unreachable", "无法连接")),
-            Self::Auth | Self::Unhealthy => ok_value(copy(language, "reachable", "可连接")),
-            Self::Other => warn_value(unknown(language)),
+            Self::Auth | Self::Permission | Self::Unhealthy => {
+                ok_value(copy(language, "reachable", "可连接"))
+            }
+            Self::Response => warn_value(copy(language, "reachable", "可连接")),
+            Self::Timeout => warn_value(copy(language, "timed out", "请求超时")),
+            Self::Other => warn_value(copy(language, "not checked", "未检查")),
         }
     }
 
     fn auth_check(self, language: Language) -> String {
         match self {
             Self::Auth => fail_value(copy(language, "rejected", "被拒绝")),
-            Self::Network => warn_value(copy(language, "not checked", "未检查")),
+            Self::Permission => fail_value(copy(language, "permission denied", "权限不足")),
+            Self::Network | Self::Timeout | Self::Response => {
+                warn_value(copy(language, "not checked", "未检查"))
+            }
             Self::Unhealthy => ok_value(copy(language, "accepted", "已通过")),
-            Self::Other => warn_value(unknown(language)),
+            Self::Other => warn_value(copy(language, "not checked", "未检查")),
         }
     }
 
     fn health_check(self, language: Language) -> String {
         match self {
             Self::Unhealthy => fail_value(copy(language, "unhealthy", "不健康")),
-            Self::Network | Self::Auth => warn_value(copy(language, "not checked", "未检查")),
-            Self::Other => warn_value(unknown(language)),
+            Self::Network | Self::Auth | Self::Permission | Self::Timeout | Self::Response => {
+                warn_value(copy(language, "not checked", "未检查"))
+            }
+            Self::Other => warn_value(copy(language, "not checked", "未检查")),
         }
     }
 
@@ -450,12 +468,20 @@ impl ValidationFailureKind {
             Language::En => match self {
                 Self::Network => "Could not reach the configured OpenViking server.",
                 Self::Auth => "OpenViking rejected the API key for this config.",
+                Self::Permission => "OpenViking rejected this config's permissions.",
+                Self::Timeout => "OpenViking did not respond before the timeout.",
+                Self::Response => {
+                    "OpenViking responded, but the CLI could not understand the response."
+                }
                 Self::Unhealthy => "OpenViking is reachable but reported an unhealthy state.",
                 Self::Other => "The active config could not be validated.",
             },
             Language::ZhCn => match self {
                 Self::Network => "无法连接已配置的 OpenViking 服务器。",
                 Self::Auth => "OpenViking 拒绝了这个配置的 API Key。",
+                Self::Permission => "OpenViking 拒绝了这个配置的权限。",
+                Self::Timeout => "OpenViking 未能在超时时间内响应。",
+                Self::Response => "OpenViking 已响应，但 CLI 无法理解响应内容。",
                 Self::Unhealthy => "服务器可连接，但健康状态异常。",
                 Self::Other => "当前配置验证失败。",
             },

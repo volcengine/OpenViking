@@ -20,6 +20,7 @@ use crate::{
         validate_user_id_value,
     },
     error::Error,
+    error_classifier::{ApiErrorKind, api_error_kind},
     output::OutputFormat,
     theme,
 };
@@ -547,6 +548,7 @@ async fn validate_config_for_write(
     kind: ConfigKind,
     require_api_key: bool,
 ) -> AgentResult<()> {
+    let api_key_is_validated_root_key = root_as_normal(config);
     if let Some(root_key) = config.root_api_key.as_deref() {
         let mut root_probe = config.clone();
         root_probe.api_key = Some(root_key.to_string());
@@ -561,9 +563,13 @@ async fn validate_config_for_write(
         }
     }
 
-    let api_key_role = match validate_candidate_config_with_role(config, require_api_key).await {
-        Ok(role) => role,
-        Err(error) => return Err(validation_error(kind, error)),
+    let api_key_role = if api_key_is_validated_root_key {
+        Some(ApiKeyRole::Root)
+    } else {
+        match validate_candidate_config_with_role(config, require_api_key).await {
+            Ok(role) => role,
+            Err(error) => return Err(validation_error(kind, error)),
+        }
     };
 
     if kind == ConfigKind::Custom
@@ -919,18 +925,58 @@ fn validate_optional_actor_peer_id(actor_peer_id: Option<&str>) -> AgentResult<(
 
 fn validation_error(kind: ConfigKind, error: Error) -> AgentError {
     match error {
-        Error::Api { message, .. } => AgentError::auth(format!(
-            "{} {message}",
-            match kind {
-                ConfigKind::OpenVikingService => "Check the API key.",
-                ConfigKind::Custom => "Check the API key, account, and user.",
-            }
-        )),
+        Error::Api {
+            message,
+            code,
+            status,
+            ..
+        } => match api_error_kind(code.as_deref(), status) {
+            ApiErrorKind::Authentication => AgentError::auth(format!(
+                "{} {message}",
+                match kind {
+                    ConfigKind::OpenVikingService => "Check the API key.",
+                    ConfigKind::Custom => "Check the API key, account, and user.",
+                }
+            )),
+            ApiErrorKind::Permission => AgentError::validation(format!(
+                "{} {message}",
+                match kind {
+                    ConfigKind::OpenVikingService => {
+                        "OpenViking Service rejected this identity's permissions."
+                    }
+                    ConfigKind::Custom => "The custom server rejected this identity's permissions.",
+                }
+            )),
+            _ => AgentError::validation(format!("Validation failed: {message}")),
+        },
         Error::Network(message) => AgentError::validation(format!(
             "{} {message}",
             match kind {
                 ConfigKind::OpenVikingService => "Could not reach OpenViking Service.",
                 ConfigKind::Custom => "Could not reach the custom server.",
+            }
+        )),
+        Error::Timeout(message) => AgentError::validation(format!(
+            "{} {message}",
+            match kind {
+                ConfigKind::OpenVikingService =>
+                    "OpenViking Service did not respond before the timeout.",
+                ConfigKind::Custom => "The custom server did not respond before the timeout.",
+            }
+        )),
+        Error::Request(message) => AgentError::validation(format!(
+            "{} {message}",
+            match kind {
+                ConfigKind::OpenVikingService =>
+                    "Could not send the request to OpenViking Service.",
+                ConfigKind::Custom => "Could not send the request to the custom server.",
+            }
+        )),
+        Error::ServerUnhealthy(message) => AgentError::validation(format!(
+            "{} {message}",
+            match kind {
+                ConfigKind::OpenVikingService => "OpenViking Service is reachable but unhealthy.",
+                ConfigKind::Custom => "The custom server is reachable but unhealthy.",
             }
         )),
         Error::Config(message) => AgentError::bad_input(message),

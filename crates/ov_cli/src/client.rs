@@ -5,6 +5,7 @@ use std::path::Path;
 
 pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
+use crate::base_client::{api_error_from_body, classify_request_error, classify_response_error};
 use crate::error::{Error, Result};
 
 /// Drop null-valued keys (and an empty `args` object) from a request body before
@@ -319,41 +320,23 @@ impl HttpClient {
             .query(&params)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| classify_request_error("HTTP request failed", e))?;
 
         let status = response.status();
         if !status.is_success() {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
+                .map_err(|e| classify_response_error("Failed to read error response", e))?;
 
-            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(json) => json
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        json.get("detail")
-                            .and_then(|d| d.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => {
-                    let body_str = String::from_utf8_lossy(&bytes);
-                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
-                }
-            };
-
-            return Err(Error::api(error_msg));
+            return Err(api_error_from_body(status, &bytes));
         }
 
         response
             .bytes()
             .await
             .map(|b| b.to_vec())
-            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))
+            .map_err(|e| classify_response_error("Failed to read response bytes", e))
     }
 
     // ============ Filesystem Methods ============
@@ -1036,40 +1019,22 @@ impl HttpClient {
             .query(&[("profile", "0")])
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| classify_request_error("HTTP request failed", e))?;
 
         let status = response.status();
         if !status.is_success() {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| Error::Network(format!("Failed to read error response: {}", e)))?;
+                .map_err(|e| classify_response_error("Failed to read error response", e))?;
 
-            let error_msg = match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(json) => json
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        json.get("detail")
-                            .and_then(|d| d.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| format!("HTTP error {}", status)),
-                Err(_) => {
-                    let body_str = String::from_utf8_lossy(&bytes);
-                    format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str)
-                }
-            };
-
-            return Err(Error::api(error_msg));
+            return Err(api_error_from_body(status, &bytes));
         }
 
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))?;
+            .map_err(|e| classify_response_error("Failed to read response bytes", e))?;
 
         let to_path = Path::new(to);
         let final_path = if to_path.is_dir() {
@@ -1454,6 +1419,7 @@ impl HttpClient {
 mod tests {
     use super::{BaseClient, HttpClient, TimeoutConfig};
     use crate::base_client::api_error_from_envelope;
+    use crate::error::Error;
     use reqwest::StatusCode;
     use serde_json::json;
     use std::collections::HashMap;
@@ -1634,6 +1600,41 @@ mod tests {
         assert_eq!(body["agent_id"], json!("legacy-agent"));
     }
 
+    #[tokio::test]
+    async fn request_timeout_maps_to_timeout_error() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = vec![0; 1024];
+            let _ = stream.read(&mut buffer).await;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        });
+
+        let client = HttpClient::new(
+            format!("http://{addr}"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            0.05,
+            false,
+            None,
+        );
+
+        let error = client
+            .get::<serde_json::Value>("/health", &[])
+            .await
+            .expect_err("request should time out");
+
+        assert!(matches!(error, Error::Timeout(_)));
+    }
+
     #[test]
     fn standard_error_envelope_formats_api_error() {
         let body = json!({
@@ -1644,10 +1645,16 @@ mod tests {
             }
         });
 
-        assert_eq!(
-            api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR),
-            "[PROCESSING_ERROR] Parse error: boom"
-        );
+        let error = api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(matches!(
+            error,
+            Error::Api {
+                message,
+                status: Some(500),
+                code: Some(code),
+                ..
+            } if message == "Parse error: boom" && code == "PROCESSING_ERROR"
+        ));
     }
 
     #[test]

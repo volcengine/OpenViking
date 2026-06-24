@@ -5,7 +5,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     error::Error,
-    error_classifier::{extra_forbidden_field, looks_like_auth_error},
+    error_classifier::{ApiErrorKind, api_error_kind, extra_forbidden_field},
     i18n::{Language, copy},
     terminal_ui::{fit_to_display_width, truncate_to_display_width},
     theme,
@@ -231,47 +231,67 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
             ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
             ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
         ]),
-        Error::Api { message, .. } if looks_like_auth_error(message) => ErrorReport::new(
-            copy(language, "Authentication Error", "认证错误"),
-            copy(language, "OpenViking rejected the API key for the active config.", "OpenViking 拒绝了当前配置的 API Key。"),
+        Error::Timeout(message) => ErrorReport::new(
+            copy(language, "Request Timeout", "请求超时"),
+            copy(
+                language,
+                "OpenViking did not return a response before the configured timeout.",
+                "OpenViking 未能在当前超时时间内返回响应。",
+            ),
         )
-        .with_command(command)
+        .with_command(command.clone())
         .with_detail(message)
         .with_actions(vec![
-            ErrorAction::new("ov config", copy(language, "Edit this config", "编辑这个配置")),
-            ErrorAction::new("ov config switch", copy(language, "Use another config", "使用其他配置")),
-        ]),
-        Error::Api { message, .. } if extra_forbidden_field(message).is_some() => {
-            let field = extra_forbidden_field(message).unwrap_or_default();
-            ErrorReport::new(
-                copy(language, "OpenViking API Error", "OpenViking API 错误"),
-                match language {
-                    Language::En => format!(
-                        "OpenViking rejected an unsupported field \"{field}\". This instance's version likely does not match your CLI (the field may be missing, renamed, or removed)."
-                    ),
-                    Language::ZhCn => format!(
-                        "OpenViking 拒绝了不支持的字段 \"{field}\"：该实例版本可能与当前 CLI 不匹配（字段可能缺失、改名或已被移除）。"
-                    ),
-                },
-            )
-            .with_command(command)
-            .with_detail(message)
-            .with_actions(vec![
-                ErrorAction::new("ov health", copy(language, "Check the instance version", "查看实例版本")),
-                ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
-                ErrorAction::new("ov status", copy(language, "Check OpenViking status", "查看 OpenViking 状态")),
-            ])
-        }
-        Error::Api { message, .. } => ErrorReport::new(
-            copy(language, "OpenViking API Error", "OpenViking API 错误"),
-            api_error_message(language, message),
-        )
-        .with_command(command)
-        .with_detail(message)
-        .with_actions(vec![
-            ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
             ErrorAction::new("ov status", copy(language, "Check OpenViking status", "查看 OpenViking 状态")),
+            ErrorAction::new("ov config show", copy(language, "Show the active timeout config", "显示当前超时配置")),
         ]),
+        Error::Request(message) => ErrorReport::new(
+            copy(language, "Request Error", "请求错误"),
+            copy(
+                language,
+                "The CLI could not build or send this request.",
+                "CLI 无法构造或发送这个请求。",
+            ),
+        )
+        .with_command(command.clone())
+        .with_detail(message)
+        .with_actions(vec![
+            ErrorAction::new("ov config show", copy(language, "Show the active config", "显示当前配置")),
+        ]),
+        Error::Response(message) => ErrorReport::new(
+            copy(language, "Response Error", "响应错误"),
+            copy(
+                language,
+                "OpenViking responded, but the CLI could not read or understand the response.",
+                "OpenViking 已返回响应，但 CLI 无法读取或理解响应内容。",
+            ),
+        )
+        .with_command(command.clone())
+        .with_detail(message)
+        .with_actions(vec![
+            ErrorAction::new("ov status", copy(language, "Check OpenViking status", "查看 OpenViking 状态")),
+            ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
+        ]),
+        Error::ServerUnhealthy(message) => ErrorReport::new(
+            copy(language, "Server Unhealthy", "服务不健康"),
+            copy(
+                language,
+                "OpenViking is reachable, but it reported an unhealthy status.",
+                "OpenViking 可连接，但服务报告当前状态不健康。",
+            ),
+        )
+        .with_command(command)
+        .with_detail(message)
+        .with_actions(vec![
+            ErrorAction::new("ov status", copy(language, "Check component status", "查看组件状态")),
+            ErrorAction::new("ov health", copy(language, "Run a quick health check", "快速检查健康状态")),
+        ]),
+        Error::Api {
+            message,
+            status,
+            code,
+            details,
+        } => api_error_report(command, language, code.as_deref(), *status, message, details.as_ref()),
         Error::Client(message) => ErrorReport::new(
             copy(language, "Command Error", "命令错误"),
             sentence_case_error(message),
@@ -329,6 +349,168 @@ fn config_error_actions(message: &str, language: Language) -> Vec<ErrorAction> {
             copy(language, "Show the active config", "显示当前配置"),
         ),
     ]
+}
+
+fn api_error_report(
+    command: String,
+    language: Language,
+    code: Option<&str>,
+    status: Option<u16>,
+    message: &str,
+    details: Option<&serde_json::Value>,
+) -> ErrorReport {
+    if let Some(field) = extra_forbidden_field(message) {
+        return ErrorReport::new(
+            copy(language, "OpenViking API Error", "OpenViking API 错误"),
+            match language {
+                Language::En => format!(
+                    "OpenViking rejected an unsupported field \"{field}\". This instance's version likely does not match your CLI (the field may be missing, renamed, or removed)."
+                ),
+                Language::ZhCn => format!(
+                    "OpenViking 拒绝了不支持的字段 \"{field}\"：该实例版本可能与当前 CLI 不匹配（字段可能缺失、改名或已被移除）。"
+                ),
+            },
+        )
+        .with_command(command)
+        .with_detail(api_error_detail(code, status, message, details))
+        .with_actions(vec![
+            ErrorAction::new(
+                "ov health",
+                copy(language, "Check the instance version", "查看实例版本"),
+            ),
+            ErrorAction::new(
+                "ov config validate",
+                copy(language, "Check the active config", "检查当前配置"),
+            ),
+            ErrorAction::new(
+                "ov status",
+                copy(language, "Check OpenViking status", "查看 OpenViking 状态"),
+            ),
+        ]);
+    }
+
+    let kind = api_error_kind(code, status);
+    let (title, fallback) = match kind {
+        ApiErrorKind::Authentication => (
+            copy(language, "Authentication Error", "认证错误"),
+            copy(
+                language,
+                "OpenViking rejected the credentials for the active config.",
+                "OpenViking 拒绝了当前配置的凭证。",
+            ),
+        ),
+        ApiErrorKind::Permission => (
+            copy(language, "Permission Error", "权限错误"),
+            copy(
+                language,
+                "OpenViking denied this request for the active identity.",
+                "OpenViking 拒绝了当前身份执行这个请求。",
+            ),
+        ),
+        ApiErrorKind::InvalidRequest => (
+            copy(language, "Request Error", "请求错误"),
+            copy(
+                language,
+                "OpenViking rejected the request parameters.",
+                "OpenViking 拒绝了请求参数。",
+            ),
+        ),
+        ApiErrorKind::NotFound => (
+            copy(language, "Not Found", "资源不存在"),
+            copy(
+                language,
+                "OpenViking could not find the requested resource.",
+                "OpenViking 找不到请求的资源。",
+            ),
+        ),
+        ApiErrorKind::Conflict => (
+            copy(language, "Conflict", "冲突"),
+            copy(
+                language,
+                "OpenViking reported a conflicting operation or state.",
+                "OpenViking 报告当前操作或状态存在冲突。",
+            ),
+        ),
+        ApiErrorKind::ResourceExhausted => (
+            copy(language, "Resource Exhausted", "资源耗尽"),
+            copy(
+                language,
+                "OpenViking reported a quota or rate-limit error.",
+                "OpenViking 返回了配额或限流错误。",
+            ),
+        ),
+        ApiErrorKind::DeadlineExceeded => (
+            copy(language, "Server Timeout", "服务端超时"),
+            copy(
+                language,
+                "OpenViking exceeded its server-side processing deadline.",
+                "OpenViking 超过了服务端处理时限。",
+            ),
+        ),
+        ApiErrorKind::Unavailable => (
+            copy(language, "Service Unavailable", "服务不可用"),
+            copy(
+                language,
+                "OpenViking reported that a required service is unavailable.",
+                "OpenViking 报告依赖服务当前不可用。",
+            ),
+        ),
+        ApiErrorKind::Other => (
+            copy(language, "OpenViking API Error", "OpenViking API 错误"),
+            copy(
+                language,
+                "OpenViking returned an error for this request.",
+                "OpenViking 返回了请求错误。",
+            ),
+        ),
+    };
+
+    ErrorReport::new(
+        title,
+        api_error_message(language, code, message).unwrap_or_else(|| fallback.to_string()),
+    )
+    .with_command(command)
+    .with_detail(api_error_detail(code, status, message, details))
+    .with_actions(api_error_actions(kind, language))
+}
+
+fn api_error_actions(kind: ApiErrorKind, language: Language) -> Vec<ErrorAction> {
+    match kind {
+        ApiErrorKind::Authentication => vec![
+            ErrorAction::new(
+                "ov config",
+                copy(language, "Edit this config", "编辑这个配置"),
+            ),
+            ErrorAction::new(
+                "ov config switch",
+                copy(language, "Use another config", "使用其他配置"),
+            ),
+        ],
+        ApiErrorKind::Permission => vec![
+            ErrorAction::new(
+                "ov config show",
+                copy(language, "Show the active identity", "显示当前身份"),
+            ),
+            ErrorAction::new(
+                "ov config switch",
+                copy(language, "Use another config", "使用其他配置"),
+            ),
+        ],
+        ApiErrorKind::Unavailable | ApiErrorKind::DeadlineExceeded => vec![
+            ErrorAction::new(
+                "ov status",
+                copy(language, "Check OpenViking status", "查看 OpenViking 状态"),
+            ),
+            ErrorAction::new(
+                "ov health",
+                copy(language, "Run a quick health check", "快速检查健康状态"),
+            ),
+        ],
+        _ => vec![ErrorAction::new(
+            "ov status",
+            copy(language, "Check OpenViking status", "查看 OpenViking 状态"),
+        )],
+    }
 }
 
 fn is_config_file_load_error(message: &str) -> bool {
@@ -511,79 +693,42 @@ fn is_contextual_top_level_command(command: &str) -> bool {
     )
 }
 
-fn api_error_message(language: Language, raw: &str) -> String {
-    let Some(summary) = summarize_api_error(raw) else {
-        return copy(
-            language,
-            "OpenViking returned an error for this request.",
-            "OpenViking 返回了请求错误。",
-        )
-        .to_string();
+fn api_error_message(language: Language, code: Option<&str>, raw: &str) -> Option<String> {
+    let message = strip_request_id(raw);
+    let message = message.lines().next().unwrap_or_default().trim();
+    let summary = match (code, message.is_empty()) {
+        (Some(code), true) => code.to_string(),
+        (Some(code), false) => format!("{code}: {}", ensure_sentence(message)),
+        (None, true) => return None,
+        (None, false) => ensure_sentence(message),
     };
 
-    match language {
+    Some(match language {
         Language::En => format!("OpenViking returned an error: {summary}"),
         Language::ZhCn => format!("OpenViking 返回了请求错误：{summary}"),
-    }
+    })
 }
 
-fn summarize_api_error(raw: &str) -> Option<String> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return None;
+fn api_error_detail(
+    code: Option<&str>,
+    status: Option<u16>,
+    message: &str,
+    details: Option<&serde_json::Value>,
+) -> String {
+    let mut lines = Vec::new();
+    if let Some(status) = status {
+        lines.push(format!("HTTP status: {status}"));
     }
-
-    if let Some(summary) = summarize_json_api_error(raw) {
-        return Some(summary);
+    if let Some(code) = code {
+        lines.push(format!("Code: {code}"));
     }
-
-    let cleaned = strip_request_id(raw);
-    let cleaned = cleaned.trim();
-    if cleaned.is_empty() {
-        return None;
+    lines.push(format!("Message: {message}"));
+    if let Some(details) = details {
+        let rendered =
+            serde_json::to_string_pretty(details).unwrap_or_else(|_| details.to_string());
+        lines.push(format!("Details: {rendered}"));
     }
-
-    if let Some((code, message)) = bracketed_error(cleaned) {
-        return Some(format_summary(Some(code), message));
-    }
-
-    Some(ensure_sentence(
-        cleaned.lines().next().unwrap_or(cleaned).trim(),
-    ))
-}
-
-fn summarize_json_api_error(raw: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let error = value.get("error").unwrap_or(&value);
-    let code = error
-        .get("code")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty());
-    let message = error
-        .get("message")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| error.get("detail").and_then(serde_json::Value::as_str))
-        .filter(|value| !value.trim().is_empty())?;
-    Some(format_summary(code, message))
-}
-
-fn bracketed_error(value: &str) -> Option<(&str, &str)> {
-    let rest = value.strip_prefix('[')?;
-    let end = rest.find(']')?;
-    let code = rest[..end].trim();
-    let message = rest[end + 1..].trim();
-    if code.is_empty() || message.is_empty() {
-        return None;
-    }
-    Some((code, message))
-}
-
-fn format_summary(code: Option<&str>, message: &str) -> String {
-    let message = ensure_sentence(strip_request_id(message).trim());
-    match code {
-        Some(code) => format!("{code}: {message}"),
-        None => message,
-    }
+    lines.join("\n")
 }
 
 fn strip_request_id(value: &str) -> &str {
@@ -1122,55 +1267,24 @@ Usage: ov config [OPTIONS] [COMMAND]
 
     #[test]
     fn runtime_api_error_hides_raw_detail_by_default() {
-        let error = Error::api(
-            "[AuthenticationError] API key invalid. Request ID: 02177930089909800000000000000000"
-                .to_string(),
+        let error = Error::api_structured(
+            "API key invalid. Request ID: 02177930089909800000000000000000",
+            Some(401),
+            Some("UNAUTHENTICATED"),
+            None,
         );
         let report = report_for_runtime_error("ov status", &error);
         let normal = strip_ansi(&render_report(&report, false));
         let verbose = strip_ansi(&render_report(&report, true));
 
         assert!(normal.contains("Authentication Error"));
-        assert!(normal.contains("OpenViking rejected the API key"));
+        assert!(normal.contains("UNAUTHENTICATED: API key invalid."));
         assert!(normal.contains("ov config"));
-        assert!(!normal.contains("Request ID"));
-        assert!(!normal.contains("AuthenticationError"));
-
-        assert!(verbose.contains("Detail:"));
-        assert!(verbose.contains("Request ID"));
-    }
-
-    #[test]
-    fn runtime_api_error_shows_sanitized_detail_by_default() {
-        let error = Error::api(
-            "[InvalidRequest] resource not found. Request ID: 02177930089909800000000000000000"
-                .to_string(),
-        );
-        let report = report_for_runtime_error("ov read viking://missing", &error);
-        let normal = strip_ansi(&render_report(&report, false));
-        let verbose = strip_ansi(&render_report(&report, true));
-
-        assert!(normal.contains("OpenViking API Error"));
-        assert!(normal.contains("InvalidRequest: resource not found."));
         assert!(!normal.contains("Request ID"));
         assert!(!normal.contains("02177930089909800000000000000000"));
 
         assert!(verbose.contains("Detail:"));
         assert!(verbose.contains("Request ID"));
-    }
-
-    #[test]
-    fn runtime_api_error_summarizes_json_error_envelope() {
-        let error = Error::api(
-            r#"{"error":{"code":"PermissionDenied","message":"root key required","request_id":"abc"}}"#
-                .to_string(),
-        );
-        let report = report_for_runtime_error("ov admin list-users --sudo", &error);
-        let normal = strip_ansi(&render_report(&report, false));
-
-        assert!(normal.contains("PermissionDenied: root key required."));
-        assert!(!normal.contains("request_id"));
-        assert!(!normal.contains("abc"));
     }
 
     #[test]

@@ -18,6 +18,7 @@ use termimad::MadSkin;
 use crate::config::Config;
 use crate::utils;
 
+use crate::base_client::{api_error_from_body, classify_request_error, classify_response_error};
 use crate::error::{Error, Result};
 
 const DEFAULT_ENDPOINT: &str = "http://localhost:1933/bot/v1";
@@ -127,7 +128,7 @@ impl ChatCommand {
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()
-            .map_err(|e| Error::Network(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| Error::Request(format!("Failed to create HTTP client: {}", e)))?;
 
         let health = self.fetch_openviking_health(&client, None).await;
         let auth = self.resolve_auth(health.as_ref().map(health_auth_mode))?;
@@ -305,18 +306,21 @@ User/Admin API key. OpenViking-backed VikingBot memory and file tools may not wo
         let response = req_builder
             .send()
             .await
-            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
+            .map_err(|e| classify_request_error("Failed to send request", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| classify_response_error("Failed to read error response", e))?;
+            return Err(api_error_from_body(status, &bytes));
         }
 
         let chat_response: ChatResponse = response
             .json()
             .await
-            .map_err(|e| Error::Parse(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| classify_response_error("Failed to parse response", e))?;
 
         // Print events if any
         self.print_events(&chat_response.events);
@@ -349,12 +353,15 @@ User/Admin API key. OpenViking-backed VikingBot memory and file tools may not wo
         let response = req_builder
             .send()
             .await
-            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
+            .map_err(|e| classify_request_error("Failed to send request", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| classify_response_error("Failed to read error response", e))?;
+            return Err(api_error_from_body(status, &bytes));
         }
 
         // Process the SSE stream
@@ -366,7 +373,7 @@ User/Admin API key. OpenViking-backed VikingBot memory and file tools may not wo
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| Error::Network(format!("Stream error: {}", e)))?
+            .map_err(|e| classify_response_error("Stream error", e))?
         {
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);
@@ -542,18 +549,21 @@ User/Admin API key. OpenViking-backed VikingBot memory and file tools may not wo
         let response = req_builder
             .send()
             .await
-            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
+            .map_err(|e| classify_request_error("Failed to send request", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| classify_response_error("Failed to read error response", e))?;
+            return Err(api_error_from_body(status, &bytes));
         }
 
         let chat_response: ChatResponse = response
             .json()
             .await
-            .map_err(|e| Error::Parse(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| classify_response_error("Failed to parse response", e))?;
 
         // Save session ID
         if session_id.is_none() {
@@ -595,12 +605,15 @@ User/Admin API key. OpenViking-backed VikingBot memory and file tools may not wo
         let response = req_builder
             .send()
             .await
-            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
+            .map_err(|e| classify_request_error("Failed to send request", e))?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(Error::api(format!("Request failed ({}): {}", status, text)));
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| classify_response_error("Failed to read error response", e))?;
+            return Err(api_error_from_body(status, &bytes));
         }
 
         let mut response = response;
@@ -615,7 +628,7 @@ User/Admin API key. OpenViking-backed VikingBot memory and file tools may not wo
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| Error::Network(format!("Stream error: {}", e)))?
+            .map_err(|e| classify_response_error("Stream error", e))?
         {
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);

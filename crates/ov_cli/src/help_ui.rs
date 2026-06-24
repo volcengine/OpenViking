@@ -67,6 +67,7 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "find",
     "read",
     "write",
+    "set-tags",
     "add-memory",
 ];
 
@@ -380,6 +381,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov task list",
                 description: "Inspect processing if not using --wait.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["set-tags"],
+        purpose: "Set metadata tags on a resource.",
+        examples: &[HelpItem {
+            label: "ov set-tags viking://projects/acme owner=team-a priority=high",
+            description: "Attach or replace explicit key-value tags.",
+        }],
+        next_steps: &[
+            HelpItem {
+                label: "ov stat <uri>",
+                description: "Confirm the updated metadata.",
+            },
+            HelpItem {
+                label: "ov find \"query\" --tags owner=team-a",
+                description: "Use tags to narrow retrieval.",
             },
         ],
     },
@@ -1651,6 +1670,7 @@ fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str
         ["health"] => "快速检查服务器是否可连接。",
         ["status"] => "查看 OpenViking 服务器诊断状态。",
         ["language"] => "选择 OpenViking CLI 显示语言。",
+        ["set-tags"] => "设置资源的元数据标签。",
         _ => spec.purpose,
     }
 }
@@ -1689,6 +1709,11 @@ fn localized_help_item_description<'a>(
         "ov language" => "打开语言选择器。",
         "ov language zh-CN" => "将显示语言切换为简体中文。",
         "ov lang en" => "使用短别名切换为英文显示。",
+        "ov set-tags viking://projects/acme owner=team-a priority=high" => {
+            "附加或替换显式键值标签。"
+        }
+        "ov stat <uri>" => "确认更新后的元数据。",
+        "ov find \"query\" --tags owner=team-a" => "使用标签缩小检索范围。",
         "language" => "可选语言代码：en 或 zh-CN。",
         "name" => "已保存的配置名称。",
         "--name <name>" => "已保存配置名称。不提供则自动生成。",

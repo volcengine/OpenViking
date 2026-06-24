@@ -1,12 +1,42 @@
-pub(crate) fn looks_like_auth_error(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    lower.contains("api key")
-        || lower.contains("unauthorized")
-        || lower.contains("forbidden")
-        || lower.contains("authentication")
-        || lower
-            .split(|ch: char| !ch.is_ascii_alphanumeric())
-            .any(|token| token == "auth")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApiErrorKind {
+    Authentication,
+    Permission,
+    InvalidRequest,
+    NotFound,
+    Conflict,
+    ResourceExhausted,
+    DeadlineExceeded,
+    Unavailable,
+    Other,
+}
+
+pub(crate) fn api_error_kind(code: Option<&str>, status: Option<u16>) -> ApiErrorKind {
+    match code {
+        Some("UNAUTHENTICATED") => return ApiErrorKind::Authentication,
+        Some("PERMISSION_DENIED") => return ApiErrorKind::Permission,
+        Some("INVALID_ARGUMENT" | "INVALID_URI" | "UNSUPPORTED_URI" | "UNSUPPORTED_MODE") => {
+            return ApiErrorKind::InvalidRequest;
+        }
+        Some("NOT_FOUND") => return ApiErrorKind::NotFound,
+        Some("CONFLICT" | "ALREADY_EXISTS" | "ABORTED") => return ApiErrorKind::Conflict,
+        Some("RESOURCE_EXHAUSTED") => return ApiErrorKind::ResourceExhausted,
+        Some("DEADLINE_EXCEEDED") => return ApiErrorKind::DeadlineExceeded,
+        Some("UNAVAILABLE") => return ApiErrorKind::Unavailable,
+        _ => {}
+    }
+
+    match status {
+        Some(401) => ApiErrorKind::Authentication,
+        Some(403) => ApiErrorKind::Permission,
+        Some(400 | 422) => ApiErrorKind::InvalidRequest,
+        Some(404) => ApiErrorKind::NotFound,
+        Some(409) => ApiErrorKind::Conflict,
+        Some(429) => ApiErrorKind::ResourceExhausted,
+        Some(504) => ApiErrorKind::DeadlineExceeded,
+        Some(502 | 503) => ApiErrorKind::Unavailable,
+        _ => ApiErrorKind::Other,
+    }
 }
 
 /// Detect the kernel's pydantic `extra="forbid"` rejection — e.g.
@@ -33,7 +63,7 @@ pub(crate) fn extra_forbidden_field(message: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extra_forbidden_field, looks_like_auth_error};
+    use super::{ApiErrorKind, api_error_kind, extra_forbidden_field};
 
     #[test]
     fn extracts_extra_forbidden_field() {
@@ -56,22 +86,19 @@ mod tests {
     }
 
     #[test]
-    fn detects_auth_errors() {
-        for message in [
-            "API key is invalid",
-            "request was unauthorized",
-            "forbidden",
-            "authentication failed",
-            "auth failed",
-        ] {
-            assert!(looks_like_auth_error(message), "{message}");
-        }
-    }
-
-    #[test]
-    fn avoids_auth_substring_false_positives() {
-        for message in ["author not found", "authority unavailable"] {
-            assert!(!looks_like_auth_error(message), "{message}");
-        }
+    fn classifies_known_api_codes_without_message_matching() {
+        assert_eq!(
+            api_error_kind(Some("UNAUTHENTICATED"), Some(401)),
+            ApiErrorKind::Authentication
+        );
+        assert_eq!(
+            api_error_kind(Some("PERMISSION_DENIED"), Some(403)),
+            ApiErrorKind::Permission
+        );
+        assert_eq!(
+            api_error_kind(Some("PROCESSING_ERROR"), Some(500)),
+            ApiErrorKind::Other
+        );
+        assert_eq!(api_error_kind(None, Some(404)), ApiErrorKind::NotFound);
     }
 }

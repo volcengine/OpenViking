@@ -1,3 +1,4 @@
+use serde_json::Value;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -14,10 +15,24 @@ pub enum Error {
     #[error("Network error: {0}")]
     Network(String),
 
+    #[error("Request timeout: {0}")]
+    Timeout(String),
+
+    #[error("Request error: {0}")]
+    Request(String),
+
+    #[error("Response error: {0}")]
+    Response(String),
+
+    #[error("Server unhealthy: {0}")]
+    ServerUnhealthy(String),
+
     #[error("API error: {message}")]
     Api {
         message: String,
         status: Option<u16>,
+        code: Option<String>,
+        details: Option<Value>,
     },
 
     #[error("Client error: {0}")]
@@ -50,6 +65,8 @@ impl Error {
         Self::Api {
             message: message.into(),
             status: None,
+            code: None,
+            details: None,
         }
     }
 
@@ -57,6 +74,22 @@ impl Error {
         Self::Api {
             message: message.into(),
             status: Some(status),
+            code: None,
+            details: None,
+        }
+    }
+
+    pub fn api_structured(
+        message: impl Into<String>,
+        status: Option<u16>,
+        code: Option<impl Into<String>>,
+        details: Option<Value>,
+    ) -> Self {
+        Self::Api {
+            message: message.into(),
+            status,
+            code: code.map(Into::into),
+            details,
         }
     }
 }

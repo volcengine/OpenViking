@@ -13,6 +13,40 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::error::{Error, Result};
 
+const ERROR_BODY_PREVIEW_CHARS: usize = 4096;
+
+pub(crate) fn classify_request_error(context: &str, error: reqwest::Error) -> Error {
+    let message = format!("{context}: {error}");
+    if error.is_timeout() {
+        Error::Timeout(message)
+    } else if error.is_connect() {
+        Error::Network(message)
+    } else {
+        Error::Request(message)
+    }
+}
+
+pub(crate) fn classify_response_error(context: &str, error: reqwest::Error) -> Error {
+    let message = format!("{context}: {error}");
+    if error.is_timeout() {
+        Error::Timeout(message)
+    } else {
+        Error::Response(message)
+    }
+}
+
+fn body_preview(bytes: &[u8]) -> String {
+    let body = String::from_utf8_lossy(bytes);
+    let mut preview = body
+        .chars()
+        .take(ERROR_BODY_PREVIEW_CHARS)
+        .collect::<String>();
+    if body.chars().count() > ERROR_BODY_PREVIEW_CHARS {
+        preview.push_str("...");
+    }
+    preview
+}
+
 fn parse_ignore_dirs(ignore_dirs: Option<&str>) -> Vec<String> {
     ignore_dirs
         .map(|s| {
@@ -66,11 +100,12 @@ fn zip_entry_name(relative_path: &Path) -> Result<String> {
     Ok(normalize_zip_entry_name(name))
 }
 
-pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
+pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> Error {
     let error_code = json
         .get("error")
         .and_then(|e| e.get("code"))
-        .and_then(|c| c.as_str());
+        .and_then(|c| c.as_str())
+        .map(str::to_string);
     let error_msg = json
         .get("error")
         .and_then(|e| e.get("message"))
@@ -82,10 +117,27 @@ pub fn api_error_from_envelope(json: &Value, status: StatusCode) -> String {
                 .map(|s| s.to_string())
         })
         .unwrap_or_else(|| format!("HTTP error {}", status));
+    let details = json.get("error").and_then(|e| e.get("details")).cloned();
 
-    match error_code {
-        Some(code) => format!("[{}] {}", code, error_msg),
-        None => error_msg,
+    Error::api_structured(
+        error_msg,
+        Some(status.as_u16()),
+        error_code,
+        details.filter(|value| !value.is_null()),
+    )
+}
+
+pub(crate) fn api_error_from_body(status: StatusCode, bytes: &[u8]) -> Error {
+    match serde_json::from_slice::<Value>(bytes) {
+        Ok(json) => api_error_from_envelope(&json, status),
+        Err(_) => Error::api_with_status(
+            format!(
+                "HTTP error {}\n\nRaw response body:\n{}",
+                status,
+                body_preview(bytes)
+            ),
+            status.as_u16(),
+        ),
     }
 }
 
@@ -264,13 +316,19 @@ impl BaseClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::Network(format!("Failed to read response body: {}", e)))?;
+            .map_err(|e| classify_response_error("Failed to read response body", e))?;
 
         let json: Value = match serde_json::from_slice(&bytes) {
             Ok(json) => json,
             Err(e) => {
-                let body_str = String::from_utf8_lossy(&bytes);
-                return Err(Error::Network(format!(
+                let body_str = body_preview(&bytes);
+                if !status.is_success() {
+                    return Err(Error::api_with_status(
+                        format!("HTTP error {}\n\nRaw response body:\n{}", status, body_str),
+                        status.as_u16(),
+                    ));
+                }
+                return Err(Error::Response(format!(
                     "Failed to parse JSON response: {}\n\nRaw response body:\n{}",
                     e, body_str
                 )));
@@ -278,26 +336,12 @@ impl BaseClient {
         };
 
         if !status.is_success() {
-            return Err(Error::api_with_status(
-                api_error_from_envelope(&json, status),
-                status.as_u16(),
-            ));
+            return Err(api_error_from_envelope(&json, status));
         }
 
         if let Some(error) = json.get("error") {
             if !error.is_null() {
-                let code = error
-                    .get("code")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("UNKNOWN");
-                let message = error
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("Unknown error");
-                return Err(Error::api_with_status(
-                    format!("[{}] {}", code, message),
-                    status.as_u16(),
-                ));
+                return Err(api_error_from_envelope(&json, status));
             }
         }
 
@@ -319,7 +363,7 @@ impl BaseClient {
         ReqwestClient::builder()
             .timeout(timeout)
             .build()
-            .map_err(|e| Error::Network(format!("Failed to build HTTP client: {}", e)))
+            .map_err(|e| Error::Request(format!("Failed to build HTTP client: {}", e)))
     }
 
     pub(crate) fn create_client_with_connect_timeout(
@@ -331,7 +375,7 @@ impl BaseClient {
             .connect_timeout(connect_timeout)
             .timeout(timeout)
             .build()
-            .map_err(|e| Error::Network(format!("Failed to build HTTP client: {}", e)))
+            .map_err(|e| Error::Request(format!("Failed to build HTTP client: {}", e)))
     }
 
     pub async fn get<T: DeserializeOwned + 'static>(
@@ -348,7 +392,7 @@ impl BaseClient {
             .query(&params)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| classify_request_error("HTTP request failed", e))?;
 
         self.handle_response(response).await
     }
@@ -372,7 +416,7 @@ impl BaseClient {
         let response = request
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| classify_request_error("HTTP request failed", e))?;
 
         self.handle_response(response).await
     }
@@ -395,7 +439,7 @@ impl BaseClient {
         let response = request
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| classify_request_error("HTTP request failed", e))?;
 
         self.handle_response(response).await
     }
@@ -415,7 +459,7 @@ impl BaseClient {
         let response = request
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| classify_request_error("HTTP request failed", e))?;
 
         self.handle_response(response).await
     }
@@ -434,7 +478,7 @@ impl BaseClient {
             .query(&params)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| classify_request_error("HTTP request failed", e))?;
 
         self.handle_response(response).await
     }
@@ -458,7 +502,7 @@ impl BaseClient {
         let response = request
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| classify_request_error("HTTP request failed", e))?;
 
         self.handle_response(response).await
     }
@@ -479,7 +523,7 @@ impl BaseClient {
             .json(body)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| classify_request_error("HTTP request failed", e))?;
 
         self.handle_response(response).await
     }
@@ -500,7 +544,7 @@ impl BaseClient {
             .json(body)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| classify_request_error("HTTP request failed", e))?;
 
         self.handle_response(response).await
     }
@@ -656,6 +700,47 @@ mod tests {
 
         assert_eq!(entry, "scripts/check_bounding_boxes.py");
     }
+
+    #[test]
+    fn api_error_from_body_preserves_unknown_structured_code() {
+        let body = br#"{
+            "status": "error",
+            "error": {
+                "code": "PROCESSING_ERROR",
+                "message": "Parse error: boom",
+                "details": {"task_id": "task-1"}
+            }
+        }"#;
+
+        let error = api_error_from_body(StatusCode::INTERNAL_SERVER_ERROR, body);
+
+        assert!(matches!(
+            error,
+            Error::Api {
+                message,
+                status: Some(500),
+                code: Some(code),
+                details: Some(details),
+            } if message == "Parse error: boom"
+                && code == "PROCESSING_ERROR"
+                && details["task_id"] == "task-1"
+        ));
+    }
+
+    #[test]
+    fn api_error_from_body_keeps_non_json_error_body_as_api_error() {
+        let error = api_error_from_body(StatusCode::BAD_GATEWAY, b"upstream unavailable");
+
+        assert!(matches!(
+            error,
+            Error::Api {
+                message,
+                status: Some(502),
+                code: None,
+                ..
+            } if message.contains("upstream unavailable")
+        ));
+    }
 }
 
 // ============ FileUploader ============
@@ -685,7 +770,7 @@ impl<'a> FileUploader<'a> {
         ignore_dirs: Option<&str>,
     ) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {
-            return Err(Error::Network(format!(
+            return Err(Error::InvalidPath(format!(
                 "Path {} is not a directory",
                 dir_path.display()
             )));
@@ -725,7 +810,7 @@ impl<'a> FileUploader<'a> {
         ignore_dirs: Option<&str>,
     ) -> Result<NamedTempFile> {
         if !dir_path.is_dir() {
-            return Err(Error::Network(format!(
+            return Err(Error::InvalidPath(format!(
                 "Path {} is not a directory",
                 dir_path.display()
             )));
@@ -833,7 +918,7 @@ impl<'a> FileUploader<'a> {
 
         let part = part
             .mime_str("application/octet-stream")
-            .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
+            .map_err(|e| Error::Request(format!("Failed to set mime type: {}", e)))?;
 
         let mut form = reqwest::multipart::Form::new().part("file", part);
         if let Some(upload_mode) = &self.upload_mode {
@@ -855,7 +940,7 @@ impl<'a> FileUploader<'a> {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
+            .map_err(|e| classify_request_error("File upload failed", e))?;
 
         let result: Value = self.client.handle_response(response).await?;
         result
@@ -901,7 +986,7 @@ impl<'a> FileUploader<'a> {
 
         let part = part
             .mime_str("application/octet-stream")
-            .map_err(|e| Error::Network(format!("Failed to set mime type: {}", e)))?;
+            .map_err(|e| Error::Request(format!("Failed to set mime type: {}", e)))?;
 
         let mut form = reqwest::multipart::Form::new().part("file", part);
         if let Some(upload_mode) = &self.upload_mode {
@@ -923,7 +1008,7 @@ impl<'a> FileUploader<'a> {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| Error::Network(format!("File upload failed: {}", e)))?;
+            .map_err(|e| classify_request_error("File upload failed", e))?;
 
         pb.finish_with_message("Upload complete");
 

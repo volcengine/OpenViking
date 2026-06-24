@@ -590,7 +590,7 @@ pub(crate) async fn validate_candidate_config_with_role(
         .and_then(Value::as_bool)
         .is_some_and(|healthy| !healthy)
     {
-        return Err(Error::Network(
+        return Err(Error::ServerUnhealthy(
             "Server responded but reported unhealthy status".to_string(),
         ));
     }
@@ -613,7 +613,17 @@ async fn detect_api_key_role(client: &BaseClient) -> Result<ApiKeyRole> {
             status: Some(status),
             ..
         }) if admin_probe_regular_key_status(status) => Ok(ApiKeyRole::Regular),
-        Err(Error::Api { message, status }) => Err(Error::Api { message, status }),
+        Err(Error::Api {
+            message,
+            status,
+            code,
+            details,
+        }) => Err(Error::Api {
+            message,
+            status,
+            code,
+            details,
+        }),
         Err(error) => Err(error),
     }
 }
@@ -653,9 +663,22 @@ fn should_run_authenticated_probe(
 
 pub(crate) fn validation_error_copy(kind: ConfigKind, error: &Error) -> String {
     match error {
+        Error::ServerUnhealthy(_) => {
+            "Server is reachable but reported unhealthy status. Check the server logs.".to_string()
+        }
         Error::Network(msg) if msg.contains("unhealthy") => {
             "Server is reachable but reported unhealthy status. Check the server logs.".to_string()
         }
+        Error::Timeout(_) => match kind {
+            ConfigKind::OpenVikingService => {
+                "OpenViking Service did not respond before the timeout. Check the service status and try again."
+                    .to_string()
+            }
+            ConfigKind::Custom => {
+                "Server did not respond before the timeout. Check the URL, server status, and timeout setting."
+                    .to_string()
+            }
+        },
         Error::Network(_) => match kind {
             ConfigKind::OpenVikingService => {
                 "Cannot reach OpenViking Service. Check your network connection.".to_string()
@@ -691,9 +714,18 @@ pub(crate) fn validation_error_copy(kind: ConfigKind, error: &Error) -> String {
 
 pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> String {
     match error {
+        Error::ServerUnhealthy(_) => "服务器可连接，但健康状态异常。请检查服务器日志。".to_string(),
         Error::Network(msg) if msg.contains("unhealthy") => {
             "服务器可连接，但健康状态异常。请检查服务器日志。".to_string()
         }
+        Error::Timeout(_) => match kind {
+            ConfigKind::OpenVikingService => {
+                "OpenViking 服务未能在超时时间内响应。请检查服务状态后重试。".to_string()
+            }
+            ConfigKind::Custom => {
+                "服务器未能在超时时间内响应。请检查 URL、服务器状态和超时配置。".to_string()
+            }
+        },
         Error::Network(_) => match kind {
             ConfigKind::OpenVikingService => {
                 "无法连接 OpenViking 服务。请检查网络连接。".to_string()

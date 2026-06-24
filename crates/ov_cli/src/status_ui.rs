@@ -6,7 +6,7 @@ use crate::{
     config::{Config, display_config_home},
     config_wizard::{ConfigKind, ConfigStore},
     error::{Error, Result},
-    error_classifier::looks_like_auth_error,
+    error_classifier::{ApiErrorKind, api_error_kind},
     i18n::{Language, copy},
     theme,
 };
@@ -204,17 +204,25 @@ pub(crate) fn render_unreachable_status(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StatusFailureKind {
     Authentication,
+    Permission,
     Api,
+    Timeout,
+    Unhealthy,
     Connection,
 }
 
 impl StatusFailureKind {
     fn from_error(error: Option<&Error>) -> Self {
         match error {
-            Some(Error::Api { message, .. }) if looks_like_auth_error(message) => {
-                Self::Authentication
-            }
-            Some(Error::Api { .. }) => Self::Api,
+            Some(Error::Api { code, status, .. }) => match api_error_kind(code.as_deref(), *status)
+            {
+                ApiErrorKind::Authentication => Self::Authentication,
+                ApiErrorKind::Permission => Self::Permission,
+                _ => Self::Api,
+            },
+            Some(Error::Timeout(_)) => Self::Timeout,
+            Some(Error::ServerUnhealthy(_)) => Self::Unhealthy,
+            Some(Error::Response(_)) => Self::Api,
             _ => Self::Connection,
         }
     }
@@ -222,7 +230,10 @@ impl StatusFailureKind {
     fn status_label(self, language: Language) -> &'static str {
         match self {
             Self::Authentication => copy(language, "Authentication failed", "认证失败"),
+            Self::Permission => copy(language, "Permission denied", "权限不足"),
             Self::Api => copy(language, "Server error", "服务器错误"),
+            Self::Timeout => copy(language, "Timed out", "请求超时"),
+            Self::Unhealthy => copy(language, "Unhealthy", "不健康"),
             Self::Connection => copy(language, "Unreachable", "无法连接"),
         }
     }
@@ -230,10 +241,25 @@ impl StatusFailureKind {
     fn issue_label(self, language: Language) -> &'static str {
         match self {
             Self::Authentication => copy(language, "API key rejected", "API Key 被拒绝"),
+            Self::Permission => copy(
+                language,
+                "Active identity lacks permission",
+                "当前身份权限不足",
+            ),
             Self::Api => copy(
                 language,
                 "OpenViking returned an API error",
                 "OpenViking 返回 API 错误",
+            ),
+            Self::Timeout => copy(
+                language,
+                "Request exceeded configured timeout",
+                "请求超过当前超时时间",
+            ),
+            Self::Unhealthy => copy(
+                language,
+                "Server is reachable but unhealthy",
+                "服务器可连接但状态不健康",
             ),
             Self::Connection => copy(language, "Cannot reach server", "无法连接服务器"),
         }
@@ -255,6 +281,20 @@ impl StatusFailureKind {
                     copy(language, "Validate after updating", "更新后验证"),
                 ),
             ],
+            Self::Permission => vec![
+                (
+                    "ov config show",
+                    copy(language, "Show active identity", "显示当前身份"),
+                ),
+                (
+                    "ov config switch",
+                    copy(language, "Use another config", "切换到其他配置"),
+                ),
+                (
+                    "ov config validate",
+                    copy(language, "Validate permissions", "验证权限"),
+                ),
+            ],
             Self::Api => vec![
                 (
                     "ov config validate",
@@ -263,6 +303,20 @@ impl StatusFailureKind {
                 (
                     "ov status --verbose",
                     copy(language, "Show backend error details", "显示后端错误详情"),
+                ),
+                (
+                    "ov health",
+                    copy(language, "Run a quick health check", "快速健康检查"),
+                ),
+            ],
+            Self::Timeout | Self::Unhealthy => vec![
+                (
+                    "ov status --verbose",
+                    copy(language, "Show backend details", "显示后端详情"),
+                ),
+                (
+                    "ov observer queue",
+                    copy(language, "Inspect background queues", "查看后台队列"),
                 ),
                 (
                     "ov health",
@@ -886,8 +940,11 @@ mod tests {
 
     #[test]
     fn unreachable_status_distinguishes_auth_failures() {
-        let error = crate::error::Error::api(
-            "[AuthenticationError] API key invalid. Request ID: abc".to_string(),
+        let error = crate::error::Error::api_structured(
+            "API key invalid. Request ID: abc",
+            Some(401),
+            Some("UNAUTHENTICATED"),
+            None,
         );
         let rendered =
             super::render_unreachable_status(&sample_config(), Some("local"), 2, Some(&error));
