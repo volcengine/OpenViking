@@ -7,9 +7,9 @@ from vikingbot.agent import loop as loop_module
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
-from vikingbot.config.schema import Config, SessionKey
+from vikingbot.config.schema import AgentsConfig, Config, SessionKey
 from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY
-from vikingbot.providers.base import LLMProvider
+from vikingbot.providers.base import LLMProvider, LLMResponse
 
 
 class _FakeProvider(LLMProvider):
@@ -23,6 +23,19 @@ class _FakeProvider(LLMProvider):
 class _FakeSubagentManager:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
+
+
+class _RecordingProvider(LLMProvider):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    async def chat(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return LLMResponse(content="ok")
+
+    def get_default_model(self) -> str:
+        return "fake-model"
 
 
 class _FakeLangfuseClient:
@@ -71,6 +84,46 @@ class _FakeOVClient:
     async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
         self.commit_calls.append((session_id, keep_recent_count, user_id))
         return {"session_id": session_id, "status": "accepted"}
+
+
+def test_agents_config_temperature_schema_caps_at_two():
+    schema = AgentsConfig.model_json_schema()
+    temperature = schema["properties"]["temperature"]
+
+    assert temperature["default"] == 0.7
+    assert temperature["minimum"] == 0.0
+    assert temperature["maximum"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_passes_configured_temperature_to_provider(temp_dir: Path, monkeypatch):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    bus = MessageBus()
+    provider = _RecordingProvider()
+    config = Config(storage_workspace=str(temp_dir), agents={"temperature": 0.2})
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        model=config.agents.model,
+        temperature=config.agents.temperature,
+        config=config,
+    )
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
+    response, _, _ = await loop._chat_with_stream_events(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[],
+        session_key=session_key,
+        publish_events=False,
+    )
+
+    assert response.content == "ok"
+    assert provider.calls[0][1]["temperature"] == 0.2
+    assert loop.subagents.kwargs["temperature"] == 0.2
 
 
 @pytest.mark.asyncio

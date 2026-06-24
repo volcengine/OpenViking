@@ -131,7 +131,7 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
     """
     Merge vlm model config into bot config.
 
-    Only sets model - provider config is read directly from OpenVikingConfig.
+    Only sets model parameters - provider config is read directly from OpenVikingConfig.
     """
     # Set default model from vlm.model
     if "agents" in bot_data:
@@ -147,6 +147,8 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
         bot_data["agents"]["provider"] = provider if provider else ""
         bot_data["agents"]["api_base"] = vlm_data.get("api_base", "")
         bot_data["agents"]["api_key"] = vlm_data.get("api_key", "")
+        if "temperature" in vlm_data and "temperature" not in bot_data["agents"]:
+            bot_data["agents"]["temperature"] = vlm_data["temperature"]
         if "extra_headers" in vlm_data and vlm_data["extra_headers"] is not None:
             bot_data["agents"]["extra_headers"] = vlm_data["extra_headers"]
 

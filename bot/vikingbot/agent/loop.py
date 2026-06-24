@@ -71,6 +71,7 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
+        temperature: float = 0.7,
         max_iterations: int = 50,
         memory_window: int = 50,
         brave_api_key: str | None = None,
@@ -92,6 +93,7 @@ class AgentLoop:
             provider: LLMProvider instance for making LLM calls.
             workspace: Path to the workspace directory for file operations.
             model: Optional model identifier. If not provided, uses the provider's default.
+            temperature: Sampling temperature for LLM requests (default: 0.7).
             max_iterations: Maximum number of tool execution iterations per message (default: 50).
             memory_window: Maximum number of messages to keep in session memory (default: 50).
             brave_api_key: Optional API key for Brave search integration.
@@ -122,6 +124,7 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
+        self.temperature = temperature
         self.max_iterations = max_iterations
         self.memory_window = memory_window
         self.brave_api_key = brave_api_key
@@ -146,6 +149,7 @@ class AgentLoop:
             bus=bus,
             config=self.config,
             model=self.model,
+            temperature=self.temperature,
             sandbox_manager=sandbox_manager,
         )
 
@@ -281,6 +285,7 @@ class AgentLoop:
             messages=messages,
             tools=tools,
             model=self.model,
+            temperature=self.temperature,
             session_id=session_key.safe_name(),
         ):
             if event.type == "content_delta":
@@ -313,6 +318,7 @@ class AgentLoop:
                 messages=messages,
                 tools=tools,
                 model=self.model,
+                temperature=self.temperature,
                 session_id=session_key.safe_name(),
             )
         return response, streamed_content, streamed_reasoning
@@ -1490,6 +1496,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                     {"role": "user", "content": prompt},
                 ],
                 model=self.model,
+                temperature=self.temperature,
                 session_id=session.key.safe_name(),
             )
             text = (response.content or "").strip()
