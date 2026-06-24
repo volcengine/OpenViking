@@ -656,7 +656,6 @@ class VikingClient:
         finally:
             if should_close:
                 await client.close()
-        logger.debug(f"Search result: {result}")
 
         # 将 FindResult 对象或已序列化的 JSON map 统一转换为 JSON map
         memories = self._matched_context_group_to_dicts(result, "memories")
