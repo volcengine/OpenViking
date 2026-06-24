@@ -1,7 +1,6 @@
 import fs from "fs"
 import path from "path"
 import { homedir } from "os"
-import { createHash } from "crypto"
 
 export const DEFAULT_CONFIG = {
   endpoint: "http://localhost:1933",
@@ -9,7 +8,6 @@ export const DEFAULT_CONFIG = {
   account: "",
   user: "",
   peerId: "",
-  projectPeerIsolation: true,
   enabled: true,
   timeoutMs: 30000,
   runtime: {
@@ -37,7 +35,7 @@ function cloneDefaultConfig() {
 
 function mergeConfig(fileConfig = {}) {
   const config = cloneDefaultConfig()
-  for (const key of ["endpoint", "apiKey", "account", "user", "peerId", "projectPeerIsolation", "enabled", "timeoutMs"]) {
+  for (const key of ["endpoint", "apiKey", "account", "user", "peerId", "enabled", "timeoutMs"]) {
     if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
   }
   config.runtime = {
@@ -60,7 +58,6 @@ function mergeConfig(fileConfig = {}) {
     config.peerId = process.env.OPENVIKING_PEER_ID
   }
 
-  config.projectPeerIsolation = config.projectPeerIsolation !== false
   config.timeoutMs = normalizeNumber(config.timeoutMs, DEFAULT_CONFIG.timeoutMs, 1000, 300000)
   config.repoContext.cacheTtlMs = normalizeNumber(
     config.repoContext.cacheTtlMs,
@@ -70,25 +67,6 @@ function mergeConfig(fileConfig = {}) {
   )
   clampRecallConfig(config.autoRecall)
   return config
-}
-
-function resolveProjectPeerId(config, projectDirectory) {
-  if (Object.prototype.hasOwnProperty.call(process.env, "OPENVIKING_PEER_ID_OVERRIDE")) {
-    config.peerId = process.env.OPENVIKING_PEER_ID_OVERRIDE ?? ""
-    return config
-  }
-  if (!config.projectPeerIsolation || !projectDirectory) return config
-
-  const projectPath = path.resolve(String(projectDirectory))
-  const basePeerId = sanitizePeerSegment(config.peerId || "opencode") || "opencode"
-  const projectName = sanitizePeerSegment(path.basename(projectPath)) || "project"
-  const projectHash = createHash("sha1").update(projectPath).digest("hex").slice(0, 8)
-  config.peerId = `${basePeerId}-${projectName}-${projectHash}`
-  return config
-}
-
-function sanitizePeerSegment(value) {
-  return String(value || "").replace(/[^A-Za-z0-9._-]/g, "")
 }
 
 function normalizeNumber(value, fallback, min, max) {
@@ -109,13 +87,13 @@ export function loadConfig(pluginRoot, projectDirectory) {
     try {
       if (fs.existsSync(configPath)) {
         const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf8"))
-        return resolveProjectPeerId(mergeConfig(fileConfig), projectDirectory)
+        return mergeConfig(fileConfig)
       }
     } catch (error) {
       console.warn(`Failed to load OpenViking config from ${configPath}:`, error)
     }
   }
-  return resolveProjectPeerId(mergeConfig(), projectDirectory)
+  return mergeConfig()
 }
 
 function getConfigPaths(pluginRoot, projectDirectory) {

@@ -3,7 +3,7 @@
 这个插件新增了一个面向 OpenCode 的统一 OpenViking 插件：
 
 - 外部仓库语义检索
-- 长期记忆、session 同步、生命周期边界 commit、自动 recall、按项目隔离 peer
+- 长期记忆、session 同步、生命周期边界 commit、自动 recall
 
 这是仓库中唯一继续维护的 OpenCode 插件示例。这个插件不再安装 `skills/openviking/SKILL.md`，也不要求 agent 使用 `ov` 命令。原 skill 风格的能力会通过 OpenCode tools 暴露。
 
@@ -96,7 +96,6 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
   "account": "",
   "user": "",
   "peerId": "",
-  "projectPeerIsolation": true,
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
@@ -121,8 +120,6 @@ export OPENVIKING_API_KEY="your-api-key-here"
 身份头，会作为 `X-OpenViking-Account`、`X-OpenViking-User` 发送；使用
 user/admin API key 的 API_KEY mode 时应留空。
 `peerId` 会作为 `X-OpenViking-Actor-Peer` 用于数据面的 memory/resource 请求；捕获 session message 时仍写入 body `peer_id`。需要 peer 维度路由时请显式配置。
-
-`projectPeerIsolation` 默认开启。插件会用配置中的基础 `peerId`（为空时使用 `opencode`）和当前 OpenCode 项目目录派生实际 peer id，避免不同项目的 memories 写入和召回到同一个 peer 命名空间。若需要沿用完全相同的 peer id，可设为 `"projectPeerIsolation": false`；若只想当前进程强制使用一个精确 peer id，可设置 `OPENVIKING_PEER_ID_OVERRIDE`。
 
 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、
 `OPENVIKING_PEER_ID`

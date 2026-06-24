@@ -10,7 +10,6 @@ The new plugin exposes everything through OpenCode tool hooks and talks to OpenV
 
 - Injects indexed `viking://resources/` repositories into the system prompt.
 - Exposes repository search, grep, glob, read, browse, add, write, remove, and queue status as tools.
-- Uses a per-project peer id by default so unrelated OpenCode projects do not share one memory namespace.
 - Maps each OpenCode session to an OpenViking session.
 - Captures user and assistant text messages into OpenViking.
 - Commits sessions at lifecycle boundaries for memory extraction.
@@ -110,7 +109,6 @@ Create `~/.config/opencode/openviking-config.json`:
   "account": "",
   "user": "",
   "peerId": "",
-  "projectPeerIsolation": true,
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
@@ -131,19 +129,6 @@ when using API-key mode with user/admin API keys.
 `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource
 requests; captured session messages store it as body `peer_id`. Configure
 `peerId` explicitly when peer-scoped memory routing is needed.
-
-`projectPeerIsolation` defaults to `true`. With isolation enabled, the effective
-peer id is derived from the configured base `peerId` (or `opencode` when empty)
-and the current OpenCode project directory:
-
-```text
-<peerId-or-opencode>-<project-name>-<directory-hash>
-```
-
-This prevents memories from unrelated projects from being written to and
-recalled from the same peer namespace. Set `"projectPeerIsolation": false` to use
-the exact configured `peerId`. Set `OPENVIKING_PEER_ID_OVERRIDE` to force one
-exact peer id for the current process.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`,
 and `OPENVIKING_PEER_ID` take
