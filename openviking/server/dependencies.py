@@ -27,11 +27,16 @@ def get_service() -> OpenVikingService:
     return _service
 
 
-def set_service(service: OpenVikingService) -> None:
-    """Set the OpenVikingService instance.
+def get_service_or_none() -> Optional[OpenVikingService]:
+    """Return the registered OpenVikingService, or None if not set."""
+    return _service
+
+
+def set_service(service: Optional[OpenVikingService]) -> None:
+    """Set (or clear) the OpenVikingService instance.
 
     Args:
-        service: OpenVikingService instance to set
+        service: OpenVikingService instance to register, or None to clear.
     """
     global _service
     _service = service

@@ -123,10 +123,12 @@ export type AfterTurnOpenVikingSessionParams = {
   messages?: AgentMessage[];
   prePromptMessageCount?: number;
   isHeartbeat?: boolean;
+  /** Model context window in tokens; the auto-commit threshold is a fraction of this. */
+  tokenBudget: number;
   runtimeContext?: Record<string, unknown>;
   cfg: {
     autoCapture: boolean;
-    commitTokenThreshold: number;
+    commitTokenThresholdRatio: number;
     commitKeepRecentCount: number;
     logFindRequests: boolean;
   };
@@ -404,6 +406,11 @@ function assemblePassthrough(
   return { messages: liveMessages, estimatedTokens: originalTokens };
 }
 
+function isSessionNotFoundError(err: unknown): boolean {
+  const errorMessage = String(err);
+  return errorMessage.includes("[NOT_FOUND]") && errorMessage.includes("Session not found");
+}
+
 export async function assembleOpenVikingSession({
   sessionId,
   sessionKey,
@@ -625,6 +632,27 @@ export async function assembleOpenVikingSession({
       ...(instruction.text ? { systemPromptAddition: instruction.text } : {}),
     };
   } catch (err) {
+    if (isSessionNotFoundError(err)) {
+      const errorMessage = String(err);
+      logger.info(
+        `openviking: assemble skipped because OV session does not exist ` +
+          `(session=${ovSessionId}, tokenBudget=${tokenBudget}, agentId=${resolveAgentId(ovSessionId)})`,
+      );
+      return assemblePassthrough({
+        diag,
+        ovSessionId,
+        reason: "session_not_found",
+        liveMessages: messages,
+        originalTokens,
+        extra: {
+          error: errorMessage,
+          tokenBudget,
+          agentId: resolveAgentId(ovSessionId),
+          senderIdFound: sender.found,
+          senderId: sender.senderId ?? null,
+        },
+      });
+    }
     logger.warn?.(
       `openviking: assemble failed for session=${ovSessionId}, ` +
         `tokenBudget=${tokenBudget}, agentId=${resolveAgentId(ovSessionId)}: ${String(err)}`,
@@ -753,6 +781,7 @@ export async function afterTurnOpenVikingSession({
   messages: rawMessages,
   prePromptMessageCount,
   isHeartbeat,
+  tokenBudget,
   runtimeContext,
   cfg,
   getClient,
@@ -880,11 +909,15 @@ export async function afterTurnOpenVikingSession({
     const session = await client.getSession(ovSessionId, agentId);
     const pendingTokens = session.pending_tokens ?? 0;
 
-    if (pendingTokens < cfg.commitTokenThreshold) {
+    const commitTokenThreshold = Math.floor(tokenBudget * cfg.commitTokenThresholdRatio);
+
+    if (pendingTokens < commitTokenThreshold) {
       diag("afterTurn_skip", ovSessionId, {
         reason: "below_threshold",
         pendingTokens,
-        commitTokenThreshold: cfg.commitTokenThreshold,
+        commitTokenThreshold,
+        commitTokenThresholdRatio: cfg.commitTokenThresholdRatio,
+        tokenBudget,
         senderIdFound: sender.found,
         senderId: sender.senderId ?? null,
       });
@@ -904,7 +937,9 @@ export async function afterTurnOpenVikingSession({
 
     diag("afterTurn_commit", ovSessionId, {
       pendingTokens,
-      commitTokenThreshold: cfg.commitTokenThreshold,
+      commitTokenThreshold,
+      commitTokenThresholdRatio: cfg.commitTokenThresholdRatio,
+      tokenBudget,
       status: commitResult.status,
       archived: commitResult.archived ?? false,
       taskId: commitResult.task_id ?? null,
@@ -1183,7 +1218,7 @@ export async function compactOpenVikingSession({
     };
   } catch (err) {
     const errorMessage = String(err);
-    if (errorMessage.includes("[NOT_FOUND]") && errorMessage.includes("Session not found")) {
+    if (isSessionNotFoundError(err)) {
       logger.info(
         `openviking: compact skipped because OV session does not exist ` +
           `(session=${ovSessionId}, agentId=${agentId})`,

@@ -502,6 +502,7 @@ jobs:
             openviking version
             echo "OPENVIKING_CLI_BIN=$(which openviking)" >> $GITHUB_ENV
           elif command -v ov &> /dev/null; then
+            ov language en
             ov version
             echo "OPENVIKING_CLI_BIN=$(which ov)" >> $GITHUB_ENV
           else

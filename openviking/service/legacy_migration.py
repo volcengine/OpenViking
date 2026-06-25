@@ -20,6 +20,13 @@ from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier, validate_user_id
 
 
+# Reserved sub-directories of viking://agent/ that belong to the new public
+# scope layout (skills, endpoints, tools, payments). They must not be treated
+# as legacy ``agent_id`` directories by either the migration planner or the
+# cleanup planner.
+_AGENT_RESERVED_SUBDIRS = frozenset({"skills", "endpoints", "tools", "payments"})
+
+
 @dataclass(frozen=True)
 class TreeCopy:
     source_path: str
@@ -210,7 +217,15 @@ class LegacyDataMigration:
         for account_id in sorted(await self._physical_account_ids()):
             agent_path = f"/local/{account_id}/agent"
             if await self._exists(agent_path):
-                plan.targets.append(self._cleanup_target(account_id, agent_path, "agent"))
+                for entry in await self._ls(agent_path):
+                    if not entry["is_dir"]:
+                        continue
+                    if entry["name"] in _AGENT_RESERVED_SUBDIRS:
+                        continue
+                    legacy_path = f"{agent_path}/{entry['name']}"
+                    plan.targets.append(
+                        self._cleanup_target(account_id, legacy_path, "agent")
+                    )
 
             session_path = f"/local/{account_id}/session"
             if await self._exists(session_path):
@@ -414,6 +429,8 @@ class LegacyDataMigration:
             if not agent_entry["is_dir"]:
                 continue
             agent_id = agent_entry["name"]
+            if agent_id in _AGENT_RESERVED_SUBDIRS:
+                continue
             user_root = f"{agent_root}/{agent_id}/user"
             for user_entry in await self._ls(user_root):
                 if not user_entry["is_dir"]:
@@ -436,6 +453,8 @@ class LegacyDataMigration:
             if not agent_entry["is_dir"]:
                 continue
             agent_id = agent_entry["name"]
+            if agent_id in _AGENT_RESERVED_SUBDIRS:
+                continue
             source_agent_path = f"{agent_root}/{agent_id}"
             if not user_ids:
                 plan.warnings.append(

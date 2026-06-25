@@ -487,10 +487,10 @@ class PathLockEngine:
         if await self._has_owned_ancestor_tree(path, owner):
             logger.debug(f"[EXACT] Reusing owned ancestor TREE lock on: {path}")
             return True
-        if timeout is None:
-            deadline = float("inf")
-        else:
-            deadline = asyncio.get_running_loop().time() + timeout
+        had_no_timeout = timeout is None
+        if had_no_timeout:
+            timeout = self._lock_expire
+        deadline = asyncio.get_running_loop().time() + timeout
         wait_start = asyncio.get_running_loop().time()
         next_wait_log_at = wait_start + _WAIT_LOG_INTERVAL
 
@@ -505,7 +505,7 @@ class PathLockEngine:
                     _log_timeout_waiting(f"[EXACT] Timeout waiting for exact lock on: {path}")
                     return False
                 now = asyncio.get_running_loop().time()
-                if timeout is None and now >= next_wait_log_at:
+                if had_no_timeout and now >= next_wait_log_at:
                     logger.info(
                         f"[EXACT] Still waiting for lock on: {path} "
                         f"(waited={now - wait_start:.1f}s)"
@@ -544,7 +544,7 @@ class PathLockEngine:
                     )
                     return False
                 now = asyncio.get_running_loop().time()
-                if timeout is None and now >= next_wait_log_at:
+                if had_no_timeout and now >= next_wait_log_at:
                     logger.info(
                         f"[EXACT] Still waiting for ancestor TREE lock: {ancestor_conflict} "
                         f"(path={path}, waited={now - wait_start:.1f}s)"
@@ -597,7 +597,7 @@ class PathLockEngine:
                         await self._remove_lock_file(lock_path)
                     return False
                 now = asyncio.get_running_loop().time()
-                if timeout is None and now >= next_wait_log_at:
+                if had_no_timeout and now >= next_wait_log_at:
                     logger.info(
                         f"[EXACT] Still waiting after conflict check on: {path} "
                         f"(waited={now - wait_start:.1f}s)"
@@ -611,7 +611,7 @@ class PathLockEngine:
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
                 now = asyncio.get_running_loop().time()
-                if timeout is None and now >= next_wait_log_at:
+                if had_no_timeout and now >= next_wait_log_at:
                     logger.info(
                         f"[EXACT] Still waiting for lock ownership verification: {path} "
                         f"(waited={now - wait_start:.1f}s)"
@@ -641,12 +641,10 @@ class PathLockEngine:
         if await self._has_owned_ancestor_tree(path, owner):
             logger.debug(f"[TREE] Reusing owned ancestor TREE lock on: {path}")
             return True
-        if timeout is None:
-            # 无限等待
-            deadline = float("inf")
-        else:
-            # 有限超时
-            deadline = asyncio.get_running_loop().time() + timeout
+        had_no_timeout = timeout is None
+        if had_no_timeout:
+            timeout = self._lock_expire
+        deadline = asyncio.get_running_loop().time() + timeout
         wait_start = asyncio.get_running_loop().time()
         next_wait_log_at = wait_start + _WAIT_LOG_INTERVAL
 
@@ -660,7 +658,7 @@ class PathLockEngine:
                     _log_timeout_waiting(f"[TREE] Timeout waiting for lock on: {path}")
                     return False
                 now = asyncio.get_running_loop().time()
-                if timeout is None and now >= next_wait_log_at:
+                if had_no_timeout and now >= next_wait_log_at:
                     logger.info(
                         f"[TREE] Still waiting for lock on: {path} (waited={now - wait_start:.1f}s)"
                     )
@@ -681,7 +679,7 @@ class PathLockEngine:
                     )
                     return False
                 now = asyncio.get_running_loop().time()
-                if timeout is None and now >= next_wait_log_at:
+                if had_no_timeout and now >= next_wait_log_at:
                     logger.info(
                         f"[TREE] Still waiting for ancestor TREE lock: {ancestor_conflict} "
                         f"(path={path}, waited={now - wait_start:.1f}s)"
@@ -714,7 +712,7 @@ class PathLockEngine:
                     )
                     return False
                 now = asyncio.get_running_loop().time()
-                if timeout is None and now >= next_wait_log_at:
+                if had_no_timeout and now >= next_wait_log_at:
                     logger.info(
                         f"[TREE] Still waiting for descendant lock: {desc_conflict} "
                         f"(path={path}, waited={now - wait_start:.1f}s)"
@@ -756,7 +754,7 @@ class PathLockEngine:
                         await self._remove_lock_file(lock_path)
                     return False
                 now = asyncio.get_running_loop().time()
-                if timeout is None and now >= next_wait_log_at:
+                if had_no_timeout and now >= next_wait_log_at:
                     logger.info(
                         f"[TREE] Still waiting after conflict check on: {path} "
                         f"(waited={now - wait_start:.1f}s)"
@@ -770,7 +768,7 @@ class PathLockEngine:
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
                 now = asyncio.get_running_loop().time()
-                if timeout is None and now >= next_wait_log_at:
+                if had_no_timeout and now >= next_wait_log_at:
                     logger.info(
                         f"[TREE] Still waiting for lock ownership verification: {path} "
                         f"(waited={now - wait_start:.1f}s)"

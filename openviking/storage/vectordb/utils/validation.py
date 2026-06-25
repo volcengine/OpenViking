@@ -152,6 +152,9 @@ class CollectionMetaConfig(BaseModel):
     ProjectName: Optional[str] = None
     Description: Optional[str] = Field(None, max_length=65535)
     Vectorize: Optional[VectorizeConfig] = None
+    FullText: Optional[List[dict]] = (
+        None  # e.g. [{"Field": "content", "Analyzer": {"Tokenizer": "standard"}}]
+    )
 
     # Internal fields
     _FieldsCount: Optional[int] = None

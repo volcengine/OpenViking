@@ -5,7 +5,7 @@ This plugin adds one unified OpenViking plugin for OpenCode:
 - Semantic retrieval for external repositories
 - Long-term memory, session synchronization, lifecycle commit, and automatic recall
 
-The older split examples remain available for now and will be deprecated in a future update. This plugin does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The capabilities from the former skill are exposed as OpenCode tools here.
+This is the only OpenCode plugin example maintained in this repository. It does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The former skill-style capabilities are exposed as OpenCode tools here.
 
 ## Prerequisites
 
@@ -34,11 +34,9 @@ Normal users are recommended to enable it through OpenCode's package plugin mech
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
-
-Use the final published package name if it changes before release.
 
 ## Installation Method 2: Source Install
 
@@ -52,7 +50,7 @@ Run the following commands from the repository root:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -63,7 +61,7 @@ After installation, the layout should look like this:
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.mjs
+├── openviking.js
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -71,13 +69,14 @@ After installation, the layout should look like this:
     └── node_modules/
 ```
 
-The top-level `openviking.mjs` forwards the first-level `.mjs` entry that OpenCode can discover to the actual plugin directory:
+The top-level `openviking.js` forwards the first-level `.js` entry that OpenCode can discover to the actual plugin directory:
 
 ```js
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 ```
 
 This wrapper is only for source installs with the directory layout shown above. npm package installs load `index.mjs` directly through `package.json`.
+Use the `.js` wrapper for source installs; OpenCode's local plugin scanner discovers JavaScript/TypeScript plugin files.
 
 If you install through an npm package, you can also use `examples/opencode-plugin` as a normal OpenCode plugin package.
 
@@ -118,11 +117,36 @@ It is recommended to provide the API key through an environment variable instead
 export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
-`apiKey` is sent as `X-API-Key`. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty when using API-key mode with user/admin API keys. `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource requests; captured session messages store it as body `peer_id`. Configure it explicitly when peer-scoped memory routing is needed.
+`apiKey` is sent as `X-API-Key`. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty when using API-key mode with user/admin API keys. `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource requests; captured session messages store it as body `peer_id`.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the corresponding values in `openviking-config.json`.
 
 For advanced setups, use `OPENVIKING_PLUGIN_CONFIG` to point to another configuration file path.
+
+## Verify
+
+Restart OpenCode after changing plugin or OpenViking configuration.
+
+In a new OpenCode session, ask the agent to browse OpenViking memory or search for a known indexed resource. The plugin should expose these tools:
+
+- `memsearch`, `memread`, `membrowse`
+- `memgrep`, `memglob`
+- `memadd`, `memwrite`, `memremove`, `memqueue`
+- `memcommit`
+- `codesearch`, `codeoutline`, `codeexpand`
+
+If anything looks wrong, check the runtime files:
+
+```bash
+ls ~/.config/opencode/openviking/
+tail -n 100 ~/.config/opencode/openviking/openviking-memory.log
+```
+
+For a local server, also confirm OpenViking is reachable:
+
+```bash
+curl http://localhost:1933/health
+```
 
 ## Available Tools
 
@@ -135,6 +159,7 @@ The plugin exposes the following tools through the OpenCode `tool` hook:
 - `memgrep`: exact text or pattern search, replacing the former `ov grep` use case
 - `memglob`: file glob enumeration, replacing the former `ov glob` use case
 - `memadd`: add a remote URL or local file resource, replacing common `ov add-resource` scenarios
+- `memwrite`: write text to a `viking://` file through `/api/v1/content/write`
 - `memremove`: remove resources, replacing `ov rm`
 - `memqueue`: inspect the processing queue, replacing `ov observer queue`
 
@@ -145,7 +170,9 @@ Usage guidance:
 - Use `memglob` to enumerate files.
 - Use `memread` to read content.
 - Use `membrowse` to explore directory structure.
+- Use `memwrite` for durable notes or small direct text updates; default mode is `create`.
 - Before deleting anything, obtain explicit user confirmation first; then call `memremove` with `confirm: true`.
+- If an agent tries to use OpenCode's local `read`, `glob`, or `grep` tools on a `viking://` URI, the plugin blocks that call and points it to `memread`, `membrowse`, or `memsearch`.
 
 ## Local Files with `memadd`
 
@@ -181,3 +208,13 @@ Possible files include:
 You can change this directory with `runtime.dataDir` in the configuration.
 
 These are local runtime files and should not be committed to the repository.
+
+## Troubleshooting
+
+| Issue | What to check |
+|-------|---------------|
+| Plugin does not load | For package installs, confirm `~/.config/opencode/opencode.json` contains `@openviking/opencode-plugin`; for source installs, confirm `~/.config/opencode/plugins/openviking.js` exists |
+| Tools call the wrong server | Check `endpoint` in `~/.config/opencode/openviking-config.json`, or set `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
+| 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
+| Recall is empty | Confirm OpenViking has indexed memories/resources and `autoRecall.enabled` is `true` |
+| Local `memadd` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |

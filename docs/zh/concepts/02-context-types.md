@@ -8,7 +8,7 @@
 |------|------|----------|--------|
 | **Resource** | 知识和规则 | 长期，相对静态 | 用户添加 |
 | **Memory** | Agent 的认知 | 长期，动态更新 | Agent 记录 |
-| **Skill** | 可调用的能力 | 长期，静态 | Agent 调用 |
+| **Skill** | 可声明的 agent 能动性配置（AgentDefinedContextType） | 长期，静态 | 用户或系统添加 |
 
 ## Resource（资源）
 
@@ -81,9 +81,9 @@ results = await client.find(
 )
 ```
 
-## Skill（技能）
+## Skill（技能 / AgentDefinedContextType）
 
-技能是 Agent 可以调用的能力，比如目前的Skills、MCP等均属于此类。
+技能（Skill）是 Agent 可以调用的能力，属于 AgentDefinedContextType 范畴。包括传统工作流定义、通信端点、工具配置和支付能力等。它们的共同特征是：**定义了 agent 如何与外部系统交互**，运行时定义相对静态，但调用经验会在 Memory 中更新。
 
 ### 特点
 
@@ -94,27 +94,51 @@ results = await client.find(
 ### 存储位置
 
 ```
-viking://user/skills/{skill-name}/
+viking://user/skills/{skill-name}/  # 默认存储路径
 ├── .abstract.md          # L0: 简短描述
-├── SKILL.md   						# L1: 详细概览
-└── scripts           		# L2: 完整定义
+├── SKILL.md              # L1: 详细概览
+└── scripts               # L2: 完整定义
 
+viking://agent/skills/{skill-name}/  # 通过 --uri 覆盖，公开共享（account 全局）
+├── .abstract.md          # L0: 简短描述
+├── SKILL.md              # L1: 详细概览
+└── scripts               # L2: 完整定义
 ```
+
+### AgentDefinedContextType 子类型
+
+AgentDefinedContextType 包含以下子类型，均存储于 `viking://agent/` 作用域：
+
+| 子类型 | 位置 | 说明 |
+|--------|------|------|
+| **Skill** | `agent/skills/` | 传统工作流定义，如搜索、代码生成 |
+| **Endpoint** | `agent/endpoints/` | 通信端点配置（a2a, anp 等）（规划中） |
+| **Tool** | `agent/tools/` | 工具配置（mcp 等）（规划中） |
+| **Payment** | `agent/payments/` | 支付能力配置（ap2 等）（规划中） |
 
 ### 使用
 
 ```python
-# 添加技能
+# 添加技能（默认写入 viking://user/skills/）
 await client.add_skill({
     "name": "search-web",
     "description": "搜索网络获取信息",
     "content": "# search-web\n..."
 })
 
-# 搜索技能
+# 通过 -p 指定写入全局 agent 技能根（公开共享）
+ov skills add search-web -p viking://agent/skills
+
+# 搜索用户技能
 results = await client.find(
     "网络搜索",
     target_uri="viking://user/skills/"
+)
+
+# 搜索全局 agent 技能
+results = await client.find(
+    "网络搜索",
+    target_uri="viking://agent/skills/"
 )
 ```
 

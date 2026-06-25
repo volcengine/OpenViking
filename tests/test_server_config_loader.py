@@ -5,7 +5,12 @@ import json
 
 import pytest
 
-from openviking.server.config import load_bot_gateway_token, load_server_config
+from openviking.server.config import (
+    ServerConfig,
+    get_server_url_from_server_data,
+    load_bot_gateway_token,
+    load_server_config,
+)
 
 
 def test_load_server_config_rejects_unknown_field(tmp_path):
@@ -91,6 +96,36 @@ def test_load_bot_gateway_token_reads_token_from_bot_gateway_section(tmp_path):
     config_path.write_text(json.dumps({"bot": {"gateway": {"token": "gateway-token"}}}))
 
     assert load_bot_gateway_token(str(config_path)) == "gateway-token"
+
+
+def test_server_config_get_effective_auth_mode():
+    assert ServerConfig(auth_mode="trusted").get_effective_auth_mode() == "trusted"
+    assert ServerConfig(root_api_key="root-key").get_effective_auth_mode() == "api_key"
+    assert ServerConfig().get_effective_auth_mode() == "dev"
+
+
+def test_get_server_url_from_server_data_uses_server_host_and_port():
+    server = {"host": "127.0.0.1", "port": 1933}
+
+    assert get_server_url_from_server_data(server) == "http://127.0.0.1:1933"
+
+
+def test_get_server_url_from_server_config_uses_runtime_host_and_port():
+    config = ServerConfig(host="127.0.0.1", port=1944)
+
+    assert get_server_url_from_server_data(config) == "http://127.0.0.1:1944"
+
+
+def test_get_server_url_from_server_data_brackets_ipv6_literal():
+    server = {"host": "::1", "port": 1933}
+
+    assert get_server_url_from_server_data(server) == "http://[::1]:1933"
+
+
+def test_get_server_url_from_server_config_brackets_ipv6_literal():
+    config = ServerConfig(host="::1", port=1944)
+
+    assert get_server_url_from_server_data(config) == "http://[::1]:1944"
 
 
 def test_load_server_config_preserves_metrics_account_dimension_fields(tmp_path):

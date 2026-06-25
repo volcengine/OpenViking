@@ -111,6 +111,11 @@ class TestIsTextFile:
     def test_additional_text_extensions(self) -> None:
         assert is_text_file("settings.ini") is True
         assert is_text_file("data.csv") is True
+        # .jsonl is treated as text (matching .json) so upload-time encoding
+        # normalization applies, mirroring its inclusion in the vectorization
+        # text-extension set (#2745); otherwise a legacy-encoded .jsonl skips
+        # UTF-8 normalization while .json does not (#2744/#2770).
+        assert is_text_file("data.jsonl") is True
 
     def test_non_text_extensions(self) -> None:
         assert is_text_file("photo.png") is False
@@ -423,9 +428,8 @@ class TestDetectAndConvertEncodingEdgeCases:
         assert result.decode("utf-8") == text
 
     def test_undecodable_content(self) -> None:
-        # Note: TEXT_ENCODINGS includes iso-8859-1 which can decode any byte sequence,
-        # so the "no matching encoding" branch is effectively unreachable.
-        # This test verifies that arbitrary bytes are handled gracefully regardless.
+        # Arbitrary bytes should be handled gracefully even when no text
+        # encoding can be selected with confidence.
         content = bytes(range(128, 256)) * 10
         result = detect_and_convert_encoding(content, "test.py")
         assert isinstance(result, bytes)

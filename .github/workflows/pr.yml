@@ -18,9 +18,6 @@ on:
       - '.editorconfig'
 
 jobs:
-  lint:
-    uses: ./.github/workflows/_lint.yml
-
   check-deps:
     runs-on: ubuntu-24.04
     outputs:

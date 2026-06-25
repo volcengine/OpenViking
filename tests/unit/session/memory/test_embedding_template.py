@@ -366,3 +366,52 @@ class TestEmbeddingTextConstruction:
 
         vector_text = mock_from_context.call_args[0][0].get_vectorization_text()
         assert vector_text == "Trip summary"
+
+    @pytest.mark.asyncio
+    async def test_memory_abstract_truncated_to_50000_bytes_before_vector_write(self):
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry._types["events"] = registry._parse_memory_type(
+            {
+                "memory_type": "events",
+                "directory": "viking://user/{{ user_space }}/memories/events",
+                "filename_template": "{{ event_name }}.md",
+                "fields": [
+                    {"name": "event_name", "type": "string"},
+                    {"name": "content", "type": "string"},
+                ],
+            }
+        )
+
+        long_content = "你" * 20_000  # 60,000 UTF-8 bytes
+        updater = MemoryUpdater(registry=registry, vikingdb=Mock())
+        updater._viking_fs = Mock()
+        updater._viking_fs.read_file = AsyncMock(
+            return_value=MemoryFileUtils.write(
+                MemoryFile(
+                    uri="viking://user/alice/memories/events/trip.md",
+                    memory_type="events",
+                    content=long_content,
+                    extra_fields={"event_name": "trip"},
+                )
+            )
+        )
+        updater._vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
+
+        result = MemoryUpdateResult()
+        result.add_written("viking://user/alice/memories/events/trip.md")
+        ctx = SimpleNamespace(user=None, account_id="default")
+
+        with patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context:
+            mock_from_context.side_effect = lambda context: SimpleNamespace(
+                telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
+            )
+            await updater._vectorize_memories(
+                result,
+                ctx,
+                extract_context=None,
+                uri_memory_type_map={"viking://user/alice/memories/events/trip.md": "events"},
+            )
+
+        memory_context = mock_from_context.call_args[0][0]
+        assert len(memory_context.abstract.encode("utf-8")) <= 50_000
+        assert memory_context.abstract.encode("utf-8").decode("utf-8") == memory_context.abstract

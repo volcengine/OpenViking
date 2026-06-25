@@ -151,9 +151,16 @@ ov session commit --session-id $SESSION
 # Build
 cargo build --release
 
+# Smoke the exact binary that was built
+target/release/ov --version
+target/release/ov -o json system health
+
 # Run tests
 cargo test
 
 # Install locally
 cargo install --path .
 ```
+
+When driving external e2e harnesses, point them at `target/release/ov` explicitly
+instead of relying on an older `ov` that may already be installed on `PATH`.

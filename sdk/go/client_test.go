@@ -123,6 +123,12 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
+		if got := body["agent_id"]; got != "agent-7" {
+			t.Fatalf("agent_id = %#v", got)
+		}
+		if got := body["agent_uri"]; got != "viking://peers/agent-7" {
+			t.Fatalf("agent_uri = %#v", got)
+		}
 		writeOK(t, w, map[string]any{
 			"resources": []map[string]any{
 				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9},
@@ -139,6 +145,8 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		Until:       "2026-06-18",
 		TimeField:   "created_at",
 		Level:       []int{0, 2},
+		AgentID:     "agent-7",
+		AgentURI:    "viking://peers/agent-7",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +162,7 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level")
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -195,6 +203,12 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		if !ok || len(levels) != 1 || levels[0] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
+		if got := body["agent_id"]; got != "agent-7" {
+			t.Fatalf("agent_id = %#v", got)
+		}
+		if got := body["agent_uri"]; got != "viking://peers/agent-7" {
+			t.Fatalf("agent_uri = %#v", got)
+		}
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -206,6 +220,8 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		Until:     "2026-06-18",
 		TimeField: "updated_at",
 		Level:     []int{2},
+		AgentID:   "agent-7",
+		AgentURI:  "viking://peers/agent-7",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +233,7 @@ func TestSearchOmitsSearchFiltersWhenUnset(t *testing.T) {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
-		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level")
+		requireBodyKeysAbsent(t, body, "since", "until", "time_field", "level", "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -643,5 +659,75 @@ func TestHealth(t *testing.T) {
 	}
 	if !ok {
 		t.Fatal("expected healthy")
+	}
+}
+
+func TestSetTagsSendsBody(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/content/set_tags" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		if got := body["uri"]; got != "viking://resources/docs" {
+			t.Fatalf("uri = %#v", got)
+		}
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 2 || tags[0] != "team=infra" || tags[1] != "tier=gold" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if got := body["mode"]; got != "append" {
+			t.Fatalf("mode = %#v", got)
+		}
+		if got := body["recursive"]; got != true {
+			t.Fatalf("recursive = %#v", got)
+		}
+		if got := body["telemetry"]; got != true {
+			t.Fatalf("telemetry = %#v", got)
+		}
+		writeOK(t, w, map[string]any{"updated": 3})
+	}))
+	defer closeServer()
+
+	result, err := client.SetTags(context.Background(), "resources/docs", []string{"team=infra", "tier=gold"}, &SetTagsOptions{
+		Mode:      "append",
+		Recursive: true,
+		Telemetry: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result["updated"]; got != float64(3) {
+		t.Fatalf("updated = %#v", got)
+	}
+}
+
+func TestSetTagsDefaultsModeAndOmitsTelemetry(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/content/set_tags" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		if got := body["mode"]; got != "replace" {
+			t.Fatalf("default mode = %#v", got)
+		}
+		if got := body["recursive"]; got != false {
+			t.Fatalf("recursive = %#v", got)
+		}
+		// nil tags must serialize as an empty JSON array, not null, to satisfy
+		// the server's tags:list[str] contract.
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 0 {
+			t.Fatalf("tags = %#v (want empty array)", body["tags"])
+		}
+		requireBodyKeysAbsent(t, body, "telemetry")
+		writeOK(t, w, map[string]any{"updated": 1})
+	}))
+	defer closeServer()
+
+	if _, err := client.SetTags(context.Background(), "resources/docs/readme.md", nil, nil); err != nil {
+		t.Fatal(err)
 	}
 }

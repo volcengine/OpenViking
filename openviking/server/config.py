@@ -7,11 +7,10 @@ from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
-from openviking.server.identity import AuthMode
-from openviking_cli.utils import get_logger
-
 # Import auth plugin registry for config validation
 from openviking.server.auth.registry import get_registry
+from openviking.server.identity import AuthMode
+from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.config_loader import (
     load_json_config,
     resolve_config_path,
@@ -192,11 +191,28 @@ class ServerConfig(BaseModel):
         - If root_api_key is configured (non-empty) and auth_mode is None: api_key
         - If root_api_key is not configured and auth_mode is None: dev
         """
-        if self.auth_mode is not None:
-            return self.auth_mode
-        if self.root_api_key is not None and self.root_api_key != "":
+        auth_mode_text = str(self.auth_mode).strip() if self.auth_mode is not None else ""
+        if auth_mode_text:
+            return auth_mode_text
+
+        if self.root_api_key is not None and str(self.root_api_key).strip():
             return AuthMode.API_KEY.value
         return AuthMode.DEV.value
+
+
+def get_server_url_from_server_data(server_data: object) -> str:
+    """Return the loopback URL clients use for the configured OpenViking server."""
+    if isinstance(server_data, dict):
+        host_value = server_data.get("host")
+        port_value = server_data.get("port")
+    else:
+        host_value = getattr(server_data, "host", None)
+        port_value = getattr(server_data, "port", None)
+    host = str(host_value or "127.0.0.1").strip()
+    if ":" in host and not (host.startswith("[") and host.endswith("]")):
+        host = f"[{host}]"
+    port = str(port_value or "1933").strip()
+    return f"http://{host}:{port}"
 
 
 def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
@@ -334,7 +350,8 @@ def validate_server_config(config: ServerConfig) -> None:
     # Ensure built-in plugins are registered before validation.
     # If a non-built-in plugin has already claimed a built-in mode name,
     # log a security warning and forcefully override it.
-    from openviking.server.auth.plugins import DevAuthPlugin, ApiKeyAuthPlugin, TrustedAuthPlugin
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin, DevAuthPlugin, TrustedAuthPlugin
+
     registry = get_registry()
     _BUILTIN_PLUGINS = {
         "dev": DevAuthPlugin,
@@ -358,8 +375,7 @@ def validate_server_config(config: ServerConfig) -> None:
     plugin_cls = registry.get(effective_auth_mode)
     if plugin_cls is None:
         logger.error(
-            "Unknown auth_mode: %r. No auth plugin registered for this mode. "
-            "Registered modes: %s.",
+            "Unknown auth_mode: %r. No auth plugin registered for this mode. Registered modes: %s.",
             effective_auth_mode,
             ", ".join(registry.list_modes()),
         )

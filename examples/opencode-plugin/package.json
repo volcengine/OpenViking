@@ -1,6 +1,6 @@
 {
-  "name": "openviking-opencode-plugin",
-  "version": "0.1.0",
+  "name": "@openviking/opencode-plugin",
+  "version": "0.1.5",
   "author": "tanyouqing",
   "description": "Unified OpenCode plugin for OpenViking repository retrieval and long-term memory",
   "type": "module",
@@ -16,15 +16,19 @@
     "INSTALL-ZH.md"
   ],
   "scripts": {
-    "check": "node --check index.mjs && node --check lib/runtime.mjs && node --check lib/repo-context.mjs && node --check lib/memory-session.mjs && node --check lib/memadd-local.mjs && node --check lib/memory-tools.mjs && node --check lib/code-tools.mjs && node --check lib/memory-recall.mjs && node --check lib/utils.mjs && node --check tests/code-tools-request-options.test.mjs",
+    "check": "node --check index.mjs && node --check lib/runtime.mjs && node --check lib/repo-context.mjs && node --check lib/memory-session.mjs && node --check lib/memadd-local.mjs && node --check lib/memory-tools.mjs && node --check lib/code-tools.mjs && node --check lib/memory-recall.mjs && node --check lib/viking-uri-guard.mjs && node --check lib/utils.mjs && node --check tests/*.test.mjs",
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.14.37"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
-  "type": "git",
-  "url": "https://github.com/volcengine/OpenViking"
+    "type": "git",
+    "url": "git+https://github.com/volcengine/OpenViking.git",
+    "directory": "examples/opencode-plugin"
   },
   "keywords": [
     "opencode",

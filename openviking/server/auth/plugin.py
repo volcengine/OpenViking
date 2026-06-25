@@ -5,13 +5,11 @@
 from __future__ import annotations
 
 import abc
-import sys
 from typing import TYPE_CHECKING, ClassVar, Optional
 
 from fastapi import Request
 
 from openviking.server.identity import ResolvedIdentity
-from openviking_cli.exceptions import UnauthenticatedError
 
 if TYPE_CHECKING:
     from openviking.server.config import ServerConfig

@@ -18,16 +18,6 @@ pub async fn vikingdb(
     Ok(())
 }
 
-pub async fn transaction(
-    client: &HttpClient,
-    output_format: OutputFormat,
-    compact: bool,
-) -> Result<()> {
-    let response: serde_json::Value = client.get("/api/v1/observer/transaction", &[]).await?;
-    output_success(&response, output_format, compact);
-    Ok(())
-}
-
 pub async fn retrieval(
     client: &HttpClient,
     output_format: OutputFormat,

@@ -142,6 +142,13 @@ type WriteOptions struct {
 	Telemetry any
 }
 
+// SetTagsOptions controls SetTags.
+type SetTagsOptions struct {
+	Mode      string
+	Recursive bool
+	Telemetry any
+}
+
 // ReindexOptions controls Reindex.
 type ReindexOptions struct {
 	Mode string
@@ -161,6 +168,13 @@ type FindOptions struct {
 	Until          string
 	TimeField      string
 	Level          []int
+	// AgentID / AgentURI select the peer whose memories this call is
+	// scoped to (server FindRequest.agent_id / agent_uri). This is a
+	// per-call selector and is mutually exclusive with the client-global
+	// Config.ActorPeerID header: the server rejects a request that sets a
+	// different peer via both. Leave empty to use the client-global peer.
+	AgentID  string
+	AgentURI string
 }
 
 // SearchOptions controls Search.
@@ -177,6 +191,12 @@ type SearchOptions struct {
 	Until          string
 	TimeField      string
 	Level          []int
+	// AgentID / AgentURI select the peer whose memories this call is
+	// scoped to (server SearchRequest.agent_id / agent_uri). Per-call
+	// selector, mutually exclusive with the client-global
+	// Config.ActorPeerID header. Leave empty to use the client-global peer.
+	AgentID  string
+	AgentURI string
 }
 
 // GrepOptions controls Grep.

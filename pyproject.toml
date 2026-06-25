@@ -17,7 +17,7 @@ requires-python = ">=3.10"
 authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
 ]
-license = { text = "AGPL-3.0" }
+license = "AGPL-3.0"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -30,6 +30,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
+    "openviking-sdk>=0.1.1",
     "pydantic>=2.0.0",
     "typing-extensions>=4.5.0",
     "pyyaml>=6.0",
@@ -39,6 +40,7 @@ dependencies = [
     "markdownify>=0.11.0",
     "openai>=1.0.0",
     "requests>=2.31.0",
+    "charset-normalizer>=3.4,<4",
     "python-docx>=1.0.0",
     "olefile>=0.47",
     "xlrd>=2.0.1",
@@ -58,7 +60,7 @@ dependencies = [
     "protobuf>=6.33.5",
     "pdfminer-six>=20251230",
     "typer>=0.12.0",
-    "litellm>=1.83.7,<1.86.3",
+    "litellm>=1.83.7,<1.89.3",
     "python-multipart>=0.0.31",
     "tree-sitter>=0.23.0",
     "tree-sitter-python>=0.23.0",
@@ -212,7 +214,8 @@ vikingbot = "vikingbot.cli.commands:app"
 [tool.setuptools_scm]
 write_to = "openviking/_version.py"
 local_scheme = "no-local-version"
-tag_regex = "^(?:v)?(?:[a-zA-Z0-9_]+@)?(?P<version>[0-9]+(?:\\.[0-9]+)*)$"
+tag_regex = "^v(?P<version>[0-9]+(?:\\.[0-9]+)*)$"
+git_describe_command = "git describe --dirty --tags --long --match v[0-9]*"
 
 [tool.setuptools.packages.find]
 where = [".", "bot"]

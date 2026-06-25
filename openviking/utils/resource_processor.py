@@ -305,7 +305,9 @@ class ResourceProcessor:
                             )
                     if not target_preexisting:
                         await viking_fs.persist_temp_tree(temp_uri, root_uri, ctx=ctx)
-                        await rewrite_image_uris(root_uri, ctx=ctx, lock_handle=resource_lock.handle)
+                        await rewrite_image_uris(
+                            root_uri, ctx=ctx, lock_handle=resource_lock.handle
+                        )
                         await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
                         temp_uri = root_uri
                         source_committed = True

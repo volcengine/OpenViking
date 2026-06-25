@@ -42,7 +42,7 @@ export function createMemoryRecall({ config }) {
 
   async function performRecallSearch(query) {
     try {
-      const body = { query: query.slice(0, 4000), limit: 20, mode: "auto" }
+      const body = { query: query.slice(0, 4000), limit: 20 }
       const response = await makeRequest(config, {
         method: "POST",
         endpoint: "/api/v1/search/find",

@@ -281,7 +281,9 @@ class OpenVikingOAuthProvider(
         if self._role_resolver is not None:
             try:
                 token_role = Role(refresh_token.role)
-                current_role = Role(self._role_resolver(refresh_token.account_id, refresh_token.user_id))
+                current_role = Role(
+                    self._role_resolver(refresh_token.account_id, refresh_token.user_id)
+                )
             except (ValueError, Exception):  # noqa: BLE001
                 token_role = None
                 current_role = None

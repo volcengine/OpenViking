@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Reques
 from pydantic import BaseModel, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.peer_id import normalize_peer_selector
+from openviking.core.peer_id import normalize_peer_id
 from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -96,11 +96,7 @@ class AddMessageRequest(BaseModel):
     def validate_content_or_parts(self) -> "AddMessageRequest":
         if self.content is None and self.parts is None:
             raise ValueError("Either 'content' or 'parts' must be provided")
-        self.peer_id = normalize_peer_selector(
-            self.peer_id,
-            agent_id=self.agent_id,
-            agent_uri=self.agent_uri,
-        )
+        self.peer_id = normalize_peer_id(self.peer_id)
         return self
 
 

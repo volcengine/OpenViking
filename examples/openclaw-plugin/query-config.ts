@@ -231,7 +231,13 @@ export class RuntimeQueryConfigStore {
     const { params, warnings } = normalizeRuntimeQueryParams(patch);
     const key = this.keyForScope(scope, ctx);
     const bucket = scope === "claw" ? this.data.claws : this.data.sessions;
-    bucket[key] = { params, updatedAt: Date.now(), updatedBy: "command", peerId: ctx.peerId };
+    const previous = bucket[key];
+    bucket[key] = {
+      params: { ...(previous?.params ?? {}), ...params },
+      updatedAt: Date.now(),
+      updatedBy: "command",
+      peerId: ctx.peerId,
+    };
     this.data.updatedAt = Date.now();
     await this.persist();
     return { warnings };

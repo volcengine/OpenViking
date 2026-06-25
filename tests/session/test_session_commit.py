@@ -15,7 +15,6 @@ from openviking.message import TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.storage.transaction import get_lock_manager
-from openviking_cli.exceptions import FailedPreconditionError
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -29,6 +28,14 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
     raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
 
 
+async def _marker_exists(session, archive_uri: str, name: str) -> bool:
+    try:
+        await session._viking_fs.read_file(f"{archive_uri}/{name}", ctx=session.ctx)
+        return True
+    except Exception:
+        return False
+
+
 class TestCommit:
     """Test commit"""
 
@@ -40,6 +47,7 @@ class TestCommit:
         assert result.get("status") == "accepted"
         assert "session_id" in result
         assert result.get("task_id") is not None
+        assert "memory_diff_uri" not in result
         assert "memories_extracted" not in result
 
     async def test_commit_extracts_memories(
@@ -52,6 +60,17 @@ class TestCommit:
         # Wait for background memory extraction to complete
         task_result = await _wait_for_task(task_id)
         assert task_result["status"] == "completed"
+        assert (
+            task_result["result"]["memory_diff_uri"]
+            == f"{task_result['result']['archive_uri']}/memory_diff.json"
+        )
+        memory_diff = json.loads(
+            await session_with_messages._viking_fs.read_file(
+                task_result["result"]["memory_diff_uri"],
+                ctx=session_with_messages.ctx,
+            )
+        )
+        assert memory_diff["archive_uri"] == task_result["result"]["archive_uri"]
         assert "memories_extracted" in task_result["result"]
         memory_counts = task_result["result"]["memories_extracted"]
         assert isinstance(memory_counts, dict)
@@ -89,6 +108,7 @@ class TestCommit:
         assert task_result["result"]["session_skill_uris"] == [
             "viking://user/test/skills/code-review"
         ]
+        assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
         session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
         call_kwargs = (
@@ -124,6 +144,7 @@ class TestCommit:
         assert task_result["status"] == "completed"
         assert task_result["result"]["memories_extracted"] == {}
         assert task_result["result"]["session_skills_extracted"] == 0
+        assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
         session_with_messages._session_compressor.extract_execution_memories.assert_not_awaited()
 
@@ -149,6 +170,7 @@ class TestCommit:
         assert task_result["status"] == "completed"
         assert task_result["result"]["session_skills_extracted"] == 0
         assert task_result["result"]["session_skill_uris"] == []
+        assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
         session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
         call_kwargs = (
@@ -474,9 +496,14 @@ class TestCommit:
             f"active_count not incremented: before={count_before}, after={count_after}"
         )
 
-    async def test_commit_blocks_after_failed_archive(self, client: AsyncOpenViking):
-        """A failed archive should block the next commit until it is resolved."""
-        session = client.session(session_id="failed_archive_blocks_new_commit")
+    async def test_commit_failed_after_long_term_extraction_failure_does_not_block(
+        self, client: AsyncOpenViking
+    ):
+        """Binary archive outcome: if long-term extraction fails (after retries),
+        the whole archive is marked .failed.json and skipped — there is no
+        partial state — but a failed archive must not block the next commit.
+        """
+        session = client.session(session_id="failed_archive_does_not_block_commit")
 
         async def failing_extract(*args, **kwargs):
             del args, kwargs
@@ -490,17 +517,25 @@ class TestCommit:
 
         assert task_result["status"] == "failed"
 
-        failed_marker = await session._viking_fs.read_file(
-            f"{result['archive_uri']}/.failed.json",
-            ctx=session.ctx,
+        archive_uri = result["archive_uri"]
+        assert await _marker_exists(session, archive_uri, ".failed.json")
+        assert not await _marker_exists(session, archive_uri, ".done")
+        assert not await _marker_exists(session, archive_uri, ".partial.json")
+
+        failed_payload = json.loads(
+            await session._viking_fs.read_file(
+                f"{archive_uri}/.failed.json",
+                ctx=session.ctx,
+            )
         )
-        failed_payload = json.loads(failed_marker)
-        assert failed_payload["stage"] == "memory_extraction"
+        assert failed_payload.get("skipped") is True
         assert "synthetic extraction failure" in failed_payload["error"]
 
+        # A failed archive is a skippable terminal state and must not block the
+        # next commit (this previously raised FailedPreconditionError).
         session.add_message("user", [TextPart("Second round message")])
-        with pytest.raises(FailedPreconditionError, match="unresolved failed archive"):
-            await session.commit_async()
+        second = await session.commit_async()
+        assert second["status"] == "accepted"
 
     async def test_commit_skips_redo_when_recovery_disabled(
         self, session_with_messages: Session, monkeypatch: pytest.MonkeyPatch

@@ -93,7 +93,7 @@
       "name": "OpenCode",
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenCode.png",
-      "summary": "Provides OpenCode plugins that can expose OpenViking either as model-selected tools or injected context.",
+      "summary": "Provides one unified OpenCode plugin for repository context, memory tools, session sync, and automatic recall.",
       "detailPath": "https://docs.openviking.net/agents/en/opencode.md"
     }
   ]

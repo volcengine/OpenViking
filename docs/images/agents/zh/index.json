@@ -93,7 +93,7 @@
       "name": "OpenCode",
       "tags": ["Plugin"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/OpenCode.png",
-      "summary": "提供两种 OpenCode 插件，可以模型自主选择使用，也可以注入上下文使用",
+      "summary": "提供一个统一 OpenCode 插件，支持仓库上下文、记忆工具、session 同步与自动 recall",
       "detailPath": "https://docs.openviking.net/agents/zh/opencode.md"
     }
   ]
