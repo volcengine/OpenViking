@@ -43,6 +43,7 @@ EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
 
 # Minimum OV version that supports content field + FullText config for grep bm25
 _FULLTEXT_MIN_VERSION = "0.3.18"
+_EMBEDDING_COMPATIBILITY_KEYS = ("provider", "model", "dimension", "model_identity")
 
 
 def _parse_version(v: str) -> tuple:
@@ -222,6 +223,52 @@ def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
     }
 
 
+def _embedding_compatibility_signature(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return fields that define embedding vector compatibility.
+
+    schema_version describes collection schema capability, not vector-space
+    compatibility, so it must not force a rebuild by itself.
+    Older metadata may not have ``model_identity`` yet; in that case compare
+    the fields that are actually recorded instead of treating the missing key as
+    a hard incompatibility.
+    """
+    if meta is None:
+        return None
+    return {
+        key: meta.get(key)
+        for key in _EMBEDDING_COMPATIBILITY_KEYS
+        if meta.get(key) is not None
+    }
+
+
+def _embedding_metadata_compatible(
+    existing_meta: Optional[Dict[str, Any]],
+    current_meta: Dict[str, Any],
+) -> bool:
+    existing_signature = _embedding_compatibility_signature(existing_meta)
+    current_signature = _embedding_compatibility_signature(current_meta) or {}
+    if not existing_signature:
+        return False
+    return all(current_signature.get(key) == value for key, value in existing_signature.items())
+
+
+def _collection_has_content_fulltext(meta: Dict[str, Any]) -> bool:
+    fields = meta.get("Fields", [])
+    has_content = any(
+        f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields
+    )
+    fulltext = meta.get("FullText") or []
+    if isinstance(fulltext, str):
+        try:
+            fulltext = json.loads(fulltext)
+        except json.JSONDecodeError:
+            fulltext = []
+    has_content_fulltext = any(
+        isinstance(ft, dict) and ft.get("Field") == "content" for ft in fulltext
+    )
+    return has_content and has_content_fulltext
+
+
 def _encode_collection_description(
     base_description: str,
     embedding_meta: Dict[str, Any],
@@ -299,27 +346,26 @@ async def init_context_collection(storage) -> bool:
         existing_meta.get("Description")
     )
 
-    # Schema compatibility check: warn if collection was created by older OV version
-    if existing_embedding_meta:
-        existing_schema_version = existing_embedding_meta.get("schema_version", "0.0.0")
-        if _parse_version(existing_schema_version) < _parse_version(_FULLTEXT_MIN_VERSION):
-            fields = existing_meta.get("Fields", [])
-            has_content = any(
-                f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields
-            )
-            fulltext = existing_meta.get("FullText") or []
-            has_content_fulltext = any(ft.get("Field") == "content" for ft in fulltext)
-            if not (has_content and has_content_fulltext):
-                logger.warning(
-                    "Collection schema is outdated (created by OV %s, requires >= %s). "
-                    "Missing 'content' field or FullText config. "
-                    "grep engine=auto will fall back to fs. "
-                    "Recreate the collection to enable vikingdb-based grep.",
-                    existing_schema_version,
-                    _FULLTEXT_MIN_VERSION,
-                )
+    # Schema compatibility check: actual collection schema controls whether
+    # VikingDB full-text grep can be used. Missing content/FullText should only
+    # disable the vikingdb grep path, not block server startup.
+    if (
+        "Fields" in existing_meta or "FullText" in existing_meta
+    ) and not _collection_has_content_fulltext(existing_meta):
+        existing_schema_version = "unknown"
+        if existing_embedding_meta:
+            existing_schema_version = existing_embedding_meta.get("schema_version", "0.0.0")
+        logger.warning(
+            "Collection schema does not support VikingDB full-text grep "
+            "(created by OV %s, feature requires >= %s). "
+            "Missing 'content' field or FullText config. "
+            "grep engine=auto will fall back to fs. "
+            "Recreate the collection to enable vikingdb-based grep.",
+            existing_schema_version,
+            _FULLTEXT_MIN_VERSION,
+        )
 
-    if existing_embedding_meta == embedding_meta:
+    if _embedding_metadata_compatible(existing_embedding_meta, embedding_meta):
         return False
 
     existing_count = await storage.count() if hasattr(storage, "count") else 0

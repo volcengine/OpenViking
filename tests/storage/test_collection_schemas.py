@@ -18,6 +18,7 @@ from openviking.storage.collection_schemas import (
     _build_embedding_metadata,
     init_context_collection,
 )
+from openviking.storage.errors import EmbeddingRebuildRequiredError
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.vectordb import engine as vectordb_engine
@@ -203,9 +204,10 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
 
 
 @pytest.mark.asyncio
-async def test_init_context_collection_warns_on_mismatched_nonempty_collection(monkeypatch):
-    """When embedding metadata mismatches for a non-empty collection, the function
-    logs a warning and returns False (does not raise)."""
+async def test_init_context_collection_rejects_mismatched_nonempty_collection(monkeypatch):
+    """When embedding dimension mismatches for a non-empty collection, vectors are
+    incompatible and the function requires a rebuild.
+    """
 
     class _FakeStorage:
         async def create_collection(self, name, schema):
@@ -234,8 +236,212 @@ async def test_init_context_collection_warns_on_mismatched_nonempty_collection(m
         lambda: config,
     )
 
-    result = await init_context_collection(_FakeStorage())
-    assert result is False
+    with pytest.raises(EmbeddingRebuildRequiredError, match="embedding dimension"):
+        await init_context_collection(_FakeStorage())
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_accepts_old_schema_version_with_same_embedding(
+    monkeypatch,
+):
+    """A collection created by an older OpenViking version may lack content
+    FullText schema, but it should still start when embedding config is unchanged.
+    """
+
+    updates = []
+    config = _DummyConfig(_DummyEmbedder())
+    current_meta = _build_embedding_metadata(config)
+    old_meta = dict(current_meta, schema_version="0.3.17")
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {
+                "Description": (
+                    "Unified context collection\n\n[openviking.embedding]\n"
+                    + json.dumps(old_meta, sort_keys=True)
+                ),
+                "Fields": [
+                    {"FieldName": "id", "FieldType": "string"},
+                    {"FieldName": "uri", "FieldType": "path"},
+                    {"FieldName": "vector", "FieldType": "vector", "Dim": 2},
+                    {"FieldName": "abstract", "FieldType": "string"},
+                ],
+                "FullText": [],
+            }
+
+        async def count(self):
+            return 3
+
+        async def update_collection_description(self, description):
+            updates.append(description)
+            return True
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    created = await init_context_collection(_FakeStorage())
+
+    assert created is False
+    assert not updates
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_accepts_legacy_metadata_without_model_identity(
+    monkeypatch,
+):
+    config = _DummyConfig(_DummyEmbedder())
+    legacy_meta = _build_embedding_metadata(config)
+    legacy_meta.pop("model_identity")
+    legacy_meta["schema_version"] = "0.3.17"
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {
+                "Description": (
+                    "Unified context collection\n\n[openviking.embedding]\n"
+                    + json.dumps(legacy_meta, sort_keys=True)
+                ),
+                "Fields": [
+                    {"FieldName": "id", "FieldType": "string"},
+                    {"FieldName": "uri", "FieldType": "path"},
+                    {"FieldName": "vector", "FieldType": "vector", "Dim": 2},
+                ],
+            }
+
+        async def count(self):
+            return 3
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    created = await init_context_collection(_FakeStorage())
+
+    assert created is False
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_rejects_dimension_change_even_for_old_schema(
+    monkeypatch,
+):
+    config = _DummyConfig(_DummyEmbedder())
+    current_meta = _build_embedding_metadata(config)
+    old_meta = dict(current_meta, dimension=4, schema_version="0.3.17")
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {
+                "Description": (
+                    "Unified context collection\n\n[openviking.embedding]\n"
+                    + json.dumps(old_meta, sort_keys=True)
+                ),
+                "Fields": [
+                    {"FieldName": "id", "FieldType": "string"},
+                    {"FieldName": "uri", "FieldType": "path"},
+                    {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+                ],
+            }
+
+        async def count(self):
+            return 3
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    with pytest.raises(EmbeddingRebuildRequiredError, match="embedding dimension"):
+        await init_context_collection(_FakeStorage())
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_rejects_provider_change_with_same_dimension(
+    monkeypatch,
+):
+    config = _DummyConfig(_DummyEmbedder())
+    current_meta = _build_embedding_metadata(config)
+    existing_meta = dict(current_meta, provider="openai", schema_version="0.3.17")
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {
+                "Description": (
+                    "Unified context collection\n\n[openviking.embedding]\n"
+                    + json.dumps(existing_meta, sort_keys=True)
+                )
+            }
+
+        async def count(self):
+            return 3
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    with pytest.raises(EmbeddingRebuildRequiredError, match="embedding metadata"):
+        await init_context_collection(_FakeStorage())
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_allows_provider_change_when_override_enabled(
+    monkeypatch,
+):
+    updates = []
+    config = _DummyConfig(_DummyEmbedder())
+    config.embedding.allow_metadata_override = True
+    current_meta = _build_embedding_metadata(config)
+    existing_meta = dict(current_meta, provider="openai", schema_version="0.3.17")
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {
+                "Description": (
+                    "Unified context collection\n\n[openviking.embedding]\n"
+                    + json.dumps(existing_meta, sort_keys=True)
+                )
+            }
+
+        async def count(self):
+            return 3
+
+        async def update_collection_description(self, description):
+            updates.append(description)
+            return True
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    created = await init_context_collection(_FakeStorage())
+
+    assert created is False
+    assert len(updates) == 1
+    assert '"provider": "local"' in updates[0]
 
 
 def test_build_embedding_metadata_hashes_resolved_local_model_path(tmp_path):
