@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """CLI search operation tests (find, search, grep, glob)."""
 
-import time
-
 import pytest
 from conftest import ov, skip_if_auth_error
 

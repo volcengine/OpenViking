@@ -465,6 +465,26 @@ def _is_retryable_api_error(result: dict) -> bool:
     return any(marker in combined for marker in retryable_markers)
 
 
+def _retry_cli_call(args, *, attempts=15, interval=10, timeout=120):
+    """Generic CLI call retry helper for write operations.
+
+    Retries on CONFLICT/busy/network errors, skips on auth errors,
+    returns immediately on non-retryable errors.
+    """
+    r = None
+    for _attempt in range(attempts):
+        r = ov(args, timeout=timeout)
+        if r["exit_code"] == 0:
+            return r
+        skip_if_auth_error(r)
+        if _is_retryable_api_error(r):
+            time.sleep(interval)
+            continue
+        # Non-retryable error, return immediately
+        return r
+    return r
+
+
 def ov_add_resource(path, to_uri, *extra_args, attempts=15, interval=10):
     """Add a resource with retries for CONFLICT/busy/network errors."""
     args = [
@@ -479,18 +499,28 @@ def ov_add_resource(path, to_uri, *extra_args, attempts=15, interval=10):
         "-o",
         "json",
     ]
-    r = None
-    for _attempt in range(attempts):
-        r = ov(args, timeout=ADD_RESOURCE_COMMAND_TIMEOUT)
-        if r["exit_code"] == 0:
-            return r
-        skip_if_auth_error(r)
-        if _is_retryable_api_error(r):
-            time.sleep(interval)
-            continue
-        # Non-retryable error, return immediately
-        return r
-    return r
+    return _retry_cli_call(
+        args, attempts=attempts, interval=interval, timeout=ADD_RESOURCE_COMMAND_TIMEOUT
+    )
+
+
+def ov_add_skill(path, *extra_args, attempts=15, interval=10):
+    """Add a skill with retries for CONFLICT/busy/network errors."""
+    args = [
+        "add-skill",
+        path,
+        *extra_args,
+        "--wait",
+        "-o",
+        "json",
+    ]
+    return _retry_cli_call(args, attempts=attempts, interval=interval, timeout=120)
+
+
+def ov_mkdir(uri, *extra_args, attempts=15, interval=5):
+    """Create a directory with retries for CONFLICT/busy/network errors."""
+    args = ["mkdir", uri, *extra_args, "-o", "json"]
+    return _retry_cli_call(args, attempts=attempts, interval=interval, timeout=120)
 
 
 def ov_retry(args, *, attempts=5, interval=5, timeout=120, retry_if=None):
@@ -513,7 +543,7 @@ def ov_retry(args, *, attempts=5, interval=5, timeout=120, retry_if=None):
     return r
 
 
-def ov_rm(uri, *, recursive=True, attempts=5, interval=3):
+def ov_rm(uri, *, recursive=True, attempts=15, interval=5):
     args = ["rm", uri, "-o", "json"]
     if recursive:
         args.insert(2, "-r")
@@ -579,44 +609,36 @@ def _find_file_in_pack(pack_uri, retries=10, interval=5):
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_resources_dir():
-    r = ov(["mkdir", "viking://resources", "-o", "json"], timeout=120)
+    r = ov_mkdir("viking://resources")
     if r["exit_code"] != 0:
+        if "already exists" in (r.get("stderr") or "").lower():
+            return
         skip_if_auth_error(r)
-        if "already exists" not in r["stderr"].lower():
-            r2 = ov(["stat", "viking://resources", "-o", "json"])
-            if r2["exit_code"] != 0:
-                skip_if_auth_error(r2)
+        r2 = ov(["stat", "viking://resources", "-o", "json"])
+        if r2["exit_code"] != 0:
+            skip_if_auth_error(r2)
+            pytest.fail(f"Failed to create resources dir: {r['stderr'][:300]}")
 
 
 @pytest.fixture(scope="session")
 def ensure_user_skills_dir():
     uri = "viking://user/skills"
-    for _attempt in range(5):
-        r = ov(["mkdir", uri, "-o", "json"], timeout=120)
-        if r["exit_code"] == 0 or "already exists" in (r.get("stderr") or "").lower():
-            return
-        skip_if_auth_error(r)
-
-        stat_r = ov(["stat", uri, "-o", "json"], timeout=120)
-        if stat_r["exit_code"] == 0:
-            return
-        skip_if_auth_error(stat_r)
-
-        time.sleep(5)
-    assert r["exit_code"] == 0, f"mkdir {uri} failed after retries: {r['stderr']}"
+    r = ov_mkdir(uri)
+    if r["exit_code"] == 0 or "already exists" in (r.get("stderr") or "").lower():
+        return
+    skip_if_auth_error(r)
+    stat_r = ov(["stat", uri, "-o", "json"], timeout=120)
+    if stat_r["exit_code"] == 0:
+        return
+    skip_if_auth_error(stat_r)
+    pytest.fail(f"mkdir {uri} failed after retries: {r['stderr'][:300]}")
 
 
 @pytest.fixture(scope="session")
 def test_dir_uri(ensure_resources_dir):
     uri = f"viking://resources/cli_test_{uuid.uuid4().hex[:8]}"
-    r = None
-    for _attempt in range(5):
-        r = ov(["mkdir", uri, "-o", "json"], timeout=120)
-        if r["exit_code"] == 0:
-            break
-        skip_if_auth_error(r)
-        time.sleep(5)
-    assert r["exit_code"] == 0, f"mkdir failed after retries: {r['stderr']}"
+    r = ov_mkdir(uri)
+    assert r["exit_code"] == 0, f"mkdir failed after retries: {r['stderr'][:300]}"
     yield uri
     ov_rm(uri, attempts=10, interval=5)
 

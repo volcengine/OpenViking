@@ -4,11 +4,10 @@
 
 import os
 import tempfile
-import time
 import uuid
 
 import pytest
-from conftest import ov, ov_add_resource, skip_if_auth_error
+from conftest import ov_add_resource
 
 pytestmark = pytest.mark.cli_remote
 
@@ -36,36 +35,6 @@ class TestAddResource:
             )
             assert result["root_uri"] == to_uri, (
                 f"root_uri should match to_uri, expected {to_uri}, got {result['root_uri']}"
-            )
-        finally:
-            os.unlink(temp_path)
-
-
-class TestAddSkill:
-    def test_add_skill_from_file(self):
-        with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w") as f:
-            f.write(
-                "---\nname: cli_test_skill\ndescription: A test skill for CLI automation\n---\n# CLI Test Skill\n\nThis is a test skill for CLI automation."
-            )
-            temp_path = f.name
-        try:
-            r = None
-            for _attempt in range(5):
-                r = ov(["add-skill", temp_path, "--wait", "-o", "json"], timeout=120)
-                if r["exit_code"] == 0:
-                    break
-                skip_if_auth_error(r)
-                time.sleep(5)
-            assert r["exit_code"] == 0, (
-                f"add-skill from file should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-            )
-            data = r["json"]
-            assert data is not None, "add-skill should return JSON"
-            assert data.get("ok") is True, f"Expected ok=true, got {data.get('ok')}"
-            assert "result" in data, "'result' field should exist"
-            result = data["result"]
-            assert "root_uri" in result, (
-                f"add-skill result should contain root_uri, got keys: {sorted(result.keys())}"
             )
         finally:
             os.unlink(temp_path)
