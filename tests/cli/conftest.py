@@ -445,22 +445,52 @@ def ov(args, timeout=120):
     }
 
 
-def ov_add_resource(path, to_uri, *extra_args):
-    return ov(
-        [
-            "add-resource",
-            path,
-            "--to",
-            to_uri,
-            *extra_args,
-            "--wait",
-            "--timeout",
-            ADD_RESOURCE_WAIT_TIMEOUT,
-            "-o",
-            "json",
-        ],
-        timeout=ADD_RESOURCE_COMMAND_TIMEOUT,
-    )
+def _is_retryable_api_error(result: dict) -> bool:
+    """Check if a CLI error is retryable (resource busy, conflict, network issue)."""
+    if is_cli_auth_error(result):
+        return False
+    stderr = (result.get("stderr") or "").lower()
+    stdout = (result.get("stdout") or "").lower()
+    combined = stderr + " " + stdout
+    retryable_markers = [
+        "conflict",
+        "resource is busy",
+        "busy",
+        "network error",
+        "connection error",
+        "could not reach openviking",
+        "timeout",
+        "temporarily unavailable",
+    ]
+    return any(marker in combined for marker in retryable_markers)
+
+
+def ov_add_resource(path, to_uri, *extra_args, attempts=15, interval=10):
+    """Add a resource with retries for CONFLICT/busy/network errors."""
+    args = [
+        "add-resource",
+        path,
+        "--to",
+        to_uri,
+        *extra_args,
+        "--wait",
+        "--timeout",
+        ADD_RESOURCE_WAIT_TIMEOUT,
+        "-o",
+        "json",
+    ]
+    r = None
+    for _attempt in range(attempts):
+        r = ov(args, timeout=ADD_RESOURCE_COMMAND_TIMEOUT)
+        if r["exit_code"] == 0:
+            return r
+        skip_if_auth_error(r)
+        if _is_retryable_api_error(r):
+            time.sleep(interval)
+            continue
+        # Non-retryable error, return immediately
+        return r
+    return r
 
 
 def ov_retry(args, *, attempts=5, interval=5, timeout=120, retry_if=None):
@@ -469,7 +499,14 @@ def ov_retry(args, *, attempts=5, interval=5, timeout=120, retry_if=None):
         r = ov(args, timeout=timeout)
         if r["exit_code"] == 0:
             return r
-        if retry_if is not None and not retry_if(r):
+        skip_if_auth_error(r)
+        # Determine if we should retry
+        should_retry = True
+        if retry_if is not None:
+            should_retry = retry_if(r)
+        else:
+            should_retry = _is_retryable_api_error(r)
+        if not should_retry:
             return r
         if attempt < attempts - 1:
             time.sleep(interval)
@@ -591,16 +628,7 @@ def test_pack_uri(test_dir_uri):
         temp_path = f.name
     try:
         pack_uri = f"{test_dir_uri}/test_pack"
-        r = None
-        for _attempt in range(10):
-            r = ov_add_resource(temp_path, pack_uri)
-            if r["exit_code"] == 0:
-                break
-            skip_if_auth_error(r)
-            if "CONFLICT" in (r.get("stderr") or "") or "busy" in (r.get("stderr") or "").lower():
-                time.sleep(10)
-            else:
-                time.sleep(5)
+        r = ov_add_resource(temp_path, pack_uri)
         assert r["exit_code"] == 0, f"add-resource failed after retries: {r['stderr']}"
     finally:
         os.unlink(temp_path)

@@ -20,19 +20,7 @@ class TestAddResource:
             temp_path = f.name
         try:
             to_uri = f"{test_dir_uri}/res_{uuid.uuid4().hex[:6]}"
-            r = None
-            for _attempt in range(5):
-                r = ov_add_resource(temp_path, to_uri)
-                if r["exit_code"] == 0:
-                    break
-                if "CONFLICT" in (r.get("stderr") or "") or "Network error" in (
-                    r.get("stderr") or ""
-                ):
-                    time.sleep(10)
-                else:
-                    time.sleep(5)
-            if r["exit_code"] != 0 and "Network error" in (r.get("stderr") or ""):
-                pytest.skip("OpenViking server unreachable")
+            r = ov_add_resource(temp_path, to_uri)
             assert r["exit_code"] == 0, (
                 f"add-resource should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
             )
@@ -88,19 +76,7 @@ class TestAddSkill:
             temp_path = f.name
         try:
             to_uri = f"{test_dir_uri}/reason_{uuid.uuid4().hex[:6]}"
-            r = None
-            for _attempt in range(5):
-                r = ov_add_resource(temp_path, to_uri, "--reason", "CLI test reason")
-                if r["exit_code"] == 0:
-                    break
-                if "CONFLICT" in (r.get("stderr") or "") or "Network error" in (
-                    r.get("stderr") or ""
-                ):
-                    time.sleep(10)
-                else:
-                    time.sleep(5)
-            if r["exit_code"] != 0 and "Network error" in (r.get("stderr") or ""):
-                pytest.skip("OpenViking server unreachable")
+            r = ov_add_resource(temp_path, to_uri, "--reason", "CLI test reason")
             assert r["exit_code"] == 0, (
                 f"add-resource with reason should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
             )
