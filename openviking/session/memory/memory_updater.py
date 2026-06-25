@@ -223,29 +223,35 @@ class ExtractContext:
         msg_range = self.read_message_ranges(ranges_str)
         return msg_range._first_message_time_with_weekday()
 
-    def get_year(self, ranges_str: str) -> str | None:
-        """根据 ranges 字符串获取第一条消息的年份"""
-        if not ranges_str:
-            return None
-        msg_range = self.read_message_ranges(ranges_str)
-        first_time = msg_range._first_message_time()
-        return first_time.split("-")[0] if first_time else None
+    def _first_message_date_or_now(self, ranges_str: str) -> str:
+        """根据 ranges 获取第一条消息的日期（YYYY-MM-DD），用于 events URI 分段。
+        Return the first message's date (YYYY-MM-DD) for the events URI segments.
 
-    def get_month(self, ranges_str: str) -> str | None:
-        """根据 ranges 字符串获取第一条消息的月份"""
-        if not ranges_str:
-            return None
-        msg_range = self.read_message_ranges(ranges_str)
-        first_time = msg_range._first_message_time()
-        return first_time.split("-")[1] if first_time else None
+        Fallback 到 datetime.now() 以保证 year/month/day 段总是非空，避免渲染出
+        .../events/None/None/None/... 这样的无效 URI（Jinja2 会把 None 渲染成字面量 "None"）。
+        Falls back to datetime.now() so the year/month/day segments are never empty;
+        otherwise the URI renders as .../events/None/None/None/... because Jinja2
+        prints None as the literal string "None".
+        """
+        from datetime import datetime
 
-    def get_day(self, ranges_str: str) -> str | None:
-        """根据 ranges 字符串获取第一条消息的日期"""
-        if not ranges_str:
-            return None
-        msg_range = self.read_message_ranges(ranges_str)
-        first_time = msg_range._first_message_time()
-        return first_time.split("-")[2] if first_time else None
+        if ranges_str:
+            first_time = self.read_message_ranges(ranges_str)._first_message_time()
+            if first_time:
+                return first_time
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def get_year(self, ranges_str: str) -> str:
+        """根据 ranges 字符串获取第一条消息的年份 / First message's year from ranges."""
+        return self._first_message_date_or_now(ranges_str).split("-")[0]
+
+    def get_month(self, ranges_str: str) -> str:
+        """根据 ranges 字符串获取第一条消息的月份 / First message's month from ranges."""
+        return self._first_message_date_or_now(ranges_str).split("-")[1]
+
+    def get_day(self, ranges_str: str) -> str:
+        """根据 ranges 字符串获取第一条消息的日期 / First message's day from ranges."""
+        return self._first_message_date_or_now(ranges_str).split("-")[2]
 
     def get_timestamp_from_ranges(self, ranges_str: str) -> str:
         """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSS），用于文件名去重。

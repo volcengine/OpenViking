@@ -155,6 +155,35 @@ class TestMemoryUpdater:
 
         assert "Gina can expand her clothing store now." in content
 
+    def test_extract_context_event_date_uses_first_message_time(self):
+        extract_context = ExtractContext(
+            messages=[
+                Message(
+                    id="1",
+                    role="user",
+                    parts=[TextPart(text="hi")],
+                    created_at="2026-04-17T01:26:14.481Z",
+                )
+            ]
+        )
+
+        assert extract_context.get_year("0") == "2026"
+        assert extract_context.get_month("0") == "04"
+        assert extract_context.get_day("0") == "17"
+
+    def test_extract_context_event_date_falls_back_to_now_without_ranges(self):
+        from datetime import datetime
+
+        extract_context = ExtractContext(
+            messages=[Message(id="1", role="user", parts=[TextPart(text="hi")])]
+        )
+
+        now = datetime.now()
+        # Empty/missing ranges must never render the literal "None" into the URI.
+        assert extract_context.get_year("") == str(now.year)
+        assert extract_context.get_month("") == f"{now.month:02d}"
+        assert extract_context.get_day("") == f"{now.day:02d}"
+
     def test_create(self):
         """Test creating a MemoryUpdater."""
         updater = MemoryUpdater()
