@@ -8,7 +8,7 @@ import time
 import uuid
 
 import pytest
-from conftest import ov
+from conftest import ov, skip_if_auth_error
 
 pytestmark = pytest.mark.cli_remote
 
@@ -28,8 +28,7 @@ class TestSkillAdd:
                 r = ov(["add-skill", temp_path, "--wait", "-o", "json"], timeout=120)
                 if r["exit_code"] == 0:
                     break
-                if "UNAUTHENTICATED" in (r.get("stderr") or ""):
-                    pytest.skip("Upstream API authentication unavailable")
+                skip_if_auth_error(r)
                 time.sleep(5)
             assert r["exit_code"] == 0, (
                 f"add-skill from file should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
@@ -59,8 +58,7 @@ class TestSkillAdd:
                 r = ov(["add-skill", temp_path, "--wait", "-o", "json"], timeout=120)
                 if r["exit_code"] == 0:
                     break
-                if "UNAUTHENTICATED" in (r.get("stderr") or ""):
-                    pytest.skip("Upstream API authentication unavailable")
+                skip_if_auth_error(r)
                 time.sleep(5)
             assert r["exit_code"] == 0, (
                 f"add-skill should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"

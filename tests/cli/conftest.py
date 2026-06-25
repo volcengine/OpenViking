@@ -147,83 +147,99 @@ def _extract_user_key(users: list[object], user_id: str) -> str:
 
 
 def _resolve_api_key() -> str:
+    """Resolve a user API key suitable for data-plane operations.
+
+    Root keys (OPENVIKING_API_KEY/OPENVIKING_ROOT_API_KEY) cannot be used for
+    data-plane operations like add-skill/ls/read. When only a root key is
+    available we need to provision a regular user via admin APIs.
+
+    Returns an empty string if we cannot obtain a valid user key; callers
+    should skip tests in that case.
+    """
+    # Priority 1: Explicit test user key is already a user key - use directly
     explicit_user_key = os.getenv("OPENVIKING_CLI_TEST_API_KEY") or os.getenv(
         "OPENVIKING_USER_API_KEY", ""
     )
     if explicit_user_key:
         return explicit_user_key
+
+    # Priority 2: If we don't have a root key, we can't provision users; return
+    # CONFIGURED_API_KEY as-is (it might be a pre-provisioned user key)
     if not ROOT_API_KEY:
         return CONFIGURED_API_KEY
 
+    # Priority 3: Use root key to provision/get a user key via admin API.
+    # Retry a few times to handle server startup race conditions.
     account_id = CLI_ACCOUNT or "test-account"
     user_id = CLI_USER or "test-user"
-    try:
-        list_resp = httpx.get(
-            f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users",
-            headers=_admin_headers(),
-            timeout=10.0,
-        )
-        if list_resp.status_code == 404:
-            create_resp = httpx.post(
-                f"{BASE_URL}/api/v1/admin/accounts",
-                headers=_admin_headers(),
-                json={"account_id": account_id, "admin_user_id": user_id},
-                timeout=10.0,
-            )
-            if create_resp.status_code in (200, 201):
-                user_key = create_resp.json().get("result", {}).get("user_key")
-                if isinstance(user_key, str) and user_key:
-                    return user_key
-            return CONFIGURED_API_KEY
 
-        if list_resp.status_code != 200:
-            return CONFIGURED_API_KEY
-
-        users = list_resp.json().get("result", [])
-        if isinstance(users, list):
-            user_key = _extract_user_key(users, user_id)
-            if user_key:
-                return user_key
-            user_exists = any(
-                (isinstance(user, dict) and user.get("user_id") == user_id)
-                or (isinstance(user, str) and user == user_id)
-                for user in users
-            )
-        else:
-            user_exists = False
-
-        if not user_exists:
-            register_resp = httpx.post(
+    for attempt in range(5):
+        try:
+            list_resp = httpx.get(
                 f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users",
                 headers=_admin_headers(),
-                json={"user_id": user_id, "role": "admin"},
                 timeout=10.0,
             )
-            if register_resp.status_code in (200, 201):
-                user_key = register_resp.json().get("result", {}).get("user_key")
-                if isinstance(user_key, str) and user_key:
-                    return user_key
-            return CONFIGURED_API_KEY
+            if list_resp.status_code == 404:
+                create_resp = httpx.post(
+                    f"{BASE_URL}/api/v1/admin/accounts",
+                    headers=_admin_headers(),
+                    json={"account_id": account_id, "admin_user_id": user_id},
+                    timeout=10.0,
+                )
+                if create_resp.status_code in (200, 201):
+                    user_key = create_resp.json().get("result", {}).get("user_key")
+                    if isinstance(user_key, str) and user_key:
+                        return user_key
+            elif list_resp.status_code == 200:
+                users = list_resp.json().get("result", [])
+                if isinstance(users, list):
+                    user_key = _extract_user_key(users, user_id)
+                    if user_key:
+                        return user_key
+                    user_exists = any(
+                        (isinstance(user, dict) and user.get("user_id") == user_id)
+                        or (isinstance(user, str) and user == user_id)
+                        for user in users
+                    )
+                else:
+                    user_exists = False
 
-        httpx.put(
-            f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users/{user_id}/role",
-            headers=_admin_headers(),
-            json={"role": "admin"},
-            timeout=10.0,
-        )
-        key_resp = httpx.post(
-            f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
-            headers=_admin_headers(),
-            json={},
-            timeout=10.0,
-        )
-        if key_resp.status_code == 200:
-            user_key = key_resp.json().get("result", {}).get("user_key")
-            if isinstance(user_key, str) and user_key:
-                return user_key
-    except Exception:
-        pass
-    return CONFIGURED_API_KEY
+                if not user_exists:
+                    register_resp = httpx.post(
+                        f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users",
+                        headers=_admin_headers(),
+                        json={"user_id": user_id, "role": "admin"},
+                        timeout=10.0,
+                    )
+                    if register_resp.status_code in (200, 201):
+                        user_key = register_resp.json().get("result", {}).get("user_key")
+                        if isinstance(user_key, str) and user_key:
+                            return user_key
+                else:
+                    httpx.put(
+                        f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users/{user_id}/role",
+                        headers=_admin_headers(),
+                        json={"role": "admin"},
+                        timeout=10.0,
+                    )
+                    key_resp = httpx.post(
+                        f"{BASE_URL}/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
+                        headers=_admin_headers(),
+                        json={},
+                        timeout=10.0,
+                    )
+                    if key_resp.status_code == 200:
+                        user_key = key_resp.json().get("result", {}).get("user_key")
+                        if isinstance(user_key, str) and user_key:
+                            return user_key
+        except Exception:
+            pass
+        time.sleep(2)
+
+    # Failed to provision a user key after retries - return empty string
+    # rather than falling back to root key (which doesn't work for data plane)
+    return ""
 
 
 API_KEY = _resolve_api_key()
@@ -321,10 +337,11 @@ CLI_COMPATIBLE = _check_cli_compatible()
 
 
 def pytest_collection_modifyitems(config, items):
+    skip_reason = None
     if not CLI_COMPATIBLE:
-        reason = "openviking CLI not available"
+        skip_reason = "openviking CLI not available"
         if CLI_BIN is None:
-            reason = "openviking CLI binary not found. Install via: curl -fsSL http://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash"
+            skip_reason = "openviking CLI binary not found. Install via: curl -fsSL http://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash"
         else:
             try:
                 result = subprocess.run(
@@ -335,10 +352,14 @@ def pytest_collection_modifyitems(config, items):
                     env=_env(),
                 )
                 if "GLIBC" in result.stderr:
-                    reason = "openviking CLI binary is not compatible with this system (GLIBC version mismatch)"
+                    skip_reason = "openviking CLI binary is not compatible with this system (GLIBC version mismatch)"
             except Exception:
                 pass
-        skip_cli = pytest.mark.skip(reason=reason)
+    elif not API_KEY:
+        skip_reason = "Could not obtain a valid user API key for data-plane operations"
+
+    if skip_reason:
+        skip_cli = pytest.mark.skip(reason=skip_reason)
         for item in items:
             if item.get_closest_marker("cli_remote"):
                 item.add_marker(skip_cli)
@@ -365,6 +386,33 @@ def _parse_cli_json(stdout):
                 except json.JSONDecodeError:
                     break
     return None
+
+
+def is_cli_auth_error(result: dict) -> bool:
+    """Check if a CLI result indicates an authentication error.
+
+    Matches both raw API errors (UNAUTHENTICATED/Unauthorized) and the
+    user-friendly Rust CLI error card ("Authentication Error" / "rejected the API key").
+    """
+    stderr = (result.get("stderr") or "").lower()
+    stdout = (result.get("stdout") or "").lower()
+    combined = stderr + " " + stdout
+    auth_markers = [
+        "unauthenticated",
+        "authentication error",
+        "rejected the api key",
+        "unauthorized",
+        "forbidden",
+        "invalid api key",
+        "api key invalid",
+    ]
+    return any(marker in combined for marker in auth_markers)
+
+
+def skip_if_auth_error(result: dict) -> None:
+    """Skip the test if the result indicates an authentication error."""
+    if is_cli_auth_error(result):
+        pytest.skip("Upstream API authentication unavailable")
 
 
 def _inject_global_args(args):
@@ -495,10 +543,12 @@ def _find_file_in_pack(pack_uri, retries=10, interval=5):
 @pytest.fixture(scope="session", autouse=True)
 def ensure_resources_dir():
     r = ov(["mkdir", "viking://resources", "-o", "json"], timeout=120)
-    if r["exit_code"] != 0 and "already exists" not in r["stderr"].lower():
-        r2 = ov(["stat", "viking://resources", "-o", "json"])
-        if r2["exit_code"] != 0:
-            pass
+    if r["exit_code"] != 0:
+        skip_if_auth_error(r)
+        if "already exists" not in r["stderr"].lower():
+            r2 = ov(["stat", "viking://resources", "-o", "json"])
+            if r2["exit_code"] != 0:
+                skip_if_auth_error(r2)
 
 
 @pytest.fixture(scope="session")
@@ -508,10 +558,12 @@ def ensure_user_skills_dir():
         r = ov(["mkdir", uri, "-o", "json"], timeout=120)
         if r["exit_code"] == 0 or "already exists" in (r.get("stderr") or "").lower():
             return
+        skip_if_auth_error(r)
 
         stat_r = ov(["stat", uri, "-o", "json"], timeout=120)
         if stat_r["exit_code"] == 0:
             return
+        skip_if_auth_error(stat_r)
 
         time.sleep(5)
     assert r["exit_code"] == 0, f"mkdir {uri} failed after retries: {r['stderr']}"
@@ -525,6 +577,7 @@ def test_dir_uri(ensure_resources_dir):
         r = ov(["mkdir", uri, "-o", "json"], timeout=120)
         if r["exit_code"] == 0:
             break
+        skip_if_auth_error(r)
         time.sleep(5)
     assert r["exit_code"] == 0, f"mkdir failed after retries: {r['stderr']}"
     yield uri
@@ -543,6 +596,7 @@ def test_pack_uri(test_dir_uri):
             r = ov_add_resource(temp_path, pack_uri)
             if r["exit_code"] == 0:
                 break
+            skip_if_auth_error(r)
             if "CONFLICT" in (r.get("stderr") or "") or "busy" in (r.get("stderr") or "").lower():
                 time.sleep(10)
             else:

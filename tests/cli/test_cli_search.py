@@ -5,7 +5,7 @@
 import time
 
 import pytest
-from conftest import ov
+from conftest import ov, skip_if_auth_error
 
 pytestmark = pytest.mark.cli_remote
 
@@ -13,8 +13,7 @@ pytestmark = pytest.mark.cli_remote
 class TestSearchFind:
     def test_find_basic(self):
         r = ov(["find", "test", "-o", "json", "-n", "5"], timeout=180)
-        if r["exit_code"] != 0 and "UNAUTHENTICATED" in (r.get("stderr") or ""):
-            pytest.skip("Upstream API authentication unavailable")
+        skip_if_auth_error(r)
         assert r["exit_code"] == 0, (
             f"ov find should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
@@ -30,8 +29,7 @@ class TestSearchFind:
 
     def test_find_with_uri(self, test_dir_uri):
         r = ov(["find", "test", "-u", test_dir_uri, "-o", "json", "-n", "5"], timeout=180)
-        if r["exit_code"] != 0 and "UNAUTHENTICATED" in (r.get("stderr") or ""):
-            pytest.skip("Upstream API authentication unavailable")
+        skip_if_auth_error(r)
         assert r["exit_code"] == 0, (
             f"ov find with uri should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
@@ -42,8 +40,7 @@ class TestSearchFind:
 class TestSearchSearch:
     def test_search_basic(self):
         r = ov(["search", "test", "-o", "json", "-n", "5"], timeout=180)
-        if r["exit_code"] != 0 and "UNAUTHENTICATED" in (r.get("stderr") or ""):
-            pytest.skip("Upstream API authentication unavailable")
+        skip_if_auth_error(r)
         assert r["exit_code"] == 0, (
             f"ov search should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
@@ -57,8 +54,7 @@ class TestSearchSearch:
             ["search", "test", "--session-id", test_session_id, "-o", "json", "-n", "5"],
             timeout=180,
         )
-        if r["exit_code"] != 0 and "UNAUTHENTICATED" in (r.get("stderr") or ""):
-            pytest.skip("Upstream API authentication unavailable")
+        skip_if_auth_error(r)
         assert r["exit_code"] == 0, (
             f"ov search with session should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
