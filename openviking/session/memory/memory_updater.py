@@ -223,29 +223,38 @@ class ExtractContext:
         msg_range = self.read_message_ranges(ranges_str)
         return msg_range._first_message_time_with_weekday()
 
-    def get_year(self, ranges_str: str) -> str | None:
-        """根据 ranges 字符串获取第一条消息的年份"""
+    def get_year(self, ranges_str: str) -> str:
+        """根据 ranges 字符串获取第一条消息的年份，fallback 到当前年份"""
+        from datetime import datetime
         if not ranges_str:
-            return None
+            return str(datetime.now().year)
         msg_range = self.read_message_ranges(ranges_str)
         first_time = msg_range._first_message_time()
-        return first_time.split("-")[0] if first_time else None
+        if first_time:
+            return first_time.split("-")[0]
+        return str(datetime.now().year)
 
-    def get_month(self, ranges_str: str) -> str | None:
-        """根据 ranges 字符串获取第一条消息的月份"""
+    def get_month(self, ranges_str: str) -> str:
+        """根据 ranges 字符串获取第一条消息的月份，fallback 到当前月份"""
+        from datetime import datetime
         if not ranges_str:
-            return None
+            return f"{datetime.now().month:02d}"
         msg_range = self.read_message_ranges(ranges_str)
         first_time = msg_range._first_message_time()
-        return first_time.split("-")[1] if first_time else None
+        if first_time:
+            return first_time.split("-")[1]
+        return f"{datetime.now().month:02d}"
 
-    def get_day(self, ranges_str: str) -> str | None:
-        """根据 ranges 字符串获取第一条消息的日期"""
+    def get_day(self, ranges_str: str) -> str:
+        """根据 ranges 字符串获取第一条消息的日期，fallback 到当前日期"""
+        from datetime import datetime
         if not ranges_str:
-            return None
+            return f"{datetime.now().day:02d}"
         msg_range = self.read_message_ranges(ranges_str)
         first_time = msg_range._first_message_time()
-        return first_time.split("-")[2] if first_time else None
+        if first_time:
+            return first_time.split("-")[2]
+        return f"{datetime.now().day:02d}"
 
     def get_timestamp_from_ranges(self, ranges_str: str) -> str:
         """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSS），用于文件名去重。
