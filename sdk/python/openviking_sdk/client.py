@@ -286,6 +286,30 @@ class AsyncHTTPClient:
             return VikingURI.normalize(target_uri)
         return target_uri
 
+    @staticmethod
+    def _compact_request_body(body: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop None-valued keys (and an empty ``args`` object) from a request body.
+
+        Older, stricter servers use ``model_config = ConfigDict(extra="forbid")`` and
+        reject any field they do not yet define, so unconditionally attaching optional
+        fields (even as ``null``/``{}``) breaks against instances that predate that
+        field — e.g. ``body.tags`` against a pre-#2706 ``find`` route, or ``body.args``
+        against a pre-#2549 ``resources`` route. Omitting them is safe for read/create
+        routes where a missing optional field and an explicit ``null`` are equivalent.
+        Do NOT use this for update/PATCH bodies where ``null`` may mean "clear this
+        field". Mirrors the CLI's ``compact_request_body`` (see PR #2799).
+        """
+        compacted: Dict[str, Any] = {}
+        for key, value in body.items():
+            if value is None:
+                continue
+            # `args` is always attached by callers but absent from pre-#2549 models;
+            # only forward it when arguments were actually provided.
+            if key == "args" and isinstance(value, dict) and not value:
+                continue
+            compacted[key] = value
+        return compacted
+
     def _handle_response_data(self, response: httpx.Response) -> Dict[str, Any]:
         try:
             data = response.json()
@@ -438,6 +462,7 @@ class AsyncHTTPClient:
         else:
             request_data["path"] = path
 
+        request_data = self._compact_request_body(request_data)
         response = await self._http.post("/api/v1/resources", json=request_data)
         return self._handle_response_data(response).get("result", {})
 
@@ -867,6 +892,7 @@ class AsyncHTTPClient:
             "tags": tags,
             "telemetry": telemetry,
         }
+        payload = self._compact_request_body(payload)
         response = await self._http.post("/api/v1/search/find", json=payload)
         return self._handle_response_data(response).get("result", {})
 
@@ -897,6 +923,7 @@ class AsyncHTTPClient:
             "tags": tags,
             "telemetry": telemetry,
         }
+        payload = self._compact_request_body(payload)
         response = await self._http.post("/api/v1/search/search", json=payload)
         return self._handle_response_data(response).get("result", {})
 
