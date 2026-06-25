@@ -1387,7 +1387,7 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Rebuild vector artifacts and wait.",
             },
             HelpItem {
-                label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true",
+                label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true --timeout 300",
                 description: "Regenerate semantic artifacts, then vectors.",
             },
             HelpItem {
@@ -2958,6 +2958,7 @@ mod tests {
                 .expect("reindex help should render"),
         );
 
+        assert!(rendered.contains("--timeout <seconds>"));
         assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors>"));
         assert!(rendered.contains("--force"));
         assert!(rendered.contains("--recursive <true|false>"));

@@ -1456,13 +1456,19 @@ pub async fn handle_reindex(
     uri: String,
     mode: String,
     wait: bool,
+    timeout: Option<f64>,
     force: bool,
     tags: Vec<String>,
     tag_mode: String,
     recursive: bool,
     ctx: CliContext,
 ) -> Result<()> {
-    let client = ctx.get_client();
+    if !wait && timeout.is_some() {
+        return Err(Error::Client(
+            "--timeout is only valid when ov reindex waits for completion.".to_string(),
+        ));
+    }
+    let client = ctx.get_client_with_timeout(timeout);
     commands::content::reindex(
         &client,
         &uri,
