@@ -993,6 +993,14 @@ class VikingFS:
 
         # Step 1: vikingdb recall candidate files
         try:
+            logger.debug(
+                "grep vikingdb search_by_keywords request: query=%r limit=%s filter=%r "
+                "output_fields=%s",
+                query,
+                remote_return_limit,
+                filter_expr,
+                ["uri"],
+            )
             result = await vector_store.search_by_keywords(
                 query=query,
                 limit=remote_return_limit,
