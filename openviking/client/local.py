@@ -81,6 +81,7 @@ class LocalClient(BaseClient):
         path: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
         actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
         """Initialize LocalClient.
 
@@ -88,7 +89,11 @@ class LocalClient(BaseClient):
             path: Local storage path (overrides ov.conf storage path)
             user: Explicit account/user identity for embedded mode
             actor_peer_id: Optional view filter for the current user's peer collection.
+            agent_id: Legacy alias that marks the actor peer scope as legacy agent mode.
         """
+        if actor_peer_id is not None and agent_id is not None:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+        effective_actor_peer_id = actor_peer_id or agent_id
         self._service = OpenVikingService(
             path=path,
             user=user or UserIdentifier.the_default_user(),
@@ -97,7 +102,8 @@ class LocalClient(BaseClient):
         self._ctx = RequestContext(
             user=self._user,
             role=Role.USER,
-            actor_peer_id=normalize_peer_id(actor_peer_id),
+            actor_peer_id=normalize_peer_id(effective_actor_peer_id),
+            legacy_agent_id=normalize_peer_id(agent_id),
         )
 
     @property
@@ -1014,10 +1020,7 @@ class LocalClient(BaseClient):
                 {
                     "role": role,
                     "parts": message_parts,
-                    "peer_id": self._resolve_message_peer_id(
-                        role,
-                        message.get("peer_id"),
-                    ),
+                    "peer_id": self._resolve_message_peer_id(role, message.get("peer_id")),
                     "created_at": message.get("created_at"),
                 }
             )
@@ -1029,8 +1032,18 @@ class LocalClient(BaseClient):
             "added": len(added),
         }
 
-    def _resolve_message_peer_id(self, role: str, peer_id: Optional[str]) -> Optional[str]:
-        return normalize_peer_id(peer_id)
+    def _resolve_message_peer_id(
+        self,
+        role: str,
+        peer_id: Optional[str],
+    ) -> Optional[str]:
+        normalized_peer_id = normalize_peer_id(peer_id)
+        if normalized_peer_id is not None:
+            return normalized_peer_id
+        legacy_agent_id = getattr(self._ctx, "legacy_agent_id", None)
+        if legacy_agent_id is not None and role == "assistant":
+            return legacy_agent_id
+        return None
 
     # ============= Pack =============
 

@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_id
@@ -92,11 +92,15 @@ class AddMessageRequest(BaseModel):
     created_at: Optional[str] = None
     telemetry: TelemetryRequest = False
 
+    @field_validator("peer_id")
+    @classmethod
+    def validate_peer_id(cls, value: Optional[str]) -> Optional[str]:
+        return normalize_peer_id(value)
+
     @model_validator(mode="after")
     def validate_content_or_parts(self) -> "AddMessageRequest":
         if self.content is None and self.parts is None:
             raise ValueError("Either 'content' or 'parts' must be provided")
-        self.peer_id = normalize_peer_id(self.peer_id)
         return self
 
 
@@ -127,6 +131,14 @@ def _resolve_message_parts(msg_request: AddMessageRequest) -> List[Part]:
     if msg_request.parts is not None:
         return [_part_request_to_part(p) for p in msg_request.parts]
     return [TextPart(text=msg_request.content or "")]
+
+
+def _resolve_message_peer_id(msg_request: AddMessageRequest, ctx: RequestContext) -> Optional[str]:
+    if msg_request.peer_id is not None:
+        return msg_request.peer_id
+    if ctx.legacy_agent_id is not None and msg_request.role == "assistant":
+        return ctx.legacy_agent_id
+    return None
 
 
 def _part_request_to_part(raw_part: Dict[str, Any]) -> Part:
@@ -447,7 +459,7 @@ async def add_message(
                 {
                     "role": request.role,
                     "parts": parts,
-                    "peer_id": request.peer_id,
+                    "peer_id": _resolve_message_peer_id(request, _ctx),
                     "created_at": request.created_at,
                 }
             ]
@@ -487,7 +499,7 @@ async def batch_add_messages(
                 {
                     "role": msg_request.role,
                     "parts": parts,
-                    "peer_id": msg_request.peer_id,
+                    "peer_id": _resolve_message_peer_id(msg_request, _ctx),
                     "created_at": msg_request.created_at,
                 }
             )

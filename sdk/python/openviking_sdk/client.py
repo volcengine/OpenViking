@@ -218,9 +218,9 @@ class AsyncHTTPClient:
         upload_mode: Optional[str] = None,
     ):
         if actor_peer_id and agent_id:
-            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+            raise ValueError("actor_peer_id cannot be used with agent_id")
         effective_user = user if user is not None else user_id
-        effective_actor = actor_peer_id or agent_id
+        effective_actor = actor_peer_id if actor_peer_id is not None else agent_id
         config = resolve_client_config(
             url=url,
             api_key=api_key,

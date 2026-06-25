@@ -100,7 +100,6 @@ impl CliContext {
             auth.account,
             auth.user,
             self.config.effective_actor_peer_id(),
-            self.config.agent_id.clone(),
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
             self.config.extra_headers.clone(),
@@ -4224,7 +4223,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_context_maps_legacy_agent_id_to_actor_peer_scope() {
+    fn cli_context_maps_agent_id_to_actor_peer_scope() {
         let config = Config {
             url: DEFAULT_CUSTOM_URL.to_string(),
             api_key: Some("test-key".to_string()),
@@ -4258,7 +4257,6 @@ mod tests {
         let client = ctx.get_client();
 
         assert_eq!(client.actor_peer_id(), Some("legacy-agent"));
-        assert_eq!(client.legacy_agent_id(), Some("legacy-agent"));
     }
 
     #[test]

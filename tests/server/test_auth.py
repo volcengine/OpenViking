@@ -761,6 +761,7 @@ async def test_actor_peer_header_sets_request_context_scope():
     ctx = await get_request_context(request, identity, "web-visitor-alice")
 
     assert ctx.actor_peer_id == "web-visitor-alice"
+    assert ctx.legacy_agent_id is None
 
 
 async def test_empty_actor_peer_header_is_unset():

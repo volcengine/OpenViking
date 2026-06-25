@@ -71,7 +71,6 @@ pub enum SnapshotShowResult {
 #[derive(Clone)]
 pub struct HttpClient {
     base: BaseClient,
-    legacy_agent_id: Option<String>,
 }
 
 impl HttpClient {
@@ -81,7 +80,6 @@ impl HttpClient {
         account: Option<String>,
         user: Option<String>,
         actor_peer_id: Option<String>,
-        legacy_agent_id: Option<String>,
         timeout_secs: f64,
         profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
@@ -97,7 +95,6 @@ impl HttpClient {
                 profile_enabled,
                 extra_headers,
             ),
-            legacy_agent_id,
         }
     }
 
@@ -107,10 +104,6 @@ impl HttpClient {
 
     pub fn actor_peer_id(&self) -> Option<&str> {
         self.base.actor_peer_id()
-    }
-
-    pub fn legacy_agent_id(&self) -> Option<&str> {
-        self.legacy_agent_id.as_deref()
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -498,7 +491,6 @@ impl HttpClient {
             "context_type": context_type,
             "tags": tags,
         });
-        self.attach_legacy_agent_scope(&mut body);
         compact_request_body(&mut body);
         self.post("/api/v1/search/find", &body).await
     }
@@ -530,15 +522,8 @@ impl HttpClient {
             "context_type": context_type,
             "tags": tags,
         });
-        self.attach_legacy_agent_scope(&mut body);
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
-    }
-
-    fn attach_legacy_agent_scope(&self, body: &mut Value) {
-        if let Some(agent_id) = self.legacy_agent_id() {
-            body["agent_id"] = serde_json::json!(agent_id);
-        }
     }
 
     pub async fn grep(
@@ -1766,7 +1751,7 @@ mod tests {
     #[tokio::test]
     async fn ls_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, None, 5.0, false, None);
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
             .ls("viking://resources", false, false, "agent", 256, false, 1)
@@ -1782,7 +1767,7 @@ mod tests {
     #[tokio::test]
     async fn tree_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, None, 5.0, false, None);
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
             .tree("viking://resources", "agent", 256, false, 1, 3)
@@ -1793,26 +1778,6 @@ mod tests {
         assert!(request.starts_with("GET /api/v1/fs/tree?"));
         assert!(!request.contains("tz="));
         assert!(!request.contains("include_mod_time_iso="));
-    }
-
-    #[test]
-    fn search_body_includes_legacy_agent_id() {
-        let client = HttpClient::new(
-            "http://localhost:1933",
-            None,
-            None,
-            None,
-            Some("legacy-agent".to_string()),
-            Some("legacy-agent".to_string()),
-            5.0,
-            false,
-            None,
-        );
-        let mut body = json!({"query": "invoice"});
-
-        client.attach_legacy_agent_scope(&mut body);
-
-        assert_eq!(body["agent_id"], json!("legacy-agent"));
     }
 
     #[test]

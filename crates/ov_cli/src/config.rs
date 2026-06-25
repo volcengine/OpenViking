@@ -269,7 +269,7 @@ impl Config {
     fn validate_identity_mode(&self) -> Result<()> {
         if self.actor_peer_id.is_some() && self.agent_id.is_some() {
             return Err(Error::Config(
-                "actor_peer_id cannot be used with legacy agent_id".to_string(),
+                "actor_peer_id cannot be used with agent_id".to_string(),
             ));
         }
         Ok(())
@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn config_deserializes_legacy_agent_id_as_effective_actor_peer() {
+    fn config_deserializes_agent_id_as_effective_actor_peer() {
         let config: Config = serde_json::from_str(
             r#"{
                 "url": "http://127.0.0.1:1933",
@@ -408,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn config_file_rejects_mixed_actor_peer_and_legacy_agent_id() {
+    fn config_file_rejects_mixed_actor_peer_and_agent_id() {
         let dir = tempfile::tempdir().expect("tempdir should be created");
         let path = dir.path().join("ovcli.conf");
         std::fs::write(
