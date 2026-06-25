@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from typing import Any, BinaryIO, Dict, List, Union
 
 from .protocols import AGFSSyncClientProtocol
@@ -215,6 +216,14 @@ class AsyncAGFSClient:
         *,
         fs_ctx: Dict[str, str] | None = None,
     ) -> list[Dict[str, Any]]:
+        if not hasattr(self._client, "tree_directory"):
+            return await self._tree_directory_via_ls(
+                path,
+                show_hidden=show_hidden,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                fs_ctx=fs_ctx,
+            )
         return await self.run(
             "tree_directory",
             path,
@@ -223,6 +232,75 @@ class AsyncAGFSClient:
             level_limit=level_limit,
             ctx=_fs_ctx_or_default(path, fs_ctx),
         )
+
+    async def _tree_directory_via_ls(
+        self,
+        path: str,
+        show_hidden: bool = False,
+        node_limit: int | None = None,
+        level_limit: int | None = None,
+        *,
+        fs_ctx: Dict[str, str] | None = None,
+    ) -> list[Dict[str, Any]]:
+        """Compatibility fallback for older native bindings without tree_directory."""
+        base = path.rstrip("/") or "/"
+        result: list[Dict[str, Any]] = []
+
+        def child_path(parent: str, name: str) -> str:
+            return "/" + name if parent == "/" else parent.rstrip("/") + "/" + name
+
+        def is_dir(entry: Dict[str, Any]) -> bool:
+            value = entry.get("isDir", entry.get("is_dir"))
+            if value is not None:
+                return bool(value)
+            return entry.get("type") == "directory"
+
+        def mod_time(entry: Dict[str, Any]) -> Any:
+            value = entry.get("modTime", entry.get("mtime"))
+            if isinstance(value, (int, float)):
+                return datetime.fromtimestamp(value, timezone.utc).isoformat().replace("+00:00", "Z")
+            return value
+
+        def make_tree_entry(entry: Dict[str, Any], full_path: str) -> Dict[str, Any]:
+            name = str(entry.get("name") or full_path.rsplit("/", 1)[-1])
+            mode = entry.get("mode")
+            if mode is None:
+                mode = 0o755 if is_dir(entry) else 0o644
+            return {
+                "path": full_path,
+                "rel_path": full_path.removeprefix(base).lstrip("/"),
+                "info": {
+                    "name": name,
+                    "size": int(entry.get("size") or 0),
+                    "mode": mode,
+                    "modTime": mod_time(entry),
+                    "isDir": is_dir(entry),
+                },
+                "extra": {},
+            }
+
+        async def walk(current: str, depth: int) -> None:
+            if node_limit is not None and len(result) >= node_limit:
+                return
+            if level_limit is not None and depth > level_limit:
+                return
+            entries = await self.ls(current, fs_ctx=_fs_ctx_or_default(current, fs_ctx))
+            for entry in sorted(entries, key=lambda item: str(item.get("name", ""))):
+                if node_limit is not None and len(result) >= node_limit:
+                    return
+                name = str(entry.get("name") or "")
+                if not name:
+                    continue
+                if not show_hidden and name.startswith("."):
+                    continue
+                full_path = str(entry.get("path") or child_path(current, name))
+                tree_entry = make_tree_entry(entry, full_path)
+                result.append(tree_entry)
+                if tree_entry["info"]["isDir"]:
+                    await walk(full_path, depth + 1)
+
+        await walk(base, 1)
+        return result
 
     async def system_sync_status(
         self, path: str, *, fs_ctx: Dict[str, str] | None = None

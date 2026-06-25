@@ -7,20 +7,28 @@ code_expand) in openviking/server/mcp_endpoint.py.
 The pure formatters in openviking.parse.parsers.code.ast.code_tools are
 covered by tests/parse/test_code_tools.py. These tests cover the MCP wiring:
 URI validation, service.fs.read / service.fs.ls plumbing, extension filtering,
-the 200-file cap, and error mapping.
+the 1000-file cap, and error mapping.
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
-from openviking.server.dependencies import set_service
+from openviking.parse.parsers.code.ast.code_tools import (
+    CODE_SCAN_LS_LEVEL_LIMIT,
+    CODE_SCAN_LS_NODE_LIMIT,
+    CODE_SEARCH_FILE_CAP,
+)
+from openviking.server.config import ServerConfig
+from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.mcp_endpoint import (
     _filter_code_uris,
     _mcp_ctx,
     _require_viking_uri,
     code_expand,
+    code_locate,
     code_outline,
     code_search,
 )
@@ -49,9 +57,11 @@ def make_greeter() -> Greeter:
 def _set_mcp_identity(service):
     """Set identity contextvar and wire service for all tests."""
     set_service(service)
+    set_server_config(ServerConfig())
     token = _mcp_ctx.set(DEFAULT_CTX)
     yield
     _mcp_ctx.reset(token)
+    set_server_config(ServerConfig())
 
 
 def _patch_fs(monkeypatch, service, *, read=None, ls=None):
@@ -119,16 +129,22 @@ class TestFilterCodeUris:
         assert uris == ["viking://r/a.py"]
         assert capped is False
 
-    def test_caps_at_200(self):
-        entries = [{"uri": f"viking://r/f{i}.py", "isDir": False} for i in range(250)]
+    def test_caps_at_search_file_cap(self):
+        entries = [
+            {"uri": f"viking://r/f{i}.py", "isDir": False}
+            for i in range(CODE_SEARCH_FILE_CAP + 1)
+        ]
         uris, capped = _filter_code_uris(entries)
-        assert len(uris) == 200
+        assert len(uris) == CODE_SEARCH_FILE_CAP
         assert capped is True
 
-    def test_exactly_200_not_capped(self):
-        entries = [{"uri": f"viking://r/f{i}.py", "isDir": False} for i in range(200)]
+    def test_exactly_search_file_cap_not_capped(self):
+        entries = [
+            {"uri": f"viking://r/f{i}.py", "isDir": False}
+            for i in range(CODE_SEARCH_FILE_CAP)
+        ]
         uris, capped = _filter_code_uris(entries)
-        assert len(uris) == 200
+        assert len(uris) == CODE_SEARCH_FILE_CAP
         assert capped is False
 
 
@@ -203,11 +219,13 @@ class TestCodeSearch:
         ls_calls = {}
         read_uris: list[str] = []
 
-        async def fake_ls(uri, ctx=None, recursive=False, output=None, **_):
+        async def fake_ls(uri, ctx=None, recursive=False, output=None, **kwargs):
             ls_calls["uri"] = uri
             ls_calls["ctx"] = ctx
             ls_calls["recursive"] = recursive
             ls_calls["output"] = output
+            ls_calls["node_limit"] = kwargs.get("node_limit")
+            ls_calls["level_limit"] = kwargs.get("level_limit")
             return [
                 {"uri": "viking://r/a.py", "isDir": False},
                 {"uri": "viking://r/sub", "isDir": True},
@@ -229,6 +247,8 @@ class TestCodeSearch:
         assert ls_calls["recursive"] is True
         assert ls_calls["output"] == "original"
         assert ls_calls["ctx"] == DEFAULT_CTX
+        assert ls_calls["node_limit"] == CODE_SCAN_LS_NODE_LIMIT
+        assert ls_calls["level_limit"] == CODE_SCAN_LS_LEVEL_LIMIT
         # b.md must be filtered out before any read happens
         assert "viking://r/b.md" not in read_uris
         assert set(read_uris) == {"viking://r/a.py", "viking://r/c.py"}
@@ -281,14 +301,17 @@ class TestCodeSearch:
 
     async def test_file_cap_warning(self, service, monkeypatch):
         async def fake_ls(uri, ctx=None, recursive=False, output=None, **_):
-            return [{"uri": f"viking://r/f{i}.py", "isDir": False} for i in range(250)]
+            return [
+                {"uri": f"viking://r/f{i}.py", "isDir": False}
+                for i in range(CODE_SEARCH_FILE_CAP + 1)
+            ]
 
         async def fake_read(uri, ctx=None, **_):
             return PY_SAMPLE
 
         _patch_fs(monkeypatch, service, ls=fake_ls, read=fake_read)
         out = await code_search("greet", "viking://r")
-        assert "200-file cap" in out
+        assert "1000-file cap" in out
 
     async def test_no_cap_warning_below_threshold(self, service, monkeypatch):
         async def fake_ls(uri, ctx=None, recursive=False, output=None, **_):
@@ -299,7 +322,92 @@ class TestCodeSearch:
 
         _patch_fs(monkeypatch, service, ls=fake_ls, read=fake_read)
         out = await code_search("greet", "viking://r")
-        assert "200-file cap" not in out
+        assert "1000-file cap" not in out
+
+
+# ---------------------------------------------------------------------------
+# code_locate
+# ---------------------------------------------------------------------------
+
+
+class TestCodeLocate:
+    async def test_local_source_requires_explicit_server_switch(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "greeter.py").write_text("def greet():\n    return 'hello'\n", encoding="utf-8")
+
+        out = await code_locate(
+            "changed greet behavior",
+            {"type": "local", "path": str(repo)},
+            output_format="json",
+        )
+
+        assert "local code source paths are disabled" in out
+
+    async def test_viking_source_json_lists_deep_code_tree(self, service, monkeypatch):
+        ls_calls = {}
+
+        async def fake_ls(uri, ctx=None, recursive=False, output=None, **kwargs):
+            ls_calls["uri"] = uri
+            ls_calls["ctx"] = ctx
+            ls_calls["recursive"] = recursive
+            ls_calls["output"] = output
+            ls_calls["node_limit"] = kwargs.get("node_limit")
+            ls_calls["level_limit"] = kwargs.get("level_limit")
+            return [
+                {"uri": "viking://r/sklearn/utils/_pprint.py", "isDir": False},
+                {"uri": "viking://r/sklearn/utils/tests/test_pprint.py", "isDir": False},
+            ]
+
+        async def fake_read(uri, ctx=None, **_):
+            if uri.endswith("test_pprint.py"):
+                return "def test_changed_only_array_repr():\n    assert True\n"
+            return "def _changed_params():\n    if value != init_value:\n        return True\n"
+
+        _patch_fs(monkeypatch, service, ls=fake_ls, read=fake_read)
+
+        out = await code_locate(
+            "print_changed_only array repr",
+            {"type": "viking", "uri": "viking://r"},
+            output_format="json",
+        )
+        payload = json.loads(out)
+
+        assert ls_calls == {
+            "uri": "viking://r",
+            "ctx": DEFAULT_CTX,
+            "recursive": True,
+            "output": "original",
+            "node_limit": CODE_SCAN_LS_NODE_LIMIT,
+            "level_limit": CODE_SCAN_LS_LEVEL_LIMIT,
+        }
+        assert payload["edit_candidates"][0]["location"]["type"] == "viking"
+        assert payload["edit_candidates"][0]["location"]["uri"] == (
+            "viking://r/sklearn/utils/_pprint.py"
+        )
+        assert "path" not in payload["edit_candidates"][0]["location"]
+
+    async def test_local_source_json_reads_current_checkout(self, tmp_path):
+        set_server_config(ServerConfig(allow_local_code_source_paths=True))
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        impl = repo / "greeter.py"
+        impl.write_text(
+            "class Greeter:\n    def greet(self):\n        return 'hello changed behavior'\n",
+            encoding="utf-8",
+        )
+
+        out = await code_locate(
+            "changed greet behavior",
+            {"type": "local", "path": str(repo)},
+            output_format="json",
+        )
+        payload = json.loads(out)
+
+        location = payload["edit_candidates"][0]["location"]
+        assert location["type"] == "local"
+        assert location["path"] == str(impl)
+        assert "uri" not in location
 
 
 # ---------------------------------------------------------------------------

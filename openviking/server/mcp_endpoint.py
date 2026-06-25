@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, List, Literal, Optional
 from urllib.parse import quote
 
@@ -32,12 +34,23 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from openviking.parse.parsers.code.ast.code_tools import (
+    CODE_LOCATE_FILE_CAP,
+    CODE_SCAN_LS_LEVEL_LIMIT,
+    CODE_SCAN_LS_NODE_LIMIT,
     CODE_SEARCH_CONCURRENCY,
+    CODE_SEARCH_FILE_CAP,
+    CodeLocateFile,
     expand_symbol,
     filter_code_uris,
+    format_locate_json_text,
+    format_locate_text,
+    locate_code_structured,
     outline_file,
-    search_symbols,
+    search_code,
+    select_code_paths,
+    select_code_uris,
 )
+from openviking.parse.parsers.code.ast.extractor import get_extractor
 from openviking.server.auth import normalize_actor_peer_header, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
@@ -59,6 +72,10 @@ from openviking_cli.utils import get_logger
 _filter_code_uris = filter_code_uris
 
 logger = get_logger(__name__)
+_ERROR_LOCAL_SOURCE_DISABLED = (
+    "Error: local code source paths are disabled; "
+    "set server.allow_local_code_source_paths=true to enable."
+)
 
 # ---------------------------------------------------------------------------
 # Identity propagation via contextvars
@@ -801,6 +818,11 @@ def _require_viking_uri(uri: str) -> Optional[str]:
     return None
 
 
+def _allow_local_code_source_paths() -> bool:
+    config = get_server_config()
+    return bool(getattr(config, "allow_local_code_source_paths", False))
+
+
 @mcp.tool()
 async def code_outline(uri: str) -> str:
     """Show a confirmed viking:// source file's symbol structure: classes, functions,
@@ -830,9 +852,9 @@ async def code_outline(uri: str) -> str:
 
 @mcp.tool()
 async def code_search(query: str, uri: str) -> str:
-    """Search AST-supported symbol names (class / function / method) by substring across a
-    confirmed viking:// code repository or source subtree. Returns structured results:
-    symbol type, class context, file URI, line range.
+    """Search code files by symbol name, raw content, and path substring across a
+    confirmed viking:// code repository or source subtree. Returns ranked matches
+    with file URI, path terms, symbol context, and content line snippets.
 
     Use only after you have evidence that the uri contains supported source files. If you have
     not confirmed that this is an ingested code repository, first use ls/glob/read or
@@ -842,7 +864,7 @@ async def code_search(query: str, uri: str) -> str:
     chat/session history, or local filesystem paths. Skip if you already know the exact file;
     use code_outline or read directly.
 
-    Scans up to 200 source files. Narrow uri to a subdirectory for deeper coverage.
+    Scans up to 1000 source files. Narrow uri to a subdirectory for deeper coverage.
     uri is required to avoid accidentally walking the entire VikingFS."""
     err = _require_viking_uri(uri)
     if err:
@@ -853,11 +875,18 @@ async def code_search(query: str, uri: str) -> str:
     service = get_service()
     ctx = _get_ctx()
     try:
-        entries = await service.fs.ls(uri, ctx=ctx, recursive=True, output="original")
+        entries = await service.fs.ls(
+            uri,
+            ctx=ctx,
+            recursive=True,
+            output="original",
+            node_limit=CODE_SCAN_LS_NODE_LIMIT,
+            level_limit=CODE_SCAN_LS_LEVEL_LIMIT,
+        )
     except Exception as exc:
         return f"Error: failed to list {uri}: {exc}"
 
-    code_uris, capped = filter_code_uris(entries or [])
+    code_uris, capped = select_code_uris(entries or [], query)
     if not code_uris:
         return f"No supported source files found under {uri}"
 
@@ -876,10 +905,258 @@ async def code_search(query: str, uri: str) -> str:
 
     fetched = await asyncio.gather(*[_read(u) for u in code_uris])
     files = [pair for pair in fetched if pair is not None]
-    result = search_symbols(query, files)
+    result = search_code(query, files)
     if capped:
-        result += "\n\n(scanning stopped at 200-file cap; narrow uri to search more)"
+        result += f"\n\n(scanning stopped at {CODE_SEARCH_FILE_CAP}-file cap; narrow uri to search more)"
     return result
+
+
+_LOCAL_CODE_SKIP_DIRS = {
+    ".git",
+    ".tox",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    "build",
+    "dist",
+}
+
+
+def _read_local_code_files_for_mcp(path_value: str, query: str) -> tuple[list[CodeLocateFile], list[dict], dict]:
+    path = Path(path_value).expanduser().resolve()
+    if not path.exists():
+        return (
+            [],
+            [{"code": "path_not_found", "message": f"Local source path not found: {path}"}],
+            {"source_type": "local", "root": str(path), "candidate_files": 0, "scanned_files": 0},
+        )
+    if not path.is_file() and not path.is_dir():
+        return (
+            [],
+            [
+                {
+                    "code": "path_not_file_or_directory",
+                    "message": f"Local source path is not a file or directory: {path}",
+                }
+            ],
+            {"source_type": "local", "root": str(path), "candidate_files": 0, "scanned_files": 0},
+        )
+
+    root = path if path.is_dir() else path.parent
+    extractor = get_extractor()
+    if path.is_file():
+        candidates = [path] if extractor.supports(str(path)) else []
+        skipped_dirs: list[str] = []
+    else:
+        collected: list[Path] = []
+        skipped_set: set[str] = set()
+        for candidate in path.rglob("*"):
+            if any(part in _LOCAL_CODE_SKIP_DIRS for part in candidate.parts):
+                skipped_set.update(part for part in candidate.parts if part in _LOCAL_CODE_SKIP_DIRS)
+                continue
+            if candidate.is_file() and extractor.supports(str(candidate)):
+                collected.append(candidate)
+        candidates, capped = select_code_paths(
+            collected, query, cap=CODE_LOCATE_FILE_CAP
+        )
+        skipped_dirs = sorted(skipped_set)
+
+    if path.is_file():
+        capped = False
+    files: list[CodeLocateFile] = []
+    failed_reads = 0
+    for candidate in candidates:
+        try:
+            content = candidate.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            try:
+                content = candidate.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                failed_reads += 1
+                continue
+        except OSError:
+            failed_reads += 1
+            continue
+        files.append(
+            CodeLocateFile(
+                content=content,
+                file_name=str(candidate),
+                location_type="local",
+                relative_path=candidate.relative_to(root).as_posix(),
+            )
+        )
+
+    warnings: list[dict] = []
+    if not files:
+        warnings.append(
+            {
+                "code": "no_supported_source_files",
+                "message": f"No supported source files found under {path}",
+            }
+        )
+    if capped:
+        warnings.append(
+            {
+                "code": "scan_capped",
+                "message": (
+                    f"Scanning stopped at {CODE_LOCATE_FILE_CAP}-file cap; "
+                    "narrow source path to search more."
+                ),
+            }
+        )
+    if failed_reads:
+        warnings.append(
+            {
+                "code": "skipped_unreadable_files",
+                "message": f"Skipped {failed_reads} unreadable source file(s).",
+            }
+        )
+    scan = {
+        "source_type": "local",
+        "root": str(root),
+        "candidate_files": len(candidates),
+        "scanned_files": len(candidates),
+        "read_files": len(files),
+        "failed_reads": failed_reads,
+        "skipped_dirs": skipped_dirs,
+        "capped": capped,
+    }
+    return files, warnings, scan
+
+
+@mcp.tool()
+async def code_locate(
+    query: str,
+    source: dict,
+    failing_tests: Optional[list[str]] = None,
+    output_format: str = "text",
+    debug: bool = False,
+    max_edit: int = 5,
+    max_references: int = 3,
+) -> str:
+    """Rank likely edit locations and behavior-reference tests for a code query.
+
+    source must be {"type": "local", "path": "/repo"} or
+    {"type": "viking", "uri": "viking://resources/repo"}. Local source reads the
+    current checkout. Viking source reads OpenViking storage. The tool is
+    deterministic and does not call a model."""
+    if not query:
+        return "Error: empty query"
+    if not isinstance(source, dict):
+        return "Error: source must be an object"
+
+    source_type = source.get("type")
+    warnings: list[dict] = []
+    scan_debug = None
+    source_root = ""
+
+    if source_type == "local":
+        path_value = source.get("path")
+        if not path_value or source.get("uri"):
+            return "Error: local source requires path and must not include uri"
+        if not _allow_local_code_source_paths():
+            return _ERROR_LOCAL_SOURCE_DISABLED
+        files, warnings, scan_debug = _read_local_code_files_for_mcp(path_value, query)
+        source_root = scan_debug.get("root", path_value)
+    elif source_type == "viking":
+        uri = source.get("uri")
+        if not uri or source.get("path"):
+            return "Error: viking source requires uri and must not include path"
+        err = _require_viking_uri(uri)
+        if err:
+            return err
+        service = get_service()
+        ctx = _get_ctx()
+        try:
+            entries = await service.fs.ls(
+                uri,
+                ctx=ctx,
+                recursive=True,
+                output="original",
+                node_limit=CODE_SCAN_LS_NODE_LIMIT,
+                level_limit=CODE_SCAN_LS_LEVEL_LIMIT,
+            )
+        except Exception as exc:
+            return f"Error: failed to list {uri}: {exc}"
+
+        code_uris, capped = select_code_uris(
+            entries or [], query, cap=CODE_LOCATE_FILE_CAP
+        )
+        if not code_uris:
+            return f"No supported source files found under {uri}"
+
+        semaphore = asyncio.Semaphore(CODE_SEARCH_CONCURRENCY)
+
+        async def _read(u: str) -> Optional[CodeLocateFile]:
+            async with semaphore:
+                try:
+                    body = await service.fs.read(u, ctx=ctx)
+                except Exception as exc:
+                    logger.warning("code_locate: read failed for %s: %s", u, exc)
+                    return None
+                if isinstance(body, str):
+                    return CodeLocateFile(
+                        content=body,
+                        file_name=u,
+                        location_type="viking",
+                        relative_path=u.removeprefix(uri.rstrip("/") + "/"),
+                    )
+                return None
+
+        fetched = await asyncio.gather(*[_read(u) for u in code_uris])
+        files = [pair for pair in fetched if pair is not None]
+        failed_reads = len(fetched) - len(files)
+        if capped:
+            warnings.append(
+                {
+                    "code": "scan_capped",
+                    "message": (
+                        f"Scanning stopped at {CODE_LOCATE_FILE_CAP}-file cap; "
+                        "narrow source path to search more."
+                    ),
+                }
+            )
+        if failed_reads:
+            warnings.append(
+                {
+                    "code": "skipped_unreadable_files",
+                    "message": f"Skipped {failed_reads} unreadable source file(s).",
+                }
+            )
+        source_root = uri
+        scan_debug = {
+            "source_type": "viking",
+            "root": uri,
+            "candidate_files": len(code_uris),
+            "scanned_files": len(code_uris),
+            "read_files": len(files),
+            "failed_reads": failed_reads,
+            "capped": capped,
+        }
+    else:
+        return 'Error: source.type must be "local" or "viking"'
+
+    result = locate_code_structured(
+        query,
+        files,
+        failing_tests,
+        max_edit=max_edit,
+        max_references=max_references,
+        debug=debug,
+        source_root=source_root,
+    )
+    result.warnings.extend(warnings)
+    if debug:
+        result.debug = result.debug or {}
+        result.debug["scan"] = scan_debug
+    if output_format == "json":
+        return format_locate_json_text(result)
+    if output_format == "both":
+        payload = result.to_dict()
+        payload["summary_text"] = format_locate_text(result)
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+    return format_locate_text(result)
 
 
 @mcp.tool()

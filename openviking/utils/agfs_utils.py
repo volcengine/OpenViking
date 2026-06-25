@@ -428,10 +428,13 @@ def create_agfs_client(config: RagfsBindingConfig) -> Any:
 
     # Construction-time decides whether the stack includes the encryption layer.
     config_path = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
-    client = RAGFSBindingClient(
-        str(config_path) if config_path else None,
-        config=config.to_binding_dict(),
-    )
+    _cp = str(config_path) if config_path else None
+    try:
+        client = RAGFSBindingClient(_cp, config=config.to_binding_dict())
+    except TypeError:
+        # Installed native ragfs binding predates the config= kwarg;
+        # fall back to config_path-only construction (reads from the conf file).
+        client = RAGFSBindingClient(_cp)
 
     # Automatically mount backend for binding client
     mount_agfs_backend(client, config)

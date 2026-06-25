@@ -17,6 +17,15 @@ export const DEFAULT_CONFIG = {
     enabled: true,
     cacheTtlMs: 60000,
   },
+  memoryTools: {
+    enabled: true,
+  },
+  codeTools: {
+    locate: true,
+    search: true,
+    outline: true,
+    expand: true,
+  },
   autoRecall: {
     enabled: true,
     limit: 6,
@@ -43,6 +52,8 @@ function mergeConfig(fileConfig = {}) {
     dataDir: fileConfig.runtime?.dataDir ?? DEFAULT_CONFIG.runtime.dataDir,
   }
   config.repoContext = { ...DEFAULT_CONFIG.repoContext, ...(fileConfig.repoContext ?? {}) }
+  config.memoryTools = { ...DEFAULT_CONFIG.memoryTools, ...(fileConfig.memoryTools ?? {}) }
+  config.codeTools = { ...DEFAULT_CONFIG.codeTools, ...(fileConfig.codeTools ?? {}) }
   config.autoRecall = { ...DEFAULT_CONFIG.autoRecall, ...(fileConfig.autoRecall ?? {}) }
 
   if (process.env.OPENVIKING_API_KEY) {

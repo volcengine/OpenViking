@@ -10,6 +10,15 @@ import { initLogger, loadConfig, log, resolveDataDir } from "./lib/utils.mjs"
 
 const pluginRoot = dirname(fileURLToPath(import.meta.url))
 
+export function buildToolRegistry({ config, sessionManager, projectDirectory }) {
+  const tools =
+    config.memoryTools?.enabled === false
+      ? {}
+      : createMemoryTools({ config, sessionManager, projectDirectory })
+  const codeTools = createCodeTools({ config, projectDirectory })
+  return { ...tools, ...codeTools }
+}
+
 /**
  * @type {import('@opencode-ai/plugin').Plugin}
  */
@@ -26,8 +35,7 @@ export async function OpenVikingPlugin({ client, directory }) {
   const repoContext = createRepoContext({ config })
   const sessionManager = createMemorySessionManager({ config, pluginRoot: dataDir })
   const recall = createMemoryRecall({ config })
-  const tools = createMemoryTools({ config, sessionManager, projectDirectory: directory })
-  const codeTools = createCodeTools({ config })
+  const tools = buildToolRegistry({ config, sessionManager, projectDirectory: directory })
 
   await sessionManager.init()
 
@@ -44,7 +52,7 @@ export async function OpenVikingPlugin({ client, directory }) {
       }
     },
 
-    tool: { ...tools, ...codeTools },
+    tool: tools,
 
     "experimental.chat.system.transform": (_input, output) => {
       const prompt = repoContext.getRepoSystemPrompt()

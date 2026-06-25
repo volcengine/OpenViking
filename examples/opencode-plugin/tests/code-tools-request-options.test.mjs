@@ -12,7 +12,7 @@ test("code tools propagate actorPeerId to every code request", async () => {
 
   assert.match(source, /import \{ effectivePeerId,/)
   assert.match(source, /const actorPeerId = effectivePeerId\(config\)/)
-  assert.equal((source.match(/actorPeerId,\n\s+abortSignal: context\.abort/g) ?? []).length, 3)
+  assert.equal((source.match(/actorPeerId,\n\s+abortSignal: context\.abort/g) ?? []).length, 4)
 })
 
 test("code tool descriptions restrict use to confirmed viking code repositories", async () => {
@@ -20,6 +20,8 @@ test("code tool descriptions restrict use to confirmed viking code repositories"
 
   assert.match(source, /confirmed viking:\/\/ code repository or source subtree/)
   assert.match(source, /evidence that the uri contains supported source files/)
+  assert.match(source, /Rank likely edit files\/symbols/)
+  assert.match(source, /Search code by ranked path, symbol, and content matches/)
   assert.match(source, /Do not use for general memory search/)
   assert.match(source, /documentation-only resources/)
   assert.match(source, /chat\/session history/)

@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import logging
-import os
 import sys
 import types
 from pathlib import Path
@@ -62,6 +61,8 @@ _load("openviking.parse.parsers.code.ast.extractor",
 _load("openviking.parse.parsers.code.ast.code_tools",
       "openviking/parse/parsers/code/ast/code_tools.py")
 
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+
 from openviking.parse.parsers.code.ast.code_tools import (  # noqa: E402
     expand_symbol,
     outline_file,
@@ -69,14 +70,12 @@ from openviking.parse.parsers.code.ast.code_tools import (  # noqa: E402
 )
 from openviking.parse.parsers.code.ast.extractor import get_extractor  # noqa: E402
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
-
 logger = logging.getLogger("openviking_mcp_test")
 
 mcp = FastMCP("openviking-code-tools-test")
 
 _VIKING_PREFIX = "viking://local"
-_CODE_SEARCH_FILE_CAP = 200
+_CODE_SEARCH_FILE_CAP = 1000
 _CODE_SEARCH_CONCURRENCY = 10
 
 
@@ -162,7 +161,7 @@ async def code_search(query: str, uri: str) -> str:
 
     Skip if you already know the exact file; use code_outline or Read directly.
 
-    Scans up to 200 source files. Narrow uri to a subdirectory for deeper coverage."""
+    Scans up to 1000 source files. Narrow uri to a subdirectory for deeper coverage."""
     err = _require_viking_uri(uri)
     if err:
         return err
@@ -199,7 +198,7 @@ async def code_search(query: str, uri: str) -> str:
     files = [pair for pair in fetched if pair is not None]
     result = search_symbols(query, files)
     if capped:
-        result += "\n\n(scanning stopped at 200-file cap; narrow uri to search more)"
+        result += "\n\n(scanning stopped at 1000-file cap; narrow uri to search more)"
     return result
 
 
