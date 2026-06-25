@@ -514,10 +514,9 @@ class AsyncHTTPClient:
             "level": level,
             "telemetry": telemetry,
         }
-        params = {}
         if target_uri is not None:
-            params["target_uri"] = target_uri
-        response = await self._http.post("/api/v1/skills/find", json=payload, params=params)
+            payload["target_uri"] = target_uri
+        response = await self._http.post("/api/v1/skills/find", json=payload)
         return self._handle_response_data(response).get("result", {})
 
     async def validate_skill(

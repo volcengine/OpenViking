@@ -46,6 +46,7 @@ class UpdateSkillRequest(BaseModel):
     timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
     telemetry: TelemetryRequest = False
+    target_uri: Optional[str] = None
 
     @model_validator(mode="after")
     def check_data_or_temp_file_id(self):
@@ -62,6 +63,7 @@ class FindSkillsRequest(BaseModel):
     score_threshold: Optional[float] = None
     level: Optional[list[int]] = None
     telemetry: TelemetryRequest = False
+    target_uri: Optional[str] = None
 
 
 class ValidateSkillRequest(BaseModel):
@@ -71,6 +73,7 @@ class ValidateSkillRequest(BaseModel):
     strict: bool = False
     source_path: Optional[str] = None
     skill_dir_name: Optional[str] = None
+    target_uri: Optional[str] = None
 
 
 def _agent_skills_root(ctx: RequestContext, target_uri: Optional[str] = None) -> str:
@@ -581,11 +584,11 @@ async def list_skills(
 @router.post("/find")
 async def find_skills(
     request: FindSkillsRequest,
-    target_uri: Optional[str] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Find agent skills by semantic search."""
     service = get_service()
+    target_uri = request.target_uri
     if target_uri:
         resolved_uri = resolve_path_variables(target_uri)
         execution = await run_operation(
@@ -731,12 +734,11 @@ async def update_skill(
     http_request: Request,
     request: UpdateSkillRequest,
     skill_name: str = ApiPath(..., description="Skill name"),
-    target_uri: Optional[str] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Replace an existing agent skill with new content."""
     service = get_service()
-    root_uri = await _require_skill(service, _ctx, skill_name, target_uri)
+    root_uri = await _require_skill(service, _ctx, skill_name, request.target_uri)
 
     data = request.data
     allow_local_path_resolution = False

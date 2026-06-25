@@ -7,20 +7,6 @@ pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
 
-/// Percent-encode a query parameter value (RFC 3986 unreserved set).
-fn encode_query_value(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(*byte as char);
-            }
-            _ => encoded.push_str(&format!("%{:02X}", byte)),
-        }
-    }
-    encoded
-}
-
 /// Drop null-valued keys (and an empty `args` object) from a request body before
 /// sending it. Older, stricter servers use `extra="forbid"` and reject any field
 /// they do not yet define, so unconditionally attaching optional fields (even as
@@ -862,21 +848,16 @@ impl HttpClient {
         level: Option<Vec<i32>>,
         target_uri: Option<&str>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "query": query,
             "limit": node_limit,
             "score_threshold": threshold,
             "level": level,
         });
-        let path = if let Some(target_uri) = target_uri {
-            format!(
-                "/api/v1/skills/find?target_uri={}",
-                encode_query_value(target_uri)
-            )
-        } else {
-            String::from("/api/v1/skills/find")
-        };
-        self.post(&path, &body).await
+        if let Some(target_uri) = target_uri {
+            body["target_uri"] = serde_json::Value::String(target_uri.to_string());
+        }
+        self.post("/api/v1/skills/find", &body).await
     }
 
     pub async fn skill_validate(&self, path: &str, strict: bool) -> Result<serde_json::Value> {
@@ -944,16 +925,13 @@ impl HttpClient {
         source_metadata: Option<Value>,
         target_uri: Option<&str>,
     ) -> Result<serde_json::Value> {
-        let endpoint = if let Some(target_uri) = target_uri {
-            format!(
-                "/api/v1/skills/{}?target_uri={}",
-                name,
-                encode_query_value(target_uri)
-            )
-        } else {
-            format!("/api/v1/skills/{}", name)
-        };
+        let endpoint = format!("/api/v1/skills/{}", name);
         let path_obj = Path::new(data);
+        let attach_target_uri = |body: &mut Value| {
+            if let Some(target_uri) = target_uri {
+                body["target_uri"] = serde_json::Value::String(target_uri.to_string());
+            }
+        };
 
         if path_obj.exists() {
             if path_obj.is_dir() {
@@ -976,6 +954,7 @@ impl HttpClient {
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
                 }
+                attach_target_uri(&mut body);
                 self.put(&endpoint, &body).await
             } else if path_obj.is_file() {
                 let temp_file_id = if show_progress {
@@ -992,6 +971,7 @@ impl HttpClient {
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
                 }
+                attach_target_uri(&mut body);
                 self.put(&endpoint, &body).await
             } else {
                 let mut body = serde_json::json!({
@@ -1002,6 +982,7 @@ impl HttpClient {
                 if let Some(source_metadata) = source_metadata.clone() {
                     body["source_metadata"] = source_metadata;
                 }
+                attach_target_uri(&mut body);
                 self.put(&endpoint, &body).await
             }
         } else {
@@ -1013,6 +994,7 @@ impl HttpClient {
             if let Some(source_metadata) = source_metadata {
                 body["source_metadata"] = source_metadata;
             }
+            attach_target_uri(&mut body);
             self.put(&endpoint, &body).await
         }
     }
