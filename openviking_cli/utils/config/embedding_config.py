@@ -292,10 +292,10 @@ class EmbeddingModelConfig(BaseModel):
         if self.backend and not self.provider:
             self.provider = self.backend
 
-        if not self.model and not any(c.model for c in self.credentials):
+        if not self.model:
             if self.provider == "local_bm25":
                 self.model = "bm25"
-            else:
+            elif not any(c.model for c in self.credentials):
                 raise ValueError("Embedding model name is required")
 
         # When credentials are configured, defer provider/api_key validation to
@@ -388,19 +388,23 @@ class EmbeddingModelConfig(BaseModel):
 
         elif provider == "local_bm25":
             if self.tokenizer and self.tokenizer not in {"jieba", "regex"}:
-                raise ValueError("local_bm25 tokenizer must be one of: 'jieba', 'regex'")
+                raise ValueError(
+                    f"{label}: local_bm25 tokenizer must be one of: 'jieba', 'regex'"
+                )
             if self.rebuild_growth_factor is not None and self.rebuild_growth_factor <= 1.0:
                 raise ValueError(
-                    "local_bm25 rebuild_growth_factor must be > 1.0 "
+                    f"{label}: local_bm25 rebuild_growth_factor must be > 1.0 "
                     "(values <= 1.0 would rebuild on every insert)"
                 )
             if self.rebuild_min_docs is not None and self.rebuild_min_docs < 0:
-                raise ValueError("local_bm25 rebuild_min_docs must be >= 0")
+                raise ValueError(f"{label}: local_bm25 rebuild_min_docs must be >= 0")
             if (
                 self.rebuild_max_interval_seconds is not None
                 and self.rebuild_max_interval_seconds <= 0
             ):
-                raise ValueError("local_bm25 rebuild_max_interval_seconds must be > 0")
+                raise ValueError(
+                    f"{label}: local_bm25 rebuild_max_interval_seconds must be > 0"
+                )
 
     def _validate_credentials(self) -> None:
         """Validate each credential when credentials list is non-empty.
@@ -560,7 +564,6 @@ class EmbeddingModelConfig(BaseModel):
         if self.credentials and self.credentials[0].model:
             return self.credentials[0].model
         return self.model
-
     def get_effective_dimension(self) -> int:
         """Resolve the dimension used for schema creation and validation."""
         if self.dimension is not None:

@@ -1,6 +1,6 @@
 {
   "name": "@openviking/openclaw-plugin",
-  "version": "2026.6.11",
+  "version": "2026.6.18",
   "displayName": "OpenViking",
   "description": "OpenClaw context-engine plugin — OpenViking AI memory, long-term memory, knowledge base, semantic search, RAG, context engine. 长期记忆 · 知识库 · 语义检索 · 上下文引擎",
   "type": "module",

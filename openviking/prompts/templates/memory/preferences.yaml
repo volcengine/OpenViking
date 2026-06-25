@@ -20,10 +20,10 @@ embedding_template: |-
 
 overview_template: |-
   # Preferences Overview
-  {% if items %}**User:** {{ items[0].file_content.user }}
-  **Topic:** {{ items[0].file_content.topic }}{% endif %}
+  {% if items %}**User:** {{ items[0].file_content.user|default(directory_name, true) }}
+  **Topic:** {{ items[0].file_content.topic|default(items[0].file_name, true) }}{% endif %}
   {% for item in items %}
-  - [{{ item.file_content.topic }}](./{{ item.file_name }})
+  - [{{ item.file_content.topic|default(item.file_name, true) }}](./{{ item.file_name }})
   {% endfor %}
 
 fields:

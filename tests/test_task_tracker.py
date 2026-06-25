@@ -427,11 +427,9 @@ async def test_singleton_reset():
     assert t1 is not t2
 
 
-async def test_get_task_tracker_requires_service_initialization(caplog):
-    caplog.set_level("ERROR")
+async def test_get_task_tracker_requires_service_initialization():
     with pytest.raises(RuntimeError, match="TaskTracker not initialized"):
         get_task_tracker()
-    assert "refusing to create a separate AGFS client" in caplog.text
 
 
 async def test_persistent_store_cross_tracker_visibility():

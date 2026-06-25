@@ -572,7 +572,7 @@ describe("context-engine afterTurn()", () => {
     expect(assistantParts.map(p => p.text).join(" ")).toContain("Here is context");
   });
 
-  it("skips heartbeat messages from being stored", async () => {
+  it("stores heartbeat-looking messages when host does not flag the turn", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -587,7 +587,35 @@ describe("context-engine afterTurn()", () => {
       prePromptMessageCount: 0,
     });
 
-    expect(client.addSessionMessage).not.toHaveBeenCalled();
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    const userParts = client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string }>;
+    expect(userParts.map(p => p.text).join(" ")).toContain("HEARTBEAT.md");
+  });
+
+  it("stores normal user messages that mention heartbeat artifacts", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      {
+        role: "user",
+        content:
+          "Please explain why HEARTBEAT.md appeared in the logs and whether HEARTBEAT_OK means success.",
+      },
+      { role: "assistant", content: "HEARTBEAT_OK is the heartbeat acknowledgement token." },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
+    const userParts = client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string }>;
+    expect(userParts.map(p => p.text).join(" ")).toContain("HEARTBEAT.md");
   });
 
   it("skips heartbeat via isHeartbeat flag", async () => {

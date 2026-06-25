@@ -186,18 +186,25 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
+        contains_resource_uri = self._conversation_contains_resource_uri()
         resource_uri_handling = (
             """
 
 ## Resource URI Handling
 - If the conversation contains a resource URI (`viking://resources/...`, `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources/...`) and the user says a durable fact, judgment, preference, or event about it, extract that memory into the appropriate normal memory type such as entities, events, or preferences.
-- Preserve resource references as markdown links in visible memory content when useful. Example: user said "用户保存了越前龙马照片 viking://resources/images/ryoma" -> write "用户保存了[越前龙马照片](viking://resources/images/ryoma)".
+- Preserve resource references as markdown links in visible memory content when useful. Example: user said "The user saved a Ryoma Echizen photo viking://resources/images/ryoma" -> write "The user saved a [Ryoma Echizen photo](viking://resources/images/ryoma)".
 - For `## Resource Addition` blocks, use `User reason` as the user's intent and `Resource abstract` only as optional context. Do not copy raw fields such as `Resource URI`, `Added at`, `Resource abstract`, or `User reason` into visible memory content.
-- Use descriptive link text such as `[越前龙马照片](viking://resources/...)`; avoid visible wording like `资源URI为` or `Resource URI`.
+- For `## Resource Deletion` blocks, update existing mutable memories that mention or depend on the deleted resource. Do not create a new event solely for this maintenance action.
+- Use descriptive link text such as `[Ryoma Echizen photo](viking://resources/...)`; avoid visible wording like `resource URI is` or `Resource URI`.
 - If the user already wrote a markdown link to a resource URI, keep the same resource link intent.
 - Do NOT claim you inspected, summarized, OCRed, or opened the resource file unless the conversation explicitly provides that fact.
 """
-            if self._conversation_contains_resource_uri()
+            if contains_resource_uri
+            else ""
+        )
+        resource_deletion_read_source = (
+            ", or listed under the system-generated `## Resource Deletion` block's `Affected memory URIs`"
+            if contains_resource_uri
             else ""
         )
         goal = f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
@@ -210,7 +217,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
 ## Critical
 - ONLY read and search tools are available - DO NOT use write tool
 - Before editing ANY existing memory file, you MUST first read its complete content
-- ONLY read URIs that are explicitly listed in ls tool results or returned by previous tool calls
+- ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls{resource_deletion_read_source}
 
 ## Target Output Language
 All memory content MUST be written in {output_language}.

@@ -42,6 +42,32 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+// install-manifest.json is the single source of truth for compatibility floors and
+// recommended versions. The published release manifest derives them from it so the
+// two manifests can never declare divergent compatibility.
+const installManifestUrl = new URL("../install-manifest.json", import.meta.url);
+
+function readInstallCompatibility() {
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(installManifestUrl, "utf8"));
+  } catch (error) {
+    die(`Unable to read install-manifest.json compatibility: ${error.message}`);
+  }
+  const compat = parsed.compatibility ?? {};
+  for (const field of [
+    "minOpenclawVersion",
+    "recommendedOpenclawVersion",
+    "minOpenvikingVersion",
+    "recommendedOpenvikingVersion",
+  ]) {
+    if (!compat[field]) {
+      die(`install-manifest.json compatibility.${field} is required`);
+    }
+  }
+  return compat;
+}
+
 const environment = readOption("--env");
 const version = readOption("--version");
 const tag = readOption("--tag");
@@ -72,6 +98,7 @@ if (artifacts.length === 0) {
 }
 
 const releaseNotes = notesPath ? readFileSync(notesPath, "utf8") : "";
+const installCompatibility = readInstallCompatibility();
 const artifactEntries = artifacts.map((path) => {
   const name = basename(path);
   const stats = statSync(path);
@@ -112,9 +139,12 @@ const manifest = {
     releaseNotes,
   },
   compatibility: {
-    minOpenclawVersion: "2026.4.8",
-    minGatewayVersion: "2026.4.8",
+    minOpenclawVersion: installCompatibility.minOpenclawVersion,
+    recommendedOpenclawVersion: installCompatibility.recommendedOpenclawVersion,
+    minGatewayVersion: installCompatibility.minOpenclawVersion,
     minNodeVersion: "22.0.0",
+    minOpenvikingVersion: installCompatibility.minOpenvikingVersion,
+    recommendedOpenvikingVersion: installCompatibility.recommendedOpenvikingVersion,
   },
   artifacts: artifactEntries,
   checksums: {

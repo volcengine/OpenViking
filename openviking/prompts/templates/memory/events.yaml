@@ -107,9 +107,8 @@ embedding_template: |-
   {{ content }}
 overview_template: |-
   # Events Overview
-  {% if items %}**Date:** {{ extract_context.get_year(items[0].file_content.ranges|default(''))|default('') }}/{{ extract_context.get_month(items[0].file_content.ranges|default(''))|default('') }}/{{ extract_context.get_day(items[0].file_content.ranges|default(''))|default('') }}{% endif %}
   {% for item in items %}
-  - [{{ item.file_content.summary }}](./{{ item.file_name }})
+  - [{{ item.file_content.summary|default(item.file_name, true) }}](./{{ item.file_name }})
   {% endfor %}
 
 fields:

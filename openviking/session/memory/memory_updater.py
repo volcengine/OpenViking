@@ -1228,12 +1228,6 @@ class MemoryUpdater:
                 # Extract filename from path
                 filename = file_path.split("/")[-1]
                 metadata = mf.to_metadata()
-                self._fill_overview_fallback_fields(
-                    memory_type=memory_type,
-                    directory=directory,
-                    filename=filename,
-                    metadata=metadata,
-                )
 
                 items.append(
                     {
@@ -1249,14 +1243,17 @@ class MemoryUpdater:
             logger.debug(f"No valid memory files parsed in {directory}")
             return
 
+        overview_context = {
+            "memory_type": memory_type,
+            "directory_name": directory.rstrip("/").split("/")[-1],
+            "items": items,
+        }
+
         # Render the template
         try:
             rendered = render_template(
                 schema.overview_template,
-                {
-                    "memory_type": memory_type,
-                    "items": items,
-                },
+                overview_context,
                 extract_context=extract_context,
             )
         except Exception as e:
@@ -1269,20 +1266,3 @@ class MemoryUpdater:
             await viking_fs.write_file(overview_path, rendered, ctx=ctx)
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")
-
-    @staticmethod
-    def _fill_overview_fallback_fields(
-        *,
-        memory_type: str,
-        directory: str,
-        filename: str,
-        metadata: Dict[str, Any],
-    ) -> None:
-        stem = filename.removesuffix(".md")
-        parent_name = directory.rstrip("/").split("/")[-1]
-        if memory_type == "entities":
-            metadata.setdefault("category", parent_name)
-            metadata.setdefault("name", stem)
-        elif memory_type == "preferences":
-            metadata.setdefault("user", parent_name)
-            metadata.setdefault("topic", stem)

@@ -16,13 +16,20 @@ const manifest = JSON.parse(
 const packageJson = JSON.parse(
   readFileSync(resolve(pluginRoot, "package.json"), "utf8"),
 ) as {
+  version?: string;
   files?: string[];
   scripts?: Record<string, string>;
 };
 const installManifest = JSON.parse(
   readFileSync(resolve(pluginRoot, "install-manifest.json"), "utf8"),
 ) as {
-  compatibility?: { minOpenclawVersion?: string };
+  pluginVersion?: string;
+  compatibility?: {
+    minOpenclawVersion?: string;
+    recommendedOpenclawVersion?: string;
+    minOpenvikingVersion?: string;
+    recommendedOpenvikingVersion?: string;
+  };
   files?: { required?: string[]; optional?: string[] };
   npm?: {
     build?: boolean;
@@ -121,5 +128,16 @@ describe("OpenClaw 5.5 package runtime contract", () => {
       "openclaw.plugin.json",
     ]));
     expect(installManifest.compatibility?.minOpenclawVersion).toBe("2026.4.8");
+  });
+
+  it("declares compatibility floors and recommended versions, and keeps version fields in sync", () => {
+    expect(installManifest.compatibility).toMatchObject({
+      minOpenclawVersion: "2026.4.8",
+      recommendedOpenclawVersion: "2026.6.6",
+      minOpenvikingVersion: "0.4.1",
+      recommendedOpenvikingVersion: "0.4.1",
+    });
+    // package.json version and install-manifest pluginVersion must stay identical.
+    expect(installManifest.pluginVersion).toBe(packageJson.version);
   });
 });

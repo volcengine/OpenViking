@@ -1,35 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { withBase } from 'vitepress'
+import { useData, withBase } from 'vitepress'
 
-type SearchMode = 'semantic' | 'keyword' | 'file'
-type SearchLocale = 'en' | 'zh'
-
-type DocsIndexRecord = {
-  locale: SearchLocale
-  path: string
-  text: string
-  title: string
-  url: string
-}
-
-type DocsSearchResult = {
-  line?: number | null
-  mode?: SearchMode
-  relativePath?: string
-  score?: number | null
-  snippet?: string
-  title?: string
-  uri?: string
-  url?: string
-}
+import { searchCopyForLocale } from './openviking-search-i18n'
+import { localizeSearchResultTitles } from './openviking-search-results'
+import type { RemoteSearchFailureReason } from './openviking-search-i18n'
+import type {
+  DocsIndexRecord,
+  DocsSearchResult,
+  SearchLocale,
+  SearchMode
+} from './openviking-search-results'
 
 type ResolvedDocsSearchResult = DocsSearchResult & {
   cleanedSnippet: string
   resolvedUrl: string
 }
-
-type RemoteSearchFailureReason = 'rate_limited' | 'timeout' | 'unavailable'
 
 type RemoteSearchResponse =
   | { ok: true; results: DocsSearchResult[] }
@@ -38,28 +24,15 @@ type RemoteSearchResponse =
 const PRODUCTION_SEARCH_URL = 'https://openviking.ai/studio/gateway/docs/search'
 const SEARCH_LIMIT = 8
 const REMOTE_SEARCH_DEBOUNCE_MS = 1000
-const REMOTE_SEARCH_TIMEOUT_MS = 10000
+const REMOTE_SEARCH_TIMEOUT_MS = 15000
 
-const modes: { command: string; label: string; placeholder: string; value: SearchMode }[] = [
-  {
-    command: '/find',
-    label: 'Semantic',
-    placeholder: 'Ask a question about the docs',
-    value: 'semantic'
-  },
-  {
-    command: '/grep',
-    label: 'Keyword',
-    placeholder: 'Search exact words in the docs',
-    value: 'keyword'
-  },
-  {
-    command: '/glob',
-    label: 'File',
-    placeholder: 'Find docs by path or filename',
-    value: 'file'
-  }
+const modeDefinitions: { command: string; value: SearchMode }[] = [
+  { command: '/find', value: 'semantic' },
+  { command: '/grep', value: 'keyword' },
+  { command: '/glob', value: 'file' }
 ]
+
+const { lang } = useData()
 
 const inputRef = ref<HTMLInputElement | null>(null)
 const triggerRef = ref<HTMLButtonElement | null>(null)
@@ -79,7 +52,14 @@ let localIndexPromise: Promise<DocsIndexRecord[]> | null = null
 let activeSearchController: AbortController | null = null
 
 const trimmedQuery = computed(() => query.value.trim())
-const activeMode = computed(() => modes.find((item) => item.value === mode.value) ?? modes[0])
+const searchCopy = computed(() => searchCopyForLocale(docsLocale()))
+const modes = computed(() =>
+  modeDefinitions.map((item) => ({
+    ...item,
+    ...searchCopy.value.modes[item.value]
+  }))
+)
+const activeMode = computed(() => modes.value.find((item) => item.value === mode.value) ?? modes.value[0])
 const resolvedResults = computed<ResolvedDocsSearchResult[]>(() =>
   results.value.flatMap((result) => {
     const resolvedUrl = resultUrl(result)
@@ -88,6 +68,12 @@ const resolvedResults = computed<ResolvedDocsSearchResult[]>(() =>
 )
 
 function docsLocale(): SearchLocale {
+  const currentLang = String(lang.value ?? '').toLowerCase()
+  if (currentLang.startsWith('zh')) return 'zh'
+  if (currentLang.startsWith('en')) return 'en'
+
+  if (typeof window === 'undefined') return 'en'
+
   const basePath = normalizeBasePath(import.meta.env.BASE_URL)
   const pathname = window.location.pathname
   const localizedPath = pathname.startsWith(basePath)
@@ -232,7 +218,7 @@ async function runSearch() {
     if (currentSequence !== searchSequence) return
 
     if (remoteResponse?.ok) {
-      results.value = remoteResponse.results
+      results.value = await localizeRemoteResultTitles(remoteResponse.results, docsLocale())
       return
     }
 
@@ -251,6 +237,13 @@ async function runSearch() {
       isLoading.value = false
     }
   }
+}
+
+async function localizeRemoteResultTitles(
+  searchResults: DocsSearchResult[],
+  locale: SearchLocale
+) {
+  return localizeSearchResultTitles(searchResults, locale, loadLocalIndex)
 }
 
 async function fetchRemoteResults(
@@ -321,16 +314,7 @@ function clearPendingSearch() {
 }
 
 function fallbackNotice(reason: RemoteSearchFailureReason, localResultCount: number) {
-  const prefix =
-    reason === 'rate_limited'
-      ? 'OpenViking search is rate limited.'
-      : reason === 'timeout'
-        ? 'OpenViking search timed out.'
-        : 'OpenViking search is unavailable.'
-
-  return localResultCount > 0
-    ? `${prefix} Showing local docs results.`
-    : `${prefix} No local results found.`
+  return searchCopy.value.notice(reason, localResultCount)
 }
 
 async function loadLocalIndex() {
@@ -484,13 +468,13 @@ onUnmounted(() => {
   <div class="ov-docs-search">
     <button
       ref="triggerRef"
-      aria-label="Search docs"
+      :aria-label="searchCopy.trigger"
       class="ov-docs-search-trigger"
       type="button"
       @click="openSearch"
     >
-      <span class="ov-docs-search-trigger-label">Search docs</span>
-      <span aria-hidden="true" class="ov-docs-search-trigger-compact">Search</span>
+      <span class="ov-docs-search-trigger-label">{{ searchCopy.trigger }}</span>
+      <span aria-hidden="true" class="ov-docs-search-trigger-compact">{{ searchCopy.compactTrigger }}</span>
       <kbd>Ctrl K</kbd>
     </button>
 
@@ -498,7 +482,7 @@ onUnmounted(() => {
       <div class="ov-docs-search-backdrop" @click.self="closeSearch">
         <section
           ref="dialogRef"
-          aria-label="OpenViking docs search"
+          :aria-label="searchCopy.dialogLabel"
           aria-modal="true"
           class="ov-docs-search-dialog"
           role="dialog"
@@ -510,7 +494,7 @@ onUnmounted(() => {
                 aria-controls="ov-docs-search-mode-menu"
                 :aria-expanded="isModeMenuOpen"
                 aria-haspopup="listbox"
-                aria-label="Search mode"
+                :aria-label="searchCopy.modeLabel"
                 class="ov-docs-search-mode-button"
                 type="button"
                 @click="toggleModeMenu"
@@ -522,7 +506,7 @@ onUnmounted(() => {
               <div
                 v-if="isModeMenuOpen"
                 id="ov-docs-search-mode-menu"
-                aria-label="Search mode options"
+                :aria-label="searchCopy.modeOptionsLabel"
                 class="ov-docs-search-mode-menu"
                 role="listbox"
               >
@@ -545,7 +529,7 @@ onUnmounted(() => {
             <input
               ref="inputRef"
               v-model="query"
-              aria-label="Search OpenViking docs"
+              :aria-label="searchCopy.inputLabel"
               class="ov-docs-search-input"
               :placeholder="activeMode.placeholder"
               type="search"
@@ -556,12 +540,12 @@ onUnmounted(() => {
           <p v-if="notice" class="ov-docs-search-notice">{{ notice }}</p>
 
           <div class="ov-docs-search-results">
-            <p v-if="isLoading" class="ov-docs-search-empty">Searching...</p>
+            <p v-if="isLoading" class="ov-docs-search-empty">{{ searchCopy.empty.loading }}</p>
             <p v-else-if="trimmedQuery && resolvedResults.length === 0" class="ov-docs-search-empty">
-              No results found.
+              {{ searchCopy.empty.noResults }}
             </p>
             <p v-else-if="!trimmedQuery" class="ov-docs-search-empty">
-              Type a query to search the current language docs.
+              {{ searchCopy.empty.initial }}
             </p>
             <template v-else>
               <a

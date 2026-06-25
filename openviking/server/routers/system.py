@@ -83,11 +83,11 @@ async def health_check(request: Request):
         x_openviking_user = request.headers.get("X-OpenViking-User")
 
         # Get effective auth mode from config
-        effective_auth_mode = AuthMode.API_KEY
+        effective_auth_mode = AuthMode.API_KEY.value
         config = getattr(request.app.state, "config", None)
         if config is not None and hasattr(config, "get_effective_auth_mode"):
             effective_auth_mode = config.get_effective_auth_mode()
-        result["auth_mode"] = effective_auth_mode.value
+        result["auth_mode"] = effective_auth_mode
 
         if x_api_key or authorization:
             try:
@@ -100,7 +100,7 @@ async def health_check(request: Request):
                 )
                 result["account_id"] = str(identity.account_id)
                 result["user_id"] = str(identity.user_id)
-                result["role"] = identity.role.value
+                result["role"] = str(identity.role)
             except Exception as e:
                 logger.warning(f"Failed to resolve identity: {e}")
     except Exception as e:

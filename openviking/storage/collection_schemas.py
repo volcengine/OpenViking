@@ -148,6 +148,7 @@ class CollectionSchemas:
                 {"FieldName": "name", "FieldType": "string"},
                 {"FieldName": "description", "FieldType": "string"},
                 {"FieldName": "tags", "FieldType": "string"},
+                {"FieldName": "search_tags", "FieldType": "list<string>"},
                 {"FieldName": "abstract", "FieldType": "string"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
@@ -166,6 +167,7 @@ class CollectionSchemas:
                 "level",
                 "name",
                 "tags",
+                "search_tags",
                 "account_id",
                 "owner_user_id",
             ]
@@ -752,7 +754,14 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         user_id="default",
                     )
                     ctx = RequestContext(user=user, role=Role.ROOT)
-                    record_id = await self._vikingdb.upsert(inserted_data, ctx=ctx)
+                    result = await self._vikingdb.upsert(
+                        inserted_data,
+                        ctx=ctx,
+                        partial_update=True,
+                    )
+                    record_id = result
+                    if record_id:
+                        self._schedule_local_bm25_sparse_rebuild(ctx)
                     if record_id:
                         self._schedule_local_bm25_sparse_rebuild(ctx)
                     if record_id:

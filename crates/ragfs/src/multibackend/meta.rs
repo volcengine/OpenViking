@@ -98,7 +98,7 @@ pub(crate) const REDIRECT_FILE: &str = ".redirect.json";
 pub(crate) const SYNC_LOG_FILE: &str = ".sync_log.json";
 /// Hidden multi-write internal file names (redirect / sync-log metadata).
 pub(crate) const MULTIWRITE_INTERNAL_NAMES: &[&str] = &[SYNC_LOG_FILE, REDIRECT_FILE];
-const GLOBAL_STATE_FILE: &str = "/local/_system/.multiwrite.global.json";
+const GLOBAL_STATE_FILE: &str = "/_system/.multiwrite.global.json";
 const GLOBAL_STATE_VERSION: u32 = 1;
 
 type TrackedLock = Mutex<()>;
@@ -175,6 +175,15 @@ impl MetaStateStore {
         Arc::new(FsContextInner::new("_system".to_string()))
     }
 
+    /// - root directory using `_system` context
+    fn effective_meta_ctx(dir: &str, ctx: &FsContext) -> FsContext {
+        if dir == "/" {
+            Self::system_ctx()
+        } else {
+            ctx.clone()
+        }
+    }
+
     /// Build the full path for a metadata file in a directory.
     fn meta_path(dir: &str, filename: &str) -> String {
         if dir == "/" {
@@ -190,8 +199,9 @@ impl MetaStateStore {
         T: DeserializeOwned + Default,
     {
         let path = Self::meta_path(dir, filename);
+        let effective_ctx = Self::effective_meta_ctx(dir, ctx);
         match FS_CTX
-            .scope(ctx.clone(), async {
+            .scope(effective_ctx, async {
                 self.primary_backend.read(&path, 0, 0).await
             })
             .await
@@ -242,8 +252,9 @@ impl MetaStateStore {
     {
         let path = Self::meta_path(dir, filename);
         let data = serde_json::to_vec(meta)?;
+        let effective_ctx = Self::effective_meta_ctx(dir, ctx);
         FS_CTX
-            .scope(ctx.clone(), async {
+            .scope(effective_ctx, async {
                 self.primary_backend
                     .write(&path, &data, 0, WriteFlag::Create)
                     .await

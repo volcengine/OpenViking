@@ -90,7 +90,7 @@ def _scheduler():
 
 
 def _identity(ctx: RequestContext):
-    return (ctx.account_id, ctx.user.user_id, ctx.role.value)
+    return (ctx.account_id, ctx.user.user_id, str(ctx.role))
 
 
 async def _resolve_task(

@@ -451,6 +451,8 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(store).toBeDefined();
     expect(store!.name).toBe("memory_store");
     expect(store!.description).toContain("Store text");
+    expect(store!.description).toContain("explicitly asks to remember");
+    expect(store!.description).toContain("threshold/commit dependent");
   });
 
   it("uses requesterSenderId to populate role_id for user writes", async () => {

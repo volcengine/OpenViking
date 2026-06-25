@@ -82,6 +82,8 @@ class _FakeService:
 
 def _build_lightweight_admin_test_app() -> FastAPI:
     from openviking.server.routers import admin as admin_router
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.auth.registry import get_registry
 
     app = FastAPI()
     app.state.config = ServerConfig(root_api_key=ROOT_KEY)
@@ -101,6 +103,13 @@ def _build_lightweight_admin_test_app() -> FastAPI:
 
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=fake_service.viking_fs)
     app.state.api_key_manager = manager
+
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("api_key") is None:
+        registry.register(ApiKeyAuthPlugin)
+    app.state.auth_plugin = registry.get("api_key")()
+
     app.include_router(admin_router.router)
     return app
 
@@ -131,6 +140,9 @@ async def admin_service(temp_dir):
 
 @pytest_asyncio.fixture(scope="function")
 async def admin_app(admin_service):
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.auth.registry import get_registry
+
     config = ServerConfig(root_api_key=ROOT_KEY)
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
@@ -138,6 +150,12 @@ async def admin_app(admin_service):
     manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
+
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("api_key") is None:
+        registry.register(ApiKeyAuthPlugin)
+    app.state.auth_plugin = registry.get("api_key")()
 
     return app
 
@@ -1035,6 +1053,9 @@ async def test_legacy_agent_and_session_uri_reads_are_read_only(
 
 @pytest_asyncio.fixture(scope="function")
 async def trusted_admin_app(admin_service):
+    from openviking.server.auth.plugins import TrustedAuthPlugin
+    from openviking.server.auth.registry import get_registry
+
     config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
@@ -1044,6 +1065,13 @@ async def trusted_admin_app(admin_service):
     if "platform" not in manager._accounts:
         await manager.create_account("platform", "gateway-admin")
     app.state.api_key_manager = manager
+
+    # Set auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("trusted") is None:
+        registry.register(TrustedAuthPlugin)
+    app.state.auth_plugin = registry.get("trusted")()
+
     return app
 
 

@@ -155,11 +155,20 @@ async def service(temp_dir: Path, monkeypatch):
 async def app(service: OpenVikingService):
     """Create FastAPI app with pre-initialized service (no auth)."""
     from openviking.server.dependencies import set_service
+    from openviking.server.auth.plugins import DevAuthPlugin
+    from openviking.server.auth.registry import get_registry
 
     config = ServerConfig()
     fastapi_app = create_app(config=config, service=service)
     # ASGITransport doesn't trigger lifespan, so wire up the service manually
     set_service(service)
+    # Manually initialize auth plugin (lifespan not triggered in ASGI tests)
+    registry = get_registry()
+    if registry.get("dev") is None:
+        registry.register(DevAuthPlugin)
+    plugin_cls = registry.get("dev")
+    if plugin_cls is not None:
+        fastapi_app.state.auth_plugin = plugin_cls()
     return fastapi_app
 
 

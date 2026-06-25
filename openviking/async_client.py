@@ -391,6 +391,7 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -421,6 +422,7 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             context_type=context_type,
+            tags=tags,
             telemetry=telemetry,
             since=since,
             until=until,
@@ -436,6 +438,7 @@ class AsyncOpenViking:
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
         context_type: Optional[SearchContextTypeInput] = None,
+        tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
         since: Optional[str] = None,
         until: Optional[str] = None,
@@ -451,6 +454,7 @@ class AsyncOpenViking:
             score_threshold=score_threshold,
             filter=filter,
             context_type=context_type,
+            tags=tags,
             telemetry=telemetry,
             since=since,
             until=until,
@@ -492,6 +496,24 @@ class AsyncOpenViking:
             mode=mode,
             wait=wait,
             timeout=timeout,
+            telemetry=telemetry,
+        )
+
+    async def set_tags(
+        self,
+        uri: str,
+        tags: List[str],
+        mode: str = "replace",
+        recursive: bool = False,
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Replace explicit retrieval tags for a file or directory."""
+        await self._ensure_initialized()
+        return await self._client.set_tags(
+            uri=uri,
+            tags=tags,
+            mode=mode,
+            recursive=recursive,
             telemetry=telemetry,
         )
 

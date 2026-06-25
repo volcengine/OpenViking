@@ -68,6 +68,18 @@ describe("TOS release and single installer contract", () => {
     expect(manifest.artifacts.every((artifact: { sha256: string; size: number }) => artifact.sha256.length === 64 && artifact.size > 0)).toBe(true);
     expect(checksums).toContain("openviking.tgz");
     expect(checksums).toContain("install.sh");
+
+    // The release manifest must derive its compatibility floors/recommended
+    // versions from install-manifest.json so the two manifests never diverge.
+    const installManifest = JSON.parse(readText("install-manifest.json"));
+    expect(manifest.compatibility).toMatchObject({
+      minOpenclawVersion: installManifest.compatibility.minOpenclawVersion,
+      recommendedOpenclawVersion: installManifest.compatibility.recommendedOpenclawVersion,
+      minOpenvikingVersion: installManifest.compatibility.minOpenvikingVersion,
+      recommendedOpenvikingVersion: installManifest.compatibility.recommendedOpenvikingVersion,
+    });
+    expect(manifest.compatibility.minGatewayVersion).toBe(installManifest.compatibility.minOpenclawVersion);
+    expect(manifest.compatibility.minNodeVersion).toBe("22.0.0");
   });
 
   it("generates environment-specific manifest metadata for non-prod releases", () => {

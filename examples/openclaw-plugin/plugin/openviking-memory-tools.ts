@@ -71,7 +71,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
       name: "memory_store",
       label: "Memory Store (OpenViking)",
       description:
-        "Store text in OpenViking memory pipeline by writing to a session and running memory extraction.",
+        "Store text in OpenViking memory pipeline by writing to a session and running memory extraction. Use when the user explicitly asks to remember, save, or store an important long-term fact, preference, project, or decision; automatic capture is threshold/commit dependent.",
       parameters: Type.Object({
         text: Type.String({ description: "Information to store as memory source text" }),
         role: Type.Optional(Type.String({ description: "Session role, default user" })),
