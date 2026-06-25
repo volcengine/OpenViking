@@ -25,13 +25,12 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
-    canonical_user_root,
     canonicalize_uri,
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
 )
-from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
@@ -46,7 +45,7 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.expr import PathScope
+from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import (
     MULTIWRITE_PATH_LOCK_FILE,
     STORAGE_INTERNAL_ENTRY_NAMES,
@@ -374,7 +373,7 @@ class VikingFS:
         if parts and parts[0] == "agent":
             if len(parts) >= 2 and parts[1] not in {"skills", "endpoints", "tools", "payments"}:
                 raise PermissionDeniedError(
-                    f"viking://agent/{{agent_id}} is deprecated. Use viking://user/.../peers/{{agent_id}} instead.",
+                    "viking://agent/{agent_id} is deprecated. Use viking://user/.../peers/{agent_id} instead.",
                     resource=normalized_uri,
                 )
             if len(parts) < 2:
@@ -969,6 +968,23 @@ class VikingFS:
         # will handle the tokenization of the query string.
         query = " ".join(kw.strip() for kw in pattern.split("|") if kw.strip())
         filter_expr = PathScope("uri", uri, depth=level_limit)
+        excluded_prefix = None
+        if exclude_uri:
+            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            self._ensure_access(excluded_prefix, ctx)
+            filter_expr = And(
+                [
+                    filter_expr,
+                    RawDSL(
+                        {
+                            "op": "must_not",
+                            "field": "uri",
+                            "conds": [excluded_prefix],
+                            "para": "-d=-1",
+                        }
+                    ),
+                ]
+            )
 
         # Auto-adapt bm25 recall limit: recall up to 5x requested matches
         # while capping at VikingDB's max limit. If node_limit is unset,
@@ -997,8 +1013,12 @@ class VikingFS:
             )
 
         candidate_uris = [r["uri"] for r in result if r.get("uri")]
-        if exclude_uri:
-            candidate_uris = [u for u in candidate_uris if not u.startswith(exclude_uri)]
+        if excluded_prefix:
+            candidate_uris = [
+                u
+                for u in candidate_uris
+                if u != excluded_prefix and not u.startswith(excluded_prefix + "/")
+            ]
         if not candidate_uris:
             # BM25 returned no candidates — the index confirms no matching content
             return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
@@ -2294,7 +2314,8 @@ class VikingFS:
     def _is_legacy_agent_id_uri(self, uri: str) -> bool:
         _, parts = self._normalized_uri_parts(uri)
         return bool(
-            parts and parts[0] == "agent"
+            parts
+            and parts[0] == "agent"
             and len(parts) >= 2
             and parts[1] not in {"skills", "endpoints", "tools", "payments"}
         )
@@ -2337,15 +2358,9 @@ class VikingFS:
         # Only legacy namespaces need alias remapping:
         # - Old format viking://agent/{agent_id}/...
         # - viking://session/...
-        is_legacy_namespace = (
-            request_parts
-            and (
-                request_parts[0] == "session"
-                or (
-                    request_parts[0] == "agent"
-                    and self._is_legacy_agent_id_uri(request_uri)
-                )
-            )
+        is_legacy_namespace = request_parts and (
+            request_parts[0] == "session"
+            or (request_parts[0] == "agent" and self._is_legacy_agent_id_uri(request_uri))
         )
         if not is_legacy_namespace:
             return self._path_to_uri(entry_path, ctx=ctx)
@@ -3351,14 +3366,10 @@ class VikingFS:
         canonical = canonicalize_uri(uri, real_ctx)
         _, parts = self._normalized_uri_parts(canonical)
         if not parts:
-            raise ValueError(
-                f"git tree path cannot be the account root: {uri!r}"
-            )
+            raise ValueError(f"git tree path cannot be the account root: {uri!r}")
         first = parts[0]
         if first in self._GIT_INTERNAL_FIRST_SEGMENTS:
-            raise ValueError(
-                f"git tree path rejects internal scope/segment {first!r}: {uri!r}"
-            )
+            raise ValueError(f"git tree path rejects internal scope/segment {first!r}: {uri!r}")
         return "/".join(parts)
 
     def _tree_path_to_uri(self, tree_path: str) -> str:
@@ -3377,9 +3388,7 @@ class VikingFS:
     }
     _NO_VECTOR_DERIVED = frozenset({".relations.json"})
 
-    def _classify_restore_path(
-        self, tree_path: str, *, deleted: bool
-    ) -> Optional[tuple]:
+    def _classify_restore_path(self, tree_path: str, *, deleted: bool) -> Optional[tuple]:
         """Classify a restore-affected tree path into a vector maintenance task.
 
         Returns a ``(op, uri, level)`` triple, or ``None`` when the path has no
@@ -3531,9 +3540,9 @@ class VikingFS:
         if dry_run:
             return await self._async_agfs.run("git_restore", **kwargs)
 
+        from openviking.pyagfs.exceptions import GitRestoreWritebackPartialError
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
-        from openviking.pyagfs.exceptions import GitRestoreWritebackPartialError
 
         # Serialize the writeback against concurrent VFS mutations on the same
         # subtree. A scoped restore tree-locks project_dir; a full restore
@@ -3603,9 +3612,7 @@ class VikingFS:
                     "[VikingFS] git restore reindex task creation failed; "
                     "falling back to fire-and-forget rebuild"
                 )
-                self._schedule_vector_rebuild(
-                    written=written, deleted=deleted, ctx=real_ctx
-                )
+                self._schedule_vector_rebuild(written=written, deleted=deleted, ctx=real_ctx)
         return result
 
     async def _schedule_restore_reindex_for_paths(
@@ -3722,14 +3729,20 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id
         head = await self._async_agfs.run(
-            "git_show", account=account, target_ref=branch, path=None,
+            "git_show",
+            account=account,
+            target_ref=branch,
+            path=None,
         )
         results: List[Dict[str, Any]] = [head]
         parents = head.get("parents") or []
         while parents and len(results) < limit:
             parent_oid = parents[0]
             commit = await self._async_agfs.run(
-                "git_show", account=account, target_ref=parent_oid, path=None,
+                "git_show",
+                account=account,
+                target_ref=parent_oid,
+                path=None,
             )
             results.append(commit)
             parents = commit.get("parents") or []
@@ -3792,9 +3805,7 @@ class VikingFS:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            logger.warning(
-                "[VikingFS] git restore vector rebuild skipped: no running event loop"
-            )
+            logger.warning("[VikingFS] git restore vector rebuild skipped: no running event loop")
             return
 
         tasks = self._collect_restore_vector_tasks(written, deleted)
@@ -3865,18 +3876,12 @@ class VikingFS:
         """Wrapper coroutine: dispatch one vector task and swallow errors."""
         try:
             if op == "reindex_marker":
-                await executor.reindex_directory_marker(
-                    dir_uri=uri, level=level, ctx=ctx
-                )
+                await executor.reindex_directory_marker(dir_uri=uri, level=level, ctx=ctx)
             elif op == "reindex_file":
-                await executor.execute(
-                    uri=uri, mode="vectors_only", wait=True, ctx=ctx
-                )
+                await executor.execute(uri=uri, mode="vectors_only", wait=True, ctx=ctx)
             elif op == "delete":
                 await executor.delete_uri_level(uri=uri, level=level, ctx=ctx)
             else:  # pragma: no cover - defensive
                 logger.warning("[VikingFS] unknown vector rebuild op %r for %s", op, uri)
         except Exception:
-            logger.exception(
-                "[VikingFS] git restore vector task %s failed for %s", op, uri
-            )
+            logger.exception("[VikingFS] git restore vector task %s failed for %s", op, uri)

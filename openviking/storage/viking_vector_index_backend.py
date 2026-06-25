@@ -610,7 +610,7 @@ class _SingleAccountBackend:
             )
         except Exception as e:
             logger.error("Error searching by keywords: %s", e)
-            return []
+            raise
 
     async def close(self) -> None:
         try:

@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 # VikingDB rejects upsert when any text field exceeds this byte length.
 # Truncation is applied at a valid UTF-8 character boundary so that
 # multi-byte sequences are never split in the middle.
-VIKINGDB_TEXT_FIELD_BYTE_LIMIT: int = 65535
+VIKINGDB_TEXT_FIELD_BYTE_LIMIT: int = 1024 * 1024
 
 
 def _truncate_text_field(text: str, byte_limit: int = VIKINGDB_TEXT_FIELD_BYTE_LIMIT) -> str:

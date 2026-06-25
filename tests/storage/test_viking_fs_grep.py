@@ -6,6 +6,7 @@ import time
 import pytest
 
 import openviking.storage.viking_fs as viking_fs_module
+from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import _DEFAULT_GREP_FILE_CONCURRENCY, VikingFS
 from openviking_cli.utils.config.grep_config import GrepConfig
 
@@ -15,12 +16,18 @@ class _DummyAgfs:
 
 
 class _DummyVectorStore:
-    def __init__(self):
+    def __init__(self, results=None):
         self.calls = []
+        self.results = results or []
 
     async def search_by_keywords(self, **kwargs):
         self.calls.append(kwargs)
-        return []
+        return self.results
+
+
+class _FailingVectorStore:
+    async def search_by_keywords(self, **kwargs):
+        raise RuntimeError("remote keyword search failed")
 
 
 @pytest.fixture
@@ -96,6 +103,111 @@ async def test_grep_vikingdb_auto_remote_limit_uses_five_times_node_limit(
 
     assert result == {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
     assert vector_store.calls[0]["limit"] == expected_remote_limit
+
+
+@pytest.mark.asyncio
+async def test_grep_vikingdb_remote_error_falls_back_to_fs(monkeypatch):
+    fs = VikingFS(agfs=_DummyAgfs())
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: _FailingVectorStore())
+
+    calls = []
+
+    async def fake_grep_fs(**kwargs):
+        calls.append(kwargs)
+        return {
+            "matches": [{"uri": "viking://resources/a.md"}],
+            "count": 1,
+            "match_count": 1,
+            "files_scanned": 1,
+        }
+
+    monkeypatch.setattr(fs, "_grep_fs", fake_grep_fs)
+
+    result = await fs._grep_vikingdb_then_fs(
+        uri="viking://resources",
+        pattern="needle",
+        exclude_uri="viking://resources/archive",
+        case_insensitive=True,
+        node_limit=10,
+        level_limit=3,
+        ctx=None,
+    )
+
+    assert result["count"] == 1
+    assert calls == [
+        {
+            "uri": "viking://resources",
+            "pattern": "needle",
+            "exclude_uri": "viking://resources/archive",
+            "case_insensitive": True,
+            "node_limit": 10,
+            "level_limit": 3,
+            "ctx": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_grep_vikingdb_pushes_exclude_uri_to_filter(monkeypatch):
+    fs = VikingFS(agfs=_DummyAgfs())
+    vector_store = _DummyVectorStore()
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+    monkeypatch.setattr(fs, "_ensure_access", lambda uri, ctx=None: None)
+
+    result = await fs._grep_vikingdb_then_fs(
+        uri="viking://resources",
+        pattern="needle",
+        exclude_uri="viking://resources/archive",
+        case_insensitive=False,
+        node_limit=10,
+        level_limit=3,
+        ctx=None,
+    )
+
+    assert result == {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+    filter_expr = vector_store.calls[0]["filter"]
+    assert isinstance(filter_expr, And)
+    assert filter_expr.conds[0] == PathScope("uri", "viking://resources", depth=3)
+    assert isinstance(filter_expr.conds[1], RawDSL)
+    assert filter_expr.conds[1].payload == {
+        "op": "must_not",
+        "field": "uri",
+        "conds": ["viking://resources/archive"],
+        "para": "-d=-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_grep_vikingdb_keeps_local_exclude_uri_guard(monkeypatch):
+    fs = VikingFS(agfs=_DummyAgfs())
+    vector_store = _DummyVectorStore(
+        results=[
+            {"uri": "viking://resources/archive/a.md"},
+            {"uri": "viking://resources/keep.md"},
+        ]
+    )
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+    monkeypatch.setattr(fs, "_ensure_access", lambda uri, ctx=None: None)
+
+    grep_in_files_calls = []
+
+    async def fake_grep_in_files(file_uris, pattern, case_insensitive, node_limit, ctx):
+        grep_in_files_calls.append(file_uris)
+        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": len(file_uris)}
+
+    monkeypatch.setattr(fs, "_grep_in_files", fake_grep_in_files)
+
+    await fs._grep_vikingdb_then_fs(
+        uri="viking://resources",
+        pattern="needle",
+        exclude_uri="viking://resources/archive",
+        case_insensitive=False,
+        node_limit=10,
+        level_limit=3,
+        ctx=None,
+    )
+
+    assert grep_in_files_calls == [["viking://resources/keep.md"]]
 
 
 @pytest.mark.asyncio
