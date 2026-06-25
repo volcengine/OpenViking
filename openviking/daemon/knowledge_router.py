@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Route extracted knowledge to appropriate viking:// URIs based on category and project.
 """

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 OpenViking Active Daemon main service.
 Orchestrates multi-tool file watching, ETL processing, and knowledge storage.

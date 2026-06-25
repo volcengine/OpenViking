@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Cursor Manager for tracking file read positions.
 Persists state in SQLite so Daemon can resume after restart.

@@ -33,9 +33,9 @@ class FakeCursorManager:
 # --- Registry Tests ---
 
 def test_all_watchers_registered():
-    """All 6 built-in watchers should be registered."""
+    """All 3 built-in watchers should be registered."""
     available = list_available_watchers()
-    expected = {"claude_code", "generic_jsonl", "aider", "cursor", "continue_dev", "cursor_db"}
+    expected = {"claude_code", "generic_jsonl", "cursor_db"}
     assert expected.issubset(set(available)), f"Missing: {expected - set(available)}"
 
 
@@ -47,19 +47,20 @@ def test_create_all_watchers():
     file_patterns = {
         "claude_code": "*.jsonl",
         "generic_jsonl": "*.jsonl",
-        "aider": ".aider.chat.history.md",
-        "cursor": "*.log",
-        "continue_dev": "*.json",
     }
 
     for tool_name in list_available_watchers():
-        watcher = create_watcher(
+        kwargs = dict(
             tool_name=tool_name,
             watch_dir="/tmp/test",
             cursor_manager=cm,
             batch_callback=lambda e: batches.append(e),
-            file_pattern=file_patterns.get(tool_name, "*.jsonl"),
         )
+        if tool_name in file_patterns:
+            kwargs["file_pattern"] = file_patterns[tool_name]
+        if tool_name == "cursor_db":
+            kwargs["poll_interval"] = 60
+        watcher = create_watcher(**kwargs)
         assert isinstance(watcher, BaseWatcher)
         assert watcher.tool_name == tool_name
 
@@ -128,88 +129,6 @@ def test_generic_jsonl_custom_mapping(tmp_path):
     assert batches[0][0]["tool_name"] == "generic_jsonl"
 
 
-def test_aider_multiline_parsing(tmp_path):
-    """Aider markdown format should produce user+assistant events."""
-    batches = []
-    cm = FakeCursorManager()
-    watcher = create_watcher(
-        tool_name="aider",
-        watch_dir=str(tmp_path),
-        cursor_manager=cm,
-        batch_callback=lambda e: batches.append(e),
-        batch_trigger_lines=100,
-    )
-
-    test_file = tmp_path / ".aider.chat.history.md"
-    test_file.write_text(
-        "# aider chat started at 2026-01-15 10:30:00\n\n"
-        "> /my/project\n\n"
-        "#### user:\n"
-        "How do I use fastapi?\n\n"
-        "#### assistant:\n"
-        "FastAPI is great for building APIs.\n"
-    )
-    watcher._process_file(str(test_file))
-    watcher.flush()
-
-    assert len(batches) == 1
-    events = batches[0]
-    assert len(events) == 2
-    assert events[0]["role"] == "user"
-    assert events[0]["content"] == "How do I use fastapi?"
-    assert events[0]["tool_name"] == "aider"
-    assert events[1]["role"] == "assistant"
-
-
-def test_cursor_log_parsing(tmp_path):
-    """Cursor log format should be normalized correctly."""
-    batches = []
-    cm = FakeCursorManager()
-    watcher = create_watcher(
-        tool_name="cursor",
-        watch_dir=str(tmp_path),
-        cursor_manager=cm,
-        batch_callback=lambda e: batches.append(e),
-        file_pattern="*.log",
-        batch_trigger_lines=1,
-    )
-
-    test_file = tmp_path / "cursor.log"
-    test_file.write_text(
-        '{"type": "chat", "role": "user", "message": "Fix this bug"}\n'
-    )
-    watcher._process_file(str(test_file))
-
-    assert len(batches) == 1
-    assert batches[0][0]["role"] == "user"
-    assert batches[0][0]["content"] == "Fix this bug"
-    assert batches[0][0]["tool_name"] == "cursor"
-
-
-def test_continue_dev_log_parsing(tmp_path):
-    """Continue.dev JSON format should be normalized."""
-    batches = []
-    cm = FakeCursorManager()
-    watcher = create_watcher(
-        tool_name="continue_dev",
-        watch_dir=str(tmp_path),
-        cursor_manager=cm,
-        batch_callback=lambda e: batches.append(e),
-        file_pattern="*.json",
-        batch_trigger_lines=1,
-    )
-
-    test_file = tmp_path / "continue.json"
-    test_file.write_text(
-        '{"role": "user", "content": "Explain this code", "sessionId": "abc123"}\n'
-    )
-    watcher._process_file(str(test_file))
-
-    assert len(batches) == 1
-    assert batches[0][0]["role"] == "user"
-    assert batches[0][0]["tool_name"] == "continue_dev"
-    assert batches[0][0]["session_id"] == "abc123"
-
 
 # --- Cross-Watcher ETL Compatibility ---
 
@@ -222,9 +141,9 @@ def test_normalized_events_compatible_with_reconstructor():
          "timestamp": "2026-01-15T10:00:00Z", "session_id": "s1", "project_name": "proj"},
         {"role": "assistant", "content": "Answer from CC", "tool_name": "claude_code",
          "timestamp": "2026-01-15T10:00:01Z", "session_id": "s1", "project_name": "proj"},
-        {"role": "user", "content": "Question from Aider", "tool_name": "aider",
+        {"role": "user", "content": "Question from CursorDB", "tool_name": "cursor_db",
          "timestamp": "2026-01-15T10:00:02Z"},
-        {"role": "assistant", "content": "Answer from Aider", "tool_name": "aider",
+        {"role": "assistant", "content": "Answer from CursorDB", "tool_name": "cursor_db",
          "timestamp": "2026-01-15T10:00:03Z"},
     ]
 
@@ -233,7 +152,7 @@ def test_normalized_events_compatible_with_reconstructor():
 
     assert len(turns) == 2
     assert turns[0].user_prompt == "Question from CC"
-    assert turns[1].user_prompt == "Question from Aider"
+    assert turns[1].user_prompt == "Question from CursorDB"
 
 
 def test_normalized_events_compatible_with_filter():
@@ -244,9 +163,9 @@ def test_normalized_events_compatible_with_filter():
         {"role": "user", "content": "A meaningful question about architecture",
          "tool_name": "claude_code"},
         {"role": "user", "content": "npm install express",
-         "tool_name": "cursor"},
+         "tool_name": "cursor_db"},
         {"role": "assistant", "content": "Here is a detailed explanation of the design pattern",
-         "tool_name": "aider"},
+         "tool_name": "generic_jsonl"},
     ]
 
     f = LowValueFilter()
@@ -261,9 +180,9 @@ def test_source_tool_propagated_through_pipeline():
     from openviking.daemon.conversation_reconstructor import ConversationReconstructor
 
     events = [
-        {"role": "user", "content": "How to use FastAPI?", "tool_name": "cursor",
+        {"role": "user", "content": "How to use FastAPI?", "tool_name": "cursor_db",
          "timestamp": "2026-01-15T10:00:00Z"},
-        {"role": "assistant", "content": "Install FastAPI with pip...", "tool_name": "cursor",
+        {"role": "assistant", "content": "Install FastAPI with pip...", "tool_name": "cursor_db",
          "timestamp": "2026-01-15T10:00:01Z"},
     ]
 
@@ -271,7 +190,7 @@ def test_source_tool_propagated_through_pipeline():
     turns = reconstructor.reconstruct(events)
 
     assert len(turns) == 1
-    assert turns[0].source_tool == "cursor"
+    assert turns[0].source_tool == "cursor_db"
 
 
 def test_multi_watcher_config_effective_watchers():
@@ -283,14 +202,14 @@ def test_multi_watcher_config_effective_watchers():
         enabled=True,
         watchers=[
             WatcherConfig(tool_name="claude_code", watch_dir="/a"),
-            WatcherConfig(tool_name="aider", watch_dir="/b"),
-            WatcherConfig(tool_name="cursor", watch_dir="/c", enabled=False),
+            WatcherConfig(tool_name="generic_jsonl", watch_dir="/b"),
+            WatcherConfig(tool_name="cursor_db", watch_dir="/c", enabled=False),
         ],
     )
     effective = cfg.get_effective_watchers()
     assert len(effective) == 2  # disabled watcher filtered out
     assert effective[0].tool_name == "claude_code"
-    assert effective[1].tool_name == "aider"
+    assert effective[1].tool_name == "generic_jsonl"
 
     # Backward compat: watch_dir only
     cfg2 = DaemonConfig(enabled=True, watch_dir="~/.claude/projects")
@@ -315,10 +234,10 @@ def test_knowledge_router_uses_source_tool():
     # With source_tool
     k1 = ExtractedKnowledge(
         status="EXTRACTED", category="skills", title="FastAPI Tips",
-        content="...", confidence=0.9, source_tool="cursor",
+        content="...", confidence=0.9, source_tool="cursor_db",
     )
     uri1 = router.route(k1)
-    assert "cursor" in uri1
+    assert "cursor_db" in uri1
     assert "claude_code" not in uri1
 
     # Without source_tool (fallback)

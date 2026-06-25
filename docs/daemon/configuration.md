@@ -10,18 +10,53 @@
 | `OV_DAEMON_BATCH_LINES` | 批处理触发行数 | `50` |
 | `OV_DAEMON_BATCH_SECONDS` | 批处理触发秒数 | `300` |
 
-## YAML 配置 (ov.conf)
+## JSON 配置 (ov.conf)
+
+> **重要**：daemon 配置必须放在 `"server"` 节内，不是顶层配置。ov.conf 的 JSON 解析器不支持 `#` 注释。
+
+单 watcher 配置：
 
 ```json
 {
-  "daemon": {
-    "enabled": true,
-    "watch_dir": "~/.claude/projects",
-    "batch_trigger_lines": 50,
-    "batch_trigger_seconds": 300
+  "server": {
+    "port": 1988,
+    "daemon": {
+      "enabled": true,
+      "watch_dir": "~/.claude/projects",
+      "batch_trigger_lines": 50,
+      "batch_trigger_seconds": 300
+    }
   }
 }
 ```
+
+多 watcher 配置（推荐，支持同时监听多个 AI 工具）：
+
+```json
+{
+  "server": {
+    "port": 1988,
+    "daemon": {
+      "enabled": true,
+      "watchers": [
+        {
+          "tool_name": "claude_code",
+          "watch_dir": "C:\\Users\\xxx\\.claude\\projects",
+          "batch_trigger_lines": 5,
+          "batch_trigger_seconds": 60
+        },
+        {
+          "tool_name": "cursor_db",
+          "watch_dir": "C:\\Users\\xxx\\AppData\\Roaming\\Cursor\\User\\globalStorage",
+          "poll_interval": 60
+        }
+      ]
+    }
+  }
+}
+```
+
+`watchers` 数组中每项支持 `tool_name`、`watch_dir`、`batch_trigger_lines`、`batch_trigger_seconds`、`extra` 字段。当 `watchers` 存在时，顶层的 `watch_dir` 被忽略。
 
 ## Docker 部署
 

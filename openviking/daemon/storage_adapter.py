@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Adapter for writing extracted knowledge to OpenViking via ResourceService.
 Generates temporary Markdown files and ingests them through the standard resource pipeline.

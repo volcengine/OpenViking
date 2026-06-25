@@ -9,7 +9,7 @@ def test_service_stores_watcher_configs():
     from openviking.daemon.service import DaemonService
     configs = [
         WatcherConfig(tool_name="claude_code", watch_dir="/tmp/cc"),
-        WatcherConfig(tool_name="aider", watch_dir="/tmp/aider"),
+        WatcherConfig(tool_name="cursor_db", watch_dir="/tmp/cursor"),
     ]
     svc = DaemonService(
         resource_service=MagicMock(),

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Abstract base class for database/API-based watchers that use periodic polling.
 Unlike BaseFileWatcher (watchdog + file cursor), this uses Thread + Event.wait(interval).

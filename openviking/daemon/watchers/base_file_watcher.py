@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Abstract base class for file-append based watchers.
 Handles watchdog Observer lifecycle, cursor management, and batch buffering.

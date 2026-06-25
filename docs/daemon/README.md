@@ -29,16 +29,18 @@ Daemon 会在服务器启动时自动运行（如果 `OV_DAEMON_ENABLED=true`）
 2. **增量读取** — 文件游标技术，只处理新增内容
 3. **批量处理** — 累积 50 行或 5 分钟后触发 ETL 管道
 4. **知识提取** — 调用 LLM 过滤噪声，提取有价值的知识
-5. **自动存储** — 写入 `viking://skills/`、`viking://memories/`、`viking://resources/`
+5. **自动存储** — 写入 `viking://resources/skills/`、`viking://resources/memories/`、`viking://resources/`
 
 ## 知识分类
 
 | 类型 | 目标路径 | 说明 |
 |------|---------|------|
-| Skills | `viking://skills/claude_code/<title>.md` | 可复用的操作指南 |
-| Memories (有项目) | `viking://memories/projects/<project>/decisions.md` | 项目决策日志 |
-| Memories (无项目) | `viking://memories/global/<title>.md` | 全局记忆 |
+| Skills | `viking://resources/skills/<source>/<title>.md` | 可复用的操作指南 |
+| Memories (有项目) | `viking://resources/memories/<project>/decisions.md` | 项目决策日志 |
+| Memories (无项目) | `viking://resources/memories/global/<title>.md` | 全局记忆 |
 | Resources | `viking://resources/<tech>/<title>.md` | 参考资源 |
+
+> **注意**：viking:// URI 只支持 `resources/`、`user/`、`agent/` 三个顶级 scope。所有知识统一路由到 `resources/` 下。
 
 ## 架构
 

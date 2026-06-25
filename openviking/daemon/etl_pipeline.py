@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Batch ETL pipeline for processing conversation events into structured knowledge.
 Orchestrates: Filter -> Reconstruct -> Extract -> Deduplicate

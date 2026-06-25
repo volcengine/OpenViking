@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Watcher registry for creating tool-specific watchers by name.
 """
@@ -47,24 +49,6 @@ def _register_builtins():
     try:
         from openviking.daemon.watchers.generic_jsonl_watcher import GenericJSONLWatcher
         _WATCHER_REGISTRY["generic_jsonl"] = GenericJSONLWatcher
-    except ImportError:
-        pass
-
-    try:
-        from openviking.daemon.watchers.aider_watcher import AiderWatcher
-        _WATCHER_REGISTRY["aider"] = AiderWatcher
-    except ImportError:
-        pass
-
-    try:
-        from openviking.daemon.watchers.cursor_watcher import CursorWatcher
-        _WATCHER_REGISTRY["cursor"] = CursorWatcher
-    except ImportError:
-        pass
-
-    try:
-        from openviking.daemon.watchers.continue_dev_watcher import ContinueDevWatcher
-        _WATCHER_REGISTRY["continue_dev"] = ContinueDevWatcher
     except ImportError:
         pass
 

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Generic JSONL log watcher.
 Supports arbitrary JSONL logs with customizable field mapping.

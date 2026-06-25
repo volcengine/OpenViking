@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Reconstruct conversation turns from flat event lists.
 Pairs user prompts with assistant responses into structured ConversationTurn objects.

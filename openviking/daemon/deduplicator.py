@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Knowledge deduplication based on content hashing.
 Prevents duplicate knowledge from being written to viking:// storage.

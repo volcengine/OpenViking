@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 """
 Watcher abstractions for OpenViking Active Daemon.
 Provides BaseWatcher protocol and watcher registry for multi-tool support.
