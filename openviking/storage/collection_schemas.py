@@ -46,28 +46,6 @@ _FULLTEXT_MIN_VERSION = "0.3.18"
 _EMBEDDING_COMPATIBILITY_KEYS = ("provider", "model", "dimension", "model_identity")
 
 
-def _parse_version(v: str) -> tuple:
-    """Parse a semver-like string into a comparable tuple of ints.
-
-    Only the first 3 numeric segments are used (e.g. "0.3.18.dev23" → (0, 3, 18)).
-    Non-numeric suffixes like ".dev23", ".rc1", "+local" are ignored.
-    """
-    try:
-        parts = v.split(".")
-        numeric = []
-        for p in parts:
-            # Stop at first non-numeric segment (e.g. "dev23", "rc1")
-            try:
-                numeric.append(int(p))
-            except ValueError:
-                break
-            if len(numeric) == 3:
-                break
-        return tuple(numeric) if numeric else (0, 0, 0)
-    except (ValueError, AttributeError):
-        return (0, 0, 0)
-
-
 @dataclass
 class RequestQueueStats:
     processed: int = 0
@@ -223,33 +201,16 @@ def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
     }
 
 
-def _embedding_compatibility_signature(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Return fields that define embedding vector compatibility.
-
-    schema_version describes collection schema capability, not vector-space
-    compatibility, so it must not force a rebuild by itself.
-    Older metadata may not have ``model_identity`` yet; in that case compare
-    the fields that are actually recorded instead of treating the missing key as
-    a hard incompatibility.
-    """
-    if meta is None:
-        return None
-    return {
-        key: meta.get(key)
-        for key in _EMBEDDING_COMPATIBILITY_KEYS
-        if meta.get(key) is not None
-    }
-
-
 def _embedding_metadata_compatible(
     existing_meta: Optional[Dict[str, Any]],
     current_meta: Dict[str, Any],
 ) -> bool:
-    existing_signature = _embedding_compatibility_signature(existing_meta)
-    current_signature = _embedding_compatibility_signature(current_meta) or {}
-    if not existing_signature:
+    if existing_meta is None:
         return False
-    return all(current_signature.get(key) == value for key, value in existing_signature.items())
+    return all(
+        existing_meta.get(key) == current_meta.get(key)
+        for key in _EMBEDDING_COMPATIBILITY_KEYS
+    )
 
 
 def _collection_has_content_fulltext(meta: Dict[str, Any]) -> bool:
