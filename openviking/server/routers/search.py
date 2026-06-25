@@ -93,6 +93,8 @@ class FindRequest(BaseModel):
     query: str
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
+    agent_id: Optional[str] = None
+    agent_uri: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
@@ -114,6 +116,8 @@ class SearchRequest(BaseModel):
     query: str
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
+    agent_id: Optional[str] = None
+    agent_uri: Optional[str] = None
     session_id: Optional[str] = None
     limit: int = 10
     node_limit: Optional[int] = None
