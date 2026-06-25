@@ -49,7 +49,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_ARCHIVE_WAIT_POLL_SECONDS = 0.1
+_ARCHIVE_WAIT_POLL_SECONDS = 2.0
+_ARCHIVE_WAIT_MAX_SECONDS = 120
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
 _MEMORY_EXTRACTION_MAX_RETRIES = 3
 _MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
@@ -1396,6 +1397,23 @@ class Session:
                     )
                     has_policy_work = bool(long_term_has_work or execution_memory_has_work)
                     if self._session_compressor and has_policy_work:
+                        try:
+                            phase2_started_payload = json.dumps(
+                                {"started_at": datetime.now(timezone.utc).isoformat()}
+                            )
+                            await self._viking_fs.write_file(
+                                f"{archive_uri}/.phase2_started.json",
+                                phase2_started_payload,
+                                ctx=self.ctx,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to write .phase2_started.json for %s: %s. "
+                                "Health check will rely on hard timeout only.",
+                                archive_uri,
+                                e,
+                            )
+
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
                             len(messages),
@@ -1674,6 +1692,12 @@ class Session:
             content=content,
             ctx=self.ctx,
         )
+        try:
+            await self._viking_fs.rm(
+                uri=f"{archive_uri}/.phase2_started.json", ctx=self.ctx
+            )
+        except Exception:
+            pass
 
     async def _write_failed_marker(
         self,
@@ -1699,6 +1723,12 @@ class Session:
             content=json.dumps(payload, ensure_ascii=False),
             ctx=self.ctx,
         )
+        try:
+            await self._viking_fs.rm(
+                uri=f"{archive_uri}/.phase2_started.json", ctx=self.ctx
+            )
+        except Exception:
+            pass
 
     def _update_active_counts(self) -> int:
         """Update active_count for used contexts/skills."""
@@ -2047,11 +2077,22 @@ class Session:
         return int(match.group(1))
 
     async def _wait_for_previous_archive_done(self, archive_index: int) -> bool:
-        """Wait until the previous archive reaches a terminal state."""
+        """Wait until the previous archive reaches a terminal state.
+
+        A hard timeout (_ARCHIVE_WAIT_MAX_SECONDS) ensures the current archive
+        is never indefinitely blocked even when the previous archive Phase 2
+        task is running but neither writes .done nor .failed.json (e.g. due to
+        a crash, OOM, or cancellation).
+
+        Health check: if .phase2_started.json exists and is older than
+        _ARCHIVE_WAIT_MAX_SECONDS, treat it as stuck and proceed immediately.
+        """
         if archive_index <= 1 or not self._viking_fs:
             return True
 
         previous_archive_uri = f"{self._session_uri}/history/archive_{archive_index - 1:03d}"
+        wait_start = asyncio.get_event_loop().time()
+
         while True:
             try:
                 await self._viking_fs.read_file(f"{previous_archive_uri}/.done", ctx=self.ctx)
@@ -2071,6 +2112,54 @@ class Session:
                 return True
             except Exception:
                 pass
+
+            # Health check: .phase2_started.json older than timeout → stuck
+            try:
+                started_raw = await self._viking_fs.read_file(
+                    f"{previous_archive_uri}/.phase2_started.json",
+                    ctx=self.ctx,
+                )
+                if started_raw:
+                    started_ts = json.loads(started_raw).get("started_at")
+                    if started_ts and isinstance(started_ts, str):
+                        try:
+                            started_dt = datetime.fromisoformat(started_ts)
+                            if started_dt.tzinfo is None:
+                                started_dt = started_dt.replace(tzinfo=timezone.utc)
+                            elapsed_since_start = (
+                                datetime.now(timezone.utc) - started_dt
+                            ).total_seconds()
+                            if elapsed_since_start > _ARCHIVE_WAIT_MAX_SECONDS:
+                                logger.warning(
+                                    "Previous archive %s .phase2_started.json is %.0fs old "
+                                    "(> %ds); Phase 2 likely stuck — proceeding without waiting",
+                                    previous_archive_uri,
+                                    elapsed_since_start,
+                                    _ARCHIVE_WAIT_MAX_SECONDS,
+                                )
+                                return True
+                        except (ValueError, TypeError) as e:
+                            logger.debug(
+                                "Invalid timestamp in .phase2_started.json for %s: %s",
+                                previous_archive_uri,
+                                e,
+                            )
+            except Exception as e:
+                logger.debug(
+                    "Failed to check .phase2_started.json for %s: %s",
+                    previous_archive_uri,
+                    e,
+                )
+
+            # Hard timeout
+            elapsed = asyncio.get_event_loop().time() - wait_start
+            if elapsed > _ARCHIVE_WAIT_MAX_SECONDS:
+                logger.error(
+                    "Timed out waiting for previous archive %s after %.0fs; proceeding anyway",
+                    previous_archive_uri,
+                    elapsed,
+                )
+                return True
 
             await asyncio.sleep(_ARCHIVE_WAIT_POLL_SECONDS)
 
