@@ -6,6 +6,7 @@ Handles watchdog Observer lifecycle, cursor management, and batch buffering.
 Subclasses only need to implement parse_line() and normalize_event().
 """
 import os
+import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -112,16 +113,33 @@ class BaseFileWatcher(ABC):
         return filename == self.file_pattern
 
     def start(self) -> None:
-        """Start the watchdog Observer."""
+        """Start the watchdog Observer and periodic flush timer."""
         self._handler = _FileHandler(self)
         self._observer = Observer()
         self._observer.schedule(self._handler, self.watch_dir, recursive=True)
         self._observer.daemon = True
         self._observer.start()
+
+        # Periodic flush timer for time-based batch trigger
+        self._stop_event = threading.Event()
+        self._flush_thread = threading.Thread(
+            target=self._periodic_flush_loop, daemon=True
+        )
+        self._flush_thread.start()
+
         logger.info("[%s] Watcher started on %s", self.tool_name, self.watch_dir)
 
     def stop(self) -> None:
-        """Stop the watchdog Observer."""
+        """Stop the watchdog Observer and periodic flush timer, flushing remaining data."""
+        # Signal flush thread to stop and wait for it
+        if hasattr(self, "_stop_event"):
+            self._stop_event.set()
+        if hasattr(self, "_flush_thread") and self._flush_thread:
+            self._flush_thread.join(timeout=5)
+
+        # Final flush to avoid losing buffered events on shutdown
+        self._flush_buffer()
+
         if self._observer:
             self._observer.stop()
             self._observer.join(timeout=5)
@@ -131,23 +149,41 @@ class BaseFileWatcher(ABC):
         """Force flush the buffer."""
         self._flush_buffer()
 
+    def _periodic_flush_loop(self):
+        """Background thread that periodically flushes the buffer based on time threshold."""
+        while not self._stop_event.wait(timeout=self.batch_trigger_seconds):
+            if not self._buffer.is_empty():
+                age = time.time() - self._buffer.created_at
+                if age >= self.batch_trigger_seconds:
+                    logger.debug("[%s] Periodic flush: %d events (age %.0fs)",
+                                 self.tool_name, len(self._buffer.lines), age)
+                    self._flush_buffer()
+
     def _process_file(self, file_path: str):
         """Read new content from file using cursor, parse, normalize, buffer."""
         try:
             cursor = self.cursor_manager.get_cursor(file_path)
             file_size = os.path.getsize(file_path)
 
-            if file_size <= cursor.last_position:
+            if file_size < cursor.last_position:
+                # File truncated or rotated — reset cursor to beginning
+                logger.warning("[%s] File truncated (size %d < cursor %d), resetting",
+                               self.tool_name, file_size, cursor.last_position)
+                self.cursor_manager.update_cursor(file_path, 0)
+                return
+            if file_size == cursor.last_position:
                 return
 
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            # Use binary mode to get exact byte offsets (avoids CRLF drift on Windows)
+            with open(file_path, "rb") as f:
                 f.seek(cursor.last_position)
-                new_content = f.read()
+                raw_bytes = f.read()
 
-            new_position = cursor.last_position + len(new_content.encode("utf-8"))
+            new_position = cursor.last_position + len(raw_bytes)
+            new_content = raw_bytes.decode("utf-8", errors="replace")
 
             logger.info("[%s] Processing %s: %d bytes new content from pos %d",
-                           self.tool_name, file_path, len(new_content.encode("utf-8")), cursor.last_position)
+                           self.tool_name, file_path, len(raw_bytes), cursor.last_position)
 
             event_count = 0
             for line in new_content.splitlines():

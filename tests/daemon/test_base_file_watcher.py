@@ -161,3 +161,98 @@ def test_filter_event_override(tmp_path):
     assert len(batches) == 1
     assert len(batches[0]) == 1
     assert batches[0][0]["content"] == "keep this"
+
+
+def test_crlf_byte_offset_accuracy(tmp_path):
+    """Binary mode read ensures cursor byte offset is exact even with CRLF line endings."""
+    w, batches, cm = _make_watcher(tmp_path, batch_trigger_lines=100)
+
+    test_file = tmp_path / "test.jsonl"
+    # Write CRLF-terminated lines (simulating Windows line endings)
+    with open(str(test_file), "wb") as f:
+        f.write(b'{"role": "user", "content": "hello"}\r\n')
+        f.write(b'{"role": "assistant", "content": "hi"}\r\n')
+
+    w._process_file(str(test_file))
+
+    # Cursor should point to exact end of file (including \r\n bytes)
+    cursor = cm.get_cursor(str(test_file))
+    actual_size = os.path.getsize(str(test_file))
+    assert cursor.last_position == actual_size, (
+        f"Cursor {cursor.last_position} != file size {actual_size} (CRLF drift)"
+    )
+
+    # Append more and verify incremental read still works
+    with open(str(test_file), "ab") as f:
+        f.write(b'{"role": "user", "content": "second"}\r\n')
+    w._process_file(str(test_file))
+
+    cursor2 = cm.get_cursor(str(test_file))
+    assert cursor2.last_position == os.path.getsize(str(test_file))
+
+    w.flush()
+    assert len(batches) == 1
+    assert len(batches[0]) == 3
+
+
+def test_file_truncation_resets_cursor(tmp_path):
+    """When a file is truncated/rotated (size < cursor), cursor resets to 0."""
+    w, batches, cm = _make_watcher(tmp_path, batch_trigger_lines=100)
+
+    test_file = tmp_path / "test.jsonl"
+    test_file.write_text(
+        '{"role": "user", "content": "first line"}\n'
+        '{"role": "assistant", "content": "first response"}\n'
+    )
+    w._process_file(str(test_file))
+
+    # Cursor should be at end of file
+    cursor = cm.get_cursor(str(test_file))
+    assert cursor.last_position > 0
+
+    # Flush to clear buffer from first read
+    w.flush()
+    batches.clear()
+
+    # Simulate file truncation/rotation: rewrite with shorter content
+    test_file.write_text('{"role": "user", "content": "new"}\n')
+
+    # First call detects truncation and resets cursor to 0
+    w._process_file(str(test_file))
+    cursor_reset = cm.get_cursor(str(test_file))
+    assert cursor_reset.last_position == 0
+
+    # Second call reads from beginning
+    w._process_file(str(test_file))
+    cursor2 = cm.get_cursor(str(test_file))
+    assert cursor2.last_position == os.path.getsize(str(test_file))
+
+    w.flush()
+    assert len(batches) == 1
+    assert batches[0][0]["content"] == "new"
+
+
+def test_periodic_flush_on_quiet_session(tmp_path):
+    """Periodic flush thread should auto-flush buffered events after timeout."""
+    w, batches, _ = _make_watcher(
+        tmp_path, batch_trigger_lines=100, batch_trigger_seconds=1
+    )
+
+    test_file = tmp_path / "test.jsonl"
+    test_file.write_text('{"role": "user", "content": "lonely message"}\n')
+    w._process_file(str(test_file))
+
+    # Not flushed yet (line threshold not reached)
+    assert len(batches) == 0
+
+    # Start the watcher (launches periodic flush thread)
+    w.start()
+    try:
+        # Wait for the periodic flush (1 second trigger + buffer)
+        time.sleep(2.5)
+    finally:
+        w.stop()
+
+    # The periodic flush thread should have flushed the buffer
+    assert len(batches) == 1
+    assert batches[0][0]["content"] == "lonely message"
