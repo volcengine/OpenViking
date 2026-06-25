@@ -123,10 +123,7 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
         }
         unknown_keys = sorted(set(data) - allowed_keys)
         if unknown_keys:
-            message = f"Unknown field 'ovcli.{unknown_keys[0]}'"
-            if unknown_keys[0] == "ur":
-                message += ". Did you mean 'ovcli.url'?"
-            raise ValueError(message)
+            raise ValueError(f"Unknown field 'ovcli.{unknown_keys[0]}'")
 
         extra_header_alias = data.get("extra_header")
         extra_headers_value = data.get("extra_headers", extra_header_alias)
