@@ -968,6 +968,14 @@ enum Commands {
             help_heading = "Common options"
         )]
         wait: bool,
+        /// Wait timeout in seconds (only used with --wait)
+        #[arg(
+            long,
+            value_name = "seconds",
+            value_parser = parse_positive_finite_seconds,
+            help_heading = "Common options"
+        )]
+        timeout: Option<f64>,
     },
 }
 
@@ -986,6 +994,33 @@ impl Commands {
 
     fn supports_upload_options(&self) -> bool {
         matches!(self, Self::AddResource { .. } | Self::AddSkill { .. })
+    }
+
+    fn semantic_error(&self) -> Option<&'static str> {
+        match self {
+            Self::Reindex {
+                wait: false,
+                timeout: Some(_),
+                ..
+            } => Some("--timeout is only valid when ov reindex waits for completion."),
+            _ => None,
+        }
+    }
+}
+
+fn parse_positive_finite_seconds(value: &str) -> std::result::Result<f64, String> {
+    const MAX_TIMEOUT_SECONDS: f64 = 86_400.0;
+    let seconds = value
+        .parse::<f64>()
+        .map_err(|_| "timeout must be a number of seconds".to_string())?;
+    if seconds.is_finite() && seconds > 0.0 {
+        if seconds <= MAX_TIMEOUT_SECONDS {
+            Ok(seconds)
+        } else {
+            Err("timeout must be no more than 86400 seconds".to_string())
+        }
+    } else {
+        Err("timeout must be a finite positive number of seconds".to_string())
     }
 }
 
@@ -2514,6 +2549,20 @@ async fn main() {
         std::process::exit(2);
     }
 
+    if let Some(message) = cli.command.semantic_error() {
+        let report = error_ui::report_for_message_error(
+            &command_display,
+            "Command Error",
+            message,
+            vec![error_ui::ErrorAction::new(
+                "ov reindex --help",
+                "Show reindex options",
+            )],
+        );
+        error_ui::print_report(&report, false);
+        std::process::exit(2);
+    }
+
     // Check this before loading config so misplaced --sudo reports the command rule directly.
     if cli.sudo && !cli.command.supports_sudo() {
         let language = i18n::Language::current();
@@ -3020,9 +3069,12 @@ async fn main() {
             mode,
             recursive,
         } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
-        Commands::Reindex { uri, mode, wait } => {
-            handlers::handle_reindex(uri, mode, wait, ctx).await
-        }
+        Commands::Reindex {
+            uri,
+            mode,
+            wait,
+            timeout,
+        } => handlers::handle_reindex(uri, mode, wait, timeout, ctx).await,
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
@@ -3667,7 +3719,7 @@ mod tests {
             .expect("skills list should parse");
         match list.command {
             Commands::Skills {
-                action: SkillCommands::List { node_limit },
+                action: SkillCommands::List { node_limit, .. },
             } => assert_eq!(node_limit, 25),
             _ => panic!("expected skills list"),
         }
@@ -3789,7 +3841,10 @@ mod tests {
             .expect("skills remove --yes should parse");
         match remove.command {
             Commands::Skills {
-                action: SkillCommands::Remove { skills, yes, all },
+                action:
+                    SkillCommands::Remove {
+                        skills, yes, all, ..
+                    },
             } => {
                 assert_eq!(skills, vec!["foo", "bar"]);
                 assert!(yes);
@@ -4370,10 +4425,64 @@ mod tests {
             "viking://resources/demo",
             "--mode",
             "semantic_and_vectors",
-            "--wait=false",
+            "--wait=true",
+            "--timeout",
+            "180",
         ]);
 
         assert!(result.is_ok(), "reindex command should parse");
+        let cli = result.unwrap();
+        match cli.command {
+            Commands::Reindex { wait, timeout, .. } => {
+                assert!(wait);
+                assert_eq!(timeout, Some(180.0));
+            }
+            _ => panic!("expected reindex command"),
+        }
+    }
+
+    #[test]
+    fn cli_rejects_non_positive_reindex_timeout() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--timeout",
+            "0",
+        ]);
+
+        assert!(result.is_err(), "zero timeout should not parse");
+    }
+
+    #[test]
+    fn cli_rejects_excessive_reindex_timeout() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--timeout",
+            "1000000",
+        ]);
+
+        assert!(result.is_err(), "excessive timeout should not parse");
+    }
+
+    #[test]
+    fn reindex_timeout_requires_waiting_semantically() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--wait=false",
+            "--timeout",
+            "180",
+        ])
+        .expect("clap parsing should succeed before semantic validation");
+
+        assert_eq!(
+            cli.command.semantic_error(),
+            Some("--timeout is only valid when ov reindex waits for completion.")
+        );
     }
 
     #[test]

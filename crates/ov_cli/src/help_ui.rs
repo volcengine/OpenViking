@@ -1211,8 +1211,8 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         path: &["reindex"],
         purpose: "Reindex semantic/vector artifacts for a URI.",
         examples: &[HelpItem {
-            label: "ov reindex viking://projects/acme --mode vectors_only --wait true",
-            description: "Rebuild vector artifacts and wait.",
+            label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true --timeout 300",
+            description: "Rebuild artifacts and wait up to five minutes.",
         }],
         next_steps: &[
             HelpItem {
@@ -2785,6 +2785,7 @@ mod tests {
         for args in [
             ["ov", "add-resource", "--help"],
             ["ov", "add-skill", "--help"],
+            ["ov", "reindex", "--help"],
             ["ov", "rm", "--help"],
             ["ov", "write", "--help"],
         ] {

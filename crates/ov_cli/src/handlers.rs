@@ -1236,8 +1236,17 @@ pub async fn handle_set_tags(
     .await
 }
 
-pub async fn handle_reindex(uri: String, mode: String, wait: bool, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
+pub async fn handle_reindex(
+    uri: String,
+    mode: String,
+    wait: bool,
+    timeout: Option<f64>,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = match (wait, timeout) {
+        (true, Some(timeout)) => ctx.get_client_with_timeout(Some(timeout)),
+        _ => ctx.get_client(),
+    };
     commands::content::reindex(&client, &uri, &mode, wait, ctx.output_format, ctx.compact).await
 }
 
