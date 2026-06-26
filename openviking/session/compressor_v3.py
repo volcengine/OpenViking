@@ -24,6 +24,7 @@ from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
 from openviking.session.memory.dataclass import (
+    MemoryFile,
     MemoryOperationSource,
     ResolvedOperation,
     ResolvedOperations,
@@ -43,14 +44,6 @@ from openviking.session.memory.streaming_memory_updater import (
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import generate_uri
-from openviking.session.skill import (
-    SkillOperationUpdater,
-    dedup_session_skill_operations,
-)
-from openviking.session.skill.session_skill_context_provider import (
-    SESSION_SKILL_MEMORY_TYPE,
-    SessionSkillContextProvider,
-)
 from openviking.session.train import (
     Case,
     ExperienceGradientContext,
@@ -212,12 +205,38 @@ class SessionCompressorV3:
                 }
             )
 
-        for item in adds + updates:
+        # Read new content for adds and updates.
+        # Some upsert operations can be reported as successful even when the
+        # final file body is identical to the pre-existing content (for
+        # example, a no-op merge/patch or a write that only re-serializes the
+        # same memory). memory_diff.json should only include effective content
+        # changes, so filter no-op updates after the final content is known.
+        for item in adds:
             try:
                 content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
                 item["after"] = MemoryFileUtils.read(content).content
             except Exception:
                 pass
+
+        effective_updates: list[dict[str, Any]] = []
+        for item in updates:
+            op = upsert_by_uri.get(item["uri"])
+            old_file = op.old_memory_file_content if op else None
+            new_file: Optional[MemoryFile] = None
+            try:
+                content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
+                new_file = MemoryFileUtils.read(content, uri=item["uri"])
+                item["after"] = new_file.content
+            except Exception:
+                pass
+            if old_file is not None and _same_memory_file(old_file, new_file):
+                logger.info(
+                    "Skipping unchanged memory file in memory_diff.json: %s",
+                    item.get("uri"),
+                )
+                continue
+            effective_updates.append(item)
+        updates = effective_updates
 
         return _make_memory_diff(
             archive_uri=archive_uri,
@@ -243,7 +262,7 @@ class SessionCompressorV3:
         message_list = list(messages)
         fast_path_case = _training_case_from_first_message(message_list, allowed_memory_types)
         if fast_path_case is not None:
-            contexts = await self._commit_training_case_fast_path(
+            return await self._commit_training_case_fast_path(
                 case=fast_path_case,
                 messages=message_list,
                 ctx=ctx,
@@ -251,7 +270,6 @@ class SessionCompressorV3:
                 archive_uri=archive_uri or "",
                 strict_extract_errors=strict_extract_errors,
             )
-            return contexts
 
         result = await self._extract_user_memories(
             messages=message_list,
@@ -283,7 +301,11 @@ class SessionCompressorV3:
                 _dict_value(train_result, "memory_diff"),
             ],
         )
-        return result.contexts
+        return _v3_extraction_response(
+            contexts=result.contexts,
+            train_result=train_result,
+            archive_uri=archive_uri or "",
+        )
 
     async def _commit_training_case_fast_path(
         self,
@@ -294,10 +316,10 @@ class SessionCompressorV3:
         session_id: Optional[str],
         archive_uri: str,
         strict_extract_errors: bool,
-    ) -> list[Context]:
+    ) -> dict[str, Any]:
         if ctx is None:
             logger.warning("No RequestContext provided, skipping training case fast path")
-            return []
+            return {"contexts": [], "session_skills": []}
         case_write = await self._write_training_case_memory(
             case=case,
             ctx=ctx,
@@ -323,7 +345,11 @@ class SessionCompressorV3:
                 _dict_value(train_result, "memory_diff"),
             ],
         )
-        return contexts
+        return _v3_extraction_response(
+            contexts=contexts,
+            train_result=train_result,
+            archive_uri=archive_uri,
+        )
 
     @tracer("train.compressor_v3.fast_path.write_case", ignore_result=True, ignore_args=True)
     async def _write_training_case_memory(
@@ -611,6 +637,7 @@ class SessionCompressorV3:
 
             submitted = 0
             skill_submitted = 0
+            skill_uris: list[str] = []
             filtered_exp_gradient_count = 0
             memory_diffs: list[dict[str, Any]] = []
             policy_snapshot_id = _commit_policy_snapshot_id(
@@ -666,12 +693,17 @@ class SessionCompressorV3:
                         if _gradient_memory_type(g) == "skills"
                     ]
                     if skill_gradients:
-                        await skill_trainer.submit_gradients(
+                        skill_training_result = await skill_trainer.submit_gradients(
                             skill_gradients,
                             analysis=analysis,
                             rollout=rollout,
                         )
                         skill_submitted += 1
+                        apply_result = getattr(skill_training_result, "apply_result", None)
+                        if apply_result is not None:
+                            for uri in getattr(apply_result, "written_uris", []) or []:
+                                if uri:
+                                    skill_uris.append(str(uri))
 
                 submitted += 1
 
@@ -699,6 +731,7 @@ class SessionCompressorV3:
                 "case_count": len(cases),
                 "submitted": submitted,
                 "skill_submitted": skill_submitted,
+                "skill_uris": skill_uris,
                 "filtered_exp_gradient_count": filtered_exp_gradient_count,
             }
             if collect_memory_diff:
@@ -836,8 +869,6 @@ class SessionCompressorV3:
             [diff for diff in memory_diffs if isinstance(diff, dict)],
             archive_uri=archive_uri,
         )
-        if not _memory_diff_has_changes(merged):
-            return
         viking_fs = get_viking_fs()
         if viking_fs is None:
             return
@@ -1485,6 +1516,36 @@ def _applied_memory_diff(value: Any) -> dict[str, Any] | None:
         return value.memory_diff
     memory_diff = getattr(value, "memory_diff", None)
     return memory_diff if isinstance(memory_diff, dict) else None
+
+
+def _same_memory_file(before: Optional[MemoryFile], after: Optional[MemoryFile]) -> bool:
+    """Return whether two parsed memory files represent the same stored memory."""
+    if before is None or after is None:
+        return False
+    # memory_type is commonly known from the operation/URI even when the raw
+    # memory file does not serialize it, so do not treat that metadata-only
+    # representation difference as a real file update.
+    return before.model_dump(exclude={"uri", "memory_type"}) == after.model_dump(
+        exclude={"uri", "memory_type"}
+    )
+
+
+def _v3_extraction_response(
+    *,
+    contexts: list[Context],
+    train_result: Any,
+    archive_uri: str,
+) -> dict[str, Any]:
+    """Build the v2-compatible ``{contexts, session_skills}`` response dict."""
+    skill_dicts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if isinstance(train_result, dict):
+        for uri in train_result.get("skill_uris", []) or []:
+            uri_str = str(uri or "")
+            if uri_str and uri_str not in seen:
+                seen.add(uri_str)
+                skill_dicts.append({"uri": uri_str, "archive_uri": archive_uri})
+    return {"contexts": contexts, "session_skills": skill_dicts}
 
 
 def _make_memory_diff(

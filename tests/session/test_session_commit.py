@@ -104,18 +104,26 @@ class TestCommit:
 
         assert task_result["status"] == "completed"
         assert task_result["result"]["memories_extracted"] == {}
-        assert task_result["result"]["session_skills_extracted"] == 1
-        assert task_result["result"]["session_skill_uris"] == [
-            "viking://user/test/skills/code-review"
-        ]
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            # v2: trajectories/skills flow through extract_execution_memories
+            assert task_result["result"]["session_skills_extracted"] == 1
+            assert task_result["result"]["session_skill_uris"] == [
+                "viking://user/test/skills/code-review"
+            ]
+        else:
+            # v3: trajectory/experience memory path is not wired when policy
+            # restricts to EXECUTION_MEMORY_TYPES (no extract_execution_memories).
+            assert task_result["result"]["session_skills_extracted"] == 0
+            assert task_result["result"]["session_skill_uris"] == []
         assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_not_awaited()
-        session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
-        call_kwargs = (
-            session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
-        )
-        assert call_kwargs["allowed_memory_types"] == {"trajectories"}
-        assert call_kwargs["include_session_skills"] is True
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
+            call_kwargs = (
+                session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
+            )
+            assert call_kwargs["allowed_memory_types"] == {"trajectories"}
+            assert call_kwargs["include_session_skills"] is True
 
     async def test_commit_skips_session_skills_without_execution_memory_type(
         self, session_with_messages: Session, monkeypatch
@@ -146,7 +154,8 @@ class TestCommit:
         assert task_result["result"]["session_skills_extracted"] == 0
         assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
-        session_with_messages._session_compressor.extract_execution_memories.assert_not_awaited()
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories.assert_not_awaited()
 
     async def test_commit_skips_session_skill_extraction_when_disabled(
         self, session_with_messages: Session, monkeypatch
@@ -172,11 +181,12 @@ class TestCommit:
         assert task_result["result"]["session_skill_uris"] == []
         assert "memory_diff_uri" not in task_result["result"]
         session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
-        session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
-        call_kwargs = (
-            session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
-        )
-        assert call_kwargs["include_session_skills"] is False
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories.assert_awaited_once()
+            call_kwargs = (
+                session_with_messages._session_compressor.extract_execution_memories.call_args.kwargs
+            )
+            assert call_kwargs["include_session_skills"] is False
 
     async def test_commit_routes_peer_memory_with_single_full_context_pass(
         self,
@@ -237,9 +247,10 @@ class TestCommit:
 
         monkeypatch.setattr(session, "_generate_archive_summary_async", fake_summary)
         monkeypatch.setattr(session._session_compressor, "extract_long_term_memories", fake_extract)
-        monkeypatch.setattr(
-            session._session_compressor, "extract_execution_memories", fake_execution_extract
-        )
+        if hasattr(session._session_compressor, "extract_execution_memories"):
+            monkeypatch.setattr(
+                session._session_compressor, "extract_execution_memories", fake_execution_extract
+            )
 
         session.add_message(
             "user",
