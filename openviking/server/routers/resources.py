@@ -453,9 +453,13 @@ async def url_image_index(
 
     image_url = (request.image_url or "").strip()
     if not image_url or not (
-        image_url.startswith("http://") or image_url.startswith("https://")
+        image_url.startswith("http://")
+        or image_url.startswith("https://")
+        or image_url.startswith("data:image/")
     ):
-        raise InvalidArgumentError("image_url must be a remote http(s) URL")
+        raise InvalidArgumentError(
+            "image_url must be a remote http(s) URL or a data:image/* URI"
+        )
 
     if request.context_type not in {"resource", "memory", "skill"}:
         raise InvalidArgumentError(
