@@ -1895,6 +1895,7 @@ class VikingFS:
             resources=resources,
             skills=skills,
         )
+        await self._drop_stale_retrieval_hits(find_result, real_ctx)
         telemetry.set("vector.returned", find_result.total)
         return find_result
 
@@ -2025,8 +2026,65 @@ class VikingFS:
             query_plan=query_plan,
             query_results=query_results,
         )
+        await self._drop_stale_retrieval_hits(find_result, real_ctx)
         telemetry.set("vector.returned", find_result.total)
         return find_result
+
+    async def _drop_stale_retrieval_hits(
+        self,
+        find_result: Any,
+        ctx: RequestContext,
+    ) -> None:
+        """Drop retrieval hits whose backing AGFS content is gone, and clean their vectors."""
+        vector_store = self._get_vector_store()
+        checked: Dict[tuple[str, str], bool] = {}
+        sidecars = {0: ".abstract.md", 1: ".overview.md"}
+
+        async def _is_live(match: Any) -> bool:
+            uri = str(getattr(match, "uri", "") or "")
+            if not uri:
+                return True
+
+            check_uri = vector_uri = uri if uri.endswith("://") else uri.rstrip("/")
+            sidecar = sidecars.get(getattr(match, "level", 2))
+            if sidecar:
+                suffix = f"/{sidecar}"
+                vector_uri = check_uri.removesuffix(suffix)
+                check_uri = uri if uri.endswith(suffix) else f"{vector_uri}{suffix}"
+
+            key = (check_uri, vector_uri)
+            if key in checked:
+                return checked[key]
+
+            try:
+                await self.stat(check_uri, ctx=ctx, skip_count=True)
+                checked[key] = True
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    logger.debug("[VikingFS] stale-hit check skipped for %s: %s", check_uri, exc)
+                    checked[key] = True
+                else:
+                    checked[key] = False
+                    if vector_store:
+                        try:
+                            await vector_store.delete_uris(ctx, [vector_uri])
+                        except Exception as delete_exc:
+                            logger.debug(
+                                "[VikingFS] stale-vector cleanup failed for %s: %s",
+                                vector_uri,
+                                delete_exc,
+                            )
+            return checked[key]
+
+        async def _filter(contexts: List[Any]) -> List[Any]:
+            return [match for match in contexts if await _is_live(match)]
+
+        for attr in ("memories", "resources", "skills"):
+            setattr(find_result, attr, await _filter(getattr(find_result, attr)))
+        if find_result.query_results:
+            for query_result in find_result.query_results:
+                query_result.matched_contexts = await _filter(query_result.matched_contexts)
+        find_result.total = sum(len(getattr(find_result, attr)) for attr in ("memories", "resources", "skills"))
 
     # ========== Relation Management ==========
 
