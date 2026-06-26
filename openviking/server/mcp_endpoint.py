@@ -716,25 +716,58 @@ async def grep(
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
-    async def _grep_one(p: str) -> tuple[str, list[dict]]:
+    _GREP_TIMEOUT = float(os.environ.get("OPENVIKING_GREP_TIMEOUT_SEC", "10"))
+    _GREP_FALLBACK_ON_EMPTY = os.environ.get("OPENVIKING_GREP_FALLBACK_ON_EMPTY", "1") == "1"
+
+    async def _grep_one(p: str) -> tuple[str, list[dict], bool]:
+        """Grep a single pattern. Returns (pattern, matches, had_error)."""
         async with semaphore:
             try:
-                result = await service.fs.grep(
-                    uri,
-                    p,
-                    ctx=ctx,
-                    case_insensitive=case_insensitive,
-                    node_limit=node_limit,
+                result = await asyncio.wait_for(
+                    service.fs.grep(
+                        uri,
+                        p,
+                        ctx=ctx,
+                        case_insensitive=case_insensitive,
+                        node_limit=node_limit,
+                    ),
+                    timeout=_GREP_TIMEOUT,
                 )
-                return (p, result.get("matches", []))
-            except Exception:
-                return (p, [])
+                return (p, result.get("matches", []), False)
+            except asyncio.TimeoutError:
+                logger.warning("grep: VikingDB query timed out (%.1fs) for pattern %r at %s", _GREP_TIMEOUT, p, uri)
+                return (p, [], True)
+            except Exception as exc:
+                logger.warning("grep: VikingDB query failed for pattern %r at %s: %s", p, uri, exc)
+                return (p, [], True)
 
     results = await asyncio.gather(*[_grep_one(p) for p in patterns])
 
+    # Check if any VikingDB queries had errors — if so, try fs grep fallback
+    had_errors = any(had_error for _, _, had_error in results)
+    if had_errors and _GREP_FALLBACK_ON_EMPTY and service.fs:
+        try:
+            from openviking_cli.utils.config.grep_config import GrepConfig
+            fs_config = GrepConfig(engine="fs")
+            logger.info("grep: retrying %d failed pattern(s) with fs grep fallback", sum(1 for _, _, e in results if e))
+            fs_results = await asyncio.gather(
+                *[_grep_one(p) for p in patterns if any(e for pp, _, e in results if pp == p)]
+            )
+            # Merge fs results: overwrite empty/error results from VikingDB
+            fs_by_pattern = {p: matches for p, matches, _ in fs_results}
+            merged_results = []
+            for p, matches, had_error in results:
+                if had_error and p in fs_by_pattern:
+                    merged_results.append((p, fs_by_pattern[p], False))
+                else:
+                    merged_results.append((p, matches, had_error))
+            results = merged_results
+        except Exception as fallback_exc:
+            logger.warning("grep: fs grep fallback also failed: %s", fallback_exc)
+
     merged: dict[str, list[tuple]] = {}
     total = 0
-    for p, matches in results:
+    for p, matches, _ in results:
         total += len(matches)
         for m in matches:
             m_uri = m.get("uri", "?")
