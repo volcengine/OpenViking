@@ -49,6 +49,16 @@ OpenViking supports various resource types, categorized by functionality:
 |------|-------------|
 | Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
 
+**Whole Website (sitemap / RSS / Atom)**
+
+| Type | Resource Name | Description |
+|------|---------------|-------------|
+| Sitemap | `https://host/sitemap.xml`, `https://host/sitemap-index.xml` | Parses the sitemap and ingests every listed page as a single resource tree (one child node per page). Nested `<sitemapindex>` is followed recursively. The whole site becomes one resource under `viking://resources/<host>`. |
+| RSS / Atom feed | `https://host/rss.xml`, `https://host/atom.xml`, `https://host/feed` | Parses RSS 2.0 / Atom and ingests each entry as a tree node; the article body is fetched from its link (or taken inline when the feed carries full content). |
+| Whole-site auto-discovery | `https://host` + `args.site=true` | Forces whole-site ingestion for a bare domain or ordinary page: discovers the site's sitemap/RSS via robots.txt, HTML `<link rel="alternate">` autodiscovery, and conventional paths, then ingests it. |
+
+Crawling is bounded and non-recursive beyond the listed pages, and is governed by the `parsers.webfeed` config (`max_pages`, `max_concurrency`, `politeness_delay`, `same_host_only`, `respect_robots`, `max_depth`); robots.txt is honored. Set `watch_interval` on a sitemap/feed URL to keep the **whole site** refreshed: on each run new pages are added and removed pages drop automatically. When adding a single homepage (without `args.site`), the response may append a one-line hint suggesting whole-site ingestion — it never auto-crawls.
+
 ### Resource Processing Pipeline
 
 Resources go through the following processing stages when added:
@@ -95,6 +105,7 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 #### Watch Task Creation
 - Set `watch_interval > 0` (in minutes) when calling `add_resource` to create a watch task
 - You may specify `to` to define the target URI; if omitted, the task binds to the `root_uri` returned by this import
+- Pointing a watch at a sitemap/RSS/Atom URL keeps the **whole site** in sync: each refresh re-reads the feed and rebuilds the tree, so newly published pages are added and removed pages drop automatically
 - `WatchManager` handles task persistence
 - Supports multi-tenant permission control (ROOT/ADMIN/USER permission levels)
 
@@ -157,7 +168,7 @@ This endpoint is the core entry point for resource management, supporting adding
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
-| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
+| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config, and Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
 | watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates task; <=0 cancels task; explicit `to` wins, otherwise binds to the imported `root_uri` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 

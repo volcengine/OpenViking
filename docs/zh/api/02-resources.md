@@ -44,6 +44,15 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 |------|------|
 | 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
 
+网站类（sitemap / RSS / Atom 整站导入）
+| 类型 | 资源名 | 说明 |
+|------|--------|------|
+| 站点地图 Sitemap | `https://host/sitemap.xml`、`https://host/sitemap-index.xml` | 解析 sitemap，将站点所有页面抓取为**一棵资源树**（每页一个子节点），支持嵌套 `<sitemapindex>` 递归。整站只生成一个资源，落在 `viking://resources/<host>`。 |
+| RSS / Atom 订阅源 | `https://host/rss.xml`、`https://host/atom.xml`、`https://host/feed` | 解析 RSS 2.0 / Atom，逐条把文章正文抓成树节点（feed 内含全文则直接使用，省一次抓取）。 |
+| 整站自动发现 | `https://host` + `args.site=true` | 对裸域名/普通页面强制整站导入：自动通过 robots.txt、HTML `<link rel="alternate">` autodiscovery、常见路径发现 sitemap/RSS，再整站抓取。 |
+
+抓取**有界、非递归**（不会超出所列页面继续爬），受 `parsers.webfeed` 配置约束（`max_pages`、`max_concurrency`、`politeness_delay`、`same_host_only`、`respect_robots`、`max_depth`），并遵守 robots.txt。对 sitemap/feed URL 设置 `watch_interval` 即可让**整站**周期刷新：每次运行自动纳入新增页面、移除已删除页面。添加单个首页（未带 `args.site`）时，返回信息可能附带一行"整站导入"提示——**只提示，绝不自动爬全站**。
+
 ### 资源处理流程
 
 资源添加经过以下处理阶段：
@@ -90,6 +99,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 #### 监控任务创建
 - 调用 `add_resource` 时设置 `watch_interval > 0` （单位：分钟）创建监控任务
 - 可指定 `to` 参数确定目标 URI；未指定时，系统会使用本次导入返回的 `root_uri` 作为监控目标
+- 把监控对象设为 sitemap/RSS/Atom URL，即可让**整站**保持同步：每次刷新重新读取 feed 并重建资源树，新发布的页面自动入库、已删除的页面自动移除
 - `WatchManager` 负责任务持久化存储
 - 支持多租户权限控制（ROOT/ADMIN/USER 权限分级）
 
@@ -152,7 +162,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | exclude | string | 否 | None | 排除的文件模式（glob） |
 | directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
-| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
+| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置，飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 创建任务；≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 

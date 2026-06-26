@@ -234,6 +234,16 @@
             "max_paragraph_length": 1000,
             "preserve_line_breaks": false,
         },
+        "webfeed": {
+            "max_pages": 200,
+            "max_concurrency": 5,
+            "request_timeout": 30.0,
+            "politeness_delay": 0.2,
+            "same_host_only": true,
+            "respect_robots": true,
+            "max_depth": 2,
+            "suggest_feed": true,
+        },
     },
     "encryption": {
         "enabled": true,
