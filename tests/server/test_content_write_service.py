@@ -335,6 +335,9 @@ class _FakeVikingFS:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
+    def _ensure_mutable_access(self, uri: str, ctx):
+        del uri, ctx
+
     async def delete_temp(self, temp_uri: str, ctx=None):
         del ctx
         self.delete_temp_calls.append(temp_uri)
@@ -494,6 +497,7 @@ async def test_resource_write_updates_target_and_queues_refresh_before_return(mo
     assert captured_enqueue["root_uri"] == root_uri
     assert captured_enqueue["changed_uri"] == file_uri
     assert captured_enqueue["change_type"] == "modified"
+    assert captured_enqueue["recursive"] is True
     assert viking_fs.delete_temp_calls == []
     assert lock_manager.release_calls == ["lock-1"]
 
@@ -616,7 +620,13 @@ async def test_memory_write_wait_skips_semantic_queue_and_releases_write_lock(mo
 class _FakeVikingFSForCreate:
     """Variant of _FakeVikingFS that supports 'file doesn't exist' scenarios."""
 
-    def __init__(self, file_uri: str, root_uri: str, file_exists: bool = True):
+    def __init__(
+        self,
+        file_uri: str,
+        root_uri: str,
+        file_exists: bool = True,
+        existing_dirs: set[str] | None = None,
+    ):
         self._file_uri = file_uri
         self._root_uri = root_uri
         self._file_exists = file_exists
@@ -624,6 +634,7 @@ class _FakeVikingFSForCreate:
         self.write_file_calls = []
         self.rm_calls = []
         self.content = {}
+        self.existing_dirs = set({root_uri} if existing_dirs is None else existing_dirs)
 
     async def stat(self, uri: str, ctx=None):
         del ctx
@@ -631,16 +642,19 @@ class _FakeVikingFSForCreate:
             if self._file_exists:
                 return {"isDir": False}
             raise NotFoundError(uri, "file")
-        if uri == self._root_uri:
+        if uri in self.existing_dirs:
             return {"isDir": True}
         # Parent directories should exist for creation
-        if uri.startswith(self._root_uri) and uri != self._file_uri:
+        if uri != self._root_uri and uri.startswith(self._root_uri) and uri != self._file_uri:
             return {"isDir": True}
         raise NotFoundError(uri, "path")
 
     def _uri_to_path(self, uri: str, ctx=None):
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
+
+    def _ensure_mutable_access(self, uri: str, ctx):
+        del uri, ctx
 
     async def delete_temp(self, temp_uri: str, ctx=None):
         del ctx
@@ -650,6 +664,12 @@ class _FakeVikingFSForCreate:
         del ctx
         self.write_file_calls.append((uri, content))
         self.content[uri] = content
+        parent = uri.rsplit("/", 1)[0]
+        while parent.startswith("viking://") and parent not in self.existing_dirs:
+            self.existing_dirs.add(parent)
+            if "/" not in parent.removeprefix("viking://"):
+                break
+            parent = parent.rsplit("/", 1)[0]
 
     async def rm(self, uri: str, *, ctx=None, lock_handle=None):
         del ctx, lock_handle
@@ -915,6 +935,7 @@ async def test_create_mode_resource_scope(monkeypatch):
         assert kwargs["changed_uri"] == file_uri
         assert kwargs["context_type"] == "resource"
         assert kwargs["change_type"] == "added"
+        assert kwargs["recursive"] is True
         del kwargs
         return None
 
@@ -930,6 +951,44 @@ async def test_create_mode_resource_scope(monkeypatch):
     )
     assert result["context_type"] == "resource"
     assert viking_fs.content[file_uri] == "content"
+
+
+@pytest.mark.asyncio
+async def test_create_mode_nested_resource_refresh_stays_recursive_after_root_changes(monkeypatch):
+    first_uri = "viking://resources/dir_repro/dir1/dir2/test12.md"
+    second_uri = "viking://resources/dir_repro/dir1/dir2/test34.md"
+    resource_root = "viking://resources/dir_repro"
+    first_parent = "viking://resources/dir_repro/dir1/dir2"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFSForCreate(
+        file_uri=first_uri,
+        root_uri=resource_root,
+        file_exists=False,
+        existing_dirs=set(),
+    )
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager()
+    enqueued = []
+
+    monkeypatch.setattr("openviking.storage.content_write.get_lock_manager", lambda: lock_manager)
+
+    async def _fake_enqueue_semantic_refresh(**kwargs):
+        enqueued.append(kwargs)
+
+    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
+
+    await coordinator.write(uri=first_uri, content="hello", mode="create", ctx=ctx)
+
+    viking_fs._file_uri = second_uri
+    viking_fs._file_exists = False
+    await coordinator.write(uri=second_uri, content="world", mode="create", ctx=ctx)
+
+    assert enqueued[0]["root_uri"] == first_parent
+    assert enqueued[0]["changed_uri"] == first_uri
+    assert enqueued[0]["recursive"] is True
+    assert enqueued[1]["root_uri"] == resource_root
+    assert enqueued[1]["changed_uri"] == second_uri
+    assert enqueued[1]["recursive"] is True
 
 
 @pytest.mark.asyncio
