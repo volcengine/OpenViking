@@ -1,7 +1,8 @@
 memory_type: entities
 description: |
-  Wikipedia article - manages page using Zettelkasten method.
-  Entity should be rich and distributed - avoid putting all info in one entity.
+  Third-party entity memory: stable cards for real people, organizations, places,
+  works, media, products, animals/pets, programs, activities, and concepts the
+  user mentions. Store what the entity is and its durable relations.
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category }}/{{ name }}.md"
 enabled: true
@@ -11,7 +12,6 @@ embedding_template: |-
   {{ name }}
 
   {{ content }}
-
 
 overview_template: |-
   # Entities Overview
@@ -24,8 +24,8 @@ fields:
   - name: category
     type: string
     description: |
-      - Category name written in {{ language }}.
-        {% if language == 'en' %}Use lowercase with underscores, max 3 words.{% else %}Keep it concise and natural in {{ language }}.{% endif %}
+      Category written in {{ language }}.
+      {% if language == 'en' %}Use lowercase with underscores, max 3 words.{% else %}Keep it concise and natural in {{ language }}.{% endif %}
     merge_op: immutable
 
   - name: name
@@ -37,5 +37,24 @@ fields:
   - name: content
     type: string
     description: |
-      - Detailed Zettelkasten card content in markdown format
+      Compact Markdown card for a third-party entity.
+
+      Required shape: one H1 display name, then one plain sentence on the next line; 
+      it must not start with "-", "*", or "1.". 
+      Then 2-4 H2 sections, every H2 body must be a bullet list, 1-5 bullets per section; 
+      do not write paragraph bodies under H2. Pick natural headings
+      such as Description, Purpose, Role, Significance, Values, or Relations.
+
+      Include compact but answerable entity facts. Prefer stable facts, but preserve
+      exact user-stated facts that may be asked later: identity, origin, relationship
+      or family status, counts, roles, skills, hobbies, favorite works/artists,
+      important possessions, and notable dated facts tied to this entity.
+
+      For people, include a Key Facts section when useful. Do not drop exact names,
+      counts, dates, places, titles, family relations, or recurring hobbies just to
+      generalize. Keep one-off facts only when they are concrete and likely useful
+      for future who/what/when/where/how-long questions.
+
+      Keep it readable: usually 6-14 bullets total / about 1200 chars. When updating,
+      merge and deduplicate; preserve existing atomic facts unless contradicted.
     merge_op: patch
