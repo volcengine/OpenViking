@@ -134,17 +134,20 @@ function MetricPanel({
 export function ContextDataPanel({
   data,
   disabled,
+  errorMessage,
   isError,
   isLoading,
   t,
 }: {
   data: ContextCounts | undefined
   disabled: boolean
+  errorMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
 }) {
   const total = asNumber(data?.total)
+  const errorText = errorMessage ?? t('requestFailed')
   return (
     <MetricPanel
       description={t('contextData.description')}
@@ -152,7 +155,7 @@ export function ContextDataPanel({
       isError={isError}
       isLoading={isLoading}
       title={t('contextData.title')}
-      value={isError ? t('requestFailed') : formatNumber(total)}
+      value={isError ? errorText : formatNumber(total)}
     >
       {disabled ? (
         <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
@@ -179,17 +182,20 @@ export function ContextDataPanel({
 export function TodayTokensPanel({
   data,
   disabled,
+  errorMessage,
   isError,
   isLoading,
   t,
 }: {
   data: TokenCounts | undefined
   disabled: boolean
+  errorMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
 }) {
   const total = asNumber(data?.total)
+  const errorText = errorMessage ?? t('requestFailed')
   return (
     <MetricPanel
       description={t('todayTokens.description')}
@@ -197,7 +203,7 @@ export function TodayTokensPanel({
       isError={isError}
       isLoading={isLoading}
       title={t('todayTokens.title')}
-      value={isError ? t('requestFailed') : formatNumber(total)}
+      value={isError ? errorText : formatNumber(total)}
     >
       {disabled ? (
         <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>
@@ -224,17 +230,20 @@ export function TodayTokensPanel({
 export function TodayRetrievalsPanel({
   data,
   disabled,
+  errorMessage,
   isError,
   isLoading,
   t,
 }: {
   data: RetrievalCounts | undefined
   disabled: boolean
+  errorMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
 }) {
   const total = asNumber(data?.total)
+  const errorText = errorMessage ?? t('requestFailed')
   return (
     <MetricPanel
       description={t('todayRetrievals.description')}
@@ -242,7 +251,7 @@ export function TodayRetrievalsPanel({
       isError={isError}
       isLoading={isLoading}
       title={t('todayRetrievals.title')}
-      value={isError ? t('requestFailed') : formatNumber(total)}
+      value={isError ? errorText : formatNumber(total)}
     >
       {disabled ? (
         <p className="text-xs text-muted-foreground">{t('usageDisabled')}</p>

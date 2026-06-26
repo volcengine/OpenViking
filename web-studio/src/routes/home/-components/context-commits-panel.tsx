@@ -49,11 +49,13 @@ function ContextCommitStat({ label, value }: { label: string; value: string }) {
 
 export function ContextCommitsPanel({
   data,
+  errorMessage,
   isError,
   isLoading,
   t,
 }: {
   data: ConsoleSeries<ContextCommitItem> | undefined
+  errorMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -123,7 +125,7 @@ export function ContextCommitsPanel({
       {isLoading ? (
         <Skeleton className="h-72 w-full" />
       ) : isError ? (
-        <EmptyState>{t('requestFailed')}</EmptyState>
+        <EmptyState>{errorMessage ?? t('requestFailed')}</EmptyState>
       ) : disabled ? (
         <EmptyState>{t('usageDisabled')}</EmptyState>
       ) : items.length === 0 ? (

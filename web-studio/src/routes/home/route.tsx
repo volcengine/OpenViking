@@ -14,6 +14,7 @@ import {
   fetchConsoleDashboardSummary,
   fetchConsoleTokenSeries,
 } from './-lib/api'
+import { resolveQueryErrorMessage } from './-lib/error'
 import { isDisabledPayload } from './-lib/format'
 import { useAppConnection } from '#/hooks/use-app-connection'
 
@@ -50,6 +51,7 @@ function HomePage() {
 
   const summary = dashboard.data
   const usageDisabled = isDisabledPayload(summary)
+  const dashboardError = resolveQueryErrorMessage(dashboard.error)
 
   if (!isConnectionRoleLoading && !hasAdminRole) {
     return (
@@ -70,6 +72,7 @@ function HomePage() {
         <ContextDataPanel
           data={summary?.context_counts}
           disabled={usageDisabled}
+          errorMessage={dashboardError}
           isError={dashboard.isError}
           isLoading={dashboard.isLoading}
           t={t}
@@ -77,6 +80,7 @@ function HomePage() {
         <TodayTokensPanel
           data={summary?.today_tokens}
           disabled={usageDisabled}
+          errorMessage={dashboardError}
           isError={dashboard.isError}
           isLoading={dashboard.isLoading}
           t={t}
@@ -84,6 +88,7 @@ function HomePage() {
         <TodayRetrievalsPanel
           data={summary?.today_retrievals}
           disabled={usageDisabled}
+          errorMessage={dashboardError}
           isError={dashboard.isError}
           isLoading={dashboard.isLoading}
           t={t}
@@ -92,6 +97,7 @@ function HomePage() {
 
       <TokenTrendPanel
         data={tokenSeries.data}
+        errorMessage={resolveQueryErrorMessage(tokenSeries.error)}
         isError={tokenSeries.isError}
         isLoading={tokenSeries.isLoading}
         t={t}
@@ -99,6 +105,7 @@ function HomePage() {
 
       <ContextCommitsPanel
         data={contextCommits.data}
+        errorMessage={resolveQueryErrorMessage(contextCommits.error)}
         isError={contextCommits.isError}
         isLoading={contextCommits.isLoading}
         t={t}
