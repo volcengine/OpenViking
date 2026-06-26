@@ -480,6 +480,31 @@ def test_training_case_spec_message_uses_fast_path_protocol():
     assert "duplicate_booking_rubric" in text
 
 
+def test_training_case_spec_message_uses_original_case_name_for_trials():
+    case = _training_case()
+    case.name = "tau2_airline_train_1_t0"
+    case.task_signature = "tau2:airline:train:1:trial:0"
+    case.input.update(
+        {
+            "domain": "airline",
+            "split": "train",
+            "data_split": "airline_train",
+            "task_id": "1",
+            "task_no": 1,
+            "train_trial": 0,
+            "original_case_name": "tau2_airline_train_1",
+        }
+    )
+    message = _case_spec_message(case)
+    payload = __import__(
+        "openviking.session.compressor_v3", fromlist=["_training_case_spec_payload_from_message"]
+    )._training_case_spec_payload_from_message(message)
+
+    assert payload["case"]["name"] == "tau2_airline_train_1"
+    assert payload["case"]["task_signature"] == "tau2:airline:train:1"
+    assert payload["case"]["metadata"]["rollout_case_name"] == "tau2_airline_train_1_t0"
+
+
 @pytest.mark.asyncio
 async def test_v3_fast_path_writes_final_memory_diff_with_case_traj_and_exp(monkeypatch):
     archive_uri = "viking://user/u/sessions/s1/history/archive_001"

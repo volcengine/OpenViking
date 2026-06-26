@@ -20,7 +20,11 @@ from openviking.session.train.components.event_recorder import (
 )
 from openviking.session.train.components.remote import RemoteCaseLoader, RemoteRolloutExecutor
 from openviking.session.train.components.report_builder import PipelineReportBuilder
-from openviking.session.train.components.reporter import emit_run_summary
+from openviking.session.train.components.reporter import (
+    _accuracy_style,
+    _style_plain,
+    emit_run_summary,
+)
 from openviking.session.train.components.rollout_artifact_recorder import (
     RolloutArtifactEventRecorder,
     RolloutArtifactRecorder,
@@ -35,6 +39,7 @@ from openviking.session.train.domain import (
     RolloutAnalysis,
 )
 from openviking.session.train.pipeline import OfflinePolicyOptimizationPipeline
+from openviking.session.train.components.progress import format_label, label_style
 from openviking.telemetry import tracer
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -48,7 +53,7 @@ class BatchTrainEvalConfig:
     dataset: str
     epochs: int = 1
     batch_size: int | None = None
-    concurrency: int = 150
+    concurrency: int = 200
     config_path: str | None = None
     output_path: str | None = None
     keep_default_tools: bool = True
@@ -60,7 +65,7 @@ class BatchTrainEvalConfig:
     commit_keep_recent_count: int = 0
     commit_poll_interval_seconds: float = 2.0
     commit_timeout_seconds: float | None = None
-    commit_concurrency: int = 100
+    commit_concurrency: int = 200
     train_index: int | str | list[int] | tuple[int, ...] | None = None
     eval_index: int | str | list[int] | tuple[int, ...] | None = None
     benchmark_service_url: str | None = None
@@ -70,6 +75,7 @@ class BatchTrainEvalConfig:
     eval_split: str | None = "test"
     skip_final_eval: bool = False
     trials: int = 8
+    train_trials: int = 1
     clean_result: bool = True
     keep_recent_results: int = 5
     events_path: str | None = None
@@ -107,6 +113,8 @@ class BatchTrainEvalConfig:
                 self.eval_split = normalized_eval_split
         if self.trials <= 0:
             raise ValueError("trials must be > 0")
+        if self.train_trials <= 0:
+            raise ValueError("train_trials must be > 0")
         if self.benchmark_service_url is not None and not self.benchmark_service_url.strip():
             raise ValueError("benchmark_service_url must not be empty")
         if self.keep_recent_results < 0:
@@ -176,6 +184,7 @@ class BatchTrainEvalReport:
     eval_split: str | None = "test"
     skip_baseline_eval: bool = False
     trials: int = 8
+    train_trials: int = 1
     rollouts_root: str | None = None
     rollouts_index_path: str | None = None
     latest_failed_rollout: str | None = None
@@ -214,6 +223,7 @@ class BatchTrainEvalReport:
             "eval_split": self.eval_split,
             "skip_baseline_eval": self.skip_baseline_eval,
             "trials": self.trials,
+            "train_trials": self.train_trials,
             "rollouts_root": self.rollouts_root,
             "rollouts_index_path": self.rollouts_index_path,
             "latest_failed_rollout": self.latest_failed_rollout,
@@ -262,6 +272,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             train_index=_index_payload(config.train_index),
             eval_index=_index_payload(config.eval_index),
             trials=config.trials,
+            train_trials=config.train_trials,
             clean_result=config.clean_result,
             keep_recent_results=config.keep_recent_results,
             result_dir_name=config.result_dir_name,
@@ -371,6 +382,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             ),
             eval_split=config.eval_split,
             eval_trials=config.trials,
+            train_trials=config.train_trials,
             trial_index_key="eval_trial",
             report_builder=report_builder,
             event_recorder=event_recorder,
@@ -446,6 +458,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             eval_split=config.eval_split,
             skip_baseline_eval=config.skip_baseline_eval,
             trials=config.trials,
+            train_trials=config.train_trials,
             rollouts_root=rollout_artifact_index.rollouts_root,
             rollouts_index_path=str(run_dir / "rollouts_index.json"),
             latest_failed_rollout=rollout_artifact_index.latest_failed_rollout,
@@ -482,6 +495,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 "domain": config.domain,
                 "epochs": config.epochs,
                 "trials": config.trials,
+                "train_trials": config.train_trials,
                 "run_id": policy_trainer.run_id,
                 "trace_id": report.trace_id,
                 "baseline_cache_hit": report.baseline_cache_hit,
@@ -536,7 +550,6 @@ def _build_http_client(config: BatchTrainEvalConfig) -> AsyncHTTPClient:
     )
 
 
-
 def _epoch_eval_reports(train_result: Any) -> list[dict[str, Any]]:
     reports: list[dict[str, Any]] = []
     for evaluation in getattr(train_result, "evaluation_passes", []) or []:
@@ -554,6 +567,7 @@ def _policy_set_metadata(config: BatchTrainEvalConfig, client: AsyncHTTPClient) 
         "openviking_account": config.account_id,
         "openviking_user": config.user_id,
     }
+
 
 def client_url(client: AsyncHTTPClient) -> str:
     return str(getattr(client, "_url", ""))
@@ -652,16 +666,19 @@ def _load_baseline_cache(path: Path) -> dict[str, Any] | None:
 
 def _print_baseline_cache_hit(report: dict[str, Any], cache_path: Path) -> None:
     """Print cached baseline info before training starts so users see it immediately."""
+    label = str(report.get("rollout_stage") or "baseline_test_rollout")
     trial_count = int(report.get("trial_count") or 1)
-    cache_info = f" (from cache: {cache_path.name})"
+    cache_info = f"(from cache: {cache_path.name})"
+    label_text = _style_plain(format_label(label), label_style(label))
     if trial_count > 1:
         accuracy_mean = report.get("accuracy_mean")
         accuracy_std = report.get("accuracy_std")
         cases_per_trial = report.get("case_count_per_trial") or "varies"
         print(
-            f"[{report.get('rollout_stage') or 'baseline_eval'}] baseline_cache_hit=1 accuracy="
-            f"{_fmt_percent(accuracy_mean)} ± {_fmt_pp_abs(accuracy_std)} "
-            f"trials={trial_count} cases_per_trial={cases_per_trial}"
+            f"{label_text} baseline_cache_hit=1 "
+            f"accuracy={_style_plain(_fmt_percent(accuracy_mean), _accuracy_style(accuracy_mean))} "
+            f"± {_style_plain(_fmt_pp_abs(accuracy_std), 'yellow')} "
+            f"trials={trial_count} cases_per_trial={cases_per_trial} "
             f"{cache_info}"
         )
         return
@@ -669,9 +686,9 @@ def _print_baseline_cache_hit(report: dict[str, Any], cache_path: Path) -> None:
     passed = report.get("passed_count")
     total = report.get("case_count")
     print(
-        f"[{report.get('rollout_stage') or 'baseline_eval'}] baseline_cache_hit=1 "
-        f"accuracy={_fmt_percent(accuracy)} "
-        f"passed={passed}/{total}"
+        f"{label_text} baseline_cache_hit=1 "
+        f"accuracy={_style_plain(_fmt_percent(accuracy), _accuracy_style(accuracy))} "
+        f"passed={passed}/{total} "
         f"{cache_info}"
     )
 
@@ -681,6 +698,7 @@ def _eval_rollout_stage(kind: str, split: str | None) -> str:
     if kind == "epoch" and eval_split == "train":
         return "eval_train_rollout"
     return f"{kind}_{eval_split}_rollout"
+
 
 def _fmt_percent(value: Any) -> str:
     if value is None:
@@ -728,6 +746,7 @@ def _pipeline_context(
     eval_split: str | None = None,
     eval_each_epoch_case_loader: Any = None,
     eval_trials: int = 1,
+    train_trials: int = 1,
     trial_index_key: str = "trial",
     report_builder: Any = None,
     event_recorder: JsonlEventRecorder | None = None,
@@ -753,6 +772,7 @@ def _pipeline_context(
         max_epochs=max_epochs,
         eval_each_epoch_case_loader=eval_each_epoch_case_loader,
         eval_trials=eval_trials,
+        train_trials=train_trials,
         trial_index_key=trial_index_key,
         report_builder=report_builder,
         **({"lifecycle_hooks": hooks} if hooks is not None else {}),
@@ -793,7 +813,9 @@ class UnusedRolloutAnalyzer:
 
 
 class UnusedGradientEstimator:
-    async def estimate(self, analysis: RolloutAnalysis, experience_set: ExperienceSet, context: Any):
+    async def estimate(
+        self, analysis: RolloutAnalysis, experience_set: ExperienceSet, context: Any
+    ):
         raise RuntimeError("policy_trainer handles training; gradient estimator must not run")
 
 
@@ -838,12 +860,7 @@ def _default_output_path(config: BatchTrainEvalConfig) -> str:
 
 
 def _baseline_cache_path(config: BatchTrainEvalConfig) -> Path:
-    return (
-        _result_base_dir(config)
-        / "cache"
-        / "baseline"
-        / f"{_baseline_cache_key(config)}.json"
-    )
+    return _result_base_dir(config) / "cache" / "baseline" / f"{_baseline_cache_key(config)}.json"
 
 
 def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
@@ -863,8 +880,6 @@ def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
     return f"{_cache_slug(config.domain)}_{split}_index-{index}_trials-{config.trials}_{digest}"
 
 
-
-
 def _index_payload(indices: list[int] | None) -> int | list[int] | None:
     if indices is None:
         return None
@@ -877,6 +892,7 @@ def _index_label(indices: list[int] | None) -> str:
     if len(indices) == 1:
         return str(indices[0])
     return "multi-" + "-".join(str(item) for item in indices)
+
 
 def _cache_slug(value: str) -> str:
     return (

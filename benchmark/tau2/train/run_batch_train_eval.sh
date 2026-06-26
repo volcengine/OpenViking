@@ -14,6 +14,7 @@ exec "${REPO_ROOT}/openviking/session/train/run_batch_train_eval.sh" \
   --dataset tau2 \
   --domain airline \
   --eval-each-epoch \
-  --concurrency 100 \
+  --concurrency 200 \
+  --commit-concurrency 200 \
   --benchmark-service-url "${BENCHMARK_SERVICE_URL:-http://127.0.0.1:1944}" \
   "$@"

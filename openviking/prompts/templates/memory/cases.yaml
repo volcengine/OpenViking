@@ -1,5 +1,7 @@
 memory_type: cases
 description: |
+  Language policy: generated natural-language text must use {{ language }}. If the source is multilingual, use the current task user's primary language as {{ language }}; if unclear, use the latest user message language. Preserve stable identifiers, code-like tokens, tool/API names, enum values, exact IDs, paths, dates, amounts, and other structured literals unchanged. When updating an existing case, prefer its existing name and language style to avoid translated duplicates.
+
   A trainable/evaluable case extracted from a real session commit.
 
   Extract ONLY when the conversation contains a concrete user task plus enough assistant execution,
@@ -63,6 +65,7 @@ fields:
     type: string
     description: |
       Semantic task signature for retrieval and grouping.
+      Write generated natural-language text in {{ language }}.
       Describe the reusable task intent, object/effect boundary, and success condition in one sentence.
       Generalize private identifiers, exact IDs, names, amounts, dates, and paths.
     merge_op: immutable
@@ -71,6 +74,7 @@ fields:
     type: string
     description: |
       Compact JSON object string describing the executable case input.
+      JSON keys must remain stable English identifiers; generated string values should use {{ language }} while preserving exact source literals needed for task matching.
       Include the user request summary and any stable preconditions needed to reproduce/evaluate the task.
       Example: {"summary":"用户要求处理重复预订并保留有效订单","preconditions":["存在两个相似订单候选"]}
     merge_op: immutable
@@ -79,6 +83,7 @@ fields:
     type: string
     description: |
       Compact JSON object string defining what good means and how to check it.
+      JSON keys must remain stable English identifiers; generated string values should use {{ language }} while preserving exact tool names, required literals, and observable evaluation labels.
       Required shape:
       {"name":"...","description":"...","criteria":[{"name":"...","description":"observable success condition","required":true,"weight":1.0}]}
       Criteria must be observable from rollout messages/tool results; include both success rate and execution efficiency when relevant.
@@ -89,5 +94,6 @@ fields:
     type: string
     description: |
       Brief generalized evidence from the commit conversation explaining why this case is useful.
+      Write generated natural-language text in {{ language }}.
       Do not include private raw identifiers, exact IDs, personal contact values, or full tool payloads.
     merge_op: immutable

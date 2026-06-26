@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import time
 from collections.abc import Callable
 from functools import wraps
@@ -14,6 +15,8 @@ from openviking.utils.model_retry import is_retryable_rate_limit_error, rate_lim
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+DEFAULT_TAU2_USER_LLM = "openai/doubao-seed-2-0-code-preview-260215"
 
 _TAU2_GENERATE_REFERENCE_MODULES = (
     "tau2.agent.llm_agent",
@@ -98,6 +101,43 @@ def _install_tau2_litellm_rate_limit_retry() -> None:
             or getattr(module_generate, "_openviking_tau2_rate_limit_retry", False)
         ):
             module.generate = wrapped
+
+
+def _install_tau2_litellm_unknown_cost_suppression() -> None:
+    """Suppress noisy LiteLLM cost lookup errors for private/proxy model names.
+
+    tau2-bench logs an ERROR whenever LiteLLM cannot find a public price entry
+    for models such as Doubao private gateway names. Cost accounting is not used
+    by our rollout evaluator, and at high concurrency those repeated ERROR logs
+    add significant IO noise. Replace cost lookup failures with a zero-cost
+    result while preserving normal behavior for mapped models.
+    """
+
+    try:
+        llm_utils = importlib.import_module("tau2.utils.llm_utils")
+    except Exception as exc:
+        logger.debug("tau2 llm_utils unavailable for cost suppression patch: %s", exc)
+        return
+
+    for name in ("get_response_cost", "get_cost"):
+        current = getattr(llm_utils, name, None)
+        if not callable(current) or getattr(current, "_openviking_tau2_cost_suppressed", False):
+            continue
+
+        @wraps(current)
+        def suppressed_cost(*args: Any, __fn: Callable[..., Any] = current, **kwargs: Any) -> Any:
+            try:
+                return __fn(*args, **kwargs)
+            except Exception as exc:
+                text = str(exc)
+                if "model isn't mapped" not in text and "not mapped" not in text:
+                    raise
+                logger.debug("suppressed tau2 LiteLLM cost lookup failure: %s", exc)
+                return 0.0
+
+        suppressed_cost._openviking_tau2_cost_suppressed = True
+        suppressed_cost._openviking_original_cost_fn = current
+        setattr(llm_utils, name, suppressed_cost)
 
 
 try:
@@ -195,10 +235,11 @@ class Tau2BenchEnv:
 class _GymTau2BenchEnv:
     def __init__(self, domain: str, task_id: str):
         _install_tau2_litellm_rate_limit_retry()
+        _install_tau2_litellm_unknown_cost_suppression()
         self.env = AgentGymEnv(
             domain=domain,
             task_id=task_id,
-            user_llm="openai/doubao-seed-2-0-pro-260215",
+            user_llm=os.getenv("TAU2_USER_LLM") or DEFAULT_TAU2_USER_LLM,
         )
         self.terminated = False
 

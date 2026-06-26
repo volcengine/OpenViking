@@ -81,6 +81,7 @@ class OfflinePolicyOptimizationPipeline:
     ) -> PipelineResult:
         ctx = context if isinstance(context, PipelineContext) else PipelineContext()
         max_epochs = max(1, int(ctx.max_epochs or 1))
+        case_loader = _train_case_loader(case_loader, ctx)
         current_policy_set = policy_set
         epoch_results: list[PipelineEpochResult] = []
         evaluation_passes: list[PipelineEvaluationResult] = []
@@ -118,9 +119,7 @@ class OfflinePolicyOptimizationPipeline:
             if epoch_eval is not None:
                 evaluation_passes.append(epoch_eval)
 
-        all_analyses = [
-            analysis for epoch in epoch_results for analysis in epoch.analyses
-        ]
+        all_analyses = [analysis for epoch in epoch_results for analysis in epoch.analyses]
         all_gradients: list[SemanticGradient] = [
             gradient for epoch in epoch_results for gradient in epoch.gradients
         ]
@@ -381,6 +380,11 @@ class OfflinePolicyOptimizationPipeline:
             "training": training,
             "stage": stage,
         }
+        # ponytail: train rollouts must never inherit an eval rollout_stage —
+        # _stage_from_execution_metadata checks rollout_stage before stage, so
+        # a leaked value would mis-route artifacts into eval directories.
+        if training:
+            execution_metadata.pop("rollout_stage", None)
         execution_context = ExecutionContext(
             policy_snapshot_id=snapshot_id,
             metadata=execution_metadata,
@@ -428,9 +432,7 @@ def _merge_report_hook_result(
     if result is None:
         return current
     if not isinstance(result, dict):
-        raise TypeError(
-            f"{hook_name} must return dict or None, got {type(result).__name__}"
-        )
+        raise TypeError(f"{hook_name} must return dict or None, got {type(result).__name__}")
     return result
 
 
@@ -511,9 +513,21 @@ def _epoch_eval_context(ctx: PipelineContext, *, epoch: int) -> PipelineContext:
         execution_metadata=execution_metadata,
         max_epochs=1,
         eval_trials=ctx.eval_trials,
+        train_trials=ctx.train_trials,
         trial_index_key=ctx.trial_index_key,
         report_builder=ctx.report_builder,
         lifecycle_hooks=list(ctx.lifecycle_hooks),
+    )
+
+
+def _train_case_loader(case_loader: CaseLoader, ctx: PipelineContext) -> CaseLoader:
+    train_trials = int(ctx.train_trials or 1)
+    if train_trials <= 1:
+        return case_loader
+    return make_trial_case_loader(
+        case_loader,
+        train_trials,
+        trial_input_key="train_trial",
     )
 
 

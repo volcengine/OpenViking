@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import posixpath
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -27,6 +29,15 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 
+def _viking_is_tool_result_success(result: Any) -> bool:
+    # Mirror vikingbot.agent.loop._is_tool_result_success locally to avoid importing
+    # private names from the bot package.
+    if result is None or isinstance(result, Exception):
+        return False
+    text = str(result).lstrip()
+    return bool(text) and not text.startswith("Error:")
+
+
 def _tool_provider_cls():
     from benchmark.tau2.common.tau2_env.tau2_tool_provider import Tau2BenchToolProvider
 
@@ -36,7 +47,12 @@ def _tool_provider_cls():
 def _vikingbot_imports() -> dict[str, Any]:
     try:
         from vikingbot.agent.context import ContextBuilder
-        from vikingbot.agent.loop import AgentLoop
+        from vikingbot.agent.loop import (
+            AgentLoop,
+            _PlainTextContext,
+            _PlainTextDelivered,
+            _PlainTextFinal,
+        )
         from vikingbot.agent.tools.base import Tool
         from vikingbot.bus.queue import MessageBus
         from vikingbot.cli.commands import _init_bot_data, _make_provider
@@ -53,6 +69,9 @@ def _vikingbot_imports() -> dict[str, Any]:
     return {
         "AgentLoop": AgentLoop,
         "ContextBuilder": ContextBuilder,
+        "_PlainTextContext": _PlainTextContext,
+        "_PlainTextDelivered": _PlainTextDelivered,
+        "_PlainTextFinal": _PlainTextFinal,
         "Tool": Tool,
         "MessageBus": MessageBus,
         "_init_bot_data": _init_bot_data,
@@ -69,9 +88,9 @@ def _make_tau2_tool(
     schema: dict[str, Any],
     provider: Any,
     *,
-    tool_lock: asyncio.Lock | None = None,
+    tool_lock: "_AsyncRWLock | None" = None,
+    is_write_tool: bool = False,
     record_tool_timing: Callable[[str, float], None] | None = None,
-    oracle_guard: "_MatchedOracleTerminalGuard | None" = None,
 ):
     Tool = _vikingbot_imports()["Tool"]
 
@@ -102,35 +121,366 @@ def _make_tau2_tool(
             del tool_context
             started_at = time.perf_counter()
 
-            async def call_with_guard() -> str:
-                if oracle_guard:
-                    guarded = await asyncio.to_thread(
-                        oracle_guard.call_or_guard,
-                        self._provider,
-                        self._name,
-                        kwargs,
-                    )
-                    if guarded.handled:
-                        return guarded.result
-                result = await asyncio.to_thread(self._provider.call_tool, self._name, kwargs)
-                if oracle_guard:
-                    oracle_guard.after_tool_call(self._name, kwargs, result)
-                return result
-
             try:
                 if tool_lock is None:
-                    return await call_with_guard()
-                async with tool_lock:
-                    # VikingBot may request multiple tools in one model turn and execute
-                    # them concurrently. Keep the matched-oracle guard update in the
-                    # same critical section as the tau2 tool call so post-final-state
-                    # writes in the same batch cannot race past the guard.
-                    return await call_with_guard()
+                    return await asyncio.to_thread(
+                        self._provider.call_tool, self._name, kwargs
+                    )
+
+                if is_write_tool:
+                    async with tool_lock.writer():
+                        return await asyncio.to_thread(
+                            self._provider.call_tool, self._name, kwargs
+                        )
+
+                # Read path: acquire a shared (reader) lock so concurrent read tools
+                # don't block each other.
+                async with tool_lock.reader():
+                    return await asyncio.to_thread(
+                        self._provider.call_tool, self._name, kwargs
+                    )
             finally:
                 if record_tool_timing is not None:
                     record_tool_timing(self._name, _elapsed_ms(started_at))
 
     return Tau2Tool(schema, provider)
+
+
+def _make_search_experience_tool():
+    Tool = _vikingbot_imports()["Tool"]
+
+    class SearchExperienceTool(Tool):
+        @property
+        def name(self) -> str:
+            return "search_experience"
+
+        @property
+        def description(self) -> str:
+            return (
+                "Search OpenViking case memories under the current user, read each matched "
+                "case's Linked Experiences section, and return candidate case summaries plus "
+                "linked experience URIs. Use read_experience to open selected experience URIs."
+            )
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language query describing the current task intent, target object, operation, policy/tool keywords.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum candidate cases to inspect and return.",
+                        "default": 10,
+                    },
+                },
+                "required": ["query"],
+            }
+
+        async def execute(self, tool_context: Any, query: str, limit: int = 10, **kwargs: Any) -> str:
+            del kwargs
+            client = None
+            try:
+                from vikingbot.openviking_mount.ov_server import VikingClient
+
+                client = await VikingClient.create()
+                target_uri = _current_cases_uri(client)
+                result = await client.search(query, target_uri=target_uri, limit=max(1, int(limit)))
+                memories = result.get("memories", []) if isinstance(result, dict) else []
+                candidates = [
+                    await _experience_search_summary(client, item, rank)
+                    for rank, item in enumerate(memories, start=1)
+                ]
+                return json.dumps(
+                    {
+                        "query": query,
+                        "target_uri": target_uri,
+                        "count": len(candidates),
+                        "candidates": candidates,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            except Exception as exc:
+                logger.warning("search_experience failed: %s", exc)
+                return f"Error searching experience candidates: {exc}"
+            finally:
+                if client is not None:
+                    await client.close()
+
+    return SearchExperienceTool()
+
+
+def _make_read_experience_tool():
+    Tool = _vikingbot_imports()["Tool"]
+
+    class ReadExperienceTool(Tool):
+        @property
+        def name(self) -> str:
+            return "read_experience"
+
+        @property
+        def description(self) -> str:
+            return "Read one OpenViking experience memory by full URI. Returns Markdown."
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": {
+                    "experience_uri": {
+                        "type": "string",
+                        "description": "Full Viking URI of the experience memory to read.",
+                    },
+                },
+                "required": ["experience_uri"],
+            }
+
+        async def execute(self, tool_context: Any, experience_uri: str, **kwargs: Any) -> str:
+            del tool_context, kwargs
+            client = None
+            try:
+                from vikingbot.openviking_mount.ov_server import VikingClient
+
+                client = await VikingClient.create()
+                experience_uri = str(experience_uri or "").strip()
+                if "/memories/experiences/" not in experience_uri:
+                    return f"Error: URI is not an experience memory: {experience_uri}"
+                content = await client.read_content(experience_uri, level="read")
+                if not content:
+                    return (
+                        "# Loaded Experience\n\n"
+                        f"Experience URI: `{experience_uri}`\n\n"
+                        "Error: experience content not found."
+                    )
+                return "\n".join(
+                    [
+                        "# Loaded Experience",
+                        "",
+                        f"Experience URI: `{experience_uri}`",
+                        "",
+                        content.rstrip(),
+                    ]
+                ).rstrip()
+            except Exception as exc:
+                logger.warning("read_experience failed: %s", exc)
+                return f"Error reading experience memory: {exc}"
+            finally:
+                if client is not None:
+                    await client.close()
+
+    return ReadExperienceTool()
+
+
+def _current_cases_uri(client: Any) -> str:
+    return f"{client._memory_target_uri(None).rstrip('/')}/cases"
+
+
+def _case_uri(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("uri") or "")
+    return str(getattr(item, "uri", "") or "")
+
+
+def _case_score(item: Any) -> float:
+    value = item.get("score", 0.0) if isinstance(item, dict) else getattr(item, "score", 0.0)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _case_abstract(item: Any) -> str:
+    return str(item.get("abstract", "") if isinstance(item, dict) else getattr(item, "abstract", "") or "")
+
+
+def _filename_name(uri: str) -> str:
+    return str(uri or "").rstrip("/").rsplit("/", 1)[-1].removesuffix(".md")
+
+
+def _markdown_section(content: str, heading: str) -> str:
+    match = re.search(
+        rf"(?ims)^##\s+{re.escape(heading)}\s*\n(.*?)(?=^##\s+|\Z)",
+        content or "",
+    )
+    return match.group(1).strip() if match else ""
+
+
+def _parse_json_object(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(value or "").strip())
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _shorten(value: Any, limit: int = 240) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text if len(text) <= limit else text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _linked_experience_count(content: str) -> int:
+    section = _markdown_section(content, "Linked Experiences")
+    if not section:
+        return 0
+    links = re.findall(r"\[[^\]]+\]\(([^)\s]+)\)", section)
+    if links:
+        return len(links)
+    return sum(1 for line in section.splitlines() if line.strip().startswith("- "))
+
+
+async def _experience_search_summary(client: Any, item: Any, rank: int) -> dict[str, Any]:
+    case_uri = _case_uri(item)
+    summary: dict[str, Any] = {
+        "rank": rank,
+        "score": round(_case_score(item), 6),
+        "case_name": _filename_name(case_uri),
+        "case_uri": case_uri,
+        "case_abstract": _shorten(_case_abstract(item), 360),
+        "experiences": [],
+    }
+    if not case_uri:
+        return summary
+    try:
+        content = await client.read_content(case_uri, level="read")
+    except Exception:
+        return summary
+    input_text = _markdown_section(content, "Input")
+    input_obj = _parse_json_object(input_text)
+    exp_uris = _linked_experience_uris(content, source_uri=case_uri)
+    summary.update(
+        {
+            "task_signature": _shorten(_markdown_section(content, "Task Signature")),
+            "input_summary": _shorten(input_obj.get("summary") if input_obj else input_text),
+            "experiences": [
+                {
+                    "index": idx,
+                    "name": _filename_name(exp_uri),
+                    "uri": exp_uri,
+                }
+                for idx, exp_uri in enumerate(exp_uris, start=1)
+            ],
+        }
+    )
+    return summary
+
+
+def _linked_experience_uris(content: str, *, source_uri: str) -> list[str]:
+    section = _markdown_section(content, "Linked Experiences")
+    if not section:
+        return []
+    targets = re.findall(r"\[[^\]]+\]\(([^)\s]+)\)", section)
+    if not targets:
+        targets = [
+            line.lstrip("- ").strip()
+            for line in section.splitlines()
+            if line.strip().startswith("- ")
+        ]
+    uris: list[str] = []
+    for target in targets:
+        uri = _resolve_case_link_uri(target, source_uri=source_uri)
+        if "/memories/experiences/" in uri and uri not in uris:
+            uris.append(uri)
+    return uris
+
+
+def _resolve_case_link_uri(target: str, *, source_uri: str) -> str:
+    target = str(target or "").strip()
+    if not target:
+        return ""
+    if "://" in target:
+        return target
+    if "/" not in target:
+        target = f"../experiences/{target.removesuffix('.md')}.md"
+    if not source_uri.startswith("viking://"):
+        return target
+    source_dir = source_uri.removeprefix("viking://").rsplit("/", 1)[0]
+    return "viking://" + posixpath.normpath(f"{source_dir}/{target}")
+
+
+class _AsyncRWLock:
+    """A simple asyncio reader/writer lock.
+
+    - Multiple readers may hold the lock concurrently.
+    - Writers get exclusive access; new readers are blocked while a writer is waiting
+      to avoid writer starvation.
+    - Not reentrant.
+    """
+
+    def __init__(self) -> None:
+        self._readers = 0
+        self._writers_waiting = 0
+        self._writing = False
+        self._lock = asyncio.Lock()
+        self._readers_ok = asyncio.Condition(self._lock)
+        self._writer_ok = asyncio.Condition(self._lock)
+
+    def reader(self) -> "_ReaderCtx":
+        return _ReaderCtx(self)
+
+    def writer(self) -> "_WriterCtx":
+        return _WriterCtx(self)
+
+    async def _acquire_reader(self) -> None:
+        async with self._lock:
+            while self._writing or self._writers_waiting > 0:
+                await self._readers_ok.wait()
+            self._readers += 1
+
+    async def _release_reader(self) -> None:
+        async with self._lock:
+            self._readers -= 1
+            if self._readers == 0:
+                self._writer_ok.notify()
+
+    async def _acquire_writer(self) -> None:
+        async with self._lock:
+            self._writers_waiting += 1
+            try:
+                while self._readers > 0 or self._writing:
+                    await self._writer_ok.wait()
+                self._writing = True
+            finally:
+                self._writers_waiting -= 1
+
+    async def _release_writer(self) -> None:
+        async with self._lock:
+            self._writing = False
+            if self._writers_waiting > 0:
+                self._writer_ok.notify()
+            else:
+                self._readers_ok.notify_all()
+
+
+class _ReaderCtx:
+    __slots__ = ("_rw",)
+
+    def __init__(self, rw: _AsyncRWLock) -> None:
+        self._rw = rw
+
+    async def __aenter__(self) -> "_ReaderCtx":
+        await self._rw._acquire_reader()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self._rw._release_reader()
+
+
+class _WriterCtx:
+    __slots__ = ("_rw",)
+
+    def __init__(self, rw: _AsyncRWLock) -> None:
+        self._rw = rw
+
+    async def __aenter__(self) -> "_WriterCtx":
+        await self._rw._acquire_writer()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self._rw._release_writer()
 
 
 @dataclass(slots=True)
@@ -174,7 +524,7 @@ class VikingBotTau2RolloutExecutor:
         task_no = int(case.input["task_no"])
         data_split = str(case.input["data_split"])
         data_root = case.input.get("data_root")
-        eval_trial = case.input.get("eval_trial")
+        trial = _case_trial(case)
 
         timings = _RolloutTiming(case=case.name, enabled=self.log_timings)
         total_started_at = time.perf_counter()
@@ -213,7 +563,7 @@ class VikingBotTau2RolloutExecutor:
         )
         user_prompt = provider.user_query
         SessionKey = _vikingbot_imports()["SessionKey"]
-        trial_suffix = "" if eval_trial is None else f"_r{int(eval_trial)}"
+        trial_suffix = "" if trial is None else f"_r{int(trial)}"
         stage = _safe_session_fragment(str(context.metadata.get("stage") or "rollout"))
         session_key = SessionKey(
             type="cli",
@@ -230,7 +580,7 @@ class VikingBotTau2RolloutExecutor:
             iteration,
             memory_content,
             experience_reminder,
-            task_case_experience_skill,
+            experience_loader_skill,
         ) = await _run_agent(
             agent=agent,
             system_prompt=system_prompt,
@@ -281,8 +631,10 @@ class VikingBotTau2RolloutExecutor:
                 "data_split": data_split,
                 "task_no": task_no,
                 "task_id": task_id,
-                "eval_trial": eval_trial,
+                "eval_trial": case.input.get("eval_trial"),
                 "eval_trial_count": case.input.get("eval_trial_count"),
+                "train_trial": case.input.get("train_trial"),
+                "train_trial_count": case.input.get("train_trial_count"),
                 "original_case_name": case.input.get("original_case_name"),
                 "reward": reward,
                 "evaluation_result": evaluation_result,
@@ -297,7 +649,7 @@ class VikingBotTau2RolloutExecutor:
                 "keep_default_tools": self.keep_default_tools,
                 "ov_tools_enable": False,
                 "experience_recall_enable": self.keep_default_tools,
-                "task_case_experience_skill": task_case_experience_skill,
+                "experience_loader_skill": experience_loader_skill,
                 "execution_metadata": dict(context.metadata),
             },
         )
@@ -310,6 +662,10 @@ class VikingBotTau2RolloutExecutor:
             iterations=iteration,
             reward=reward,
             message_count=len(rollout.messages),
+        )
+        rollout.metadata["timing_ms"] = timings.snapshot(
+            total_ms=_elapsed_ms(total_started_at),
+            iterations=iteration,
         )
         return rollout
 
@@ -363,261 +719,101 @@ def _append_final_answer_for_tau2_evaluation(provider_env: Any, final_content: s
         append_message(str(final_content))
 
 
-@dataclass(slots=True)
-class _GuardedToolResult:
-    handled: bool
-    result: str
+# Tokens tau2's user simulator emits to signal that the conversation should end.
+_TAU2_USER_STOP_TOKENS = ("###STOP###",)
+_TAU2_USER_TRANSFER_TOKENS = ("###TRANSFER###",)
 
 
-class _MatchedOracleTerminalGuard:
-    """Small deterministic guard for brittle matched-oracle tau2 tasks.
+def _tau2_user_reply_terminates(reply: Any) -> bool:
+    text = str(reply or "")
+    return any(tok in text for tok in _TAU2_USER_STOP_TOKENS + _TAU2_USER_TRANSFER_TOKENS)
 
-    The tau2 user simulator sometimes objects after the evaluated write sequence
-    has already reached the oracle final state, or talks the agent out of the
-    oracle target before the final writes are attempted. For controlled
-    training/eval tasks, those objections are adversarial drift: the matched
-    structured oracle is the target being evaluated.
+
+def _make_tau2_plain_text_router(*, publish_events: bool, bus: Any, session_key: Any):
+    """Build an `on_plain_text` callback that forwards assistant text via communicate_with_user.
+
+    In tau2 bench, plain assistant text is semantically equivalent to calling
+    `communicate_with_user`: both should be delivered to the user simulator so the
+    simulated user can reply and the conversation can continue. This router is owned by
+    the tau2 executor so vikingbot's generic AgentLoop stays benchmark-agnostic.
     """
+    imports = _vikingbot_imports()
+    PlainTextContext = imports["_PlainTextContext"]
+    PlainTextDelivered = imports["_PlainTextDelivered"]
+    PlainTextFinal = imports["_PlainTextFinal"]
+    OutboundMsgType = imports["MessageBus"]  # only used for type/attr access
+    del OutboundMsgType
 
-    def __init__(self, *, final_writes: list[tuple[str, dict[str, Any]]], terminal_message: str):
-        self._final_writes = final_writes
-        self._terminal_message = terminal_message
-        self._matched_count = 0
-        self._terminal_communicated = False
-        self._autofill_started = False
+    async def _route(
+        ctx: PlainTextContext,  # type: ignore[valid-type]
+    ):
+        text = ctx.text
+        # If the assistant text itself contains STOP (unlikely in tau2), treat as final.
+        if any(tok in text for tok in _TAU2_USER_STOP_TOKENS):
+            return PlainTextFinal(content=text)
+        if not ctx.tools.has("communicate_with_user"):
+            return PlainTextFinal(content=text)
 
-    @property
-    def final_state_reached(self) -> bool:
-        return self._matched_count >= len(self._final_writes)
-
-    def call_or_guard(
-        self, provider: Any, tool_name: str, arguments: dict[str, Any]
-    ) -> _GuardedToolResult:
-        if tool_name == "done" and not self.final_state_reached:
-            return _GuardedToolResult(True, self._complete_oracle_sequence(provider))
-        blocked = self.before_tool_call(tool_name, arguments)
-        if blocked is not None:
-            return _GuardedToolResult(True, blocked)
-        return _GuardedToolResult(False, "")
-
-    def before_tool_call(self, tool_name: str, arguments: dict[str, Any]) -> str | None:
-        if not self.final_state_reached:
-            expected_tool, expected_args = self._final_writes[self._matched_count]
-            if tool_name == expected_tool:
-                if _arguments_match(arguments, expected_args):
-                    return None
-                if _is_state_changing_or_transfer_tool(tool_name):
-                    return _pre_final_expected_write_message(expected_tool, expected_args)
-            if _is_state_changing_or_transfer_tool(tool_name):
-                return _pre_final_expected_write_message(expected_tool, expected_args)
-            return None
-        if tool_name == "communicate_with_user":
-            content = str(arguments.get("content") or "")
-            if _terminal_message_covers(content):
-                self._terminal_communicated = True
-            return None
-        if tool_name == "done":
-            return None
-        if _is_state_changing_or_transfer_tool(tool_name):
-            return (
-                "Oracle terminal guard: the matched training-oracle final write sequence "
-                "has already completed. Do not call further state-changing tools or "
-                "transfer away from the evaluated final state; send a concise final "
-                "communicate_with_user confirmation that includes 327, 1000, and 44, "
-                "then call done."
-            )
-        return None
-
-    def after_tool_call(self, tool_name: str, arguments: dict[str, Any], result: Any) -> None:
-        self._advance_if_expected(tool_name, arguments, result)
-
-    def _advance_if_expected(self, tool_name: str, arguments: dict[str, Any], result: Any) -> bool:
-        if self.final_state_reached:
-            return False
-        expected_tool, expected_args = self._final_writes[self._matched_count]
-        if tool_name != expected_tool:
-            return False
-        if _arguments_match(arguments, expected_args):
-            result_text = str(result or "")
-            if not result_text.lstrip().startswith("Error:"):
-                self._matched_count += 1
-                return True
-        return False
-
-    def _complete_oracle_sequence(self, provider: Any) -> str:
-        if self._autofill_started:
-            return _pre_final_expected_write_message(*self._final_writes[self._matched_count])
-        self._autofill_started = True
-        outputs: list[str] = [
-            "Oracle terminal guard: blocked premature done before the matched "
-            "training-oracle final write sequence completed. Completing the "
-            "remaining evaluated writes now."
-        ]
-        while not self.final_state_reached:
-            tool_name, arguments = self._final_writes[self._matched_count]
-            try:
-                result = provider.call_tool(tool_name, dict(arguments))
-            except Exception as exc:  # pragma: no cover - defensive runtime guard
-                result = f"Error: {type(exc).__name__}: {exc}"
-            outputs.append(f"{tool_name}({_stringify(arguments)}) => {result}")
-            if not self._advance_if_expected(tool_name, arguments, result):
-                outputs.append(
-                    "Oracle terminal guard: stopped autofill because the expected write "
-                    "did not complete successfully."
+        messages = list(ctx.messages)
+        # Record the assistant text using the same dict shape vikingbot uses elsewhere.
+        assistant_entry: dict[str, Any] = {"role": "assistant", "content": text}
+        if ctx.reasoning_content:
+            assistant_entry["reasoning_content"] = ctx.reasoning_content
+        messages.append(assistant_entry)
+        from vikingbot.utils.helpers import cal_str_tokens as _cal
+        started_at = time.perf_counter()
+        user_reply = await ctx.tools.execute(
+            "communicate_with_user",
+            {"content": text},
+            session_key=ctx.session_key,
+            sandbox_manager=ctx.sandbox_manager,
+            sender_id=ctx.sender_id,
+            memory_peer_ids=ctx.memory_peer_ids,
+            memory_owner_user_ids=ctx.memory_owner_user_ids,
+            openviking_connection=ctx.openviking_connection,
+        )
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        args_str = json.dumps({"content": text}, ensure_ascii=False)
+        logger.info("[TAU2_PLAIN_TEXT]: routed assistant text through communicate_with_user")
+        logger.info(f"[TOOL_CALL]: communicate_with_user({args_str[:200]})")
+        logger.info(f"[RESULT]: {str(user_reply)[:600]}")
+        if publish_events:
+            from vikingbot.bus.events import OutboundMessage, OutboundEventType
+            await bus.publish_outbound(
+                OutboundMessage(
+                    session_key=session_key,
+                    content=f"communicate_with_user({args_str})",
+                    event_type=OutboundEventType.TOOL_CALL,
                 )
-                break
-        if self.final_state_reached and not self._terminal_communicated:
-            try:
-                result = provider.call_tool(
-                    "communicate_with_user", {"content": self._terminal_message}
+            )
+            await bus.publish_outbound(
+                OutboundMessage(
+                    session_key=session_key,
+                    content=str(user_reply),
+                    event_type=OutboundEventType.TOOL_RESULT,
                 )
-            except Exception as exc:  # pragma: no cover - defensive runtime guard
-                result = f"Error: {type(exc).__name__}: {exc}"
-            outputs.append(
-                f"communicate_with_user({_stringify({'content': self._terminal_message})}) => {result}"
             )
-            if not str(result or "").lstrip().startswith("Error:"):
-                self._terminal_communicated = True
-        outputs.append(
-            "The evaluated oracle sequence is complete; call done again if no further user-facing communication is needed."
-        )
-        return "\n".join(outputs)
-
-
-def _oracle_guard_for_task(
-    *,
-    task_id: str | None,
-    task_no: int | None,
-    data_split: str | None,
-    provider: Any,
-) -> _MatchedOracleTerminalGuard | None:
-    # The current optimization target's persistent failure is tau2 airline train
-    # sample index 10, which resolves to task_id 14. Keep this deliberately
-    # narrow to avoid changing unrelated cases where later writes are expected.
-    split_text = str(data_split or "")
-    if split_text not in {"train", "airline_train"} or str(task_id or "") != "14" or task_no != 10:
-        return None
-    actions = getattr(getattr(provider, "env", None), "task", None)
-    actions = getattr(getattr(actions, "evaluation_criteria", None), "actions", None)
-    final_writes: list[tuple[str, dict[str, Any]]] = []
-    if actions:
-        for action in actions:
-            name = str(getattr(action, "name", ""))
-            if _is_state_changing_or_transfer_tool(name) and name != "transfer_to_human_agents":
-                final_writes.append((name, dict(getattr(action, "arguments", {}) or {})))
-    if not final_writes:
-        final_writes = [
-            ("cancel_reservation", {"reservation_id": "K1NW8N"}),
-            (
-                "book_reservation",
-                {
-                    "user_id": "mohamed_silva_9265",
-                    "origin": "JFK",
-                    "destination": "SFO",
-                    "flight_type": "round_trip",
-                    "cabin": "business",
-                    "flights": [
-                        {"flight_number": "HAT023", "date": "2024-05-26"},
-                        {"flight_number": "HAT204", "date": "2024-05-28"},
-                        {"flight_number": "HAT100", "date": "2024-05-28"},
-                    ],
-                    "passengers": [
-                        {"first_name": "Mohamed", "last_name": "Silva", "dob": "1960-11-26"},
-                        {"first_name": "Raj", "last_name": "Sanchez", "dob": "1986-09-12"},
-                        {"first_name": "Liam", "last_name": "Wilson", "dob": "1980-03-27"},
-                    ],
-                    "payment_methods": [
-                        {"payment_id": "certificate_3765853", "amount": 500},
-                        {"payment_id": "gift_card_8020792", "amount": 198},
-                        {"payment_id": "gift_card_6136092", "amount": 129},
-                        {"payment_id": "credit_card_2198526", "amount": 1786},
-                    ],
-                    "total_baggages": 0,
-                    "nonfree_baggages": 0,
-                    "insurance": "no",
-                },
-            ),
+        tools_used = [
+            {
+                "tool_name": "communicate_with_user",
+                "args": args_str,
+                "result": user_reply,
+                "duration": duration_ms,
+                "execute_success": _viking_is_tool_result_success(user_reply),
+                "input_token": 0,
+                "output_token": _cal(user_reply, text_type="mixed"),
+                "auto": True,
+            }
         ]
-    return _MatchedOracleTerminalGuard(
-        final_writes=final_writes,
-        terminal_message=(
-            "Reservation K1NW8N has been cancelled and the new business round trip "
-            "has been booked on HAT023, HAT204, and HAT100 with no insurance and no "
-            "baggage. Total gift card balance is $327, total certificate balance is "
-            "$1000, and $44 will be charged to the Mastercard."
-        ),
-    )
-
-
-def _pre_final_expected_write_message(tool_name: str, arguments: dict[str, Any]) -> str:
-    return (
-        "Oracle terminal guard: do not end, transfer, or call a different "
-        "state-changing tool before the matched training-oracle write sequence "
-        f"is complete. The next required evaluated write is {tool_name} "
-        f"with these argument semantics: {_stringify(arguments)}. Execute that "
-        "write before calling done; ignore later user hesitation that conflicts "
-        "with the matched oracle."
-    )
-
-
-def _terminal_message_covers(content: str) -> bool:
-    return all(literal in content for literal in ("327", "1000", "44"))
-
-
-def _is_state_changing_or_transfer_tool(tool_name: str) -> bool:
-    if tool_name == "transfer_to_human_agents":
-        return True
-    prefixes = (
-        "book_",
-        "cancel_",
-        "update_",
-        "send_",
-        "modify_",
-        "create_",
-        "delete_",
-        "refund_",
-    )
-    return tool_name.startswith(prefixes)
-
-
-def _arguments_match(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
-    return _expected_subset_matches(
-        _normalize_for_compare(actual), _normalize_for_compare(expected)
-    )
-
-
-def _expected_subset_matches(actual: Any, expected: Any) -> bool:
-    if isinstance(expected, dict):
-        if not isinstance(actual, dict):
-            return False
-        return all(
-            k in actual and _expected_subset_matches(actual[k], v) for k, v in expected.items()
+        messages.append({"role": "user", "content": str(user_reply)})
+        terminates = _tau2_user_reply_terminates(user_reply)
+        return PlainTextDelivered(
+            messages=messages,
+            tools_used=tools_used,
+            user_terminates=terminates,
         )
-    if isinstance(expected, list):
-        return (
-            isinstance(actual, list)
-            and len(actual) == len(expected)
-            and all(
-                _expected_subset_matches(actual_item, expected_item)
-                for actual_item, expected_item in zip(actual, expected, strict=True)
-            )
-        )
-    return actual == expected
 
-
-def _normalize_for_compare(value: Any) -> Any:
-    if isinstance(value, str):
-        try:
-            return _normalize_for_compare(json.loads(value))
-        except json.JSONDecodeError:
-            return value
-    if isinstance(value, dict):
-        return {str(k): _normalize_for_compare(v) for k, v in sorted(value.items())}
-    if isinstance(value, list):
-        return [_normalize_for_compare(v) for v in value]
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    return value
+    return _route
 
 
 def _build_agent(config_path: str | None, *, max_iterations: int):
@@ -667,23 +863,90 @@ def _configure_tools(
     for tool_name in list(agent.tools.tool_names):
         if str(tool_name).startswith("openviking_"):
             agent.tools.unregister(tool_name)
-    tool_lock = asyncio.Lock()
-    oracle_guard = _oracle_guard_for_task(
-        task_id=task_id,
-        task_no=task_no,
-        data_split=data_split,
-        provider=provider,
-    )
+    agent.tools.register(_make_search_experience_tool())
+    agent.tools.register(_make_read_experience_tool())
+    tool_lock = _AsyncRWLock()
+    write_tool_names = _classify_write_tools(provider)
     for schema in provider.list_openai_tools():
+        fn_name = str((schema.get("function") or {}).get("name") or "")
         agent.tools.register(
             _make_tau2_tool(
                 schema,
                 provider,
                 tool_lock=tool_lock,
+                is_write_tool=fn_name in write_tool_names,
                 record_tool_timing=record_tool_timing,
-                oracle_guard=oracle_guard,
             )
         )
+
+
+def _classify_write_tools(provider: Any) -> set[str]:
+    """Classify which tau2 tools mutate environment state.
+
+    Pure read/lookup tools can run in parallel within a single rollout; state-mutating
+    tools (book/update/cancel/etc.) plus communicate_with_user and ``done`` must run
+    exclusively because they advance the user simulator and tau2 DB state.
+    """
+    write_names: set[str] = {"communicate_with_user", "done"}
+
+    # 1) Introspect the underlying tau2 ToolKit: tau2 marks tools with __tool_type__ and
+    #    __mutates_state__. Prefer this when available (covers both gym and native envs).
+    env = getattr(provider, "env", None)
+    inner = getattr(env, "_impl", None) if env is not None else None
+    inner_env = getattr(inner, "env", None) if inner is not None else None
+    for toolkit_attr in ("tools", "user_tools"):
+        toolkit = getattr(inner_env, toolkit_attr, None) if inner_env is not None else None
+        if toolkit is None:
+            continue
+        get_tools_fn = getattr(toolkit, "get_tools", None)
+        tool_type_fn = getattr(toolkit, "tool_type", None)
+        mutates_fn = getattr(toolkit, "tool_mutates_state", None)
+        try:
+            tools_dict = get_tools_fn() if callable(get_tools_fn) else None
+        except Exception:
+            tools_dict = None
+        if isinstance(tools_dict, dict):
+            for name, tool_fn in tools_dict.items():
+                mutates = getattr(tool_fn, "__mutates_state__", None)
+                tool_type = getattr(tool_fn, "__tool_type__", None)
+                if mutates is None and mutates_fn is not None:
+                    try:
+                        mutates = mutates_fn(name)
+                    except Exception:
+                        mutates = None
+                if tool_type is None and tool_type_fn is not None:
+                    try:
+                        tool_type = tool_type_fn(name)
+                    except Exception:
+                        tool_type = None
+                is_write = (
+                    mutates is True
+                    or str(tool_type) in {"write", "ToolType.WRITE", "ToolType.WRITE.value"}
+                )
+                if is_write:
+                    write_names.add(str(name))
+
+    # 2) Heuristic fallback for tools not introspected above: any tool not starting
+    #    with a read-y prefix is assumed to be a writer. This is conservative (pessimistic
+    #    about parallelism) rather than risking races on stateful tools.
+    try:
+        schemas = list(provider.list_openai_tools() or [])
+    except Exception:
+        schemas = []
+    _READ_PREFIXES = ("get_", "search_", "list_", "find_", "retrieve_", "lookup_", "check_",
+                     "view_", "describe_", "think", "summary")
+    for schema in schemas:
+        fn = schema.get("function") or {}
+        name = str(fn.get("name") or "")
+        if not name or name in write_names:
+            continue
+        if not any(name.startswith(p) for p in _READ_PREFIXES):
+            write_names.add(name)
+    return write_names
+
+
+def _case_trial(case: Case) -> Any:
+    return case.input.get("eval_trial", case.input.get("train_trial"))
 
 
 def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_language: str) -> str:
@@ -693,22 +956,14 @@ def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_langu
         instructions.append(policy)
     instructions.append("Use the provided tools to interact with the environment.")
     instructions.append(
-        "Relevant agent experience, when available, is automatically provided in the prompt. "
-        "Carefully learn from it before you attend to the customer."
+        "Before taking task actions, you MUST use the required `experience_loader` skill. "
+        "It explains how to search OpenViking case memories with the `search_experience` tool, return linked experience URIs, and read selected experiences using the `read_experience` tool."
     )
     instructions.append(
-        "For controlled training/evaluation runs, retrieved structured case memories may "
-        "contain expected action and communication requirements. If the current task matches "
-        "such a case memory, treat it as the strongest training-oracle hint: complete the "
-        "listed required action families with matching argument semantics, include every "
-        "required communication item/literal in a customer-facing `communicate_with_user` "
-        "message, and do not let later conversational hesitation, a narrower cost comparison, "
-        "or a generic policy-only refusal replace the required evaluated sequence. When the "
-        "case memory exposes full expected tool arguments, prefer those recalled argument "
-        "semantics over re-derived alternatives, including payment allocation and add-on "
-        "counts. After completing the matched expected state-changing sequence, do not undo, "
-        "reverse, restore, compensate, or transfer away from that evaluated final state unless "
-        "the same matched case memory explicitly lists such a later corrective action."
+        "Loaded experiences are guidance from prior training runs. "
+        "Use them only when their situation and applicability boundaries match the current "
+        "task; current policy, current tool results, and current user facts override prior "
+        "experience."
     )
     if rollout_language == "zh":
         instructions.append(
@@ -732,13 +987,21 @@ def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_langu
     return "\n".join(instructions)
 
 
-async def _prepare_task_case_experience_skill(
+EXPERIENCE_LOADER_TEMPLATE_DIR = Path(__file__).resolve().parent / "experience_loader_template"
+EXPERIENCE_LOADER_SKILL_PATH = "skills/experience_loader/SKILL.md"
+
+
+async def _prepare_experience_loader_skill(
     *,
     agent: Any,
     session_key: Any,
-    query: str,
-    case_lookup: dict[str, Any],
 ) -> Any:
+    """Install the generic experience_loader skill into the rollout sandbox.
+
+    The loader does not contain per-task memory. It instructs the LLM to use the
+    tau2-only `search_experience` and `read_experience` tools to search case-linked experiences and load selected experience memories.
+    """
+
     imports = _vikingbot_imports()
     sandbox_manager = getattr(agent, "sandbox_manager", None)
     workspace_path = (
@@ -746,71 +1009,61 @@ async def _prepare_task_case_experience_skill(
         if sandbox_manager
         else agent.context.workspace
     )
-    workspace_id = sandbox_manager.to_workspace_id(session_key) if sandbox_manager else "shared"
-    content = ""
-    uris: list[str] = []
-    try:
-        from vikingbot.agent.memory import MemoryStore
-
-        content, uris = await MemoryStore(workspace_path).get_task_case_experience_content(
-            query=query,
-            workspace_id=workspace_id,
-            case_lookup=case_lookup,
-        )
-    except Exception as exc:
-        logger.warning("failed to load task_case_experience content: %s", exc)
-
-    skill_content = _task_case_experience_skill_content(
-        case_lookup=case_lookup,
-        content=content,
-        uris=uris,
-    )
+    skill_content = _read_experience_loader_template_file("SKILL.md")
     if sandbox_manager:
         try:
             sandbox = await sandbox_manager.get_sandbox(session_key)
-            await sandbox.write_file("skills/task_case_experience/SKILL.md", skill_content)
+            await sandbox.write_file(EXPERIENCE_LOADER_SKILL_PATH, skill_content)
         except Exception as exc:
-            logger.warning("failed to write task_case_experience skill to sandbox: %s", exc)
-            _write_task_case_experience_skill_content(
+            logger.warning("failed to write experience_loader skill to sandbox: %s", exc)
+            _write_experience_loader_files(
                 workspace_path=workspace_path,
                 skill_content=skill_content,
             )
     else:
-        _write_task_case_experience_skill_content(
+        _write_experience_loader_files(
             workspace_path=workspace_path,
             skill_content=skill_content,
         )
+
     context_builder = imports["ContextBuilder"](
         workspace_path,
         sandbox_manager=sandbox_manager,
         eval=True,
     )
-    context_builder.latest_task_case_experience_skill_content = skill_content
+    context_builder.latest_experience_loader_skill_content = skill_content
     return context_builder
 
 
-async def _execute_required_task_case_skill_read(
+def _read_experience_loader_template_file(relative_path: str) -> str:
+    return (EXPERIENCE_LOADER_TEMPLATE_DIR / relative_path).read_text(encoding="utf-8")
+
+
+def _write_experience_loader_files(
+    *,
+    workspace_path: Path,
+    skill_content: str,
+) -> None:
+    skill_dir = workspace_path / "skills" / "experience_loader"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_dir.joinpath("SKILL.md").write_text(skill_content, encoding="utf-8")
+
+
+async def _execute_required_experience_loader_read(
     *,
     agent: Any,
     messages: list[dict[str, Any]],
     session_key: Any,
     sender_id: str,
 ) -> dict[str, Any]:
-    """Force-load the required per-task skill before the rollout starts.
+    """Force-load the generic experience_loader skill before task actions."""
 
-    The prompt still tells the model that this is a normal skill, but TAU2 rollouts
-    are controlled evaluations: the case-linked experience is a required input, not
-    an optional action.  Execute the read_file tool once up front so the actual
-    model conversation and artifacts include the skill content before any TAU2
-    task tool can be called.
-    """
-
-    path = "skills/task_case_experience/SKILL.md"
-    tool_id = "tau2-required-task-case-skill-read"
+    path = EXPERIENCE_LOADER_SKILL_PATH
+    tool_id = "required-experience-loader-skill-read"
     messages.append(
         {
             "role": "assistant",
-            "content": "Reading required task_case_experience skill before task actions.",
+            "content": "Reading required experience_loader skill before task actions.",
             "tool_calls": [
                 {
                     "id": tool_id,
@@ -842,7 +1095,7 @@ async def _execute_required_task_case_skill_read(
     )
     execute_success = not (isinstance(result, str) and result.lstrip().startswith("Error"))
     if not execute_success:
-        logger.warning("required task_case_experience skill read failed: %s", str(result)[:300])
+        logger.warning("required experience_loader skill read failed: %s", str(result)[:300])
     return {
         "tool_name": "read_file",
         "args": json.dumps({"path": path}, ensure_ascii=False),
@@ -852,58 +1105,8 @@ async def _execute_required_task_case_skill_read(
         "input_token": 0,
         "output_token": 0,
         "auto": True,
-        "required_skill": "task_case_experience",
+        "required_skill": "experience_loader",
     }
-
-
-def _task_case_experience_skill_content(
-    *,
-    case_lookup: dict[str, Any],
-    content: str,
-    uris: list[str],
-) -> str:
-    matched = bool(content.strip())
-    uri_lines = "\n".join(f"- `{uri}`" for uri in uris) if uris else "- none"
-    body = content.strip() if matched else "No case-specific experience was found for this task."
-    return (
-        "---\n"
-        "name: task_case_experience\n"
-        "description: 下面是这个任务相关的经验，请认真阅读并吸取经验。\n"
-        "---\n\n"
-        "# task_case_experience\n\n"
-        "下面是这个任务相关的经验，请认真阅读并吸取经验。\n\n"
-        "## Linked Experience URIs\n"
-        f"{uri_lines}\n\n"
-        "## Case-Linked Experiences\n"
-        f"{body}\n"
-    )
-
-
-def _write_task_case_experience_skill_content(
-    *,
-    workspace_path: Path,
-    skill_content: str,
-) -> None:
-    skill_dir = workspace_path / "skills" / "task_case_experience"
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_dir.joinpath("SKILL.md").write_text(skill_content, encoding="utf-8")
-
-
-def _write_task_case_experience_skill(
-    *,
-    workspace_path: Path,
-    case_lookup: dict[str, Any],
-    content: str,
-    uris: list[str],
-) -> None:
-    _write_task_case_experience_skill_content(
-        workspace_path=workspace_path,
-        skill_content=_task_case_experience_skill_content(
-            case_lookup=case_lookup,
-            content=content,
-            uris=uris,
-        ),
-    )
 
 
 async def _run_agent(
@@ -919,19 +1122,16 @@ async def _run_agent(
 ):
     stage_started_at = time.perf_counter()
     message_context = agent.context
-    task_case_experience_skill = None
-    if case_lookup:
-        message_context = await _prepare_task_case_experience_skill(
-            agent=agent,
-            session_key=session_key,
-            query=user_prompt,
-            case_lookup=case_lookup,
-        )
-        task_case_experience_skill = getattr(
-            message_context,
-            "latest_task_case_experience_skill_content",
-            None,
-        )
+    del case_lookup
+    message_context = await _prepare_experience_loader_skill(
+        agent=agent,
+        session_key=session_key,
+    )
+    experience_loader_skill = getattr(
+        message_context,
+        "latest_experience_loader_skill_content",
+        None,
+    )
     messages = await message_context.build_messages(
         history=[],
         current_message=user_prompt,
@@ -966,13 +1166,18 @@ async def _run_agent(
     memory_content = _merge_memories(user_memory, exp_content)
     stage_started_at = time.perf_counter()
     required_skill_tool = None
-    if task_case_experience_skill and task_case_experience_skill.strip():
-        required_skill_tool = await _execute_required_task_case_skill_read(
+    if experience_loader_skill and experience_loader_skill.strip():
+        required_skill_tool = await _execute_required_experience_loader_read(
             agent=agent,
             messages=messages,
             session_key=session_key,
             sender_id=sender_id,
         )
+    plain_text_router = _make_tau2_plain_text_router(
+        publish_events=False,
+        bus=getattr(agent, "bus", None),
+        session_key=session_key,
+    )
     result = await agent._run_agent_loop(
         messages=messages,
         session_key=session_key,
@@ -980,12 +1185,15 @@ async def _run_agent(
         sender_id=sender_id,
         ov_tools_enable=False,
         stop_tool_names=["done"],
+        on_plain_text=plain_text_router,
     )
     if timings is not None:
         timings.record("agent_loop", stage_started_at)
     final_content, final_reasoning_content, tools_used, token_usage, iteration = result
     if required_skill_tool is not None:
         tools_used = [required_skill_tool, *tools_used]
+    case_memory_context = _case_memory_context_from_tools(tools_used)
+    memory_content = _merge_memories(memory_content, case_memory_context)
     if _last_tool_name(tools_used) == "done":
         final_content = None
         final_reasoning_content = None
@@ -997,7 +1205,7 @@ async def _run_agent(
         iteration,
         memory_content,
         experience_reminder_text,
-        task_case_experience_skill,
+        experience_loader_skill,
     )
 
 
@@ -1015,6 +1223,42 @@ class _RolloutTiming:
     def record_tool(self, tool_name: str, duration_ms: float) -> None:
         if self.enabled:
             self.tool_durations.append((tool_name, duration_ms))
+
+    def snapshot(self, *, total_ms: float, iterations: int | None) -> dict[str, Any]:
+        """Return a JSON-serializable timing breakdown for rollout.metadata."""
+        tool_total_ms = sum(duration for _, duration in self.tool_durations)
+        tool_counts: dict[str, int] = {}
+        tool_total_by_name: dict[str, float] = {}
+        tool_max_by_name: dict[str, float] = {}
+        for name, duration in self.tool_durations:
+            tool_counts[name] = tool_counts.get(name, 0) + 1
+            tool_total_by_name[name] = tool_total_by_name.get(name, 0.0) + duration
+            cur = tool_max_by_name.get(name, 0.0)
+            if duration > cur:
+                tool_max_by_name[name] = duration
+        tools_by_name = {
+            name: {
+                "count": tool_counts[name],
+                "total_ms": round(tool_total_by_name[name], 2),
+                "avg_ms": round(tool_total_by_name[name] / tool_counts[name], 2),
+                "max_ms": round(tool_max_by_name[name], 2),
+            }
+            for name in tool_counts
+        }
+        slowest = max(self.tool_durations, key=lambda item: item[1], default=None)
+        return {
+            "total_ms": round(total_ms, 2),
+            "iterations": iterations,
+            "stages_ms": {k: round(v, 2) for k, v in self.stages.items()},
+            "tool_count": len(self.tool_durations),
+            "tool_total_ms": round(tool_total_ms, 2),
+            "slowest_tool": (
+                {"name": slowest[0], "duration_ms": round(slowest[1], 2)}
+                if slowest is not None
+                else None
+            ),
+            "tools_by_name": tools_by_name,
+        }
 
     def log_summary(self, *, total_ms: float, **metadata: Any) -> None:
         if not self.enabled:
@@ -1079,6 +1323,36 @@ def _extract_experience_content(content: str) -> str | None:
         return None
     start += len(prefix)
     return content[start:].strip() or None
+
+
+def _case_memory_context_from_tools(tools_used: list[dict] | None) -> str:
+    blocks: list[str] = []
+    for tool in tools_used or []:
+        if not isinstance(tool, dict) or tool.get("tool_name") != "read_experience":
+            continue
+        result = str(tool.get("result") or "").strip()
+        if not result:
+            continue
+        args = tool.get("args")
+        blocks.append(
+            "\n".join(
+                [
+                    "## Loaded Experience",
+                    "",
+                    "Tool: `read_experience`",
+                    "",
+                    "Args:",
+                    "```json",
+                    str(args or "{}"),
+                    "```",
+                    "",
+                    result,
+                ]
+            )
+        )
+    if not blocks:
+        return ""
+    return "# Experience Loader Context\n\n" + "\n\n---\n\n".join(blocks)
 
 
 def _merge_memories(user_memory: str | None, exp_memory: str | None) -> str | None:

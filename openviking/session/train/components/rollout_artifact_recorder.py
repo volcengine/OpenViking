@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from dataclasses import dataclass, field
@@ -382,10 +383,15 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                 self._write_index()
                 continue
             (commit_dir / "memory_diff.json").write_text(str(memory_diff), encoding="utf-8")
+            (commit_dir / "memory_diff.md").write_text(
+                _format_memory_diff_markdown(_parse_memory_diff(memory_diff)),
+                encoding="utf-8",
+            )
             self._update_rollout_status(
                 train_dir,
                 artifact_state="memory_diff_done",
                 memory_diff_path=str(commit_dir / "memory_diff.json"),
+                memory_diff_markdown_path=str(commit_dir / "memory_diff.md"),
                 commit_path=str(commit_dir),
             )
             self._update_rollout_index_entry(
@@ -393,6 +399,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
                 updates={
                     "artifact_state": "memory_diff_done",
                     "memory_diff_path": str(commit_dir / "memory_diff.json"),
+                    "memory_diff_markdown_path": str(commit_dir / "memory_diff.md"),
                     "commit_path": str(commit_dir),
                 },
             )
@@ -823,11 +830,14 @@ def _task_id(rollout: Rollout) -> Any:
 
 
 def _trial(rollout: Rollout) -> Any:
-    if "eval_trial" in rollout.case.input:
-        return rollout.case.input.get("eval_trial")
-    if "eval_trial" in rollout.case.metadata:
-        return rollout.case.metadata.get("eval_trial")
-    return rollout.metadata.get("eval_trial")
+    for key in ("eval_trial", "train_trial"):
+        if key in rollout.case.input:
+            return rollout.case.input.get(key)
+        if key in rollout.case.metadata:
+            return rollout.case.metadata.get(key)
+        if key in rollout.metadata:
+            return rollout.metadata.get(key)
+    return None
 
 
 def _commit_failed(commit_result: dict[str, Any] | None) -> bool:
@@ -911,3 +921,67 @@ def _format_commit_messages_markdown(messages: list[dict[str, Any]]) -> str:
         lines.append("---")
         lines.append("")
     return "\n".join(lines)
+
+
+def _parse_memory_diff(memory_diff: Any) -> dict[str, Any]:
+    if isinstance(memory_diff, dict):
+        return memory_diff
+    if isinstance(memory_diff, str):
+        try:
+            parsed = json.loads(memory_diff)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _format_memory_diff_markdown(memory_diff: dict[str, Any]) -> str:
+    lines = ["# Memory Diff", ""]
+    summary = memory_diff.get("summary") if isinstance(memory_diff, dict) else None
+    if isinstance(summary, dict):
+        lines.extend(
+            [
+                "## Summary",
+                "",
+                f"- adds: {summary.get('total_adds', 0)}",
+                f"- updates: {summary.get('total_updates', 0)}",
+                f"- deletes: {summary.get('total_deletes', 0)}",
+                "",
+            ]
+        )
+    operations = memory_diff.get("operations") if isinstance(memory_diff, dict) else None
+    operations = operations if isinstance(operations, dict) else {}
+    for item in operations.get("adds", []) or []:
+        if isinstance(item, dict):
+            lines.extend(_memory_diff_file_section("add", item.get("uri"), "", item.get("after", "")))
+    for item in operations.get("updates", []) or []:
+        if isinstance(item, dict):
+            lines.extend(
+                _memory_diff_file_section(
+                    "update",
+                    item.get("uri"),
+                    item.get("before", ""),
+                    item.get("after", ""),
+                )
+            )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _memory_diff_file_section(kind: str, uri: Any, before: Any, after: Any) -> list[str]:
+    path = str(uri or "unknown")
+    old_path = "/dev/null" if kind == "add" else path
+    diff = difflib.unified_diff(
+        str(before or "").splitlines(),
+        str(after or "").splitlines(),
+        fromfile=old_path,
+        tofile=path,
+        lineterm="",
+    )
+    return [
+        f"## {kind}: `{path}`",
+        "",
+        "```diff",
+        *diff,
+        "```",
+        "",
+    ]

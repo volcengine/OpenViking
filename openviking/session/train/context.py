@@ -44,6 +44,7 @@ class PipelineContext:
     max_epochs: int = 1
     eval_each_epoch_case_loader: CaseLoader | None = None
     eval_trials: int = 1
+    train_trials: int = 1
     trial_index_key: str = "trial"
     report_builder: PipelineReportBuilder | None = None
     lifecycle_hooks: list[PipelineLifecycleHook] = field(

@@ -146,13 +146,17 @@ class ContextBuilder:
         skills_summary = self.skills.build_skills_summary()
         if skills_summary:
             required_skill_note = ""
-            task_case_skill = self.workspace / "skills" / "task_case_experience" / "SKILL.md"
-            if task_case_skill.exists():
-                task_case_skill_path = "skills/task_case_experience/SKILL.md"
-                required_skill_note = (
-                    "\nRequired skill: before taking any task action, you MUST read "
-                    f"`{task_case_skill_path}` and apply its instructions.\n"
-                )
+            required_skill_candidates = [
+                "skills/experience_loader/SKILL.md",
+                "skills/task_case_experience/SKILL.md",
+            ]
+            for skill_path in required_skill_candidates:
+                if (self.workspace / skill_path).exists():
+                    required_skill_note = (
+                        "\nRequired skill: before taking any task action, you MUST read "
+                        f"`{skill_path}` and apply its instructions.\n"
+                    )
+                    break
             parts.append(f"""# Skills
 
 The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.

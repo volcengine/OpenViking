@@ -10,6 +10,7 @@ from openviking.session.train.batch_runner import (
     _baseline_cache_key,
     _clean_result_dir,
     _load_baseline_cache,
+    _print_baseline_cache_hit,
     _result_base_dir,
     _write_baseline_cache,
 )
@@ -318,3 +319,26 @@ def test_result_dir_name_must_not_be_empty():
             benchmark_service_url="http://127.0.0.1:1944",
             result_dir_name=" ",
         )
+
+
+def test_print_baseline_cache_hit_formats_as_stage_label(capsys, tmp_path: Path):
+    _print_baseline_cache_hit(
+        {
+            "rollout_stage": "baseline_test_rollout",
+            "trial_count": 8,
+            "accuracy_mean": 0.55,
+            "accuracy_std": 0.05,
+            "case_count_per_trial": 20,
+        },
+        tmp_path / "airline_test_index-all_trials-8_523a9bffb6c24543.json",
+    )
+
+    output = capsys.readouterr().out
+    assert "[BASELINE_TEST_ROLLOUT]" in output
+    assert "baseline_cache_hit=1" in output
+    assert "accuracy=" in output
+    assert "55.00%" in output
+    assert "± " in output
+    assert "5.00pp" in output
+    assert "trials=8 cases_per_trial=20" in output
+    assert "(from cache: airline_test_index-all_trials-8_523a9bffb6c24543.json)" in output

@@ -183,8 +183,8 @@ class NativeTau2RolloutExecutor:
         task_id = str(case.input["task_id"])
         task_no = int(case.input["task_no"])
         data_split = str(case.input["data_split"])
-        eval_trial = case.input.get("eval_trial")
-        seed = _case_seed(self.seed, case_index=case_index, eval_trial=eval_trial)
+        trial = _case_trial(case)
+        seed = _case_seed(self.seed, case_index=case_index, eval_trial=trial)
 
         _ensure_tau2_llm_api_bases()
 
@@ -247,8 +247,10 @@ class NativeTau2RolloutExecutor:
                 "data_split": data_split,
                 "task_no": task_no,
                 "task_id": task_id,
-                "eval_trial": eval_trial,
+                "eval_trial": case.input.get("eval_trial"),
                 "eval_trial_count": case.input.get("eval_trial_count"),
+                "train_trial": case.input.get("train_trial"),
+                "train_trial_count": case.input.get("train_trial_count"),
                 "original_case_name": case.input.get("original_case_name"),
                 "seed": seed,
                 "reward": reward,
@@ -734,6 +736,10 @@ def _tool_call_query(tool_calls: list[Any], state_messages: list[Any]) -> str:
     if recent_observations:
         parts.append("Recent tool observations: " + " | ".join(recent_observations[-4:]))
     return "\n".join(parts)
+
+
+def _case_trial(case: Case) -> Any:
+    return case.input.get("eval_trial", case.input.get("train_trial"))
 
 
 def _case_seed(base_seed: int, *, case_index: int, eval_trial: Any) -> int:

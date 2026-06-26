@@ -9,6 +9,7 @@ import time
 import uuid
 from contextlib import AsyncExitStack
 from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +52,41 @@ def _is_tool_result_success(result: Any) -> bool:
         return False
     text = str(result).lstrip()
     return bool(text) and not text.startswith("Error:")
+
+
+@dataclass(slots=True)
+class _PlainTextContext:
+    """Context passed to an `on_plain_text` callback when the model emits plain text."""
+
+    messages: list[dict]
+    session_key: SessionKey
+    text: str
+    reasoning_content: str | None
+    iteration: int
+    tools: ToolRegistry
+    sandbox_manager: SandboxManager | None
+    sender_id: str | None
+    memory_peer_ids: list[str] | None
+    memory_owner_user_ids: list[str] | None
+    openviking_connection: dict[str, Any] | None
+
+
+@dataclass(slots=True)
+class _PlainTextDelivered:
+    """Signal that the text was delivered externally; continue the loop with new state."""
+
+    messages: list[dict]
+    tools_used: list[dict]
+    user_terminates: bool = False
+
+
+@dataclass(slots=True)
+class _PlainTextFinal:
+    """Signal that the text should be treated as the final reply; exit the loop."""
+
+    content: str | None = None
+
+
 
 
 class AgentLoop:
@@ -652,6 +688,7 @@ class AgentLoop:
         disabled_tools: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
         stop_tool_names: list[str] | None = None,
+        on_plain_text: Any | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -667,6 +704,12 @@ class AgentLoop:
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
             stop_tool_names: Tool names that terminate the loop immediately after execution
+            on_plain_text: Optional async callback invoked when the model returns a non-empty
+                plain-text reply (no tool calls). It receives (messages, text, iteration) and
+                must return a PlainTextRouteResult to either deliver the text and continue the
+                loop (e.g. forward it to a user simulator) or treat it as the final reply. When
+                None, plain text is treated as the final assistant reply (default chatbot
+                semantics).
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -853,8 +896,53 @@ class AgentLoop:
                     {"role": "user", "content": "Reflect on the results and decide next steps."}
                 )
             else:
+                text = (response.content or "").strip()
+                routed = False
+                if text and on_plain_text is not None:
+                    try:
+                        route = await on_plain_text(
+                            _PlainTextContext(
+                                messages=messages,
+                                session_key=session_key,
+                                text=text,
+                                reasoning_content=response.reasoning_content,
+                                iteration=iteration,
+                                tools=self.tools,
+                                sandbox_manager=self.sandbox_manager,
+                                sender_id=sender_id,
+                                memory_peer_ids=memory_peer_ids,
+                                memory_owner_user_ids=memory_owner_user_ids,
+                                openviking_connection=openviking_connection,
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[PLAIN_TEXT_HOOK]: hook raised; treating as final answer: %s", exc
+                        )
+                        route = None
+                    if isinstance(route, _PlainTextDelivered):
+                        messages = route.messages
+                        tools_used.extend(route.tools_used)
+                        if route.user_terminates:
+                            final_content = ""
+                            break
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": "Reflect on the results and decide next steps.",
+                            }
+                        )
+                        routed = True
+                        continue
+                    if isinstance(route, _PlainTextFinal):
+                        final_content = route.content if route.content is not None else text
+                        final_reasoning_content = response.reasoning_content
+                        break
+                    # Unknown / None result: fall through to default final-answer handling.
                 final_content = response.content
                 final_reasoning_content = response.reasoning_content
+                if routed:
+                    continue
                 break
 
         if final_content == "" and tools_used and tools_used[-1].get("tool_name") in stop_tools:

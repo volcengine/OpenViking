@@ -394,6 +394,37 @@ async def test_offline_policy_optimization_pipeline_supports_train_and_eval():
 
 
 @pytest.mark.asyncio
+async def test_train_trials_expands_training_cases_per_epoch():
+    class RecordingExecutor(DummyExecutor):
+        def __init__(self):
+            super().__init__()
+            self.train_trials = []
+
+        async def execute(self, cases, policy_set, context):
+            self.train_trials.extend(case.input.get("train_trial") for case in cases)
+            return await super().execute(cases, policy_set, context)
+
+    executor = RecordingExecutor()
+    pipeline = OfflinePolicyOptimizationPipeline(
+        snapshotter=DummySnapshotter(),
+        rollout_executor=executor,
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+    )
+
+    result = await pipeline.train(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=_policy_set(),
+        context=PipelineContext(train_trials=3),
+    )
+
+    assert len(result.analyses) == 3
+    assert executor.train_trials == [0, 1, 2]
+
+
+@pytest.mark.asyncio
 async def test_training_updates_execution_metadata_epoch_each_epoch():
     pipeline = OfflinePolicyOptimizationPipeline(
         snapshotter=DummySnapshotter(),
@@ -1699,7 +1730,22 @@ async def test_rollout_artifact_recorder_writes_epoch_commit_artifacts_under_com
     class CommitArtifactClient:
         async def read(self, uri):
             assert uri == "viking://archive/memory_diff.json"
-            return '{"updated": true}'
+            return json.dumps({
+                "operations": {
+                    "adds": [
+                        {"uri": "viking://memory/new.md", "after": "# New\nbody"}
+                    ],
+                    "updates": [
+                        {
+                            "uri": "viking://memory/old.md",
+                            "before": "# Old\nbody",
+                            "after": "# Old\nnew body",
+                        }
+                    ],
+                    "deletes": [],
+                },
+                "summary": {"total_adds": 1, "total_updates": 1, "total_deletes": 0},
+            })
 
     recorder = RolloutArtifactRecorder(run_dir=tmp_path, client=CommitArtifactClient())
     case = Case(
@@ -1758,12 +1804,19 @@ async def test_rollout_artifact_recorder_writes_epoch_commit_artifacts_under_com
     assert not (train_dir / "commit_result.json").exists()
     assert not (train_dir / "memory_diff.json").exists()
     assert (commit_dir / "commit_result.json").exists()
-    assert (commit_dir / "memory_diff.json").read_text() == '{"updated": true}'
+    memory_diff_json = json.loads((commit_dir / "memory_diff.json").read_text())
+    assert memory_diff_json["summary"]["total_adds"] == 1
+    memory_diff_md = (commit_dir / "memory_diff.md").read_text()
+    assert "--- /dev/null" in memory_diff_md
+    assert "+++ viking://memory/new.md" in memory_diff_md
+    assert "--- viking://memory/old.md" in memory_diff_md
+    assert "+new body" in memory_diff_md
 
     status = json.loads((train_dir / "status.json").read_text())
     assert status["artifact_state"] == "memory_diff_done"
     assert status["commit_path"] == str(commit_dir)
     assert status["memory_diff_path"] == str(commit_dir / "memory_diff.json")
+    assert status["memory_diff_markdown_path"] == str(commit_dir / "memory_diff.md")
 
 
 class DelayedSessionCommitClient(FakeSessionCommitClient):

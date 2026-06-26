@@ -75,3 +75,22 @@ def test_empty_index_filter_is_invalid():
             train_index="",
             benchmark_service_url="http://127.0.0.1:1944",
         )
+
+
+def test_train_trials_defaults_to_one_and_validates_positive():
+    import pytest
+
+    config = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+
+    assert config.train_trials == 1
+    with pytest.raises(ValueError, match="train_trials must be > 0"):
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            train_trials=0,
+            benchmark_service_url="http://127.0.0.1:1944",
+        )

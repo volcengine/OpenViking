@@ -27,14 +27,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=150,
-        help="Concurrent rollout executions for train and eval (default: 150)",
+        default=200,
+        help="Concurrent rollout executions for train and eval (default: 200)",
     )
     parser.add_argument(
         "--commit-concurrency",
         type=int,
-        default=100,
-        help="Concurrent OpenViking session.commit submissions during train (default: 100)",
+        default=200,
+        help="Concurrent OpenViking session.commit submissions during train (default: 200)",
     )
     parser.add_argument("--config", default=None, help="ov.conf path (optional)")
     parser.add_argument("--server-url", default=None, help="OpenViking server URL. Defaults to ov.conf/ovcli.conf")
@@ -118,6 +118,12 @@ def parse_args() -> argparse.Namespace:
         help="Run each eval split N times and aggregate (default: 8).",
     )
     parser.add_argument(
+        "--train-trials",
+        type=int,
+        default=1,
+        help="Run each train case N times per epoch (default: 1).",
+    )
+    parser.add_argument(
         "--keep-recent-results",
         type=int,
         default=5,
@@ -193,6 +199,7 @@ async def main_async() -> int:
             skip_baseline_eval=args.skip_baseline_eval,
             eval_split=args.eval_split,
             trials=args.trials,
+            train_trials=args.train_trials,
             clean_result=args.clean_result,
             keep_recent_results=args.keep_recent_results,
         )

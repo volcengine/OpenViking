@@ -17,7 +17,8 @@ from typing import Any
 import uvicorn
 
 DEFAULT_NATIVE_THREAD_WORKERS = 128
-DEFAULT_MAX_ROLLOUT_CONCURRENCY = 32
+DEFAULT_MAX_ROLLOUT_CONCURRENCY = 200
+DEFAULT_ROLLOUT_THREAD_WORKERS = 200
 TAU2_SERVICE_LOG_LEVEL = "WARNING"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -52,6 +53,7 @@ def create_app(
     rollout_language: str = "default",
     rollout_backend: str | None = None,
     max_rollout_concurrency: int | None = None,
+    rollout_thread_workers: int | None = None,
 ):
     if rollout_language not in {"default", "zh"}:
         raise ValueError("rollout_language must be 'default' or 'zh'")
@@ -95,6 +97,7 @@ def create_app(
         make_case_loader=make_case_loader,
         make_rollout_executor=make_rollout_executor,
         max_rollout_concurrency=max_rollout_concurrency,
+        rollout_thread_workers=rollout_thread_workers,
     )
 
 
@@ -146,6 +149,21 @@ def parse_args() -> argparse.Namespace:
             f"Default: {DEFAULT_MAX_ROLLOUT_CONCURRENCY}."
         ),
     )
+    parser.add_argument(
+        "--rollout-thread-workers",
+        type=int,
+        default=int(
+            os.getenv(
+                "TAU2_ROLLOUT_THREAD_WORKERS",
+                str(DEFAULT_ROLLOUT_THREAD_WORKERS),
+            )
+        ),
+        help=(
+            "Worker threads used to host rollout executions off the uvicorn event loop. "
+            "Set to 0 to disable threaded hosting. "
+            f"Default: {DEFAULT_ROLLOUT_THREAD_WORKERS}."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -180,6 +198,9 @@ def main() -> None:
         rollout_language=args.rollout_language,
         rollout_backend=args.rollout_backend,
         max_rollout_concurrency=args.max_rollout_concurrency,
+        rollout_thread_workers=(
+            None if args.rollout_thread_workers == 0 else args.rollout_thread_workers
+        ),
     )
     config = uvicorn.Config(
         app,

@@ -1,6 +1,6 @@
 memory_type: trajectories
 description: |
-  输出语言硬约束：生成的 memory 必须使用中文，包括名称、检索锚点、摘要、要点和分析内容。固定 schema 标题、工具名、API/function 名、evaluation 字段名、enum 值、代码标识符和必要的引用字面量可保留原文。
+  输出语言策略：生成性自然语言必须使用 {{ language }}，包括名称、检索锚点、摘要、要点和分析内容。若原始内容多语言，以当前用户任务的主语言作为 {{ language }}；不明确时使用最新用户消息的语言。固定 schema 标题、工具名、API/function 名、evaluation 字段名、enum 值、代码标识符、ID、金额、日期、路径和必要的用户原文关键字面量必须保留原文。更新已有 memory 时优先复用已有名称和语言风格，避免创建同义翻译副本。
 
   本模板用于从 agent 任务轨迹中提炼一个紧凑、可复用的操作契约。
   当 agent 处理了包含决策、工具调用或多步骤动作的明确任务时才提取；纯闲聊或没有执行轨迹的简单问答不要提取。
@@ -23,8 +23,8 @@ fields:
     type: string
     description: |
       直接、稳定地命名任务。
-      新生成名称必须使用中文，不受 {{ language }} 影响。
-      使用简洁中文名词短语，最多 15 个汉字。
+      新生成名称必须使用 {{ language }}。
+      {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}使用简洁自然的 {{ language }} 名词短语，最多 15 个字符。{% endif %}
       不要为同一任务创建近似重复名称。
       好例子："重复请求处理"、"异步任务挂起修复"、"补偿对象错绑"。
       优先表达可复用的操作或决策边界，而不是照抄用户开场请求。
@@ -40,7 +40,7 @@ fields:
     type: string
     description: |
       为该 rollout 分析生成正向语义检索文本；它面向 embedding，而不是展示。
-      自然语言部分使用中文；固定 enum 值、工具名和 evaluation 字段名可保留原文。
+      自然语言部分使用 {{ language }}；固定 enum 值、工具名和 evaluation 字段名保留原文。
       建议格式："意图: <booking|modification|cancellation|baggage|upgrade|refund_compensation|lookup|transfer|multi_intent|other>; 阶段: <opening|after_read|before_write|after_write|terminal_handoff|final_response|evaluation_failure|evaluation_success>; 终态动作: <required final tool family or none>; 禁止替代: <tool/action that must not replace the terminal action or none>; Policy gates: <eligibility/confirmation/object-binding checks>; 失败模式: <none, missing expected action, wrong target, wrong args, premature handoff/done, policy mismatch, or other>; 目标: <primary object or write/read boundary>."
 
       规则：
@@ -57,7 +57,7 @@ fields:
   - name: content
     type: string
     description: |
-      生成以“反思”为主体的 rollout trajectory 分析。目标不是复述全过程，而是沉淀一个可被未来 agent 检索、理解和执行的核心教训。必须严格使用以下格式。自然语言全部使用中文，下面的 section 标题必须原样保留。
+      生成以“反思”为主体的 rollout trajectory 分析。目标不是复述全过程，而是沉淀一个可被未来 agent 检索、理解和执行的核心教训。必须严格使用以下格式。自然语言全部使用 {{ language }}，下面的 section 标题必须原样保留；工具名、API 名、evaluation 字段名、enum 值、代码标识符和必要原文 literal 保留原文。
       # Evaluation 信号
       - Outcome: <success|failure|partial|unfinished|unknown>.
       - Reward: <可见 reward/score/pass status；若不可见则写 evaluation not visible>.
@@ -76,12 +76,11 @@ fields:
       - Wrong target/path: <agent 错误走向的对象/动作，如有；无则写 none>.
       - First critical deviation: <按时间顺序写第一个导致结果变化的读取/决策/动作偏离；不要只写最后症状>.
 
-      # 思维链
-      <包括以下内容>
-      - <为什么失败，失败的关键在哪里步骤>
-      - <这个关键步骤，为什么会决策失败，是因为忽略了上下文中的哪个规则，还是因为错误的判断，不要说是“忽略了评测明确要求的动作序列”而应该深入分析，错误行动背后的原因>
-      - <是否是看到了错误的经验文件导致了这个失败，是否有经验文件需要修正>
-      - <怎么添加或修改经验文件，可以在下次同样任务执行时避免类似问题，重复出现，而从而获得更高的任务reward>
+      # 失败机制
+      - 失败/成功关键: <用一句话说明直接影响 reward 的第一个关键步骤；success 时说明保持成功的关键。>
+      - 决策原因: <解释为什么 agent 会走错或走对：忽略了哪个 runtime 可见规则、tool fact、policy gate、用户确认、对象绑定或通信要求；不要写隐藏思维过程，不要只说“忽略了评测要求”。>
+      - 记忆影响: <说明检索/注入的经验是 missing、irrelevant、over-broad、misleading、ignored、too weak、only solved secondary issue、necessary、helpful-but-not-necessary 或 irrelevant，并点名具体规则类型。>
+      - 经验修正: <说明应新增/更新/跳过哪一种 experience：同一 intent + 同一 terminal tool family + 同一 policy gate；若只支持负面教训，写 Reflect-only，不写正向流程。>
       
       # 关键反思
       - 核心教训: <用一句话概括本次成功/失败最值得复用的反思； 比如： “前客服承诺 != cancel 授权；无 refund 接受 != 可取消”>
@@ -97,6 +96,7 @@ fields:
       - <只写一条最关键、最可复用的规则，用于未来 agent 避免该失败或保持该成功；不要列第二条或第三条，除非当前 outcome 是 success 且确有独立必要规则>.
 
       规则：
+      - Failure-mechanism section：使用 `# 失败机制`，不要输出 `# 思维链`。这里只写可审计的失败/成功机制、决策原因、记忆影响和经验修正，不写隐藏推理过程或长篇复盘。
       - Reflection-first：`# 关键反思` 是主体，不是摘要。它必须承载最重要的可复用 lesson；后续 section 只提供证据、边界和执行修正。失败/错误 trajectory 的反思只记录第一关键规则，不顺带记录额外查询、措辞、冗余步骤等次要问题。若有多个问题，按影响排序选择一个：expected/forbidden write > wrong target/args > missing required communication > premature done/handoff > 其他。
       - Scope/source：每个最新 evaluated task 最多抽取一个 trajectory。所有判断必须落在当前用户请求、实际工具调用/输出、assistant 动作、可见 CaseSpec/ground_truth/evaluation 上。不要从 retrieved memories、Experience Reminder、candidate/source memories、历史样例或无关 policy sections 抽取。system/domain policy 只用于判断与当前观察事实绑定的 policy gate。
       - Evidence priority：Expected vs Actual 优先使用 evaluation/action_checks/CaseSpec 作为 oracle。即使最终 report 很稀疏，CaseSpec 的 `Actions`、`Communicate Info`、NL Assertions 也算证据。保留精确 evaluated/actual tool names。之后依次使用 tool facts、policy、user self-report。
@@ -107,6 +107,8 @@ fields:
       - Write/action deltas：若 expected actions 要求某个 state-changing tool 但 actual 漏掉或参数错，诊断该 exact missing/wrong write，并保留 evaluated sequence；不要替换成更严格拒绝、handoff、cancel-and-recreate 或不同 tier/tool。若 expected actions 只有 read/refusal/communication，但 actual 做了 state-changing tool 且 DB failed，则该 write 是 forbidden substitute；不要因为 tool returned success 就归结为缺少 post-write verification、`done` 或 environment mismatch。Tool success 只证明 write 已执行。
       - Communication deltas：若 evaluation/CaseSpec 要求 customer-facing `Communicate Info` 或 NL Assertions，把精确 required literals 及其语义标签带入 `DB/Communicate`、`Expected vs Actual`、`事实链与偏离` 和 `正确做法`。对 aggregate values，从用户回合和 tool facts 推导 inclusion set 与 time boundary；不要用 refund total、fee total、subset total 或 post-change remaining total 替代。若只有 communication failed，主 delta 是 missing/wrong communication，不是 missing write 或 `done`；必须先 communicate required items，再 `done`。
       - Policy-gated decisions：先从 tool outputs 重建事实链，再判断 policy；用户说法或 prior-support approval claims 不能覆盖当前 policy + tool facts。航空取消/退款场景中，在批准或调用 `cancel_reservation` 前，必须核验无已飞航段，并至少满足一个 allow-cancel gate：用完整 timestamp arithmetic 判断预订在 24 小时内、航司取消、business cabin，或有 travel insurance 且 reason covered。若全部 gate 都不满足，正确终态是 refusal/communication 或 policy-specified handoff，`cancel_reservation` 是 forbidden。不要写“通用政策显示可行但 oracle 禁止”；如果 timestamp/cabin/insurance/reason/airline-cancel facts 已显示不可取消，就写 policy 本身不可取消。
+      - Generalization discipline：`retrieval_anchor`、`# 关键反思`、`# 正确做法`、`# 泛化规则` 必须泛化人名、reservation/order id、路线、精确日期、金额、路径和 raw payload；只有 `# Evaluation 信号`、`# Expected vs Actual` 或必要证据可以保留 source literal。
+      - Consistency check：`Outcome`、`Expected vs Actual`、`Delta`、`First critical deviation`、`# 关键反思` 必须互相一致。若 Actual 已完成 Expected 的关键动作，不要把同一动作写成 missing；重新定位真正 delta，或写 `no material delta` 并避免生成泛化规则。
       - Output discipline：严格保留七个 required headings 及顺序；不要加额外标题或结尾语。内容要密集、反思优先、证据从属。泛化姓名、ID、精确日期/金额/路线、路径和原始 payload；稳定 policy 常量或执行所需 exact tool/evaluation names 除外。只提当前 trace/evaluation 中存在的工具。
 
       Few-shot focus examples（用来校准 `# 关键反思` 的主因选择；不要照抄标签，要按当前 trace 改写）：

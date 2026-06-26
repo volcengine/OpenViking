@@ -206,7 +206,26 @@ class VikingClient:
         return instance
 
     def _matched_context_to_dict(self, matched_context: Any) -> Dict[str, Any]:
-        """将 MatchedContext 对象转换为字典"""
+        """将 MatchedContext 对象或 dict 结果转换为字典。"""
+        if isinstance(matched_context, dict):
+            relations = matched_context.get("relations", [])
+            return {
+                "uri": str(matched_context.get("uri", "") or ""),
+                "context_type": str(
+                    matched_context.get("context_type")
+                    or matched_context.get("type")
+                    or ""
+                ),
+                "is_leaf": bool(matched_context.get("is_leaf", False)),
+                "abstract": str(matched_context.get("abstract", "") or ""),
+                "overview": matched_context.get("overview"),
+                "category": str(matched_context.get("category", "") or ""),
+                "score": matched_context.get("score", 0.0),
+                "match_reason": str(matched_context.get("match_reason", "") or ""),
+                "relations": [
+                    self._relation_to_dict(r) for r in relations if r is not None
+                ] if isinstance(relations, list) else [],
+            }
         return {
             "uri": getattr(matched_context, "uri", ""),
             "context_type": str(getattr(matched_context, "context_type", "")),
@@ -220,6 +239,33 @@ class VikingClient:
                 self._relation_to_dict(r) for r in getattr(matched_context, "relations", [])
             ],
         }
+
+    @staticmethod
+    def _search_group(result: Any, key: str) -> List[Any]:
+        if isinstance(result, dict):
+            group = result.get(key, [])
+            return group if isinstance(group, list) else []
+        group = getattr(result, key, [])
+        return group if isinstance(group, list) else []
+
+    @staticmethod
+    def _search_total(result: Any) -> int:
+        if isinstance(result, dict):
+            value = result.get("total")
+            if value is None:
+                return sum(
+                    len(result.get(key, []) or [])
+                    for key in ("memories", "resources", "skills")
+                    if isinstance(result.get(key, []), list)
+                )
+        else:
+            value = getattr(result, "total", None)
+            if value is None:
+                value = len(getattr(result, "resources", []) or [])
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
 
     def _relation_to_dict(self, relation: Any) -> Dict[str, Any]:
         """将 Relation 对象转换为字典"""
@@ -574,18 +620,21 @@ class VikingClient:
             if should_close:
                 await client.close()
 
-        # 将 FindResult 对象转换为 JSON map
+        # 将 FindResult 对象或新版 SDK 返回的 JSON map 统一转换为 JSON map。
         return {
-            "memories": [self._matched_context_to_dict(m) for m in result.memories]
-            if hasattr(result, "memories")
-            else [],
-            "resources": [self._matched_context_to_dict(r) for r in result.resources]
-            if hasattr(result, "resources")
-            else [],
-            "skills": [self._matched_context_to_dict(s) for s in result.skills]
-            if hasattr(result, "skills")
-            else [],
-            "total": getattr(result, "total", len(getattr(result, "resources", []))),
+            "memories": [
+                self._matched_context_to_dict(m)
+                for m in self._search_group(result, "memories")
+            ],
+            "resources": [
+                self._matched_context_to_dict(r)
+                for r in self._search_group(result, "resources")
+            ],
+            "skills": [
+                self._matched_context_to_dict(s)
+                for s in self._search_group(result, "skills")
+            ],
+            "total": self._search_total(result),
             "query": query,
             "target_uri": target_uri,
         }
@@ -597,11 +646,10 @@ class VikingClient:
             return []
         uri_user_memory = self._memory_target_uri(effective_user_id)
         result = await self.client.search(query, target_uri=uri_user_memory)
-        return (
-            [self._matched_context_to_dict(m) for m in result.memories]
-            if hasattr(result, "memories")
-            else []
-        )
+        return [
+            self._matched_context_to_dict(m)
+            for m in self._search_group(result, "memories")
+        ]
 
     async def _check_user_exists(self, user_id: str) -> bool:
         """检查用户是否存在于账户中。"""

@@ -432,7 +432,7 @@ class ChannelsConfig(BaseModel):
 class AgentsConfig(BaseModel):
     """Agent configuration."""
 
-    model: str = "openai/doubao-seed-2-0-pro-260215"
+    model: str = "openai/doubao-seed-2-0-mini-260428"
     max_tool_iterations: int = 50
     memory_window: int = 50
     session_context_enabled: bool = False

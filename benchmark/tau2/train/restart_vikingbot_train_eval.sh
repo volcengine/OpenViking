@@ -5,7 +5,7 @@ set -euo pipefail
 # are healthy, then start tau2 vikingbot batch train/eval.
 #
 # Default training args match the common vikingbot run:
-#   --commit-concurrency 100 --epochs 2 --trials 8 --skip-final-eval
+#   --commit-concurrency 200 --epochs 2 --trials 8 --train-trials 1 --skip-final-eval
 # Pass any non-launcher arguments to override/extend the batch train/eval invocation.
 #
 # Launcher-only options:
@@ -104,7 +104,8 @@ OPENVIKING_BOT_PORT="${OPENVIKING_BOT_PORT:-${DEFAULT_OPENVIKING_BOT_PORT}}"
 TAU2_SERVICE_HOST="${TAU2_SERVICE_HOST:-127.0.0.1}"
 TAU2_SERVICE_PORT="${TAU2_SERVICE_PORT:-${DEFAULT_TAU2_SERVICE_PORT}}"
 TAU2_ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-vikingbot}"
-TAU2_MAX_ROLLOUT_CONCURRENCY="${TAU2_MAX_ROLLOUT_CONCURRENCY:-32}"
+TAU2_MAX_ROLLOUT_CONCURRENCY="${TAU2_MAX_ROLLOUT_CONCURRENCY:-150}"
+TAU2_ROLLOUT_THREAD_WORKERS="${TAU2_ROLLOUT_THREAD_WORKERS:-${TAU2_MAX_ROLLOUT_CONCURRENCY}}"
 WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-180}"
 RESULT_DIR_NAME="${RESULT_DIR_NAME:-${DEFAULT_RESULT_DIR_NAME}}"
 LOG_DIR="${LOG_DIR:-${DEFAULT_LOG_DIR}}"
@@ -310,6 +311,7 @@ start_openviking_server() {
 
 start_tau2_service() {
   log "restarting tau2 service on ${TAU2_SERVICE_HOST}:${TAU2_SERVICE_PORT} backend=${TAU2_ROLLOUT_BACKEND}"
+  log "tau2 service concurrency=${TAU2_MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${TAU2_ROLLOUT_THREAD_WORKERS}"
   log "tau2 service log: ${TAU2_SERVICE_LOG}"
   : > "${TAU2_SERVICE_LOG}"
   stop_existing_listener "tau2 rollout service" "${TAU2_SERVICE_PORT}"
@@ -322,7 +324,8 @@ start_tau2_service() {
       --port "${TAU2_SERVICE_PORT}" \
       --config "${OPENVIKING_CONFIG_FILE}" \
       --rollout-backend "${TAU2_ROLLOUT_BACKEND}" \
-      --max-rollout-concurrency "${TAU2_MAX_ROLLOUT_CONCURRENCY}"
+      --max-rollout-concurrency "${TAU2_MAX_ROLLOUT_CONCURRENCY}" \
+      --rollout-thread-workers "${TAU2_ROLLOUT_THREAD_WORKERS}"
   ) >"${TAU2_SERVICE_LOG}" 2>&1 &
 
   echo "$!" > "${LOG_DIR}/tau2-service.pid"
@@ -339,9 +342,10 @@ run_train_eval() {
   local -a train_args=("$@")
   if [[ ${#train_args[@]} -eq 0 ]]; then
     train_args=(
-      --commit-concurrency 100
+      --commit-concurrency 200
       --epochs 2
       --trials 8
+      --train-trials 1
       --skip-final-eval
     )
   fi

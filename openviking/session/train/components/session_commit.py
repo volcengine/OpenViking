@@ -451,10 +451,10 @@ def _case_spec_payload(rollout: Rollout) -> dict[str, Any]:
     return {
         "protocol": _TRAINING_CASE_SPEC_PROTOCOL,
         "case": {
-            "name": case.name,
-            "task_signature": case.task_signature,
+            "name": _stable_case_name(rollout),
+            "task_signature": _stable_task_signature(rollout),
             "input": _case_input_payload(case.input),
-            "metadata": dict(case.metadata or {}),
+            "metadata": _stable_case_metadata(rollout),
             "rubric": {
                 "name": case.rubric.name,
                 "description": case.rubric.description,
@@ -470,6 +470,30 @@ def _case_spec_payload(rollout: Rollout) -> dict[str, Any]:
             },
         },
     }
+
+
+def _stable_case_name(rollout: Rollout) -> str:
+    case = rollout.case
+    return str(
+        case.input.get("original_case_name")
+        or case.metadata.get("original_case_name")
+        or rollout.metadata.get("original_case_name")
+        or case.name
+    )
+
+
+def _stable_task_signature(rollout: Rollout) -> str:
+    case = rollout.case
+    if case.input.get("original_case_name") or case.metadata.get("original_case_name"):
+        return str(case.task_signature).split(":trial:", 1)[0]
+    return case.task_signature
+
+
+def _stable_case_metadata(rollout: Rollout) -> dict[str, Any]:
+    metadata = dict(rollout.case.metadata or {})
+    metadata.setdefault("rollout_case_name", rollout.case.name)
+    metadata.setdefault("rollout_task_signature", rollout.case.task_signature)
+    return metadata
 
 
 def _case_input_payload(case_input: dict[str, Any]) -> dict[str, Any]:

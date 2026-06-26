@@ -68,6 +68,7 @@ bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
   --eval-split train \
   --eval-index 14 \
   --trials 8 \
+  --train-trials 1 \
   --skip-baseline-eval \
   --skip-final-eval
 ```
@@ -105,6 +106,8 @@ bash benchmark/tau2/train/run_service.sh --host 127.0.0.1 --port 1944
 | `--rollout-language` | `default` | Rollout response language. Use `zh` for Chinese user-facing replies. |
 | `--rollout-backend` | `vikingbot` | Rollout implementation backend. `native` for fast Python executor, `vikingbot` for full VikingBot AgentLoop. |
 | `--native-thread-workers` | `128` | Thread pool size for native rollout executor. |
+| `--rollout-thread-workers` | `200` | Worker threads used to host rollout executions off the uvicorn event loop. Use `0` to disable threaded hosting. |
+| `--max-rollout-concurrency` | `200` | Maximum concurrent rollout executions accepted by the service. |
 | `--no-kill-existing` | off | Don't kill existing process on the same port. |
 
 ### Using native backend
@@ -161,6 +164,7 @@ bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
   --eval-split train \
   --eval-index 14 \
   --trials 8 \
+  --train-trials 1 \
   --skip-baseline-eval \
   --skip-final-eval
 ```
@@ -181,6 +185,7 @@ Default concurrency and output behavior:
 - rollout concurrency: `150`
 - session.commit concurrency: `100`
 - eval trials: `8`
+- train trials: `1`
 - `--clean-result` is enabled by default and keeps the most recent 5 `result/tau2/<result-dir-name>/run_<domain>_<timestamp>/` run directories while preserving `result/tau2/<result-dir-name>/cache/` and all non-`run_` directories such as `result/tau2/<result-dir-name>/opt/`. Use `--keep-recent-results N` to change the retention count, or `--no-clean-result` to keep all previous runs.
 - `--skip-final-eval` skips the extra final held-out eval pass. The one-click launcher enables this by default because the Tau2 wrapper already enables `--eval-each-epoch`.
 - Streaming JSONL events are written to `result/tau2/<result-dir-name>/run_<domain>_<timestamp>/events.jsonl`; train commit events include `trace_id` for live `tail -f` debugging. Use `--events-output` to override the path.
@@ -195,6 +200,7 @@ Default concurrency and output behavior:
 | `--concurrency` | `150` | Max concurrent rollout executions |
 | `--commit-concurrency` | `100` | Max concurrent `session.commit` submissions during training |
 | `--trials` | `8` | Run each eval case N times and aggregate scores |
+| `--train-trials` | `1` | Run each train case N times per epoch |
 | `--train-index` | all | Run train sample(s) at 0-based split index/indices, e.g. `7` or `1,5,6` |
 | `--eval-split` | `test` | Split used for baseline/per-epoch/final eval: `test`, `train`, or `none` |
 | `--eval-index` | all | Run eval sample(s) at 0-based split index/indices within `--eval-split`, e.g. `14` or `1,5,6` |
