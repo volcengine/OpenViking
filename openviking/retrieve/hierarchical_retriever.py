@@ -50,6 +50,8 @@ class HierarchicalRetriever:
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     MAX_PARALLEL_CHILD_SEARCHES = 4  # Limit per-request fan-out against remote vector stores
+    MAX_RERANK_DOCUMENT_CHARS = 4000  # Keep one oversized abstract from breaking a rerank batch
+    MAX_RERANK_BATCH_CHARS = 12000  # Leave query/instruction headroom across providers
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
@@ -226,10 +228,8 @@ class HierarchicalRetriever:
             # Step 3: Pick recursive entry points from directory hits and explicit roots.
             directory_scores = [self._finite_score(r.get("_score", 0.0)) for r in global_results]
             if self._rerank_client and mode == RetrieverMode.THINKING:
-                directory_scores = self._rerank_scores(
-                    query.query,
-                    [str(r.get("abstract", "")) for r in global_results],
-                    directory_scores,
+                directory_scores = self._rerank_scores_with_budget(
+                    self._rerank_scores, query.query, global_results, directory_scores
                 )
 
             starting_points = []
@@ -347,6 +347,39 @@ class HierarchicalRetriever:
             normalized_scores.append(self._finite_score(score, fallback))
         return normalized_scores
 
+    @classmethod
+    def _rerank_scores_with_budget(
+        cls,
+        rerank_scores,
+        query: str,
+        results: List[Dict[str, Any]],
+        fallback_scores: List[float],
+    ) -> List[float]:
+        """Rerank documents after bounding each abstract's input size.
+
+        Oversized L2 abstracts are truncated before rerank so one long abstract
+        does not force the whole batch back to vector scores.
+        """
+        documents: List[str] = []
+        for result, _fallback in zip(results, fallback_scores, strict=True):
+            document = str(result.get("abstract", ""))
+            if len(document) > cls.MAX_RERANK_DOCUMENT_CHARS:
+                document = document[: cls.MAX_RERANK_DOCUMENT_CHARS]
+            documents.append(document)
+
+        if not documents:
+            return fallback_scores
+
+        available_chars = max(len(documents), cls.MAX_RERANK_BATCH_CHARS - len(query))
+        per_document_batch_chars = max(1, available_chars // len(documents))
+        if per_document_batch_chars < cls.MAX_RERANK_DOCUMENT_CHARS:
+            documents = [
+                document[:per_document_batch_chars]
+                for document in documents
+            ]
+
+        return rerank_scores(query, documents, fallback_scores)
+
     async def _recursive_search(
         self,
         vector_proxy: VikingDBManagerProxy,
@@ -452,8 +485,9 @@ class HierarchicalRetriever:
 
                 query_scores = [self._finite_score(r.get("_score", 0.0)) for r in results]
                 if self._rerank_client and mode == RetrieverMode.THINKING:
-                    documents = [str(r.get("abstract", "")) for r in results]
-                    query_scores = self._rerank_scores(query, documents, query_scores)
+                    query_scores = self._rerank_scores_with_budget(
+                        self._rerank_scores, query, results, query_scores
+                    )
 
                 for r, score in zip(results, query_scores, strict=True):
                     uri = r.get("uri", "")

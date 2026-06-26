@@ -234,6 +234,75 @@ def test_retriever_initializes_rerank_client(monkeypatch):
     assert retriever._rerank_client is fake_client
 
 
+def test_rerank_scores_with_budget_truncates_oversized_docs():
+    calls = []
+
+    def rerank_scores(query, documents, fallback_scores):
+        calls.append((query, list(documents), list(fallback_scores)))
+        return [0.91, 0.52, 0.73]
+
+    oversized = "x" * (HierarchicalRetriever.MAX_RERANK_DOCUMENT_CHARS + 1)
+    results = [
+        _result("viking://resources/short-a", 0.2, abstract="short A"),
+        _result("viking://resources/too-large", 0.8, abstract=oversized),
+        _result("viking://resources/short-b", 0.4, abstract="short B"),
+    ]
+
+    scores = HierarchicalRetriever._rerank_scores_with_budget(
+        rerank_scores, "hello", results, [0.2, 0.8, 0.4]
+    )
+
+    assert scores == [0.91, 0.52, 0.73]
+    assert calls == [
+        (
+            "hello",
+            ["short A", oversized[: HierarchicalRetriever.MAX_RERANK_DOCUMENT_CHARS], "short B"],
+            [0.2, 0.8, 0.4],
+        )
+    ]
+
+
+def test_rerank_scores_with_budget_falls_back_for_truncated_batch_failure():
+    def rerank_scores(query, documents, fallback_scores):
+        return fallback_scores
+
+    results = [
+        _result(
+            "viking://resources/too-large",
+            0.8,
+            abstract="x" * (HierarchicalRetriever.MAX_RERANK_DOCUMENT_CHARS + 1),
+        )
+    ]
+
+    scores = HierarchicalRetriever._rerank_scores_with_budget(
+        rerank_scores, "hello", results, [0.8]
+    )
+
+    assert scores == [0.8]
+
+
+def test_rerank_scores_with_budget_caps_total_document_chars(monkeypatch):
+    calls = []
+    monkeypatch.setattr(HierarchicalRetriever, "MAX_RERANK_DOCUMENT_CHARS", 100)
+    monkeypatch.setattr(HierarchicalRetriever, "MAX_RERANK_BATCH_CHARS", 15)
+
+    def rerank_scores(query, documents, fallback_scores):
+        calls.append((query, list(documents), list(fallback_scores)))
+        return [0.91, 0.73]
+
+    results = [
+        _result("viking://resources/a", 0.2, abstract="abcdefghij"),
+        _result("viking://resources/b", 0.4, abstract="klmnopqrst"),
+    ]
+
+    scores = HierarchicalRetriever._rerank_scores_with_budget(
+        rerank_scores, "hello", results, [0.2, 0.4]
+    )
+
+    assert scores == [0.91, 0.73]
+    assert calls == [("hello", ["abcde", "klmno"], [0.2, 0.4])]
+
+
 @pytest.mark.asyncio
 async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
     fake_client = FakeRerankClient([0.95, 0.05, 0.11, 0.95])
