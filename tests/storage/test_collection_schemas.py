@@ -251,6 +251,7 @@ def test_build_embedding_metadata_hashes_resolved_local_model_path(tmp_path):
     assert payload["provider"] == "local"
     assert payload["model"] == "bge-small-zh-v1.5-f16"
     assert payload["model_identity"] == hashlib.sha256(expected.encode("utf-8")).hexdigest()
+    assert "schema_version" not in payload
 
 
 @pytest.mark.asyncio

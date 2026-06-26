@@ -41,8 +41,6 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 logger = get_logger(__name__)
 EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
 
-# Minimum OV version that supports content field + FullText config for grep bm25
-_FULLTEXT_MIN_VERSION = "0.3.18"
 _EMBEDDING_COMPATIBILITY_KEYS = ("provider", "model", "dimension", "model_identity")
 
 
@@ -190,14 +188,11 @@ def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
         except Exception:
             model_identity = model
 
-    from openviking import __version__
-
     return {
         "provider": provider,
         "model": model,
         "dimension": dimension,
         "model_identity": model_identity,
-        "schema_version": __version__,
     }
 
 
@@ -313,17 +308,11 @@ async def init_context_collection(storage) -> bool:
     if (
         "Fields" in existing_meta or "FullText" in existing_meta
     ) and not _collection_has_content_fulltext(existing_meta):
-        existing_schema_version = "unknown"
-        if existing_embedding_meta:
-            existing_schema_version = existing_embedding_meta.get("schema_version", "0.0.0")
         logger.warning(
             "Collection schema does not support VikingDB full-text grep "
-            "(created by OV %s, feature requires >= %s). "
             "Missing 'content' field or FullText config. "
             "grep engine=auto will fall back to fs. "
-            "Recreate the collection to enable vikingdb-based grep.",
-            existing_schema_version,
-            _FULLTEXT_MIN_VERSION,
+            "Recreate the collection to enable vikingdb-based grep."
         )
 
     if _embedding_metadata_compatible(existing_embedding_meta, embedding_meta):
