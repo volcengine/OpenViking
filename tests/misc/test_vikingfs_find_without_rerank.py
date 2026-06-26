@@ -22,6 +22,7 @@ def _make_viking_fs() -> VikingFS:
     fs.agfs = MagicMock()
     fs.query_embedder = MagicMock(name="embedder")
     fs.rerank_config = None
+    fs.retrieval_config = None
     fs.vector_store = MagicMock(name="vector_store")
     fs._bound_ctx = contextvars.ContextVar("vikingfs_bound_ctx_test", default=None)
     fs._ensure_access = MagicMock()
@@ -39,17 +40,19 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     captured = {}
 
     class FakeRetriever:
-        def __init__(self, storage, embedder, rerank_config):
+        def __init__(self, storage, embedder, rerank_config, retrieval_config=None):
             captured["storage"] = storage
             captured["embedder"] = embedder
             captured["rerank_config"] = rerank_config
+            captured["retrieval_config"] = retrieval_config
 
-        async def retrieve(self, typed_query, ctx, limit, score_threshold, scope_dsl):
+        async def retrieve(self, typed_query, ctx, limit, score_threshold, scope_dsl, level=None):
             captured["typed_query"] = typed_query
             captured["ctx"] = ctx
             captured["limit"] = limit
             captured["score_threshold"] = score_threshold
             captured["scope_dsl"] = scope_dsl
+            captured["level"] = level
             return QueryResult(
                 query=typed_query,
                 matched_contexts=[
@@ -81,6 +84,7 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     assert captured["storage"] is fs.vector_store
     assert captured["embedder"] is fs.query_embedder
     assert captured["rerank_config"] is None
+    assert captured["retrieval_config"] is None
     assert captured["typed_query"].query == "guide"
     assert captured["typed_query"].context_type == ContextType.RESOURCE
     assert captured["typed_query"].target_directories == ["viking://resources/docs"]
@@ -88,4 +92,5 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     assert captured["limit"] == 3
     assert captured["score_threshold"] == 0.2
     assert captured["scope_dsl"] == {"category": "doc"}
+    assert captured["level"] is None
     fs._ensure_access.assert_called_once_with("viking://resources/docs", request_ctx)

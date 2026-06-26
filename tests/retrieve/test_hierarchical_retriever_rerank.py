@@ -3,6 +3,8 @@
 
 """Hierarchical retriever rerank behavior tests."""
 
+import asyncio
+
 import pytest
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
@@ -19,7 +21,10 @@ class DummyEmbedResult:
 
 
 class DummyEmbedder:
-    def embed(self, _query: str, is_query: bool = False) -> DummyEmbedResult:
+    def prepare_embedding_input(self, text: str) -> str:
+        return text
+
+    async def embed_async(self, _query: str, is_query: bool = False) -> DummyEmbedResult:
         return DummyEmbedResult()
 
 
@@ -225,6 +230,38 @@ class FakeRerankClient:
         return list(self.scores[start:end])
 
 
+class FakeVikingFS:
+    def __init__(self, existing_uris: set[str]) -> None:
+        self.existing_uris = existing_uris
+        self.exists_calls: list[str] = []
+        self.relation_calls: list[str] = []
+
+    async def exists(self, uri: str, ctx=None) -> bool:
+        self.exists_calls.append(uri)
+        return uri in self.existing_uris
+
+    async def get_relations(self, uri: str, ctx=None):
+        self.relation_calls.append(uri)
+        return []
+
+
+class BlockingVikingFS(FakeVikingFS):
+    def __init__(self, existing_uris: set[str]) -> None:
+        super().__init__(existing_uris)
+        self.active = 0
+        self.max_active = 0
+
+    async def exists(self, uri: str, ctx=None) -> bool:
+        self.exists_calls.append(uri)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0.01)
+            return uri in self.existing_uris
+        finally:
+            self.active -= 1
+
+
 def _ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
 
@@ -325,7 +362,7 @@ async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_retrieve_reranks_level_two_initial_candidates_in_thinking_mode(monkeypatch):
-    fake_client = FakeRerankClient([0.05, 0.95])
+    fake_client = FakeRerankClient([0.11, 0.95])
     monkeypatch.setattr(
         "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
         lambda config: fake_client,
@@ -475,3 +512,111 @@ async def test_retrieval_hotness_alpha_blends_when_configured(monkeypatch):
     )
 
     assert result[0].score == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_convert_to_matched_contexts_skips_missing_display_uris(monkeypatch):
+    fake_fs = FakeVikingFS(
+        {
+            "viking://resources/file-a",
+            "viking://resources/dir/.abstract.md",
+            "viking://resources/dir/.overview.md",
+        }
+    )
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.get_viking_fs",
+        lambda: fake_fs,
+    )
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            {
+                "uri": "viking://resources/file-a",
+                "abstract": "existing file",
+                "_score": 1.0,
+                "level": 2,
+                "context_type": "resource",
+            },
+            {
+                "uri": "viking://resources/file-missing",
+                "abstract": "missing file",
+                "_score": 0.9,
+                "level": 2,
+                "context_type": "resource",
+            },
+            {
+                "uri": "viking://resources/dir",
+                "abstract": "existing abstract",
+                "_score": 0.8,
+                "level": 0,
+                "context_type": "resource",
+            },
+            {
+                "uri": "viking://resources/dir",
+                "abstract": "existing overview",
+                "_score": 0.7,
+                "level": 1,
+                "context_type": "resource",
+            },
+            {
+                "uri": "viking://resources/missing-dir",
+                "abstract": "missing overview",
+                "_score": 0.6,
+                "level": 1,
+                "context_type": "resource",
+            },
+        ],
+        ctx=_ctx(),
+    )
+
+    assert [ctx.uri for ctx in result] == [
+        "viking://resources/file-a",
+        "viking://resources/dir/.abstract.md",
+        "viking://resources/dir/.overview.md",
+    ]
+    assert fake_fs.exists_calls == [
+        "viking://resources/file-a",
+        "viking://resources/file-missing",
+        "viking://resources/dir/.abstract.md",
+        "viking://resources/dir/.overview.md",
+        "viking://resources/missing-dir/.overview.md",
+    ]
+    assert fake_fs.relation_calls == [
+        "viking://resources/file-a",
+        "viking://resources/dir",
+        "viking://resources/dir",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_convert_to_matched_contexts_limits_parallel_exists_checks(monkeypatch):
+    candidates = [
+        {
+            "uri": f"viking://resources/file-{i}",
+            "abstract": f"file {i}",
+            "_score": float(20 - i),
+            "level": 2,
+            "context_type": "resource",
+        }
+        for i in range(20)
+    ]
+    fake_fs = BlockingVikingFS({c["uri"] for c in candidates})
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.get_viking_fs",
+        lambda: fake_fs,
+    )
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    result = await retriever._convert_to_matched_contexts(candidates, ctx=_ctx())
+
+    assert len(result) == 20
+    assert fake_fs.max_active == retriever.MAX_PARALLEL_EXISTENCE_CHECKS == 10

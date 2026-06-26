@@ -51,6 +51,7 @@ class HierarchicalRetriever:
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     MAX_PARALLEL_CHILD_SEARCHES = 4  # Limit per-request fan-out against remote vector stores
+    MAX_PARALLEL_EXISTENCE_CHECKS = 10  # Limit stat checks when filtering stale vector hits
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
@@ -548,15 +549,47 @@ class HierarchicalRetriever:
         ``active_count`` and ``updated_at`` when configured. The blend weight
         is controlled by ``retrieval.hotness_alpha`` (0 disables the boost).
         """
+        try:
+            viking_fs = get_viking_fs()
+        except RuntimeError:
+            viking_fs = None
+
+        display_candidates = [
+            (c, self._append_level_suffix(c.get("uri", ""), c.get("level", 2))) for c in candidates
+        ]
+
+        if viking_fs:
+            semaphore = asyncio.Semaphore(self.MAX_PARALLEL_EXISTENCE_CHECKS)
+
+            async def exists(display_uri: str) -> bool:
+                async with semaphore:
+                    return await viking_fs.exists(display_uri, ctx=ctx)
+
+            existence_results = await asyncio.gather(
+                *(exists(display_uri) for _, display_uri in display_candidates)
+            )
+            filtered_candidates = []
+            for (candidate, display_uri), exists_result in zip(
+                display_candidates, existence_results, strict=True
+            ):
+                if exists_result:
+                    filtered_candidates.append((candidate, display_uri))
+                else:
+                    logger.debug(
+                        "[HierarchicalRetriever] Skip missing retrieval URI: %s",
+                        display_uri,
+                    )
+            display_candidates = filtered_candidates
+
         results = []
 
-        for c in candidates:
+        for c, display_uri in display_candidates:
             # Read related contexts and get summaries
             relations = []
-            if get_viking_fs():
-                related_uris = await get_viking_fs().get_relations(c.get("uri", ""), ctx=ctx)
+            if viking_fs:
+                related_uris = await viking_fs.get_relations(c.get("uri", ""), ctx=ctx)
                 if related_uris:
-                    related_abstracts = await get_viking_fs().read_batch(
+                    related_abstracts = await viking_fs.read_batch(
                         related_uris[: self.MAX_RELATIONS], level="l0", ctx=ctx
                     )
                     for uri in related_uris[: self.MAX_RELATIONS]:
@@ -592,7 +625,6 @@ class HierarchicalRetriever:
             if not math.isfinite(final_score):
                 final_score = 0.0
             level = c.get("level", 2)
-            display_uri = self._append_level_suffix(c.get("uri", ""), level)
 
             results.append(
                 MatchedContext(
