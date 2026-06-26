@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ArrowUpIcon, SquareIcon } from 'lucide-react'
 
 import { cn } from '#/lib/utils'
@@ -16,6 +17,7 @@ export function Composer({
   isStreaming,
   variant = 'default',
 }: ComposerProps) {
+  const { t } = useTranslation('sessions')
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isCompact = variant === 'compact'
@@ -65,7 +67,7 @@ export function Composer({
         <textarea
           ref={textareaRef}
           autoFocus
-          placeholder="回复..."
+          placeholder={t('chat.placeholder')}
           rows={1}
           value={value}
           onChange={(e) => {

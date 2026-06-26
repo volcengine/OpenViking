@@ -265,6 +265,7 @@ class ContentWriteCoordinator:
                 context_type=context_type,
                 ctx=ctx,
                 change_type="added" if mode == "create" else "modified",
+                recursive=True,
             )
             semantic_enqueued = True
             await lock_manager.release(handle)

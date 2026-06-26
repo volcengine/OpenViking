@@ -244,6 +244,43 @@ export function createMemoryTools({ config, sessionManager, projectDirectory }) 
       },
     }),
 
+    memwrite: tool({
+      description:
+        "Write text content to a viking:// file through OpenViking content/write. Use create for new durable notes or resources, append to extend an existing file, and replace only when the user explicitly wants to overwrite existing content.",
+      args: {
+        uri: z.string().describe("Complete viking:// file URI to write, e.g. viking://user/memories/project-notes.md or viking://resources/docs/api.md."),
+        content: z.string().describe("Text content to write."),
+        mode: z.enum(["create", "append", "replace"]).optional().describe("Write mode. Defaults to create to avoid accidental overwrite."),
+        wait: z.boolean().optional().describe("Whether OpenViking should wait for semantic/vector refresh."),
+        timeout: z.number().optional().describe("Timeout seconds when wait=true."),
+      },
+      async execute(args, context) {
+        const validationError = validateVikingUri(args.uri, "memwrite")
+        if (validationError) return validationError
+
+        try {
+          const body = {
+            uri: args.uri,
+            content: args.content,
+            mode: args.mode ?? "create",
+            wait: args.wait ?? false,
+          }
+          if (args.timeout !== undefined) body.timeout = args.timeout
+          const response = await makeRequest(config, {
+            method: "POST",
+            endpoint: "/api/v1/content/write",
+            body,
+            abortSignal: context.abort,
+            actorPeerId,
+          })
+          return JSON.stringify({ write: unwrapResponse(response) }, null, 2)
+        } catch (error) {
+          log("ERROR", "memwrite", "Write failed", { error: error?.message, args: { ...args, content: `[${args.content?.length ?? 0} chars]` } })
+          return `Error: ${error.message}`
+        }
+      },
+    }),
+
     memremove: tool({
       description:
         "Remove a viking:// resource. The user must explicitly confirm deletion before this tool is called. Set confirm=true, otherwise deletion is refused.",

@@ -5,7 +5,6 @@ Tests for JSON stable parsing utilities.
 """
 
 import json
-import logging
 from typing import List, Optional
 from unittest.mock import patch
 
@@ -190,7 +189,7 @@ class TestParseJsonWithStability:
 
         OperationsLike._allow_empty_list_response = True
 
-        data, error = parse_json_with_stability('[]', model_class=OperationsLike)
+        data, error = parse_json_with_stability("[]", model_class=OperationsLike)
         assert error is None
         assert data.tags == []
 
@@ -205,7 +204,7 @@ class TestParseJsonWithStability:
                 return not self.tags
 
         for model in (self.TestModel, HasIsEmptyButNotOptedIn):
-            data, error = parse_json_with_stability('[]', model_class=model)
+            data, error = parse_json_with_stability("[]", model_class=model)
             assert data is None
             assert error is not None
 
@@ -392,7 +391,9 @@ class TestMemoryOperationsIntegration:
             }
         )
 
-        with patch("openviking.session.memory.utils.json_parser.logger.exception") as mock_exception:
+        with patch(
+            "openviking.session.memory.utils.json_parser.logger.exception"
+        ) as mock_exception:
             data, error = parse_json_with_stability(content, model_class=PreferenceOperations)
 
         assert error is None

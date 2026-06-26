@@ -77,7 +77,7 @@ def _warn_deprecated_memory_user(memory_user: list[str] | None) -> None:
     if not memory_user:
         return
     typer.secho(
-        "Warning: --memory-user is deprecated and only kept for legacy root-key fanout. "
+        "Warning: --memory-user is deprecated and only kept for explicit owner-user lookup. "
         "Use --memory-peer for the current OpenViking User/Peer model.",
         fg=typer.colors.YELLOW,
         err=True,
@@ -306,6 +306,7 @@ def _make_provider(config, langfuse_client: None = None):
 
     p = config.agents
     model = p.model if p else None
+    temperature = p.temperature if p else 0.7
     api_key = p.api_key if p else None
     api_base = p.api_base if p else None
     provider_name = p.provider if p else None
@@ -325,6 +326,7 @@ def _make_provider(config, langfuse_client: None = None):
         vlm_config: dict[str, Any] = {
             "provider": provider_name,
             "model": model,
+            "temperature": temperature,
         }
         if api_key:
             vlm_config["api_key"] = api_key
@@ -479,6 +481,7 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
         provider=provider,
         workspace=config.workspace_path,
         model=config.agents.model,
+        temperature=config.agents.temperature,
         max_iterations=config.agents.max_tool_iterations,
         memory_window=config.agents.memory_window,
         brave_api_key=config.tools.web.search.api_key or None,

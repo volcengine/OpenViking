@@ -3,6 +3,48 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.4.5 (2026-06-24)
+
+### Highlights
+
+- **Auth role serialization and trusted mode**: request identity roles are now serialized consistently as string roles across storage, resource, session, queue, watch, summarizer, and semantic-processing paths, and OpenViking-backed VikingBot flows gain trusted `auth_mode` support.
+- **CLI, Web Studio, and bot setup reliability**: user-management setup in the CLI config wizard is clearer, Web Studio account selection is more stable, VikingBot auth handling is simplified, and failed session archives can now be skipped.
+- **Agent integration recall and OpenCode docs**: Codex and OpenCode integrations now include session-aware recall, while the OpenCode plugin docs are consolidated around the single maintained plugin.
+- **Storage and session hardening**: QueueFS semantic processing handles non-directory memory URIs, glob URI schemes are preserved, event summaries fall back more safely, memory abstracts are truncated defensively, and path-lock progress logging is improved.
+- **CLI / SDK surface polish**: CLI validation errors are clearer, requests omit newer fields when talking to older servers, the Go SDK exposes `set_tags`, and the standalone Python HTTP SDK extraction is included.
+- **New integration examples**: OpenWebUI and Pi coding-agent examples were added.
+
+### Upgrade Notes
+
+- Upgrade to this release if you run authenticated or trusted-mode multi-tenant deployments and need the role serialization fix.
+- The Python package version is derived from the `v0.4.5` tag.
+- Docker images are published with both `v0.4.5` and `latest` tags by the release workflow.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.4...v0.4.5)
+
+## v0.4.4 (2026-06-18)
+
+### Highlights
+
+- **Plugin-based authentication architecture**: authentication internals were refactored around a plugin-based architecture, laying groundwork for cleaner auth-mode extension and maintenance.
+- **Go SDK search filters**: the Go SDK now exposes search date and level filters so clients can constrain retrieval more precisely.
+- **RAGFS encryption-account fix**: RAGFS now handles root-directory encryption account ID acquisition correctly, avoiding exceptions in that path.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.3...v0.4.4)
+
+## v0.4.3 (2026-06-18)
+
+### Highlights
+
+- **RAGFS cache and migration reliability**: CachedFileSystem was added with Redis, Mooncake, and Yuanrong cache providers, while legacy shape probing skips zero-byte files and path locks, S3 head-object handling is clearer, and encrypted reads gain a plaintext fallback for migration.
+- **Go SDK and code navigation**: the Go HTTP SDK is supported and documented, and new code navigation endpoints were added for the OpenCode plugin.
+- **Docs search and localization**: OpenViking-powered documentation search was added, localized, and refreshed alongside SDK and Hermes wording updates.
+- **Parser, session, and task fixes**: session ID encoding, Feishu URL host matching, task tracker encryption binding, and event overview refresh behavior were fixed.
+- **Security dependency updates**: `python-multipart` and `cryptography` floors were raised to address high-severity advisories, and UnderstandingAPI zip downloads now use safe extraction to close Zip Slip risk.
+- **Plugin and memory follow-ups**: memory plugin recall/auth handling, OpenClaw plugin release metadata, session skill YAML rules, and tag-setting support were updated.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.2...v0.4.3)
+
 ## v0.4.2 (2026-06-17)
 
 ### Highlights

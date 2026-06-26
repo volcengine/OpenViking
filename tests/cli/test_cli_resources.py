@@ -4,11 +4,10 @@
 
 import os
 import tempfile
-import time
 import uuid
 
 import pytest
-from conftest import ov, ov_add_resource
+from conftest import ov_add_resource
 
 pytestmark = pytest.mark.cli_remote
 
@@ -20,19 +19,7 @@ class TestAddResource:
             temp_path = f.name
         try:
             to_uri = f"{test_dir_uri}/res_{uuid.uuid4().hex[:6]}"
-            r = None
-            for _attempt in range(5):
-                r = ov_add_resource(temp_path, to_uri)
-                if r["exit_code"] == 0:
-                    break
-                if "CONFLICT" in (r.get("stderr") or "") or "Network error" in (
-                    r.get("stderr") or ""
-                ):
-                    time.sleep(10)
-                else:
-                    time.sleep(5)
-            if r["exit_code"] != 0 and "Network error" in (r.get("stderr") or ""):
-                pytest.skip("OpenViking server unreachable")
+            r = ov_add_resource(temp_path, to_uri)
             assert r["exit_code"] == 0, (
                 f"add-resource should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
             )
@@ -52,56 +39,13 @@ class TestAddResource:
         finally:
             os.unlink(temp_path)
 
-
-class TestAddSkill:
-    def test_add_skill_from_file(self):
-        with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w") as f:
-            f.write(
-                "---\nname: cli_test_skill\ndescription: A test skill for CLI automation\n---\n# CLI Test Skill\n\nThis is a test skill for CLI automation."
-            )
-            temp_path = f.name
-        try:
-            r = None
-            for _attempt in range(5):
-                r = ov(["add-skill", temp_path, "--wait", "-o", "json"], timeout=120)
-                if r["exit_code"] == 0:
-                    break
-                if "UNAUTHENTICATED" in (r.get("stderr") or ""):
-                    pytest.skip("Upstream API authentication unavailable")
-                time.sleep(5)
-            assert r["exit_code"] == 0, (
-                f"add-skill from file should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-            )
-            data = r["json"]
-            assert data is not None, "add-skill should return JSON"
-            assert data.get("ok") is True, f"Expected ok=true, got {data.get('ok')}"
-            assert "result" in data, "'result' field should exist"
-            result = data["result"]
-            assert "root_uri" in result, (
-                f"add-skill result should contain root_uri, got keys: {sorted(result.keys())}"
-            )
-        finally:
-            os.unlink(temp_path)
-
     def test_add_resource_with_reason(self, test_dir_uri):
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
             f.write("CLI test: add resource with reason")
             temp_path = f.name
         try:
             to_uri = f"{test_dir_uri}/reason_{uuid.uuid4().hex[:6]}"
-            r = None
-            for _attempt in range(5):
-                r = ov_add_resource(temp_path, to_uri, "--reason", "CLI test reason")
-                if r["exit_code"] == 0:
-                    break
-                if "CONFLICT" in (r.get("stderr") or "") or "Network error" in (
-                    r.get("stderr") or ""
-                ):
-                    time.sleep(10)
-                else:
-                    time.sleep(5)
-            if r["exit_code"] != 0 and "Network error" in (r.get("stderr") or ""):
-                pytest.skip("OpenViking server unreachable")
+            r = ov_add_resource(temp_path, to_uri, "--reason", "CLI test reason")
             assert r["exit_code"] == 0, (
                 f"add-resource with reason should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
             )

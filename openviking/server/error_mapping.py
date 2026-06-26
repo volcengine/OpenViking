@@ -25,6 +25,7 @@ from openviking.pyagfs.exceptions import (
     AGFSPluginError,
     AGFSSerializationError,
     AGFSTimeoutError,
+    GitConcurrentCommitError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import (
@@ -297,12 +298,25 @@ def _upstream_code_for_status(status: int) -> str:
     return "UNKNOWN"
 
 
+def _extract_vlm_info(exc: Exception | None) -> tuple[str | None, str | None]:
+    """Extract model name and api_base from the exception chain, if annotated."""
+    if exc is None:
+        return None, None
+    for item in _iter_exception_chain(exc):
+        model = getattr(item, "_vlm_model", None)
+        api_base = getattr(item, "_vlm_api_base", None)
+        if model or api_base:
+            return model, api_base
+    return None, None
+
+
 def _build_upstream_error(
     *,
     code: str,
     message: str,
     status: int | None = None,
     source: BaseException | None = None,
+    vlm_context: BaseException | None = None,
 ) -> OpenVikingError:
     labels = {
         "INVALID_ARGUMENT": "Upstream model request was rejected",
@@ -325,6 +339,18 @@ def _build_upstream_error(
         details["upstream_status_code"] = status
     if source is not None:
         details["upstream_error_type"] = type(source).__name__
+    # Search for VLM model/api_base annotations. vlm_context is the outermost
+    # exception (where failover wrappers attach the annotation); source may be
+    # an inner exception from the chain.
+    vlm_model, vlm_api_base = _extract_vlm_info(vlm_context)
+    if not vlm_model and not vlm_api_base:
+        vlm_model, vlm_api_base = _extract_vlm_info(source)
+    if vlm_model:
+        details["vlm_model"] = vlm_model
+        display = f"{display}\n  Model: {vlm_model}"
+    if vlm_api_base:
+        details["vlm_api_base"] = vlm_api_base
+        display = f"{display}\n  API base: {vlm_api_base}"
     return OpenVikingError(display, code=code, details=details)
 
 
@@ -347,6 +373,7 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             status=status,
             source=source,
             message=_upstream_detail_message(exc),
+            vlm_context=exc,
         )
 
     if not _looks_like_upstream_model_error(exc):
@@ -355,11 +382,17 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
     lowered = text.lower()
     if "invalid api key" in lowered or "unauthorized" in lowered:
         return _build_upstream_error(
-            code="UNAUTHENTICATED", message=_upstream_detail_message(exc), source=exc
+            code="UNAUTHENTICATED",
+            message=_upstream_detail_message(exc),
+            source=exc,
+            vlm_context=exc,
         )
     if "forbidden" in lowered:
         return _build_upstream_error(
-            code="PERMISSION_DENIED", message=_upstream_detail_message(exc), source=exc
+            code="PERMISSION_DENIED",
+            message=_upstream_detail_message(exc),
+            source=exc,
+            vlm_context=exc,
         )
     if any(
         marker in lowered
@@ -373,7 +406,10 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
         )
     ):
         return _build_upstream_error(
-            code="RESOURCE_EXHAUSTED", message=_upstream_detail_message(exc), source=exc
+            code="RESOURCE_EXHAUSTED",
+            message=_upstream_detail_message(exc),
+            source=exc,
+            vlm_context=exc,
         )
     return None
 
@@ -447,6 +483,14 @@ def map_exception(
             "retryable": True,
         }
         return OpenVikingError(str(exc), code="CONFLICT", details=details)
+    if isinstance(exc, GitConcurrentCommitError):
+        details = {
+            "conflict_type": "git_ref_cas",
+            "retryable": True,
+        }
+        return OpenVikingError(
+            str(exc) or "concurrent git commit", code="CONFLICT", details=details
+        )
     if isinstance(exc, PermissionError):
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, FileNotFoundError):

@@ -204,9 +204,7 @@ class MemoryStore:
             if quota <= 0:
                 continue
             type_memories = [
-                memory
-                for memory in memories
-                if cls._infer_memory_type(memory) == memory_type
+                memory for memory in memories if cls._infer_memory_type(memory) == memory_type
             ][:quota]
             selected.extend(
                 cls._with_recall_metadata(memory, memory_type, rank)

@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
-from openviking_cli.exceptions import ConflictError, FailedPreconditionError, ProcessingError
+from openviking_cli.exceptions import ConflictError, ProcessingError
 from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
 from tests.server.ovpack_test_helpers import build_ovpack_bytes
 
@@ -290,7 +290,16 @@ async def test_sdk_commit_session_keeps_telemetry_as_second_positional_argument(
 
 
 async def test_sdk_get_session_archive(http_client):
-    client, _ = http_client
+    client, svc = http_client
+
+    # Memory extraction uses a VLM backend the fake does not cover; stub it so
+    # the archive completes (this test checks archive retrieval, not extraction).
+    async def _no_memories(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    svc.session_compressor.extract_long_term_memories = _no_memories
+    svc.session_compressor.extract_execution_memories = _no_memories
 
     session_info = await client.create_session()
     session_id = session_info["session_id"]
@@ -312,7 +321,7 @@ async def test_sdk_get_session_archive(http_client):
     assert [m["parts"][0]["text"] for m in archive["messages"]] == ["Archive me"]
 
 
-async def test_sdk_commit_raises_failed_precondition_after_failed_archive(http_client):
+async def test_sdk_commit_not_blocked_after_failed_archive(http_client):
     client, svc = http_client
 
     session_info = await client.create_session()
@@ -328,15 +337,21 @@ async def test_sdk_commit_raises_failed_precondition_after_failed_archive(http_c
     commit_result = await client.commit_session(session_id)
     task_id = commit_result["task_id"]
 
+    task = None
     for _ in range(100):
         task = await client.get_task(task_id)
         if task and task["status"] in ("completed", "failed"):
             break
         await asyncio.sleep(0.1)
 
+    # Any Phase 2 step failing marks the whole archive .failed.json (skipped).
+    assert task is not None and task["status"] == "failed"
+
+    # A failed archive is a skippable terminal state and must not block the
+    # next commit (this previously raised FailedPreconditionError).
     await client.add_message(session_id, "user", "Second round")
-    with pytest.raises(FailedPreconditionError, match="unresolved failed archive"):
-        await client.commit_session(session_id)
+    second = await client.commit_session(session_id)
+    assert second["task_id"]
 
 
 # ===================================================================

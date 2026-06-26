@@ -64,7 +64,9 @@ def _resolve_ov_conf_path() -> Path:
         return Path(configured_path).expanduser()
 
     resolved = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
-    default_path = str(resolved) if resolved is not None else str(Path.home() / ".openviking" / "ov.conf")
+    default_path = (
+        str(resolved) if resolved is not None else str(Path.home() / ".openviking" / "ov.conf")
+    )
 
     if _is_interactive():
         _log_info(f"OpenViking 配置默认路径: {default_path}")

@@ -18,14 +18,15 @@ import hashlib
 import json
 import os
 import re
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
-    canonical_user_root,
     canonicalize_uri,
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
@@ -44,7 +45,7 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.expr import PathScope
+from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import (
     MULTIWRITE_PATH_LOCK_FILE,
     STORAGE_INTERNAL_ENTRY_NAMES,
@@ -58,13 +59,14 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.grep_config import GrepEngine
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking.storage.transaction.lock_handle import LockHandle
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import RerankConfig, RetrievalConfig
+    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
 
 logger = get_logger(__name__)
 
@@ -126,6 +128,7 @@ def _get_abstract_worker_count() -> int:
 
 
 _ABSTRACT_WORKER_COUNT = _get_abstract_worker_count()
+_DEFAULT_GREP_FILE_CONCURRENCY = 32
 
 
 # ========== Dataclass ==========
@@ -164,6 +167,7 @@ def init_viking_fs(
     rerank_config: Optional["RerankConfig"] = None,
     vector_store: Optional["VikingVectorIndexBackend"] = None,
     retrieval_config: Optional["RetrievalConfig"] = None,
+    grep_config: Optional["GrepConfig"] = None,
     timeout: int = 10,
     enable_recorder: bool = False,
     encryptor: Optional[Any] = None,
@@ -172,10 +176,10 @@ def init_viking_fs(
 
     Args:
         agfs: Pre-initialized AGFS client (HTTP or Binding)
-        agfs_config: AGFS configuration object for backend settings
         query_embedder: Embedder instance
         rerank_config: Rerank configuration
         retrieval_config: Retrieval ranking configuration
+        grep_config: Grep engine configuration
         vector_store: Vector store instance
         enable_recorder: Whether to enable IO recording
         encryptor: FileEncryptor instance for encryption/decryption
@@ -188,6 +192,7 @@ def init_viking_fs(
         rerank_config=rerank_config,
         vector_store=vector_store,
         retrieval_config=retrieval_config,
+        grep_config=grep_config,
         encryptor=encryptor,
     )
 
@@ -260,6 +265,7 @@ class VikingFS:
         rerank_config: Optional["RerankConfig"] = None,
         vector_store: Optional["VikingVectorIndexBackend"] = None,
         retrieval_config: Optional["RetrievalConfig"] = None,
+        grep_config: Optional["GrepConfig"] = None,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
     ):
@@ -269,10 +275,15 @@ class VikingFS:
         self.rerank_config = rerank_config
         self.vector_store = vector_store
         self.retrieval_config = retrieval_config
+        self.grep_config = grep_config
         self._encryptor = encryptor
+        self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
+        self._count_cache_max_size = 1024
+        self._fulltext_available: Optional[bool] = None  # cached result of _collection_has_fulltext
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
+        self._background_tasks: set = set()
 
     @staticmethod
     def _default_ctx() -> RequestContext:
@@ -354,11 +365,22 @@ class VikingFS:
                 "or current-user content path instead.",
                 resource=normalized_uri,
             )
-        if parts and parts[0] in {"agent", "session"}:
+        if parts and parts[0] == "session":
             raise PermissionDeniedError(
                 f"Writing {normalized_uri} is not supported; use user-owned namespaces instead.",
                 resource=normalized_uri,
             )
+        if parts and parts[0] == "agent":
+            if len(parts) >= 2 and parts[1] not in {"skills", "endpoints", "tools", "payments"}:
+                raise PermissionDeniedError(
+                    "viking://agent/{agent_id} is deprecated. Use viking://user/.../peers/{agent_id} instead.",
+                    resource=normalized_uri,
+                )
+            if len(parts) < 2:
+                raise PermissionDeniedError(
+                    "Writing to viking://agent root is not supported.",
+                    resource=normalized_uri,
+                )
 
     # ========== AGFS Basic Commands ==========
 
@@ -749,13 +771,17 @@ class VikingFS:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
-        level_limit: int = 5,
+        level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """Content search by pattern or keywords.
 
+        Optimized implementation that uses agfs native grep when possible.
         The ragfs layer greps transparently over encrypted and plaintext files
         (it decrypts via account_id when an encryption layer is configured).
+        Falls back to VikingFS layer implementation if native grep is unavailable.
+        When engine="auto" and vikingdb is available with sufficient data,
+        uses vikingdb bm25 recall + local fs precise matching.
 
         Args:
             uri: Viking URI
@@ -763,16 +789,158 @@ class VikingFS:
             exclude_uri: Optional URI prefix to exclude from search
             case_insensitive: Whether to perform case-insensitive matching
             node_limit: Maximum number of results to return
-            level_limit: Maximum depth level to traverse (default: 5)
+            level_limit: Maximum depth level to traverse (default: 10)
             ctx: Request context
+            Internal bm25 recall limit is auto-adapted from node_limit as
+            min(node_limit * 5, 100000); when node_limit is unset, use 100000.
 
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
         self._ensure_access(uri, ctx)
-        await self.stat(uri, ctx=ctx)
+        # Skip vector_store.count() — the count field is not needed for grep,
+        # and avoiding it saves one VikingDB API call.
+        await self.stat(uri, ctx=ctx, skip_count=True)
 
-        return await self._grep_with_agfs(
+        # Read engine and threshold from grep_config (ov.conf)
+        engine = self.grep_config.engine if self.grep_config else "auto"
+        switch_to_remote_threshold = (
+            self.grep_config.switch_to_remote_threshold if self.grep_config else 10000
+        )
+
+        resolved_engine = await self._resolve_grep_engine(
+            engine, uri, ctx, switch_to_remote_threshold
+        )
+
+        if resolved_engine == "fs":
+            return await self._grep_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+        else:  # "vikingdb_then_fs"
+            return await self._grep_vikingdb_then_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+
+    async def _resolve_grep_engine(
+        self, engine: GrepEngine, uri: str, ctx, switch_to_remote_threshold: int = 10000
+    ) -> str:
+        """Resolve the actual grep engine to use."""
+        if engine == "fs":
+            return "fs"
+
+        # auto mode: check vikingdb availability
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return "fs"
+
+        backend_type = getattr(vector_store, "_backend_type", "unknown")
+        if backend_type not in ("volcengine", "vikingdb"):
+            return "fs"
+
+        # Check collection has content field and FullText config
+        if not await self._collection_has_fulltext(vector_store, ctx):
+            return "fs"
+
+        # switch_to_remote_threshold=0 means always use vikingdb
+        if switch_to_remote_threshold == 0:
+            return "vikingdb_then_fs"
+
+        # Check data volume threshold
+        try:
+            count = await self._get_cached_count(uri, ctx)
+            if count < switch_to_remote_threshold:
+                return "fs"
+        except Exception:
+            logger.debug(
+                "grep engine=auto: count() check failed, falling back to fs", exc_info=True
+            )
+            return "fs"
+
+        return "vikingdb_then_fs"
+
+    async def _collection_has_fulltext(self, vector_store, ctx) -> bool:
+        """Check if collection has content field and FullText config.
+
+        Result is cached on the VikingFS instance since collection schema
+        does not change at runtime.
+        """
+        if self._fulltext_available is not None:
+            return self._fulltext_available
+        try:
+            meta = None
+            if hasattr(vector_store, "get_collection_meta"):
+                meta = await vector_store.get_collection_meta(ctx=ctx)
+            if not meta:
+                self._fulltext_available = False
+                return False
+            fields = meta.get("Fields", [])
+            has_content = any(
+                f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields
+            )
+            fulltext = meta.get("FullText") or []
+            has_content_fulltext = any(ft.get("Field") == "content" for ft in fulltext)
+            result = has_content and has_content_fulltext
+            self._fulltext_available = result
+            return result
+        except Exception:
+            logger.debug(
+                "Failed to check collection fulltext config, assuming no fulltext", exc_info=True
+            )
+            return False
+
+    async def _get_cached_count(self, uri: str, ctx) -> int:
+        """Get cached count of records for a URI (TTL=1h)."""
+        _COUNT_CACHE_TTL = 3600
+        vector_store = self._get_vector_store()
+
+        # Include account_id in cache key for multi-tenant safety
+        account_id = getattr(ctx, "account_id", None) if ctx else None
+        cache_key = f"{account_id}:{uri}" if account_id else uri
+
+        now = time.time()
+        cached = self._count_cache.get(cache_key)
+        if cached and (now - cached[1]) < _COUNT_CACHE_TTL:
+            return cached[0]
+
+        count = await vector_store.count(filter=PathScope("uri", uri, depth=-1), ctx=ctx)
+        # Evict oldest entries if cache exceeds max size
+        if len(self._count_cache) >= self._count_cache_max_size:
+            oldest_keys = sorted(self._count_cache, key=lambda k: self._count_cache[k][1])
+            for k in oldest_keys[: len(oldest_keys) // 2]:
+                del self._count_cache[k]
+        self._count_cache[cache_key] = (count, now)
+        return count
+
+    async def _grep_fs(
+        self, uri, pattern, exclude_uri, case_insensitive, node_limit, level_limit, ctx
+    ):
+        """Filesystem grep path: prefer native agfs grep and fall back if unavailable."""
+        try:
+            return await self._grep_with_agfs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+        except (AttributeError, AGFSNotSupportedError, NotImplementedError) as e:
+            logger.debug(f"agfs grep unavailable, falling back to VikingFS implementation: {e}")
+
+        return await self._grep_encrypted(
             uri=uri,
             pattern=pattern,
             exclude_uri=exclude_uri,
@@ -782,6 +950,137 @@ class VikingFS:
             ctx=ctx,
         )
 
+    async def _grep_vikingdb_then_fs(
+        self,
+        uri,
+        pattern,
+        exclude_uri,
+        case_insensitive,
+        node_limit,
+        level_limit,
+        ctx,
+    ):
+        """VikingDB bm25 recall + local fs precise matching."""
+        vector_store = self._get_vector_store()
+
+        # Split regex alternation (e.g. "error|warning|fail") and join as a
+        # single query string for bm25 search. VikingDB's standard tokenizer
+        # will handle the tokenization of the query string.
+        query = " ".join(kw.strip() for kw in pattern.split("|") if kw.strip())
+        filter_expr = PathScope("uri", uri, depth=level_limit)
+        excluded_prefix = None
+        if exclude_uri:
+            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            self._ensure_access(excluded_prefix, ctx)
+            filter_expr = And(
+                [
+                    filter_expr,
+                    RawDSL(
+                        {
+                            "op": "must_not",
+                            "field": "uri",
+                            "conds": [excluded_prefix],
+                            "para": "-d=-1",
+                        }
+                    ),
+                ]
+            )
+
+        # Auto-adapt bm25 recall limit: recall up to 5x requested matches
+        # while capping at VikingDB's max limit. If node_limit is unset,
+        # use the maximum limit to avoid truncation.
+        remote_return_limit = min(node_limit * 5, 100000) if node_limit else 100000
+
+        # Step 1: vikingdb recall candidate files
+        try:
+            logger.debug(
+                "grep vikingdb search_by_keywords request: query=%r limit=%s filter=%r "
+                "output_fields=%s",
+                query,
+                remote_return_limit,
+                filter_expr,
+                ["uri"],
+            )
+            result = await vector_store.search_by_keywords(
+                query=query,
+                limit=remote_return_limit,
+                filter=filter_expr,
+                output_fields=["uri"],
+                ctx=ctx,
+            )
+        except Exception as e:
+            logger.warning(f"grep vikingdb step failed, falling back to fs: {e}")
+            return await self._grep_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
+
+        candidate_uris = [r["uri"] for r in result if r.get("uri")]
+        if excluded_prefix:
+            candidate_uris = [
+                u
+                for u in candidate_uris
+                if u != excluded_prefix and not u.startswith(excluded_prefix + "/")
+            ]
+        if not candidate_uris:
+            # BM25 returned no candidates — the index confirms no matching content
+            return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+        # Step 2: local fs precise matching on candidate files
+        return await self._grep_in_files(
+            candidate_uris,
+            pattern,
+            case_insensitive,
+            node_limit,
+            ctx,
+        )
+
+    async def _grep_in_files(
+        self,
+        file_uris: List[str],
+        pattern: str,
+        case_insensitive: bool,
+        node_limit: Optional[int],
+        ctx: Optional[RequestContext],
+    ) -> Dict:
+        """Execute regex matching in specified file list (vikingdb_then_fs Step 2)."""
+        flags = re.IGNORECASE if case_insensitive else 0
+        compiled = re.compile(pattern, flags)
+
+        results = []
+        files_scanned = 0
+
+        for file_uri in file_uris:
+            files_scanned += 1
+            try:
+                content_bytes = await self.read(file_uri, ctx=ctx)
+                content = content_bytes.decode("utf-8", errors="replace")
+            except Exception:
+                continue
+
+            for line_no, line in enumerate(content.splitlines(), 1):
+                if compiled.search(line):
+                    results.append({"uri": file_uri, "line": line_no, "content": line})
+                    if node_limit and len(results) >= node_limit:
+                        return {
+                            "matches": results,
+                            "count": len(results),
+                            "match_count": len(results),
+                            "files_scanned": files_scanned,
+                        }
+
+        return {
+            "matches": results,
+            "count": len(results),
+            "match_count": len(results),
+            "files_scanned": files_scanned,
+        }
+
     async def _grep_with_agfs(
         self,
         uri: str,
@@ -789,7 +1088,7 @@ class VikingFS:
         exclude_uri: Optional[str] = None,
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
-        level_limit: int = 5,
+        level_limit: int = 10,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """Grep using agfs native implementation.
@@ -883,6 +1182,166 @@ class VikingFS:
             "files_scanned": files_scanned,
         }
 
+    async def _grep_encrypted(
+        self,
+        uri: str,
+        pattern: str,
+        exclude_uri: Optional[str] = None,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+        level_limit: int = 10,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict:
+        """Grep implementation for encrypted files.
+
+        This implementation decrypts files at VikingFS layer before matching.
+        Used when encryption is enabled or when agfs.grep is not available.
+
+        Args:
+            uri: Viking URI
+            pattern: Regular expression pattern to search for
+            exclude_uri: Optional URI prefix to exclude from search
+            case_insensitive: Whether to perform case-insensitive matching
+            node_limit: Maximum number of results to return
+            level_limit: Maximum depth level to traverse (default: 10)
+            ctx: Request context
+
+        Returns:
+            Dict with matches, count, match_count, files_scanned
+        """
+        flags = re.IGNORECASE if case_insensitive else 0
+        compiled_pattern = re.compile(pattern, flags)
+        excluded_prefix = None
+        if exclude_uri:
+            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            self._ensure_access(excluded_prefix, ctx)
+        file_uris = await self._collect_grep_files(
+            uri,
+            excluded_prefix=excluded_prefix,
+            level_limit=level_limit,
+            ctx=ctx,
+        )
+        results, files_scanned = await self._grep_files_parallel(
+            file_uris,
+            compiled_pattern=compiled_pattern,
+            node_limit=node_limit,
+            ctx=ctx,
+        )
+
+        return {
+            "matches": results,
+            "count": len(results),
+            "match_count": len(results),
+            "files_scanned": files_scanned,
+        }
+
+    async def _collect_grep_files(
+        self,
+        uri: str,
+        excluded_prefix: Optional[str],
+        level_limit: int,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[str]:
+        file_uris: List[str] = []
+
+        async def search_recursive(current_uri: str, current_depth: int) -> None:
+            if current_depth > level_limit:
+                return
+
+            normalized_current_uri = self._normalize_uri(current_uri)
+            if excluded_prefix and (
+                normalized_current_uri == excluded_prefix
+                or normalized_current_uri.startswith(excluded_prefix + "/")
+            ):
+                logger.debug(f"Skipping excluded uri during grep: {normalized_current_uri}")
+                return
+
+            try:
+                entries = await self.ls(normalized_current_uri, ctx=ctx)
+            except Exception:
+                return
+
+            for entry in entries:
+                entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
+                if excluded_prefix and (
+                    entry_uri == excluded_prefix or entry_uri.startswith(excluded_prefix + "/")
+                ):
+                    logger.debug(f"Skipping excluded uri during grep: {entry_uri}")
+                    continue
+
+                if entry.get("isDir"):
+                    await search_recursive(entry_uri, current_depth + 1)
+                else:
+                    file_uris.append(entry_uri)
+
+        normalized_uri = self._normalize_uri(uri)
+        if excluded_prefix and (
+            normalized_uri == excluded_prefix or normalized_uri.startswith(excluded_prefix + "/")
+        ):
+            logger.debug(f"Skipping excluded uri during grep: {normalized_uri}")
+            return file_uris
+        try:
+            root_stat = await self.stat(normalized_uri, ctx=ctx)
+        except Exception:
+            return file_uris
+        if not root_stat.get("isDir", False):
+            file_uris.append(normalized_uri)
+            return file_uris
+
+        await search_recursive(uri, 0)
+        return file_uris
+
+    async def _grep_files_parallel(
+        self,
+        file_uris: List[str],
+        compiled_pattern: re.Pattern,
+        node_limit: Optional[int],
+        ctx: Optional[RequestContext] = None,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        results: List[Dict[str, Any]] = []
+        files_scanned = 0
+        for start in range(0, len(file_uris), _DEFAULT_GREP_FILE_CONCURRENCY):
+            batch_uris = file_uris[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
+            batch_jobs = [
+                self._grep_single_file(entry_uri, compiled_pattern, ctx) for entry_uri in batch_uris
+            ]
+            batch_results = await asyncio.gather(*batch_jobs)
+            for matches, scanned_count in batch_results:
+                files_scanned += scanned_count
+                for match in matches:
+                    results.append(match)
+                    if node_limit and len(results) >= node_limit:
+                        return results, files_scanned
+
+        return results, files_scanned
+
+    async def _grep_single_file(
+        self,
+        entry_uri: str,
+        compiled_pattern: re.Pattern,
+        ctx: Optional[RequestContext] = None,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        try:
+            content = await self.read(entry_uri, ctx=ctx)
+            if isinstance(content, bytes):
+                content = content.decode("utf-8", errors="replace")
+
+            matches: List[Dict[str, Any]] = []
+            lines = content.split("\n")
+            for line_num, line in enumerate(lines, 1):
+                if compiled_pattern.search(line):
+                    matches.append(
+                        {
+                            "line": line_num,
+                            "uri": entry_uri,
+                            "content": line,
+                        }
+                    )
+            return matches, 1
+        except Exception as e:
+            logger.debug(f"Failed to grep {entry_uri}: {e}")
+            return [], 1
+
     def _resolve_grep_match_agfs_path(self, base_path: str, match_file: str) -> str:
         """Resolve a grep match path (relative to query root) into a full AGFS path."""
         if match_file == ".":
@@ -895,7 +1354,9 @@ class VikingFS:
             return 0
         return len([part for part in match_file.split("/") if part])
 
-    async def stat(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
+    async def stat(
+        self, uri: str, ctx: Optional[RequestContext] = None, skip_count: bool = False
+    ) -> Dict[str, Any]:
         """
         File/directory information.
 
@@ -909,6 +1370,13 @@ class VikingFS:
             count (int): For directories, the number of nodes in the vector index
                 under this directory (including subdirectories). For files, this
                 field is not included.
+
+        Args:
+            uri: Viking URI
+            ctx: Request context
+            skip_count: If True, skip the vector_store.count() call for directories.
+                Use this when the count field is not needed (e.g. in grep) to avoid
+                an extra VikingDB API call.
         """
         self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
@@ -942,7 +1410,7 @@ class VikingFS:
         if isinstance(result, dict):
             result["isLocked"] = await self._is_path_locked_async(path)
             # Add count for directories if vector store available
-            if result.get("isDir", False):
+            if not skip_count and result.get("isDir", False):
                 try:
                     vector_store = self._get_vector_store()
                     if vector_store:
@@ -993,12 +1461,11 @@ class VikingFS:
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive."""
         entries = await self.tree(uri, node_limit=1000000, level_limit=None, ctx=ctx)
-        base_uri = uri.rstrip("/")
         matches = []
         for entry in entries:
             rel_path = entry.get("rel_path", "")
             if PurePath(rel_path).match(pattern):
-                matches.append(f"{base_uri}/{rel_path}")
+                matches.append(entry["uri"])
         # Now apply node limit to the filtered matches
         if node_limit is not None and node_limit > 0:
             matches = matches[:node_limit]
@@ -1811,7 +2278,8 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         account_id = real_ctx.account_id
         normalized_uri, legacy_parts = self._normalized_uri_parts(uri)
-        if legacy_parts and legacy_parts[0] == "agent":
+        if legacy_parts and legacy_parts[0] == "agent" and self._is_legacy_agent_id_uri(uri):
+            # Old format: viking://agent/{agent_id}/... — direct mapping for read-only compat
             safe_parts = [
                 self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in legacy_parts
             ]
@@ -1851,17 +2319,18 @@ class VikingFS:
         _, parts = self._normalized_uri_parts(uri)
         return parts == ["session"]
 
-    def _is_legacy_agent_uri(self, uri: str) -> bool:
+    def _is_legacy_agent_id_uri(self, uri: str) -> bool:
         _, parts = self._normalized_uri_parts(uri)
-        return bool(parts and parts[0] == "agent")
+        return bool(
+            parts
+            and parts[0] == "agent"
+            and len(parts) >= 2
+            and parts[1] not in {"skills", "endpoints", "tools", "payments"}
+        )
 
     def _read_paths(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
         """Return read candidates for a URI, including legacy alias fallbacks."""
         paths = [self._uri_to_path(uri, ctx=ctx)]
-        for alias_uri in self._legacy_agent_alias_uris(uri, ctx=ctx):
-            alias_path = self._uri_to_path(alias_uri, ctx=ctx)
-            if alias_path not in paths:
-                paths.append(alias_path)
 
         if self._is_legacy_session_uri(uri):
             for candidate in (
@@ -1871,35 +2340,6 @@ class VikingFS:
                 if candidate and candidate not in paths:
                     paths.append(candidate)
         return paths
-
-    def _legacy_agent_alias_uris(
-        self,
-        uri: str,
-        ctx: Optional[RequestContext] = None,
-    ) -> List[str]:
-        """Return migrated user/peer URI aliases for a legacy viking://agent URI."""
-        _, parts = self._normalized_uri_parts(uri)
-        if not parts or parts[0] != "agent":
-            return []
-
-        user_root = canonical_user_root(self._ctx_or_default(ctx))
-        if len(parts) == 1:
-            return [f"{user_root}/peers"]
-
-        agent_id = parts[1]
-        suffix = parts[2:]
-        if not suffix:
-            return [f"{user_root}/peers/{agent_id}"]
-
-        if suffix[0] in {"memories", "resources"}:
-            return [f"{user_root}/peers/{agent_id}/{'/'.join(suffix)}"]
-        if suffix[0] == "skills":
-            skill_suffix = suffix[1:]
-            skill_uri = f"{user_root}/skills"
-            if skill_suffix:
-                skill_uri = f"{skill_uri}/{'/'.join(skill_suffix)}"
-            return [skill_uri]
-        return []
 
     async def _read_path_visible(
         self,
@@ -1923,7 +2363,14 @@ class VikingFS:
         ctx: Optional[RequestContext],
     ) -> str:
         normalized_request, request_parts = self._normalized_uri_parts(request_uri)
-        if not request_parts or request_parts[0] not in {"agent", "session"}:
+        # Only legacy namespaces need alias remapping:
+        # - Old format viking://agent/{agent_id}/...
+        # - viking://session/...
+        is_legacy_namespace = request_parts and (
+            request_parts[0] == "session"
+            or (request_parts[0] == "agent" and self._is_legacy_agent_id_uri(request_uri))
+        )
+        if not is_legacy_namespace:
             return self._path_to_uri(entry_path, ctx=ctx)
         base = base_path.rstrip("/")
         rel_path = entry_path[len(base) :].strip("/") if entry_path.startswith(base) else ""
@@ -2084,7 +2531,7 @@ class VikingFS:
             return await self._session_root_items(uri, real_ctx)
 
         primary_path = self._uri_to_path(uri, ctx=ctx)
-        merge_paths = self._is_legacy_agent_uri(uri)
+        merge_paths = self._is_legacy_session_uri(uri)
         found_path = False
         last_not_found: Optional[Exception] = None
         by_uri: Dict[str, tuple[Dict[str, Any], str]] = {}
@@ -2192,14 +2639,14 @@ class VikingFS:
         if scope == "_system":
             return False
         if scope == "agent":
-            return self._is_legacy_agent_accessible(parts, ctx)
+            # New format: agent/skills/..., agent/endpoints/... — globally readable (account scope)
+            if len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}:
+                return True
+            # Old format: agent/{agent_id}/... — actor_peer_id match for read-only access
+            if not ctx.actor_peer_id or len(parts) < 2:
+                return True
+            return parts[1] == ctx.actor_peer_id
         return namespace_is_accessible(normalized_uri, ctx)
-
-    @staticmethod
-    def _is_legacy_agent_accessible(parts: List[str], ctx: RequestContext) -> bool:
-        if not ctx.actor_peer_id or len(parts) < 2:
-            return True
-        return parts[1] == ctx.actor_peer_id
 
     def _handle_agfs_read(self, result: Union[bytes, Any, None]) -> bytes:
         """Handle AGFSClient read return types consistently."""
@@ -2894,3 +3341,555 @@ class VikingFS:
         except Exception as e:
             logger.error(f"[VikingFS] Failed to write {uri}: {e}")
             raise IOError(f"Failed to write {uri}: {e}")
+
+    # ------------------------------------------------------------------
+    # Git version control (commit / restore / show / log)
+    # ------------------------------------------------------------------
+
+    # First path segments that the Rust git enumerate.rs prunes from snapshots,
+    # plus the runtime lock name. Mirrors INTERNAL_FIRST_SEGMENTS in
+    # crates/ragfs/src/git/enumerate.rs and VikingFS._INTERNAL_NAMES so that
+    # callers fail fast in Python with a clear error rather than passing a
+    # path that the Rust side will silently drop.
+    _GIT_INTERNAL_FIRST_SEGMENTS = frozenset(
+        {"_system", "tasks", "temp", "queue", "upload", ".path.ovlock"}
+    )
+
+    _DEFAULT_GIT_AUTHOR_NAME = "viking-bot"
+    _DEFAULT_GIT_AUTHOR_EMAIL = "bot@viking.local"
+
+    def _uri_to_tree_path(self, uri: str, ctx: Optional[RequestContext] = None) -> str:
+        """Convert a viking:// URI to an account-relative git tree path.
+
+        ``viking://resources/proj_a/docs/a.md`` -> ``resources/proj_a/docs/a.md``.
+
+        Pure prefix stripping: removes the ``viking://`` scheme and any
+        ``/local/{account}/`` segment. Internal scopes that the Rust git layer
+        would prune (`_system`, `tasks`, `temp`, `queue`, `upload`) and the
+        runtime lock name (`.path.ovlock`) are rejected with ``ValueError``
+        — passing them through silently would result in a no-op commit and
+        confuse callers.
+        """
+        real_ctx = self._ctx_or_default(ctx)
+        canonical = canonicalize_uri(uri, real_ctx)
+        _, parts = self._normalized_uri_parts(canonical)
+        if not parts:
+            raise ValueError(f"git tree path cannot be the account root: {uri!r}")
+        first = parts[0]
+        if first in self._GIT_INTERNAL_FIRST_SEGMENTS:
+            raise ValueError(f"git tree path rejects internal scope/segment {first!r}: {uri!r}")
+        return "/".join(parts)
+
+    def _tree_path_to_uri(self, tree_path: str) -> str:
+        """Convert an account-relative git tree path to a viking:// URI.
+
+        Inverse of :py:meth:`_uri_to_tree_path` (without context canonicalization).
+        """
+        cleaned = tree_path.strip("/")
+        if not cleaned:
+            raise ValueError("tree path must not be empty")
+        return f"viking://{cleaned}"
+
+    _DIR_MARKER_LEVELS = {
+        ".abstract.md": ContextLevel.ABSTRACT,
+        ".overview.md": ContextLevel.OVERVIEW,
+    }
+    _NO_VECTOR_DERIVED = frozenset({".relations.json"})
+
+    def _classify_restore_path(self, tree_path: str, *, deleted: bool) -> Optional[tuple]:
+        """Classify a restore-affected tree path into a vector maintenance task.
+
+        Returns a ``(op, uri, level)`` triple, or ``None`` when the path has no
+        vector side-effect:
+
+        - ``dir/.abstract.md`` / ``dir/.overview.md`` → recompute (write) or
+          delete (removal) ONLY that directory's L0/L1 vector:
+          ``("reindex_marker"|"delete", dir_uri, ABSTRACT|OVERVIEW)``.
+        - ``.relations.json`` → ``None`` (not a vector text source).
+        - anything else (a source file) → reindex (write) or delete (removal)
+          its DETAIL vector:
+          ``("reindex_file", file_uri, DETAIL)`` / ``("delete", file_uri, DETAIL)``.
+
+        ``None`` is also returned for a directory marker at the account root
+        (no parent directory to scope an L0/L1 vector to).
+        """
+        parent, _, name = tree_path.rpartition("/")
+        if name in self._NO_VECTOR_DERIVED:
+            return None
+        level = self._DIR_MARKER_LEVELS.get(name)
+        if level is not None:
+            if not parent:
+                return None
+            dir_uri = self._tree_path_to_uri(parent)
+            op = "delete" if deleted else "reindex_marker"
+            return (op, dir_uri, level)
+        # Source file.
+        file_uri = self._tree_path_to_uri(tree_path)
+        op = "delete" if deleted else "reindex_file"
+        return (op, file_uri, ContextLevel.DETAIL)
+
+    async def commit(
+        self,
+        *,
+        message: str,
+        paths: Optional[List[str]] = None,
+        branch: str = "main",
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        """Create a git snapshot of the account's tree.
+
+        Args:
+            message: Commit message.
+            paths: Optional list of ``viking://`` URIs to scope the commit to;
+                entries may be files or directories. Directories are expanded
+                recursively with the snapshot pruning rules applied. ``None``
+                (default) enumerates the whole account tree. An empty list is
+                forwarded as an explicit empty path list (no-op commit). A
+                path that exists in neither the VFS nor the previous snapshot
+                logs a warning and is treated as a no-op deletion.
+            branch: Branch to advance. Defaults to ``"main"``.
+            author_name / author_email: Override the default bot author.
+            ctx: Request context (provides ``account_id``).
+
+        Returns:
+            Dict with ``result`` (``"created"`` / ``"noop"``) and ``commit_oid``;
+            ``changed`` count when ``result == "created"``.
+        """
+        real_ctx = self._ctx_or_default(ctx)
+        account = real_ctx.account_id
+        if paths is None:
+            tree_paths: Optional[List[str]] = None
+        else:
+            tree_paths = [self._uri_to_tree_path(p, ctx=real_ctx) for p in paths]
+        return await self._async_agfs.run(
+            "git_commit",
+            account=account,
+            branch=branch,
+            message=message,
+            paths=tree_paths,
+            author_name=author_name or self._DEFAULT_GIT_AUTHOR_NAME,
+            author_email=author_email or self._DEFAULT_GIT_AUTHOR_EMAIL,
+        )
+
+    async def restore(
+        self,
+        *,
+        project_dir: Optional[str] = None,
+        source_commit: str,
+        branch: str = "main",
+        dry_run: bool = False,
+        message: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        """Restore a project subtree to the state at ``source_commit``.
+
+        Generates a new commit whose parent is the current HEAD (not the
+        source commit) and writes the diff through the VFS. Paths outside
+        ``project_dir`` are left untouched.
+
+        Args:
+            project_dir: ``viking://`` URI of the subtree, e.g.
+                ``"viking://resources/proj_a"``. May also be passed as a
+                short form like ``"resources/proj_a"``. Trailing slashes are
+                stripped. Internal scopes are rejected with ``ValueError``.
+                If None, restore the entire tree.
+            source_commit: 40-hex OID, branch name, or full ref path.
+            branch: Branch to advance. Defaults to ``"main"``.
+            dry_run: If True, returns the planned diff without writing.
+            message: Optional commit message; defaults to a generated string.
+            author_name / author_email: Override the default bot author.
+            ctx: Request context (provides ``account_id``).
+
+        Returns:
+            Dict containing ``result`` (``"applied"`` / ``"noop"`` / ``"dry_run"``)
+            and corresponding oid / diff fields. When an ``Applied`` result has
+            vector side-effects, a ``task_id`` is included for polling the
+            background reindex via ``GET /api/v1/tasks/{task_id}``.
+
+        After an ``Applied`` result, this method schedules background vector
+        maintenance for the affected paths via :class:`ReindexExecutor`:
+        directory markers (``.abstract.md`` / ``.overview.md``) recompute or
+        delete only that directory's L0/L1 vector; source files reindex (write)
+        or delete (removal) their DETAIL vector. ``.relations.json`` has no
+        vector side-effect. The rebuild is tracked as a single task
+        (``snapshot_restore_reindex``); per-path failures are logged and do not
+        block the return value. The task reaches ``completed`` only after each
+        affected vector has been written to (or deleted from) the index, so
+        polling ``task_id`` to ``completed`` guarantees subsequent ``find``
+        reads see the restored state.
+        """
+        real_ctx = self._ctx_or_default(ctx)
+        account = real_ctx.account_id
+        tree_dir: Optional[str]
+        if project_dir is None:
+            tree_dir = None
+        else:
+            tree_dir = self._uri_to_tree_path(project_dir, ctx=real_ctx).rstrip("/")
+            if not tree_dir:
+                raise ValueError(f"project_dir must not be empty: {project_dir!r}")
+        # Build kwargs dynamically, only include project_dir if it's not None
+        kwargs = {
+            "account": account,
+            "branch": branch,
+            "source_commit": source_commit,
+            "dry_run": dry_run,
+            "message": message,
+            "author_name": author_name or self._DEFAULT_GIT_AUTHOR_NAME,
+            "author_email": author_email or self._DEFAULT_GIT_AUTHOR_EMAIL,
+        }
+        if tree_dir is not None:
+            kwargs["project_dir"] = tree_dir
+        # dry_run only computes the diff; it never writes the VFS, so it needs
+        # no lock.
+        if dry_run:
+            return await self._async_agfs.run("git_restore", **kwargs)
+
+        from openviking.pyagfs.exceptions import GitRestoreWritebackPartialError
+        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        # Serialize the writeback against concurrent VFS mutations on the same
+        # subtree. A scoped restore tree-locks project_dir; a full restore
+        # (project_dir is None) locks the account root so only one restore runs
+        # per account at a time. The lock covers only the writeback — the
+        # background reindex is scheduled after release, otherwise its per-path
+        # child locks would conflict with this tree lock.
+        lock_path = (
+            self._uri_to_path(project_dir, ctx=real_ctx)
+            if project_dir is not None
+            else f"/local/{account}"
+        )
+        partial_exc: Optional[GitRestoreWritebackPartialError] = None
+        try:
+            async with LockContext(get_lock_manager(), [lock_path], lock_mode="tree"):
+                try:
+                    result = await self._async_agfs.run("git_restore", **kwargs)
+                except GitRestoreWritebackPartialError as exc:
+                    # The ref already advanced — capture the exception and
+                    # finish the lock scope cleanly. Reindex scheduling and
+                    # re-raise happen below, outside the tree lock.
+                    partial_exc = exc
+                    result = None
+        except LockAcquisitionError:
+            raise ResourceBusyError(
+                f"Resource is being processed: {project_dir or '*'}",
+                uri=project_dir or "*",
+            )
+
+        if partial_exc is not None:
+            # HEAD has moved forward but some VFS writes/deletes failed.
+            # Still schedule reindex for the paths that *did* reach the VFS so
+            # the vector index doesn't stay stale, then re-raise so the caller
+            # learns about the partial failure (and can inspect failed_writes
+            # / failed_deletes / task_id on the exception).
+            try:
+                partial_exc.task_id = await self._schedule_restore_reindex_for_paths(
+                    written_paths=partial_exc.written_paths,
+                    deleted_paths=partial_exc.deleted_paths,
+                    project_dir=project_dir,
+                    real_ctx=real_ctx,
+                )
+            except Exception:
+                logger.exception(
+                    "[VikingFS] git restore partial: reindex scheduling failed; "
+                    "HEAD advanced but reindex was not queued"
+                )
+            raise partial_exc
+
+        if result.get("result") != "applied":
+            return result
+
+        written = list(result.get("written_paths") or [])
+        deleted = list(result.get("deleted_paths") or [])
+        if written or deleted:
+            try:
+                task_id = await self._schedule_restore_reindex_for_paths(
+                    written_paths=written,
+                    deleted_paths=deleted,
+                    project_dir=project_dir,
+                    real_ctx=real_ctx,
+                )
+                if task_id is not None:
+                    result["task_id"] = task_id
+            except Exception:
+                logger.exception(
+                    "[VikingFS] git restore reindex task creation failed; "
+                    "falling back to fire-and-forget rebuild"
+                )
+                self._schedule_vector_rebuild(written=written, deleted=deleted, ctx=real_ctx)
+        return result
+
+    async def _schedule_restore_reindex_for_paths(
+        self,
+        *,
+        written_paths: List[str],
+        deleted_paths: List[str],
+        project_dir: Optional[str],
+        real_ctx: RequestContext,
+    ) -> Optional[str]:
+        """Classify ``written``/``deleted`` paths into vector tasks and queue
+        them as a single tracked background rebuild. Returns the task id, or
+        ``None`` if there is nothing to do.
+
+        Shared by the applied path and the partial-writeback recovery path —
+        both schedule reindex for paths that actually reached the VFS.
+        """
+        if not written_paths and not deleted_paths:
+            return None
+        tasks = self._collect_restore_vector_tasks(written_paths, deleted_paths)
+        if not tasks:
+            return None
+
+        from openviking.service.task_tracker import get_task_tracker
+
+        tracker = get_task_tracker()
+        task = await tracker.create(
+            "snapshot_restore_reindex",
+            resource_id=project_dir or "*",
+            account_id=real_ctx.account_id,
+            user_id=real_ctx.user.user_id,
+        )
+        await tracker.update_stage(
+            task.task_id,
+            "queued",
+            account_id=real_ctx.account_id,
+            user_id=real_ctx.user.user_id,
+        )
+        background = asyncio.create_task(
+            self._run_restore_rebuild_tracked(task.task_id, tasks, real_ctx),
+            name=f"vikingfs-git-restore-reindex:{task.task_id}",
+        )
+        self._background_tasks.add(background)
+        background.add_done_callback(self._background_tasks.discard)
+        return task.task_id
+
+    async def show(
+        self,
+        target_ref: str,
+        *,
+        path: Optional[str] = None,
+        ctx: Optional[RequestContext] = None,
+    ) -> Union[Dict[str, Any], bytes]:
+        """Read a commit's metadata or a single blob.
+
+        ``path=None`` returns the commit metadata dict (oid, tree, parents,
+        author, committer, message). ``path=str`` returns the blob bytes
+        directly, stripping the oid/size envelope returned by the binding.
+        """
+        real_ctx = self._ctx_or_default(ctx)
+        account = real_ctx.account_id
+        tree_path = self._uri_to_tree_path(path, ctx=real_ctx) if path else None
+        resp = await self._async_agfs.run(
+            "git_show",
+            account=account,
+            target_ref=target_ref,
+            path=tree_path,
+        )
+        if path is not None and isinstance(resp, dict) and "bytes" in resp:
+            return resp["bytes"]
+        return resp
+
+    async def show_blob_raw(
+        self,
+        target_ref: str,
+        *,
+        path: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        """Like ``show(target_ref, path=...)`` but returns the full envelope.
+
+        Returns ``{"oid": str, "size": int, "bytes": bytes}`` without
+        stripping. Used by the HTTP snapshot router to populate
+        ``X-Snapshot-Oid`` / ``X-Snapshot-Size`` response headers.
+        """
+        real_ctx = self._ctx_or_default(ctx)
+        account = real_ctx.account_id
+        tree_path = self._uri_to_tree_path(path, ctx=real_ctx)
+        resp = await self._async_agfs.run(
+            "git_show",
+            account=account,
+            target_ref=target_ref,
+            path=tree_path,
+        )
+        if not isinstance(resp, dict) or "bytes" not in resp:
+            raise TypeError(
+                f"git_show returned unexpected shape for blob path: {type(resp).__name__}"
+            )
+        return resp
+
+    async def log(
+        self,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[Dict[str, Any]]:
+        """Walk back from ``branch``'s HEAD along ``parents[0]`` up to ``limit`` commits.
+
+        Returns a list of commit metadata dicts (same shape as ``show(target_ref)``).
+        """
+        if limit <= 0:
+            return []
+        real_ctx = self._ctx_or_default(ctx)
+        account = real_ctx.account_id
+        head = await self._async_agfs.run(
+            "git_show",
+            account=account,
+            target_ref=branch,
+            path=None,
+        )
+        results: List[Dict[str, Any]] = [head]
+        parents = head.get("parents") or []
+        while parents and len(results) < limit:
+            parent_oid = parents[0]
+            commit = await self._async_agfs.run(
+                "git_show",
+                account=account,
+                target_ref=parent_oid,
+                path=None,
+            )
+            results.append(commit)
+            parents = commit.get("parents") or []
+        return results
+
+    def _collect_restore_vector_tasks(
+        self,
+        written: List[str],
+        deleted: List[str],
+    ) -> set[tuple]:
+        """Classify restore-affected paths into deduplicated ``(op, uri, level)`` tasks.
+
+        Tasks are deduplicated on the exact ``(op, uri, level)`` key (no ancestor
+        subsumption — each change is handled independently because no operation
+        recurses into descendants).
+        """
+        tasks: set[tuple] = set()
+        for tree_path in written:
+            try:
+                task = self._classify_restore_path(tree_path, deleted=False)
+            except ValueError:
+                continue
+            if task is not None:
+                tasks.add(task)
+        for tree_path in deleted:
+            try:
+                task = self._classify_restore_path(tree_path, deleted=True)
+            except ValueError:
+                continue
+            if task is not None:
+                tasks.add(task)
+        return tasks
+
+    def _schedule_vector_rebuild(
+        self,
+        *,
+        written: List[str],
+        deleted: List[str],
+        ctx: RequestContext,
+    ) -> None:
+        """Fire-and-forget precise vector maintenance for a git restore.
+
+        Each affected path is classified by :py:meth:`_classify_restore_path`
+        into a ``(op, uri, level)`` task and scheduled independently:
+
+        - ``reindex_marker`` — recompute only a directory's L0/L1 vector.
+        - ``reindex_file`` — recompute only a source file's DETAIL vector
+          (non-recursive ``execute(mode="vectors_only")``).
+        - ``delete`` — remove only the ``(uri, level)`` vector (directory
+          marker removal, or deleted source file).
+
+        Failures are logged and never propagate.
+        """
+        try:
+            from openviking.service.reindex_executor import get_reindex_executor
+        except Exception:
+            logger.exception("[VikingFS] ReindexExecutor import failed; skipping rebuild")
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("[VikingFS] git restore vector rebuild skipped: no running event loop")
+            return
+
+        tasks = self._collect_restore_vector_tasks(written, deleted)
+        if not tasks:
+            return
+
+        executor = get_reindex_executor()
+        for op, uri, level in tasks:
+            loop.create_task(
+                self._run_vector_rebuild(executor, op, uri, level, ctx),
+                name=f"vikingfs-git-{op}:{uri}:{int(level)}",
+            )
+
+    async def _run_restore_rebuild_tracked(
+        self,
+        task_id: str,
+        tasks: set[tuple],
+        ctx: RequestContext,
+    ) -> None:
+        """Background worker driving a tracked restore vector rebuild.
+
+        Runs all classified ``(op, uri, level)`` rebuild tasks concurrently and
+        drives the task through start → complete/fail. Per-task failures are
+        swallowed (and logged) inside :py:meth:`_run_vector_rebuild`, preserving
+        the "failures do not block" semantics.
+        """
+        from openviking.service.task_tracker import get_task_tracker
+
+        tracker = get_task_tracker()
+        await tracker.start(
+            task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            stage="reindexing",
+        )
+        try:
+            from openviking.service.reindex_executor import get_reindex_executor
+
+            executor = get_reindex_executor()
+            await asyncio.gather(
+                *[
+                    self._run_vector_rebuild(executor, op, uri, level, ctx)
+                    for (op, uri, level) in tasks
+                ]
+            )
+            await tracker.complete(
+                task_id,
+                {"status": "completed", "task_count": len(tasks)},
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        except Exception as exc:
+            await tracker.fail(
+                task_id,
+                str(exc),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+
+    async def _run_vector_rebuild(
+        self,
+        executor: Any,
+        op: str,
+        uri: str,
+        level: ContextLevel,
+        ctx: RequestContext,
+    ) -> None:
+        """Wrapper coroutine: dispatch one vector task and swallow errors."""
+        try:
+            if op == "reindex_marker":
+                await executor.reindex_directory_marker(dir_uri=uri, level=level, ctx=ctx)
+            elif op == "reindex_file":
+                await executor.execute(uri=uri, mode="vectors_only", wait=True, ctx=ctx)
+            elif op == "delete":
+                await executor.delete_uri_level(uri=uri, level=level, ctx=ctx)
+            else:  # pragma: no cover - defensive
+                logger.warning("[VikingFS] unknown vector rebuild op %r for %s", op, uri)
+        except Exception:
+            logger.exception("[VikingFS] git restore vector task %s failed for %s", op, uri)

@@ -7,7 +7,7 @@ import tempfile
 import uuid
 
 import pytest
-from conftest import ov, ov_add_resource, ov_mv, ov_rm
+from conftest import ov, ov_add_resource, ov_mkdir, ov_mv, ov_rm
 
 pytestmark = pytest.mark.cli_remote
 
@@ -88,7 +88,7 @@ class TestFsStat:
 class TestFsMkdir:
     def test_mkdir(self, test_dir_uri):
         sub_dir = f"{test_dir_uri}/mkdir_test"
-        r = ov(["mkdir", sub_dir, "-o", "json"])
+        r = ov_mkdir(sub_dir)
         assert r["exit_code"] == 0, (
             f"ov mkdir should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
@@ -99,7 +99,7 @@ class TestFsMkdir:
 
     def test_mkdir_with_description(self, test_dir_uri):
         sub_dir = f"{test_dir_uri}/mkdir_desc"
-        r = ov(["mkdir", sub_dir, "--description", "CLI test directory", "-o", "json"])
+        r = ov_mkdir(sub_dir, "--description", "CLI test directory")
         assert r["exit_code"] == 0, (
             f"ov mkdir with description should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
@@ -109,7 +109,7 @@ class TestFsMkdir:
 class TestFsRm:
     def test_rm_directory(self, test_dir_uri):
         sub_dir = f"{test_dir_uri}/rm_test"
-        ov(["mkdir", sub_dir, "-o", "json"])
+        ov_mkdir(sub_dir)
         r = ov_rm(sub_dir)
         assert r["exit_code"] == 0, (
             f"ov rm should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"

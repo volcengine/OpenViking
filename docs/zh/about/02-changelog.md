@@ -3,6 +3,48 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+## v0.4.5 (2026-06-24)
+
+### 重点更新
+
+- **认证角色序列化与 trusted 模式**：请求身份中的角色现在会在 storage、resource、session、queue、watch、summarizer 和语义处理路径中统一序列化为字符串角色；OpenViking 后端的 VikingBot 流程也补充了 trusted `auth_mode` 支持。
+- **CLI、Web Studio 与 Bot 配置可靠性**：CLI 配置向导中的用户管理设置更清晰，Web Studio 账号选择更稳定，VikingBot 认证处理更简单，失败的 session archive 现在可以跳过。
+- **Agent 集成召回与 OpenCode 文档**：Codex / OpenCode 集成新增 session-aware recall，OpenCode 插件文档收敛到单一维护中的插件。
+- **存储与 Session 稳定性加固**：QueueFS 语义处理支持非目录 memory URI，glob URI scheme 会被保留，event summary fallback、memory abstract 截断和 path-lock 进度日志更加稳健。
+- **CLI / SDK 接口打磨**：CLI 校验错误更清晰，旧服务端请求会避免发送较新的字段，Go SDK 暴露 `set_tags`，并纳入独立 Python HTTP SDK 提取。
+- **新增集成示例**：补充 OpenWebUI 与 Pi coding-agent 集成示例。
+
+### 升级说明
+
+- 运行认证或 trusted-mode 多租户部署时，建议升级到此版本以获得角色序列化修复。
+- Python 包版本由 `v0.4.5` tag 推导。
+- Docker 镜像由 release workflow 发布 `v0.4.5` 和 `latest` 标签。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.4...v0.4.5)
+
+## v0.4.4 (2026-06-18)
+
+### 重点更新
+
+- **插件化认证架构**：认证内部重构为 plugin-based 架构，为后续扩展和维护 auth mode 打下基础。
+- **Go SDK 搜索过滤**：Go SDK 暴露 search date 与 level filters，客户端可以更精确地约束检索范围。
+- **RAGFS 加密账号修复**：修正 RAGFS 根目录获取 encryption account ID 的异常路径。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.3...v0.4.4)
+
+## v0.4.3 (2026-06-18)
+
+### 重点更新
+
+- **RAGFS 缓存与迁移可靠性**：新增 CachedFileSystem，并支持 Redis、Mooncake、Yuanrong cache providers；legacy shape probe 会跳过 zero-byte 文件和 path locks，S3 head-object 错误返回更清晰，加密读取迁移路径增加 plaintext fallback。
+- **Go SDK 与代码导航**：支持 Go HTTP SDK 并补充文件系统示例文档，同时为 OpenCode 插件新增 code navigation endpoints。
+- **文档搜索与本地化**：新增 OpenViking-powered 文档搜索，并补齐本地化、SDK 和 Hermes wording 更新。
+- **Parser、Session 与 Task 修复**：修复 session ID encode、飞书 URL host 匹配、task tracker 加密绑定和 event overview refresh 等问题。
+- **安全依赖更新**：提升 `python-multipart` 和 `cryptography` 版本下限以修复高危公告，并让 UnderstandingAPI zip 下载使用 safe extraction 规避 Zip Slip 风险。
+- **插件与 Memory 后续修复**：更新 memory plugin recall/auth handling、OpenClaw 插件 release metadata、session skill YAML 规则和 tag-setting 支持。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.2...v0.4.3)
+
 ## v0.4.2 (2026-06-17)
 
 ### 重点更新

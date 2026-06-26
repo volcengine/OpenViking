@@ -53,10 +53,10 @@ OpenClaw 记忆链路完整端到端测试
     - plugins.entries.openviking.enabled = true     # 启用 OV 插件
     - plugins.entries.openviking.config.autoCapture = true  # afterTurn 自动捕获
     - plugins.entries.openviking.config.autoRecall = true   # 新用户自动召回记忆
-    - plugins.entries.openviking.config.commitTokenThreshold = 50
-      ↑ 此值控制 auto-commit 触发时机。设为 50（token）时几乎每轮触发；
-        若值较大（如 10000），测试中 auto-commit 不会提前发生，
-        Phase 3 的 commit 验证行为会不同。脚本已兼容两种场景。
+    - plugins.entries.openviking.config.commitTokenThresholdRatio = 0
+      ↑ 此值控制 auto-commit 触发时机，按模型上下文窗口的比例计算。
+        设为 0 时每轮都 commit；若比例较大（如 0.8），测试中 auto-commit
+        不会提前发生，Phase 3 的 commit 验证行为会不同。脚本已兼容两种场景。
 
 ================================================================================
 四、使用方法

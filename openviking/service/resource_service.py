@@ -1037,6 +1037,7 @@ class ResourceService:
         source_path_hint: Optional[str] = None,
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -1044,6 +1045,7 @@ class ResourceService:
             data: Skill data (directory path, file path, string, or dict)
             wait: Whether to wait for vectorization to complete
             timeout: Wait timeout in seconds
+            target_uri: Optional root URI override (e.g. ``viking://agent/skills``).
 
         Returns:
             Processing result
@@ -1063,6 +1065,7 @@ class ResourceService:
                     ctx=ctx,
                     apply_privacy=apply_privacy,
                     privacy_change_reason=privacy_change_reason,
+                    target_uri=target_uri,
                 )
             else:
                 result = await self._skill_processor.process_skill(
@@ -1073,6 +1076,7 @@ class ResourceService:
                     source_path_hint=source_path_hint,
                     apply_privacy=apply_privacy,
                     privacy_change_reason=privacy_change_reason,
+                    target_uri=target_uri,
                 )
             if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                 result["root_uri"] = result["uri"]

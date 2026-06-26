@@ -229,6 +229,7 @@ export function ContextTreeNode({
   onSelectFile: (entry: VikingFsEntry) => void
   selectedFileUri?: string | null
 }) {
+  const { t } = useTranslation('playground')
   const isOpen = expandedKeys.has(entry.uri)
   const isFileSelected = !entry.isDir && selectedFileUri === entry.uri
   const isDirSelected =
@@ -339,11 +340,11 @@ export function ContextTreeNode({
         ) : null}
         {entry.name === '_abstract.md' ? (
           <span className="shrink-0 rounded bg-muted px-1 font-sans text-[10px] text-muted-foreground">
-            L0
+            {t('explorer.abstractLevel')}
           </span>
         ) : entry.name === '_overview.md' ? (
           <span className="shrink-0 rounded bg-muted px-1 font-sans text-[10px] text-muted-foreground">
-            L1
+            {t('explorer.overviewLevel')}
           </span>
         ) : null}
       </div>
@@ -357,7 +358,7 @@ export function ContextTreeNode({
             >
               <TreeIndentGuides level={level + 1} />
               <Loader2Icon className="size-3 animate-spin" />
-              loading
+              {t('explorer.loading')}
             </div>
           ) : children.length > 0 ? (
             children.map((child) => (
@@ -379,7 +380,7 @@ export function ContextTreeNode({
               style={{ paddingLeft: treeChildContentPadding(level) }}
             >
               <TreeIndentGuides level={level + 1} />
-              empty
+              {t('explorer.empty')}
             </div>
           )}
         </div>

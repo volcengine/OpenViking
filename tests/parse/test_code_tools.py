@@ -10,7 +10,6 @@ from openviking.parse.parsers.code.ast.code_tools import (
 )
 from openviking.parse.parsers.code.ast.extractor import get_extractor
 
-
 PY_SAMPLE = '''"""Module top doc."""
 
 import os
@@ -281,14 +280,14 @@ class TestOutlineFile:
 # ---------------------------------------------------------------------------
 
 
-SECOND_FILE = '''def greet():
+SECOND_FILE = """def greet():
     pass
 
 
 class Other:
     def helper(self):
         pass
-'''
+"""
 
 
 class TestSearchSymbols:

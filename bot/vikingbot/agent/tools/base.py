@@ -27,7 +27,7 @@ class ToolContext:
         memory_peer_ids: Optional list of peer IDs for memory retrieval inside
             the current OpenViking user scope.
         memory_owner_user_ids: Optional list of explicit OpenViking user IDs
-            for legacy root-key fanout searches.
+            for trusted-mode owner-user memory lookup.
         openviking_connection: Optional request-scoped OpenViking identity. Studio
             requests use this so tools call OpenViking with the same connection
             selected in the browser.

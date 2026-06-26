@@ -107,6 +107,7 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
+        temperature: float = 0.7,
         max_iterations: int = 50,
         memory_window: int = 50,
         brave_api_key: str | None = None,
@@ -128,6 +129,7 @@ class AgentLoop:
             provider: LLMProvider instance for making LLM calls.
             workspace: Path to the workspace directory for file operations.
             model: Optional model identifier. If not provided, uses the provider's default.
+            temperature: Sampling temperature for LLM requests (default: 0.7).
             max_iterations: Maximum number of tool execution iterations per message (default: 50).
             memory_window: Maximum number of messages to keep in session memory (default: 50).
             brave_api_key: Optional API key for Brave search integration.
@@ -158,6 +160,7 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
+        self.temperature = temperature
         self.max_iterations = max_iterations
         self.memory_window = memory_window
         self.brave_api_key = brave_api_key
@@ -182,6 +185,7 @@ class AgentLoop:
             bus=bus,
             config=self.config,
             model=self.model,
+            temperature=self.temperature,
             sandbox_manager=sandbox_manager,
         )
 
@@ -317,6 +321,7 @@ class AgentLoop:
             messages=messages,
             tools=tools,
             model=self.model,
+            temperature=self.temperature,
             session_id=session_key.safe_name(),
         ):
             if event.type == "content_delta":
@@ -349,6 +354,7 @@ class AgentLoop:
                 messages=messages,
                 tools=tools,
                 model=self.model,
+                temperature=self.temperature,
                 session_id=session_key.safe_name(),
             )
         return response, streamed_content, streamed_reasoning
@@ -700,7 +706,7 @@ class AgentLoop:
             ov_tools_enable: Whether to enable OpenViking tools for this session
             memory_peer_ids: List of peer IDs for memory retrieval
             memory_owner_user_ids: List of explicit OpenViking user IDs for
-                legacy root-key fanout searches
+                trusted-mode owner-user memory lookup
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
             stop_tool_names: Tool names that terminate the loop immediately after execution
@@ -726,6 +732,14 @@ class AgentLoop:
         write_exp_injected = False
         stop_tools = set(stop_tool_names or [])
 
+        def accumulate_token_usage(response: Any) -> None:
+            if not response.usage:
+                return
+            cur_token = response.usage
+            token_usage["prompt_tokens"] += cur_token.get("prompt_tokens", 0)
+            token_usage["completion_tokens"] += cur_token.get("completion_tokens", 0)
+            token_usage["total_tokens"] += cur_token.get("total_tokens", 0)
+
         while iteration < self.max_iterations:
             iteration += 1
 
@@ -748,11 +762,7 @@ class AgentLoop:
                 session_key=session_key,
                 publish_events=publish_events,
             )
-            if response.usage:
-                cur_token = response.usage
-                token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
-                token_usage["completion_tokens"] += cur_token["completion_tokens"]
-                token_usage["total_tokens"] += cur_token["total_tokens"]
+            accumulate_token_usage(response)
 
             if publish_events and response.reasoning_content and not streamed_reasoning:
                 await self.bus.publish_outbound(
@@ -949,7 +959,43 @@ class AgentLoop:
             pass
         elif final_content is None or (isinstance(final_content, str) and not final_content.strip()):
             if iteration >= self.max_iterations:
-                final_content = f"Reached {self.max_iterations} iterations without completion."
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Tool-use iteration limit reached. Do not call any more tools. "
+                            "Answer the user's original request directly using only the "
+                            "conversation, tool calls, and tool results already available above. "
+                            "If the gathered information is incomplete, explain the best-known "
+                            "answer and clearly note what remains uncertain."
+                        ),
+                    }
+                )
+                response, _streamed_content, streamed_reasoning = await self._chat_with_stream_events(
+                    messages=messages,
+                    tools=[],
+                    session_key=session_key,
+                    publish_events=publish_events,
+                )
+                accumulate_token_usage(response)
+                final_content = response.content
+                final_reasoning_content = response.reasoning_content
+
+                if publish_events and response.reasoning_content and not streamed_reasoning:
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            session_key=session_key,
+                            content=response.reasoning_content,
+                            event_type=OutboundEventType.REASONING,
+                        )
+                    )
+
+        if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
+            if iteration >= self.max_iterations:
+                final_content = (
+                    "I reached the tool-use limit before completing every step, and the "
+                    "available tool results are not enough for a reliable final answer."
+                )
             else:
                 final_content = "I've completed processing but have no response to give."
 
@@ -1620,6 +1666,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                     {"role": "user", "content": prompt},
                 ],
                 model=self.model,
+                temperature=self.temperature,
                 session_id=session.key.safe_name(),
             )
             text = (response.content or "").strip()

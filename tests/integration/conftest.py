@@ -84,6 +84,7 @@ def _skip_when_qdrant_unavailable(request):
     if not _qdrant_available():
         pytest.skip(f"Qdrant not available at {QDRANT_URL}")
 
+
 # (model_name, default_dimension, token_limit)
 GEMINI_MODELS = [
     ("gemini-embedding-2-preview", 3072, 8192),

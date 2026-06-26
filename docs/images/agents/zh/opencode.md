@@ -25,11 +25,11 @@ curl http://localhost:1933/health
 
 ## 步骤 2：安装插件
 
-如果使用已发布的包，把插件加入 `~/.config/opencode/opencode.json`。如果当前环境还不能通过 package 安装，请使用下面的源码安装路径。
+已发布的 npm 包是 `@openviking/opencode-plugin`，可以用 `npm view @openviking/opencode-plugin version` 验证当前可用版本。使用 package 安装时，把插件加入 `~/.config/opencode/opencode.json`。如果当前环境还不能通过 package 安装，请使用下面的源码安装路径。
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 
@@ -39,7 +39,7 @@ curl http://localhost:1933/health
 git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -50,7 +50,7 @@ npm install
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.mjs
+├── openviking.js
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -96,7 +96,7 @@ export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
 
 ## 步骤 4：验证
 
-重启 OpenCode。插件应暴露 `memsearch`、`memread`、`membrowse`、`memgrep`、`memglob`、`memadd`、`memremove`、`memqueue` 和 `memcommit`。
+重启 OpenCode。插件应暴露 memory tools：`memsearch`、`memread`、`membrowse`、`memgrep`、`memglob`、`memadd`、`memwrite`、`memremove`、`memqueue`、`memcommit`，以及 code tools：`codesearch`、`codeoutline`、`codeexpand`。
 
 可以让 OpenCode 浏览 OpenViking 或 commit 当前 session。异常时查看运行时日志：
 
@@ -109,7 +109,7 @@ export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
 
 | 现象 | 修复 |
 |------|------|
-| 插件没有加载 | package 安装检查 `~/.config/opencode/opencode.json`；源码安装检查 `~/.config/opencode/plugins/openviking.mjs` |
+| 插件没有加载 | package 安装检查 `~/.config/opencode/opencode.json`；源码安装检查 `~/.config/opencode/plugins/openviking.js` |
 | Tools 连到了错误的 server | 检查 `endpoint`，或用 `OPENVIKING_PLUGIN_CONFIG` 指向正确配置文件 |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还需要 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
 | recall 为空 | 确认 OpenViking 中已有 memories/resources，并且 `autoRecall.enabled` 为 `true` |

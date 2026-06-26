@@ -193,9 +193,13 @@ def is_session_uri(uri: str) -> bool:
     return len(parts) >= 3 and parts[0] == "user" and parts[2] == "sessions"
 
 
+AGENT_SHARED_ROOTS: tuple[str, ...] = ("viking://agent/skills",)
+
+
 def visible_roots(ctx: RequestContext) -> list[str]:
     return [
         "viking://resources",
+        *AGENT_SHARED_ROOTS,
         canonical_user_root(ctx),
     ]
 

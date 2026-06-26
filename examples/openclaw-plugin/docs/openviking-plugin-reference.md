@@ -85,7 +85,8 @@ $OPENCLAW_STATE_DIR/openclaw.json
 | `autoCapture` | boolean | `true` | — | 是否在会话过程中自动将消息写入 OpenViking session 并触发记忆抽取。 |
 | `captureMode` | `"semantic"` \| `"keyword"` | `"semantic"` | — | 捕获模式。非法值会导致配置解析失败。 |
 | `captureMaxLength` | number | `24000` | — | 自动捕获文本最大长度，范围 `200` 到 `200000`。 |
-| `commitTokenThreshold` | number | `20000` | — | afterTurn 中 pending tokens 达到阈值后触发 commit；`0` 表示每轮都提交。 |
+| `commitTokenThreshold` | number | 已废弃 | — | 旧的绝对 token 阈值，已被 `commitTokenThresholdRatio` 取代；为兼容老配置保留（可解析但被忽略，不再生效）。 |
+| `commitTokenThresholdRatio` | number | `0.5` | — | afterTurn 中 pending tokens 达到「模型上下文窗口 × 该比例」时触发 commit（0-1，例 `0.5`=50%）；`0` 表示每轮都提交。 |
 | `commitKeepRecentCount` | number | `10` | — | afterTurn commit 后保留最近消息数，范围 `0` 到 `1000`。compact 路径始终使用 `0`。 |
 
 ### 3.4 自动召回与显式召回

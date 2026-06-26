@@ -3,14 +3,12 @@
 """Search endpoints for OpenViking HTTP Server."""
 
 import math
-from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.peer_id import normalize_peer_selector
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -87,21 +85,6 @@ def _resolve_uri_or_uris(uri: Union[str, List[str]]) -> Union[str, List[str]]:
     return resolve_path_variables(uri)
 
 
-def _ctx_with_legacy_actor_peer(
-    ctx: RequestContext,
-    legacy_peer_id: Optional[str],
-) -> RequestContext:
-    if legacy_peer_id is None:
-        return ctx
-    if ctx.actor_peer_id and ctx.actor_peer_id != legacy_peer_id:
-        raise InvalidArgumentError(
-            "actor_peer_id cannot be used with a different legacy agent_id/agent_uri"
-        )
-    if ctx.actor_peer_id == legacy_peer_id and ctx.legacy_agent_id == legacy_peer_id:
-        return ctx
-    return replace(ctx, actor_peer_id=legacy_peer_id, legacy_agent_id=legacy_peer_id)
-
-
 class FindRequest(BaseModel):
     """Request model for find."""
 
@@ -123,15 +106,6 @@ class FindRequest(BaseModel):
     time_field: Optional[TimeField] = None
     level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
-
-    @model_validator(mode="after")
-    def normalize_request_peer_id(self) -> "FindRequest":
-        self.agent_id = normalize_peer_selector(
-            None,
-            agent_id=self.agent_id,
-            agent_uri=self.agent_uri,
-        )
-        return self
 
 
 class SearchRequest(BaseModel):
@@ -158,15 +132,6 @@ class SearchRequest(BaseModel):
     level: Optional[Union[int, str, List[int]]] = None
     telemetry: TelemetryRequest = False
 
-    @model_validator(mode="after")
-    def normalize_request_peer_id(self) -> "SearchRequest":
-        self.agent_id = normalize_peer_selector(
-            None,
-            agent_id=self.agent_id,
-            agent_uri=self.agent_uri,
-        )
-        return self
-
 
 class GrepRequest(BaseModel):
     """Request model for grep."""
@@ -176,7 +141,7 @@ class GrepRequest(BaseModel):
     pattern: str
     case_insensitive: bool = False
     node_limit: Optional[int] = None
-    level_limit: int = 5
+    level_limit: int = 10
 
 
 class GlobRequest(BaseModel):
@@ -194,7 +159,6 @@ async def find(
 ):
     """Semantic search without session context."""
     service = get_service()
-    ctx = _ctx_with_legacy_actor_peer(_ctx, request.agent_id)
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
@@ -210,7 +174,7 @@ async def find(
         telemetry=request.telemetry,
         fn=lambda: service.search.find(
             query=request.query,
-            ctx=ctx,
+            ctx=_ctx,
             target_uri=resolved_target_uri,
             limit=actual_limit,
             score_threshold=request.score_threshold,
@@ -236,7 +200,6 @@ async def search(
 ):
     """Semantic search with optional session context."""
     service = get_service()
-    ctx = _ctx_with_legacy_actor_peer(_ctx, request.agent_id)
     actual_limit = _resolve_search_limit(request.limit, request.node_limit)
     effective_filter = _resolve_search_filter(
         request.filter,
@@ -251,11 +214,11 @@ async def search(
     async def _search():
         session = None
         if request.session_id:
-            session = service.sessions.session(ctx, request.session_id)
+            session = service.sessions.session(_ctx, request.session_id)
             await session.load()
         return await service.search.search(
             query=request.query,
-            ctx=ctx,
+            ctx=_ctx,
             target_uri=resolved_target_uri,
             session=session,
             limit=actual_limit,

@@ -525,8 +525,21 @@ const zhCN = {
       loadingEditor: '加载编辑器...',
       markdownPreview: '预览',
       markdownSource: '源码',
+      noDirectoryContext: '这个目录暂无摘要或概览。',
       save: '保存',
+      selectDirectoryContext: '选择一个标签查看目录上下文。',
       unsupportedBinary: '二进制文件不支持文本预览。',
+      jsonl: {
+        collapse: '收起',
+        dialogMode: '对话',
+        emptyJsonl: '空 JSONL。',
+        emptyMessage: '空消息',
+        expand: '展开',
+        noArguments: '无参数',
+        rawMode: 'JSONL',
+        recordCount: '{{count}} 条记录',
+        toolcall: '工具调用',
+      },
     },
   },
   retrieval: {
@@ -614,6 +627,12 @@ const zhCN = {
       toolInput: '输入',
       toolResult: '结果',
       loadMoreRefs: '加载更多 {{count}} 条（剩余 {{remaining}} 条）',
+      relativeTime: {
+        justNow: '刚刚',
+        minutesAgo: '{{count}} 分钟前',
+        hoursAgo: '{{count}} 小时前',
+        daysAgo: '{{count}} 天前',
+      },
       toolStatus: {
         completed: '完成',
         failed: '失败',
@@ -698,6 +717,10 @@ const zhCN = {
     explorer: {
       title: '上下文目录',
       addResource: '添加资源',
+      abstractLevel: 'L0',
+      empty: '空',
+      loading: '加载中',
+      overviewLevel: 'L1',
       search: '搜索上下文',
       refresh: '刷新目录',
       namespaces: {
@@ -726,6 +749,7 @@ const zhCN = {
         title: '请开启 bot 模式',
         description:
           '当前服务未启用 Agent 对话能力，请使用 bot 模式启动服务后重试。',
+        command: 'openviking-server --with-bot',
         retry: '重新检测',
       },
       empty: {
@@ -753,6 +777,7 @@ const zhCN = {
       searchScopeLine: '搜索范围：{{scope}}',
       helpParameters: '参数',
       helpExamples: '示例',
+      helpSubcommands: '子命令',
       noParameters: '无参数',
       currentScopeAction: '使用当前目录',
       readUsage: '用法：/read viking://resources/...',
@@ -1082,6 +1107,30 @@ const zhCN = {
         session: {
           description: '管理 Agent 会话',
           usage: '/session 子命令',
+        },
+        tree: {
+          description: '展示目录树',
+          usage: '/tree [viking://resources/...]',
+        },
+        stat: {
+          description: '查看资源元信息',
+          usage: '/stat viking://resources/...',
+        },
+        abstract: {
+          description: '读取目录摘要',
+          usage: '/abstract viking://resources/...',
+        },
+        overview: {
+          description: '读取目录概览',
+          usage: '/overview viking://resources/...',
+        },
+        health: {
+          description: '查看后端健康状态',
+          usage: '/health',
+        },
+        wait: {
+          description: '等待服务就绪',
+          usage: '/wait [--timeout seconds]',
         },
       },
     },

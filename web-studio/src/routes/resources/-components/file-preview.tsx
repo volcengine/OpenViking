@@ -135,6 +135,8 @@ const DIRECTORY_LEVEL_META: Array<{
 
 const JSONL_MESSAGE_PREVIEW_LIMIT = 720
 const JSONL_TOOLCALL_STORAGE_KEY = 'openviking.playground.jsonlToolCall'
+const COLLAPSE_SYMBOL = '▾'
+const EXPAND_SYMBOL = '▸'
 
 type JsonlRecord = {
   error: Error | null
@@ -776,7 +778,7 @@ function JsonlRawRow({ record }: { record: JsonlRecord }) {
         onClick={() => setOpen((current) => !current)}
       >
         <span>{record.index + 1}</span>
-        <span>{open ? '▾' : '▸'}</span>
+        <span aria-hidden="true">{open ? COLLAPSE_SYMBOL : EXPAND_SYMBOL}</span>
       </button>
       <div className="min-w-0 px-3 py-2">
         {open ? (
@@ -813,6 +815,7 @@ function JsonlRawRow({ record }: { record: JsonlRecord }) {
 }
 
 function JsonlToolBody({ text, toolName }: { text: string; toolName: string }) {
+  const { t } = useTranslation('resources')
   const afterTag = text.replace(/^\[tool:\s*[^\]]+\]\s*/, '')
   const parsed = useMemo(() => {
     if (!toolName || !afterTag.trim()) return null
@@ -829,25 +832,27 @@ function JsonlToolBody({ text, toolName }: { text: string; toolName: string }) {
     </pre>
   ) : (
     <pre className="whitespace-pre-wrap break-words text-xs leading-5">
-      {afterTag || 'No arguments'}
+      {afterTag || t('filePreview.jsonl.noArguments')}
     </pre>
   )
 }
 
 function JsonlMarkdownBody({ content }: { content: string }) {
+  const { t } = useTranslation('resources')
   return (
     <div className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={markdownComponents}
       >
-        {content || 'Empty message'}
+        {content || t('filePreview.jsonl.emptyMessage')}
       </ReactMarkdown>
     </div>
   )
 }
 
 function JsonlMessageCard({ record }: { record: JsonlRecord }) {
+  const { t } = useTranslation('resources')
   const [expanded, setExpanded] = useState(false)
   const message = useMemo(() => getJsonlMessage(record), [record])
   const isTool = Boolean(message.toolName || message.kind === 'tool-result')
@@ -893,7 +898,7 @@ function JsonlMessageCard({ record }: { record: JsonlRecord }) {
         <JsonlMarkdownBody content={body} />
       ) : (
         <pre className="whitespace-pre-wrap break-words text-xs leading-5">
-          {body || 'Empty message'}
+          {body || t('filePreview.jsonl.emptyMessage')}
         </pre>
       )}
 
@@ -908,7 +913,9 @@ function JsonlMessageCard({ record }: { record: JsonlRecord }) {
             className="ml-auto rounded border px-2 py-0.5 font-medium text-primary hover:border-primary"
             onClick={() => setExpanded((current) => !current)}
           >
-            {expanded ? 'Collapse' : 'Expand'}
+            {expanded
+              ? t('filePreview.jsonl.collapse')
+              : t('filePreview.jsonl.expand')}
           </button>
         ) : null}
       </div>
@@ -917,6 +924,7 @@ function JsonlMessageCard({ record }: { record: JsonlRecord }) {
 }
 
 function JsonlPreview({ content }: { content: string }) {
+  const { t } = useTranslation('resources')
   const [dialogMode, setDialogMode] = useState(true)
   const [showTools, setShowTools] = useState(() => {
     if (typeof window === 'undefined') return true
@@ -943,7 +951,7 @@ function JsonlPreview({ content }: { content: string }) {
   if (!records.length) {
     return (
       <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-        Empty JSONL.
+        {t('filePreview.jsonl.emptyJsonl')}
       </div>
     )
   }
@@ -952,12 +960,14 @@ function JsonlPreview({ content }: { content: string }) {
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
         <span className="font-medium text-primary">
-          {records.length} record{records.length === 1 ? '' : 's'}
+          {t('filePreview.jsonl.recordCount', { count: records.length })}
         </span>
         <div className="flex items-center gap-2">
           {dialogMode && hasTools ? (
             <label className="inline-flex cursor-pointer items-center gap-2">
-              <span className="font-medium">toolcall</span>
+              <span className="font-medium">
+                {t('filePreview.jsonl.toolcall')}
+              </span>
               <input
                 type="checkbox"
                 className="peer sr-only"
@@ -975,7 +985,9 @@ function JsonlPreview({ content }: { content: string }) {
           ) : null}
           <label className="inline-flex cursor-pointer items-center gap-2">
             <span className="font-medium">
-              {dialogMode ? 'Dialog' : 'JSONL'}
+              {dialogMode
+                ? t('filePreview.jsonl.dialogMode')
+                : t('filePreview.jsonl.rawMode')}
             </span>
             <input
               type="checkbox"
@@ -1355,11 +1367,11 @@ export function FilePreview({
                   </div>
                 ) : availableDirectoryLevels.length === 0 ? (
                   <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-                    No abstract or overview available for this folder.
+                    {t('filePreview.noDirectoryContext')}
                   </div>
                 ) : visibleDirectoryLevels.length === 0 ? (
                   <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-                    Select a chip to show folder context.
+                    {t('filePreview.selectDirectoryContext')}
                   </div>
                 ) : (
                   <div className="grid gap-5">

@@ -8,7 +8,7 @@ Based on a simplified mapping of human cognitive patterns and engineering consid
 |------|---------|-----------|------------|
 | **Resource** | Knowledge and rules | Long-term, relatively static | User adds |
 | **Memory** | Agent's cognition | Long-term, dynamically updated | Agent records |
-| **Skill** | Callable capabilities | Long-term, static | Agent invokes |
+| **Skill** | Declarable agent capability configuration (AgentDefinedContextType) | Long-term, static | User or system adds |
 
 ## Resource
 
@@ -81,9 +81,9 @@ results = await client.find(
 )
 ```
 
-## Skill
+## Skill (Capabilities / AgentDefinedContextType)
 
-Skills are capabilities that Agents can invoke, such as current Skills, MCP, etc.
+Skills are capabilities that Agents can invoke, belonging to the **AgentDefinedContextType** category. This includes traditional workflow definitions, communication endpoints, tool configurations, and payment capabilities. Their common characteristic is that they **define how an agent interacts with external systems**, with relatively static runtime definitions, but invocation experiences are updated in Memory.
 
 ### Characteristics
 
@@ -94,26 +94,51 @@ Skills are capabilities that Agents can invoke, such as current Skills, MCP, etc
 ### Storage Location
 
 ```
-viking://user/skills/{skill-name}/
+viking://user/skills/{skill-name}/     # Default storage path
+├── .abstract.md          # L0: Short description
+├── SKILL.md              # L1: Detailed overview
+└── scripts               # L2: Full definition
+
+viking://agent/skills/{skill-name}/    # Override via --uri, public/shared (account global)
 ├── .abstract.md          # L0: Short description
 ├── SKILL.md              # L1: Detailed overview
 └── scripts               # L2: Full definition
 ```
 
+### AgentDefinedContextType Subtypes
+
+AgentDefinedContextType includes the following subtypes, all stored under the `viking://agent/` scope:
+
+| Subtype | Location | Description |
+|---------|----------|-------------|
+| **Skill** | `agent/skills/` | Traditional workflow definitions, such as search and code generation |
+| **Endpoint** | `agent/endpoints/` | Communication endpoint configuration (a2a, anp, etc.) (planned) |
+| **Tool** | `agent/tools/` | Tool configuration (mcp, etc.) (planned) |
+| **Payment** | `agent/payments/` | Payment capability configuration (ap2, etc.) (planned) |
+
 ### Usage
 
 ```python
-# Add skill
+# Add skill (defaults to viking://user/skills/)
 await client.add_skill({
     "name": "search-web",
     "description": "Search the web for information",
     "content": "# search-web\n..."
 })
 
-# Search skills
+# Write to global agent skills root (public/shared) via -p override
+ov skills add search-web -p viking://agent/skills
+
+# Search user skills
 results = await client.find(
     "web search",
     target_uri="viking://user/skills/"
+)
+
+# Search global agent skills
+results = await client.find(
+    "web search",
+    target_uri="viking://agent/skills/"
 )
 ```
 

@@ -651,14 +651,75 @@ fn should_run_authenticated_probe(
     }
 }
 
-pub(crate) fn validation_error_copy(kind: ConfigKind, _error: &Error) -> String {
-    match kind {
-        ConfigKind::OpenVikingService => {
-            "Validation failed. Check your API key and try again.".to_string()
+pub(crate) fn validation_error_copy(kind: ConfigKind, error: &Error) -> String {
+    match error {
+        Error::Network(msg) if msg.contains("unhealthy") => {
+            "Server is reachable but reported unhealthy status. Check the server logs.".to_string()
         }
-        ConfigKind::Custom => {
-            "Validation failed. Check the server URL and API key if required.".to_string()
+        Error::Network(_) => match kind {
+            ConfigKind::OpenVikingService => {
+                "Cannot reach OpenViking Service. Check your network connection.".to_string()
+            }
+            ConfigKind::Custom => {
+                "Cannot reach the server. Check the URL and your network connection.".to_string()
+            }
+        },
+        Error::Api {
+            status: Some(401 | 403),
+            ..
+        } => "API key was rejected. Check your API key.".to_string(),
+        Error::Api { status: Some(404), .. } => {
+            "Server responded but the API endpoint was not found. Check the server URL.".to_string()
         }
+        Error::Api { status: Some(status), .. } => {
+            format!("Server returned HTTP {status}. Check the server configuration.")
+        }
+        Error::Api { .. } => {
+            "Server returned an error during validation. Check the server logs.".to_string()
+        }
+        Error::Config(msg) => msg.clone(),
+        _ => match kind {
+            ConfigKind::OpenVikingService => {
+                "Validation failed. Check your API key and try again.".to_string()
+            }
+            ConfigKind::Custom => {
+                "Validation failed. Check the server URL and API key if required.".to_string()
+            }
+        },
+    }
+}
+
+pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> String {
+    match error {
+        Error::Network(msg) if msg.contains("unhealthy") => {
+            "服务器可连接，但健康状态异常。请检查服务器日志。".to_string()
+        }
+        Error::Network(_) => match kind {
+            ConfigKind::OpenVikingService => {
+                "无法连接 OpenViking 服务。请检查网络连接。".to_string()
+            }
+            ConfigKind::Custom => {
+                "无法连接服务器。请检查 URL 和网络连接。".to_string()
+            }
+        },
+        Error::Api {
+            status: Some(401 | 403),
+            ..
+        } => "API Key 被拒绝。请检查 API Key。".to_string(),
+        Error::Api { status: Some(404), .. } => {
+            "服务器响应了，但 API 端点未找到。请检查服务器 URL。".to_string()
+        }
+        Error::Api { status: Some(status), .. } => {
+            format!("服务器返回 HTTP {status}。请检查服务器配置。")
+        }
+        Error::Api { .. } => {
+            "服务器验证时返回错误。请检查服务器日志。".to_string()
+        }
+        Error::Config(msg) => msg.clone(),
+        _ => match kind {
+            ConfigKind::OpenVikingService => "验证失败。请检查 API Key 后重试。".to_string(),
+            ConfigKind::Custom => "验证失败。请检查服务器 URL，以及是否需要 API Key。".to_string(),
+        },
     }
 }
 
@@ -1081,11 +1142,11 @@ mod tests {
 
         assert_eq!(
             cloud,
-            "Validation failed. Check your API key and try again."
+            "Server returned an error during validation. Check the server logs."
         );
         assert_eq!(
             custom,
-            "Validation failed. Check the server URL and API key if required."
+            "Server returned an error during validation. Check the server logs."
         );
         assert!(!cloud.contains("Request ID"));
         assert!(!custom.contains("AuthenticationError"));

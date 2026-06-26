@@ -1,7 +1,6 @@
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -16,7 +15,9 @@ def _array_items(text: str, key: str) -> set[str]:
 
 
 def _section(text: str, name: str) -> str:
-    match = re.search(rf"^\[{re.escape(name)}\]\s*$(.*?)(?=^\[|\Z)", text, flags=re.DOTALL | re.MULTILINE)
+    match = re.search(
+        rf"^\[{re.escape(name)}\]\s*$(.*?)(?=^\[|\Z)", text, flags=re.DOTALL | re.MULTILINE
+    )
     assert match is not None, f"[{name}] section not found"
     return match.group(1)
 

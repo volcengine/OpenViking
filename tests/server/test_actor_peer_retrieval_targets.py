@@ -19,24 +19,21 @@ def test_normalize_peer_id_accepts_peer_id():
 
 def _ctx(
     actor_peer_id: str | None = None,
-    legacy_agent_id: str | None = None,
 ) -> RequestContext:
     return RequestContext(
         user=UserIdentifier("acct", "support_bot"),
         role=Role.USER,
         actor_peer_id=actor_peer_id,
-        legacy_agent_id=legacy_agent_id,
     )
 
 
 def _target_dirs(
     target_uri="",
     actor_peer_id: str | None = None,
-    legacy_agent_id: str | None = None,
 ):
     return resolve_retrieval_targets(
         target_uri,
-        _ctx(actor_peer_id, legacy_agent_id),
+        _ctx(actor_peer_id),
     ).target_directories
 
 
@@ -59,25 +56,6 @@ def test_actor_default_search_keeps_user_view_and_filters_peer_collection():
         "viking://user/support_bot/skills",
         "viking://user/support_bot/peers/web-visitor-alice/memories",
         "viking://user/support_bot/peers/web-visitor-alice/resources",
-    ]
-
-
-def test_legacy_agent_default_search_includes_unmigrated_agent_context():
-    targets = _target_dirs(
-        actor_peer_id="web-visitor-alice",
-        legacy_agent_id="web-visitor-alice",
-    )
-
-    assert targets == [
-        "viking://resources",
-        "viking://user/support_bot/memories",
-        "viking://user/support_bot/resources",
-        "viking://user/support_bot/skills",
-        "viking://user/support_bot/peers/web-visitor-alice/memories",
-        "viking://user/support_bot/peers/web-visitor-alice/resources",
-        "viking://agent/web-visitor-alice/memories",
-        "viking://agent/web-visitor-alice/resources",
-        "viking://agent/web-visitor-alice/skills",
     ]
 
 
@@ -108,21 +86,13 @@ def test_actor_default_memory_targets_actor_peer_memory():
     ]
 
 
-def test_legacy_agent_default_memory_targets_unmigrated_agent_memory():
-    assert default_target_directories(
-        _ctx("web-visitor-alice", legacy_agent_id="web-visitor-alice"),
-        context_type=ContextType.MEMORY,
-    ) == [
-        "viking://user/support_bot/memories",
-        "viking://user/support_bot/peers/web-visitor-alice/memories",
-        "viking://agent/web-visitor-alice/memories",
-    ]
-
-
-def test_actor_skill_defaults_keep_user_skills():
+def test_actor_skill_defaults_include_user_and_shared_agent_skills():
     assert default_target_directories(
         _ctx("web-visitor-alice"), context_type=ContextType.SKILL
-    ) == ["viking://user/support_bot/skills"]
+    ) == [
+        "viking://user/support_bot/skills",
+        "viking://agent/skills",
+    ]
 
 
 def test_actor_default_resource_targets_global_and_actor_peer_resources():
@@ -169,32 +139,6 @@ def test_actor_explicit_other_peer_memory_target_is_denied():
     with pytest.raises(PermissionDeniedError, match="another peer"):
         _target_dirs(
             "viking://user/support_bot/peers/web-visitor-bob/memories",
-            actor_peer_id="web-visitor-alice",
-        )
-
-
-def test_explicit_legacy_agent_memory_target_includes_migrated_peer_memory():
-    targets = _target_dirs("viking://agent/web-visitor-alice/memories")
-
-    assert targets == [
-        "viking://agent/web-visitor-alice/memories",
-        "viking://user/support_bot/peers/web-visitor-alice/memories",
-    ]
-
-
-def test_explicit_legacy_agent_skill_target_includes_migrated_user_skills():
-    targets = _target_dirs("viking://agent/web-visitor-alice/skills")
-
-    assert targets == [
-        "viking://agent/web-visitor-alice/skills",
-        "viking://user/support_bot/skills",
-    ]
-
-
-def test_actor_explicit_other_legacy_agent_target_is_denied():
-    with pytest.raises(PermissionDeniedError, match="another legacy agent"):
-        _target_dirs(
-            "viking://agent/web-visitor-bob/memories",
             actor_peer_id="web-visitor-alice",
         )
 

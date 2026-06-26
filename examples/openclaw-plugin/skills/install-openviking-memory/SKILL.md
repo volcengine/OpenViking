@@ -603,7 +603,7 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `recallMaxInjectedChars` | `4000` | Hard cap on injected character count. Complete memories that do not fit are skipped, not truncated. |
 | `recallPreferAbstract` | (plugin default) | Prefer abstract memories over raw. |
 | `recallTokenBudget` | deprecated | Compatibility alias for `recallMaxInjectedChars`. |
-| `commitTokenThreshold` | `20000` | Pending-token threshold for async commit after turns; `0` commits every turn. |
+| `commitTokenThresholdRatio` | `0.5` | Async-commit threshold as a fraction (0-1) of the model context window (e.g. 0.5 = 50%); `0` commits every turn. |
 | `commitKeepRecentCount` | `10` | Recent messages kept live after afterTurn commit. Compact always uses `0`. |
 | `bypassSessionPatterns` | — | Glob patterns for sessions skipped by capture. |
 | `ingestReplyAssist` | (plugin default) | Reply-assist ingestion toggle. |

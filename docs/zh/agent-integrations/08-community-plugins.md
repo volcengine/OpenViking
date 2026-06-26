@@ -48,11 +48,11 @@ curl http://localhost:1933/health
 
 ### 安装
 
-如果使用已发布的包，把插件加入 `~/.config/opencode/opencode.json`。如果当前环境还不能通过 package 安装，请使用下面的源码安装路径。
+已发布的 npm 包是 `@openviking/opencode-plugin`，可以用 `npm view @openviking/opencode-plugin version` 验证当前可用版本。使用 package 安装时，把插件加入 `~/.config/opencode/opencode.json`。如果当前环境还不能通过 package 安装，请使用下面的源码安装路径。
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 
@@ -62,7 +62,7 @@ curl http://localhost:1933/health
 git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -73,7 +73,7 @@ npm install
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.mjs
+├── openviking.js
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -81,7 +81,8 @@ npm install
     └── node_modules/
 ```
 
-顶层 `openviking.mjs` 只是一个 wrapper，用来把 OpenCode 可发现的一级插件入口转发到实际安装目录。
+顶层 `openviking.js` 只是一个 wrapper，用来把 OpenCode 可发现的一级插件入口转发到实际安装目录。
+源码安装请使用 `.js` wrapper；OpenCode 的本地插件扫描器会发现 JavaScript/TypeScript 插件文件。
 
 ### 配置
 
@@ -125,8 +126,9 @@ export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
 
 - `memsearch`、`memread`、`membrowse`
 - `memgrep`、`memglob`
-- `memadd`、`memremove`、`memqueue`
+- `memadd`、`memwrite`、`memremove`、`memqueue`
 - `memcommit`
+- `codesearch`、`codeoutline`、`codeexpand`
 
 可以让 OpenCode 搜索或浏览 OpenViking memory，也可以要求它手动 commit 当前 session。运行时状态和错误日志会写入：
 
@@ -139,7 +141,7 @@ export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
 
 | 问题 | 排查方向 |
 |------|----------|
-| 插件没有加载 | 确认 `~/.config/opencode/opencode.json` 引用了 `openviking-opencode-plugin`；源码安装时确认 `~/.config/opencode/plugins/openviking.mjs` 存在 |
+| 插件没有加载 | 确认 `~/.config/opencode/opencode.json` 引用了 `@openviking/opencode-plugin`；源码安装时确认 `~/.config/opencode/plugins/openviking.js` 存在 |
 | Tools 连到了错误的 server | 检查 `~/.config/opencode/openviking-config.json` 里的 `endpoint`，或用 `OPENVIKING_PLUGIN_CONFIG` 指向正确配置文件 |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还要检查 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
 | recall 为空 | 确认 OpenViking server 中已有 memories/resources，并且 `autoRecall.enabled` 为 `true` |
