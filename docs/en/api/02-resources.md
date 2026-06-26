@@ -869,6 +869,85 @@ Possible shared response:
 
 ---
 
+### POST /api/v1/resources/url_image_index
+
+Embed a **remote image URL** as a multimodal vector under `target_uri` *without persisting the image bytes in agfs*.
+
+Useful when the image lives in tenant-owned hosting (an external S3 / CDN) and only the resulting vector should live in OpenViking. The configured multimodal embedder is passed the URL directly — the embedder (or its upstream provider, e.g. Volcengine Ark `embeddings/multimodal`) fetches the image itself.
+
+Compared with the standard ingest pipeline (`temp_upload` + `/resources`), this endpoint:
+
+- Does **not** write any file to agfs (no temp upload, no resource tree under `target_uri`).
+- Does **not** spawn semantic / abstract-generation work — no `.abstract.md` or `.overview.md` is produced for the indexed URI.
+- Does **not** go through the embedding queue. The embedder is called synchronously and the vector is upserted before the response returns.
+
+The configured multimodal embedder is reused as-is: the same provider, failover, circuit-breaker, and dim-validation enforcement as the normal ingest path apply. A text-only embedder (`supports_multimodal` is `False`) is rejected with HTTP 400.
+
+#### Parameters
+
+| Parameter      | Type    | Required | Default      | Description |
+|----------------|---------|----------|--------------|-------------|
+| `target_uri`   | string  | Yes      | -            | Viking URI to index the resulting vector at, e.g. `viking://resources/products/M14253/images/0.embed`. Must lie under the account scope set by `X-OpenViking-Account`. |
+| `image_url`    | string  | Yes      | -            | Remote `http://` or `https://` URL of the image. Forwarded to the multimodal embedder; the upstream provider fetches the URL. |
+| `summary`      | string  | No       | -            | Optional text accompanying the image (mirrors the `image_and_summary` mode). When set, the multimodal embedding is computed over both the text and the image. |
+| `name`         | string  | No       | URI tail     | Optional display name for the indexed record. |
+| `context_type` | string  | No       | `"resource"` | One of `resource`, `memory`, `skill` — passed through to the vectordb scalar field. |
+| `metadata`     | object  | No       | `{}`         | Extra scalar fields attached to the indexed record (e.g. `sku`, `image_idx`). Reserved keys (`id`, `uri`, `account_id`, `vector`, `level`, `abstract`, `content`, `name`, etc.) are stripped — those are set by the server. |
+| `telemetry`    | bool/object | No   | `false`      | Attach telemetry data to the response. |
+
+#### Request
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/url_image_index \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -H "X-OpenViking-Account: tenant-a" \
+  -d '{
+    "target_uri": "viking://resources/products/M14253/images/0.embed",
+    "image_url": "https://tenant-bucket.example.com/products/abc.jpg",
+    "summary": "Louis Vuitton Trocadero Wearable Wallet",
+    "metadata": {"sku": "M14253", "image_idx": 0}
+  }'
+```
+
+```python
+client.http.post(
+    "/api/v1/resources/url_image_index",
+    json={
+        "target_uri": "viking://resources/products/M14253/images/0.embed",
+        "image_url": "https://tenant-bucket.example.com/products/abc.jpg",
+        "summary": "Louis Vuitton Trocadero Wearable Wallet",
+        "metadata": {"sku": "M14253", "image_idx": 0},
+    },
+    headers={"X-OpenViking-Account": "tenant-a"},
+)
+```
+
+#### Response
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "status": "ok",
+    "uri": "viking://resources/products/M14253/images/0.embed",
+    "id": "8c1b3d2…"
+  }
+}
+```
+
+The returned `id` is a deterministic md5 of `account_id:canonical_uri`, so repeat calls with the same `(X-OpenViking-Account, target_uri)` upsert in place.
+
+#### Notes & caveats
+
+- **No backing resource file.** A URI inserted this way exists only in vectordb. `readDetail` / hierarchical retrieval will not find a `.abstract.md` or `.overview.md` for the URI. Pair it with text resources elsewhere in the tree (e.g. a sibling `.detail.md/detail.md` ingested normally) if downstream agents need narrative context.
+- **No semantic abstract generation.** No VLM is invoked. If callers want a text description alongside the vector, supply it as `summary`.
+- **Embedder must support multimodal.** A 400 is returned if `EmbedderBase.supports_multimodal` is `False`.
+- **Dim consistency is enforced.** The endpoint refuses to insert if `len(vector) != index.dimension`, just like the normal ingest path.
+- **Tenant isolation.** The URI is canonicalized against `X-OpenViking-Account`; cross-account writes are rejected by the same scope check as other tenant-scoped data APIs.
+
+---
+
 ## Related Documentation
 
 - [File System](03-filesystem.md) - File and directory operations
