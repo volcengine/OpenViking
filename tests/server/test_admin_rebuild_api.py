@@ -783,6 +783,150 @@ async def test_reindex_semantic_processor_runs_with_skip_vectorization(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_reindex_resource_vectors_only_skips_directories_with_only_derived_files(
+    monkeypatch,
+):
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
+        async def stat(self, uri, ctx=None):
+            return {"isDir": True}
+
+        async def tree(
+            self,
+            uri,
+            output="original",
+            show_all_hidden=True,
+            node_limit=1000,
+            level_limit=3,
+            ctx=None,
+        ):
+            return [
+                {"uri": "viking://resources/demo/empty", "isDir": True},
+                {"uri": "viking://resources/demo/full", "isDir": True},
+                {"uri": "viking://resources/demo/full/doc.txt", "isDir": False},
+                {"uri": "viking://resources/demo/empty/.overview.md", "isDir": False},
+                {"uri": "viking://resources/demo/empty/.abstract.md", "isDir": False},
+            ]
+
+    seen = []
+
+    async def fake_read_directory_abstract(self, uri, *, ctx):
+        if uri.endswith("/empty"):
+            return ""
+        if uri.endswith("/full"):
+            return "full abstract"
+        return ""
+
+    async def fake_read_directory_overview(self, uri, *, ctx):
+        if uri.endswith("/empty"):
+            return ""
+        if uri.endswith("/full"):
+            return "full overview"
+        return ""
+
+    async def fake_best_file_summary(self, uri, *, ctx):
+        return "file summary"
+
+    async def fake_best_resource_file_vector_text(self, uri, summary, ctx):
+        return summary
+
+    async def fake_upsert_context(self, **kwargs):
+        seen.append((kwargs["uri"], int(kwargs["level"])))
+
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
+    monkeypatch.setattr(ReindexExecutor, "_read_directory_abstract", fake_read_directory_abstract)
+    monkeypatch.setattr(ReindexExecutor, "_read_directory_overview", fake_read_directory_overview)
+    monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
+    monkeypatch.setattr(
+        ReindexExecutor,
+        "_best_resource_file_vector_text",
+        fake_best_resource_file_vector_text,
+    )
+    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
+
+    service = ReindexExecutor()
+    counters = _ReindexCounters()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    await service._reindex_resource_vectors(
+        uri="viking://resources/demo",
+        counters=counters,
+        ctx=ctx,
+    )
+
+    assert ("viking://resources/demo/full", 0) in seen
+    assert ("viking://resources/demo/full", 1) in seen
+    assert all(uri != "viking://resources/demo/empty" for uri, _ in seen)
+    assert counters.unsupported_records == 1
+    assert counters.rebuilt_records == 3
+
+
+@pytest.mark.asyncio
+async def test_reindex_resource_vectors_only_does_not_rebuild_overview_only_directory(
+    monkeypatch,
+):
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
+        async def stat(self, uri, ctx=None):
+            return {"isDir": True}
+
+        async def tree(
+            self,
+            uri,
+            output="original",
+            show_all_hidden=True,
+            node_limit=1000,
+            level_limit=3,
+            ctx=None,
+        ):
+            return [{"uri": "viking://resources/demo/.overview.md", "isDir": False}]
+
+    seen = []
+
+    async def fake_read_directory_abstract(self, uri, *, ctx):
+        return ""
+
+    async def fake_read_directory_overview(self, uri, *, ctx):
+        return "directory overview"
+
+    async def fake_upsert_context(self, **kwargs):
+        seen.append(kwargs["uri"])
+
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
+    monkeypatch.setattr(ReindexExecutor, "_read_directory_abstract", fake_read_directory_abstract)
+    monkeypatch.setattr(ReindexExecutor, "_read_directory_overview", fake_read_directory_overview)
+    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
+
+    service = ReindexExecutor()
+    counters = _ReindexCounters()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    await service._reindex_resource_vectors(
+        uri="viking://resources/demo",
+        counters=counters,
+        ctx=ctx,
+    )
+
+    assert seen == []
+    assert counters.rebuilt_records == 0
+    assert counters.unsupported_records == 1
+
+
+@pytest.mark.asyncio
 async def test_reindex_resource_l2_falls_back_to_vector_text_when_summary_missing(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
 
