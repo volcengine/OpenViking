@@ -42,31 +42,51 @@ def _fake_viking_fs() -> MagicMock:
 
 def test_resolve_uses_resource_name():
     fp = Path("upload_0123456789abcdef.png")
-    assert resolve_media_names(fp, ".png", resource_name="vacation") == ("vacation", "vacation", "vacation.png")
+    assert resolve_media_names(fp, ".png", resource_name="vacation") == (
+        "vacation",
+        "vacation",
+        "vacation.png",
+    )
 
 
 def test_resolve_resource_name_filename_is_not_double_extended():
     # A filename-like resource_name is reduced to its stem ("My Holiday.png" ->
     # "My_Holiday.png", not "My_Holiday.png.png").
     fp = Path("upload_x.png")
-    assert resolve_media_names(fp, ".png", resource_name="My Holiday.png") == ("My Holiday", "My_Holiday", "My_Holiday.png")
+    assert resolve_media_names(fp, ".png", resource_name="My Holiday.png") == (
+        "My Holiday",
+        "My_Holiday",
+        "My_Holiday.png",
+    )
 
 
 def test_resolve_source_name_stem_when_no_resource_name():
     fp = Path("upload_x.png")
-    assert resolve_media_names(fp, ".png", source_name="My Holiday.png") == ("My Holiday", "My_Holiday", "My_Holiday.png")
+    assert resolve_media_names(fp, ".png", source_name="My Holiday.png") == (
+        "My Holiday",
+        "My_Holiday",
+        "My_Holiday.png",
+    )
 
 
 def test_resolve_preserves_non_media_dotted_name():
     # A name that merely contains a dot (not a media extension) is kept intact —
     # only a real media extension is stripped, so "meeting.v1" is not truncated.
     fp = Path("upload_x.png")
-    assert resolve_media_names(fp, ".png", resource_name="meeting.v1") == ("meeting.v1", "meeting.v1", "meeting.v1.png")
+    assert resolve_media_names(fp, ".png", resource_name="meeting.v1") == (
+        "meeting.v1",
+        "meeting.v1",
+        "meeting.v1.png",
+    )
 
 
 def test_resolve_empty_resource_name_falls_through_to_source_name():
     fp = Path("upload_x.png")
-    assert resolve_media_names(fp, ".png", resource_name="", source_name="clip.png") == ("clip", "clip", "clip.png")
+    assert resolve_media_names(fp, ".png", resource_name="", source_name="clip.png") == (
+        "clip",
+        "clip",
+        "clip.png",
+    )
 
 
 def test_resolve_falls_back_to_temp_name_when_no_caller_name():

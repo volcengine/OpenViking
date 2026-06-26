@@ -741,7 +741,7 @@ class TestCheckVikingBot:
                             "api_key": "user-key",
                             "api_key_type": "user",
                         }
-                    }
+                    },
                 }
             )
         )
@@ -766,9 +766,7 @@ class TestCheckVikingBot:
 
     def test_pass_dev_mode_with_ignored_bot_api_key(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
-        config.write_text(
-            json.dumps({"bot": {"ov_server": {"api_key": "stale-key"}}})
-        )
+        config.write_text(json.dumps({"bot": {"ov_server": {"api_key": "stale-key"}}}))
 
         with patch("openviking_cli.doctor._find_config", return_value=config):
             status, detail, fix = check_vikingbot()

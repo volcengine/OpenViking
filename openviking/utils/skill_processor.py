@@ -118,6 +118,7 @@ class SkillProcessor:
         source_path_hint: Optional[str] = None,
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Process and store a skill.
@@ -126,6 +127,8 @@ class SkillProcessor:
             data: Skill data (directory, file path, string, or dict)
             viking_fs: VikingFS instance for storage
             user: Username for context
+            target_uri: Optional root URI override (e.g. ``viking://agent/skills``).
+                When omitted, defaults to ``{user_root}/skills``.
 
         Returns:
             Processing result with status and metadata
@@ -151,6 +154,7 @@ class SkillProcessor:
             ctx=ctx,
             apply_privacy=apply_privacy,
             privacy_change_reason=privacy_change_reason,
+            target_uri=target_uri,
         )
 
     async def process_prepared_skill(
@@ -161,6 +165,7 @@ class SkillProcessor:
         *,
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         config = get_openviking_config()
         cleanup_path = preparation.cleanup_path
@@ -179,10 +184,10 @@ class SkillProcessor:
                 )
             skill_abstract = self._build_skill_abstract(skill_dict)
 
-            skill_root_uri = f"{canonical_user_root(ctx)}/skills"
+            effective_root_uri = self._resolve_skill_root_uri(ctx, target_uri)
             context = Context(
-                uri=f"{skill_root_uri}/{skill_dict['name']}",
-                parent_uri=skill_root_uri,
+                uri=f"{effective_root_uri}/{skill_dict['name']}",
+                parent_uri=effective_root_uri,
                 is_leaf=False,
                 abstract=skill_abstract,
                 context_type=ContextType.SKILL.value,
@@ -388,6 +393,35 @@ class SkillProcessor:
             normalized["tags"] = SkillProcessor._normalize_list_field(tags)
 
         return normalized
+
+    @staticmethod
+    def _resolve_skill_root_uri(
+        ctx: RequestContext, target_uri: Optional[str]
+    ) -> str:
+        """Resolve the skill storage root URI.
+
+        Defaults to the per-user private skills root.  Callers may pass
+        ``viking://agent/skills`` (or a future agent-scope subpath) to publish
+        the skill under the account-global ``/agent`` scope.
+        """
+        if target_uri:
+            normalized = target_uri.rstrip("/")
+            if normalized.startswith("viking://agent/skills"):
+                return "viking://agent/skills"
+            user_root = f"{canonical_user_root(ctx)}/skills"
+            if normalized == user_root.rstrip("/"):
+                return user_root
+            raise InvalidArgumentError(
+                f"Unsupported skill root URI: {target_uri}",
+                details={
+                    "field": "target_uri",
+                    "allowed": [
+                        f"{canonical_user_root(ctx)}/skills",
+                        "viking://agent/skills",
+                    ],
+                },
+            )
+        return f"{canonical_user_root(ctx)}/skills"
 
     @staticmethod
     def _validate_skill_dict(skill_dict: Dict[str, Any]) -> None:

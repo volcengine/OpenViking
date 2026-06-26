@@ -29,6 +29,7 @@ use super::store::{
     OPENVIKING_SERVICE_URL, build_config, custom_allows_empty_api_key, normalize_custom_url,
     validate_candidate_config, validate_candidate_config_with_role, validate_config,
     validate_config_name, validate_identity_value, validation_error_copy,
+    validation_error_copy_zh,
 };
 
 const OPENVIKING_SERVICE_API_KEY_URL: &str =
@@ -5502,11 +5503,8 @@ fn switch_confirm_prompt(name: &str) -> String {
 
 fn localized_validation_error(kind: ConfigKind, error: &Error) -> String {
     match Language::current() {
-        Language::En => validation_error_copy(kind, error),
-        Language::ZhCn => match kind {
-            ConfigKind::OpenVikingService => "验证失败。请检查 API Key 后重试。".to_string(),
-            ConfigKind::Custom => "验证失败。请检查服务器 URL，以及是否需要 API Key。".to_string(),
-        },
+        Language::ZhCn => validation_error_copy_zh(kind, error),
+        _ => validation_error_copy(kind, error),
     }
 }
 
@@ -6309,12 +6307,12 @@ mod tests {
         let lines = switch_validation_error_lines(
             "cloud",
             ConfigKind::OpenVikingService,
-            &Error::Config("invalid".to_string()),
+            &Error::api_with_status("invalid key", 401),
         );
         let plain = strip_ansi(&lines.join("\n"));
 
         assert!(plain.contains("Target config 'cloud' failed validation."));
-        assert!(plain.contains("Check your API key"));
+        assert!(plain.contains("API key"));
         assert!(!plain.contains("server URL"));
     }
 

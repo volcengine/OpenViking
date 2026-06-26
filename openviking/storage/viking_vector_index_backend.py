@@ -36,18 +36,6 @@ LOOKUP_OUTPUT_FIELDS = [
     "active_count",
 ]
 
-MEMORY_DEDUP_OUTPUT_FIELDS = [
-    "uri",
-    "abstract",
-    "context_type",
-    "created_at",
-    "updated_at",
-    "active_count",
-    "level",
-    "account_id",
-    "owner_user_id",
-]
-
 FETCH_BY_URI_OUTPUT_FIELDS = [
     "id",
     "uri",
@@ -70,8 +58,15 @@ URI_REWRITE_OUTPUT_FIELDS = [
     "id",
     "uri",
     "level",
+    "name",
+    "description",
+    "tags",
+    "abstract",
+    "content",
     "account_id",
 ]
+
+VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
 
 
 class _AsyncVectorAdapter:
@@ -157,7 +152,24 @@ class _SingleAccountBackend:
         """Drop runtime-only or stale legacy fields before writing back to the current schema."""
         payload = {k: v for k, v in data.items() if v is not None}
         filtered = self._filter_known_fields(payload)
-        return {k: v for k, v in filtered.items() if v is not None}
+        result = {k: v for k, v in filtered.items() if v is not None}
+
+        # Ensure text fields required by the schema are present (even if empty).
+        # VikingDB requires all schema-defined fields in upsert data.
+        try:
+            coll = self._get_collection()
+            meta = self._get_meta_data(coll)
+            for field in meta.get("Fields", []):
+                if field.get("FieldType") == "text" and field.get("FieldName") not in result:
+                    result[field["FieldName"]] = ""
+        except Exception:
+            pass
+
+        content = result.get("content")
+        if isinstance(content, (str, bytes)):
+            result["content"] = content[:VIKINGDB_CONTENT_MAX_SIZE]
+
+        return result
 
     @staticmethod
     def _is_not_found_error(exc: Exception) -> bool:
@@ -556,6 +568,38 @@ class _SingleAccountBackend:
         logger.info("Optimization requested")
         return True
 
+    async def search_by_keywords(
+        self,
+        keywords: Optional[List[str]] = None,
+        query: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        output_fields: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        try:
+            if self._bound_account_id:
+                account_filter = Eq("account_id", self._bound_account_id)
+                if filter:
+                    if isinstance(filter, dict):
+                        filter = RawDSL(filter)
+                    filter = And([account_filter, filter])
+                else:
+                    filter = account_filter
+
+            return await asyncio.to_thread(
+                self._adapter.search_by_keywords,
+                keywords=keywords,
+                query=query,
+                limit=limit,
+                offset=offset,
+                filter=filter,
+                output_fields=output_fields,
+            )
+        except Exception as e:
+            logger.error("Error searching by keywords: %s", e)
+            raise
+
     async def close(self) -> None:
         try:
             await self._async_adapter.call("close")
@@ -609,6 +653,7 @@ class VikingVectorIndexBackend:
         init_cpp_logging()
 
         self._config = config
+        self._backend_type = config.backend  # expose for engine resolution
         self.vector_dim = config.dimension
         self.distance_metric = config.distance_metric
         self.sparse_weight = config.sparse_weight
@@ -694,8 +739,16 @@ class VikingVectorIndexBackend:
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
         return await self._get_default_backend().get_collection_info()
 
-    async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
-        return await self._get_default_backend().get_collection_meta()
+    async def get_collection_meta(
+        self,
+        *,
+        ctx: Optional[RequestContext] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if ctx:
+            backend = self._get_backend_for_context(ctx)
+        else:
+            backend = self._get_default_backend()
+        return await backend.get_collection_meta()
 
     async def update_collection_description(self, description: str) -> bool:
         return await self._get_default_backend().update_collection_description(description)
@@ -966,6 +1019,30 @@ class VikingVectorIndexBackend:
             backend = self._get_default_backend()
         return await backend.count(filter=filter)
 
+    async def search_by_keywords(
+        self,
+        keywords: Optional[List[str]] = None,
+        query: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        output_fields: Optional[List[str]] = None,
+        *,
+        ctx: Optional[RequestContext] = None,
+    ) -> List[Dict[str, Any]]:
+        if ctx:
+            backend = self._get_backend_for_context(ctx)
+        else:
+            backend = self._get_default_backend()
+        return await backend.search_by_keywords(
+            keywords=keywords,
+            query=query,
+            limit=limit,
+            offset=offset,
+            filter=filter,
+            output_fields=output_fields,
+        )
+
     async def clear(self, *, ctx: Optional[RequestContext] = None) -> bool:
         if ctx:
             backend = self._get_backend_for_context(ctx)
@@ -1017,6 +1094,7 @@ class VikingVectorIndexBackend:
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
@@ -1025,6 +1103,7 @@ class VikingVectorIndexBackend:
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
+            level=level,
         )
         return await self.search(
             query_vector=query_vector,
@@ -1032,37 +1111,6 @@ class VikingVectorIndexBackend:
             filter=scope_filter,
             limit=limit,
             offset=offset,
-            output_fields=RETRIEVAL_OUTPUT_FIELDS,
-            ctx=ctx,
-        )
-
-    async def search_global_roots_in_tenant(
-        self,
-        ctx: RequestContext,
-        query_vector: Optional[List[float]],
-        sparse_query_vector: Optional[Dict[str, float]] = None,
-        context_type: Optional[str] = None,
-        target_directories: Optional[List[str]] = None,
-        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        if not query_vector:
-            return []
-
-        merged_filter = self._merge_filters(
-            self._build_scope_filter(
-                ctx=ctx,
-                context_type=context_type,
-                target_directories=target_directories,
-                extra_filter=extra_filter,
-            ),
-            In("level", [0, 1, 2]),  # TODO: smj fix this
-        )
-        return await self.search(
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            filter=merged_filter,
-            limit=limit,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
         )
@@ -1110,31 +1158,6 @@ class VikingVectorIndexBackend:
             limit=limit,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
-        )
-
-    async def search_similar_memories(
-        self,
-        owner_space: Optional[str],
-        category_uri_prefix: str,
-        query_vector: List[float],
-        limit: int = 5,
-        *,
-        ctx: RequestContext,
-    ) -> List[Dict[str, Any]]:
-        conds: List[FilterExpr] = [
-            Eq("context_type", "memory"),
-            Eq("level", 2),
-            Eq("account_id", ctx.account_id),
-        ]
-        if category_uri_prefix:
-            conds.append(PathScope("uri", canonicalize_uri(category_uri_prefix, ctx), depth=-1))
-
-        backend = self._get_backend_for_context(ctx)
-        return await backend.search(
-            query_vector=query_vector,
-            filter=And(conds),
-            limit=limit,
-            output_fields=MEMORY_DEDUP_OUTPUT_FIELDS,
         )
 
     async def get_context_by_uri(
@@ -1297,6 +1320,7 @@ class VikingVectorIndexBackend:
         context_type: Optional[str],
         target_directories: Optional[List[str]],
         extra_filter: Optional[FilterExpr | Dict[str, Any]],
+        level: Optional[List[int]] = None,
     ) -> Optional[FilterExpr]:
         filters: List[FilterExpr] = []
         if context_type:
@@ -1321,8 +1345,10 @@ class VikingVectorIndexBackend:
             else:
                 filters.append(extra_filter)
 
-        merged = self._merge_filters(*filters)
-        return merged
+        if level:
+            filters.append(In("level", level))
+
+        return self._merge_filters(*filters)
 
     @staticmethod
     def _tenant_filter(

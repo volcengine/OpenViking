@@ -111,6 +111,11 @@ class TestIsTextFile:
     def test_additional_text_extensions(self) -> None:
         assert is_text_file("settings.ini") is True
         assert is_text_file("data.csv") is True
+        # .jsonl is treated as text (matching .json) so upload-time encoding
+        # normalization applies, mirroring its inclusion in the vectorization
+        # text-extension set (#2745); otherwise a legacy-encoded .jsonl skips
+        # UTF-8 normalization while .json does not (#2744/#2770).
+        assert is_text_file("data.jsonl") is True
 
     def test_non_text_extensions(self) -> None:
         assert is_text_file("photo.png") is False

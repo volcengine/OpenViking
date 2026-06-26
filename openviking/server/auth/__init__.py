@@ -73,6 +73,19 @@ def normalize_actor_peer_header(value: Optional[str]) -> Optional[str]:
         raise InvalidArgumentError(str(exc)) from exc
 
 
+def resolve_actor_peer_headers(
+    actor_peer_header: Optional[str],
+    legacy_agent_header: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    actor_peer_id = normalize_actor_peer_header(actor_peer_header)
+    legacy_agent_id = normalize_actor_peer_header(legacy_agent_header)
+    if actor_peer_id and legacy_agent_id and actor_peer_id != legacy_agent_id:
+        raise InvalidArgumentError(
+            "X-OpenViking-Agent and X-OpenViking-Actor-Peer must match when both are set."
+        )
+    return actor_peer_id or legacy_agent_id, legacy_agent_id
+
+
 def _explicit_identity_from_request(request: Request) -> tuple[Optional[str], Optional[str]]:
     path_params = getattr(request, "path_params", {}) or {}
     query_params = request.query_params
@@ -121,11 +134,16 @@ async def get_request_context(
     request: Request,
     identity: ResolvedIdentity = Depends(resolve_identity),
     x_openviking_actor_peer: Optional[str] = Header(None, alias="X-OpenViking-Actor-Peer"),
+    x_openviking_agent: Optional[str] = Header(None, alias="X-OpenViking-Agent"),
 ) -> RequestContext:
     """Convert ResolvedIdentity to RequestContext."""
     path = request.url.path
     plugin = _get_plugin(request)
     plugin.get_request_context_checks(path, identity)
+    actor_peer_id, legacy_agent_id = resolve_actor_peer_headers(
+        x_openviking_actor_peer,
+        x_openviking_agent,
+    )
 
     ctx = RequestContext(
         user=UserIdentifier(
@@ -133,7 +151,8 @@ async def get_request_context(
             identity.user_id or "default",
         ),
         role=identity.role,
-        actor_peer_id=normalize_actor_peer_header(x_openviking_actor_peer),
+        actor_peer_id=actor_peer_id,
+        legacy_agent_id=legacy_agent_id,
         from_oauth=identity.from_oauth,
     )
     # Update the unified root observability context after authentication succeeds.

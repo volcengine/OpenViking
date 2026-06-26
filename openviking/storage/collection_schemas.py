@@ -41,6 +41,8 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 logger = get_logger(__name__)
 EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
 
+_EMBEDDING_COMPATIBILITY_KEYS = ("provider", "model", "dimension", "model_identity")
+
 
 @dataclass
 class RequestQueueStats:
@@ -104,6 +106,7 @@ class CollectionSchemas:
                 {"FieldName": "tags", "FieldType": "string"},
                 {"FieldName": "search_tags", "FieldType": "list<string>"},
                 {"FieldName": "abstract", "FieldType": "string"},
+                {"FieldName": "content", "FieldType": "text"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
             ]
@@ -131,6 +134,12 @@ class CollectionSchemas:
             "Description": description or "Unified context collection",
             "Fields": fields,
             "ScalarIndex": scalar_index,
+            "FullText": [
+                {
+                    "Field": "content",
+                    "Analyzer": {"Tokenizer": "standard", "StopWordsFilters": ["symbol"]},
+                },
+            ],
         }
 
 
@@ -185,6 +194,35 @@ def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
         "dimension": dimension,
         "model_identity": model_identity,
     }
+
+
+def _embedding_metadata_compatible(
+    existing_meta: Optional[Dict[str, Any]],
+    current_meta: Dict[str, Any],
+) -> bool:
+    if existing_meta is None:
+        return False
+    return all(
+        existing_meta.get(key) == current_meta.get(key)
+        for key in _EMBEDDING_COMPATIBILITY_KEYS
+    )
+
+
+def _collection_has_content_fulltext(meta: Dict[str, Any]) -> bool:
+    fields = meta.get("Fields", [])
+    has_content = any(
+        f.get("FieldName") == "content" and f.get("FieldType") == "text" for f in fields
+    )
+    fulltext = meta.get("FullText") or []
+    if isinstance(fulltext, str):
+        try:
+            fulltext = json.loads(fulltext)
+        except json.JSONDecodeError:
+            fulltext = []
+    has_content_fulltext = any(
+        isinstance(ft, dict) and ft.get("Field") == "content" for ft in fulltext
+    )
+    return has_content and has_content_fulltext
 
 
 def _encode_collection_description(
@@ -263,7 +301,21 @@ async def init_context_collection(storage) -> bool:
     base_description, existing_embedding_meta = _decode_collection_description(
         existing_meta.get("Description")
     )
-    if existing_embedding_meta == embedding_meta:
+
+    # Schema compatibility check: actual collection schema controls whether
+    # VikingDB full-text grep can be used. Missing content/FullText should only
+    # disable the vikingdb grep path, not block server startup.
+    if (
+        "Fields" in existing_meta or "FullText" in existing_meta
+    ) and not _collection_has_content_fulltext(existing_meta):
+        logger.warning(
+            "Collection schema does not support VikingDB full-text grep "
+            "Missing 'content' field or FullText config. "
+            "grep engine=auto will fall back to fs. "
+            "Recreate the collection to enable vikingdb-based grep."
+        )
+
+    if _embedding_metadata_compatible(existing_embedding_meta, embedding_meta):
         return False
 
     existing_count = await storage.count() if hasattr(storage, "count") else 0

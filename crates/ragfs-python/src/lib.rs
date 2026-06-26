@@ -496,6 +496,8 @@ fn cache_policy_from_config(config: &RagfsCacheConfig) -> CachePolicy {
     )
 }
 
+mod git;
+
 fn py_detach_blocking<T, F>(py: Python<'_>, f: F) -> T
 where
     T: Send,
@@ -805,6 +807,40 @@ fn build_fs_context(ctx: Option<HashMap<String, String>>) -> FsContext {
     Arc::new(FsContextInner::new(account_id))
 }
 
+#[derive(serde::Deserialize)]
+struct BindingConfig {
+    #[serde(default)]
+    git: Option<ragfs::git::GitConfig>,
+}
+
+fn build_git_from_cfg(
+    git_cfg: ragfs::git::GitConfig,
+    fs: &Arc<MountableFS>,
+    rt: &tokio::runtime::Runtime,
+) -> PyResult<(Option<Arc<ragfs::git::GitService>>, Option<String>)> {
+    let backend = git_cfg.backend.clone();
+    let vfs = fs.clone() as Arc<dyn ragfs::core::FileSystem>;
+    let _guard = rt.enter();
+    let svc = git::build_git_service(&git_cfg, vfs)?;
+    Ok((svc, Some(backend)))
+}
+
+fn load_git_from_config(
+    path: &str,
+    fs: &Arc<MountableFS>,
+    rt: &tokio::runtime::Runtime,
+) -> PyResult<(Option<Arc<ragfs::git::GitService>>, Option<String>)> {
+    let body = std::fs::read_to_string(path).map_err(|e| {
+        PyRuntimeError::new_err(format!("read config_path {}: {}", path, e))
+    })?;
+    let cfg: BindingConfig = toml::from_str(&body)
+        .map_err(|e| PyRuntimeError::new_err(format!("parse config_path: {}", e)))?;
+    match cfg.git {
+        Some(git_cfg) => build_git_from_cfg(git_cfg, fs, rt),
+        None => Ok((None, None)),
+    }
+}
+
 /// RAGFS Python Binding Client.
 ///
 /// Embeds the ragfs filesystem engine directly in the Python process.
@@ -816,6 +852,8 @@ struct RAGFSBindingClient {
     /// Data entry point: `Stats(Encryption(Mountable))` when encrypted, else `Stats(Mountable)`.
     top: Arc<dyn FileSystem>,
     rt: tokio::runtime::Runtime,
+    git_service: Option<Arc<ragfs::git::GitService>>,
+    git_backend: Option<String>,
 }
 
 impl RAGFSBindingClient {
@@ -846,11 +884,12 @@ impl RAGFSBindingClient {
     /// `provider_type` (int) and causes the stack to include an `EncryptionWrappedFS` layer.
     /// Runtime `cache` configuration takes precedence over `config_path`.
     #[new]
-    #[pyo3(signature = (config_path=None, config=None))]
+    #[pyo3(signature = (config_path=None, config=None, git_config_path=None))]
     fn new(
         py: Python<'_>,
         config_path: Option<&str>,
         config: Option<HashMap<String, Py<PyAny>>>,
+        git_config_path: Option<&str>
     ) -> PyResult<Self> {
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
@@ -858,6 +897,7 @@ impl RAGFSBindingClient {
         // Phase A (holding GIL): parse the sectioned config into an owned RagfsConfig.
         let mut ragfs_cfg = RagfsConfig::default();
         let mut runtime_cache_config = None;
+        let mut inline_git_cfg: Option<ragfs::git::GitConfig> = None;
         if let Some(cfg) = config {
             if let Some(enc_obj) = cfg.get("encryption") {
                 let enc: HashMap<String, Py<PyAny>> = enc_obj.extract(py)?;
@@ -884,6 +924,12 @@ impl RAGFSBindingClient {
                     Some(cache_config_from_value(&cache_value).map_err(|error| {
                         PyRuntimeError::new_err(format!("Invalid cache config: {error}"))
                     })?);
+            }
+            if let Some(git_obj) = cfg.get("git") {
+                let git_value = py_to_json_value(git_obj.bind(py))?;
+                let git_cfg: ragfs::git::GitConfig = serde_json::from_value(git_value)
+                    .map_err(|e| PyRuntimeError::new_err(format!("Invalid git config: {e}")))?;
+                inline_git_cfg = Some(git_cfg);
             }
         }
 
@@ -926,10 +972,23 @@ impl RAGFSBindingClient {
         } else {
             rt.block_on(build_default_stack(ragfs_cfg))
         };
+
+        // Build the git service from inline config when present; otherwise fall
+        // back to loading the [git] section from a config file path.
+        let (git_service, git_backend) = match inline_git_cfg {
+            Some(git_cfg) => build_git_from_cfg(git_cfg, &stack.mountable, &rt)?,
+            None => match git_config_path {
+                Some(path) => load_git_from_config(path, &stack.mountable, &rt)?,
+                None => (None, None),
+            },
+        };
+
         Ok(Self {
             mountable: stack.mountable,
             top: stack.top,
             rt,
+            git_service,
+            git_backend,
         })
     }
 
@@ -937,7 +996,68 @@ impl RAGFSBindingClient {
     fn health(&self) -> PyResult<HashMap<String, String>> {
         let mut m = HashMap::new();
         m.insert("status".to_string(), "healthy".to_string());
+        m.insert(
+            "git_enabled".to_string(),
+            if self.git_service.is_some() { "true".into() } else { "false".into() },
+        );
+        if let Some(b) = &self.git_backend {
+            m.insert("git_backend".to_string(), b.clone());
+        }
         Ok(m)
+    }
+
+    /// Commit a snapshot of the account's tree.
+    #[pyo3(signature = (**kwargs))]
+    fn git_commit(
+        &self,
+        py: Python<'_>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let empty = PyDict::new(py);
+        let kw = kwargs.unwrap_or(&empty);
+        let req = git::parse_commit_request(kw)?;
+        let resp = py_detach_blocking(py, move || self.rt.block_on(svc.commit(req)))
+            .map_err(|e| git::map_git_error(py, e))?;
+        git::commit_response_to_pydict(py, resp)
+    }
+
+    /// Restore a project_dir subtree to the state at source_commit.
+    #[pyo3(signature = (**kwargs))]
+    fn git_restore(
+        &self,
+        py: Python<'_>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let empty = PyDict::new(py);
+        let kw = kwargs.unwrap_or(&empty);
+        let req = git::parse_restore_request(kw)?;
+        let resp = py_detach_blocking(py, move || self.rt.block_on(svc.restore(req)))
+            .map_err(|e| git::map_git_error(py, e))?;
+        git::restore_response_to_pydict(py, resp)
+    }
+
+    /// Read a commit's metadata or a blob's bytes at a path.
+    #[pyo3(signature = (**kwargs))]
+    fn git_show(
+        &self,
+        py: Python<'_>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        let svc = self.git_service.clone().ok_or_else(|| {
+            git::new_py_err_pub(py, "AGFSNotSupportedError", "git feature disabled".into())
+        })?;
+        let empty = PyDict::new(py);
+        let kw = kwargs.unwrap_or(&empty);
+        let req = git::parse_show_request(kw)?;
+        let resp = py_detach_blocking(py, move || self.rt.block_on(svc.show(req)))
+            .map_err(|e| git::map_git_error(py, e))?;
+        git::show_response_to_pydict(py, resp)
     }
 
     /// Get client capabilities.

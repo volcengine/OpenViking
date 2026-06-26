@@ -20,6 +20,8 @@ const SEARCH_RESULT_COLLECTION_KEYS: &[&str] =
 enum SearchRenderMode {
     Find,
     Search,
+    SkillsList,
+    SkillsFind,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -41,6 +43,72 @@ impl SearchRenderContext {
             mode: SearchRenderMode::Search,
             node_limit,
         }
+    }
+
+    fn skills_list() -> Self {
+        Self {
+            mode: SearchRenderMode::SkillsList,
+            node_limit: 0,
+        }
+    }
+
+    fn skills_find(node_limit: i32) -> Self {
+        Self {
+            mode: SearchRenderMode::SkillsFind,
+            node_limit,
+        }
+    }
+
+    fn hides_level_and_score(self) -> bool {
+        matches!(
+            self.mode,
+            SearchRenderMode::SkillsList | SearchRenderMode::SkillsFind
+        )
+    }
+
+    fn splits_name_and_description(self) -> bool {
+        matches!(
+            self.mode,
+            SearchRenderMode::SkillsList | SearchRenderMode::SkillsFind
+        )
+    }
+
+    fn item_noun(self) -> (&'static str, &'static str) {
+        match self.mode {
+            SearchRenderMode::SkillsList | SearchRenderMode::SkillsFind => ("skill", "skills"),
+            _ => ("result", "results"),
+        }
+    }
+
+    fn shows_ranking_line(self) -> bool {
+        !matches!(self.mode, SearchRenderMode::SkillsList)
+    }
+}
+
+pub(super) fn output_skills_list_results(result: &Value, output_format: OutputFormat, compact: bool) {
+    let context = SearchRenderContext::skills_list();
+    if let Some(rendered) =
+        render_search_output_for_table_with_context(result, output_format, Some(context))
+    {
+        println!("{rendered}");
+    } else {
+        output_success(result, output_format, compact);
+    }
+}
+
+pub(super) fn output_skills_find_results(
+    result: &Value,
+    output_format: OutputFormat,
+    compact: bool,
+    node_limit: i32,
+) {
+    let context = SearchRenderContext::skills_find(node_limit);
+    if let Some(rendered) =
+        render_search_output_for_table_with_context(result, output_format, Some(context))
+    {
+        println!("{rendered}");
+    } else {
+        output_success(result, output_format, compact);
     }
 }
 
@@ -181,14 +249,26 @@ fn render_search_results_for_table_with_context(
             .bold()
             .to_string(),
     );
-    lines.push(theme::body(search_ranking_line(context, pass_count)).to_string());
+    if context.is_none_or(|context| context.shows_ranking_line()) {
+        lines.push(theme::body(search_ranking_line(context, pass_count)).to_string());
+    }
     lines.push(String::new());
 
+    let hide_level_and_score = context.is_some_and(|context| context.hides_level_and_score());
+    let split_name_description =
+        context.is_some_and(|context| context.splits_name_and_description());
     for (index, item) in items.iter().enumerate() {
         if index > 0 {
             lines.push(String::new());
         }
-        render_search_result_card(index + 1, item, text_width, &mut lines);
+        render_search_result_card(
+            index + 1,
+            item,
+            text_width,
+            hide_level_and_score,
+            split_name_description,
+            &mut lines,
+        );
     }
 
     append_profile_lines(profile, &mut lines);
@@ -200,10 +280,13 @@ fn search_result_summary(
     context: Option<SearchRenderContext>,
     pass_count: Option<usize>,
 ) -> String {
+    let (singular, plural) = context
+        .map(SearchRenderContext::item_noun)
+        .unwrap_or(("result", "results"));
     let mut summary = format!(
         "{} {}",
         item_count,
-        pluralize(item_count as u64, "result", "results")
+        pluralize(item_count as u64, singular, plural)
     );
 
     if matches!(
@@ -231,10 +314,16 @@ fn search_ranking_line(context: Option<SearchRenderContext>, pass_count: Option<
             context.node_limit,
             pluralize(context.node_limit as u64, "result", "results")
         ),
+        SearchRenderMode::SkillsFind => format!(
+            "limit {} final {}",
+            context.node_limit,
+            pluralize(context.node_limit as u64, "skill", "skills")
+        ),
         SearchRenderMode::Search if pass_count.is_some_and(|count| count > 1) => {
             format!("limit {} per pass", context.node_limit)
         }
         SearchRenderMode::Search => format!("limit {} per search pass", context.node_limit),
+        SearchRenderMode::SkillsList => return "Ranked by relevance".to_string(),
     };
 
     format!("Ranked by relevance · {suffix}")
@@ -306,6 +395,8 @@ fn render_search_result_card(
     rank: usize,
     item: &Value,
     text_width: usize,
+    hide_level_and_score: bool,
+    split_name_and_description: bool,
     lines: &mut Vec<String>,
 ) {
     let object = item.as_object();
@@ -315,12 +406,14 @@ fn render_search_result_card(
             .to_string(),
     ];
 
-    if let Some(level) = search_result_level(object) {
-        metadata.push(theme::value(level).bold().to_string());
-    }
+    if !hide_level_and_score {
+        if let Some(level) = search_result_level(object) {
+            metadata.push(theme::value(level).bold().to_string());
+        }
 
-    if let Some(score) = search_result_score(object) {
-        metadata.push(theme::warning(score).bold().to_string());
+        if let Some(score) = search_result_score(object) {
+            metadata.push(theme::warning(score).bold().to_string());
+        }
     }
 
     lines.push(format!(
@@ -335,6 +428,12 @@ fn render_search_result_card(
         }
     }
 
+    if split_name_and_description
+        && render_skill_name_and_description(object, text_width, lines)
+    {
+        return;
+    }
+
     let abstract_text = search_result_text(item, object);
     let wrapped = wrap_display_text(&abstract_text, text_width, SEARCH_MAX_ABSTRACT_LINES);
     if wrapped.is_empty() {
@@ -347,6 +446,82 @@ fn render_search_result_card(
             lines.push(format!("{SEARCH_INDENT}{}", theme::body(line)));
         }
     }
+}
+
+fn render_skill_name_and_description(
+    object: Option<&serde_json::Map<String, Value>>,
+    text_width: usize,
+    lines: &mut Vec<String>,
+) -> bool {
+    let Some(object) = object else {
+        return false;
+    };
+
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let description = object
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| extract_field_from_abstract(object, "description"));
+    let name = name.or_else(|| extract_field_from_abstract(object, "name"));
+
+    if name.is_none() && description.is_none() {
+        return false;
+    }
+
+    if let Some(name) = name {
+        let label = theme::heading("name:").bold().to_string();
+        let value = theme::body(name).to_string();
+        lines.push(format!("{SEARCH_INDENT}{label} {value}"));
+    }
+
+    if let Some(description) = description {
+        let label = theme::heading("description:").bold().to_string();
+        let wrapped = wrap_display_text(description, text_width, SEARCH_MAX_ABSTRACT_LINES);
+        if let Some((first, rest)) = wrapped.split_first() {
+            lines.push(format!(
+                "{SEARCH_INDENT}{label} {}",
+                theme::body(first)
+            ));
+            for line in rest {
+                lines.push(format!("{SEARCH_INDENT}{}", theme::body(line)));
+            }
+        } else {
+            lines.push(format!(
+                "{SEARCH_INDENT}{label} {}",
+                theme::body(description)
+            ));
+        }
+    }
+
+    true
+}
+
+fn extract_field_from_abstract<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    field: &str,
+) -> Option<&'a str> {
+    let raw = object
+        .get("abstract")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let needle = format!("{field}:");
+    let start = raw.find(&needle)? + needle.len();
+    let rest = raw[start..].trim_start();
+    let end = ["name:", "description:", "tags:", "allowed_tools:"]
+        .iter()
+        .filter(|key| !key.eq_ignore_ascii_case(&format!("{field}:")))
+        .filter_map(|key| rest.find(key))
+        .min()
+        .unwrap_or(rest.len());
+    let value = rest[..end].trim().trim_end_matches(',');
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn search_card_text_width() -> usize {
@@ -414,7 +589,7 @@ fn search_result_uri(object: Option<&serde_json::Map<String, Value>>) -> Option<
 }
 
 fn search_result_text(item: &Value, object: Option<&serde_json::Map<String, Value>>) -> String {
-    for key in ["abstract", "snippet", "content", "text"] {
+    for key in ["abstract", "description", "snippet", "content", "text"] {
         if let Some(text) = object
             .and_then(|object| object.get(key))
             .and_then(Value::as_str)

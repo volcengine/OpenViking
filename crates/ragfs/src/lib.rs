@@ -34,6 +34,7 @@ pub mod cache;
 pub mod core;
 pub mod crypto;
 pub mod multibackend;
+pub mod git;
 pub mod plugins;
 pub mod shape;
 

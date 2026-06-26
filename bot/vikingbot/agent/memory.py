@@ -17,9 +17,7 @@ _TYPE_QUOTA_MEMORY_TYPES = ("events", "entities", "preferences")
 _TYPE_QUOTA_EVENT_CHAR_RATIO = 0.75
 _TYPE_QUOTA_PREFERENCE_FULL_LIMIT = 1
 _MEMORY_TYPE_DESCRIPTIONS = {
-    "events": (
-        "Event memories. The URI path includes the event date."
-    ),
+    "events": ("Event memories. The URI path includes the event date."),
     "entities": (
         "Entity and topic memories. Use them for stable facts, attributes, "
         "relationships, and background about people, hobbies, places, or concepts."
@@ -185,9 +183,7 @@ class MemoryStore:
             if quota <= 0:
                 continue
             type_memories = [
-                memory
-                for memory in memories
-                if cls._infer_memory_type(memory) == memory_type
+                memory for memory in memories if cls._infer_memory_type(memory) == memory_type
             ][:quota]
             selected.extend(
                 cls._with_recall_metadata(memory, memory_type, rank)
@@ -320,9 +316,7 @@ class MemoryStore:
             memory_type = self._infer_memory_type(memory) or "other"
             should_try_full = idx <= full_limit
             if use_type_budgets:
-                should_try_full = (
-                    memory_type in type_char_budgets
-                ) or (
+                should_try_full = (memory_type in type_char_budgets) or (
                     memory_type == "preferences"
                     and preference_full_count < max(0, preference_full_limit)
                 )
@@ -621,9 +615,7 @@ class MemoryStore:
                 type_char_budgets=(
                     self._type_quota_char_budgets(recall_max_chars) if use_type_quota else None
                 ),
-                preference_full_limit=(
-                    _TYPE_QUOTA_PREFERENCE_FULL_LIMIT if use_type_quota else 0
-                ),
+                preference_full_limit=(_TYPE_QUOTA_PREFERENCE_FULL_LIMIT if use_type_quota else 0),
                 include_uri_entries=True,
                 read_content=read_memory_content,
             )

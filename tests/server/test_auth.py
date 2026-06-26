@@ -90,7 +90,6 @@ def _make_request(
 ) -> Request:
     """Create a minimal Starlette request for auth dependency tests."""
     # Ensure built-in plugins are registered
-    from openviking.server.auth.plugins import DevAuthPlugin, ApiKeyAuthPlugin, TrustedAuthPlugin
 
     raw_headers = []
     for key, value in (headers or {}).items():
@@ -129,7 +128,6 @@ def _build_auth_http_test_app(
     the test focused on request auth behavior and the structured HTTP error body.
     """
     # Ensure built-in plugins are registered
-    from openviking.server.auth.plugins import DevAuthPlugin, ApiKeyAuthPlugin, TrustedAuthPlugin
 
     app = FastAPI()
     # When auth is disabled and mode is the default api_key, fall back to dev mode
@@ -763,6 +761,7 @@ async def test_actor_peer_header_sets_request_context_scope():
     ctx = await get_request_context(request, identity, "web-visitor-alice")
 
     assert ctx.actor_peer_id == "web-visitor-alice"
+    assert ctx.legacy_agent_id is None
 
 
 async def test_empty_actor_peer_header_is_unset():

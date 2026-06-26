@@ -87,7 +87,6 @@ pub async fn handle_add_resource(
         auth.account,
         auth.user,
         ctx.config.effective_actor_peer_id(),
-        ctx.config.agent_id.clone(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.extra_headers.clone(),
@@ -238,6 +237,7 @@ pub async fn handle_add_skill(
     data: String,
     wait: bool,
     timeout: Option<f64>,
+    parent: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -246,6 +246,7 @@ pub async fn handle_add_skill(
         &data,
         wait,
         timeout,
+        parent.as_deref(),
         ctx.should_show_progress(),
         ctx.is_verbose(),
         ctx.output_format,

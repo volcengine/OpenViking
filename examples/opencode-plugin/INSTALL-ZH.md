@@ -34,7 +34,7 @@ curl http://localhost:1933/health
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 
@@ -50,7 +50,7 @@ curl http://localhost:1933/health
 
 ```bash
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -61,7 +61,7 @@ npm install
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.mjs
+├── openviking.js
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -69,13 +69,14 @@ npm install
     └── node_modules/
 ```
 
-顶层 `openviking.mjs` 只负责把 OpenCode 能发现的一级 `.mjs` 入口转发到插件目录：
+顶层 `openviking.js` 只负责把 OpenCode 能发现的一级 `.js` 入口转发到插件目录：
 
 ```js
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 ```
 
 这个 wrapper 只用于上面这种源码安装目录结构。npm 包安装会通过 `package.json` 直接加载 `index.mjs`。
+源码安装请使用 `.js` wrapper；OpenCode 的本地插件扫描器会发现 JavaScript/TypeScript 插件文件。
 
 如果你使用 npm 包方式安装，也可以将 `examples/opencode-plugin` 作为一个普通 OpenCode 插件包使用。
 
@@ -135,8 +136,9 @@ user/admin API key 的 API_KEY mode 时应留空。
 
 - `memsearch`、`memread`、`membrowse`
 - `memgrep`、`memglob`
-- `memadd`、`memremove`、`memqueue`
+- `memadd`、`memwrite`、`memremove`、`memqueue`
 - `memcommit`
+- `codesearch`、`codeoutline`、`codeexpand`
 
 如果行为异常，先查看运行时文件：
 
@@ -162,6 +164,7 @@ curl http://localhost:1933/health
 - `memgrep`：精确文本或模式搜索，替代原 `ov grep`
 - `memglob`：文件 glob 枚举，替代原 `ov glob`
 - `memadd`：添加远端 URL 或本地文件资源，替代常见 `ov add-resource` 场景
+- `memwrite`：通过 `/api/v1/content/write` 直接写入 `viking://` 文本文件
 - `memremove`：删除资源，替代 `ov rm`
 - `memqueue`：查看处理队列，替代 `ov observer queue`
 
@@ -172,7 +175,9 @@ curl http://localhost:1933/health
 - 枚举文件用 `memglob`
 - 读取内容用 `memread`
 - 探索目录结构用 `membrowse`
+- 持久化笔记或小型文本更新用 `memwrite`；默认是 `create`，避免误覆盖
 - 删除前必须先获得用户明确确认，再调用 `memremove` 且传入 `confirm: true`
+- 如果 agent 误用 OpenCode 本地 `read`、`glob`、`grep` 工具访问 `viking://` URI，插件会阻止这次本地文件系统调用，并提示改用 `memread`、`membrowse` 或 `memsearch`。
 
 ## `memadd` 本地文件
 
@@ -213,7 +218,7 @@ memadd path="file:///home/alice/project/notes.md" reason="project notes"
 
 | 问题 | 排查方向 |
 |------|----------|
-| 插件没有加载 | package 安装检查 `~/.config/opencode/opencode.json` 是否包含 `openviking-opencode-plugin`；源码安装检查 `~/.config/opencode/plugins/openviking.mjs` 是否存在 |
+| 插件没有加载 | package 安装检查 `~/.config/opencode/opencode.json` 是否包含 `@openviking/opencode-plugin`；源码安装检查 `~/.config/opencode/plugins/openviking.js` 是否存在 |
 | Tools 连到了错误的 server | 检查 `~/.config/opencode/openviking-config.json` 里的 `endpoint`，或用 `OPENVIKING_PLUGIN_CONFIG` 指向正确配置文件 |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还要检查 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
 | recall 为空 | 确认 OpenViking 中已有 memories/resources，并且 `autoRecall.enabled` 为 `true` |

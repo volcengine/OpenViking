@@ -28,7 +28,7 @@ The following example uses a local directory as the primary backend and replicat
             "name": "local-backup",
             "backend": "local",
             "local": {
-              "local_dir": "./data/backup"
+                "workspace": "./data/backup"
             }
           }
         ]
@@ -43,6 +43,7 @@ Notes:
 - The top-level `backend` is the primary backend.
 - `backups.items[]` is the backup backend list.
 - `name` is the stable identity of a backup; later sync metadata refers to it.
+- A backup with `backend = "local"` uses `local.workspace` to point to its local directory.
 - If `sync_type` is omitted, treat it as async by default.
 
 ## Configuring Multiple Backups
@@ -62,7 +63,7 @@ You can configure more than one backup. The following example writes to both a l
             "name": "local-az2",
             "backend": "local",
             "local": {
-              "local_dir": "./data/local-az2"
+                "workspace": "./data/local-az2"
             }
           },
           {
@@ -291,7 +292,7 @@ Example with global encryption enabled:
             "name": "encrypted-backup",
             "backend": "local",
             "local": {
-              "local_dir": "./data/encrypted-backup"
+                "workspace": "./data/encrypted-backup"
             },
             "encryption": {
               "enabled": true

@@ -817,7 +817,7 @@ Search content by pattern.
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | None | Maximum number of results |
-| level_limit | int | No | 5 | Maximum directory depth to traverse |
+| level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -866,7 +866,7 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
 **CLI**
 
 ```bash
-openviking grep viking://resources/ "authentication" [--ignore-case]
+openviking grep "authentication" --uri viking://resources/ [--ignore-case]
 ```
 
 **Response**

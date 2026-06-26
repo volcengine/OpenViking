@@ -100,7 +100,6 @@ impl CliContext {
             auth.account,
             auth.user,
             self.config.effective_actor_peer_id(),
-            self.config.agent_id.clone(),
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
             self.config.extra_headers.clone(),
@@ -340,6 +339,9 @@ enum Commands {
         /// Wait timeout in seconds
         #[arg(long, value_name = "seconds", help_heading = "Common options")]
         timeout: Option<f64>,
+        /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
+        #[arg(short = 'p', long = "parent-auto-create", value_name = "uri", help_heading = "Skill options")]
+        parent: Option<String>,
         #[command(flatten)]
         upload_options: UploadCliOptions,
     },
@@ -899,6 +901,11 @@ enum Commands {
         #[command(subcommand)]
         action: TaskCommands,
     },
+    /// [Version] Manage workspace snapshots (commit, restore, show, log)
+    Snapshot {
+        #[command(subcommand)]
+        cmd: SnapshotCmd,
+    },
     /// [Status] All OpenViking Server components status
     Status {
         /// Show full component tables
@@ -943,10 +950,11 @@ enum Commands {
         /// Viking URI
         #[arg(value_name = "uri")]
         uri: String,
-        /// Reindex mode
+        /// Reindex mode: vectors_only rebuilds vectors; semantic_and_vectors regenerates semantic artifacts, then vectors
         #[arg(
             long,
             default_value = "vectors_only",
+            value_parser = ["vectors_only", "semantic_and_vectors"],
             value_name = "mode",
             help_heading = "Common options"
         )]
@@ -1015,6 +1023,58 @@ enum TaskCommands {
     Watch {
         #[command(subcommand)]
         action: WatchCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum SnapshotCmd {
+    /// Create a snapshot of current workspace state
+    Commit {
+        #[arg(short = 'm', long)]
+        message: String,
+        /// Limit to specific viking:// URIs (comma-separated); accepts files and directories. Directories are expanded recursively with the snapshot pruning rules. Omit to snapshot the full account tree.
+        #[arg(long, value_delimiter = ',')]
+        paths: Option<Vec<String>>,
+        #[arg(long, default_value = "main")]
+        branch: String,
+        #[arg(long)]
+        author_name: Option<String>,
+        #[arg(long)]
+        author_email: Option<String>,
+    },
+    /// Restore a project directory or the full account tree to a past snapshot (forward commit)
+    Restore {
+        /// Commit oid, branch, or tag
+        source_commit: String,
+        /// Optional viking:// directory or relative tree path; omit for full-tree restore
+        project_dir: Option<String>,
+        #[arg(long, default_value = "main")]
+        branch: String,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        #[arg(long)]
+        author_name: Option<String>,
+        #[arg(long)]
+        author_email: Option<String>,
+    },
+    /// Show a commit's metadata, or a single blob at a path
+    Show {
+        target_ref: String,
+        /// viking:// URI of a file; omit to show commit metadata
+        #[arg(long)]
+        path: Option<String>,
+        /// Write blob bytes to this file (default: stdout)
+        #[arg(long = "out-file")]
+        out_path: Option<std::path::PathBuf>,
+    },
+    /// Walk commit history (newest first)
+    Log {
+        #[arg(long, default_value = "main")]
+        branch: String,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
     },
 }
 
@@ -1169,6 +1229,9 @@ enum SkillCommands {
         /// Skip confirmation prompt
         #[arg(short = 'y', long = "yes")]
         yes: bool,
+        /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
+        #[arg(short = 'p', long = "parent-auto-create", value_name = "uri")]
+        parent: Option<String>,
     },
     /// List installed agent skills
     #[command(alias = "ls")]
@@ -1182,6 +1245,9 @@ enum SkillCommands {
             value_name = "n"
         )]
         node_limit: i32,
+        /// Restrict listing to a specific skill root URI (defaults to merged user + agent)
+        #[arg(short = 'p', long = "uri", value_name = "uri")]
+        parent: Option<String>,
     },
     /// Find installed agent skills semantically
     Find {
@@ -1208,6 +1274,9 @@ enum SkillCommands {
             value_name = "0,1,2"
         )]
         level: Option<Vec<i32>>,
+        /// Restrict search to a specific skill root URI (defaults to merged user + agent)
+        #[arg(short = 'p', long = "uri", value_name = "uri")]
+        parent: Option<String>,
     },
     /// Show one installed skill
     Show {
@@ -1234,6 +1303,9 @@ enum SkillCommands {
         /// Include full SKILL.md content (legacy alias for --level 2)
         #[arg(long, hide = true)]
         content: bool,
+        /// Resolve the skill under a specific root URI (e.g. viking://agent/skills)
+        #[arg(short = 'p', long = "uri", value_name = "uri")]
+        parent: Option<String>,
     },
     /// Update installed skills from their recorded source
     Update {
@@ -1246,6 +1318,9 @@ enum SkillCommands {
         /// Skip confirmation prompt
         #[arg(short = 'y', long = "yes")]
         yes: bool,
+        /// Resolve the skill under a specific root URI (e.g. viking://agent/skills)
+        #[arg(short = 'p', long = "parent-auto-create", value_name = "uri")]
+        parent: Option<String>,
     },
     /// Remove installed skills
     #[command(alias = "rm", alias = "delete")]
@@ -1259,6 +1334,9 @@ enum SkillCommands {
         /// Skip confirmation prompt
         #[arg(short = 'y', long = "yes")]
         yes: bool,
+        /// Resolve the skill under a specific root URI (e.g. viking://agent/skills)
+        #[arg(short = 'p', long = "parent-auto-create", value_name = "uri")]
+        parent: Option<String>,
     },
     /// Validate a local SKILL.md file or skill directory
     Validate {
@@ -2583,11 +2661,12 @@ async fn main() {
             data,
             wait,
             timeout,
+            parent,
             upload_options,
         } => {
             let ctx =
                 ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
-            handlers::handle_add_skill(data, wait, timeout, ctx).await
+            handlers::handle_add_skill(data, wait, timeout, parent, ctx).await
         }
         Commands::Skills { action } => match action {
             SkillCommands::Add {
@@ -2596,6 +2675,7 @@ async fn main() {
                 list,
                 wait,
                 yes,
+                parent,
             } => {
                 let client = ctx.get_client();
                 commands::skills::add(
@@ -2609,18 +2689,27 @@ async fn main() {
                     ctx.is_verbose(),
                     ctx.output_format,
                     ctx.compact,
+                    parent.as_deref(),
                 )
                 .await
             }
-            SkillCommands::List { node_limit } => {
+            SkillCommands::List { node_limit, parent } => {
                 let client = ctx.get_client();
-                commands::skills::list(&client, node_limit, ctx.output_format, ctx.compact).await
+                commands::skills::list(
+                    &client,
+                    node_limit,
+                    ctx.output_format,
+                    ctx.compact,
+                    parent.as_deref(),
+                )
+                .await
             }
             SkillCommands::Find {
                 query,
                 node_limit,
                 threshold,
                 level,
+                parent,
             } => {
                 let client = ctx.get_client();
                 commands::skills::find(
@@ -2631,6 +2720,7 @@ async fn main() {
                     level,
                     ctx.output_format,
                     ctx.compact,
+                    parent.as_deref(),
                 )
                 .await
             }
@@ -2641,6 +2731,7 @@ async fn main() {
                 source,
                 format,
                 content,
+                parent,
             } => {
                 let client = ctx.get_client();
                 let output_format = format
@@ -2656,18 +2747,45 @@ async fn main() {
                     source,
                     output_format,
                     ctx.compact,
+                    parent.as_deref(),
                 )
                 .await
             }
-            SkillCommands::Update { skills, wait, yes } => {
+            SkillCommands::Update {
+                skills,
+                wait,
+                yes,
+                parent,
+            } => {
                 let client = ctx.get_client();
-                commands::skills::update(&client, skills, wait, yes, ctx.output_format, ctx.compact)
-                    .await
+                commands::skills::update(
+                    &client,
+                    skills,
+                    wait,
+                    yes,
+                    ctx.output_format,
+                    ctx.compact,
+                    parent.as_deref(),
+                )
+                .await
             }
-            SkillCommands::Remove { skills, all, yes } => {
+            SkillCommands::Remove {
+                skills,
+                all,
+                yes,
+                parent,
+            } => {
                 let client = ctx.get_client();
-                commands::skills::remove(&client, skills, all, yes, ctx.output_format, ctx.compact)
-                    .await
+                commands::skills::remove(
+                    &client,
+                    skills,
+                    all,
+                    yes,
+                    ctx.output_format,
+                    ctx.compact,
+                    parent.as_deref(),
+                )
+                .await
             }
             SkillCommands::Validate { path, strict } => {
                 let client = ctx.get_client();
@@ -2769,6 +2887,10 @@ async fn main() {
                 }
             }
         },
+        Commands::Snapshot { cmd } => {
+            let client = ctx.get_client();
+            commands::snapshot::dispatch(&client, cmd, ctx.output_format, ctx.compact).await
+        }
         Commands::Status { verbose } => {
             let client = ctx.get_client();
             commands::system::diagnostic_status(
@@ -3545,7 +3667,7 @@ mod tests {
             .expect("skills list should parse");
         match list.command {
             Commands::Skills {
-                action: SkillCommands::List { node_limit },
+                action: SkillCommands::List { node_limit, .. },
             } => assert_eq!(node_limit, 25),
             _ => panic!("expected skills list"),
         }
@@ -3667,7 +3789,9 @@ mod tests {
             .expect("skills remove --yes should parse");
         match remove.command {
             Commands::Skills {
-                action: SkillCommands::Remove { skills, yes, all },
+                action: SkillCommands::Remove {
+                    skills, yes, all, ..
+                },
             } => {
                 assert_eq!(skills, vec!["foo", "bar"]);
                 assert!(yes);
@@ -4102,7 +4226,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_context_maps_legacy_agent_id_to_actor_peer_scope() {
+    fn cli_context_maps_agent_id_to_actor_peer_scope() {
         let config = Config {
             url: DEFAULT_CUSTOM_URL.to_string(),
             api_key: Some("test-key".to_string()),
@@ -4136,7 +4260,6 @@ mod tests {
         let client = ctx.get_client();
 
         assert_eq!(client.actor_peer_id(), Some("legacy-agent"));
-        assert_eq!(client.legacy_agent_id(), Some("legacy-agent"));
     }
 
     #[test]
@@ -4252,6 +4375,19 @@ mod tests {
         ]);
 
         assert!(result.is_ok(), "reindex command should parse");
+    }
+
+    #[test]
+    fn cli_rejects_unknown_reindex_mode() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--mode",
+            "semantic",
+        ]);
+
+        assert!(result.is_err(), "unknown reindex mode should not parse");
     }
 
     #[test]

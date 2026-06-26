@@ -38,7 +38,7 @@ from openviking.parse.parsers.code.ast.code_tools import (
     outline_file,
     search_symbols,
 )
-from openviking.server.auth import normalize_actor_peer_header, resolve_identity
+from openviking.server.auth import resolve_actor_peer_headers, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -150,8 +150,9 @@ class _IdentityASGIMiddleware:
                 x_openviking_account=request.headers.get("x-openviking-account"),
                 x_openviking_user=request.headers.get("x-openviking-user"),
             )
-            actor_peer_id = normalize_actor_peer_header(
-                request.headers.get("x-openviking-actor-peer")
+            actor_peer_id, legacy_agent_id = resolve_actor_peer_headers(
+                request.headers.get("x-openviking-actor-peer"),
+                request.headers.get("x-openviking-agent"),
             )
         except (UnauthenticatedError, PermissionDeniedError, InvalidArgumentError) as exc:
             status = (
@@ -184,6 +185,7 @@ class _IdentityASGIMiddleware:
             ),
             role=identity.role,
             actor_peer_id=actor_peer_id,
+            legacy_agent_id=legacy_agent_id,
             from_oauth=identity.from_oauth,
         )
         url_info = {
@@ -437,6 +439,39 @@ def _resolve_public_base_url() -> tuple[str, str]:
     return "http://127.0.0.1:1933", "listen"
 
 
+async def _maybe_sitemap_hint(path: str) -> str:
+    """Best-effort sitemap/RSS suggestion for a single-page add (never crawls).
+
+    Policy: only suggest when the added URL is the site root / homepage (path is
+    empty or "/"). Adding a deep article URL implies intent for just that page, and
+    gating to the root also keeps the (bounded, non-recursive) probe from re-running
+    when many pages of the same site are added one-by-one.
+
+    Gated by config (``webfeed.suggest_feed``) and fully exception-safe so it can
+    never block or fail the add it is attached to.
+    """
+    try:
+        from urllib.parse import urlparse
+
+        if urlparse(path).path not in ("", "/"):
+            return ""
+
+        from openviking.parse.accessors import discover_feed_hint
+        from openviking.utils.network_guard import ensure_public_remote_target
+        from openviking_cli.utils.config import get_openviking_config
+
+        webfeed = getattr(get_openviking_config(), "webfeed", None)
+        if webfeed is not None and not getattr(webfeed, "suggest_feed", True):
+            return ""
+        timeout = float(getattr(webfeed, "suggest_timeout", 2.5)) if webfeed else 2.5
+        hint = await discover_feed_hint(
+            path, timeout=timeout, request_validator=ensure_public_remote_target
+        )
+        return hint or ""
+    except Exception:
+        return ""
+
+
 @mcp.tool()
 async def add_resource(
     path: str = "",
@@ -454,6 +489,10 @@ async def add_resource(
        Returns a success message immediately. Supports ``watch_interval`` for
        auto-refresh subscriptions; pass ``to`` to choose the exact target URI, or
        omit it to bind the watch to the URI created by this add.
+       A sitemap / RSS / Atom URL ingests the WHOLE site as one resource tree;
+       pass ``args={"site": true}`` to force whole-site ingestion from a bare
+       domain (auto-discovers the site's sitemap/RSS). Watching a sitemap/feed
+       URL keeps the whole site auto-refreshed.
 
     2. Local file: pass ``path`` set to a local filesystem path (e.g. ``/tmp/foo.pdf``).
        The response is NOT a success message — it's a multi-step upload instruction.
@@ -560,11 +599,18 @@ async def add_resource(
             watch_suffix = f" (watch enabled, refresh every {watch_interval:g} minute(s))"
         else:
             watch_suffix = ""
-        return (
+        message = (
             f"Resource added: {root_uri}{watch_suffix}"
             if root_uri
             else f"Resource added (processing in background){watch_suffix}."
         )
+        # Detect-and-suggest: if this single page belongs to a site that exposes a
+        # sitemap/RSS feed, hint at whole-site ingestion. Never auto-crawls; the
+        # add above is already done, so a slow/failed probe has no functional impact.
+        hint = await _maybe_sitemap_hint(path)
+        if hint:
+            message += "\n" + hint
+        return message
 
     # Branch 4: local path — mint token, return upload instruction
     server_config = get_server_config()
@@ -790,6 +836,7 @@ async def forget(uri: str, recursive: bool = False) -> str:
 
 
 # -- code navigation -------------------------------------------------------
+
 
 def _require_viking_uri(uri: str) -> Optional[str]:
     """Return error message if uri is not a viking:// URI, else None."""

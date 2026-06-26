@@ -112,6 +112,7 @@ class AddSkillRequest(BaseModel):
     wait: bool = False
     timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
+    target_uri: Optional[str] = None
     telemetry: TelemetryRequest = False
 
     @model_validator(mode="after")
@@ -312,6 +313,7 @@ async def add_skill(
                 timeout=request.timeout,
                 allow_local_path_resolution=allow_local_path_resolution,
                 source_path_hint=source_path_hint,
+                target_uri=request.target_uri,
             )
             await persist_skill_source_metadata(service, _ctx, result, source_metadata)
         except Exception:

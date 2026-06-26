@@ -9,23 +9,23 @@ viking://{scope}/{path}
 ```
 
 - **scheme**: 始终为 `viking`
-- **scope**: 顶级命名空间（`resources`、`user`；`temp`、`queue` 和 `upload` 为内部作用域）
+- **scope**: 顶级命名空间（`resources`、`user`、`agent`；`temp`、`queue` 和 `upload` 为内部作用域）
 - **path**: 作用域内的资源路径
 
 ## 作用域
 
 | 作用域 | 说明 | 生命周期 | 可见性 |
 |--------|------|----------|--------|
-| **resources** | 独立资源 | 长期 | 全局 |
+| **resources** | 独立资源/客观知识 | 长期 | account 全局 |
 | **user** | 用户级数据，包括 session | 长期 / 会话生命周期 | 当前用户 |
+| **agent** | agent 能力与配置（技能、端点、工具、支付等） | 长期 | account 全局 |
 | **queue** | 处理队列 | 临时 | 内部 |
 | **temp** | 临时文件 | 解析期间 | 内部 |
 | **upload** | 临时上传文件 | 临时 | 内部 |
 
-公开 API 和 CLI 的文件系统/内容操作接受公开作用域 `resources` 和 `user`，
+公开 API 和 CLI 的文件系统/内容操作接受公开作用域 `resources`、`user` 和 `agent`，
 以及根 URI `viking://`。`session` 保留为 user session 路径的向后兼容别名；
-新 session 数据位于 `viking://user/{user_id}/sessions`。`agent` 已废弃，但仍作为
-legacy agent 数据的只读兼容入口。
+新 session 数据位于 `viking://user/{user_id}/sessions`。
 `temp`、`queue` 和 `upload` 是内部实现作用域，不能通过公开 API 的 URI 参数直接访问。
 
 ## 初始目录
@@ -52,6 +52,12 @@ viking://
 │               ├── messages.jsonl
 │               ├── tools/
 │               └── history/
+│
+├── agent/                     # agent 能力与配置（全局）
+│   ├── skills/                # 技能定义
+│   ├── endpoints/             # 通信端点（a2a, anp 等）（规划中）
+│   ├── tools/                 # 工具配置（mcp 等）（规划中）
+│   └── payments/              # 支付配置（ap2 等）（规划中）
 │
 └── resources/{project}/      # 资源工作区
 ```
@@ -97,6 +103,20 @@ OpenViking 会在存储和检索前将它展开为显式命名空间路径，例
 `viking://user/{user_id}/...`。
 `{user_id}` 和 `{peer_id}` 等身份路径片段必须是安全的单段标识，例如
 `alice` 或 `web-visitor-alice`。
+
+### agent 能力与配置
+
+```
+viking://agent/skills/search-web                    # 某个技能定义
+viking://agent/skills/                              # 所有技能定义
+viking://agent/endpoints/                           # 通信端点（a2a, anp 等）（规划中）
+viking://agent/tools/mcp/                           # MCP 工具配置（规划中）
+viking://agent/payments/ap2/                        # 支付配置（规划中）
+```
+
+`viking://agent/...` 为全局共享作用域，account 下所有用户均可访问，
+不通过 agent_id 隔离。旧版（0.3.x）遗留的 `viking://agent/...` 数据仍可通过
+只读兼容入口访问，但新数据应按照新的目录语义写入。
 
 ### 会话数据
 
@@ -190,11 +210,17 @@ ov add-resource --parent-auto-create "viking://resources/reports/{calendar:ym}" 
 
 ```
 viking://
-├── resources/                    # 独立资源
+├── resources/                    # 独立资源（客观知识，禁止存储非知识类配置）
 │   └── {project}/
 │       ├── .abstract.md          # 摘要
 │       ├── .overview.md          # 概述
 │       └── {files...}
+│
+├── agent/                        # agent 能力与配置（全局共享，account 粒度）
+│   ├── skills/                   # 技能定义
+│   ├── endpoints/                # 通信端点（a2a, anp 等）（规划中）
+│   ├── tools/                    # 工具配置（mcp 等）（规划中）
+│   └── payments/               # 支付配置（ap2 等）（规划中）
 │
 ├── user/{user_id}/
 │   ├── profile.md                # 用户基本信息
@@ -204,7 +230,7 @@ viking://
 │   │   └── events/               # 每条独立
 │   ├── resources/
 │   │   └── {project}/
-│   ├── skills/
+│   ├── skills/                   # 用户技能（与 viking://agent/skills/ 兼容）
 │   └── peers/{peer_id}/
 │       ├── memories/
 │       └── resources/
@@ -215,8 +241,8 @@ viking://
     └── history/
 ```
 
-`viking://agent/...` 已废弃，仅保留 legacy agent 数据的只读兼容；新数据应写入
-`viking://user/{user_id}/peers/{peer_id}/...`。
+`viking://agent/...` 作用域为全局共享的 agent 能力根，account 下所有用户均可访问，
+不通过 agent_id 隔离。旧版（0.3.x）遗留的 `viking://agent/...` 数据仍可通过只读兼容入口访问。
 
 ## URI 操作
 
@@ -320,9 +346,19 @@ await client.add_resource(url, to="viking://resources/project/")
 # 添加到当前用户私有资源根
 await client.add_resource(path, parent="viking://user/resources/project/")
 
-# 技能始终添加到当前用户技能根
-await client.add_skill(skill)  # canonical root: viking://user/{user_id}/skills/
+# 技能默认添加到当前用户技能根
+await client.add_skill(skill)  # canonical root: viking://user/skills/
+
+# 通过 -p 指定写入全局 agent 技能根（公开共享）
+ov skills add xxx -p viking://agent/skills/
 ```
+
+### resources 作用域约束
+
+`resources` 作用域仅用于存储客观知识类数据（文档、代码、规范、论文等）。
+禁止在 `viking://resources/` 下存储非知识类数据，包括但不限于：
+工具配置、通信端点定义、支付配置、技能定义等。
+此类数据应使用 `viking://agent/` 作用域。
 
 ## 相关文档
 

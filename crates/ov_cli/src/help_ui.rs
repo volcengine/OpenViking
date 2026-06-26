@@ -81,7 +81,7 @@ const CONFIG_STATUS: &[HelpCommand] = help_commands![
 ];
 
 const IMPORT_EXPORT_SESSIONS: &[HelpCommand] = help_commands![
-    "import", "export", "backup", "restore", "session", "privacy"
+    "import", "export", "backup", "restore", "snapshot", "session", "privacy"
 ];
 
 const INTERACTIVE_ADMIN: &[HelpCommand] = help_commands![
@@ -125,7 +125,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
 const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["add-resource"],
-        purpose: "Import a local file, folder, URL, or repository into OpenViking.",
+        purpose: "Import a local file, folder, URL, repository, or whole website (sitemap/RSS) into OpenViking.",
         examples: &[
             HelpItem {
                 label: "ov add-resource ./docs --parent viking://projects/acme --wait",
@@ -134,6 +134,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov add-resource https://example.com/spec.md --to viking://specs/api.md",
                 description: "Import a URL to an exact target URI.",
+            },
+            HelpItem {
+                label: "ov add-resource https://example.com/sitemap.xml --watch-interval 1440",
+                description: "Import a whole site via sitemap/RSS and refresh it daily.",
             },
         ],
         next_steps: &[
@@ -471,6 +475,106 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov session <subcommand> --help",
             description: "Show exact arguments for a session operation.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot"],
+        purpose: "Manage workspace snapshots: commit, restore, show, and walk history.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot commit -m \"checkpoint before refactor\"",
+                description: "Commit the current workspace state.",
+            },
+            HelpItem {
+                label: "ov snapshot log --branch main",
+                description: "Walk commit history, newest first.",
+            },
+            HelpItem {
+                label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
+                description: "Preview restoring a directory to a past snapshot.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot <subcommand> --help",
+            description: "Show exact arguments for a snapshot operation.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "commit"],
+        purpose: "Commit the current workspace state as a new snapshot.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot commit -m \"checkpoint before refactor\"",
+                description: "Commit the full workspace on the main branch.",
+            },
+            HelpItem {
+                label: "ov snapshot commit -m \"docs only\" --paths viking://docs",
+                description: "Commit only the given viking:// URIs. Directories are expanded recursively (with snapshot pruning rules applied).",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov snapshot log --branch main",
+                description: "Confirm the new commit in history.",
+            },
+            HelpItem {
+                label: "ov snapshot show <commit>",
+                description: "Inspect the commit metadata.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "restore"],
+        purpose: "Restore a project directory to a past snapshot via a forward commit.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot restore viking://projects/acme <commit> --dry-run",
+                description: "Preview which files would change.",
+            },
+            HelpItem {
+                label: "ov snapshot restore viking://projects/acme <commit> -m \"rollback\"",
+                description: "Apply the restore as a new commit.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot log --branch main",
+            description: "Verify the restore commit landed.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "show"],
+        purpose: "Show a commit's metadata, or a single blob at a path.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot show <commit>",
+                description: "Print commit metadata.",
+            },
+            HelpItem {
+                label: "ov snapshot show <commit> --path viking://docs/spec.md --out-file spec.md",
+                description: "Write a file blob from the snapshot to disk.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot log --branch main",
+            description: "Find another commit to inspect.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "log"],
+        purpose: "Walk commit history for a branch, newest first.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot log --branch main",
+                description: "Show the latest commits on main.",
+            },
+            HelpItem {
+                label: "ov snapshot log --branch main --limit 50",
+                description: "Show more history entries.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot show <commit>",
+            description: "Inspect a commit from the log.",
         }],
     },
     CommandHelpSpec {
@@ -1110,10 +1214,16 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["reindex"],
         purpose: "Reindex semantic/vector artifacts for a URI.",
-        examples: &[HelpItem {
-            label: "ov reindex viking://projects/acme --mode vectors_only --wait true",
-            description: "Rebuild vector artifacts and wait.",
-        }],
+        examples: &[
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode vectors_only --wait true",
+                description: "Rebuild vector artifacts and wait.",
+            },
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true",
+                description: "Regenerate semantic artifacts, then vectors.",
+            },
+        ],
         next_steps: &[
             HelpItem {
                 label: "ov task list",
@@ -1651,6 +1761,11 @@ fn localized_command_purpose(spec: &CommandHelpSpec, language: Language) -> &str
         ["health"] => "快速检查服务器是否可连接。",
         ["status"] => "查看 OpenViking 服务器诊断状态。",
         ["language"] => "选择 OpenViking CLI 显示语言。",
+        ["snapshot"] => "管理工作区快照：提交、恢复、查看，以及遍历历史。",
+        ["snapshot", "commit"] => "将当前工作区状态提交为新的快照。",
+        ["snapshot", "restore"] => "通过一次前向提交，将项目目录恢复到历史快照。",
+        ["snapshot", "show"] => "查看某次提交的元数据，或指定路径下的单个文件内容。",
+        ["snapshot", "log"] => "按分支遍历提交历史，最新的在前。",
         _ => spec.purpose,
     }
 }
@@ -2113,6 +2228,7 @@ fn localized_command_description<'a>(
         "export" => "导出为 .ovpack",
         "backup" => "创建仅恢复备份",
         "restore" => "恢复备份",
+        "snapshot" => "管理工作区快照",
         "tui" => "打开交互式浏览器",
         "chat" => "与 VikingBot 对话",
         "admin" => "管理账户、用户和 API Key",
@@ -2329,7 +2445,7 @@ fn version() -> String {
 fn is_bare_group_help_command(command: &str) -> bool {
     matches!(
         command,
-        "task" | "skills" | "session" | "privacy" | "admin" | "system" | "observer"
+        "task" | "skills" | "session" | "snapshot" | "privacy" | "admin" | "system" | "observer"
     )
 }
 
@@ -2648,6 +2764,17 @@ mod tests {
         assert!(find_help.contains("Maximum final results returned"));
         assert!(search_help.contains("Maximum results per search pass."));
         assert!(search_help.contains("Search may merge multiple passes"));
+    }
+
+    #[test]
+    fn reindex_help_lists_supported_modes() {
+        let rendered = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "reindex", "--help"]))
+                .expect("reindex help should render"),
+        );
+
+        assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors>"));
+        assert!(rendered.contains("Regenerate semantic artifacts, then vectors."));
     }
 
     #[test]

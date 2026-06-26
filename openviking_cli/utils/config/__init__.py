@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+from . import embedding_config
 from .agfs_config import AGFSConfig
 from .config_loader import (
     load_json_config,
@@ -49,8 +50,9 @@ from .consts import (
     OPENVIKING_WRITE_CHECK_URI_ENV,
     SYSTEM_CONFIG_DIR,
 )
-from . import embedding_config
 from .embedding_config import EmbeddingConfig
+from .grep_config import GrepConfig, GrepEngine
+from .git_config import GitConfig, GitLocalConfig, GitS3Config
 from .log_config import LogConfig
 from .open_viking_config import (
     OpenVikingConfig,
@@ -130,6 +132,8 @@ __all__ = [
     "OpenVikingConfig",
     "OpenVikingConfigSingleton",
     "OVCLIConfig",
+    "GrepConfig",
+    "GrepEngine",
     "RerankConfig",
     "RetrievalConfig",
     "StorageConfig",
@@ -158,4 +162,7 @@ __all__ = [
     "is_valid_openviking_config",
     "TelemetryConfig",
     "TracerConfig",
+    "GitConfig",
+    "GitLocalConfig",
+    "GitS3Config",
 ]

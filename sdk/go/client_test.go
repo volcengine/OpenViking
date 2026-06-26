@@ -123,12 +123,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
-		if got := body["agent_id"]; got != "agent-7" {
-			t.Fatalf("agent_id = %#v", got)
-		}
-		if got := body["agent_uri"]; got != "viking://peers/agent-7" {
-			t.Fatalf("agent_uri = %#v", got)
-		}
+		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{
 			"resources": []map[string]any{
 				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9},
@@ -145,8 +140,6 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		Until:       "2026-06-18",
 		TimeField:   "created_at",
 		Level:       []int{0, 2},
-		AgentID:     "agent-7",
-		AgentURI:    "viking://peers/agent-7",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -203,12 +196,7 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		if !ok || len(levels) != 1 || levels[0] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
-		if got := body["agent_id"]; got != "agent-7" {
-			t.Fatalf("agent_id = %#v", got)
-		}
-		if got := body["agent_uri"]; got != "viking://peers/agent-7" {
-			t.Fatalf("agent_uri = %#v", got)
-		}
+		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -220,8 +208,6 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		Until:     "2026-06-18",
 		TimeField: "updated_at",
 		Level:     []int{2},
-		AgentID:   "agent-7",
-		AgentURI:  "viking://peers/agent-7",
 	}); err != nil {
 		t.Fatal(err)
 	}

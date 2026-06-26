@@ -53,7 +53,7 @@ class OVCLIConfig(BaseModel):
     @model_validator(mode="after")
     def reject_mixed_actor_and_agent_identity(self) -> "OVCLIConfig":
         if self.actor_peer_id is not None and self.agent_id is not None:
-            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+            raise ValueError("actor_peer_id cannot be used with agent_id")
         return self
 
 

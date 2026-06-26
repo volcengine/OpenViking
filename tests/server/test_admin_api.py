@@ -81,9 +81,9 @@ class _FakeService:
 
 
 def _build_lightweight_admin_test_app() -> FastAPI:
-    from openviking.server.routers import admin as admin_router
     from openviking.server.auth.plugins import ApiKeyAuthPlugin
     from openviking.server.auth.registry import get_registry
+    from openviking.server.routers import admin as admin_router
 
     app = FastAPI()
     app.state.config = ServerConfig(root_api_key=ROOT_KEY)

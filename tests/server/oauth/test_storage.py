@@ -138,9 +138,7 @@ async def test_auth_code_concurrent_consume_race(store):
     """Two coroutines racing to consume the same code — exactly one wins."""
     code = "race-code"
     await _insert_code(store, code)
-    results = await asyncio.gather(
-        store.consume_auth_code(code), store.consume_auth_code(code)
-    )
+    results = await asyncio.gather(store.consume_auth_code(code), store.consume_auth_code(code))
     winners = [r for r in results if r is not None]
     assert len(winners) == 1
 
