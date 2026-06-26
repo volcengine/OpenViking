@@ -435,7 +435,10 @@ def _resolve_public_base_url() -> tuple[str, str]:
             return f"http://{host_hdr}", "host"
 
     if config is not None:
-        return f"http://{config.host}:{config.port}", "listen"
+        from openviking.server.config import map_bind_host_to_loopback
+
+        host = map_bind_host_to_loopback(config.host)
+        return f"http://{host}:{config.port}", "listen"
     return "http://127.0.0.1:1933", "listen"
 
 

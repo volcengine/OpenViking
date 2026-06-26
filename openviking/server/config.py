@@ -200,6 +200,30 @@ class ServerConfig(BaseModel):
         return AuthMode.DEV.value
 
 
+def map_bind_host_to_loopback(host: str) -> str:
+    """Map a server *bind* host to a client-connectable *loopback* host.
+
+    ``server.host`` configures the address the server binds/listens on. A
+    wildcard bind address such as ``0.0.0.0`` (or IPv6 ``::``) is valid to
+    listen on but is *not* a destination a client can connect to. Clients that
+    derive a connect URL from the configured host (the bot proxy, the bot's
+    own config loader, ``doctor``) must translate the wildcard to loopback:
+
+    - ``"0.0.0.0"``, ``""``, ``"*"``   -> ``"127.0.0.1"``
+    - ``"::"``, ``"::0"``, ``"[::]"``  -> ``"[::1]"``
+    - bare IPv6 literals (e.g. ``"::1"``) are bracketed for URL syntax
+    - everything else passes through unchanged
+    """
+    host = str(host or "").strip()
+    if host in ("0.0.0.0", "", "*"):
+        return "127.0.0.1"
+    if host in ("::", "::0", "[::]"):
+        return "[::1]"
+    if ":" in host and not (host.startswith("[") and host.endswith("]")):
+        return f"[{host}]"
+    return host
+
+
 def get_server_url_from_server_data(server_data: object) -> str:
     """Return the loopback URL clients use for the configured OpenViking server."""
     if isinstance(server_data, dict):
@@ -208,9 +232,7 @@ def get_server_url_from_server_data(server_data: object) -> str:
     else:
         host_value = getattr(server_data, "host", None)
         port_value = getattr(server_data, "port", None)
-    host = str(host_value or "127.0.0.1").strip()
-    if ":" in host and not (host.startswith("[") and host.endswith("]")):
-        host = f"[{host}]"
+    host = map_bind_host_to_loopback(str(host_value or "127.0.0.1"))
     port = str(port_value or "1933").strip()
     return f"http://{host}:{port}"
 
