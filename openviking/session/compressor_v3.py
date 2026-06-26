@@ -814,6 +814,19 @@ class SessionCompressorV3:
             if before is None:
                 adds.append({"uri": uri, "memory_type": "experiences", "after": after})
             else:
+                # Filter no-op experience updates the same way as user-memory
+                # updates: a patch that re-serializes to identical content should
+                # not appear in memory_diff.json.
+                try:
+                    old_file = MemoryFileUtils.read(before, uri=uri) if before else None
+                    new_file = MemoryFileUtils.read(after, uri=uri) if after else None
+                except Exception:
+                    old_file, new_file = None, None
+                if old_file is not None and _same_memory_file(old_file, new_file):
+                    logger.info(
+                        "Skipping unchanged experience memory in memory_diff.json: %s", uri
+                    )
+                    continue
                 updates.append(
                     {
                         "uri": uri,
