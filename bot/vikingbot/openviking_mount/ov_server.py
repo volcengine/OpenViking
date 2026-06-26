@@ -850,8 +850,11 @@ class VikingClient:
     async def search_experiences(self, query: str, limit: int = 5) -> list[Any]:
         """用 query 检索 vikingbot experience 记忆。"""
         exp_uri = f"{self._memory_target_uri(self.admin_user_id)}experiences/"
-        result = await self.search(query=query, target_uri=exp_uri, limit=limit)
-        return result.get("memories", [])
+        result = await self.client.find(query=query, target_uri=exp_uri, limit=limit)
+        return [
+            self._matched_context_to_dict(m)
+            for m in self._search_group(result, "memories")
+        ]
 
     async def grep(
         self,

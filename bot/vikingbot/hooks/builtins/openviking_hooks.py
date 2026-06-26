@@ -318,8 +318,11 @@ class OpenVikingPostCallHook(Hook):
             )
             return "\n\n---\n".join(parts) if parts else ""
         except Exception as e:
-            logger.opt(exception=e).warning(
-                "[SKILL_EXP]: failed to search experiences workspace_id={} "
+            # Skill experience injection is best-effort. Under high-parallel evals,
+            # OpenViking search may time out; log a compact line instead of a full
+            # traceback so rollout logs are not dominated by optional retrieval.
+            logger.warning(
+                "[SKILL_EXP]: skipped experience search workspace_id={} "
                 "elapsed_ms={:.1f} error_type={} error={!r} query_len={} query={!r}",
                 workspace_id,
                 (time.perf_counter() - started_at) * 1000.0,
@@ -336,6 +339,8 @@ class OpenVikingPostCallHook(Hook):
                 match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
                 if match:
                     skill_name = match.group(1).strip()
+                    if skill_name == "experience_loader":
+                        return {"tool_name": tool_name, "params": params, "result": result}
                     desc_match = re.search(r"^description:\s*(.+)$", result, re.MULTILINE)
                     skill_query = desc_match.group(1).strip() if desc_match else skill_name
 

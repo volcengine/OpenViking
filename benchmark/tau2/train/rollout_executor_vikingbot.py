@@ -123,22 +123,16 @@ def _make_tau2_tool(
 
             try:
                 if tool_lock is None:
-                    return await asyncio.to_thread(
-                        self._provider.call_tool, self._name, kwargs
-                    )
+                    return await asyncio.to_thread(self._provider.call_tool, self._name, kwargs)
 
                 if is_write_tool:
                     async with tool_lock.writer():
-                        return await asyncio.to_thread(
-                            self._provider.call_tool, self._name, kwargs
-                        )
+                        return await asyncio.to_thread(self._provider.call_tool, self._name, kwargs)
 
                 # Read path: acquire a shared (reader) lock so concurrent read tools
                 # don't block each other.
                 async with tool_lock.reader():
-                    return await asyncio.to_thread(
-                        self._provider.call_tool, self._name, kwargs
-                    )
+                    return await asyncio.to_thread(self._provider.call_tool, self._name, kwargs)
             finally:
                 if record_tool_timing is not None:
                     record_tool_timing(self._name, _elapsed_ms(started_at))
@@ -180,7 +174,9 @@ def _make_search_experience_tool():
                 "required": ["query"],
             }
 
-        async def execute(self, tool_context: Any, query: str, limit: int = 10, **kwargs: Any) -> str:
+        async def execute(
+            self, tool_context: Any, query: str, limit: int = 10, **kwargs: Any
+        ) -> str:
             del kwargs
             client = None
             try:
@@ -294,7 +290,9 @@ def _case_score(item: Any) -> float:
 
 
 def _case_abstract(item: Any) -> str:
-    return str(item.get("abstract", "") if isinstance(item, dict) else getattr(item, "abstract", "") or "")
+    return str(
+        item.get("abstract", "") if isinstance(item, dict) else getattr(item, "abstract", "") or ""
+    )
 
 
 def _filename_name(uri: str) -> str:
@@ -351,18 +349,28 @@ async def _experience_search_summary(client: Any, item: Any, rank: int) -> dict[
     input_text = _markdown_section(content, "Input")
     input_obj = _parse_json_object(input_text)
     exp_uris = _linked_experience_uris(content, source_uri=case_uri)
+    # ponytail: fetch Situation snippet per experience so agent can gate read_experience on applicability.
+    experiences: list[dict[str, Any]] = []
+    for idx, exp_uri in enumerate(exp_uris, start=1):
+        exp_entry: dict[str, Any] = {
+            "index": idx,
+            "name": _filename_name(exp_uri),
+            "uri": exp_uri,
+            "situation": "",
+        }
+        try:
+            exp_content = await client.read_content(exp_uri, level="read")
+        except Exception:
+            exp_content = ""
+        situation = _markdown_section(exp_content, "Situation") if exp_content else ""
+        # ponytail: cap at ~600 chars per exp to bound search-result tokens; exclusions ("不适用于"/"not apply") are preserved.
+        exp_entry["situation"] = _shorten(situation, 600)
+        experiences.append(exp_entry)
     summary.update(
         {
             "task_signature": _shorten(_markdown_section(content, "Task Signature")),
             "input_summary": _shorten(input_obj.get("summary") if input_obj else input_text),
-            "experiences": [
-                {
-                    "index": idx,
-                    "name": _filename_name(exp_uri),
-                    "uri": exp_uri,
-                }
-                for idx, exp_uri in enumerate(exp_uris, start=1)
-            ],
+            "experiences": experiences,
         }
     )
     return summary
@@ -761,6 +769,7 @@ def _make_tau2_plain_text_router(*, publish_events: bool, bus: Any, session_key:
             assistant_entry["reasoning_content"] = ctx.reasoning_content
         messages.append(assistant_entry)
         from vikingbot.utils.helpers import cal_str_tokens as _cal
+
         started_at = time.perf_counter()
         user_reply = await ctx.tools.execute(
             "communicate_with_user",
@@ -779,6 +788,7 @@ def _make_tau2_plain_text_router(*, publish_events: bool, bus: Any, session_key:
         logger.info(f"[RESULT]: {str(user_reply)[:600]}")
         if publish_events:
             from vikingbot.bus.events import OutboundMessage, OutboundEventType
+
             await bus.publish_outbound(
                 OutboundMessage(
                     session_key=session_key,
@@ -919,10 +929,11 @@ def _classify_write_tools(provider: Any) -> set[str]:
                         tool_type = tool_type_fn(name)
                     except Exception:
                         tool_type = None
-                is_write = (
-                    mutates is True
-                    or str(tool_type) in {"write", "ToolType.WRITE", "ToolType.WRITE.value"}
-                )
+                is_write = mutates is True or str(tool_type) in {
+                    "write",
+                    "ToolType.WRITE",
+                    "ToolType.WRITE.value",
+                }
                 if is_write:
                     write_names.add(str(name))
 
@@ -933,8 +944,19 @@ def _classify_write_tools(provider: Any) -> set[str]:
         schemas = list(provider.list_openai_tools() or [])
     except Exception:
         schemas = []
-    _READ_PREFIXES = ("get_", "search_", "list_", "find_", "retrieve_", "lookup_", "check_",
-                     "view_", "describe_", "think", "summary")
+    _READ_PREFIXES = (
+        "get_",
+        "search_",
+        "list_",
+        "find_",
+        "retrieve_",
+        "lookup_",
+        "check_",
+        "view_",
+        "describe_",
+        "think",
+        "summary",
+    )
     for schema in schemas:
         fn = schema.get("function") or {}
         name = str(fn.get("name") or "")
