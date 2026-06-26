@@ -434,3 +434,31 @@ def _zip_bytes(files):
         for name, content in files.items():
             zf.writestr(name, content)
     return buffer.getvalue()
+
+
+class TestExtractFilenameFromDisposition:
+    """RFC 6266 / RFC 5987 Content-Disposition filename parsing."""
+
+    @pytest.mark.parametrize(
+        ("header", "expected"),
+        [
+            ('inline; filename="2601.00014v1.pdf"', "2601.00014v1.pdf"),
+            ("attachment; filename=document.pdf", "document.pdf"),
+            ("attachment; filename*=UTF-8''encoded.pdf", "encoded.pdf"),
+            ('attachment; filename="foo.pdf"; size=12345', "foo.pdf"),
+            ("attachment; filename*=UTF-8''report%20final.pdf", "report final.pdf"),
+            ("attachment; filename*=iso-8859-1''r%E9sum%E9.pdf", "r\xe9sum\xe9.pdf"),
+            (
+                "attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf; filename=resume.pdf",
+                "r\u00e9sum\u00e9.pdf",
+            ),
+            ("attachment; size=100; filename*=Shift_JIS%27%27a.txt", "a.txt"),
+            ("attachment;filename*=UTF-8''%E6%96%87%E4%BB%B6.txt", "\u6587\u4ef6.txt"),
+            ('attachment; filename="a b.txt"', "a b.txt"),
+            ("attachment; filename=", None),
+            ("", None),
+            ("inline", None),
+        ],
+    )
+    def test_extract_filename_from_disposition(self, header, expected):
+        assert URLTypeDetector._extract_filename_from_disposition(header) == expected

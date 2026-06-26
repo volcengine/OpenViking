@@ -339,12 +339,13 @@ class URLTypeDetector:
     @staticmethod
     def _extract_filename_from_disposition(content_disposition: str) -> Optional[str]:
         """
-        Extract filename from Content-Disposition header per RFC 6266.
+        Extract filename from Content-Disposition header per RFC 6266 / RFC 5987.
 
         Handles formats:
             - inline; filename="2601.00014v1.pdf"
             - attachment; filename=document.pdf
             - attachment; filename*=UTF-8''encoded.pdf
+            - attachment; filename*=iso-8859-1''r%E9sum%E9.pdf
             - attachment; filename="foo.pdf"; size=12345
 
         Args:
@@ -357,25 +358,37 @@ class URLTypeDetector:
             return None
 
         import re
+        from urllib.parse import unquote
 
         content_disposition = content_disposition.strip()
 
-        # Try filename*=UTF-8''... format first (RFC 5987)
-        utf8_match = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition, re.I)
-        if utf8_match:
-            from urllib.parse import unquote
+        # RFC 5987 extended parameter: filename*=charset'lang'pct-encoded-value.
+        # Accept any charset (not just UTF-8); some servers percent-encode the
+        # two single quotes as %27, so tolerate that form too.
+        ext_match = re.search(
+            r"filename\*\s*=\s*([\w!#$%&+\-.^_`|~]+?)(?:''|%27%27)([^;]+)",
+            content_disposition,
+            re.I,
+        )
+        if ext_match:
+            charset = ext_match.group(1).lower()
+            raw = ext_match.group(2).strip()
+            enc = "utf-8" if charset in ("utf-8", "utf8") else charset
+            try:
+                return unquote(raw, encoding=enc, errors="replace") or None
+            except LookupError:
+                return unquote(raw, encoding="latin-1", errors="replace") or None
 
-            return unquote(utf8_match.group(1))
-
-        # Try filename="..." format (quoted-string)
-        quoted_match = re.search(r'filename="([^"]+)"', content_disposition, re.I)
+        # Quoted filename (quoted-string form).
+        quoted_match = re.search(r'filename\s*=\s*"([^"]*)"', content_disposition, re.I)
         if quoted_match:
-            return quoted_match.group(1)
+            return quoted_match.group(1) or None
 
-        # Try filename=... format (token)
-        simple_match = re.search(r"filename=([^;]+)", content_disposition, re.I)
+        # Bare token filename. (?!\*) ensures we never capture the extended
+        # filename*= parameter token here.
+        simple_match = re.search(r"filename\s*=\s*(?!\*)([^;]+)", content_disposition, re.I)
         if simple_match:
-            return simple_match.group(1).strip()
+            return simple_match.group(1).strip() or None
 
         return None
 
