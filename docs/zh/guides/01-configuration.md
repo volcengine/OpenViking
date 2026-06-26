@@ -873,6 +873,8 @@ Grep 引擎配置，用于内容模式搜索。这些设置为服务端配置，
 
 对于 VikingDB / Volcengine FullText grep，OpenViking 会写入 `content` text 字段用于 BM25 召回。源上下文中保留完整内容，仅在最终写入向量库 adapter payload 时将该字段截断到 **1 MB**，以满足后端 payload 限制。
 
+在加入 `content` FullText 字段之前创建的旧 VikingDB collection 仍会正常启动。使用 `engine: "auto"` 时，OpenViking 会记录 schema 不匹配并回退到本地文件系统搜索；如需恢复 VikingDB BM25 召回，需要用当前 schema 重新创建该 collection。
+
 ### storage
 
 用于存储上下文数据 ，包括文件存储（RAGFS）和向量库存储（VectorDB）。
