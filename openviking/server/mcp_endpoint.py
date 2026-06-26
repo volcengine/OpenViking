@@ -212,6 +212,52 @@ mcp = FastMCP(
 )
 
 
+# -- compact description mode -----------------------------------------------
+# When OPENVIKING_MCP_DESCRIPTION_MODE=compact, truncate each tool's
+# description to the first sentence. Reduces context token overhead for
+# MCP clients (Claude Code, etc.) that receive all tool schemas at once.
+# Default: "full" (no truncation).
+
+_MCP_DESCRIPTION_MODE = os.environ.get("OPENVIKING_MCP_DESCRIPTION_MODE", "full").lower()
+
+
+def _compact_description(doc: str) -> str:
+    """Truncate docstring to first sentence for compact MCP schema mode."""
+    if _MCP_DESCRIPTION_MODE != "compact" or not doc:
+        return doc
+    # First sentence = text before first '. ' or '\n\n' (whichever comes first)
+    for sep in (". ", "\n\n"):
+        idx = doc.find(sep)
+        if idx > 0:
+            return doc[: idx + len(sep)].rstrip()
+    return doc
+
+
+# Wrap the @mcp.tool decorator to auto-compact descriptions when mode is "compact".
+_original_mcp_tool = mcp.tool
+
+
+def _mcp_tool_with_compact_desc(*args, **kwargs):
+    """Decorator that compacts tool descriptions when OPENVIKING_MCP_DESCRIPTION_MODE=compact."""
+    def _wrapper(fn):
+        # Compact the function's docstring before registration
+        if fn.__doc__:
+            fn.__doc__ = _compact_description(fn.__doc__)
+        return _original_mcp_tool(*args, **kwargs)(fn)
+    # Support both @mcp.tool() and @mcp.tool(name="...")
+    if args and callable(args[0]):
+        # Used as @mcp.tool (no parentheses)
+        fn = args[0]
+        if fn.__doc__:
+            fn.__doc__ = _compact_description(fn.__doc__)
+        return _original_mcp_tool(fn)
+    # Used as @mcp.tool() or @mcp.tool(name="...")
+    return _wrapper
+
+
+mcp.tool = _mcp_tool_with_compact_desc
+
+
 # -- find / search ---------------------------------------------------------
 
 
