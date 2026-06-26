@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from urllib.parse import unquote
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -1895,6 +1896,7 @@ class VikingFS:
             resources=resources,
             skills=skills,
         )
+        await self._drop_stale_retrieval_hits(find_result, real_ctx)
         telemetry.set("vector.returned", find_result.total)
         return find_result
 
@@ -2025,8 +2027,78 @@ class VikingFS:
             query_plan=query_plan,
             query_results=query_results,
         )
+        await self._drop_stale_retrieval_hits(find_result, real_ctx)
         telemetry.set("vector.returned", find_result.total)
         return find_result
+
+    async def _drop_stale_retrieval_hits(
+        self,
+        find_result: Any,
+        ctx: RequestContext,
+    ) -> None:
+        """Drop retrieval hits whose backing AGFS content is gone, and clean their vectors."""
+        vector_store = self._get_vector_store()
+        sidecars = {0: ".abstract.md", 1: ".overview.md"}
+
+        def _key(match: Any):
+            uri = str(getattr(match, "uri", "") or "")
+            if not uri:
+                return None
+
+            check_uri = uri if uri.endswith("://") else uri.rstrip("/")
+            sidecar = sidecars.get(getattr(match, "level", 2))
+            if sidecar:
+                suffix = f"/{sidecar}"
+                vector_uri = check_uri.removesuffix(suffix)
+                check_uri = uri if uri.endswith(suffix) else f"{vector_uri}{suffix}"
+
+            record_id = hashlib.md5(f"{ctx.account_id}:{check_uri}".encode("utf-8")).hexdigest()
+            return check_uri, record_id
+
+        def _check_uri_candidates(check_uri: str) -> tuple[str, ...]:
+            decoded = unquote(check_uri)
+            if decoded != check_uri and decoded.count("/") == check_uri.count("/"):
+                return check_uri, decoded
+            return (check_uri,)
+
+        async def _check(key: tuple[str, str]) -> tuple[tuple[str, str], bool]:
+            check_uri, _ = key
+            for candidate in _check_uri_candidates(check_uri):
+                try:
+                    await self.stat(candidate, ctx=ctx, skip_count=True)
+                    return key, True
+                except Exception as exc:
+                    if not is_not_found_error(exc):
+                        logger.debug("[VikingFS] stale-hit check skipped for %s: %s", candidate, exc)
+                        return key, True
+            return key, False
+
+        matches = []
+        for attr in ("memories", "resources", "skills"):
+            matches.extend(getattr(find_result, attr))
+        if find_result.query_results:
+            for query_result in find_result.query_results:
+                matches.extend(query_result.matched_contexts)
+
+        keys = {_key(match) for match in matches}
+        keys.discard(None)
+        checked = dict(await asyncio.gather(*(_check(key) for key in keys)))
+        stale_ids = sorted(record_id for (_, record_id), live in checked.items() if not live)
+        if vector_store and stale_ids:
+            try:
+                await vector_store.delete(stale_ids, ctx=ctx)
+            except Exception as exc:
+                logger.debug("[VikingFS] stale-vector cleanup failed: %s", exc)
+
+        def _filter(contexts: List[Any]) -> List[Any]:
+            return [match for match in contexts if checked.get(_key(match), True)]
+
+        for attr in ("memories", "resources", "skills"):
+            setattr(find_result, attr, _filter(getattr(find_result, attr)))
+        if find_result.query_results:
+            for query_result in find_result.query_results:
+                query_result.matched_contexts = _filter(query_result.matched_contexts)
+        find_result.total = sum(len(getattr(find_result, attr)) for attr in ("memories", "resources", "skills"))
 
     # ========== Relation Management ==========
 
