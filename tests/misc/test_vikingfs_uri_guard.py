@@ -8,8 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from openviking.pyagfs.exceptions import AGFSInvalidOperationError
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.session.user_id import UserIdentifier
 
 
 def _make_viking_fs() -> VikingFS:
@@ -19,10 +21,18 @@ def _make_viking_fs() -> VikingFS:
     fs._async_agfs = fs.agfs
     fs.query_embedder = None
     fs.rerank_config = None
+    fs.grep_config = None
     fs.vector_store = None
     fs._encryptor = None
     fs._bound_ctx = contextvars.ContextVar("vikingfs_bound_ctx_test", default=None)
     return fs
+
+
+def _user_ctx(account_id: str = "acct1", user_id: str = "alice") -> RequestContext:
+    return RequestContext(
+        user=UserIdentifier(account_id=account_id, user_id=user_id),
+        role=Role.USER,
+    )
 
 
 class TestVikingFSURITraversalGuard:
@@ -91,6 +101,68 @@ class TestVikingFSURITraversalGuard:
 
         fs._collect_uris.assert_not_called()
         fs._delete_from_vector_store.assert_not_called()
+        fs.agfs.rm.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "viking://",
+            "/",
+            "viking://user",
+            "viking://user/",
+            "/user",
+            "user",
+        ],
+    )
+    async def test_rm_rejects_protected_namespace_roots_before_side_effects(
+        self, uri: str
+    ) -> None:
+        fs = _make_viking_fs()
+        fs._collect_uris = AsyncMock(return_value=[])
+        fs._delete_from_vector_store = AsyncMock()
+
+        with pytest.raises(PermissionDeniedError, match="Deleting viking://"):
+            await fs.rm(uri, recursive=True)
+
+        fs._collect_uris.assert_not_called()
+        fs._delete_from_vector_store.assert_not_called()
+        fs.agfs.stat.assert_not_called()
+        fs.agfs.rm.assert_not_called()
+
+    @pytest.mark.parametrize("uri", ["viking://resources", "viking://session"])
+    @pytest.mark.asyncio
+    async def test_rm_allows_public_scope_roots_to_reach_agfs(self, uri: str) -> None:
+        fs = _make_viking_fs()
+        fs.agfs.stat = AsyncMock(side_effect=RuntimeError("sentinel"))
+
+        with pytest.raises(RuntimeError, match="sentinel"):
+            await fs.rm(uri, recursive=True)
+
+        fs.agfs.stat.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rm_session_root_is_scoped_to_current_user_before_agfs(self) -> None:
+        fs = _make_viking_fs()
+        fs.agfs.stat = AsyncMock(side_effect=RuntimeError("sentinel"))
+
+        with pytest.raises(RuntimeError, match="sentinel"):
+            await fs.rm("viking://session", recursive=True, ctx=_user_ctx())
+
+        fs.agfs.stat.assert_called_once_with("/local/acct1/user/alice/sessions")
+
+    @pytest.mark.asyncio
+    async def test_rm_rejects_temp_root_for_non_root_before_side_effects(self) -> None:
+        fs = _make_viking_fs()
+        fs._collect_uris = AsyncMock(return_value=[])
+        fs._delete_from_vector_store = AsyncMock()
+
+        with pytest.raises(PermissionDeniedError, match="Temp root is read-only"):
+            await fs.rm("viking://temp", recursive=True, ctx=_user_ctx())
+
+        fs._collect_uris.assert_not_called()
+        fs._delete_from_vector_store.assert_not_called()
+        fs.agfs.stat.assert_not_called()
         fs.agfs.rm.assert_not_called()
 
     @pytest.mark.asyncio
