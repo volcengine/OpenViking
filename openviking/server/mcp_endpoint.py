@@ -212,52 +212,6 @@ mcp = FastMCP(
 )
 
 
-# -- compact description mode -----------------------------------------------
-# When OPENVIKING_MCP_DESCRIPTION_MODE=compact, truncate each tool's
-# description to the first sentence. Reduces context token overhead for
-# MCP clients (Claude Code, etc.) that receive all tool schemas at once.
-# Default: "full" (no truncation).
-
-_MCP_DESCRIPTION_MODE = os.environ.get("OPENVIKING_MCP_DESCRIPTION_MODE", "full").lower()
-
-
-def _compact_description(doc: str) -> str:
-    """Truncate docstring to first sentence for compact MCP schema mode."""
-    if _MCP_DESCRIPTION_MODE != "compact" or not doc:
-        return doc
-    # First sentence = text before first '. ' or '\n\n' (whichever comes first)
-    for sep in (". ", "\n\n"):
-        idx = doc.find(sep)
-        if idx > 0:
-            return doc[: idx + len(sep)].rstrip()
-    return doc
-
-
-# Wrap the @mcp.tool decorator to auto-compact descriptions when mode is "compact".
-_original_mcp_tool = mcp.tool
-
-
-def _mcp_tool_with_compact_desc(*args, **kwargs):
-    """Decorator that compacts tool descriptions when OPENVIKING_MCP_DESCRIPTION_MODE=compact."""
-    def _wrapper(fn):
-        # Compact the function's docstring before registration
-        if fn.__doc__:
-            fn.__doc__ = _compact_description(fn.__doc__)
-        return _original_mcp_tool(*args, **kwargs)(fn)
-    # Support both @mcp.tool() and @mcp.tool(name="...")
-    if args and callable(args[0]):
-        # Used as @mcp.tool (no parentheses)
-        fn = args[0]
-        if fn.__doc__:
-            fn.__doc__ = _compact_description(fn.__doc__)
-        return _original_mcp_tool(fn)
-    # Used as @mcp.tool() or @mcp.tool(name="...")
-    return _wrapper
-
-
-mcp.tool = _mcp_tool_with_compact_desc
-
-
 # -- find / search ---------------------------------------------------------
 
 
@@ -532,43 +486,25 @@ async def add_resource(
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
 
-    Three ways to invoke:
+    Remote URL: pass ``path`` as an http(s)://, git@, ssh://, or git:// URL. A sitemap /
+    RSS / Atom URL ingests the WHOLE site as one resource tree; pass ``args={"site": true}``
+    to force whole-site ingestion from a bare domain.
 
-    1. Remote URL: pass ``path`` set to an http(s)://, git@, ssh://, or git:// URL.
-       Returns a success message immediately. Supports ``watch_interval`` for
-       auto-refresh subscriptions; pass ``to`` to choose the exact target URI, or
-       omit it to bind the watch to the URI created by this add.
-       A sitemap / RSS / Atom URL ingests the WHOLE site as one resource tree;
-       pass ``args={"site": true}`` to force whole-site ingestion from a bare
-       domain (auto-discovers the site's sitemap/RSS). Watching a sitemap/feed
-       URL keeps the whole site auto-refreshed.
-
-    2. Local file: pass ``path`` set to a local filesystem path (e.g. ``/tmp/foo.pdf``).
-       The response is NOT a success message — it's a multi-step upload instruction.
-       HTTP POST the file to the URL the response gives you, read ``temp_file_id`` from
-       the upload response body, then call this tool again with that ``temp_file_id``.
-
-    3. Re-call after upload: pass ``temp_file_id`` set to the value the signed upload
-       response returned. Omit ``path``. The server resolves the file via TempUploadStore
-       and ingests it.
+    Local file: pass ``path`` as a filesystem path (e.g. ``/tmp/foo.pdf``). The response is a
+    multi-step upload instruction — HTTP POST the file to the returned URL, read ``temp_file_id``
+    from the upload body, then re-call this tool with ``temp_file_id`` (omit ``path``) to ingest.
 
     Args:
-        path: Remote URL or local filesystem path.
-        temp_file_id: Server-minted upload id from a prior signed upload. Either
-            ``path`` or ``temp_file_id`` is required.
+        path: Remote URL or local filesystem path. Required unless ``temp_file_id`` is set.
+        temp_file_id: Server-minted upload id from a prior signed local-file upload.
         description: Optional human-readable reason for adding the resource.
-        watch_interval: Auto-refresh cadence in minutes. 0 (default) = no watch.
-            >0 = periodically re-fetch the resource at that cadence (full re-ingest
-            each time). Prefer >=1440 (24h) unless the source genuinely changes
-            faster — every refresh re-embeds the entire resource. When ``to`` is
-            omitted, the watch binds to the URI created by this add.
+        watch_interval: Auto-refresh cadence in minutes. 0 = no watch. Prefer >=1440 (24h)
+            unless the source changes faster — every refresh re-embeds the whole resource.
             Only applies to remote-URL invocations.
-        to: Target URI under viking://resources/ (e.g.
-            "viking://resources/volcengine/OpenViking"). Leave empty to let the
-            system derive a URI from the source.
-        args: Parser-specific import options. For Feishu one-time user-token imports,
-            pass {"feishu_access_token": "..."}. For Feishu user-token watches,
-            pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
+        to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
+            Leave empty to derive a URI from the source.
+        args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
+            or {"site": true} for whole-site ingestion.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 
@@ -719,11 +655,7 @@ async def add_resource(
 
 @mcp.tool()
 async def list_watches() -> str:
-    """List watch tasks (auto-refresh subscriptions) visible to the current user.
-
-    Each line shows: target URI, refresh interval (minutes), active/paused status,
-    and the next scheduled execution time. Returns "No watch tasks." when empty.
-    """
+    """List watch tasks (auto-refresh subscriptions) visible to the current user."""
     service = get_service()
     ctx = _get_ctx()
     scheduler = getattr(service, "watch_scheduler", None)
@@ -755,11 +687,7 @@ async def list_watches() -> str:
 
 @mcp.tool()
 async def cancel_watch(to_uri: str) -> str:
-    """Cancel (delete) a watch task by its target URI.
-
-    The URI must match the watch task's `to` value (e.g. "viking://resources/volcengine/OpenViking").
-    To change the cadence or pause temporarily, cancel and re-add with a new watch_interval.
-    """
+    """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking")."""
     from openviking.resource import watch_manager as _wm_mod
 
     service = get_service()
@@ -877,7 +805,7 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 
 @mcp.tool()
 async def forget(uri: str, recursive: bool = False) -> str:
-    """Permanently delete a viking:// URI from OpenViking. This is irreversible. Only use when the user explicitly asks to forget or delete something. Always confirm with the user before calling this tool. Use the search tool first to find the exact URI, then pass it here. Set recursive=true only when the user explicitly asks to delete a directory tree."""
+    """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling."""
     service = get_service()
     ctx = _get_ctx()
     await service.fs.rm(uri, ctx=ctx, recursive=recursive)
@@ -899,17 +827,7 @@ def _require_viking_uri(uri: str) -> Optional[str]:
 
 @mcp.tool()
 async def code_outline(uri: str) -> str:
-    """Show a confirmed viking:// source file's symbol structure: classes, functions,
-    methods, and line ranges. Returns a structural map without reading implementation bodies.
-
-    Use only for source files inside an ingested code repository, after you know the exact
-    viking:// file URI. Do not use on directories, documentation-only files, plain text notes,
-    chat/session history, or files that are not supported source code.
-
-    Use read instead when you need the full file content.
-    Typical workflow: code_search → code_outline → code_expand.
-
-    uri must be a viking:// file URI (not a directory)."""
+    """Show symbol structure (classes, functions, methods, line ranges) of a viking:// source file without reading full content."""
     err = _require_viking_uri(uri)
     if err:
         return err
@@ -926,20 +844,7 @@ async def code_outline(uri: str) -> str:
 
 @mcp.tool()
 async def code_search(query: str, uri: str) -> str:
-    """Search AST-supported symbol names (class / function / method) by substring across a
-    confirmed viking:// code repository or source subtree. Returns structured results:
-    symbol type, class context, file URI, line range.
-
-    Use only after you have evidence that the uri contains supported source files. If you have
-    not confirmed that this is an ingested code repository, first use ls/glob/read or
-    add_resource output to verify it.
-
-    Do not use for general memory search, documentation-only resources, plain text notes,
-    chat/session history, or local filesystem paths. Skip if you already know the exact file;
-    use code_outline or read directly.
-
-    Scans up to 200 source files. Narrow uri to a subdirectory for deeper coverage.
-    uri is required to avoid accidentally walking the entire VikingFS."""
+    """Search symbol names (class/function/method) by substring across a viking:// code repository. Returns symbol type, class context, file URI, and line range. Scans up to 200 source files — narrow uri for deeper coverage."""
     err = _require_viking_uri(uri)
     if err:
         return err
@@ -980,16 +885,7 @@ async def code_search(query: str, uri: str) -> str:
 
 @mcp.tool()
 async def code_expand(uri: str, symbol: str) -> str:
-    """Return the full source of a single named symbol from a confirmed viking:// source file.
-    Reads only that symbol's body, avoiding the overhead of reading an entire file.
-
-    Use only after code_outline or other evidence shows the symbol exists in that file.
-    Do not use for broad exploration, non-code files, documentation, chat/session history,
-    or unverified viking:// resources. For reading multiple symbols from the same file,
-    read is often more efficient.
-
-    `symbol` accepts 'bar' (top-level) or 'Foo.bar' (method).
-    uri must be a viking:// file URI."""
+    """Return the full source of a single named symbol from a viking:// source file. symbol accepts 'bar' (top-level) or 'Foo.bar' (method)."""
     err = _require_viking_uri(uri)
     if err:
         return err
