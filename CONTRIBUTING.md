@@ -14,7 +14,7 @@ Thank you for your interest in OpenViking! We welcome contributions of all kinds
 ### Prerequisites
 
 - **Python**: 3.10+
-- **Go**: 1.22+ (Required for building AGFS components from source)
+- **Go**: 1.22+ (Required only for Go SDK development under `sdk/go`)
 - **Rust**: 1.91.1+ (Required for source builds because the bundled `ov` CLI is built during packaging)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions, must support C++17)
 - **CMake**: 3.12+
@@ -58,13 +58,13 @@ source .venv/bin/activate  # Linux/macOS
 
 #### Local Development & Native Rebuilds
 
-OpenViking defaults to `binding-client` mode for AGFS, which requires pre-built native artifacts. If you modify the **AGFS (Go)** code, the bundled **Rust CLI**, or the **C++ extensions**, or if the pre-built artifacts are not found, you need to re-compile and re-install them. Run the following command in the project root:
+OpenViking defaults to `binding-client` mode for AGFS/RAGFS, which requires pre-built native artifacts. If you modify the **RAGFS Rust binding**, the bundled **Rust CLI**, or the **C++ extensions**, or if the pre-built artifacts are not found, you need to re-compile and re-install them. Run the following command in the project root:
 
 ```bash
 uv pip install -e . --force-reinstall
 ```
 
-This command ensures that `setup.py` is re-executed, triggering rebuilds for AGFS, the bundled `ov` CLI, and the C++ components.
+This command ensures that `setup.py` is re-executed, triggering rebuilds for AGFS/RAGFS, the bundled `ov` CLI, and the C++ components.
 
 ### 3. Configure Environment
 
@@ -136,7 +136,9 @@ openviking/
 ├── pyproject.toml        # Project configuration
 ├── Cargo.toml            # Rust workspace configuration
 ├── third_party/          # Third-party dependencies
-│   └── agfs/             # AGFS filesystem
+│   ├── krl/              # Native retrieval dependency
+│   ├── leveldb-1.23/     # Embedded key-value storage dependency
+│   └── spdlog-1.14.1/    # Native logging dependency
 │
 ├── openviking/           # Python SDK
 │   ├── async_client.py   # AsyncOpenViking client
@@ -159,6 +161,8 @@ openviking/
 │   └── prompts/          # Prompt templates
 │
 ├── crates/               # Rust components
+│   ├── ragfs/            # Rust implementation of AGFS
+│   ├── ragfs-python/     # Python binding for RAGFS
 │   └── ov_cli/           # Rust CLI client
 │       ├── src/          # CLI source code
 │       └── install.sh    # Deprecated stub (use npm package; see Install)
@@ -200,14 +204,9 @@ We use the following tools to maintain code consistency:
 
 We use [pre-commit](https://pre-commit.com/) to automatically run these checks before every commit. This ensures your code always meets the standards without manual effort.
 
-1. **Install pre-commit**:
+1. **Install the git hooks**:
    ```bash
-   pip install pre-commit
-   ```
-
-2. **Install the git hooks**:
-   ```bash
-   pre-commit install
+   uvx pre-commit install
    ```
 
 Now, `ruff` (check & format) will run automatically when you run `git commit`. If any check fails, it may automatically fix the file. You just need to add the changes and commit again.
