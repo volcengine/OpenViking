@@ -12,17 +12,18 @@ from typing import Any
 
 import httpx
 
-from openviking.message import Message
-from openviking.session.train.components.progress import ProgressPrinter
+from openviking.session.train.components.dataset_service import (
+    case_from_dict,
+    case_to_dict,
+    policy_set_to_dict,
+    rollout_from_dict,
+)
+from openviking.session.train.components.progress import run_with_progress
 from openviking.session.train.context import ExecutionContext
 from openviking.session.train.domain import (
     Case,
-    CriterionResult,
     ExperienceSet,
     Rollout,
-    Rubric,
-    RubricCriterion,
-    RubricEvaluation,
 )
 
 
@@ -70,7 +71,7 @@ class RemoteCaseLoader:
                 )
                 response.raise_for_status()
                 data = response.json()
-                cases = [_case_from_dict(item) for item in data.get("cases", [])]
+                cases = [case_from_dict(item) for item in data.get("cases", [])]
                 if not cases:
                     return
                 yield cases
@@ -137,41 +138,26 @@ class RemoteRolloutExecutor:
             context.metadata.get("stage"),
             default=self.progress_label,
         )
-        progress = ProgressPrinter(
-            total=len(case_list),
-            label=stage_label,
-            enabled=self.show_progress,
-            description=f"Running {len(case_list)} rollouts, concurrency={self.concurrency}",
-        )
-        progress.render()
-        semaphore = asyncio.Semaphore(self.concurrency)
         timeout = httpx.Timeout(self.request_timeout_seconds)
         async with httpx.AsyncClient(base_url=self.service_url.rstrip("/"), timeout=timeout) as client:
 
-            async def execute_one(index: int, case: Case) -> Rollout:
-                async with semaphore:
-                    progress.start_one()
-                    try:
-                        rollout = await self._execute_one(client, case, policy_set, context)
-                        await self._emit_rollout_complete(
-                            rollout=rollout,
-                            index=index,
-                            context=context,
-                        )
-                        progress.complete_one()
-                        return rollout
-                    except Exception:
-                        progress.fail_one()
-                        raise
-
-            try:
-                return list(
-                    await asyncio.gather(
-                        *(execute_one(index, case) for index, case in enumerate(case_list))
-                    )
+            async def _execute(case: Case, index: int) -> Rollout:
+                rollout = await self._execute_one(client, case, policy_set, context)
+                await self._emit_rollout_complete(
+                    rollout=rollout,
+                    index=index,
+                    context=context,
                 )
-            finally:
-                progress.finish()
+                return rollout
+
+            return await run_with_progress(
+                case_list,
+                coroutine_factory=_execute,
+                label=stage_label,
+                enabled=self.show_progress,
+                description=f"Running {len(case_list)} rollouts, concurrency={self.concurrency}",
+                concurrency=self.concurrency,
+            )
 
     async def _emit_rollout_complete(
         self,
@@ -200,8 +186,8 @@ class RemoteRolloutExecutor:
         response = await client.post(
             "/v1/rollouts/execute",
             json={
-                "case": _case_to_dict(case),
-                "policy_set": _policy_set_to_dict(policy_set),
+                "case": case_to_dict(case),
+                "policy_set": policy_set_to_dict(policy_set),
                 "execution_context": {
                     "policy_snapshot_id": context.policy_snapshot_id,
                     "metadata": context.metadata,
@@ -265,7 +251,7 @@ class RemoteRolloutExecutor:
                 rollout_data = data.get("rollout")
                 if not isinstance(rollout_data, dict):
                     raise RuntimeError(f"rollout execution {execution_id} completed without rollout")
-                return _rollout_from_dict(rollout_data)
+                return rollout_from_dict(rollout_data)
             if status == "failed":
                 raise RuntimeError(
                     f"rollout execution {execution_id} failed for case {case.name}: "
@@ -326,102 +312,3 @@ def _response_text(response: httpx.Response, *, max_chars: int = 500) -> str:
     if len(text) > max_chars:
         return text[:max_chars] + "..."
     return text
-
-
-def _policy_set_to_dict(policy_set: ExperienceSet) -> dict[str, Any]:
-    return {
-        "root_uri": policy_set.root_uri,
-        "policies": [
-            {
-                "name": item.name,
-                "uri": item.uri,
-                "version": item.version,
-                "status": item.status,
-                "content": item.content,
-                "metadata": item.metadata,
-            }
-            for item in policy_set.policies
-        ],
-        "metadata": policy_set.metadata,
-    }
-
-
-def _case_to_dict(case: Case) -> dict[str, Any]:
-    return {
-        "name": case.name,
-        "task_signature": case.task_signature,
-        "input": case.input,
-        "rubric": {
-            "name": case.rubric.name,
-            "description": case.rubric.description,
-            "criteria": [
-                {
-                    "name": criterion.name,
-                    "description": criterion.description,
-                    "required": criterion.required,
-                    "weight": criterion.weight,
-                    "metadata": criterion.metadata,
-                }
-                for criterion in case.rubric.criteria
-            ],
-            "metadata": case.rubric.metadata,
-        },
-        "metadata": case.metadata,
-    }
-
-
-def _case_from_dict(data: dict[str, Any]) -> Case:
-    rubric_data = data["rubric"]
-    return Case(
-        name=data["name"],
-        task_signature=data["task_signature"],
-        input=dict(data.get("input") or {}),
-        rubric=Rubric(
-            name=rubric_data["name"],
-            description=rubric_data.get("description", ""),
-            criteria=[
-                RubricCriterion(
-                    name=item["name"],
-                    description=item.get("description", ""),
-                    required=bool(item.get("required", True)),
-                    weight=float(item.get("weight", 1.0)),
-                    metadata=dict(item.get("metadata") or {}),
-                )
-                for item in rubric_data.get("criteria", [])
-            ],
-            metadata=dict(rubric_data.get("metadata") or {}),
-        ),
-        metadata=dict(data.get("metadata") or {}),
-    )
-
-
-def _rollout_from_dict(data: dict[str, Any]) -> Rollout:
-    return Rollout(
-        case=_case_from_dict(data["case"]),
-        messages=[Message.from_dict(item) for item in data.get("messages", [])],
-        policy_snapshot_id=data["policy_snapshot_id"],
-        evaluation=_evaluation_from_dict(data.get("evaluation")),
-        metadata=dict(data.get("metadata") or {}),
-    )
-
-
-def _evaluation_from_dict(data: dict[str, Any] | None) -> RubricEvaluation | None:
-    if data is None:
-        return None
-    return RubricEvaluation(
-        passed=bool(data.get("passed")),
-        score=float(data.get("score") or 0.0),
-        criterion_results=[
-            CriterionResult(
-                criterion_name=item.get("criterion_name", "unknown"),
-                passed=bool(item.get("passed")),
-                score=float(item.get("score") or 0.0),
-                feedback=[str(value) for value in item.get("feedback", [])],
-                evidence=[str(value) for value in item.get("evidence", [])],
-                metadata=dict(item.get("metadata") or {}),
-            )
-            for item in data.get("criterion_results", [])
-        ],
-        feedback=[str(value) for value in data.get("feedback", [])],
-        metadata=dict(data.get("metadata") or {}),
-    )

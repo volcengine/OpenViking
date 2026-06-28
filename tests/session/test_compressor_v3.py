@@ -24,14 +24,14 @@ from openviking.session.train import (
     Case,
     ExperienceSet,
     PolicyApplyResult,
-    PolicyUpdatePlan,
     PolicyPlanItem,
+    PolicyUpdatePlan,
     Rollout,
     RolloutAnalysis,
     RolloutTrainingResult,
     Rubric,
-    RubricEvaluation,
     RubricCriterion,
+    RubricEvaluation,
     StreamingPolicyTrainerConfig,
     Trajectory,
 )
@@ -133,10 +133,10 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
                 gradients=[],
             )
 
-    async def fake_estimate_exp_gradients(**kwargs):
+    async def fake_estimate_exp_gradients(self, *args, **kwargs):
         # Return one dummy gradient so we can verify submission
-        from openviking.session.train import PatchSemanticGradient
         from openviking.session.memory.dataclass import MemoryFile
+        from openviking.session.train import PatchSemanticGradient
         return [
             PatchSemanticGradient(
                 before_file=None,
@@ -163,7 +163,7 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
         AsyncMock(return_value=FakeTrainer()),
     )
     monkeypatch.setattr(
-        "openviking.session.compressor_v3._estimate_exp_gradients",
+        "openviking.session.train.components.gradient_estimator.ExperienceGradientEstimator.estimate",
         fake_estimate_exp_gradients,
     )
 
@@ -232,7 +232,7 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
                 gradients=[],
             )
 
-    async def fake_estimate_exp_gradients(**kwargs):
+    async def fake_estimate_exp_gradients(self, *args, **kwargs):
         return []
 
     monkeypatch.setattr(
@@ -244,7 +244,7 @@ async def test_train_from_extracted_multiple_case_memories_analyzes_bound_rollou
         AsyncMock(return_value=FakeTrainer()),
     )
     monkeypatch.setattr(
-        "openviking.session.compressor_v3._estimate_exp_gradients",
+        "openviking.session.train.components.gradient_estimator.ExperienceGradientEstimator.estimate",
         fake_estimate_exp_gradients,
     )
 
@@ -895,7 +895,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
                 gradients=[],
             )
 
-    async def fake_estimate_exp_gradients(**kwargs):
+    async def fake_estimate_exp_gradients(self, *args, **kwargs):
         from openviking.session.train import PatchSemanticGradient
 
         return [
@@ -921,7 +921,10 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
         "openviking.session.compressor_v3.get_streaming_policy_trainer",
         AsyncMock(return_value=FakeTrainer()),
     )
-    monkeypatch.setattr("openviking.session.compressor_v3._estimate_exp_gradients", fake_estimate_exp_gradients)
+    monkeypatch.setattr(
+        "openviking.session.train.components.gradient_estimator.ExperienceGradientEstimator.estimate",
+        fake_estimate_exp_gradients,
+    )
 
     compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=FakeAnalyzer())
     result = await compressor.train_from_extracted_cases(

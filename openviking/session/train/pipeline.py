@@ -36,6 +36,7 @@ from openviking.session.train.interfaces import (
     RolloutExecutor,
     SemanticGradient,
 )
+from openviking.session.train.utils import average_score, validate_rollouts_have_cases
 from openviking.telemetry import tracer
 
 
@@ -212,7 +213,7 @@ class OfflinePolicyOptimizationPipeline:
 
         ctx = context if isinstance(context, PipelineContext) else PipelineContext()
         rollout_list = list(rollouts)
-        _validate_rollouts_have_cases(rollout_list)
+        validate_rollouts_have_cases(rollout_list)
         result = await self.policy_trainer.train_rollouts(
             rollout_list,
             policy_set,
@@ -283,7 +284,7 @@ class OfflinePolicyOptimizationPipeline:
             apply_result=last_apply_result,
             policy_snapshot_ids=snapshot_ids,
             metadata={
-                "score": _average_score(all_analyses),
+                "score": average_score(all_analyses),
                 "analysis_count": len(all_analyses),
                 "gradient_count": len(all_gradients),
                 "train_rollout_report": rollout_report,
@@ -321,7 +322,7 @@ class OfflinePolicyOptimizationPipeline:
             policy_snapshot_ids=snapshot_ids,
             metadata={
                 **dict(ctx.execution_metadata),
-                "score": _average_score(all_analyses),
+                "score": average_score(all_analyses),
                 "analysis_count": len(all_analyses),
                 "evaluation_only": True,
                 "cost_seconds": cost_seconds,
@@ -622,12 +623,6 @@ def _rollout_stage(*, epoch: int, training: bool) -> str:
     return f"test_rollout epoch={epoch}"
 
 
-def _average_score(analyses: list[RolloutAnalysis]) -> float | None:
-    if not analyses:
-        return None
-    return sum(float(analysis.evaluation.score) for analysis in analyses) / len(analyses)
-
-
 def _analyses_from_rollout_evaluations(rollouts) -> list[RolloutAnalysis]:
     analyses: list[RolloutAnalysis] = []
     for idx, rollout in enumerate(rollouts):
@@ -653,7 +648,7 @@ def _analyses_from_rollout_evaluations(rollouts) -> list[RolloutAnalysis]:
 
 def _first_epoch_score(epochs: list[PipelineEpochResult]) -> float | None:
     for epoch in epochs:
-        score = _average_score(epoch.analyses)
+        score = average_score(epoch.analyses)
         if score is not None:
             return score
     return None
@@ -663,17 +658,7 @@ def _final_epoch_score(
     epochs: list[PipelineEpochResult],
 ) -> float | None:
     for epoch in reversed(epochs):
-        score = _average_score(epoch.analyses)
+        score = average_score(epoch.analyses)
         if score is not None:
             return score
     return None
-
-
-def _validate_rollouts_have_cases(rollouts) -> None:
-    missing = [
-        idx for idx, rollout in enumerate(rollouts) if getattr(rollout, "case", None) is None
-    ]
-    if missing:
-        raise ValueError(
-            f"rollout training requires Rollout.case for all rollouts; missing indices={missing}"
-        )

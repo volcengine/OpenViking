@@ -69,6 +69,19 @@ fields:
       - Actual: <实际轨迹中的 tool/action sequence 和关键参数>.
       - Delta: <missing action、wrong target object、wrong amount/count/status、extra action、premature handoff/done，或 no material delta>.
 
+      # 实际执行路径
+      - Tool path: <按时间顺序列出真实发生的关键工具调用；包括读取了哪些 experience，以及主要业务工具调用；不要写模型“打算做什么”，只写实际 trace 里发生了什么。>
+      - Business path: <用一句话概括实际业务路径，例如“读订单 -> 转人工 -> 未执行 expected write”或“读订单 -> 升级 -> 取消 -> 漏沟通聚合值”。>
+
+      # 经验步骤对齐
+      - Experience: <实际读取的 experience 名称或 uri；如果没有读取 experience，写 none。>
+        - Applied: <yes/no/unclear/misleading/ignored>.
+        - 从头连续走过的步骤: <如果 experience 的 Approach 有 `[1]` `[2]` step id，写从 `[1]` 开始连续匹配到的步骤列表，如 `[1, 2, 3]`；如果没有匹配到 `[1]`，写 `[]`；如果该 experience 没有 step id，写 unavailable。>
+        - 分支判断结果: <列出实际走到的 IF 步骤及结果，例如 `[4]=true`、`[7]=false`；如果 trace 不足以判断，写 `[N]=unknown`。>
+        - 每步结果: <用短列表写关键 step 的结果，例如 `[1]=done`, `[2]=done`, `[4]=false`, `[5]=skipped`, `[8]=executed`, `[9]=blocked`, `[10]=not_reached`。只写对 reward/偏离有用的步骤，不要冗长。>
+        - 第一个未走到或偏离步骤: <如 `[4]`；如果完整走完写 none；无法判断写 unknown。>
+        - 偏离说明: <一句话说明该步骤要求什么、实际做了什么；如果 agent 按经验走完但仍失败，说明该 experience 可能是 misleading/over-broad/conflicted with evaluation/tool facts。>
+
       # 事实链与偏离
       - User/task intent: <用户试图完成什么>.
       - Decisive tool facts: <决定性字段，例如 status、count、membership、insurance、lifecycle state、ownership、timestamp arithmetic 或 policy eligibility>.
@@ -101,19 +114,23 @@ fields:
       - Scope/source：每个最新 evaluated task 最多抽取一个 trajectory。所有判断必须落在当前用户请求、实际工具调用/输出、assistant 动作、可见 CaseSpec/ground_truth/evaluation 上。不要从 retrieved memories、Experience Reminder、candidate/source memories、历史样例或无关 policy sections 抽取。system/domain policy 只用于判断与当前观察事实绑定的 policy gate。
       - Evidence priority：Expected vs Actual 优先使用 evaluation/action_checks/CaseSpec 作为 oracle。即使最终 report 很稀疏，CaseSpec 的 `Actions`、`Communicate Info`、NL Assertions 也算证据。保留精确 evaluated/actual tool names。之后依次使用 tool facts、policy、user self-report。
       - Root-cause audit：必须先用可见证据找“第一个改变 reward 的决策点”，再写 trajectory；不要复述全流程。先按 outcome、terminal tool/action、DB/Communicate、first divergent action 对当前 trace 分桶。若 state-changing tool 返回成功但 DB failed，优先诊断 forbidden write、wrong target、wrong args；不得归因于缺少 done、缺少 post-write verification、工具成功但环境异常，除非 evaluation 明确支持。对 policy-gated write，必须从 tool outputs 重建 gate：ownership/status、完整 timestamp arithmetic、cabin、insurance、reason、airline-cancelled、confirmation/refund；用户或客服口头说法不能覆盖 policy + tool facts。若存在 sibling rollouts 或 group summary，必须比较 PASS vs FAIL 的最小差异；只沉淀能解释多数失败的一个核心规则。若 retrieved experience 与当前 tool facts/evaluation 冲突，标记为 misleading 或 over-broad，不得把它当结论。输出时按“结论 -> 证据 -> 反事实 -> 修正规则”写进既有 section，不新增标题。
+      - Fix only the failed part：先分清“哪些步骤已经被结果证明是对的”和“真正失败/缺失/不一致的点”。做对的地方不要反着学：已通过的读/写/业务步骤不能写成 forbidden，也不能被总结成以后要拒绝、转人工、换路径。若业务路径已成立，只是最终回复少说或说错信息，主因只能写 missing/wrong communication，并保留原业务路径为正确路径。
+      - Actual path extraction：`# 实际执行路径` 只能来自真实 trace/tool calls。按时间顺序列关键路径，优先保留 `read_experience`、state-changing tools、handoff/done、以及决定 reward 的 `communicate_with_user`；可以省略重复闲聊和无影响重试。不要根据经验内容或 agent 自称补写没有实际发生的工具调用。
+      - Experience step alignment：如果当前 trace 读取了一个或多个 experience，`# 经验步骤对齐` 必须逐个列出。对每个 experience，只匹配 `## Approach` 里带 `[1]`、`[2]` 这种编号的步骤；从 `[1]` 开始找连续前缀，第一处没做、换工具、换对象、换返回语义或反向执行的位置就是“第一个未走到或偏离步骤”。不要把后面偶然出现的相似工具算进“从头连续走过”。如果 agent 基本照着某经验走完但 reward 失败，明确写“经验本身可能误导/过宽/与 evaluation 或 tool facts 冲突”，不要把责任写成 agent 没用好经验。
+      - IF result extraction：当 experience 的 Approach 有 `- [N] IF <condition>` 时，必须尽量从实际 tool facts、assistant messages 和后续工具调用判断该 IF 的结果。若后续执行了对应 `THEN` 步骤，通常写 `[N]=true`；若跳过 THEN 并继续后续主路径，通常写 `[N]=false`；若证据不足，写 `[N]=unknown`。同时在“每步结果”里标出相关 THEN/ELSE 步是 `executed`、`skipped`、`not_reached` 或 `deviated`。
       - Memory effect audit：如果当前 trace 实际读取/注入了 memory_context、task_case_experience、retrieved memories 或 candidate memories，必须评估该记忆对 outcome 的作用。若 outcome 是 failure/partial/unfinished，必须在 `# 关键反思` 或 `# 事实链与偏离` 中说明记忆为什么没起作用：missing、irrelevant、over-broad、misleading/stale、ignored、too weak、conflicted with policy/tool facts、或 only solved a secondary issue。若记忆内容与当前 tool facts/evaluation 冲突，必须标为 misleading/over-broad，不得继续把该记忆沉淀成正向 Approach。若记忆被遵守但仍失败，必须指出“该记忆只覆盖了次要问题”，并重新定位真正决定 reward 的 first critical deviation。若 outcome 是 success，简短说明记忆是 necessary、helpful-but-not-necessary，还是 irrelevant；不要过度归因。不要泛泛写“没有充分利用记忆”；必须引用具体记忆规则和实际偏离动作。
       - `# 关键反思` 必须回答：为什么这个 reward 失败/成功，而不是 agent 自认为哪里做得好。核心教训必须能解释 DB/Communicate 的主失败信号。
       - Oracle-to-runtime mapping：在 retrieval_anchor 和面向未来 agent 的 sections（`# 关键反思`、`# 适用边界`、`# 事实链与偏离`、`# 正确做法`、`# 泛化规则`）中，只要当前 trace 暴露了 runtime 可见 gate，就必须把 hidden oracle 约束转译成这些 gate：status、ownership、timestamp arithmetic、cabin/membership/insurance、eligibility、confirmation、refund 或 object binding。硬性禁止在这些位置出现 `ground_truth要求仅查询`、`训练oracle要求`、`oracle明确要求`、`预期动作列表`、`结构化评测场景`、`evaluation says query-only` 等 hidden-evaluation 词。此类词只能出现在 `# Evaluation 信号` 或 `# Expected vs Actual`。若没有可观察 gate 能解释边界，则写 non-generalizable/evaluation-only，不要产出 agent-facing 泛化规则。
       - Write/action deltas：若 expected actions 要求某个 state-changing tool 但 actual 漏掉或参数错，诊断该 exact missing/wrong write，并保留 evaluated sequence；不要替换成更严格拒绝、handoff、cancel-and-recreate 或不同 tier/tool。若 expected actions 只有 read/refusal/communication，但 actual 做了 state-changing tool 且 DB failed，则该 write 是 forbidden substitute；不要因为 tool returned success 就归结为缺少 post-write verification、`done` 或 environment mismatch。Tool success 只证明 write 已执行。
-      - Communication deltas：若 evaluation/CaseSpec 要求 customer-facing `Communicate Info` 或 NL Assertions，把精确 required literals 及其语义标签带入 `DB/Communicate`、`Expected vs Actual`、`事实链与偏离` 和 `正确做法`。对 aggregate values，从用户回合和 tool facts 推导 inclusion set 与 time boundary；不要用 refund total、fee total、subset total 或 post-change remaining total 替代。若只有 communication failed，主 delta 是 missing/wrong communication，不是 missing write 或 `done`；必须先 communicate required items，再 `done`。
+      - Communication deltas：若 evaluation/CaseSpec 要求 customer-facing `Communicate Info` 或 NL Assertions，把精确 required literals 及其语义标签带入 `DB/Communicate`、`Expected vs Actual`、`事实链与偏离` 和 `正确做法`。对 aggregate values，从用户回合和 tool facts 推导 query-time inclusion set 与 time boundary；后续写操作（取消、修改、删除、创建）不得静默改变先前查询的集合语义。不要用 refund total、fee total、subset total、operation cost、post-change remaining total 或 post-change current total 替代用户当时请求的 aggregate。若用户说 "other/current/upcoming/all" 等相对词，必须说明其相对于用户当时目标集合还是最终剩余集合。若只有 communication failed，主 delta 是 missing/wrong communication，不是 missing write、forbidden write、拒绝/转人工缺失或 `done`；必须先 communicate required items，再 `done`。
       - Policy-gated decisions：先从 tool outputs 重建事实链，再判断 policy；用户说法或 prior-support approval claims 不能覆盖当前 policy + tool facts。航空取消/退款场景中，在批准或调用 `cancel_reservation` 前，必须核验无已飞航段，并至少满足一个 allow-cancel gate：用完整 timestamp arithmetic 判断预订在 24 小时内、航司取消、business cabin，或有 travel insurance 且 reason covered。若全部 gate 都不满足，正确终态是 refusal/communication 或 policy-specified handoff，`cancel_reservation` 是 forbidden。不要写“通用政策显示可行但 oracle 禁止”；如果 timestamp/cabin/insurance/reason/airline-cancel facts 已显示不可取消，就写 policy 本身不可取消。
       - Generalization discipline：`retrieval_anchor`、`# 关键反思`、`# 正确做法`、`# 泛化规则` 必须泛化人名、reservation/order id、路线、精确日期、金额、路径和 raw payload；只有 `# Evaluation 信号`、`# Expected vs Actual` 或必要证据可以保留 source literal。
       - Consistency check：`Outcome`、`Expected vs Actual`、`Delta`、`First critical deviation`、`# 关键反思` 必须互相一致。若 Actual 已完成 Expected 的关键动作，不要把同一动作写成 missing；重新定位真正 delta，或写 `no material delta` 并避免生成泛化规则。
-      - Output discipline：严格保留七个 required headings 及顺序；不要加额外标题或结尾语。内容要密集、反思优先、证据从属。泛化姓名、ID、精确日期/金额/路线、路径和原始 payload；稳定 policy 常量或执行所需 exact tool/evaluation names 除外。只提当前 trace/evaluation 中存在的工具。
+      - Output discipline：严格保留九个 required headings 及顺序；不要加额外标题或结尾语。内容要密集、反思优先、证据从属。泛化姓名、ID、精确日期/金额/路线、路径和原始 payload；稳定 policy 常量或执行所需 exact tool/evaluation names 除外。只提当前 trace/evaluation 中存在的工具。
 
       Few-shot focus examples（用来校准 `# 关键反思` 的主因选择；不要照抄标签，要按当前 trace 改写）：
       - Forbidden cancellation write：反思主体写“核心教训: 取消前必须满足至少一个 allow-cancel gate；当工具事实显示 economy/no insurance/change-of-plan/no airline cancellation 且完整 timestamp arithmetic 超过 24h 时，`cancel_reservation` 是 forbidden write。违反的实际规则/成功关键: 用户/前客服口头批准不能覆盖 policy + tool facts。错误推理或风险: agent 把口头批准或错误 24h 判断当成取消资格。修正原则: 先逐项核验 gate，不满足时拒绝/沟通或按 policy handoff。”不要写“ground_truth要求仅查询”。
-      - Communication-only failure：反思主体写“核心教训: 最终沟通必须覆盖用户/evaluation 要求的聚合语义和 literal。违反的实际规则/成功关键: DB/action 已通过时，主风险是用 refund/remaining/subset total 替代 total cost。错误推理或风险: agent 把相关金额当成同义聚合值。修正原则: `done` 前按正确 inclusion set 与 time boundary 传达 required literal。”不要把 missing write 或 missing `done` 诊断为主因。
+      - Communication-only failure：反思主体写“核心教训: 最终沟通必须覆盖用户/evaluation 要求的聚合语义和 literal。违反的实际规则/成功关键: 业务路径已成立时，主风险是用 refund/remaining/subset total 替代 total cost，或漏说用户要求的信息。错误推理或风险: agent 把相关金额当成同义聚合值。修正原则: `done` 前按正确 inclusion set 与 time boundary 传达 required literal。”不要把已通过的业务步骤写成 forbidden，也不要把 missing write、拒绝/转人工缺失或 missing `done` 诊断为主因。
       - Missing expected write：反思主体写“核心教训: 已满足 update 前置条件时必须调用 exact `update_reservation_flights`。违反的实际规则/成功关键: evaluated sequence 要求 reads/pricing/confirmation 后执行该 write。错误推理或风险: agent 用 refusal/handoff/cancel-and-rebook 替代 expected write。修正原则: 保留 exact tool family 和 evaluated sequence，不得换工具或换路径。”
 
     merge_op: patch

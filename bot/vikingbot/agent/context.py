@@ -129,11 +129,6 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
-        # Memory context
-        # memory = self.memory.get_memory_context()
-        # if memory:
-        #     parts.append(f"# Memory\n\n{memory}")
-
         # Skills - progressive loading
         # 1. Always-loaded skills: include full content
         always_skills = self.skills.get_always_skills()
@@ -380,7 +375,6 @@ IMPORTANT:
             memory_owner_user_ids=memory_owner_user_ids,
         )
         messages.append({"role": "system", "content": system_prompt})
-        # logger.debug(f"system_prompt: {system_prompt}")
 
         # History
         if not self._eval:

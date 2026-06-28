@@ -37,6 +37,7 @@ from openviking.session.train.interfaces import (
     RolloutAnalyzer,
     SemanticGradient,
 )
+from openviking.session.train.utils import average_score, validate_rollouts_have_cases
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
@@ -71,7 +72,7 @@ class BatchPolicyTrainer:
     ) -> RolloutTrainingResult | ScopedRolloutTrainingResult:
         ctx = _coerce_pipeline_context(context)
         rollout_list = list(rollouts)
-        _validate_rollouts_have_cases(rollout_list)
+        validate_rollouts_have_cases(rollout_list)
         if analyses is None:
             analyses = await self._engine.analyze_rollouts(rollout_list, ctx)
         else:
@@ -92,7 +93,7 @@ class BatchPolicyTrainer:
                 "rollout_count": len(rollout_list),
                 "analysis_count": len(analyses),
                 "gradient_count": len(gradients),
-                "score": _average_score(analyses),
+                "score": average_score(analyses),
                 "source": "batch_rollouts",
             },
         )
@@ -213,7 +214,7 @@ class StreamingPolicyTrainer:
 
         if self._closed:
             raise RuntimeError("StreamingPolicyTrainer is closed")
-        _validate_rollouts_have_cases([rollout])
+        validate_rollouts_have_cases([rollout])
         analysis = await self.rollout_analyzer.analyze(rollout, self.context.analysis_context)
         gradients = await self.gradient_estimator.estimate(
             analysis,
@@ -375,7 +376,7 @@ class StreamingPolicyTrainer:
                 "gradient_count": len(gradients),
                 "chunk_count": len(chunk_gradient_counts),
                 "chunk_gradient_counts": chunk_gradient_counts,
-                "score": _average_score(analyses),
+                "score": average_score(analyses),
                 "source": "streaming_rollouts",
                 "flush_reason": reason,
             },
@@ -664,27 +665,6 @@ def _coerce_pipeline_context(context: PipelineContext | Any = None) -> PipelineC
     return context if isinstance(context, PipelineContext) else PipelineContext()
 
 
-def _validate_rollouts_have_cases(rollouts: list[Rollout]) -> None:
-    missing = [
-        idx for idx, rollout in enumerate(rollouts) if getattr(rollout, "case", None) is None
-    ]
-    if missing:
-        raise ValueError(
-            f"rollout training requires Rollout.case for all rollouts; missing indices={missing}"
-        )
-
-
-def _average_score(analyses: list[RolloutAnalysis | None]) -> float | None:
-    scores = [
-        float(analysis.evaluation.score)
-        for analysis in analyses
-        if analysis is not None and analysis.evaluation is not None
-    ]
-    if not scores:
-        return None
-    return sum(scores) / len(scores)
-
-
 def _unique_by_identity(items: list[Any]) -> list[Any]:
     seen: set[int] = set()
     unique = []
@@ -727,7 +707,7 @@ def _combine_training_results(
             "rollout_count": len(analyses),
             "analysis_count": len(analyses),
             "gradient_count": len(gradients),
-            "score": _average_score(analyses),
+            "score": average_score(analyses),
         }
     )
     return RolloutTrainingResult(

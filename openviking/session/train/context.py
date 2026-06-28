@@ -11,9 +11,9 @@ from openviking.session.train.components.report_builder import PipelineReportHoo
 from openviking.session.train.components.reporter import ConsolePipelineReporter
 
 if TYPE_CHECKING:
-    from openviking.session.train.interfaces import CaseLoader
-    from openviking.session.train.components.reporter import PipelineLifecycleHook
     from openviking.session.train.components.report_builder import PipelineReportBuilder
+    from openviking.session.train.components.reporter import PipelineLifecycleHook
+    from openviking.session.train.interfaces import CaseLoader
 
 
 @dataclass(slots=True)

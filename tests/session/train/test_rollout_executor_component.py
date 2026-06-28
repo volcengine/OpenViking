@@ -434,7 +434,11 @@ def test_tau2_configure_tools_removes_only_openviking_tools():
 
     assert agent.tools.unregistered == ["openviking_search", "openviking_memory_commit"]
     assert agent.tools.tool_names == ["read_file", "web_search"]
-    assert agent.tools.registered == ["get_user_details"]
+    assert agent.tools.registered == [
+        "search_experience",
+        "read_experience",
+        "get_user_details",
+    ]
 
 
 def test_tau2_rollout_backend_factory_defaults_to_native():
@@ -588,7 +592,7 @@ async def test_tau2_vikingbot_rollout_runs_on_current_event_loop():
 
 
 @pytest.mark.asyncio
-async def test_tau2_prepare_task_case_experience_skill_writes_required_skill(tmp_path, monkeypatch):
+async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_path):
     import benchmark.tau2.train.rollout_executor_vikingbot as module
 
     class FakeSandbox:
@@ -617,52 +621,31 @@ async def test_tau2_prepare_task_case_experience_skill_writes_required_skill(tmp
         sandbox_manager = FakeSandboxManager()
         context = SimpleNamespace(workspace=tmp_path)
 
-    class FakeMemoryStore:
-        def __init__(self, workspace):
-            self.workspace = workspace
-
-        async def get_task_case_experience_content(self, **kwargs):
-            return "linked exp content", ["viking://user/u/memories/experiences/exp.md"]
-
-    monkeypatch.setattr("vikingbot.agent.memory.MemoryStore", FakeMemoryStore)
-
-    context_builder = await module._prepare_task_case_experience_skill(
+    context_builder = await module._prepare_experience_loader_skill(
         agent=FakeAgent(),
         session_key=SimpleNamespace(),
-        query="user query",
-        case_lookup={"benchmark": "tau2", "strict": True, "case_name": "case"},
     )
 
-    skill_path = tmp_path / "skills" / "task_case_experience" / "SKILL.md"
+    skill_path = tmp_path / "skills" / "experience_loader" / "SKILL.md"
     content = skill_path.read_text(encoding="utf-8")
     assert context_builder.workspace == tmp_path
-    assert "name: task_case_experience" in content
-    assert "下面是这个任务相关的经验，请认真阅读并吸取经验。" in content
-    assert "linked exp content" in content
-    assert "viking://user/u/memories/experiences/exp.md" in content
+    assert "name: experience_loader" in content
+    assert "search_experience" in content
+    assert "read_experience" in content
     assert fake_sandbox.writes
-    assert fake_sandbox.writes[0][0] == "skills/task_case_experience/SKILL.md"
+    assert fake_sandbox.writes[0][0] == "skills/experience_loader/SKILL.md"
+    assert context_builder.latest_experience_loader_skill_content == content
 
 
 @pytest.mark.asyncio
-async def test_tau2_task_case_skill_is_required_with_relative_read_path(tmp_path, monkeypatch):
+async def test_tau2_experience_loader_skill_is_required_with_relative_read_path(tmp_path):
     from vikingbot.config.schema import SessionKey
 
     import benchmark.tau2.train.rollout_executor_vikingbot as module
 
-    class FakeMemoryStore:
-        def __init__(self, workspace):
-            self.workspace = workspace
-
-        async def get_task_case_experience_content(self, **kwargs):
-            return "linked exp content", ["viking://user/u/memories/experiences/exp.md"]
-
-    monkeypatch.setattr("vikingbot.agent.memory.MemoryStore", FakeMemoryStore)
-    module._write_task_case_experience_skill(
+    module._write_experience_loader_files(
         workspace_path=tmp_path,
-        case_lookup={"benchmark": "tau2", "strict": True, "case_name": "case"},
-        content="linked exp content",
-        uris=["viking://user/u/memories/experiences/exp.md"],
+        skill_content="# experience_loader\n\nUse search_experience then read_experience.",
     )
 
     from vikingbot.agent.context import ContextBuilder
@@ -674,8 +657,8 @@ async def test_tau2_task_case_skill_is_required_with_relative_read_path(tmp_path
     )
 
     assert "Required skill: before taking any task action" in system_prompt
-    assert "`skills/task_case_experience/SKILL.md`" in system_prompt
-    assert "<location>skills/task_case_experience/SKILL.md</location>" in system_prompt
+    assert "`skills/experience_loader/SKILL.md`" in system_prompt
+    assert "<location>skills/experience_loader/SKILL.md</location>" in system_prompt
     assert f"<location>{tmp_path}" not in system_prompt
 
 
@@ -770,9 +753,10 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_tau2_run_agent_force_loads_task_case_skill_before_task_actions(monkeypatch):
-    import benchmark.tau2.train.rollout_executor_vikingbot as module
+async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_actions(monkeypatch):
     from vikingbot.providers.base import LLMResponse, ToolCallRequest
+
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
 
     observed = {}
     real_imports = module._vikingbot_imports()
@@ -798,18 +782,11 @@ async def test_tau2_run_agent_force_loads_task_case_skill_before_task_actions(mo
         async def get_sandbox(self, session_key):
             return FakeSandbox()
 
-    class FakeMemoryStore:
-        def __init__(self, workspace):
-            self.workspace = workspace
-
-        async def get_task_case_experience_content(self, **kwargs):
-            return "linked exp content", ["viking://user/u/memories/experiences/exp.md"]
-
     class FakeContextBuilder:
         def __init__(self, workspace, *, sandbox_manager=None, eval=False, **kwargs):
             self.workspace = workspace
             self.sandbox_manager = sandbox_manager
-            self.latest_task_case_experience_skill_content = ""
+            self.latest_experience_loader_skill_content = ""
 
         async def build_messages(self, **kwargs):
             return [
@@ -867,6 +844,7 @@ async def test_tau2_run_agent_force_loads_task_case_skill_before_task_actions(mo
             self.tools.register(_DoneTool())
             self.provider = FakeProvider()
             self.model = "fake"
+            self.temperature = None
             self.max_iterations = 1
 
         _chat_with_stream_events = real_imports["AgentLoop"]._chat_with_stream_events
@@ -901,11 +879,10 @@ async def test_tau2_run_agent_force_loads_task_case_skill_before_task_actions(mo
         async def execute(self, tool_context, **kwargs):
             return ""
 
-    monkeypatch.setattr("vikingbot.agent.memory.MemoryStore", FakeMemoryStore)
     monkeypatch.setattr(
         module,
         "_vikingbot_imports",
-        lambda: {"ContextBuilder": FakeContextBuilder, "AgentLoop": real_imports["AgentLoop"]},
+        lambda: {**real_imports, "ContextBuilder": FakeContextBuilder},
     )
 
     result = await module._run_agent(
@@ -931,9 +908,10 @@ async def test_tau2_run_agent_force_loads_task_case_skill_before_task_actions(mo
         if msg.get("role") == "tool" and msg.get("name") == "read_file"
     )
 
-    assert observed["sandbox_writes"][0][0] == "skills/task_case_experience/SKILL.md"
-    assert observed["sandbox_reads"] == ["skills/task_case_experience/SKILL.md"]
+    assert observed["sandbox_writes"][0][0] == "skills/experience_loader/SKILL.md"
+    assert observed["sandbox_reads"] == ["skills/experience_loader/SKILL.md"]
     assert read_call_index < tool_result_index
-    assert "linked exp content" in messages[tool_result_index]["content"]
+    assert "search_experience" in messages[tool_result_index]["content"]
+    assert "read_experience" in messages[tool_result_index]["content"]
     assert tools_used[0]["tool_name"] == "read_file"
-    assert tools_used[0]["required_skill"] == "task_case_experience"
+    assert tools_used[0]["required_skill"] == "experience_loader"

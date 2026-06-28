@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from openviking.message import ToolPart
-from openviking.session.train.components.dataset_service import evaluation_to_dict, jsonable
+from openviking.session.train.components.dataset_service import (
+    case_to_dict,
+    evaluation_to_dict,
+    jsonable,
+)
 from openviking.session.train.components.reporter import NoopPipelineLifecycleHook
 from openviking.session.train.domain import (
     PipelineEpochResult,
@@ -303,7 +307,7 @@ class RolloutArtifactRecorder(NoopPipelineLifecycleHook):
         group_dir = self.rollouts_root / group_id
         group_dir.mkdir(parents=True, exist_ok=True)
         case = records[0].rollout.case
-        _write_json(group_dir / "case.json", _case_to_dict(case))
+        _write_json(group_dir / "case.json", case_to_dict(case))
 
         group_entry = self._case_groups.setdefault(
             group_id,
@@ -618,30 +622,6 @@ def _stage_from_execution_metadata(metadata: dict[str, Any]) -> str:
     return _stage_dir(stage.split(maxsplit=1)[0], epoch=epoch)
 
 
-def _case_to_dict(case: Any) -> dict[str, Any]:
-    return {
-        "name": case.name,
-        "task_signature": case.task_signature,
-        "input": jsonable(case.input),
-        "rubric": {
-            "name": case.rubric.name,
-            "description": case.rubric.description,
-            "criteria": [
-                {
-                    "name": criterion.name,
-                    "description": criterion.description,
-                    "required": criterion.required,
-                    "weight": criterion.weight,
-                    "metadata": criterion.metadata,
-                }
-                for criterion in case.rubric.criteria
-            ],
-            "metadata": case.rubric.metadata,
-        },
-        "metadata": jsonable(case.metadata),
-    }
-
-
 def _status_payload(record: _RolloutRecord) -> dict[str, Any]:
     rollout = record.rollout
     return {
@@ -675,7 +655,7 @@ def _status_payload(record: _RolloutRecord) -> dict[str, Any]:
 def _rollout_payload(record: _RolloutRecord) -> dict[str, Any]:
     rollout = record.rollout
     return {
-        "case": _case_to_dict(rollout.case),
+        "case": case_to_dict(rollout.case),
         "policy_snapshot_id": rollout.policy_snapshot_id,
         "metadata": jsonable(rollout.metadata),
         "evaluation": evaluation_to_dict(record.evaluation),
@@ -894,8 +874,6 @@ def _format_commit_messages_markdown(messages: list[dict[str, Any]]) -> str:
                     lines.append("```")
                 if part.get("tool_output"):
                     content = str(part.get("tool_output", ""))
-                    if len(content) > 2000:
-                        content = content[:2000] + "\n... (truncated)"
                     lines.append("")
                     lines.append("```")
                     lines.append(content)
@@ -910,8 +888,6 @@ def _format_commit_messages_markdown(messages: list[dict[str, Any]]) -> str:
                 lines.append(f"**Tool result:** `{part.get('tool_name', '?')}`")
                 lines.append("")
                 content = str(part.get("text", part.get("tool_result", "")))
-                if len(content) > 2000:
-                    content = content[:2000] + "\n... (truncated)"
                 lines.append("```")
                 lines.append(content)
                 lines.append("```")

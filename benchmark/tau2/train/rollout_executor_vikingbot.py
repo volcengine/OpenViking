@@ -13,12 +13,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi.encoders import jsonable_encoder
-
-from openviking.message import Message, TextPart, ToolPart
+from benchmark.tau2.train._rollout_helpers import (
+    _as_tool_input,
+    _case_trial,
+    _communicate_text_from_tool_input,
+    _is_communicate_with_user,
+    _message,
+    _metadata_message,
+    _stringify,
+    _to_jsonable,
+)
+from benchmark.tau2.train._rollout_helpers import (
+    _tau2_evaluation as _tau2_evaluation_helper,
+)
+from openviking.message import Message, ToolPart
 from openviking.session.train import (
     Case,
-    CriterionResult,
     ExecutionContext,
     ExperienceSet,
     Rollout,
@@ -27,6 +37,55 @@ from openviking.session.train import (
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _tau2_policy_current_time_match(policy: str) -> re.Match[str] | None:
+    return re.search(
+        r"(?im)\bcurrent\s+time\s+is\s+"
+        r"(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*([A-Z]{2,5})?",
+        policy or "",
+    )
+
+
+def _tau2_policy_current_time_display(policy: str) -> str | None:
+    """Return tau2's authoritative business clock for prompt display."""
+    match = _tau2_policy_current_time_match(policy)
+    if not match:
+        return None
+    date_part, time_part, tz_name = match.groups()
+    suffix = f" ({tz_name}; from tau2 policy)" if tz_name else " (from tau2 policy)"
+    return f"{date_part} {time_part}{suffix}"
+
+
+def _tau2_policy_current_time_iso(policy: str) -> str | None:
+    """Return tau2's authoritative business clock as an ISO timestamp.
+
+    Tau2 airline embeds the authoritative business clock in the policy, e.g.
+    ``The current time is 2024-05-15 15:00:00 EST.``  Rollout artifacts should
+    use that clock for message ``created_at`` so downstream trajectory/experience
+    extraction does not treat the wall-clock run timestamp as business time.
+    """
+    match = _tau2_policy_current_time_match(policy)
+    if not match:
+        return None
+
+    date_part, time_part, tz_name = match.groups()
+    tz_offsets = {
+        "UTC": "+00:00",
+        "GMT": "+00:00",
+        "EST": "-05:00",
+        "EDT": "-04:00",
+        "CST": "-06:00",
+        "CDT": "-05:00",
+        "MST": "-07:00",
+        "MDT": "-06:00",
+        "PST": "-08:00",
+        "PDT": "-07:00",
+    }
+    offset = tz_offsets.get((tz_name or "").upper())
+    if offset is not None:
+        return f"{date_part}T{time_part}{offset}"
+    return f"{date_part}T{time_part}"
 
 
 def _viking_is_tool_result_success(result: Any) -> bool:
@@ -631,6 +690,7 @@ class VikingBotTau2RolloutExecutor:
                 evaluation_result=evaluation_result,
                 reward=reward,
                 experience_reminder=experience_reminder,
+                artifact_created_at=_tau2_policy_current_time_iso(system_prompt),
             ),
             policy_snapshot_id=context.policy_snapshot_id,
             evaluation=_tau2_evaluation(reward=reward, evaluation_result=evaluation_result),
@@ -651,6 +711,7 @@ class VikingBotTau2RolloutExecutor:
                 "iterations": iteration,
                 "memory": memory_content,
                 "system_prompt": system_prompt,
+                "business_current_time": _tau2_policy_current_time_iso(system_prompt),
                 "user_prompt": user_prompt,
                 "final_content": final_content,
                 "final_reasoning_content": final_reasoning_content,
@@ -787,7 +848,7 @@ def _make_tau2_plain_text_router(*, publish_events: bool, bus: Any, session_key:
         logger.info(f"[TOOL_CALL]: communicate_with_user({args_str[:200]})")
         logger.info(f"[RESULT]: {str(user_reply)[:600]}")
         if publish_events:
-            from vikingbot.bus.events import OutboundMessage, OutboundEventType
+            from vikingbot.bus.events import OutboundEventType, OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -965,10 +1026,6 @@ def _classify_write_tools(provider: Any) -> set[str]:
         if not any(name.startswith(p) for p in _READ_PREFIXES):
             write_names.add(name)
     return write_names
-
-
-def _case_trial(case: Case) -> Any:
-    return case.input.get("eval_trial", case.input.get("train_trial"))
 
 
 def _build_system_prompt(policy: str, *, keep_default_tools: bool, rollout_language: str) -> str:
@@ -1167,6 +1224,10 @@ async def _run_agent(
         timings.record("build_messages", stage_started_at)
     if system_prompt:
         messages.insert(1, {"role": "system", "content": system_prompt})
+    _override_vikingbot_current_time_messages(
+        messages,
+        business_current_time=_tau2_policy_current_time_display(system_prompt),
+    )
     user_memory = None
     experience_reminder_text = None  # 完整的 [Experience Reminder] 消息文本（用于 messages.json）
     for msg in messages:
@@ -1229,6 +1290,33 @@ async def _run_agent(
         experience_reminder_text,
         experience_loader_skill,
     )
+
+
+def _override_vikingbot_current_time_messages(
+    messages: list[dict[str, Any]],
+    *,
+    business_current_time: str | None,
+) -> None:
+    """Replace VikingBot's wall-clock prompt time with tau2's business time.
+
+    VikingBot's generic context builder includes ``## Current Time: <system
+    clock>`` in the user-memory wrapper.  For tau2, the domain policy owns the
+    business clock; leaving the host clock in the prompt can make the agent
+    interpret unqualified dates against the run date.
+    """
+    if not business_current_time:
+        return
+    replacement = f"## Current Time: {business_current_time}"
+    for msg in messages:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, str) or "## Current Time:" not in content:
+            continue
+        msg["content"] = re.sub(
+            r"(?m)^## Current Time: .*$",
+            replacement,
+            content,
+            count=1,
+        )
 
 
 @dataclass(slots=True)
@@ -1401,17 +1489,21 @@ def _build_rollout_messages(
     evaluation_result: Any,
     reward: Any,
     experience_reminder: str | None = None,
+    artifact_created_at: str | None = None,
 ) -> list[Message]:
     messages = [
         _metadata_message(
             "tau2-system",
             f"system:\n{system_prompt}",
+            created_at=artifact_created_at,
         ),
     ]
     # Experience Reminder 放在 system 之后、user 之前，与 agent 实际看到的顺序一致
     if experience_reminder:
-        messages.append(_message("tau2-experience", "user", experience_reminder))
-    messages.append(_message("tau2-user", "user", user_prompt))
+        messages.append(
+            _message("tau2-experience", "user", experience_reminder, created_at=artifact_created_at)
+        )
+    messages.append(_message("tau2-user", "user", user_prompt, created_at=artifact_created_at))
     if isinstance(tools_used, list):
         for idx, tool_info in enumerate(tools_used):
             if not isinstance(tool_info, dict):
@@ -1431,6 +1523,7 @@ def _build_rollout_messages(
                             f"tau2-communicate-assistant-{idx}",
                             "assistant",
                             assistant_text,
+                            created_at=artifact_created_at,
                         )
                     )
                 if has_result:
@@ -1441,6 +1534,7 @@ def _build_rollout_messages(
                                 f"tau2-communicate-user-{idx}",
                                 "user",
                                 user_text,
+                                created_at=artifact_created_at,
                             )
                         )
                 continue
@@ -1457,10 +1551,13 @@ def _build_rollout_messages(
                             tool_status="completed" if has_result else "running",
                         )
                     ],
+                    created_at=artifact_created_at,
                 )
             )
     if final_content and str(final_content).strip():
-        messages.append(_message("tau2-final", "assistant", str(final_content)))
+        messages.append(
+            _message("tau2-final", "assistant", str(final_content), created_at=artifact_created_at)
+        )
     reward_jsonable = _to_jsonable(reward)
     evaluation_jsonable = _to_jsonable(evaluation_result)
     success = reward_jsonable == 1 or reward_jsonable == 1.0
@@ -1470,37 +1567,16 @@ def _build_rollout_messages(
             "user",
             f"task_success: {success}\ntask_reward: {reward_jsonable}\n"
             f"evaluation report: {_stringify(evaluation_jsonable)}",
+            created_at=artifact_created_at,
         )
     )
     return messages
 
 
-def _message(message_id: str, role: str, text: str) -> Message:
-    return Message(id=message_id, role=role, parts=[TextPart(text=text)])
-
-
-def _metadata_message(
-    message_id: str,
-    text: str,
-) -> Message:
-    return Message(
-        id=message_id,
-        role="user",
-        parts=[TextPart(text=text)],
+def _tau2_evaluation(*, reward: Any, evaluation_result: Any) -> RubricEvaluation:
+    return _tau2_evaluation_helper(
+        reward=reward, evaluation_result=evaluation_result, source="tau2_executor"
     )
-
-
-def _is_communicate_with_user(tool_name: str) -> bool:
-    return tool_name == "communicate_with_user"
-
-
-def _communicate_text_from_tool_input(tool_input: dict[str, Any] | None) -> str:
-    if not isinstance(tool_input, dict):
-        return ""
-    content = tool_input.get("content")
-    if content is None:
-        return ""
-    return str(content)
 
 
 def _last_tool_name(tools_used: Any) -> str:
@@ -1510,72 +1586,6 @@ def _last_tool_name(tools_used: Any) -> str:
     if not isinstance(last, dict):
         return ""
     return str(last.get("tool_name") or "")
-
-
-def _as_tool_input(args: Any) -> dict[str, Any]:
-    if isinstance(args, dict):
-        return args
-    if isinstance(args, str):
-        import json
-
-        try:
-            parsed = json.loads(args)
-        except json.JSONDecodeError:
-            return {"arguments": args}
-        if isinstance(parsed, dict):
-            return parsed
-        return {"arguments": parsed}
-    return {"arguments": args}
-
-
-def _tau2_evaluation(*, reward: Any, evaluation_result: Any) -> RubricEvaluation:
-    score = _safe_float(reward, default=0.0)
-    passed = score >= 1.0
-    feedback = [] if passed else ["tau2 environment reward is below 1.0."]
-    evaluation_jsonable = _to_jsonable(evaluation_result)
-    if evaluation_jsonable is not None:
-        feedback.append(_stringify(evaluation_jsonable))
-    return RubricEvaluation(
-        passed=passed,
-        score=score,
-        criterion_results=[
-            CriterionResult(
-                criterion_name="tau2_reward",
-                passed=passed,
-                score=score,
-                feedback=feedback,
-                evidence=[_stringify(evaluation_jsonable)]
-                if evaluation_jsonable is not None
-                else [],
-                metadata={"reward": score},
-            )
-        ],
-        feedback=feedback,
-        metadata={
-            "source": "tau2_executor",
-            "reward": score,
-            "evaluation_result": evaluation_jsonable,
-        },
-    )
-
-
-def _safe_float(value: Any, *, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _to_jsonable(value: Any) -> Any:
-    return jsonable_encoder(value)
-
-
-def _stringify(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    import json
-
-    return json.dumps(_to_jsonable(value), ensure_ascii=False, sort_keys=True)
 
 
 # Backwards-compatible alias for existing imports.

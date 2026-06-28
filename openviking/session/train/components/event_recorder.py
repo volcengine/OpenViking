@@ -9,10 +9,10 @@ import inspect
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from openviking.session.train.components.dataset_service import jsonable
 from openviking.session.train.components.reporter import NoopPipelineLifecycleHook
 
 
@@ -41,7 +41,7 @@ class JsonlEventRecorder:
             }
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as file:
-                file.write(json.dumps(_jsonable(payload), ensure_ascii=False, sort_keys=True))
+                file.write(json.dumps(jsonable(payload), ensure_ascii=False, sort_keys=True))
                 file.write("\n")
                 file.flush()
 
@@ -139,18 +139,6 @@ class JsonlPipelineEventHook(NoopPipelineLifecycleHook):
             rollouts_index_path=rollouts_index_path,
             latest_failed_rollout=latest_failed_rollout,
         )
-
-
-def _jsonable(value: Any) -> Any:
-    if hasattr(value, "model_dump"):
-        return _jsonable(value.model_dump(mode="json"))
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, dict):
-        return {str(_jsonable(key)): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
-        return [_jsonable(item) for item in value]
-    return value
 
 
 def _merge_fields(*items: dict[str, Any]) -> dict[str, Any]:

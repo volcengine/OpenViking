@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -1407,7 +1408,6 @@ async def test_jsonl_pipeline_event_hook_omits_full_commit_results(tmp_path):
 @pytest.mark.asyncio
 async def test_rollout_artifact_recorder_writes_train_rollouts_before_commit(tmp_path):
     from openviking.session.train import RolloutArtifactRecorder
-    from openviking.session.train.context import ExecutionContext
 
     recorder = RolloutArtifactRecorder(run_dir=tmp_path)
     case = Case(
@@ -1645,7 +1645,7 @@ def test_console_reporter_highlights_accuracy_and_prints_epoch_summary(capsys):
     assert "accuracy=\x1b[1;33m60.00%\x1b[0m" in output
     assert "epoch 1 summary" in output
     assert "TRAIN accuracy: \x1b[0m\x1b[1;33m60.00%\x1b[0m" in output
-    assert "TEST  accuracy: \x1b[0m\x1b[1;33m58.13%\x1b[0m" in output
+    assert "EVAL  accuracy: \x1b[0m\x1b[1;33m58.13%\x1b[0m" in output
     assert output.count("------------------------------------------------------------") >= 3
 
 

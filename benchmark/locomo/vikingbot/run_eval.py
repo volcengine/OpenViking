@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import csv
 import json
 import os
@@ -16,16 +17,6 @@ from progress_utils import (
     make_three_state_progress,
     should_show_progress,
 )
-
-
-class _NullCtx:
-    """No-op context manager for the non-progress path."""
-
-    def __enter__(self):
-        return None
-
-    def __exit__(self, *args):
-        return False
 
 
 def get_evidence_text(evidence_list: list, sample: dict) -> list[str]:
@@ -706,7 +697,7 @@ def main():
                 progress_tracker.job_finished(failed=failed)
 
     # 使用线程池处理：全局并行，每个 question 独立 session
-    ctx = progress if show_progress else _NullCtx()
+    ctx = progress if show_progress else contextlib.nullcontext()
     with ctx:
         with ThreadPoolExecutor(max_workers=args.threads) as executor:
             # 提交所有任务

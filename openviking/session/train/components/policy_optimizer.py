@@ -20,11 +20,12 @@ from openviking.session.memory.patch_merge_context_provider import (
 )
 from openviking.session.train.domain import (
     Policy,
-    PolicySet,
     PolicyPlanItem,
+    PolicySet,
     PolicyUpdatePlan,
 )
 from openviking.session.train.interfaces import SemanticGradient
+from openviking.session.train.utils import first_uri, safe_int
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -411,7 +412,7 @@ def _operations_to_plan_items(
             or fields.get("name")
             or _fallback_policy_name(op, memory_type=memory_type)
         )
-        target_uri = _first_uri(getattr(op, "uris", []) or [])
+        target_uri = first_uri(getattr(op, "uris", []) or [])
         old_file = getattr(op, "old_memory_file_content", None)
         before_content = old_file.plain_content() if old_file is not None else None
         if before_content is None and target_uri:
@@ -531,7 +532,7 @@ def _name_field_for_memory_type(memory_type: str) -> str:
 
 
 def _fallback_policy_name(op: Any, *, memory_type: str) -> str:
-    uri = _first_uri(getattr(op, "uris", []) or [])
+    uri = first_uri(getattr(op, "uris", []) or [])
     if uri:
         # For skills: path/to/skills/my_skill/SKILL.md → my_skill
         if memory_type == "skills" and uri.endswith("/SKILL.md"):
@@ -812,11 +813,6 @@ def _is_source_trajectory_link(link: StoredLink) -> bool:
     )
 
 
-def _remap_links_from_uri(links: list[StoredLink], from_uri: str) -> list[StoredLink]:
-    if not from_uri:
-        return list(links)
-    return [link.model_copy(update={"from_uri": from_uri}) for link in links]
-
 def _find_policy_by_uri(policy_set: PolicySet, uri: str) -> Policy | None:
     for policy in policy_set.policies:
         if policy.uri == uri:
@@ -827,7 +823,7 @@ def _base_version_from_old_file_or_policy(
     old_file: Any, target_uri: str | None, policy_set: PolicySet
 ) -> int | None:
     if old_file is not None:
-        version = _safe_int((getattr(old_file, "extra_fields", {}) or {}).get("version"))
+        version = safe_int((getattr(old_file, "extra_fields", {}) or {}).get("version"))
         if version is not None:
             return version
     if target_uri:
@@ -835,15 +831,6 @@ def _base_version_from_old_file_or_policy(
         return policy.version if policy is not None else None
     return None
 
-def _safe_int(value: Any) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
-
-def _first_uri(uris: list[str]) -> str | None:
-    return uris[0] if uris else None
 
 def _gradient_supersedes(gradient: SemanticGradient) -> Any:
     metadata = dict(getattr(gradient, "metadata", {}) or {})

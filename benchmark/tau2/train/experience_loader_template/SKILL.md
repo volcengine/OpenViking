@@ -16,8 +16,18 @@ Use this skill before taking task actions when reusable execution experience may
 5. You may call `search_experience` multiple times with refined keywords, and you may call `read_experience` multiple times for the experiences that pass the gate.
 6. Treat loaded experiences as reusable guidance, not as current-task truth. Current policy, current tool results, and current user facts override prior experience.
 7. **Re-verify after reading.** Even after `read_experience`, before acting on the experience, check its full `## Situation` against current facts you have obtained from tools (cabin class, reservation status, flight dates, segment state, etc.). If any "不适用于" / exclusion condition matches the current task now that you have concrete facts, DISCARD the experience and proceed from policy and tool results instead — do NOT apply its Approach or Reflect.
-8. Multi-intent tasks (e.g. "cancel, then book", "upgrade then change flight", "refuse a modification then offer a fallback") may legitimately require more than one experience; gate and apply each segment's experience independently. Do not end the task (`done` / `transfer_to_human_agents`) just because one segment's experience says to stop — check whether the user has a remaining intent.
+8. Multi-intent tasks (e.g. "cancel, then book", "upgrade then change flight", "refuse a modification then offer a fallback") may legitimately require more than one experience; gate and apply each segment's experience independently. Do not end the task (`done` / `transfer_to_human_agents`) just because one segment's experience reaches a local return marker — check whether the user has a remaining intent.
 9. If no linked experience is plausibly relevant after gating, continue without experience guidance.
+
+## Local return markers in loaded experiences
+
+Experience return markers are **local to the covered intent/subtask**. They are not whole-task success/failure labels and are not automatic permission to call `done`.
+
+- `RETURN_COMPLETED`: the specific intent/subtask covered by this experience has been completed, usually after the required business read/write tool calls and required customer communication. If the user has another independent intent, continue with that next intent instead of ending the conversation.
+- `RETURN_BLOCKED(reason="...")`: the covered intent/subtask cannot proceed under the current facts, policy, missing input, refusal boundary, or escalation boundary. Perform any required communication/escalation from the experience, then continue other remaining user intents if they are still actionable.
+- `RETURN_NOT_APPLICABLE`: the experience does not match the current facts; discard it and use another applicable experience or current policy/tool facts.
+
+Refusal, no-option, policy-ineligible, missing-input, and `transfer_to_human_agents` branches should be interpreted as `RETURN_BLOCKED(...)` for that local intent, not as whole-task completion. Before ending globally, verify that every user intent is completed, blocked, not applicable, or explicitly transferred/stopped by the user/environment.
 
 ## Tools
 

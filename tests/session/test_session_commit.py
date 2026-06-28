@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -188,6 +189,47 @@ class TestCommit:
             )
             assert call_kwargs["include_session_skills"] is False
 
+    async def test_commit_can_skip_working_memory_summary(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.working_memory_enabled = False
+        config.memory.session_skill_extraction_enabled = False
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
+        summary_called = False
+
+        async def fake_summary(messages, latest_archive_overview=""):
+            nonlocal summary_called
+            del messages, latest_archive_overview
+            summary_called = True
+            return "should not be written"
+
+        async def fake_extract(*args, **kwargs):
+            del args
+            assert kwargs.get("latest_archive_overview", "") == ""
+            return []
+
+        session_with_messages._generate_archive_summary_async = fake_summary
+        session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            side_effect=fake_extract
+        )
+        if hasattr(session_with_messages._session_compressor, "extract_execution_memories"):
+            session_with_messages._session_compressor.extract_execution_memories = AsyncMock(
+                return_value={"contexts": [], "session_skills": []}
+            )
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert summary_called is False
+        archive_uri = task_result["result"]["archive_uri"]
+        assert not await _marker_exists(session_with_messages, archive_uri, ".overview.md")
+        assert not await _marker_exists(session_with_messages, archive_uri, ".abstract.md")
+        session_with_messages._session_compressor.extract_long_term_memories.assert_awaited_once()
+
     async def test_commit_routes_peer_memory_with_single_full_context_pass(
         self,
         client: AsyncOpenViking,
@@ -328,8 +370,15 @@ class TestCommit:
         assert result2.get("task_id") is not None
 
     async def test_commit_keep_recent_count_retains_live_tail_and_resets_pending_tokens(
-        self, client: AsyncOpenViking
+        self, client: AsyncOpenViking, monkeypatch
     ):
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.working_memory_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        config.vlm = SimpleNamespace(is_available=lambda: False)
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
         session = client.session(session_id="commit_keep_recent_count_test")
 
         session.add_message("user", [TextPart("Round 1 user")])
@@ -424,9 +473,16 @@ class TestCommit:
         ]
 
     async def test_commit_uses_latest_archive_overview_for_summary_and_extraction(
-        self, client: AsyncOpenViking
+        self, client: AsyncOpenViking, monkeypatch
     ):
         """Second commit should pass the latest completed archive overview into Phase 2."""
+        config = MagicMock()
+        config.memory.extraction_enabled = True
+        config.memory.working_memory_enabled = True
+        config.memory.session_skill_extraction_enabled = False
+        config.vlm = SimpleNamespace(is_available=lambda: False)
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+
         session = client.session(session_id="latest_overview_threading_test")
         session._meta.memory_policy = {
             "peer": {"enabled": False},

@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import asyncio
+import contextlib
 import csv
 import json
 import re
@@ -435,16 +436,6 @@ def record_success_trace_id(result: Dict[str, Any], success_trace_ids: list[str]
     trace_id = result.get("trace_id")
     if trace_id:
         success_trace_ids.append(str(trace_id))
-
-
-class _NullCtx:
-    """No-op context manager for the non-progress path."""
-
-    def __enter__(self):
-        return None
-
-    def __exit__(self, *args):
-        return False
 
 
 def load_ingest_record(record_path: str = "./result/locomo/.ingest_record.json") -> Dict[str, Any]:
@@ -1258,7 +1249,7 @@ async def run_import(args: argparse.Namespace) -> None:
         f"\n[INFO] Starting import with {len(tasks)} tasks to process",
         file=sys.stderr,
     )
-    ctx = progress if show_progress and progress is not None else _NullCtx()
+    ctx = progress if show_progress and progress is not None else contextlib.nullcontext()
     with ctx:
         task_results = await asyncio.gather(*tasks, return_exceptions=True)
 

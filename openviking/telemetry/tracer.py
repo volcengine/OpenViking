@@ -521,22 +521,12 @@ class tracer:
     @staticmethod
     def get_trace_id() -> str:
         """Get the current trace ID as a hex string."""
-        if _otel_tracer is None:
-            return ""
-
-        try:
-            current_span = otel_trace.get_current_span()
-            if current_span is not None and hasattr(current_span, "context"):
-                trace_id = "{:032x}".format(current_span.context.trace_id)
-                return trace_id
-        except Exception:
-            _log_trace_internal_failure("[TRACER] failed to resolve decorator trace id")
-        return ""
+        return get_trace_id()
 
     @staticmethod
     def is_enabled() -> bool:
         """Check if tracer is enabled."""
-        return _otel_tracer is not None
+        return is_enabled()
 
     @staticmethod
     def set(key: str, value: Any) -> None:

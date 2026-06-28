@@ -69,6 +69,15 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
+    working_memory_enabled: bool = Field(
+        default=True,
+        description=(
+            "When enabled (default), session commit generates a Working Memory "
+            "summary for each archive. When disabled, commit still archives messages "
+            "and can still extract configured long-term/execution memories, but skips "
+            "the archive summary LLM call."
+        ),
+    )
     session_skill_extraction_enabled: bool = Field(
         default=False,
         description=(

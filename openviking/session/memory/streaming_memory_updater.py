@@ -635,7 +635,7 @@ async def merge_memory_operations(
     registry = registry or create_default_registry()
     merge_results = await asyncio.gather(
         *[
-            _merge_memory_type_group(
+            merge_one_memory_type_operations(
                 memory_type=memory_type,
                 operations=upsert_groups.get((peer_id, memory_type), []),
                 delete_files=delete_groups.get((peer_id, memory_type), []),
@@ -714,29 +714,6 @@ async def merge_memory_operations(
         errors=list(operations.errors),
         resolved_links=merged_links,
         delete_replacements=merged_delete_replacements,
-    )
-
-
-async def _merge_memory_type_group(
-    *,
-    memory_type: str,
-    operations: list[ResolvedOperation],
-    delete_files: list[MemoryFile],
-    messages: list[Message],
-    ctx: RequestContext,
-    registry: MemoryTypeRegistry,
-    peer_id: str | None = None,
-    trace_console: bool = False,
-) -> ResolvedOperations:
-    return await merge_one_memory_type_operations(
-        memory_type=memory_type,
-        operations=operations,
-        delete_files=delete_files,
-        messages=messages,
-        ctx=ctx,
-        registry=registry,
-        peer_id=peer_id,
-        trace_console=trace_console,
     )
 
 
@@ -1094,14 +1071,6 @@ def classify_memory_merge_mode(
     if old_file.plain_content().strip() == str(fields.get("content") or "").strip():
         return True, "single_existing_content_unchanged"
     return False, "single_existing_content_changed"
-
-
-def can_fast_path_memory_operations(
-    operations: list[ResolvedOperation],
-    *,
-    schema: MemoryTypeSchema | None = None,
-) -> bool:
-    return classify_memory_merge_mode(operations, schema=schema)[0]
 
 
 def enforce_merge_group_peer_id(

@@ -19,7 +19,6 @@ except Exception:  # pragma: no cover - rich is optional
 
 from openviking.session.train.components.progress import format_duration, format_label, label_style
 
-
 HookResult = Awaitable[None] | None
 ReportHookResult = Awaitable[dict[str, Any] | None] | dict[str, Any] | None
 DecisionHookResult = Awaitable[Any] | Any | None
@@ -580,7 +579,7 @@ def _test_summary_fragments(data: dict[str, Any]) -> list[tuple[str, str]]:
     if trial_count > 1:
         accuracy = data.get("accuracy_mean")
         fragments = [
-            ("TEST  accuracy: ", "bold"),
+            ("EVAL  accuracy: ", "bold"),
             (fmt_percent(accuracy), _accuracy_style(accuracy)),
             (" ± ", "default"),
             (fmt_percentage_point_abs(data.get("accuracy_std")), "yellow"),
@@ -591,7 +590,7 @@ def _test_summary_fragments(data: dict[str, Any]) -> list[tuple[str, str]]:
 
     accuracy = data.get("accuracy")
     fragments = [
-        ("TEST  accuracy: ", "bold"),
+        ("EVAL  accuracy: ", "bold"),
         (fmt_percent(accuracy), _accuracy_style(accuracy)),
         ("  passed=", "default"),
         (f"{data.get('passed_count')}/{data.get('case_count')}", _passed_style(data)),

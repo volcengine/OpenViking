@@ -7,7 +7,7 @@ from __future__ import annotations
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 try:  # pragma: no cover - exercised through integration/TTY usage
     from rich.console import Console
@@ -335,3 +335,45 @@ def label_style(label: str) -> str:
     } or label.endswith("_rollout"):
         return "bold green"
     return "bold cyan"
+
+
+async def run_with_progress(
+    items: list[Any],
+    *,
+    coroutine_factory: Callable[[Any, int], Any],
+    total: int | None = None,
+    label: str,
+    enabled: bool,
+    description: str = "",
+    concurrency: int,
+) -> list[Any]:
+    """Run ``coroutine_factory(item, index)`` for each item with a ProgressPrinter.
+
+    Creates a semaphore, starts/fails/completes progress rows per item, and
+    guarantees ``progress.finish()`` in a finally block. Returns the gathered
+    results in input order.
+    """
+    import asyncio
+
+    n = total if total is not None else len(items)
+    progress = ProgressPrinter(total=n, label=label, enabled=enabled, description=description)
+    progress.render()
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _run_one(item: Any, index: int) -> Any:
+        async with semaphore:
+            progress.start_one()
+            try:
+                result = await coroutine_factory(item, index)
+            except Exception:
+                progress.fail_one()
+                raise
+            progress.complete_one()
+            return result
+
+    try:
+        return list(
+            await asyncio.gather(*(_run_one(item, idx) for idx, item in enumerate(items)))
+        )
+    finally:
+        progress.finish()

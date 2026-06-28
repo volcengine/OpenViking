@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from progress_utils import (
     AsyncProgressTracker,
+    format_duration,
     make_three_state_progress,
     should_show_progress,
 )
@@ -18,17 +19,6 @@ from progress_utils import (
 # 加载本地环境变量文件
 env_file = Path.home() / ".openviking_benchmark_env"
 load_dotenv(env_file)
-
-
-def format_duration(seconds: float) -> str:
-    total_seconds = max(0, int(round(seconds)))
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours}h{minutes:02d}m{secs:02d}s"
-    if minutes:
-        return f"{minutes}m{secs:02d}s"
-    return f"{secs}s"
 
 
 async def grade_answer(

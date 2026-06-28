@@ -9,17 +9,22 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from benchmark.tau2.train.rollout_executor_vikingbot import (
+from benchmark.tau2.train._rollout_helpers import (
     _as_tool_input,
+    _case_trial,
+    _communicate_text_from_tool_input,
+    _is_communicate_with_user,
     _message,
-    _safe_float,
+    _metadata_message,
     _stringify,
     _to_jsonable,
+)
+from benchmark.tau2.train._rollout_helpers import (
+    _tau2_evaluation as _tau2_evaluation_helper,
 )
 from openviking.message import Message, TextPart, ToolPart
 from openviking.session.train import (
     Case,
-    CriterionResult,
     ExecutionContext,
     ExperienceSet,
     Rollout,
@@ -738,10 +743,6 @@ def _tool_call_query(tool_calls: list[Any], state_messages: list[Any]) -> str:
     return "\n".join(parts)
 
 
-def _case_trial(case: Case) -> Any:
-    return case.input.get("eval_trial", case.input.get("train_trial"))
-
-
 def _case_seed(base_seed: int, *, case_index: int, eval_trial: Any) -> int:
     trial = 0
     try:
@@ -899,31 +900,6 @@ def _simulation_message_to_rollout_messages(
     return [_message(f"tau2-message-{index}", "assistant", content)]
 
 
-
-def _is_communicate_with_user(tool_name: str) -> bool:
-    return tool_name == "communicate_with_user"
-
-
-def _communicate_text_from_tool_input(tool_input: dict[str, Any] | None) -> str:
-    if not isinstance(tool_input, dict):
-        return ""
-    content = tool_input.get("content")
-    if content is None:
-        return ""
-    return str(content)
-
-
-def _metadata_message(
-    message_id: str,
-    text: str,
-) -> Message:
-    return Message(
-        id=message_id,
-        role="user",
-        parts=[TextPart(text=text)],
-    )
-
-
 def _tool_usage_from_simulation(simulation: Any) -> list[dict[str, Any]]:
     usages: list[dict[str, Any]] = []
     pending: dict[str, dict[str, Any]] = {}
@@ -962,31 +938,6 @@ def _role_value(role: Any) -> str:
 
 
 def _tau2_evaluation(*, reward: Any, evaluation_result: Any) -> RubricEvaluation:
-    score = _safe_float(reward, default=0.0)
-    passed = score >= 1.0
-    feedback = [] if passed else ["tau2 environment reward is below 1.0."]
-    evaluation_jsonable = _to_jsonable(evaluation_result)
-    if evaluation_jsonable is not None:
-        feedback.append(_stringify(evaluation_jsonable))
-    return RubricEvaluation(
-        passed=passed,
-        score=score,
-        criterion_results=[
-            CriterionResult(
-                criterion_name="tau2_reward",
-                passed=passed,
-                score=score,
-                feedback=feedback,
-                evidence=[_stringify(evaluation_jsonable)]
-                if evaluation_jsonable is not None
-                else [],
-                metadata={"reward": score},
-            )
-        ],
-        feedback=feedback,
-        metadata={
-            "source": "tau2_native_executor",
-            "reward": score,
-            "evaluation_result": evaluation_jsonable,
-        },
+    return _tau2_evaluation_helper(
+        reward=reward, evaluation_result=evaluation_result, source="tau2_native_executor"
     )

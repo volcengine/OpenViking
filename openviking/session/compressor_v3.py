@@ -16,7 +16,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from uuid import uuid4
 
 from openviking.core.context import Context
@@ -40,6 +40,7 @@ from openviking.session.memory.streaming_memory_updater import (
     MemoryUpdateRequest,
     get_streaming_memory_updater,
     make_streaming_memory_updater_key,
+    merge_link_lists,
 )
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -61,8 +62,8 @@ from openviking.session.train import (
     RolloutTrainingResult,
     Rubric,
     RubricCriterion,
-    SkillSetLoader,
     SkillPolicyUpdater,
+    SkillSetLoader,
     StreamingPolicyTrainerConfig,
     TrajectoryAnalyzerContext,
     TrajectoryRolloutAnalyzer,
@@ -168,7 +169,7 @@ class SessionCompressorV3:
 
         for uri in result.written_uris:
             op = upsert_by_uri.get(uri)
-            memory_type = op.memory_type if op else _get_memory_type_from_uri(uri)
+            memory_type = op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
             old_file = op.old_memory_file_content if op else None
             if old_file:
                 updates.append(
@@ -184,7 +185,7 @@ class SessionCompressorV3:
 
         for uri in result.edited_uris:
             op = upsert_by_uri.get(uri)
-            memory_type = op.memory_type if op else _get_memory_type_from_uri(uri)
+            memory_type = op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
             old_file = op.old_memory_file_content if op and op.old_memory_file_content else None
             updates.append(
                 {
@@ -298,7 +299,7 @@ class SessionCompressorV3:
             ctx=ctx,
             memory_diffs=[
                 getattr(result, "memory_diff", None),
-                _dict_value(train_result, "memory_diff"),
+                train_result.get("memory_diff"),
             ],
         )
         return _v3_extraction_response(
@@ -342,7 +343,7 @@ class SessionCompressorV3:
             ctx=ctx,
             memory_diffs=[
                 _applied_memory_diff(case_write),
-                _dict_value(train_result, "memory_diff"),
+                train_result.get("memory_diff"),
             ],
         )
         return _v3_extraction_response(
@@ -660,12 +661,9 @@ class SessionCompressorV3:
                 )
 
                 # Experience path: estimate gradients, then submit to exp trainer
-                exp_gradients = await _estimate_exp_gradients(
-                    analysis=analysis,
-                    policy_set=exp_trainer.policy_set,
-                    context=gradient_context,
+                exp_gradients = await ExperienceGradientEstimator(
                     viking_fs=viking_fs,
-                )
+                ).estimate(analysis, exp_trainer.policy_set, gradient_context)
                 exp_training_result = _trajectory_only_training_result(
                     analysis=analysis,
                     rollout=rollout,
@@ -1194,14 +1192,6 @@ def _fallback_case_name(op: ResolvedOperation) -> str:
     return "commit_case"
 
 
-def _get_memory_type_from_uri(uri: str) -> str:
-    parts = uri.split("/")
-    for part in parts:
-        if part.endswith(".md"):
-            return part.removesuffix(".md")
-    return "unknown"
-
-
 def _experience_root_uri(ctx: RequestContext) -> str:
     user_space = getattr(getattr(ctx, "user", None), "user_id", None) or "default"
     return f"viking://user/{user_space}/memories/experiences"
@@ -1305,7 +1295,7 @@ def _case_training_links(
         plan=plan,
         apply_result=apply_result,
     )
-    return _dedupe_stored_links([*trajectory_links, *experience_links])
+    return merge_link_lists([*trajectory_links, *experience_links])
 
 
 def _case_trajectory_links(
@@ -1383,18 +1373,6 @@ def _plan_item_has_source_trajectory(item: PolicyPlanItem, trajectory_uris: set[
     return False
 
 
-def _dedupe_stored_links(links: list[StoredLink]) -> list[StoredLink]:
-    result: list[StoredLink] = []
-    seen: set[tuple[str, str, str, str | None]] = set()
-    for link in links:
-        key = (link.from_uri, link.to_uri, link.link_type, link.match_text)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(link)
-    return result
-
-
 def _stored_link(
     *,
     from_uri: str,
@@ -1442,24 +1420,6 @@ async def _render_case_links_from_template(
         MemoryFileUtils.write(mf, content_template=content_template),
         ctx=ctx,
     )
-
-
-async def _estimate_exp_gradients(
-    *,
-    analysis: RolloutAnalysis,
-    policy_set: Any,
-    context: ExperienceGradientContext,
-    viking_fs: Any = None,
-) -> list[Any]:
-    """Estimate experience gradients from a rollout analysis.
-
-    Thin wrapper around ExperienceGradientEstimator that reuses the
-    trajectory content from the analysis instead of running a full
-    second extraction pass.
-    """
-    estimator = ExperienceGradientEstimator(viking_fs=viking_fs)
-    gradients = await estimator.estimate(analysis, policy_set, context)
-    return gradients
 
 
 def _gradient_memory_type(gradient: Any) -> str:
@@ -1511,11 +1471,6 @@ def _trajectory_only_training_result(
         },
     )
 
-def _dict_value(data: Any, key: str) -> Any:
-    if isinstance(data, dict):
-        return data.get(key)
-    return None
-
 
 def _applied_memory_result(value: Any) -> Any:
     if isinstance(value, _V3AppliedMemory):
@@ -1548,8 +1503,16 @@ def _v3_extraction_response(
     contexts: list[Context],
     train_result: Any,
     archive_uri: str,
-) -> dict[str, Any]:
-    """Build the v2-compatible ``{contexts, session_skills}`` response dict."""
+) -> list[Context] | dict[str, Any]:
+    """Build the extraction response.
+
+    Historically ``extract_long_term_memories`` returned ``list[Context]`` and
+    a number of direct callers still index/compare the return value as a list.
+    Commit orchestration now also understands the execution-memory style
+    ``{"contexts": ..., "session_skills": ...}`` shape so it can count
+    session skills.  Preserve the old list shape unless there are actual
+    session skills to report.
+    """
     skill_dicts: list[dict[str, Any]] = []
     seen: set[str] = set()
     if isinstance(train_result, dict):
@@ -1558,6 +1521,8 @@ def _v3_extraction_response(
             if uri_str and uri_str not in seen:
                 seen.add(uri_str)
                 skill_dicts.append({"uri": uri_str, "archive_uri": archive_uri})
+    if not skill_dicts:
+        return contexts
     return {"contexts": contexts, "session_skills": skill_dicts}
 
 
@@ -1662,23 +1627,3 @@ def _commit_policy_snapshot_id(*, session_id: Optional[str], archive_uri: str) -
     if session_id:
         return f"session-commit:{session_id}"
     return f"session-commit:{uuid4().hex}"
-
-
-def _trajectory_content_from_rollout(rollout: Rollout) -> str:
-    conversation = "\n".join(
-        f"- {message.role}: {message.content}" for message in rollout.messages if message.content
-    )
-    return "\n".join(
-        [
-            f"# {rollout.case.name}",
-            f"- Task Signature: {rollout.case.task_signature}",
-            "- Commit Case: extracted as a case memory from a real session commit.",
-            "- Rubric:",
-            *[
-                f"  - {criterion.name}: {criterion.description}"
-                for criterion in rollout.case.rubric.criteria
-            ],
-            "- Conversation Evidence:",
-            conversation,
-        ]
-    )

@@ -134,9 +134,6 @@ class MemoryIsolationHandler:
             return False
         return True
 
-    def _schema_peer_enabled(self, memory_type_schema: MemoryTypeSchema) -> bool:
-        return bool(getattr(memory_type_schema, "peer_enabled", True))
-
     def _can_write_peer(self, peer_id: str) -> bool:
         return self.allow_peer and peer_id in self.allowed_peer_ids
 
@@ -146,7 +143,7 @@ class MemoryIsolationHandler:
         user_spaces: List[str] = []
         if self.allow_self:
             user_spaces.append(user_space)
-        if self.allow_peer and self._schema_peer_enabled(memory_type_schema):
+        if self.allow_peer and getattr(memory_type_schema, "peer_enabled", True):
             for peer_id in sorted(self.allowed_peer_ids):
                 user_spaces.append(peer_user_space(user_space, peer_id))
 
@@ -208,7 +205,7 @@ class MemoryIsolationHandler:
 
         target_ids: List[str] = []
         has_ranges = operation.memory_fields.get("ranges") is not None
-        if not self._schema_peer_enabled(memory_type_schema):
+        if not getattr(memory_type_schema, "peer_enabled", True):
             operation.memory_fields.pop("peer_id", None)
             target_ids = [_SELF_PEER_ID]
         elif operation.memory_fields.get("ranges") is not None:

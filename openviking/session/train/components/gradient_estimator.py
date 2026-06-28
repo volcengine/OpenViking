@@ -18,6 +18,7 @@ from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.train.domain import ExperienceSet, RolloutAnalysis, Trajectory
 from openviking.session.train.gradients import PatchSemanticGradient
+from openviking.session.train.utils import first_uri, safe_int
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
@@ -166,7 +167,7 @@ def _operations_to_gradients(
 
         old_file = getattr(op, "old_memory_file_content", None)
         target_name = str(fields.get("experience_name") or _fallback_experience_name(op))
-        target_uri = _first_uri(getattr(op, "uris", []) or [])
+        target_uri = first_uri(getattr(op, "uris", []) or [])
         base_version = _base_version(old_file, target_uri, experience_set)
         after_file = _operation_after_file(
             fields=fields,
@@ -252,12 +253,8 @@ def _operation_after_file(
     )
 
 
-def _first_uri(uris: list[str]) -> str | None:
-    return uris[0] if uris else None
-
-
 def _fallback_experience_name(op: Any) -> str:
-    uri = _first_uri(getattr(op, "uris", []) or [])
+    uri = first_uri(getattr(op, "uris", []) or [])
     if uri:
         return uri.rstrip("/").split("/")[-1].removesuffix(".md")
     return "unknown_experience"
@@ -268,7 +265,7 @@ def _base_version(
 ) -> int | None:
     if old_file is not None:
         fields = getattr(old_file, "extra_fields", {}) or {}
-        version = _safe_int(fields.get("version"))
+        version = safe_int(fields.get("version"))
         if version is not None:
             return version
     if target_uri:
@@ -276,14 +273,6 @@ def _base_version(
             if policy.uri == target_uri:
                 return policy.version
     return None
-
-
-def _safe_int(value: Any) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
 
 
 def _confidence(trajectory: Trajectory, analysis: RolloutAnalysis) -> float:

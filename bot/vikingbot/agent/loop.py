@@ -1277,7 +1277,6 @@ class AgentLoop:
                         existing_uris.add(uri)
                         exp_exclude_uris.append(uri)
                 session.metadata["recalled_exp_uris"] = exp_exclude_uris
-            # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
 
             # Run agent loop within a stable response identity for tracing/tool spans.
             response_id = uuid.uuid4().hex

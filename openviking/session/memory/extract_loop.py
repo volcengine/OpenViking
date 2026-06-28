@@ -198,8 +198,6 @@ class ExtractLoop:
         json_schema = self._operations_model.model_json_schema()
 
         # Build initial messages from provider
-        import json
-
         schema_str = json.dumps(json_schema, ensure_ascii=False)
         messages = []
         page_id_rules = """
@@ -237,8 +235,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         """,
             }
         )
-
-        await self._mark_cache_breakpoint(messages)
 
         # Pre-fetch context via provider
         tool_call_messages = await self.context_provider.prefetch()
@@ -386,11 +382,23 @@ The final output of the model must strictly follow the JSON Schema format shown 
             for item in items:
                 item_dict = dict(item)
                 item_dict["memory_type"] = memory_type
-                self._isolation_handler.fill_identity_fields(
-                    item_dict,
-                    role_scope=role_scope,
-                    memory_type_schema=schema,
-                )
+                try:
+                    self._isolation_handler.fill_identity_fields(
+                        item_dict,
+                        role_scope=role_scope,
+                        memory_type_schema=schema,
+                    )
+                except TypeError as exc:
+                    # Some tests and older custom isolation handlers implement
+                    # the pre-schema signature ``fill_identity_fields(item,
+                    # role_scope=None)``.  Keep that extension point working
+                    # while the real handler can still use schema peer settings.
+                    if "memory_type_schema" not in str(exc):
+                        raise
+                    self._isolation_handler.fill_identity_fields(
+                        item_dict,
+                        role_scope=role_scope,
+                    )
 
                 page_id = item_dict.pop("page_id", None)
                 resolved_op = ResolvedOperation(
@@ -651,7 +659,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         action_tasks = [
             execute_single_tool_call(idx, tool_call) for idx, tool_call in enumerate(tool_calls)
         ]
-        results = await self._execute_in_parallel(action_tasks)
+        results = await asyncio.gather(*action_tasks)
 
         has_unknown_tool = False
 
@@ -696,9 +704,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         Returns:
             Tuple of (tool_calls, operations) - one will be None, the other set
         """
-        # 标记 cache breakpoint
-        await self._mark_cache_breakpoint(messages)
-
         # Call LLM with tools - use tools from strategy
         tools = None
         tool_choice = None
@@ -799,13 +804,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
             f"response_preview={_preview_text(self._last_llm_failure_content)!r}"
         )
         return (None, None)
-
-    async def _execute_in_parallel(
-        self,
-        tasks: List[Any],
-    ) -> List[Any]:
-        """Execute tasks in parallel, similar to AgentLoop."""
-        return await asyncio.gather(*tasks)
 
     async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
         refetch_uris = {}
@@ -953,11 +951,3 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 "content": "Note: The files above were automatically read because they exist and you didn't read them before deciding to write. Please consider the existing content when making write decisions. You can now output updated operations.",
             }
         )
-
-    async def _mark_cache_breakpoint(self, messages):
-        # 支持 dict 消息和 object 消息
-        # last_msg = messages[-1]
-        # last_msg["cache_control"] = {"type": "ephemeral"}
-
-        # 暂时注释掉，不确定对所有模型的影响
-        pass

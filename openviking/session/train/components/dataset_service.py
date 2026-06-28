@@ -492,7 +492,7 @@ def case_to_dict(case: Case) -> dict[str, Any]:
     return {
         "name": case.name,
         "task_signature": case.task_signature,
-        "input": case.input,
+        "input": jsonable(case.input),
         "rubric": {
             "name": case.rubric.name,
             "description": case.rubric.description,
@@ -502,13 +502,13 @@ def case_to_dict(case: Case) -> dict[str, Any]:
                     "description": criterion.description,
                     "required": criterion.required,
                     "weight": criterion.weight,
-                    "metadata": criterion.metadata,
+                    "metadata": jsonable(criterion.metadata),
                 }
                 for criterion in case.rubric.criteria
             ],
-            "metadata": case.rubric.metadata,
+            "metadata": jsonable(case.rubric.metadata),
         },
-        "metadata": case.metadata,
+        "metadata": jsonable(case.metadata),
     }
 
 
@@ -553,6 +553,24 @@ def policy_set_from_dict(data: dict[str, Any]) -> ExperienceSet:
         ],
         metadata=dict(data.get("metadata") or {}),
     )
+
+
+def policy_set_to_dict(policy_set: ExperienceSet) -> dict[str, Any]:
+    return {
+        "root_uri": policy_set.root_uri,
+        "policies": [
+            {
+                "name": item.name,
+                "uri": item.uri,
+                "version": item.version,
+                "status": item.status,
+                "content": item.content,
+                "metadata": jsonable(item.metadata),
+            }
+            for item in policy_set.policies
+        ],
+        "metadata": jsonable(policy_set.metadata),
+    }
 
 
 def rollout_to_dict(rollout: Rollout) -> dict[str, Any]:
@@ -625,10 +643,10 @@ def evaluation_to_dict(evaluation: RubricEvaluation | None) -> dict[str, Any] | 
                 "score": result.score,
                 "feedback": result.feedback,
                 "evidence": result.evidence,
-                "metadata": result.metadata,
+                "metadata": jsonable(result.metadata),
             }
             for result in evaluation.criterion_results
         ],
         "feedback": evaluation.feedback,
-        "metadata": evaluation.metadata,
+        "metadata": jsonable(evaluation.metadata),
     }

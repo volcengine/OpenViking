@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from openviking.session.train.components.progress import ProgressPrinter
+from openviking.session.train.components.progress import run_with_progress
 from openviking.session.train.context import PipelineContext
 from openviking.session.train.domain import (
     CriterionResult,
@@ -23,6 +23,7 @@ from openviking.session.train.domain import (
     RolloutTrainingResult,
     RubricEvaluation,
 )
+from openviking.session.train.utils import average_score, validate_rollouts_have_cases
 from openviking_cli.client.http import AsyncHTTPClient
 
 _TRAINING_COMMIT_MEMORY_TYPES = ("cases", "trajectories", "experiences")
@@ -63,46 +64,31 @@ class SessionCommitPolicyTrainer:
         analyses: list[RolloutAnalysis] | None = None,
     ) -> RolloutTrainingResult:
         rollout_list = list(rollouts)
-        _validate_rollouts_have_cases(rollout_list)
+        validate_rollouts_have_cases(rollout_list)
         if analyses is not None and len(analyses) != len(rollout_list):
             raise ValueError(
                 "SessionCommitPolicyTrainer analyses length must match rollouts length when provided"
             )
         execution_metadata = dict(getattr(context, "execution_metadata", {}) or {})
-        progress = ProgressPrinter(
-            total=len(rollout_list),
+
+        async def _commit(rollout: Rollout, idx: int) -> dict[str, Any]:
+            return await self._commit_one(
+                rollout,
+                idx,
+                execution_metadata=execution_metadata,
+            )
+
+        commit_results = await run_with_progress(
+            rollout_list,
+            coroutine_factory=_commit,
             label="train_start",
             enabled=self.show_progress,
             description=(
                 f"Processing {len(rollout_list)} rollouts, "
                 f"concurrency={self.commit_concurrency}"
             ),
+            concurrency=self.commit_concurrency,
         )
-        progress.render()
-
-        semaphore = asyncio.Semaphore(self.commit_concurrency)
-
-        async def commit_one(rollout: Rollout, idx: int) -> dict[str, Any]:
-            async with semaphore:
-                progress.start_one()
-                try:
-                    result = await self._commit_one(
-                        rollout,
-                        idx,
-                        execution_metadata=execution_metadata,
-                    )
-                    progress.complete_one()
-                    return result
-                except Exception:
-                    progress.fail_one()
-                    raise
-
-        try:
-            commit_results = await asyncio.gather(
-                *[commit_one(rollout, idx) for idx, rollout in enumerate(rollout_list)]
-            )
-        finally:
-            progress.finish()
         analysis_list = [_analysis_from_rollout(rollout) for rollout in rollout_list]
         errors = [item["error"] for item in commit_results if item.get("error")]
         apply_result = PolicyApplyResult(
@@ -124,7 +110,7 @@ class SessionCommitPolicyTrainer:
                 "rollout_count": len(rollout_list),
                 "analysis_count": len(analysis_list),
                 "gradient_count": 0,
-                "score": _average_score(analysis_list),
+                "score": average_score(analysis_list),
                 "source": "session_commit_trainer",
                 "run_id": self.run_id,
             },
@@ -278,8 +264,10 @@ class SessionCommitPolicyTrainer:
             await result
 
     async def _batch_add_messages(self, session_id: str, messages: list[dict[str, Any]]) -> None:
-        for chunk in _chunks(messages, _SESSION_BATCH_ADD_MESSAGE_LIMIT):
-            await self.client.batch_add_messages(session_id, chunk)
+        for start in range(0, len(messages), _SESSION_BATCH_ADD_MESSAGE_LIMIT):
+            await self.client.batch_add_messages(
+                session_id, messages[start : start + _SESSION_BATCH_ADD_MESSAGE_LIMIT]
+            )
 
     async def _wait_task(self, task_id: str) -> dict[str, Any]:
         deadline = (
@@ -332,12 +320,6 @@ def _rollout_event_fields(
         "policy_snapshot_id": rollout.policy_snapshot_id,
         "passed": bool(rollout.evaluation.passed) if rollout.evaluation is not None else None,
     }
-
-
-def _chunks(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
-    if size <= 0:
-        raise ValueError("chunk size must be > 0")
-    return [items[start : start + size] for start in range(0, len(items), size)]
 
 
 def _training_commit_memory_policy() -> dict[str, Any]:
@@ -563,19 +545,3 @@ def _message_to_request(message: Any) -> dict[str, Any]:
     if data.get("peer_id") is not None:
         request["peer_id"] = data["peer_id"]
     return request
-
-
-def _average_score(analyses: list[RolloutAnalysis]) -> float | None:
-    if not analyses:
-        return None
-    return sum(float(analysis.evaluation.score) for analysis in analyses) / len(analyses)
-
-
-def _validate_rollouts_have_cases(rollouts: list[Rollout]) -> None:
-    missing = [
-        idx for idx, rollout in enumerate(rollouts) if getattr(rollout, "case", None) is None
-    ]
-    if missing:
-        raise ValueError(
-            f"rollout training requires Rollout.case for all rollouts; missing indices={missing}"
-        )

@@ -22,6 +22,8 @@ from rich.progress import (
 from rich.table import Column
 from rich.text import Text
 
+from openviking.session.train.components.progress import ProgressSummaryColumn
+
 
 def format_duration(seconds: float) -> str:
     """Format a duration as compact h/m/s text for progress displays."""
@@ -121,25 +123,6 @@ class ThreeStateBarColumn(ProgressColumn):
             bar.append("░" * pending_width, style="dim")
 
         return bar
-
-
-class ProgressSummaryColumn(ProgressColumn):
-    """Render processed count plus non-zero active/failure counts."""
-
-    def render(self, task: Task) -> Text:
-        failed = max(int(task.fields.get("failed", 0) or 0), 0)
-        running = max(int(task.fields.get("running", 0) or 0), 0)
-
-        summary = Text("(")
-        summary.append(f"{int(task.completed or 0)}/{int(task.total or 0)}")
-        if failed > 0:
-            summary.append(", ")
-            summary.append(f"{failed} failed", style="bold red")
-        if running > 0:
-            summary.append(", ")
-            summary.append(f"{running} running", style="bold yellow")
-        summary.append(")")
-        return summary
 
 
 # ---------------------------------------------------------------------------

@@ -18,12 +18,15 @@ from openviking.session.train.components.event_recorder import (
     JsonlEventRecorder,
     JsonlPipelineEventHook,
 )
+from openviking.session.train.components.progress import format_label, label_style
 from openviking.session.train.components.remote import RemoteCaseLoader, RemoteRolloutExecutor
 from openviking.session.train.components.report_builder import PipelineReportBuilder
 from openviking.session.train.components.reporter import (
     _accuracy_style,
     _style_plain,
     emit_run_summary,
+    fmt_percent,
+    fmt_percentage_point_abs,
 )
 from openviking.session.train.components.rollout_artifact_recorder import (
     RolloutArtifactEventRecorder,
@@ -39,7 +42,6 @@ from openviking.session.train.domain import (
     RolloutAnalysis,
 )
 from openviking.session.train.pipeline import OfflinePolicyOptimizationPipeline
-from openviking.session.train.components.progress import format_label, label_style
 from openviking.telemetry import tracer
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -676,8 +678,8 @@ def _print_baseline_cache_hit(report: dict[str, Any], cache_path: Path) -> None:
         cases_per_trial = report.get("case_count_per_trial") or "varies"
         print(
             f"{label_text} baseline_cache_hit=1 "
-            f"accuracy={_style_plain(_fmt_percent(accuracy_mean), _accuracy_style(accuracy_mean))} "
-            f"± {_style_plain(_fmt_pp_abs(accuracy_std), 'yellow')} "
+            f"accuracy={_style_plain(fmt_percent(accuracy_mean), _accuracy_style(accuracy_mean))} "
+            f"± {_style_plain(fmt_percentage_point_abs(accuracy_std), 'yellow')} "
             f"trials={trial_count} cases_per_trial={cases_per_trial} "
             f"{cache_info}"
         )
@@ -687,7 +689,7 @@ def _print_baseline_cache_hit(report: dict[str, Any], cache_path: Path) -> None:
     total = report.get("case_count")
     print(
         f"{label_text} baseline_cache_hit=1 "
-        f"accuracy={_style_plain(_fmt_percent(accuracy), _accuracy_style(accuracy))} "
+        f"accuracy={_style_plain(fmt_percent(accuracy), _accuracy_style(accuracy))} "
         f"passed={passed}/{total} "
         f"{cache_info}"
     )
@@ -698,18 +700,6 @@ def _eval_rollout_stage(kind: str, split: str | None) -> str:
     if kind == "epoch" and eval_split == "train":
         return "eval_train_rollout"
     return f"{kind}_{eval_split}_rollout"
-
-
-def _fmt_percent(value: Any) -> str:
-    if value is None:
-        return "n/a"
-    return f"{float(value) * 100:.2f}%"
-
-
-def _fmt_pp_abs(value: Any) -> str:
-    if value is None:
-        return "n/a"
-    return f"{float(value) * 100:.2f}pp"
 
 
 def _build_pipeline(

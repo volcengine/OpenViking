@@ -16,7 +16,6 @@ from openviking.session.train.domain import (
     PipelineEvaluationResult,
     Rollout,
     RolloutAnalysis,
-    RubricEvaluation,
 )
 
 

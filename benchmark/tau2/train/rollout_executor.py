@@ -5,19 +5,21 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from benchmark.tau2.train.rollout_executor_native import NativeTau2RolloutExecutor
-from benchmark.tau2.train.rollout_executor_vikingbot import (
-    Tau2RolloutExecutor as VikingBotTau2RolloutExecutor,
-)
-from benchmark.tau2.train.rollout_executor_vikingbot import (  # re-export shared helpers/tests
-    _append_final_answer_for_tau2_evaluation,
+from benchmark.tau2.train._rollout_helpers import (
     _as_tool_input,
-    _build_rollout_messages,
-    _configure_tools,
     _safe_float,
     _stringify,
     _tau2_evaluation,
     _to_jsonable,
+)
+from benchmark.tau2.train.rollout_executor_native import NativeTau2RolloutExecutor
+from benchmark.tau2.train.rollout_executor_vikingbot import (
+    Tau2RolloutExecutor as VikingBotTau2RolloutExecutor,
+)
+from benchmark.tau2.train.rollout_executor_vikingbot import (  # re-export vikingbot-only helpers for tests
+    _append_final_answer_for_tau2_evaluation,
+    _build_rollout_messages,
+    _configure_tools,
 )
 
 Tau2RolloutBackend = Literal["native", "vikingbot"]

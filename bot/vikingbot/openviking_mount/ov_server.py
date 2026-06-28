@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import json
 import re
@@ -1111,43 +1110,3 @@ class VikingClient:
             await self.admin_user_client.close()
         for client in self._user_clients.values():
             await client.close()
-
-
-async def main_test():
-    client = await VikingClient.create()
-    # res = client.list_resources()
-    # res = await client.search("头有点疼", target_uri="viking://user/memories/")
-    # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
-    res = await client.search_memory("你好", "user_1")
-    # res = await client.list_resources("viking://resources/")
-    # res = await client.read_content("viking://user/memories/profile.md", level="read")
-    # res = await client.add_resource("https://github.com/volcengine/OpenViking", "ov代码")
-    # res = await client.grep("viking://resources/", "viking", True)
-    # res = await client.commit(
-    #     session_id="99999",
-    #     messages=[{"role": "user", "content": "你好"}],
-    #     user_id="1010101010",
-    # )
-    # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
-    #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
-    print(res)
-
-    await client.close()
-    print("处理完成！")
-
-
-async def account_test():
-    client = ov.AsyncHTTPClient(
-        url="http://localhost:1933",
-        api_key="",
-    )
-    await client.initialize()
-
-    res = await client.search("123")
-
-    print(res)
-
-
-if __name__ == "__main__":
-    asyncio.run(main_test())
-    # asyncio.run(account_test())
