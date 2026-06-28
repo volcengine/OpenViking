@@ -294,6 +294,10 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 			if body["directly_upload_media"] != true {
 				t.Fatalf("directly_upload_media = %#v", body["directly_upload_media"])
 			}
+			// args must be omitted when the caller does not pass any, so the
+			// request is accepted by pre-#2549 instances whose resources route
+			// uses model_config=ConfigDict(extra="forbid").
+			requireBodyKeysAbsent(t, body, "args")
 			writeOK(t, w, map[string]any{"uri": "viking://resources/note.md"})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -307,6 +311,78 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 	}
 	if result["uri"] != "viking://resources/note.md" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestAddResourceSendsArgsWhenProvided(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "note.md")
+	if err := os.WriteFile(filePath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/resources/temp_upload":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			writeOK(t, w, map[string]any{"temp_file_id": "tmp-file"})
+		case "/api/v1/resources":
+			body := readJSONBody(t, r)
+			args, ok := body["args"].(map[string]any)
+			if !ok {
+				t.Fatalf("args = %#v, want map", body["args"])
+			}
+			if args["key"] != "value" {
+				t.Fatalf("args[key] = %#v", args["key"])
+			}
+			writeOK(t, w, map[string]any{"uri": "viking://resources/note.md"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(context.Background(), filePath, &AddResourceOptions{
+		Args: map[string]any{"key": "value"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An explicitly-provided but empty Args map is treated the same as no args: the
+// key is omitted so the request stays compatible with pre-#2549 instances. The
+// resources create route defaults args to {} server-side, so "absent" and
+// "present-but-empty" are equivalent here. Mirrors the Python SDK #2834.
+func TestAddResourceOmitsExplicitlyEmptyArgs(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "note.md")
+	if err := os.WriteFile(filePath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/resources/temp_upload":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			writeOK(t, w, map[string]any{"temp_file_id": "tmp-file"})
+		case "/api/v1/resources":
+			body := readJSONBody(t, r)
+			requireBodyKeysAbsent(t, body, "args")
+			writeOK(t, w, map[string]any{"uri": "viking://resources/note.md"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(context.Background(), filePath, &AddResourceOptions{
+		Args: map[string]any{},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
