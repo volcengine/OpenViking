@@ -6,6 +6,20 @@ Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/
 
 ## Install
 
+### Codex marketplace
+
+Use Codex's native marketplace commands for local or self-hosted OpenViking:
+
+```bash
+codex plugin marketplace add volcengine/OpenViking
+codex plugin add openviking-memory@openviking
+```
+
+When adding from the Codex App UI, leave the sparse path empty. The marketplace
+catalog lives at the repository root in `.agents/plugins/marketplace.json`.
+
+### One-line installer
+
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
 ```
@@ -37,6 +51,53 @@ Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `codex_hooks` feature en
 2. **Plugin installation** — Register a local marketplace and enable the plugin. See `setup-helper/install.sh` for the exact commands.
 
 3. **Placeholder rendering** — The provided `.mcp.json` and `hooks.json` files contain placeholders that must be substituted when copied to Codex's plugin cache. The automated installer handles this for you.
+
+   Codex App keeps the installed copy in its plugin cache:
+
+   - macOS/Linux: `~/.codex/plugins/cache/openviking/openviking-memory/<version>/`
+   - Windows: `%USERPROFILE%\.codex\plugins\cache\openviking\openviking-memory\<version>\`
+
+   If you installed from the Codex marketplace and later changed
+   `~/.openviking/ovcli.conf`, re-render the cached MCP config. On Windows:
+
+   ```powershell
+   $PluginCache = Get-ChildItem "$env:USERPROFILE\.codex\plugins\cache\openviking\openviking-memory" -Directory |
+     Sort-Object LastWriteTime -Descending |
+     Select-Object -First 1
+   node "$($PluginCache.FullName)\scripts\ov-credentials.mjs" sync-mcp "$($PluginCache.FullName)\.mcp.json"
+   Get-Content -Raw "$($PluginCache.FullName)\.mcp.json"
+   ```
+
+   The rendered `.mcp.json` should point at `/mcp` and use
+   `bearer_token_env_var` instead of storing the secret:
+
+   ```json
+   {
+     "mcpServers": {
+       "openviking-memory": {
+         "url": "http://localhost:1933/mcp",
+         "bearer_token_env_var": "OPENVIKING_API_KEY",
+         "env_http_headers": {
+           "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
+           "X-OpenViking-User": "OPENVIKING_USER"
+         }
+       }
+     }
+   }
+   ```
+
+   Restart Codex after editing `.mcp.json` or changing environment variables.
+
+   Copy this prompt into Codex if you want the agent to repair the installed
+   cache for you:
+
+   ```text
+   Fix my installed OpenViking Memory Codex plugin MCP config.
+   Locate the newest openviking-memory plugin cache under CODEX_HOME, or ~/.codex if unset
+   (Windows: %CODEX_HOME%, or %USERPROFILE%\.codex if unset). Use ~/.openviking/ovcli.conf
+   to run scripts/ov-credentials.mjs sync-mcp against the cached .mcp.json. Do not write
+   the API key value into .mcp.json; show the redacted result and remind me to restart Codex.
+   ```
 
 </details>
 
