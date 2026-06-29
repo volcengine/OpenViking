@@ -151,6 +151,14 @@ class ResourceService:
             return None
         return self._watch_scheduler.watch_manager
 
+    def _get_parser_router(self):
+        if not hasattr(self, "_parser_router"):
+            from openviking.parse.parser_router import ParserRouter
+            from openviking.parse.registry import get_registry
+
+            self._parser_router = ParserRouter(get_registry())
+        return self._parser_router
+
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sanitized: Dict[str, Any] = {}
         for key, value in processor_kwargs.items():
@@ -518,20 +526,8 @@ class ResourceService:
         )
         return root_uri, resource_lock
 
-    @staticmethod
-    def _should_use_understanding_api(path: str) -> bool:
-        try:
-            from openviking_cli.utils.config.open_viking_config import get_openviking_config
-
-            ov_config = get_openviking_config()
-        except Exception:
-            return False
-        parser_api = getattr(ov_config, "parser_api", None)
-        if not parser_api or not getattr(parser_api, "enable", False):
-            return False
-        ext = Path(path).suffix.lower().lstrip(".")
-        extensions = getattr(parser_api, "extensions", None) or []
-        return ext in extensions
+    def _should_use_understanding_api(self, path: str) -> bool:
+        return self._get_parser_router().should_use_understanding_api(path)
 
     @staticmethod
     def _target_doc_name(
