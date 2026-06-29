@@ -495,6 +495,140 @@ func TestSkillManagementRequests(t *testing.T) {
 	}
 }
 
+func TestSkillRequestsScopeTargetURI(t *testing.T) {
+	const target = "viking://agent/skills"
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/skills":
+			body := readJSONBody(t, r)
+			if body["target_uri"] != target {
+				t.Fatalf("add target_uri = %#v", body["target_uri"])
+			}
+			writeOK(t, w, map[string]any{"added": true})
+		case "GET /api/v1/skills":
+			if got := r.URL.Query().Get("target_uri"); got != target {
+				t.Fatalf("list target_uri = %q", got)
+			}
+			writeOK(t, w, map[string]any{"total": 0})
+		case "POST /api/v1/skills/find":
+			body := readJSONBody(t, r)
+			if body["target_uri"] != target {
+				t.Fatalf("find target_uri = %#v", body["target_uri"])
+			}
+			writeOK(t, w, map[string]any{"skills": []any{}})
+		case "POST /api/v1/skills/validate":
+			body := readJSONBody(t, r)
+			if body["target_uri"] != target {
+				t.Fatalf("validate target_uri = %#v", body["target_uri"])
+			}
+			writeOK(t, w, map[string]any{"valid": true})
+		case "GET /api/v1/skills/demo":
+			if got := r.URL.Query().Get("target_uri"); got != target {
+				t.Fatalf("get target_uri = %q", got)
+			}
+			writeOK(t, w, map[string]any{"name": "demo"})
+		case "PUT /api/v1/skills/demo":
+			body := readJSONBody(t, r)
+			if body["target_uri"] != target {
+				t.Fatalf("update target_uri = %#v", body["target_uri"])
+			}
+			writeOK(t, w, map[string]any{"updated": true})
+		case "DELETE /api/v1/skills/demo":
+			if got := r.URL.Query().Get("target_uri"); got != target {
+				t.Fatalf("delete target_uri = %q", got)
+			}
+			writeOK(t, w, map[string]any{"deleted": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer closeServer()
+
+	ctx := context.Background()
+	if _, err := client.AddSkill(ctx, map[string]any{"name": "demo"}, &AddSkillOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListSkills(ctx, &ListSkillsOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.FindSkills(ctx, "demo", &FindSkillsOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ValidateSkill(ctx, map[string]any{"name": "demo"}, &ValidateSkillOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetSkill(ctx, "demo", &GetSkillOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateSkill(ctx, "demo", map[string]any{"name": "demo"}, &UpdateSkillOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DeleteSkill(ctx, "demo", &DeleteSkillOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSkillRequestsOmitTargetURIWhenUnset(t *testing.T) {
+	assertNoTargetURIQuery := func(t *testing.T, r *http.Request) {
+		if r.URL.Query().Has("target_uri") {
+			t.Fatalf("unexpected target_uri query on %s %s: %s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+	}
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/skills":
+			requireBodyKeysAbsent(t, readJSONBody(t, r), "target_uri")
+			writeOK(t, w, map[string]any{"added": true})
+		case "POST /api/v1/skills/find":
+			requireBodyKeysAbsent(t, readJSONBody(t, r), "target_uri")
+			writeOK(t, w, map[string]any{"skills": []any{}})
+		case "POST /api/v1/skills/validate":
+			requireBodyKeysAbsent(t, readJSONBody(t, r), "target_uri")
+			writeOK(t, w, map[string]any{"valid": true})
+		case "PUT /api/v1/skills/demo":
+			requireBodyKeysAbsent(t, readJSONBody(t, r), "target_uri")
+			writeOK(t, w, map[string]any{"updated": true})
+		case "GET /api/v1/skills":
+			assertNoTargetURIQuery(t, r)
+			writeOK(t, w, map[string]any{"total": 0})
+		case "GET /api/v1/skills/demo":
+			assertNoTargetURIQuery(t, r)
+			writeOK(t, w, map[string]any{"name": "demo"})
+		case "DELETE /api/v1/skills/demo":
+			assertNoTargetURIQuery(t, r)
+			writeOK(t, w, map[string]any{"deleted": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer closeServer()
+
+	ctx := context.Background()
+	if _, err := client.AddSkill(ctx, map[string]any{"name": "demo"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.FindSkills(ctx, "demo", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ValidateSkill(ctx, map[string]any{"name": "demo"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateSkill(ctx, "demo", map[string]any{"name": "demo"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListSkills(ctx, &ListSkillsOptions{NodeLimit: 5}); err != nil {
+		t.Fatal(err)
+	}
+	// Non-nil opts with a nil TargetURI: exercises GetSkill's opts != nil branch
+	// so setQueryAny is actually reached and must still omit target_uri.
+	if _, err := client.GetSkill(ctx, "demo", &GetSkillOptions{IncludeSource: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DeleteSkill(ctx, "demo"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWatchManagementRequests(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {

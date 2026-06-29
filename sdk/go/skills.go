@@ -16,6 +16,7 @@ func (c *Client) AddSkill(ctx context.Context, data any, opts *AddSkillOptions) 
 	}
 	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
+	setAny(payload, "target_uri", opts.TargetURI)
 	if err := c.attachSkillData(ctx, payload, data); err != nil {
 		return nil, err
 	}
@@ -32,6 +33,9 @@ func (c *Client) ListSkills(ctx context.Context, opts *ListSkillsOptions) (map[s
 	}
 	query := url.Values{}
 	queryInt(query, "node_limit", nodeLimit)
+	if opts != nil {
+		setQueryAny(query, "target_uri", opts.TargetURI)
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/skills", query, nil, &result)
 	return result, err
@@ -55,6 +59,7 @@ func (c *Client) FindSkills(ctx context.Context, queryText string, opts *FindSki
 		payload["level"] = opts.Level
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
+	setAny(payload, "target_uri", opts.TargetURI)
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/skills/find", nil, payload, &result)
 	return result, err
@@ -67,6 +72,7 @@ func (c *Client) ValidateSkill(ctx context.Context, data any, opts *ValidateSkil
 		payload["strict"] = opts.Strict
 		setString(payload, "source_path", opts.SourcePath)
 		setString(payload, "skill_dir_name", opts.SkillDirName)
+		setAny(payload, "target_uri", opts.TargetURI)
 	} else {
 		payload["strict"] = false
 	}
@@ -90,6 +96,7 @@ func (c *Client) GetSkill(ctx context.Context, skillName string, opts *GetSkillO
 		if opts.Level != nil {
 			queryInt(query, "level", *opts.Level)
 		}
+		setQueryAny(query, "target_uri", opts.TargetURI)
 	} else {
 		queryBool(query, "include_source", false)
 	}
@@ -110,6 +117,7 @@ func (c *Client) UpdateSkill(ctx context.Context, skillName string, data any, op
 	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "source_metadata", opts.SourceMetadata)
 	setAny(payload, "telemetry", opts.Telemetry)
+	setAny(payload, "target_uri", opts.TargetURI)
 	if err := c.attachSkillData(ctx, payload, data); err != nil {
 		return nil, err
 	}
@@ -118,10 +126,17 @@ func (c *Client) UpdateSkill(ctx context.Context, skillName string, data any, op
 	return result, err
 }
 
-// DeleteSkill removes an installed agent skill.
-func (c *Client) DeleteSkill(ctx context.Context, skillName string) (map[string]any, error) {
+// DeleteSkill removes an installed agent skill. The optional opts carries a
+// TargetURI to scope the deletion to a specific skills root (e.g.
+// "viking://agent/skills"). opts is variadic so existing DeleteSkill(ctx, name)
+// callers keep compiling; only the first options value is used.
+func (c *Client) DeleteSkill(ctx context.Context, skillName string, opts ...*DeleteSkillOptions) (map[string]any, error) {
+	query := url.Values{}
+	if len(opts) > 0 && opts[0] != nil {
+		setQueryAny(query, "target_uri", opts[0].TargetURI)
+	}
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/skills/"+url.PathEscape(skillName), nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/skills/"+url.PathEscape(skillName), query, nil, &result)
 	return result, err
 }
 

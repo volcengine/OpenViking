@@ -1,6 +1,7 @@
 package openviking
 
 import (
+	"fmt"
 	"net/url"
 	"strconv"
 )
@@ -21,6 +22,19 @@ func setQueryString(values url.Values, key, value string) {
 	if value != "" {
 		values.Set(key, value)
 	}
+}
+
+// setQueryAny mirrors setAny for query parameters: it sets key only when value
+// is non-nil, so an unset optional (e.g. a skill TargetURI) is omitted entirely.
+func setQueryAny(values url.Values, key string, value any) {
+	if value == nil {
+		return
+	}
+	if s, ok := value.(string); ok {
+		values.Set(key, s)
+		return
+	}
+	values.Set(key, fmt.Sprint(value))
 }
 
 func setFloatPtr(m map[string]any, key string, value *float64) {
