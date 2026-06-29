@@ -3339,6 +3339,12 @@ class VikingFS:
     _DEFAULT_GIT_AUTHOR_NAME = "viking-bot"
     _DEFAULT_GIT_AUTHOR_EMAIL = "bot@viking.local"
 
+    _OVGITIGNORE_TREE_PATH = ".ovgitignore"
+
+    def _gitignore_agfs_path(self, ctx: Optional[RequestContext] = None) -> str:
+        real_ctx = self._ctx_or_default(ctx)
+        return f"/local/{real_ctx.account_id}/{self._OVGITIGNORE_TREE_PATH}"
+
     def _uri_to_tree_path(self, uri: str, ctx: Optional[RequestContext] = None) -> str:
         """Convert a viking:// URI to an account-relative git tree path.
 
@@ -3379,7 +3385,7 @@ class VikingFS:
         ".abstract.md": ContextLevel.ABSTRACT,
         ".overview.md": ContextLevel.OVERVIEW,
     }
-    _NO_VECTOR_DERIVED = frozenset({".relations.json"})
+    _NO_VECTOR_DERIVED = frozenset({".relations.json", ".ovgitignore"})
 
     def _classify_restore_path(
         self, tree_path: str, *, deleted: bool
@@ -3414,6 +3420,52 @@ class VikingFS:
         file_uri = self._tree_path_to_uri(tree_path)
         op = "delete" if deleted else "reindex_file"
         return (op, file_uri, ContextLevel.DETAIL)
+
+    async def get_gitignore(self, ctx: Optional[RequestContext] = None) -> str:
+        """Return the account-level .ovgitignore content, or an empty string if absent."""
+        path = self._gitignore_agfs_path(ctx)
+        try:
+            raw = await self._async_agfs.read(path, 0, -1)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                return ""
+            mapped = map_exception(exc, resource=path)
+            if mapped is not None:
+                raise mapped from exc
+            raise
+        if isinstance(raw, bytes):
+            data = raw
+        elif raw is not None and hasattr(raw, "content"):
+            data = raw.content
+        else:
+            data = b""
+        return data.decode("utf-8")
+
+    async def set_gitignore(
+        self,
+        content: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Write the account-level .ovgitignore control file without semantic indexing."""
+        if not isinstance(content, str):
+            raise TypeError("content must be a string")
+        path = self._gitignore_agfs_path(ctx)
+        data = content.encode("utf-8")
+        await self._ensure_parent_dirs(path, ctx=ctx)
+        await self._async_agfs.write(path, data)
+
+    async def delete_gitignore(self, ctx: Optional[RequestContext] = None) -> None:
+        """Delete the account-level .ovgitignore control file. Missing is success."""
+        path = self._gitignore_agfs_path(ctx)
+        try:
+            await self._async_agfs.rm(path, recursive=False)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                return
+            mapped = map_exception(exc, resource=path)
+            if mapped is not None:
+                raise mapped from exc
+            raise
 
     async def commit(
         self,

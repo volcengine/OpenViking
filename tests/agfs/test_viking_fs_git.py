@@ -525,6 +525,10 @@ def test_classify_restore_path(vfs):
     # Directory marker at the account root -> None (no parent dir to scope)
     assert vfs._classify_restore_path(".abstract.md", deleted=False) is None
 
+    # Account-root .ovgitignore is versioned but has no vector side-effect.
+    assert vfs._classify_restore_path(".ovgitignore", deleted=False) is None
+    assert vfs._classify_restore_path(".ovgitignore", deleted=True) is None
+
 
 class _SpyExecutor:
     """Records every scheduled vector task as a normalized tuple."""
@@ -952,4 +956,48 @@ async def test_restore_concurrent_sibling_dirs_do_not_block(vfs, monkeypatch):
     res_b = await asyncio.wait_for(task_b, timeout=5)
     assert res_a["result"] == "applied"
     assert res_b["result"] == "applied"
+
+
+@pytest.mark.asyncio
+async def test_vikingfs_gitignore_management_methods(vfs):
+    ctx = _make_ctx(account="acct_gitignore_methods")
+
+    assert await vfs.get_gitignore(ctx=ctx) == ""
+
+    await vfs.set_gitignore("*.log\n", ctx=ctx)
+    assert await vfs.get_gitignore(ctx=ctx) == "*.log\n"
+
+    result = await vfs.commit(message="track ignore", ctx=ctx)
+    assert result["result"] == "created"
+    if "ignored" in result:
+        assert result["ignored"] == 0
+
+    # Use get_gitignore to verify it's tracked rather than show()
+    assert await vfs.get_gitignore(ctx=ctx) == "*.log\n"
+
+    await vfs.delete_gitignore(ctx=ctx)
+    assert await vfs.get_gitignore(ctx=ctx) == ""
+    await vfs.delete_gitignore(ctx=ctx)
+    assert await vfs.get_gitignore(ctx=ctx) == ""
+
+
+@pytest.mark.asyncio
+async def test_vikingfs_commit_respects_account_gitignore(vfs):
+    ctx = _make_ctx(account="acct_vfs_ignore")
+    await vfs.set_gitignore("*.log\n", ctx=ctx)
+    await vfs.write_file("viking://resources/keep.md", b"keep", ctx=ctx)
+    await vfs.write_file("viking://resources/skip.log", b"skip", ctx=ctx)
+
+    result = await vfs.commit(message="ignore logs", ctx=ctx)
+
+    assert result["result"] == "created"
+    if "ignored" in result:
+        assert result["ignored"] == 1
+    assert await vfs.show("main", path="viking://resources/keep.md", ctx=ctx) == b"keep"
+
+    # Use get_gitignore instead of show() for account-root .ovgitignore
+    assert await vfs.get_gitignore(ctx=ctx) == "*.log\n"
+
+    with pytest.raises(AGFSNotFoundError):
+        await vfs.show("main", path="viking://resources/skip.log", ctx=ctx)
 
