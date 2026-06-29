@@ -122,7 +122,12 @@ function normalizeConnectionDraft(
     accountId: connection.accountId.trim(),
     adminApiKey: connection.adminApiKey.trim(),
     apiKey: connection.apiKey.trim(),
-    baseUrl: normalizeBaseUrl(connection.baseUrl),
+    // Keep the URL as typed (whitespace trimmed only). Stripping the trailing
+    // slash here ran on every keystroke and fought the input: typing the "//"
+    // of "http://" kept collapsing back to "http:". Trailing slashes are
+    // stripped where the URL is actually used instead (ovClient.setOptions,
+    // detectServerMode, detectConnectionRole, and the admin client).
+    baseUrl: connection.baseUrl.trim(),
     userId: connection.userId.trim(),
   }
 }
@@ -175,7 +180,10 @@ async function detectConnectionRole(
     headers['X-API-Key'] = apiKey
   }
 
-  const response = await fetch(`${connection.baseUrl}/health`, { headers })
+  const response = await fetch(
+    `${normalizeBaseUrl(connection.baseUrl)}/health`,
+    { headers },
+  )
   if (!response.ok) {
     return 'unknown'
   }

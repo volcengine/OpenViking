@@ -111,17 +111,21 @@ const en = {
       regenerate: 'Regenerate',
       save: 'Save',
       use: 'Use',
-      useForData: 'Use as user key',
+      useForData: 'Use as User API Key',
     },
     connection: {
       accountListLimited:
         'This key cannot list all accounts, but it can still manage the selected account if it has account-admin access.',
-      adminError: 'Could not load admin identities: {{message}}',
+      adminError: 'Could not verify the Root API Key: {{message}}',
       description:
-        'Use a user API key for tenant data APIs and an optional root or account-admin key for control APIs.',
+        'Use a User API Key for tenant data APIs and an optional Root or account-admin key for control APIs.',
+      devMode:
+        'Development mode is active — identity is automatic and no API key is required.',
       noKey:
-        'Enter a root or account-admin API key to load account and user choices.',
+        'Add a Root API Key to manage accounts and mint user keys. The User API Key alone powers the Playground and data APIs.',
+      rootHint: 'Lists accounts and users, and mints or rotates keys.',
       title: 'Connection settings',
+      userHint: 'Used by the Playground and tenant data APIs.',
     },
     dialogs: {
       addAccount: {
@@ -154,7 +158,8 @@ const en = {
       apiKey: 'API key',
       baseUrl: 'Server URL',
       dataApiKey: 'User API key',
-      userApiKey: 'User API key',
+      rootApiKey: 'Root API Key',
+      userApiKey: 'User API Key',
       role: 'Role',
       user: 'User',
     },
@@ -856,7 +861,8 @@ const en = {
         },
         messageContent: {
           name: 'content',
-          description: 'For the message subcommand. Text to append to the session.',
+          description:
+            'For the message subcommand. Text to append to the session.',
         },
         contexts: {
           name: '--context uri',
@@ -883,7 +889,8 @@ const en = {
         },
         toolResultId: {
           name: 'tool_result_id',
-          description: 'Required when reading or searching an externalized tool result.',
+          description:
+            'Required when reading or searching an externalized tool result.',
         },
         limit: {
           name: '--limit count',
@@ -895,7 +902,8 @@ const en = {
         },
         contextChars: {
           name: '--context-chars count',
-          description: 'For tool-search. Controls context length around matches.',
+          description:
+            'For tool-search. Controls context length around matches.',
         },
         timeout: {
           name: '--timeout seconds',

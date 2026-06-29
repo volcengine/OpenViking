@@ -111,17 +111,20 @@ const zhCN = {
       regenerate: '重新生成',
       save: '保存',
       use: '使用',
-      useForData: '用作 User key',
+      useForData: '用作 User API Key',
     },
     connection: {
       accountListLimited:
         '当前 key 不能列出所有 account；如果它有 account-admin 权限，仍可管理选中的 account。',
-      adminError: '加载 admin 身份失败：{{message}}',
+      adminError: '校验 Root API Key 失败：{{message}}',
       description:
-        '租户数据 API 使用 User API key；控制 API 可单独使用 root 或 account-admin key。',
+        '租户数据 API 使用 User API Key；控制 API 可单独使用 Root 或 account-admin key。',
+      devMode: '当前为开发模式 — 身份自动确定，无需 API key。',
       noKey:
-        '输入 root 或 account-admin API key 后，可以加载 account 和 user 可选项。',
+        '填入 Root API Key 即可管理 account / user 并生成 user key。仅凭 User API Key 即可使用 Playground 和数据 API。',
+      rootHint: '用于列出 account / user，以及生成或轮换 key。',
       title: '连接设置',
+      userHint: '供 Playground 和租户数据 API 使用。',
     },
     dialogs: {
       addAccount: {
@@ -154,7 +157,8 @@ const zhCN = {
       apiKey: 'API key',
       baseUrl: '服务地址',
       dataApiKey: 'User API key',
-      userApiKey: 'User API key',
+      rootApiKey: 'Root API Key',
+      userApiKey: 'User API Key',
       role: '角色',
       user: 'User',
     },
@@ -764,7 +768,8 @@ const zhCN = {
       sessionUsage:
         '用法：/session [current|list|create|switch|get|context|messages|archive|commit|extract|message|used|tool-results|tool-result|tool-search|delete] ...',
       sessionDeleteUsage: '用法：/session delete <session_id>',
-      sessionMissing: '当前没有 active session，请先打开 Agent 面板创建会话，或指定 session_id。',
+      sessionMissing:
+        '当前没有 active session，请先打开 Agent 面板创建会话，或指定 session_id。',
       sessionCurrentBody: '当前 active session：{{id}}',
       sessionListBody: '共有 {{count}} 个 session。',
       sessionCreatedBody: '已创建并切换到 session：{{id}}',
@@ -811,7 +816,8 @@ const zhCN = {
         },
         scope: {
           name: '--scope <.|uri>',
-          description: '可选。不填则全局搜索；传 . 使用当前目录；传 uri 使用指定目录。',
+          description:
+            '可选。不填则全局搜索；传 . 使用当前目录；传 uri 使用指定目录。',
         },
         sessionAction: {
           name: '子命令',
@@ -820,7 +826,8 @@ const zhCN = {
         },
         sessionId: {
           name: 'session_id',
-          description: '可选。省略时多数子命令使用当前 Agent session；delete 必须显式指定。',
+          description:
+            '可选。省略时多数子命令使用当前 Agent session；delete 必须显式指定。',
         },
         archiveId: {
           name: 'archive_id',

@@ -157,7 +157,10 @@ async function probeAdminAccess(
     }
   }
 
-  const controlKey = input.adminApiKey || input.apiKey
+  // The Root API key is the only control-plane credential. The User API key is
+  // never promoted to admin access, so management stays gated behind the root
+  // or account-admin key alone.
+  const controlKey = input.adminApiKey.trim()
   if (input.serverMode === 'api_key' && !controlKey) {
     return {
       detail: 'A root or account-admin API key is required',
