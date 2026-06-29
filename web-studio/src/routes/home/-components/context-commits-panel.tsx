@@ -49,11 +49,13 @@ function ContextCommitStat({ label, value }: { label: string; value: string }) {
 
 export function ContextCommitsPanel({
   data,
+  disabled: disabledProp,
   isError,
   isLoading,
   t,
 }: {
   data: ConsoleSeries<ContextCommitItem> | undefined
+  disabled?: boolean
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -93,7 +95,7 @@ export function ContextCommitsPanel({
     [items],
   )
   const stats = useMemo(() => computeCommitHeatmapStats(items), [items])
-  const disabled = isDisabledPayload(data)
+  const disabled = Boolean(disabledProp) || isDisabledPayload(data)
   const rangeLabel =
     data?.start_date && data.end_date
       ? `${data.start_date} - ${data.end_date}`

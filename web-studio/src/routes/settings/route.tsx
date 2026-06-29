@@ -590,7 +590,8 @@ function AddUserDialog({
 function SettingsRoute() {
   const { t } = useTranslation('settings')
   const queryClient = useQueryClient()
-  const { connection, saveConnection, serverMode } = useAppConnection()
+  const { connection, connectionRole, saveConnection, serverMode } =
+    useAppConnection()
   const [draft, setDraft] = React.useState<ConnectionDraft>(connection)
   const [managedAccountIds, setManagedAccountIds] = React.useState<string[]>([
     connection.accountId || DEFAULT_ACCOUNT_ID,
@@ -642,6 +643,8 @@ function SettingsRoute() {
 
   const hasAdminAccess =
     serverMode !== 'dev' && probeQuery.data?.admin.state === 'ok'
+  const showAdminDescription =
+    hasAdminAccess || connectionRole === 'admin' || connectionRole === 'root'
   const hasSavedAdminApiKey = Boolean(draft.adminApiKey.trim())
   const showAdminCredentialFields =
     serverMode !== 'dev' && (hasAdminAccess || hasSavedAdminApiKey)
@@ -969,7 +972,9 @@ function SettingsRoute() {
           {t('page.title')}
         </h1>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          {t('page.description')}
+          {showAdminDescription
+            ? t('page.adminDescription')
+            : t('page.description')}
         </p>
       </header>
 

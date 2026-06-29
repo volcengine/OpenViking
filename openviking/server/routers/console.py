@@ -51,7 +51,7 @@ async def dashboard_summary(
         None,
         description="IANA viewer timezone (e.g. Asia/Shanghai). Defaults to server tz.",
     ),
-    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Return Dashboard top-card data."""
     service = _runtime_service(request)
@@ -70,7 +70,7 @@ async def token_series(
         None,
         description="IANA viewer timezone (e.g. Asia/Shanghai). Defaults to server tz.",
     ),
-    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Return token usage trend for a date range."""
     service = _runtime_service(request)
@@ -96,7 +96,7 @@ async def context_commits(
         None,
         description="IANA viewer timezone (e.g. Asia/Shanghai). Defaults to server tz.",
     ),
-    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Return context write heatmap rows for a date range."""
     service = _runtime_service(request)
@@ -120,7 +120,7 @@ async def audit_logs(
     request_id: Optional[str] = Query(None),
     status: Optional[list[str]] = Query(None),
     api_type: Optional[list[str]] = Query(None),
-    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Return filtered request audit logs."""
     service = _runtime_service(request)

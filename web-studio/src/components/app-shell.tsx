@@ -346,7 +346,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     select: (state) => state.location.pathname,
   })
   const { setTheme, resolvedTheme } = useTheme()
-  const { connectionRole } = useAppConnection()
   const currentLanguage = resolveLanguage(
     i18n.resolvedLanguage ?? i18n.language,
   )
@@ -355,15 +354,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   const settingsActive = pathname === '/settings'
   const crossDeviceVerifyActive =
     pathname === '/oauth/verify' || pathname.startsWith('/oauth/verify/')
-  const visibleNavItems = React.useMemo(
-    () =>
-      connectionRole === 'admin' || connectionRole === 'root'
-        ? NAV_ITEMS
-        : NAV_ITEMS.filter(
-            (item) => item.id !== 'home' && item.id !== 'requestLogs',
-          ),
-    [connectionRole],
-  )
+  const visibleNavItems = NAV_ITEMS
 
   function openCrossDeviceVerify(): void {
     if (crossDeviceVerifyActive) {
