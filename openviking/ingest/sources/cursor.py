@@ -50,7 +50,7 @@ class CursorIDESource(SqliteLogSource):
         self._guard()
         return []
 
-    def fetch_rows(self, conn, ref, cursor):  # pragma: no cover - deferred
+    def fetch_rows(self, conn, ref, cursor, limit):  # pragma: no cover - deferred
         self._guard()
         return []
 

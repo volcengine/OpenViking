@@ -4,8 +4,16 @@
 
 ``ConversationReplayClient`` is a thin, vikingbot-free wrapper over ``ov.AsyncHTTPClient``
 (client-side, transport-agnostic: targets a local or remote server). ``SessionReplayer``
-drives the canonical recipe: ensure_session -> batch_add (<=100) -> commit, persisting the
-read-cursor BEFORE commit for crash-safe, idempotent resume.
+drives the canonical recipe in idempotent batches:
+
+  reconcile() -> for each <=100-message batch: set_pending -> append -> confirm -> commit_if_needed
+
+Each batch's intent (target cursor + size + the server's message count *before* the
+append) is persisted BEFORE the append. If the process crashes mid-append, the next run
+``reconcile()`` compares the server's current message count against that baseline to decide
+whether the batch landed — confirming it (no re-append) or dropping the intent (re-read
+from the confirmed cursor). The cursor only advances on a confirmed append, and
+``needs_commit`` ensures appended-but-uncommitted sessions still get extracted later.
 """
 
 from __future__ import annotations
@@ -39,12 +47,7 @@ class ConversationReplayClient:
 
     @classmethod
     async def create(
-        cls,
-        *,
-        url: str = "",
-        api_key: str = "",
-        account: str = "default",
-        user: str = "default",
+        cls, *, url: str = "", api_key: str = "", account: str = "", user: str = ""
     ) -> "ConversationReplayClient":
         client = ov.AsyncHTTPClient(
             url=url or None,
@@ -81,12 +84,19 @@ class ConversationReplayClient:
             ov_session_id, keep_recent_count=keep_recent_count
         )
 
-    async def pending_tokens(self, ov_session_id: str) -> int:
+    async def _session_info(self, ov_session_id: str) -> Dict[str, Any]:
         try:
-            info = await self._client.get_session(ov_session_id)
+            return await self._client.get_session(ov_session_id)
         except NotFoundError:
-            return 0
+            return {}
+
+    async def pending_tokens(self, ov_session_id: str) -> int:
+        info = await self._session_info(ov_session_id)
         return int(info.get("pending_tokens", 0) or 0)
+
+    async def message_count(self, ov_session_id: str) -> int:
+        info = await self._session_info(ov_session_id)
+        return int(info.get("message_count", 0) or 0)
 
     async def delete(self, ov_session_id: str) -> None:
         try:
@@ -114,69 +124,84 @@ class SessionReplayer:
             [_sanitize_id(self.prefix), _sanitize_id(harness), _sanitize_id(native_session_id)]
         )
 
-    async def append_session(
+    async def reconcile(self, harness: str, ref: SessionRef) -> None:
+        """Resolve a pending batch intent left by a crash before the next read happens."""
+        rec = self.store.get(harness, ref.native_session_id)
+        if not rec or not rec.pending_count or rec.pending_cursor is None:
+            return
+        sid = self.ov_session_id(harness, ref.native_session_id)
+        try:
+            count = await self.client.message_count(sid)
+        except Exception:  # noqa: BLE001 - leave the intent; retry next time
+            logger.warning("[ingest:%s] reconcile read failed for %s", harness, sid)
+            return
+        if count >= rec.pending_baseline + rec.pending_count:
+            # The batch landed before the crash: confirm it without re-appending.
+            self.store.confirm_append(
+                harness, ref.native_session_id, rec.pending_cursor, rec.pending_count
+            )
+            logger.info("[ingest:%s] reconciled landed batch for %s", harness, sid)
+        else:
+            # It did not land: drop the intent and re-read from the confirmed cursor.
+            self.store.clear_pending(harness, ref.native_session_id)
+
+    async def append_batch(
         self,
         harness: str,
         ref: SessionRef,
         messages: List[NormalizedMessage],
+        from_cursor: Cursor,
         new_cursor: Cursor,
     ) -> int:
-        """Ensure session, append messages, persist the advanced cursor (pre-commit)."""
+        """Append one <=100 batch idempotently and advance the confirmed cursor."""
         sid = self.ov_session_id(harness, ref.native_session_id)
         payloads = to_add_message_requests(messages)
-        added = 0
-        if payloads:
-            await self.client.ensure_session(sid, self.memory_policy)
-            added = await self.client.append(sid, payloads)
-        # Persist cursor even if everything was filtered out, so we don't re-scan it.
-        self.store.upsert(
-            harness,
-            ref.native_session_id,
-            sid,
-            new_cursor,
-            appended_delta=added,
-            locator=ref.locator,
-            title=ref.title,
+        if not payloads:
+            # Only control/empty turns consumed: advance the cursor, no commit owed.
+            self.store.advance_cursor(
+                harness, ref.native_session_id, sid, new_cursor, locator=ref.locator
+            )
+            return 0
+        await self.client.ensure_session(sid, self.memory_policy)
+        baseline = await self.client.message_count(sid)
+        self.store.set_pending(
+            harness, ref.native_session_id, sid, from_cursor, new_cursor,
+            len(payloads), baseline, locator=ref.locator, title=ref.title,
         )
-        return added
+        await self.client.append(sid, payloads)
+        self.store.confirm_append(harness, ref.native_session_id, new_cursor, len(payloads))
+        return len(payloads)
 
-    async def commit_session(self, harness: str, ref: SessionRef, keep_recent_count: int = 0) -> bool:
-        """Commit if the session has pending (un-archived) tokens. Returns whether committed."""
+    async def commit_if_needed(
+        self, harness: str, ref: SessionRef, keep_recent_count: int = 0
+    ) -> bool:
+        """Commit when the session has un-committed appends or live pending tokens."""
         sid = self.ov_session_id(harness, ref.native_session_id)
+        rec = self.store.get(harness, ref.native_session_id)
+        need = bool(rec and rec.needs_commit)
         pending = await self.client.pending_tokens(sid)
+        if not need and pending <= 0:
+            return False
         if pending <= 0:
+            # Nothing live to archive (already committed elsewhere); clear the stale flag.
+            self.store.mark_committed(harness, ref.native_session_id)
             return False
         await self.client.commit(sid, keep_recent_count=keep_recent_count)
-        rec = self.store.get(harness, ref.native_session_id)
-        if rec is not None:
-            self.store.upsert(
-                harness,
-                ref.native_session_id,
-                sid,
-                rec.cursor,
-                pending_tokens=0,
-                committed=True,
-            )
+        self.store.mark_committed(harness, ref.native_session_id)
         return True
 
     async def maybe_commit_on_threshold(
         self, harness: str, ref: SessionRef, threshold: int, keep_recent_count: int = 0
     ) -> bool:
-        """Commit only if pending tokens reached the threshold (incremental/watch mode)."""
         sid = self.ov_session_id(harness, ref.native_session_id)
         pending = await self.client.pending_tokens(sid)
         if pending < threshold:
             return False
         await self.client.commit(sid, keep_recent_count=keep_recent_count)
-        rec = self.store.get(harness, ref.native_session_id)
-        if rec is not None:
-            self.store.upsert(
-                harness, ref.native_session_id, sid, rec.cursor, pending_tokens=0, committed=True
-            )
+        self.store.mark_committed(harness, ref.native_session_id)
         return True
 
     async def reset_session(self, harness: str, ref: SessionRef) -> None:
-        """Delete the OV session and local cursor (for --reset)."""
         sid = self.ov_session_id(harness, ref.native_session_id)
         await self.client.delete(sid)
         self.store.delete(harness, ref.native_session_id)

@@ -10,9 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from openviking.ingest.models import Cursor
 from openviking.ingest.registry import iter_enabled_sources
 from openviking.ingest.replay import SessionReplayer
-from openviking.ingest.sources.base import LogSource, NotSupportedError
+from openviking.ingest.sources.base import DEFAULT_READ_LIMIT, LogSource, NotSupportedError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.ingest_config import IngestConfig, IngestHarnessConfig
 
@@ -33,10 +34,6 @@ class BackfillStats:
         self.committed += other.committed
         self.skipped += other.skipped
         self.errors.extend(other.errors)
-
-
-def _cursors_equal(a, b) -> bool:
-    return a is not None and b is not None and a.value == b.value
 
 
 def enabled_sources(
@@ -84,13 +81,18 @@ class IngestOrchestrator:
                 stats.skipped += 1
                 continue
             try:
-                if reset and not dry_run:
-                    await self.replayer.reset_session(name, ref)
+                if not dry_run:
+                    if reset:
+                        await self.replayer.reset_session(name, ref)
+                    else:
+                        await self.replayer.reconcile(name, ref)
                 added = await self._backfill_one(name, source, ref, dry_run=dry_run)
                 stats.sessions += 1
                 stats.messages += added
-                if not dry_run and added > 0:
-                    if await self.replayer.commit_session(
+                if not dry_run:
+                    # Commit even when added == 0: a prior crash may have left appended
+                    # messages un-committed (needs_commit / server pending tokens).
+                    if await self.replayer.commit_if_needed(
                         name, ref, harness_cfg.commit.keep_recent_count
                     ):
                         stats.committed += 1
@@ -103,19 +105,22 @@ class IngestOrchestrator:
         cursor = self.store.get_cursor(name, ref.native_session_id, source.cursor_kind)
         total = 0
         while True:
-            messages, new_cursor = source.read_messages(ref, cursor)
+            messages, new_cursor = source.read_messages(ref, cursor, DEFAULT_READ_LIMIT)
             if not messages:
-                # No new messages: persist an advanced cursor (e.g. all-control records).
-                if not dry_run and not _cursors_equal(cursor, new_cursor):
+                from_value = (cursor or Cursor.zero(source.cursor_kind)).value
+                if not dry_run and new_cursor.value != from_value:
                     sid = self.replayer.ov_session_id(name, ref.native_session_id)
-                    self.store.upsert(
+                    self.store.advance_cursor(
                         name, ref.native_session_id, sid, new_cursor, locator=ref.locator
                     )
                 break
             if dry_run:
                 total += sum(1 for m in messages if (m.text or "").strip() or m.parts)
             else:
-                total += await self.replayer.append_session(name, ref, messages, new_cursor)
+                from_cursor = cursor or Cursor.zero(source.cursor_kind)
+                total += await self.replayer.append_batch(
+                    name, ref, messages, from_cursor, new_cursor
+                )
             cursor = new_cursor
         return total
 

@@ -19,7 +19,7 @@ from typing import List, Optional, Tuple
 
 import typer
 
-from openviking.ingest.cursor_store import CursorStore
+from openviking.ingest.cursor_store import CursorStore, SingleInstanceLock
 from openviking.ingest.orchestrator import BackfillStats, IngestOrchestrator, enabled_sources
 from openviking.ingest.poller import IngestPoller
 from openviking.ingest.registry import SOURCE_REGISTRY
@@ -37,12 +37,16 @@ app = typer.Typer(
 
 
 def _load_ingest_config() -> IngestConfig:
-    """Read the ``ingest`` section of ov.conf if present; else a default (env-driven)."""
-    try:
-        from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+    """Read the ``ingest`` section of ov.conf if present; else a default (env-driven).
 
+    Only a *missing* config falls back to defaults; a malformed config surfaces its
+    validation/JSON error instead of silently looking like "ingest not configured".
+    """
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    try:
         return OpenVikingConfigSingleton.get_instance().ingest
-    except Exception:  # noqa: BLE001 - no ov.conf is fine for a client tool
+    except FileNotFoundError:
         return IngestConfig()
 
 
@@ -52,6 +56,14 @@ def _state_dir(config: IngestConfig) -> Path:
 
 def _make_store(config: IngestConfig) -> CursorStore:
     return CursorStore(_state_dir(config))
+
+
+def _acquire_lock(config: IngestConfig) -> SingleInstanceLock:
+    try:
+        return SingleInstanceLock(_state_dir(config)).acquire()
+    except RuntimeError as exc:
+        typer.echo(f"error: {exc}")
+        raise typer.Exit(1) from exc
 
 
 async def _make_replayer(
@@ -156,14 +168,16 @@ async def _run_backfill(harness, since, dry_run, reset) -> None:
     config = _load_ingest_config()
     store = _make_store(config)
     client = None
+    lock = None
     try:
         only = harness or None
         if dry_run:
-            # No server needed for a dry run.
+            # No server (and no lock) needed for a read-only dry run.
             replayer = SessionReplayer(None, store, session_id_prefix=config.session_id_prefix)  # type: ignore[arg-type]
             orch = IngestOrchestrator(config, replayer)
             results = await orch.backfill(only=only, since=since, dry_run=True)
         else:
+            lock = _acquire_lock(config)
             client, replayer = await _make_replayer(config, store)
             orch = IngestOrchestrator(config, replayer)
             results = await orch.backfill(only=only, since=since, dry_run=False, reset=reset)
@@ -171,6 +185,8 @@ async def _run_backfill(harness, since, dry_run, reset) -> None:
     finally:
         if client is not None:
             await client.close()
+        if lock is not None:
+            lock.release()
         store.close()
 
 
@@ -193,6 +209,7 @@ def run() -> None:
 async def _run_all() -> None:
     config = _load_ingest_config()
     store = _make_store(config)
+    lock = _acquire_lock(config)
     client, replayer = await _make_replayer(config, store)
     try:
         orch = IngestOrchestrator(config, replayer)
@@ -205,12 +222,14 @@ async def _run_all() -> None:
             await _watch_loop(replayer, watch_sources)
     finally:
         await client.close()
+        lock.release()
         store.close()
 
 
 async def _run_watch(harness) -> None:
     config = _load_ingest_config()
     store = _make_store(config)
+    lock = _acquire_lock(config)
     client, replayer = await _make_replayer(config, store)
     try:
         only = harness or None
@@ -225,6 +244,7 @@ async def _run_watch(harness) -> None:
         await _watch_loop(replayer, sources)
     finally:
         await client.close()
+        lock.release()
         store.close()
 
 

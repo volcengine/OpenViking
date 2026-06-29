@@ -33,6 +33,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Max messages returned per read_messages() call. Bounds memory and lets the orchestrator
+# append+confirm in idempotent batches (<= the server's 100-message batch cap).
+DEFAULT_READ_LIMIT = 100
+_READ_BLOCK = 262144  # 256 KiB
+
 
 class NotSupportedError(RuntimeError):
     """Raised by an adapter that is registered but not usable in the current config."""
@@ -66,9 +71,9 @@ class LogSource(ABC):
 
     @abstractmethod
     def read_messages(
-        self, ref: SessionRef, cursor: Optional[Cursor]
+        self, ref: SessionRef, cursor: Optional[Cursor], limit: int = DEFAULT_READ_LIMIT
     ) -> Tuple[List[NormalizedMessage], Cursor]:
-        """Read messages after ``cursor``; return (new messages, advanced cursor)."""
+        """Read up to ``limit`` messages after ``cursor``; return (messages, advanced cursor)."""
 
     # --- peer_id helpers (used by adapters) -------------------------------
     def assistant_peer(
@@ -123,7 +128,7 @@ class JsonlLogSource(LogSource):
         return None
 
     def read_messages(
-        self, ref: SessionRef, cursor: Optional[Cursor]
+        self, ref: SessionRef, cursor: Optional[Cursor], limit: int = DEFAULT_READ_LIMIT
     ) -> Tuple[List[NormalizedMessage], Cursor]:
         path = Path(ref.locator)
         cur = cursor or Cursor.zero(self.cursor_kind)
@@ -138,30 +143,45 @@ class JsonlLogSource(LogSource):
         if (stored_inode is not None and stored_inode != st.st_ino) or start > st.st_size:
             start = 0
 
+        messages: List[NormalizedMessage] = []
+        consumed = 0  # bytes of fully-processed (newline-terminated) lines
+        buf = b""
         with open(path, "rb") as f:
             f.seek(start)
-            data = f.read()
+            while len(messages) < limit:
+                chunk = f.read(_READ_BLOCK)
+                if not chunk:
+                    break  # EOF; any partial trailing line stays in buf, unconsumed
+                buf += chunk
+                stop = False
+                while True:
+                    nl = buf.find(b"\n")
+                    if nl == -1:
+                        break
+                    line = buf[: nl + 1]
+                    buf = buf[nl + 1 :]
+                    consumed += len(line)
+                    stripped = line.strip()
+                    if stripped:
+                        try:
+                            obj = json.loads(stripped)
+                        except ValueError:
+                            obj = None
+                        if obj is not None:
+                            try:
+                                messages.extend(self.parse_line(obj, ref))
+                            except Exception as exc:  # one bad record must not abort the file
+                                logger.debug(
+                                    "[ingest:%s] skip bad record in %s: %s",
+                                    self.name, path.name, exc,
+                                )
+                    if len(messages) >= limit:
+                        stop = True
+                        break
+                if stop:
+                    break
 
-        last_nl = data.rfind(b"\n")
-        if last_nl == -1:
-            # Only a partial (still-being-written) line; consume nothing.
-            return [], Cursor(self.cursor_kind, {"offset": start, "inode": st.st_ino})
-
-        complete = data[: last_nl + 1]
-        messages: List[NormalizedMessage] = []
-        for line in complete.split(b"\n"):
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-            except ValueError:
-                continue
-            try:
-                messages.extend(self.parse_line(obj, ref))
-            except Exception as exc:  # one bad record must not abort the file
-                logger.debug("[ingest:%s] skip bad record in %s: %s", self.name, path.name, exc)
-
-        new_offset = start + len(complete)
+        new_offset = start + consumed
         return messages, Cursor(self.cursor_kind, {"offset": new_offset, "inode": st.st_ino})
 
     @abstractmethod
@@ -190,18 +210,26 @@ class SqliteLogSource(LogSource):
         return conn
 
     def read_messages(
-        self, ref: SessionRef, cursor: Optional[Cursor]
+        self, ref: SessionRef, cursor: Optional[Cursor], limit: int = DEFAULT_READ_LIMIT
     ) -> Tuple[List[NormalizedMessage], Cursor]:
         cur = cursor or Cursor.zero(self.cursor_kind)
         conn = self._connect(immutable=False)
         try:
-            rows = list(self.fetch_rows(conn, ref, cur))
-            messages = self.rows_to_messages(conn, ref, rows)
-            if rows:
-                last = rows[-1]
+            rows = list(self.fetch_rows(conn, ref, cur, limit))
+            # Advance only past rows that are fully written. A still-incomplete trailing
+            # row (e.g. a message whose `part` text has not been flushed yet) is left for
+            # the next poll so we never skip its content.
+            complete: List[sqlite3.Row] = []
+            for row in rows:
+                if self.row_complete(conn, row):
+                    complete.append(row)
+                else:
+                    break
+            messages = self.rows_to_messages(conn, ref, complete)
+            if complete:
+                last = complete[-1]
                 new_cur = Cursor(
-                    self.cursor_kind,
-                    {"time": last["time_created"], "id": last["id"]},
+                    self.cursor_kind, {"time": last["time_created"], "id": last["id"]}
                 )
             else:
                 new_cur = cur
@@ -209,11 +237,15 @@ class SqliteLogSource(LogSource):
         finally:
             conn.close()
 
+    def row_complete(self, conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+        """Whether a fetched row is fully written and safe to advance past (default: yes)."""
+        return True
+
     @abstractmethod
     def fetch_rows(
-        self, conn: sqlite3.Connection, ref: SessionRef, cursor: Cursor
+        self, conn: sqlite3.Connection, ref: SessionRef, cursor: Cursor, limit: int
     ) -> List[sqlite3.Row]:
-        """Rows after the cursor, ordered by (time_created, id). Each row needs time_created,id."""
+        """Up to ``limit`` rows after the cursor, ordered by (time_created, id)."""
 
     @abstractmethod
     def rows_to_messages(

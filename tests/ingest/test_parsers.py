@@ -189,7 +189,14 @@ def test_opencode_text_from_part_table(tmp_path):
             "msg_a",
             "ses_1",
             1773044819959,
-            json.dumps({"role": "assistant", "modelID": "glm-4.7", "providerID": "tiktok"}),
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "modelID": "glm-4.7",
+                    "providerID": "tiktok",
+                    "finish": "stop",  # mark complete so the cursor advances past it
+                }
+            ),
         ),
     )
     # text lives in the part table, not message.data

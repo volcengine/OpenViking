@@ -32,14 +32,17 @@ class CommitPolicy(BaseModel):
 
     commit_token_threshold: int = Field(
         default=6000,
+        gt=0,
         description="Commit a session once its pending (un-archived) token count reaches this.",
     )
     commit_idle_seconds: float = Field(
         default=5.0,
+        gt=0,
         description="In watch mode, commit a session after it has been idle this long.",
     )
     keep_recent_count: int = Field(
         default=0,
+        ge=0,
         description="WM v2 sliding window: messages to retain live after a commit (0 = archive all).",
     )
 
@@ -60,6 +63,7 @@ class IngestHarnessConfig(BaseModel):
     )
     poll_interval_seconds: float = Field(
         default=5.0,
+        gt=0,
         description="Incremental poll cadence for this harness (watch mode).",
     )
     user_field: str = Field(
@@ -123,7 +127,13 @@ class IngestConfig(BaseModel):
         return self
 
     def enabled_harnesses(self) -> Dict[str, IngestHarnessConfig]:
-        """Harnesses that are turned on and not in 'off' mode."""
+        """Harnesses that are turned on and not in 'off' mode.
+
+        The master switch ``enabled`` gates everything: when it is false, no harness
+        is active regardless of its own ``enabled`` flag.
+        """
+        if not self.enabled:
+            return {}
         return {
             name: cfg
             for name, cfg in self.harnesses.items()

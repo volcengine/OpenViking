@@ -59,15 +59,28 @@ class OpenCodeSource(SqliteLogSource):
                 meta={"cwd": r["directory"], "session_model": r["model"]},
             )
 
-    def fetch_rows(self, conn, ref: SessionRef, cursor) -> List[sqlite3.Row]:
+    def fetch_rows(self, conn, ref: SessionRef, cursor, limit: int) -> List[sqlite3.Row]:
         t = cursor.value.get("time", 0)
         last_id = cursor.value.get("id", "")
+        # opencode message ids are ULID-like (monotonic with insertion), so (time, id)
+        # is a stable order/cursor.
         return conn.execute(
             "SELECT id, time_created, data FROM message "
             "WHERE session_id = ? AND (time_created > ? OR (time_created = ? AND id > ?)) "
-            "ORDER BY time_created, id",
-            (ref.locator, t, t, last_id),
+            "ORDER BY time_created, id LIMIT ?",
+            (ref.locator, t, t, last_id, limit),
         ).fetchall()
+
+    def row_complete(self, conn, row) -> bool:
+        # A message row may exist before its `part` text is flushed; only advance the
+        # cursor past it once it is final, so late-arriving parts are never skipped.
+        try:
+            data = json.loads(row["data"])
+        except (ValueError, TypeError):
+            return True
+        if data.get("role") == "user":
+            return True
+        return bool((data.get("time") or {}).get("completed") or data.get("finish"))
 
     def rows_to_messages(self, conn, ref: SessionRef, rows) -> List[NormalizedMessage]:
         out: List[NormalizedMessage] = []
