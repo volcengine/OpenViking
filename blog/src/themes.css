@@ -112,12 +112,12 @@ button { font: inherit; color: inherit; }
 .b-pre__bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: color-mix(in oklab, var(--th-bg-2) 80%, var(--th-ink) 8%); border-bottom: 1px solid var(--th-line); font-family: var(--th-font-mono); font-size: 12px; color: var(--th-mute); }
 .b-pre__file { color: var(--th-ink); }
 .b-pre__lang { text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.6; }
-.b-pre__code { margin: 0; padding: 14px 14px; overflow-x: auto; font-family: var(--th-font-mono); font-size: 13.5px; line-height: 1.48; tab-size: 2; }
-.b-pre__code code { display: block; }
-.b-pre__code--numbered code { counter-reset: b-pre-line; }
-.b-pre__line { display: flex; gap: 14px; }
-.b-pre__code--numbered .b-pre__line::before { counter-increment: b-pre-line; content: counter(b-pre-line); color: var(--th-mute); opacity: 0.5; user-select: none; min-width: 2ch; text-align: right; flex: 0 0 auto; }
-.b-pre__lc { white-space: pre; flex: 1 1 auto; }
+.b-pre__lang::before { content: attr(data-lang); }
+.b-pre__body { display: flex; align-items: flex-start; overflow-x: auto; font-family: var(--th-font-mono); font-size: 13.5px; line-height: 1.48; tab-size: 2; }
+.b-pre__gutter { flex: 0 0 auto; padding: 14px 0 14px 14px; color: var(--th-mute); opacity: 0.5; user-select: none; text-align: right; }
+.b-pre__ln { display: block; min-width: 2ch; line-height: inherit; }
+.b-pre__code { flex: 1 0 auto; margin: 0; padding: 14px; overflow: visible; font: inherit; line-height: inherit; tab-size: inherit; }
+.b-pre__code code { display: block; white-space: pre; font: inherit; }
 .tk-cm { color: var(--th-mute); font-style: normal; }
 .tk-st { color: var(--th-tk-st, var(--th-accent-2)); }
 .tk-nu { color: var(--th-tk-nu, var(--th-accent)); }

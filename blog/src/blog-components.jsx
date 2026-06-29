@@ -193,33 +193,22 @@ export function Pre({ children, lang = 'js', filename, lineNumbers = true }) {
   const src = typeof children === 'string' ? children : flattenChildren(children);
   const trimmed = src.replace(/^\n+|\n+$/g, '');
   const tokens = useMemo(() => tokenize(trimmed, lang), [trimmed, lang]);
-  const lines = useMemo(() => {
-    const ls = [[]];
-    for (const t of tokens) {
-      const parts = t.text.split('\n');
-      parts.forEach((p, idx) => {
-        if (p.length) ls[ls.length - 1].push({ cls: t.cls, text: p });
-        if (idx < parts.length - 1) ls.push([]);
-      });
-    }
-    return ls;
-  }, [tokens]);
+  const lineCount = useMemo(() => trimmed ? trimmed.split('\n').length : 1, [trimmed]);
+  const code = tokens.map((t, i) => (
+    <span className={`tk-${t.cls}`} key={i}>{t.text}</span>
+  ));
   return (
-    <div className="b-pre">
-      {filename ? <div className="b-pre__bar"><span className="b-pre__file">{filename}</span><span className="b-pre__lang">{lang}</span></div> : null}
-      <pre className={`b-pre__code ${lineNumbers ? 'b-pre__code--numbered' : ''}`}><code className={`language-${lang}`}>
-        {lines.map((line, i) => (
-          <React.Fragment key={i}>
-            <span className="b-pre__line">
-              <span className="b-pre__lc">{line.length === 0 ? <span> </span> : line.map((t, j) => (
-                <span className={`tk-${t.cls}`} key={j}>{t.text}</span>
-              ))}</span>
-            </span>
-            {i < lines.length - 1 ? '\n' : null}
-          </React.Fragment>
-        ))}
-      </code></pre>
-    </div>
+    <figure className="b-pre">
+      {filename ? <figcaption className="b-pre__bar"><span className="b-pre__file">{filename}</span><span className="b-pre__lang" data-lang={lang} aria-hidden="true" /></figcaption> : null}
+      <div className={`b-pre__body ${lineNumbers ? 'b-pre__body--numbered' : ''}`}>
+        {lineNumbers ? (
+          <div className="b-pre__gutter" aria-hidden="true">
+            {Array.from({ length: lineCount }, (_, i) => <span className="b-pre__ln" key={i}>{i + 1}</span>)}
+          </div>
+        ) : null}
+        <pre className="b-pre__code"><code className={`language-${lang}`}>{code}</code></pre>
+      </div>
+    </figure>
   );
 }
 
