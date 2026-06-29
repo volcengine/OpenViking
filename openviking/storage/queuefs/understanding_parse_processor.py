@@ -4,6 +4,8 @@
 
 import asyncio
 import json
+from contextlib import suppress
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from openviking.observability.context import (
@@ -44,6 +46,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                 payload["id"] = data["id"]
 
         msg = UnderstandingParseMsg.from_dict(payload)
+        cleanup_local_path = msg.cleanup_local_path
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
@@ -137,3 +140,23 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                 )
                 self.report_error(str(exc), data)
                 return None
+            finally:
+                if not cleanup_local_path:
+                    return
+                try:
+                    from openviking_cli.utils.config.open_viking_config import (
+                        get_openviking_config,
+                    )
+
+                    cfg = get_openviking_config()
+                    staging_root = (
+                        Path(cfg.storage.workspace).expanduser().resolve()
+                        / "temp"
+                        / "external_parse"
+                    )
+                    cleanup_path = Path(cleanup_local_path).expanduser().resolve()
+                    if cleanup_path.is_relative_to(staging_root):
+                        with suppress(FileNotFoundError):
+                            cleanup_path.unlink()
+                except Exception:
+                    return

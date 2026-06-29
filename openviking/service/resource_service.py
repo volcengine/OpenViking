@@ -681,6 +681,29 @@ class ResourceService:
                     user_id=ctx.user.user_id,
                 )
 
+                cleanup_local_path = None
+                temp_file_id = kwargs.get("temp_file_id")
+                if isinstance(temp_file_id, str) and temp_file_id.startswith("shared_"):
+                    from pathlib import Path
+                    import shutil
+
+                    from openviking_cli.utils.config.open_viking_config import (
+                        get_openviking_config,
+                    )
+
+                    cfg = get_openviking_config()
+                    staging_dir = (
+                        Path(cfg.storage.workspace).expanduser().resolve()
+                        / "temp"
+                        / "external_parse"
+                    )
+                    staging_dir.mkdir(parents=True, exist_ok=True)
+                    suffix = Path(path).suffix or ".tmp"
+                    staged_path = staging_dir / f"{task.task_id}{suffix}"
+                    shutil.copyfile(path, staged_path)
+                    cleanup_local_path = str(staged_path)
+                    path = cleanup_local_path
+
                 msg = UnderstandingParseMsg(
                     task_id=task.task_id,
                     path=path,
@@ -702,6 +725,7 @@ class ResourceService:
                     enforce_public_remote_targets=enforce_public_remote_targets,
                     args=normalized_args.processor_kwargs,
                     source_name=source_name,
+                    cleanup_local_path=cleanup_local_path,
                 )
                 qm = get_queue_manager()
                 await qm.enqueue(QueueManager.EXTERNAL_PARSE, msg.to_dict())

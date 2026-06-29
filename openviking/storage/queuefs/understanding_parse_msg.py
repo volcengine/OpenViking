@@ -15,6 +15,7 @@ class UnderstandingParseMsg:
     task_id: str
     path: str
     root_uri: str
+    cleanup_local_path: Optional[str] = None
     status: str = "pending"
     timestamp: int = int(datetime.now().timestamp())
     account_id: str = "default"
@@ -45,6 +46,7 @@ class UnderstandingParseMsg:
         user_id: str,
         role: str,
         actor_peer_id: Optional[str] = None,
+        cleanup_local_path: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         build_index: bool = True,
@@ -67,6 +69,7 @@ class UnderstandingParseMsg:
         self.user_id = user_id
         self.role = role
         self.actor_peer_id = actor_peer_id
+        self.cleanup_local_path = cleanup_local_path
         self.reason = reason
         self.instruction = instruction
         self.build_index = build_index
@@ -112,6 +115,9 @@ class UnderstandingParseMsg:
             user_id=str(data.get("user_id", "default")),
             role=str(data.get("role", "root")),
             actor_peer_id=data.get("actor_peer_id"),
+            cleanup_local_path=data.get("cleanup_local_path")
+            if isinstance(data.get("cleanup_local_path"), str)
+            else None,
             reason=str(data.get("reason", "")),
             instruction=str(data.get("instruction", "")),
             build_index=bool(data.get("build_index", True)),
