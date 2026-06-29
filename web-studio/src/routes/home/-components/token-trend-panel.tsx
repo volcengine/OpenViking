@@ -28,17 +28,19 @@ import { EmptyState, Panel, SectionHeading } from './panel'
 
 export function TokenTrendPanel({
   data,
+  disabled: disabledProp,
   isError,
   isLoading,
   t,
 }: {
   data: ConsoleSeries<TokenSeriesItem> | undefined
+  disabled?: boolean
   isError: boolean
   isLoading: boolean
   t: HomeT
 }) {
   const items = normalizeTokenSeries(data?.items)
-  const disabled = isDisabledPayload(data)
+  const disabled = Boolean(disabledProp) || isDisabledPayload(data)
   const rangeLabel =
     data?.start_date && data.end_date
       ? `${data.start_date} - ${data.end_date}`

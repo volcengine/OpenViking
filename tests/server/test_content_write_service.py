@@ -497,7 +497,6 @@ async def test_resource_write_updates_target_and_queues_refresh_before_return(mo
     assert captured_enqueue["root_uri"] == root_uri
     assert captured_enqueue["changed_uri"] == file_uri
     assert captured_enqueue["change_type"] == "modified"
-    assert captured_enqueue["recursive"] is True
     assert viking_fs.delete_temp_calls == []
     assert lock_manager.release_calls == ["lock-1"]
 
@@ -935,7 +934,6 @@ async def test_create_mode_resource_scope(monkeypatch):
         assert kwargs["changed_uri"] == file_uri
         assert kwargs["context_type"] == "resource"
         assert kwargs["change_type"] == "added"
-        assert kwargs["recursive"] is True
         del kwargs
         return None
 
@@ -953,42 +951,36 @@ async def test_create_mode_resource_scope(monkeypatch):
     assert viking_fs.content[file_uri] == "content"
 
 
+class _AnyDirVikingFS:
+    """Stats the given file uri as a file and every other uri as a directory."""
+
+    def __init__(self, file_uri: str):
+        self._file_uri = file_uri
+
+    async def stat(self, uri: str, ctx=None):
+        del ctx
+        return {"isDir": uri != self._file_uri}
+
+
 @pytest.mark.asyncio
-async def test_create_mode_nested_resource_refresh_stays_recursive_after_root_changes(monkeypatch):
-    first_uri = "viking://resources/dir_repro/dir1/dir2/test12.md"
-    second_uri = "viking://resources/dir_repro/dir1/dir2/test34.md"
-    resource_root = "viking://resources/dir_repro"
-    first_parent = "viking://resources/dir_repro/dir1/dir2"
+async def test_resource_write_anchors_nested_file_to_direct_parent():
+    """A resource content write anchors the semantic refresh at the written file's
+    direct parent directory (anchor_to_parent=True), so the changed file is a direct
+    child of the DAG run root: its own L2 vector and the parent's L0/L1 are generated
+    from a single-directory run instead of a recursive walk of the whole project subtree.
+    set_tags keeps the project-root collapse (the default), which the derived
+    ``.abstract.md`` sidecar mapping relies on."""
+    file_uri = "viking://resources/dir1/sub_dir/sub_dir_1/test.md"
+    parent_uri = "viking://resources/dir1/sub_dir/sub_dir_1"
+    project_root = "viking://resources/dir1"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    viking_fs = _FakeVikingFSForCreate(
-        file_uri=first_uri,
-        root_uri=resource_root,
-        file_exists=False,
-        existing_dirs=set(),
-    )
-    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
-    lock_manager = _FakeLockManager()
-    enqueued = []
+    coordinator = ContentWriteCoordinator(viking_fs=_AnyDirVikingFS(file_uri))
 
-    monkeypatch.setattr("openviking.storage.content_write.get_lock_manager", lambda: lock_manager)
+    write_anchor = await coordinator._resolve_root_uri(file_uri, ctx=ctx, anchor_to_parent=True)
+    set_tags_anchor = await coordinator._resolve_root_uri(file_uri, ctx=ctx)
 
-    async def _fake_enqueue_semantic_refresh(**kwargs):
-        enqueued.append(kwargs)
-
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
-
-    await coordinator.write(uri=first_uri, content="hello", mode="create", ctx=ctx)
-
-    viking_fs._file_uri = second_uri
-    viking_fs._file_exists = False
-    await coordinator.write(uri=second_uri, content="world", mode="create", ctx=ctx)
-
-    assert enqueued[0]["root_uri"] == first_parent
-    assert enqueued[0]["changed_uri"] == first_uri
-    assert enqueued[0]["recursive"] is True
-    assert enqueued[1]["root_uri"] == resource_root
-    assert enqueued[1]["changed_uri"] == second_uri
-    assert enqueued[1]["recursive"] is True
+    assert write_anchor == parent_uri
+    assert set_tags_anchor == project_root
 
 
 @pytest.mark.asyncio

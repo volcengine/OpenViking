@@ -182,8 +182,10 @@ const zhCN = {
       title: '用户管理',
     },
     page: {
+      adminDescription:
+        '配置当前 OpenViking Studio 身份，并管理账号、用户和 API key。',
       description:
-        '配置当前 OpenViking Studio 身份，并管理 accounts、users 和 API keys。',
+        '配置当前 OpenViking Studio 的服务地址和 API key，查看当前身份下的数据。',
       title: '连接与身份',
     },
     placeholders: {
@@ -305,7 +307,8 @@ const zhCN = {
   },
   requestLogs: {
     clear: '清空',
-    description: '查看服务端审计到的 API 请求，包括状态、耗时和请求标识。',
+    description:
+      '查看当前身份下服务端审计到的 API 请求，包括状态、耗时和请求标识。',
     disabled: {
       description: 'Usage/Audit 未初始化，暂无服务端请求日志。',
       title: '审计日志不可用',
@@ -345,6 +348,10 @@ const zhCN = {
     refresh: '刷新',
     reset: '重置',
     searchPlaceholder: '筛选方法、路径或状态码',
+    scope: {
+      currentIdentity: '当前范围：当前 API key 身份',
+      currentIdentityWithName: '当前范围：当前 API key 身份（{{identity}}）',
+    },
     status: {
       error: 'ERR',
       pending: 'PENDING',
