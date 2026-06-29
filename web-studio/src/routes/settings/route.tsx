@@ -760,8 +760,13 @@ function SettingsRoute() {
         Boolean(current.userId) && userIds.includes(current.userId)
       const userId = hasCurrentUser ? current.userId : preferred
       const selectedUser = users.find((user) => user.userId === userId)
-      const apiKey = selectedUser?.apiKey || ''
-      const next = { ...current, apiKey, userId }
+      const next = selectedUser?.apiKey
+        ? buildDataKeyConnection(current, {
+            accountId: current.accountId || DEFAULT_ACCOUNT_ID,
+            apiKey: selectedUser.apiKey,
+            userId,
+          })
+        : { ...current, userId }
 
       if (next.apiKey !== current.apiKey || next.userId !== current.userId) {
         saveConnection(next)
@@ -900,19 +905,32 @@ function SettingsRoute() {
     setManagedAccountIds((current) =>
       sortedAccountIds([...current, accountId], ''),
     )
-    updateDraft({
-      accountId,
-      apiKey: selectedUser?.apiKey || '',
-      userId: selectedUser?.userId || DEFAULT_USER_ID,
-    })
+    const next = selectedUser?.apiKey
+      ? buildDataKeyConnection(draft, {
+          accountId,
+          apiKey: selectedUser.apiKey,
+          userId: selectedUser.userId,
+        })
+      : {
+          ...draft,
+          accountId,
+          userId: selectedUser?.userId || DEFAULT_USER_ID,
+        }
+    setDraft(next)
+    saveConnection(next)
   }
 
   function updateConnectionUser(userId: string): void {
     const selectedUser = findSelectedUser(draft.accountId, userId)
-    updateDraft({
-      apiKey: selectedUser?.apiKey || '',
-      userId,
-    })
+    const next = selectedUser?.apiKey
+      ? buildDataKeyConnection(draft, {
+          accountId: draft.accountId || DEFAULT_ACCOUNT_ID,
+          apiKey: selectedUser.apiKey,
+          userId,
+        })
+      : { ...draft, userId }
+    setDraft(next)
+    saveConnection(next)
   }
 
   function buildDataKeyConnection(

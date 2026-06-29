@@ -9,6 +9,7 @@ Provides session management operations: session, sessions, add_message, commit, 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri, legacy_session_uri
+from openviking.message import Message
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
@@ -212,6 +213,71 @@ class SessionService:
             auto_create=auto_create,
             legacy_fallback=False,
         )
+
+    @staticmethod
+    def _append_unique_message(
+        messages: List[Message], seen: set[str], message: Message
+    ) -> None:
+        if message.id in seen:
+            return
+        seen.add(message.id)
+        messages.append(message)
+
+    async def _readable_messages_for_canonical_copy(self, session: Session) -> List[Message]:
+        """Collect user-visible legacy messages in chronological display order."""
+        messages: List[Message] = []
+        seen: set[str] = set()
+
+        commit_count = max(0, int(session.meta.commit_count or 0))
+        for index in range(1, commit_count + 1):
+            try:
+                archive = await session.get_session_archive(f"archive_{index:03d}")
+            except Exception:
+                continue
+            for raw_message in archive.get("messages", []):
+                if not isinstance(raw_message, dict):
+                    continue
+                try:
+                    self._append_unique_message(
+                        messages,
+                        seen,
+                        Message.from_dict(raw_message),
+                    )
+                except Exception:
+                    continue
+
+        for message in session.messages:
+            self._append_unique_message(messages, seen, message)
+
+        return messages
+
+    async def get_or_create_writable(self, session_id: str, ctx: RequestContext) -> Session:
+        """Get a canonical user session, migrating readable legacy history on first write."""
+        try:
+            session = self.session(ctx, session_id)
+            legacy_messages: List[Message] = []
+
+            if not await session.exists():
+                legacy_session = self.session(
+                    ctx,
+                    session_id,
+                    session_uri=legacy_session_uri(session_id),
+                )
+                if await legacy_session.exists():
+                    await legacy_session.load()
+                    legacy_messages = await self._readable_messages_for_canonical_copy(
+                        legacy_session
+                    )
+                await session.ensure_exists()
+
+            await session.load()
+            if legacy_messages:
+                session.import_messages(legacy_messages)
+            self._record_lifecycle_metric("get", "ok")
+            return session
+        except Exception:
+            self._record_lifecycle_metric("get", "error")
+            raise
 
     async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
         """Get all sessions for the current user.

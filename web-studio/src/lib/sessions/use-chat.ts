@@ -209,7 +209,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
   const pendingInitialMessagesRef = useRef<Message[] | undefined>(undefined)
   messagesRef.current = messages
 
-  // Reset state when sessionId changes
+  // Reset state when the visible session scope changes.
   useEffect(() => {
     abortRef.current?.abort()
     abortRef.current = null
@@ -223,7 +223,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     setStreamingReasoning('')
     setStreamingParts([])
     setIteration(0)
-  }, [sessionId])
+  }, [sessionId, scope])
 
   // Sync initialMessages into state when they load or when switching sessions.
   useEffect(() => {
@@ -243,7 +243,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
     lastSyncedInitialMessagesRef.current = nextInitialMessages
     setMessages(nextInitialMessages)
-  }, [initialMessages, sessionId, status])
+  }, [initialMessages, sessionId, scope, status])
 
   const abort = useCallback(() => {
     abortRef.current?.abort()
