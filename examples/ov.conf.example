@@ -162,6 +162,20 @@
         "extraction_enabled": true,
         "session_skill_extraction_enabled": false,
     },
+    "ingest": {
+        "enabled": false,
+        "server_url": "$OPENVIKING_URL",
+        "api_key": "$OPENVIKING_API_KEY",
+        "account": "default",
+        "user": "default",
+        "harnesses": {
+            "claude_code": {"enabled": false, "mode": "both"},
+            "codex": {"enabled": false, "mode": "backfill"},
+            "opencode": {"enabled": false, "mode": "watch", "experimental": true},
+            "hermes": {"enabled": false, "mode": "both", "user_field": "sender"},
+            "openclaw": {"enabled": false, "mode": "both", "user_field": "sender"},
+        },
+    },
     "log": {
         "level": "INFO",
         "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
