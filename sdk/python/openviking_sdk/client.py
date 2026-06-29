@@ -1227,11 +1227,11 @@ class AsyncHTTPClient:
         self,
         account_id: str,
         admin_user_id: str,
-        admin_user_config: Optional[Dict[str, Any]] = None,
+        user_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"account_id": account_id, "admin_user_id": admin_user_id}
-        if admin_user_config is not None:
-            payload["admin_user_config"] = admin_user_config
+        if user_config is not None:
+            payload["user_config"] = user_config
         response = await self._http.post(
             "/api/v1/admin/accounts",
             json=payload,
@@ -1984,13 +1984,13 @@ class SyncHTTPClient:
         self,
         account_id: str,
         admin_user_id: str,
-        admin_user_config: Optional[Dict[str, Any]] = None,
+        user_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.admin_create_account(
                 account_id,
                 admin_user_id,
-                admin_user_config=admin_user_config,
+                user_config=user_config,
             )
         )
 

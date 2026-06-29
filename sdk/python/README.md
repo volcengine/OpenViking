@@ -222,7 +222,7 @@ root_client.admin_register_user(
 )
 ```
 
-`admin_create_account` also accepts `admin_user_config` with the same shape.
+`admin_create_account` also accepts `user_config` with the same shape.
 These fields initialize server-side user config; ordinary add calls still just
 omit `to` / `parent` / `target_uri` and let the server resolve defaults.
 

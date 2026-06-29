@@ -1246,7 +1246,7 @@ impl HttpClient {
         &self,
         account_id: &str,
         admin_user_id: &str,
-        admin_user_config: Option<&Value>,
+        user_config: Option<&Value>,
     ) -> Result<Value> {
         let mut body = Map::new();
         body.insert(
@@ -1257,8 +1257,8 @@ impl HttpClient {
             "admin_user_id".to_string(),
             Value::String(admin_user_id.to_string()),
         );
-        if let Some(config) = admin_user_config {
-            body.insert("admin_user_config".to_string(), config.clone());
+        if let Some(config) = user_config {
+            body.insert("user_config".to_string(), config.clone());
         }
         self.post("/api/v1/admin/accounts", &Value::Object(body))
             .await

@@ -48,7 +48,7 @@ type AddSkillOptions struct {
 
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
 type AdminCreateAccountOptions struct {
-	AdminUserConfig map[string]any
+	UserConfig map[string]any
 }
 
 // AdminRegisterUserOptions controls AdminRegisterUserWithOptions.

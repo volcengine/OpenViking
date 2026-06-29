@@ -1501,8 +1501,8 @@ enum AdminCommands {
         #[arg(long = "admin", value_name = "user-id")]
         admin_user_id: String,
         /// Initial config for the first admin user as JSON
-        #[arg(long = "admin-user-config-json", value_name = "json")]
-        admin_user_config_json: Option<String>,
+        #[arg(long = "user-config-json", value_name = "json")]
+        user_config_json: Option<String>,
     },
     /// List all accounts (ROOT only)
     ListAccounts,

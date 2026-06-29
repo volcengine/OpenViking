@@ -222,7 +222,7 @@ root_client.admin_register_user(
 )
 ```
 
-`admin_create_account` 也接受同样结构的 `admin_user_config`。这些字段用于初始化服务端用户配置；普通添加调用仍然只需省略 `to` / `parent` / `target_uri`，由服务端解析默认值。
+`admin_create_account` 也接受同样结构的 `user_config`。这些字段用于初始化服务端用户配置；普通添加调用仍然只需省略 `to` / `parent` / `target_uri`，由服务端解析默认值。
 
 ## 错误处理
 

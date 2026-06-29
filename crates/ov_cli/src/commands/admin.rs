@@ -11,14 +11,13 @@ pub async fn create_account(
     client: &HttpClient,
     account_id: &str,
     admin_user_id: &str,
-    admin_user_config_json: Option<&str>,
+    user_config_json: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let admin_user_config =
-        parse_user_config_json(admin_user_config_json, "--admin-user-config-json")?;
+    let user_config = parse_user_config_json(user_config_json, "--user-config-json")?;
     let response = client
-        .admin_create_account(account_id, admin_user_id, admin_user_config.as_ref())
+        .admin_create_account(account_id, admin_user_id, user_config.as_ref())
         .await?;
     output_success(&response, output_format, compact);
     print_admin_user_key_notice(&response, output_format, false);

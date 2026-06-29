@@ -84,13 +84,13 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
-| admin_user_config | object | 否 | `null` | 首个管理员用户的初始配置。当前支持 `add_targets.resource_uri` 和 `add_targets.skill_uri` |
+| user_config | object | 否 | `null` | 首个管理员用户的初始配置。当前支持 `add_targets.resource_uri` 和 `add_targets.skill_uri` |
 
 **说明：**
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
 - 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
-- `admin_user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://user/resources` 或 `viking://user/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
-- `admin_user_config.add_targets.skill_uri` 只能是 `viking://user/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
+- `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://user/resources` 或 `viking://user/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
+- `user_config.add_targets.skill_uri` 只能是 `viking://user/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
 
 #### 3. 使用示例
 
@@ -168,7 +168,7 @@ print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 result = client.admin_create_account(
     "acme-private",
     "alice",
-    admin_user_config={
+    user_config={
         "add_targets": {
             "resource_uri": "viking://user/resources",
             "skill_uri": "viking://user/skills",
@@ -187,7 +187,7 @@ if err != nil {
 fmt.Println(result["account_id"])
 
 result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice", &openviking.AdminCreateAccountOptions{
-    AdminUserConfig: map[string]any{
+    UserConfig: map[string]any{
         "add_targets": map[string]any{
             "resource_uri": "viking://user/resources",
             "skill_uri":    "viking://user/skills",
@@ -203,7 +203,7 @@ result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice",
 ov --sudo admin create-account acme --admin alice
 
 ov --sudo admin create-account acme-private --admin alice \
-  --admin-user-config-json '{"add_targets":{"resource_uri":"viking://user/resources","skill_uri":"viking://user/skills"}}'
+  --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources","skill_uri":"viking://user/skills"}}'
 ```
 
 **响应示例**

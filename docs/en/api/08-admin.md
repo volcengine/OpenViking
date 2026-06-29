@@ -84,13 +84,13 @@ Create a new workspace with its first admin user.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | admin_user_id | str | Yes | - | First admin user ID |
-| admin_user_config | object | No | `null` | Initial config for the first admin user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
+| user_config | object | No | `null` | Initial config for the first admin user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
-- `admin_user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://user/resources` or `viking://user/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
-- `admin_user_config.add_targets.skill_uri` must be `viking://user/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
+- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://user/resources` or `viking://user/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.skill_uri` must be `viking://user/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
 
 #### 3. Usage Examples
 
@@ -168,7 +168,7 @@ print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 result = client.admin_create_account(
     "acme-private",
     "alice",
-    admin_user_config={
+    user_config={
         "add_targets": {
             "resource_uri": "viking://user/resources",
             "skill_uri": "viking://user/skills",
@@ -187,7 +187,7 @@ if err != nil {
 fmt.Println(result["account_id"])
 
 result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice", &openviking.AdminCreateAccountOptions{
-    AdminUserConfig: map[string]any{
+    UserConfig: map[string]any{
         "add_targets": map[string]any{
             "resource_uri": "viking://user/resources",
             "skill_uri":    "viking://user/skills",
@@ -203,7 +203,7 @@ result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice",
 ov --sudo admin create-account acme --admin alice
 
 ov --sudo admin create-account acme-private --admin alice \
-  --admin-user-config-json '{"add_targets":{"resource_uri":"viking://user/resources","skill_uri":"viking://user/skills"}}'
+  --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources","skill_uri":"viking://user/skills"}}'
 ```
 
 **Response Example**

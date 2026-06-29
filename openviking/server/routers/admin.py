@@ -43,7 +43,7 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
-    admin_user_config: UserConfig | None = None
+    user_config: UserConfig | None = None
 
 
 class RegisterUserRequest(BaseModel):
@@ -165,7 +165,7 @@ async def create_account(
         user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
     )
-    _validate_initial_user_config(service, account_ctx, body.admin_user_config)
+    _validate_initial_user_config(service, account_ctx, body.user_config)
     manager = _get_api_key_manager(request)
     user_key = await manager.create_account(
         body.account_id,
@@ -173,7 +173,7 @@ async def create_account(
     )
     await service.initialize_account_directories(account_ctx)
     await service.initialize_user_directories(account_ctx)
-    await _write_initial_user_config(service, account_ctx, body.admin_user_config)
+    await _write_initial_user_config(service, account_ctx, body.user_config)
     result = {
         "account_id": body.account_id,
         "admin_user_id": body.admin_user_id,

@@ -371,13 +371,13 @@ async def test_admin_create_paths_accept_initial_user_config():
     client._handle_response = lambda _response: {"status": "ok"}
 
     user_config = {"add_targets": {"resource_uri": "viking://user/resources/project-a"}}
-    await client.admin_create_account("acct", "admin", admin_user_config=user_config)
+    await client.admin_create_account("acct", "admin", user_config=user_config)
     await client.admin_register_user("acct", "alice", "admin", user_config=user_config)
 
     assert fake_http.post.await_args_list[0].kwargs["json"] == {
         "account_id": "acct",
         "admin_user_id": "admin",
-        "admin_user_config": user_config,
+        "user_config": user_config,
     }
     assert fake_http.post.await_args_list[1].kwargs["json"] == {
         "user_id": "alice",

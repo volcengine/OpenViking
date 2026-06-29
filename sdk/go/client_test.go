@@ -184,7 +184,7 @@ func TestAdminCreatePathsAcceptInitialUserConfig(t *testing.T) {
 		"add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
 	}
 	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
-		AdminUserConfig: userConfig,
+		UserConfig: userConfig,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -193,8 +193,8 @@ func TestAdminCreatePathsAcceptInitialUserConfig(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := seen[0]["admin_user_config"].(map[string]any)["add_targets"].(map[string]any)["resource_uri"]; got != "viking://user/resources/project-a" {
-		t.Fatalf("admin_user_config resource_uri = %#v", got)
+	if got := seen[0]["user_config"].(map[string]any)["add_targets"].(map[string]any)["resource_uri"]; got != "viking://user/resources/project-a" {
+		t.Fatalf("user_config resource_uri = %#v", got)
 	}
 	if got := seen[1]["user_config"].(map[string]any)["add_targets"].(map[string]any)["resource_uri"]; got != "viking://user/resources/project-a" {
 		t.Fatalf("user_config resource_uri = %#v", got)

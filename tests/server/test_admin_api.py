@@ -277,7 +277,7 @@ async def test_create_user_paths_accept_initial_user_config(
         json={
             "account_id": acct,
             "admin_user_id": "alice",
-            "admin_user_config": {"add_targets": {"resource_uri": "viking://user/resources/admin"}},
+            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/admin"}},
         },
         headers=root_headers(),
     )

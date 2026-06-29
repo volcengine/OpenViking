@@ -17,8 +17,8 @@ func (c *Client) AdminCreateAccountWithOptions(ctx context.Context, accountID, a
 		"account_id":    accountID,
 		"admin_user_id": adminUserID,
 	}
-	if opts != nil && opts.AdminUserConfig != nil {
-		payload["admin_user_config"] = opts.AdminUserConfig
+	if opts != nil && opts.UserConfig != nil {
+		payload["user_config"] = opts.UserConfig
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts", nil, payload, &result)
