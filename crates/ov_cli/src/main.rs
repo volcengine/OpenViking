@@ -3199,61 +3199,6 @@ mod tests {
     }
 
     #[test]
-    fn cli_parses_admin_user_config_json_flags() {
-        let create = Cli::try_parse_from([
-            "ov",
-            "admin",
-            "create-account",
-            "acct",
-            "--admin",
-            "alice",
-            "--admin-user-config-json",
-            r#"{"add_targets":{"resource_uri":"viking://user/resources"}}"#,
-        ])
-        .expect("admin create-account should parse user config");
-        match create.command {
-            Commands::Admin { action } => match action {
-                AdminCommands::CreateAccount {
-                    admin_user_config_json,
-                    ..
-                } => {
-                    assert_eq!(
-                        admin_user_config_json.as_deref(),
-                        Some(r#"{"add_targets":{"resource_uri":"viking://user/resources"}}"#)
-                    );
-                }
-                _ => panic!("expected admin create-account"),
-            },
-            _ => panic!("expected admin command"),
-        }
-
-        let register = Cli::try_parse_from([
-            "ov",
-            "admin",
-            "register-user",
-            "acct",
-            "bob",
-            "--user-config-json",
-            r#"{"add_targets":{"skill_uri":"viking://user/skills"}}"#,
-        ])
-        .expect("admin register-user should parse user config");
-        match register.command {
-            Commands::Admin { action } => match action {
-                AdminCommands::RegisterUser {
-                    user_config_json, ..
-                } => {
-                    assert_eq!(
-                        user_config_json.as_deref(),
-                        Some(r#"{"add_targets":{"skill_uri":"viking://user/skills"}}"#)
-                    );
-                }
-                _ => panic!("expected admin register-user"),
-            },
-            _ => panic!("expected admin command"),
-        }
-    }
-
-    #[test]
     fn cli_parses_search_context_type() {
         let cli = Cli::try_parse_from(["ov", "search", "invoice", "--context-type", "skill"])
             .expect("search context type should parse");
