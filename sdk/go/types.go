@@ -46,6 +46,16 @@ type AddSkillOptions struct {
 	Telemetry any
 }
 
+// AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
+type AdminCreateAccountOptions struct {
+	AdminUserConfig map[string]any
+}
+
+// AdminRegisterUserOptions controls AdminRegisterUserWithOptions.
+type AdminRegisterUserOptions struct {
+	UserConfig map[string]any
+}
+
 // ListSkillsOptions controls ListSkills.
 type ListSkillsOptions struct {
 	NodeLimit int

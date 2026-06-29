@@ -165,6 +165,42 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 	}
 }
 
+func TestAdminCreatePathsAcceptInitialUserConfig(t *testing.T) {
+	var seen []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/accounts" && r.URL.Path != "/api/v1/admin/accounts/acct/users" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		seen = append(seen, body)
+		writeOK(t, w, body)
+	}))
+	defer closeServer()
+
+	userConfig := map[string]any{
+		"add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
+	}
+	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
+		AdminUserConfig: userConfig,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AdminRegisterUserWithOptions(context.Background(), "acct", "alice", "admin", &AdminRegisterUserOptions{
+		UserConfig: userConfig,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := seen[0]["admin_user_config"].(map[string]any)["add_targets"].(map[string]any)["resource_uri"]; got != "viking://user/resources/project-a" {
+		t.Fatalf("admin_user_config resource_uri = %#v", got)
+	}
+	if got := seen[1]["user_config"].(map[string]any)["add_targets"].(map[string]any)["resource_uri"]; got != "viking://user/resources/project-a" {
+		t.Fatalf("user_config resource_uri = %#v", got)
+	}
+}
+
 func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search/search" {

@@ -1500,6 +1500,9 @@ enum AdminCommands {
         /// First admin user ID
         #[arg(long = "admin", value_name = "user-id")]
         admin_user_id: String,
+        /// Initial config for the first admin user as JSON
+        #[arg(long = "admin-user-config-json", value_name = "json")]
+        admin_user_config_json: Option<String>,
     },
     /// List all accounts (ROOT only)
     ListAccounts,
@@ -1526,6 +1529,9 @@ enum AdminCommands {
         /// Role: admin or user
         #[arg(long, default_value = "user", value_name = "role")]
         role: String,
+        /// Initial config for the new user as JSON
+        #[arg(long = "user-config-json", value_name = "json")]
+        user_config_json: Option<String>,
     },
     /// List all users in an account
     ListUsers {
@@ -3187,6 +3193,61 @@ mod tests {
             Commands::Admin { action } => match action {
                 AdminCommands::Migrate { cleanup } => assert!(cleanup),
                 _ => panic!("expected admin migrate command"),
+            },
+            _ => panic!("expected admin command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_admin_user_config_json_flags() {
+        let create = Cli::try_parse_from([
+            "ov",
+            "admin",
+            "create-account",
+            "acct",
+            "--admin",
+            "alice",
+            "--admin-user-config-json",
+            r#"{"add_targets":{"resource_uri":"viking://user/resources"}}"#,
+        ])
+        .expect("admin create-account should parse user config");
+        match create.command {
+            Commands::Admin { action } => match action {
+                AdminCommands::CreateAccount {
+                    admin_user_config_json,
+                    ..
+                } => {
+                    assert_eq!(
+                        admin_user_config_json.as_deref(),
+                        Some(r#"{"add_targets":{"resource_uri":"viking://user/resources"}}"#)
+                    );
+                }
+                _ => panic!("expected admin create-account"),
+            },
+            _ => panic!("expected admin command"),
+        }
+
+        let register = Cli::try_parse_from([
+            "ov",
+            "admin",
+            "register-user",
+            "acct",
+            "bob",
+            "--user-config-json",
+            r#"{"add_targets":{"skill_uri":"viking://user/skills"}}"#,
+        ])
+        .expect("admin register-user should parse user config");
+        match register.command {
+            Commands::Admin { action } => match action {
+                AdminCommands::RegisterUser {
+                    user_config_json, ..
+                } => {
+                    assert_eq!(
+                        user_config_json.as_deref(),
+                        Some(r#"{"add_targets":{"skill_uri":"viking://user/skills"}}"#)
+                    );
+                }
+                _ => panic!("expected admin register-user"),
             },
             _ => panic!("expected admin command"),
         }
