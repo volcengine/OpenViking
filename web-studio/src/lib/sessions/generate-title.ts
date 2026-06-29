@@ -9,9 +9,11 @@ export async function generateTitle(
   assistantReply: string,
 ): Promise<string> {
   const prompt = [
-    '请用10个字以内为以下对话生成一个简短标题，只返回标题本身，不要加引号或其他标点：',
-    `用户：${userMessage.slice(0, 200)}`,
-    `助手：${assistantReply.slice(0, 300)}`,
+    'Create a concise conversation title in the same language as the conversation.',
+    'Return only the title, without quotes or trailing punctuation.',
+    'Keep it under 10 Chinese characters or 6 English words.',
+    `User: ${userMessage.slice(0, 200)}`,
+    `Assistant: ${assistantReply.slice(0, 300)}`,
   ].join('\n')
 
   const res = await sendChat({

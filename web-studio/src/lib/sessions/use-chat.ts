@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 
 import type { ChatStatus, StreamToolCall } from './types/chat'
 import type {
@@ -10,6 +11,11 @@ import type {
   ToolPart,
 } from './types/message'
 import { addMessage, sendChatStream, serializeParts } from './api'
+import { useAppConnection } from '#/hooks/use-app-connection'
+import {
+  getSessionMessagesQueryKey,
+  getSessionScopeKey,
+} from './query-keys'
 import { parseSseStream, streamEventDataToText } from './sse'
 import { setSessionTitle } from './use-session-titles'
 import { createBrowserId } from '../browser-crypto'
@@ -73,6 +79,23 @@ function waitForNextFrame(): Promise<void> {
   return new Promise((resolve) => {
     window.requestAnimationFrame(() => resolve())
   })
+}
+
+function appendMessagesToCache(
+  current: Message[] | undefined,
+  messages: Message[],
+): Message[] {
+  const existing = current ?? []
+  const seen = new Set(existing.map((message) => message.id))
+  const next = [...existing]
+
+  for (const message of messages) {
+    if (seen.has(message.id)) continue
+    seen.add(message.id)
+    next.push(message)
+  }
+
+  return next
 }
 
 type SendOptions = {
@@ -155,6 +178,19 @@ export interface UseChatReturn {
 
 export function useChat(options: UseChatOptions): UseChatReturn {
   const { sessionId, initialMessages, persistMessages = true } = options
+  const queryClient = useQueryClient()
+  const { connection, connectionRole } = useAppConnection()
+  const scope = useMemo(
+    () => getSessionScopeKey(connection, connectionRole),
+    [
+      connection.accountId,
+      connection.adminApiKey,
+      connection.apiKey,
+      connection.baseUrl,
+      connection.userId,
+      connectionRole,
+    ],
+  )
 
   const [messages, setMessages] = useState<Message[]>(initialMessages ?? [])
   const [status, setStatus] = useState<ChatStatus>('idle')
@@ -478,6 +514,14 @@ export function useChat(options: UseChatOptions): UseChatReturn {
               undefined,
               serializeParts(assistantMsg.parts),
             )
+            queryClient.setQueryData<Message[]>(
+              getSessionMessagesQueryKey(scope, sessionId),
+              (current) =>
+                appendMessagesToCache(current, [userMsg, assistantMsg]),
+            )
+            void queryClient.invalidateQueries({
+              queryKey: getSessionMessagesQueryKey(scope, sessionId),
+            })
           } catch {
             // Persistence failure is non-blocking
           }
@@ -513,7 +557,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         abortRef.current = null
       }
     },
-    [status, sessionId, persistMessages],
+    [status, sessionId, persistMessages, queryClient, scope],
   )
 
   return {

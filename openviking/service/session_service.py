@@ -8,7 +8,7 @@ Provides session management operations: session, sessions, add_message, commit, 
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.core.namespace import canonical_session_uri
+from openviking.core.namespace import canonical_session_uri, legacy_session_uri
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
@@ -142,10 +142,11 @@ class SessionService:
         self._record_lifecycle_metric("create", "attempt")
         try:
             if session_id:
-                existing = self.session(ctx, session_id)
-                if await existing.exists():
+                session = self.session(ctx, session_id)
+                if await session.exists():
                     raise AlreadyExistsError(f"Session '{session_id}' already exists")
-            session = self.session(ctx, session_id)
+            else:
+                session = self.session(ctx, session_id)
             if memory_policy is not None:
                 policy = MemoryPolicy.from_dict(memory_policy)
                 policy.validate_memory_types(
@@ -160,7 +161,12 @@ class SessionService:
             raise
 
     async def get(
-        self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        *,
+        auto_create: bool = False,
+        legacy_fallback: bool = True,
     ) -> Session:
         """Get an existing session.
 
@@ -169,19 +175,43 @@ class SessionService:
             ctx: Request context
             auto_create: If True, create the session when it does not exist.
                          Default is False (raise NotFoundError).
+            legacy_fallback: If True, allow read-only fallback to pre-user-namespace
+                             legacy sessions when the canonical session is absent.
         """
         try:
             session = self.session(ctx, session_id)
             if not await session.exists():
-                if not auto_create:
+                if auto_create:
+                    await session.ensure_exists()
+                elif legacy_fallback:
+                    legacy_session = self.session(
+                        ctx,
+                        session_id,
+                        session_uri=legacy_session_uri(session_id),
+                    )
+                    if await legacy_session.exists():
+                        session = legacy_session
+                    else:
+                        raise NotFoundError(session_id, "session")
+                else:
                     raise NotFoundError(session_id, "session")
-                await session.ensure_exists()
             await session.load()
             self._record_lifecycle_metric("get", "ok")
             return session
         except Exception:
             self._record_lifecycle_metric("get", "error")
             raise
+
+    async def get_writable(
+        self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
+    ) -> Session:
+        """Get a canonical user session for mutating operations."""
+        return await self.get(
+            session_id,
+            ctx,
+            auto_create=auto_create,
+            legacy_fallback=False,
+        )
 
     async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
         """Get all sessions for the current user.
@@ -233,13 +263,12 @@ class SessionService:
         """
         self._ensure_initialized()
 
-        session_uri = canonical_session_uri(ctx, session_id)
-        session = await self.get(session_id, ctx)
+        session = await self.get_writable(session_id, ctx)
         if not await session.exists():
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
 
-        await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
+        await self._viking_fs.rm(session.uri, recursive=True, ctx=ctx)
         logger.info(f"Deleted session: {session_id}")
         self._record_lifecycle_metric("delete", "ok")
         return True
@@ -288,7 +317,7 @@ class SessionService:
             archive_uri, archived
         """
         self._ensure_initialized()
-        session = await self.get(session_id, ctx)
+        session = await self.get_writable(session_id, ctx)
         result = await session.commit_async(keep_recent_count=keep_recent_count)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
@@ -316,7 +345,7 @@ class SessionService:
         if not self._session_compressor:
             raise NotInitializedError("SessionCompressorV2")
 
-        session = await self.get(session_id, ctx)
+        session = await self.get_writable(session_id, ctx)
         archive_uri = f"{session.uri}/manual_extract"
 
         memories = await self._session_compressor.extract_long_term_memories(

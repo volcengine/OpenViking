@@ -35,6 +35,7 @@ import { MessageList } from '#/routes/sessions/-components/message-list'
 
 import type { ResourceOpenHandler } from '../-lib/types'
 import {
+  createPlaygroundAgentSessionId,
   getErrorMessage,
   readPlaygroundAgentSessionIds,
   registerPlaygroundAgentSessionId,
@@ -81,7 +82,7 @@ export function AgentPanel({
 
     try {
       const result = await withTimeout(
-        createSession.mutateAsync(undefined),
+        createSession.mutateAsync(createPlaygroundAgentSessionId()),
         12_000,
         t('agent.createTimeout'),
       )
@@ -109,7 +110,7 @@ export function AgentPanel({
 
     try {
       const result = await withTimeout(
-        createSession.mutateAsync(undefined),
+        createSession.mutateAsync(createPlaygroundAgentSessionId()),
         12_000,
         t('agent.createTimeout'),
       )

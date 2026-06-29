@@ -9,6 +9,7 @@ import openviking.service.session_service as session_service_module
 from openviking.metrics.datasources.session import SessionLifecycleDataSource
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -124,3 +125,81 @@ async def test_sessions_merges_canonical_and_legacy_session_scope():
             "is_dir": True,
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_falls_back_to_legacy_session_scope(monkeypatch: pytest.MonkeyPatch):
+    service = SessionService(viking_fs=Mock())
+    ctx = _make_ctx()
+    canonical = Mock()
+    canonical.exists = AsyncMock(return_value=False)
+    canonical.load = AsyncMock()
+    legacy = Mock()
+    legacy.exists = AsyncMock(return_value=True)
+    legacy.load = AsyncMock()
+
+    def _session(_ctx, session_id, *, session_uri=None):
+        assert session_id == "legacy-session"
+        return legacy if session_uri == "viking://session/legacy-session" else canonical
+
+    monkeypatch.setattr(service, "session", Mock(side_effect=_session))
+
+    result = await service.get("legacy-session", ctx)
+
+    assert result is legacy
+    canonical.load.assert_not_awaited()
+    legacy.load.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_auto_create_ignores_legacy_session_scope(monkeypatch: pytest.MonkeyPatch):
+    service = SessionService(viking_fs=Mock())
+    ctx = _make_ctx()
+    canonical = Mock()
+    canonical.exists = AsyncMock(return_value=False)
+    canonical.ensure_exists = AsyncMock()
+    canonical.load = AsyncMock()
+    legacy = Mock()
+    legacy.exists = AsyncMock(return_value=True)
+    legacy.load = AsyncMock()
+
+    def _session(_ctx, session_id, *, session_uri=None):
+        assert session_id == "legacy-session"
+        return legacy if session_uri == "viking://session/legacy-session" else canonical
+
+    monkeypatch.setattr(service, "session", Mock(side_effect=_session))
+
+    result = await service.get("legacy-session", ctx, auto_create=True)
+
+    assert result is canonical
+    canonical.ensure_exists.assert_awaited_once()
+    canonical.load.assert_awaited_once()
+    legacy.exists.assert_not_awaited()
+    legacy.load.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_writable_session_does_not_fall_back_to_legacy_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service = SessionService(viking_fs=Mock())
+    ctx = _make_ctx()
+    canonical = Mock()
+    canonical.exists = AsyncMock(return_value=False)
+    canonical.load = AsyncMock()
+    legacy = Mock()
+    legacy.exists = AsyncMock(return_value=True)
+    legacy.load = AsyncMock()
+
+    def _session(_ctx, session_id, *, session_uri=None):
+        assert session_id == "legacy-session"
+        return legacy if session_uri == "viking://session/legacy-session" else canonical
+
+    monkeypatch.setattr(service, "session", Mock(side_effect=_session))
+
+    with pytest.raises(NotFoundError):
+        await service.get_writable("legacy-session", ctx)
+
+    canonical.load.assert_not_awaited()
+    legacy.exists.assert_not_awaited()
+    legacy.load.assert_not_awaited()

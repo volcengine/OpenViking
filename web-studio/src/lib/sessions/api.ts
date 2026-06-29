@@ -31,6 +31,65 @@ import type {
 } from '@ov-server/api/v1/sessions'
 import type { UsedRequest } from '#/gen/ov-client/types.gen'
 
+function isSessionMessage(value: unknown): value is Message {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'id' in value &&
+    'role' in value &&
+    'parts' in value
+  )
+}
+
+function normalizeSessionMessages(value: unknown): Message[] {
+  return Array.isArray(value) ? value.filter(isSessionMessage) : []
+}
+
+export function archiveIdFromIndex(index: number): string {
+  return `archive_${String(index).padStart(3, '0')}`
+}
+
+function readCommitCount(meta: SessionMeta): number {
+  const value = (meta as { commit_count?: unknown }).commit_count
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function appendUniqueMessages(
+  current: Message[],
+  messages: Message[],
+): Message[] {
+  const seen = new Set(current.map((message) => message.id))
+  const next = [...current]
+
+  for (const message of messages) {
+    if (seen.has(message.id)) continue
+    seen.add(message.id)
+    next.push(message)
+  }
+
+  return next
+}
+
+async function fetchArchivedMessages(
+  sessionId: string,
+  commitCount: number,
+): Promise<Message[]> {
+  let archivedMessages: Message[] = []
+  for (let index = 1; index <= commitCount; index += 1) {
+    try {
+      const archive = (await fetchSessionArchive(
+        sessionId,
+        archiveIdFromIndex(index),
+      )) as { messages?: unknown }
+      const messages = normalizeSessionMessages(archive.messages)
+      archivedMessages = appendUniqueMessages(archivedMessages, messages)
+    } catch {
+      // Archives can be missing, failed, or still pending; keep the readable ones.
+    }
+  }
+  return archivedMessages
+}
+
 // ---------------------------------------------------------------------------
 // Session CRUD
 // ---------------------------------------------------------------------------
@@ -100,22 +159,22 @@ export async function deleteSession(
 export async function fetchSessionMessages(
   sessionId: string,
 ): Promise<Message[]> {
-  const result = await getOvResult<SessionContextResult>(
-    getSessionIdContext({
-      path: { session_id: sessionId },
-    }),
-  )
-  const raw = result.messages
-  if (!Array.isArray(raw)) return []
+  const [result, meta] = await Promise.all([
+    getOvResult<SessionContextResult>(
+      getSessionIdContext({
+        path: { session_id: sessionId },
+      }),
+    ),
+    fetchSession(sessionId),
+  ])
   // Each item is Message.to_dict() — { id, role, parts, created_at }
-  return raw.filter(
-    (m): m is Message =>
-      typeof m === 'object' &&
-      m !== null &&
-      'id' in m &&
-      'role' in m &&
-      'parts' in m,
-  )
+  const messages = normalizeSessionMessages(result.messages)
+
+  const commitCount = readCommitCount(meta)
+  if (commitCount <= 0) return messages
+
+  const archivedMessages = await fetchArchivedMessages(sessionId, commitCount)
+  return appendUniqueMessages(archivedMessages, messages)
 }
 
 export async function addMessage(
