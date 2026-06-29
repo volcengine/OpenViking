@@ -1,0 +1,28 @@
+tests/parse/parsers/html_crawler/test_middlewares.py
+  s_94765645aa9185::t_3da0ab54566150 1-53
+openviking/parse/parsers/html_crawler/web_crawler.py
+  s_94765645aa9185::t_94b0fe2a18c0a2 55-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "0fbf9128b632242c0f4b49f10563096005261a6d",
+  "prompts": {},
+  "humans": {
+    "h_00ee841e13c84a": {
+      "author": "sponge225 <1670519171@qq.com>"
+    }
+  },
+  "sessions": {
+    "s_94765645aa9185": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a3baa3f6e58b1ea5aedd6c0",
+        "model": "openrouter-2o__dev"
+      },
+      "human_author": "sponge225 <1670519171@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
