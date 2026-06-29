@@ -7,7 +7,6 @@ All queues are managed through NamedQueue.
 
 import asyncio
 import atexit
-from gc import callbacks
 import threading
 import time
 import traceback
