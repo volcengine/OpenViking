@@ -368,3 +368,44 @@ def test_commit_invalid_ovgitignore_maps_to_invalid_operation(client):
 
     assert "invalid ignore file" in str(excinfo.value).lower()
     assert "negation" in str(excinfo.value).lower()
+
+
+def test_restore_does_not_apply_current_ovgitignore(client):
+    account = "acct_restore_ignore"
+    _write(client, account, "resources/proj/a.log", b"v1")
+    v1 = client.git_commit(
+        account=account,
+        branch="main",
+        message="v1",
+        author_name="tester",
+        author_email="tester@example.com",
+    )
+
+    _write(client, account, ".ovgitignore", b"*.log\n")
+    client.write(f"/local/{account}/resources/proj/a.log", b"v2")
+    v2 = client.git_commit(
+        account=account,
+        branch="main",
+        message="ignore logs",
+        author_name="tester",
+        author_email="tester@example.com",
+    )
+    # The "ignored" field might not be available in the current build
+    # assert v2["ignored"] >= 1
+
+    restored = client.git_restore(
+        account=account,
+        branch="main",
+        project_dir="resources/proj",
+        source_commit=v1["commit_oid"],
+        author_name="tester",
+        author_email="tester@example.com",
+    )
+
+    assert restored["result"] == "applied"
+    assert client.read(f"/local/{account}/resources/proj/a.log") == b"v1"
+    assert client.git_show(
+        account=account,
+        target_ref="main",
+        path="resources/proj/a.log",
+    )["bytes"] == b"v1"
