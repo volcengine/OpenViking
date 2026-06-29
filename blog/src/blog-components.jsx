@@ -207,14 +207,16 @@ export function Pre({ children, lang = 'js', filename, lineNumbers = true }) {
   return (
     <div className="b-pre">
       {filename ? <div className="b-pre__bar"><span className="b-pre__file">{filename}</span><span className="b-pre__lang">{lang}</span></div> : null}
-      <pre className="b-pre__code"><code>
+      <pre className={`b-pre__code ${lineNumbers ? 'b-pre__code--numbered' : ''}`}><code className={`language-${lang}`}>
         {lines.map((line, i) => (
-          <span className="b-pre__line" key={i}>
-            {lineNumbers ? <span className="b-pre__ln" aria-hidden="true">{String(i+1).padStart(2, ' ')}</span> : null}
-            <span className="b-pre__lc">{line.length === 0 ? <span> </span> : line.map((t, j) => (
-              <span className={`tk-${t.cls}`} key={j}>{t.text}</span>
-            ))}</span>
-          </span>
+          <React.Fragment key={i}>
+            <span className="b-pre__line">
+              <span className="b-pre__lc">{line.length === 0 ? <span> </span> : line.map((t, j) => (
+                <span className={`tk-${t.cls}`} key={j}>{t.text}</span>
+              ))}</span>
+            </span>
+            {i < lines.length - 1 ? '\n' : null}
+          </React.Fragment>
         ))}
       </code></pre>
     </div>
