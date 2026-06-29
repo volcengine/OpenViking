@@ -455,6 +455,21 @@ class ResourceService:
         return root_uri, resource_lock
 
     @staticmethod
+    def _should_use_understanding_api(path: str) -> bool:
+        try:
+            from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+            ov_config = get_openviking_config()
+        except Exception:
+            return False
+        parser_api = getattr(ov_config, "parser_api", None)
+        if not parser_api or not getattr(parser_api, "enable", False):
+            return False
+        ext = Path(path).suffix.lower().lstrip(".")
+        extensions = getattr(parser_api, "extensions", None) or []
+        return ext in extensions
+
+    @staticmethod
     def _target_doc_name(
         path: str,
         source_name: Optional[str],
@@ -610,6 +625,96 @@ class ResourceService:
                 kwargs.setdefault("request_validator", ensure_public_remote_target)
             if resource_lock is not None:
                 kwargs["resource_lock"] = resource_lock
+
+            if (
+                not wait
+                and not is_git_repo_url(path)
+                and self._should_use_understanding_api(path)
+                and self._resource_processor is not None
+            ):
+                from openviking.service.task_tracker import get_task_tracker
+                from openviking.storage.queuefs import QueueManager, get_queue_manager
+                from openviking.storage.queuefs.understanding_parse_msg import (
+                    UnderstandingParseMsg,
+                )
+
+                source_name = kwargs.get("source_name")
+                source_info = _ResourceSourceInfo(
+                    source_name=source_name,
+                    source_path=path,
+                    source_format="file",
+                )
+                doc_name = self._target_doc_name(path, source_name, source_info)
+                source_path = source_info.source_path or source_name or path
+                root_uri, candidate_uri = await self._resource_processor.tree_builder.resolve_target_uri(
+                    ctx=ctx,
+                    doc_name=doc_name,
+                    scope="resources",
+                    to_uri=target.to,
+                    parent_uri=target.parent,
+                    source_path=source_path,
+                    source_format=source_info.source_format,
+                    create_parent=target.create_parent,
+                )
+                if candidate_uri:
+                    root_uri, lock_lease = await self._resource_processor.reserve_unique_candidate(
+                        candidate_uri=candidate_uri,
+                        ctx=ctx,
+                    )
+                    await lock_lease.close()
+
+                if self._viking_fs is None:
+                    raise NotInitializedError("VikingFS")
+                await self._viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
+
+                task_tracker = get_task_tracker()
+                task = await task_tracker.create(
+                    "add_resource",
+                    resource_id=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                await task_tracker.update_stage(
+                    task.task_id,
+                    "queued_external_parse",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+
+                msg = UnderstandingParseMsg(
+                    task_id=task.task_id,
+                    path=path,
+                    root_uri=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    role=str(ctx.role),
+                    actor_peer_id=ctx.actor_peer_id,
+                    reason=reason,
+                    instruction=instruction,
+                    build_index=build_index,
+                    summarize=summarize,
+                    strict=bool(kwargs.get("strict", False)),
+                    ignore_dirs=kwargs.get("ignore_dirs"),
+                    include=kwargs.get("include"),
+                    exclude=kwargs.get("exclude"),
+                    directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    enforce_public_remote_targets=enforce_public_remote_targets,
+                    args=normalized_args.processor_kwargs,
+                    source_name=source_name,
+                )
+                qm = get_queue_manager()
+                await qm.enqueue(QueueManager.EXTERNAL_PARSE, msg.to_dict())
+                logger.info(
+                    "[ResourceService] Enqueued UnderstandingParseMsg task_id=%s root_uri=%s",
+                    task.task_id,
+                    root_uri,
+                )
+                return {
+                    "status": "success",
+                    "root_uri": root_uri,
+                    "task_id": task.task_id,
+                }
 
             result = await self._resource_processor.process_resource(
                 path=path,

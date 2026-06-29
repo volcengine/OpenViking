@@ -27,6 +27,7 @@ from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
+from openviking.storage.queuefs.understanding_parse_processor import UnderstandingParseProcessor
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils.agfs_utils import (
@@ -330,6 +331,18 @@ class OpenVikingService:
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
 
+        self._resource_processor = ResourceProcessor(
+            vikingdb=self._vikingdb_manager,
+        )
+
+        if self._queue_manager:
+            external_parse_processor = UnderstandingParseProcessor(self._resource_processor)
+            self._queue_manager.get_queue(
+                self._queue_manager.EXTERNAL_PARSE,
+                dequeue_handler=external_parse_processor,
+                allow_create=True,
+            )
+
         # Start queue workers now that VikingFS is ready.
         # Doing it here (rather than in _init_storage) ensures that any tasks
         # recovered from a previous crash are not processed before VikingFS is
@@ -356,9 +369,6 @@ class OpenVikingService:
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
 
         # Initialize processors
-        self._resource_processor = ResourceProcessor(
-            vikingdb=self._vikingdb_manager,
-        )
         self._skill_processor = SkillProcessor(
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
