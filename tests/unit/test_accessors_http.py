@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from openviking.parse.accessors import AccessorRegistry, GitAccessor, HTTPAccessor
+from openviking.parse.accessors.http_accessor import URLType
 
 
 def _mock_config():
@@ -73,6 +74,67 @@ class TestHTTPAccessor:
     def test_extract_filename_from_url(self, url: str, expected: str) -> None:
         """Test filename extraction from URLs."""
         assert HTTPAccessor._extract_filename_from_url(url) == expected
+
+    async def test_webpage_uses_web_importer_directory(self, accessor, tmp_path, monkeypatch):
+        downloaded = tmp_path / "entry.html"
+        downloaded.write_text("<html>entry</html>", encoding="utf-8")
+        imported_dir = tmp_path / "web"
+        imported_dir.mkdir()
+
+        async def fake_download(url, request_validator=None):
+            return str(downloaded), URLType.WEBPAGE, {"extension": ".html"}
+
+        class FakeImporter:
+            async def import_to_directory(self, *, root_url, options, request_validator=None):
+                assert root_url == "https://example.com/page"
+                assert options.depth == 1
+                return SimpleNamespace(
+                    path=imported_dir,
+                    meta={
+                        "web_import": True,
+                        "crawl_result": {"total_crawled": 1},
+                        "original_filename": "example.com",
+                    },
+                )
+
+        monkeypatch.setattr(accessor, "_download_url", fake_download)
+        monkeypatch.setattr(
+            "openviking.parse.accessors.web_importer.WebImporter",
+            lambda: FakeImporter(),
+        )
+
+        resource = await accessor.access("https://example.com/page", depth=1)
+
+        assert resource.path == imported_dir
+        assert resource.path.is_dir()
+        assert resource.meta["url_type"] == "webpage"
+        assert resource.meta["web_import"] is True
+        assert not downloaded.exists()
+
+    async def test_download_file_does_not_use_web_importer(self, accessor, tmp_path, monkeypatch):
+        downloaded = tmp_path / "file.pdf"
+        downloaded.write_bytes(b"%PDF-test")
+        called = False
+
+        async def fake_download(url, request_validator=None):
+            return str(downloaded), URLType.DOWNLOAD_PDF, {"extension": ".pdf"}
+
+        class FakeImporter:
+            async def import_to_directory(self, **kwargs):
+                nonlocal called
+                called = True
+
+        monkeypatch.setattr(accessor, "_download_url", fake_download)
+        monkeypatch.setattr(
+            "openviking.parse.accessors.web_importer.WebImporter",
+            lambda: FakeImporter(),
+        )
+
+        resource = await accessor.access("https://example.com/file.pdf", depth=1)
+
+        assert resource.path == downloaded
+        assert resource.meta["url_type"] == "download_pdf"
+        assert called is False
 
 
 class TestHTTPAccessorPriorityRouting:

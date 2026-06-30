@@ -429,14 +429,14 @@ class HTTPAccessor(DataAccessor):
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
-        Fetch the HTTP URL to a local file.
+        Fetch the HTTP URL to a local file or directory.
 
         Args:
             source: HTTP/HTTPS URL
             **kwargs: Additional arguments (request_validator, etc.)
 
         Returns:
-            LocalResource pointing to the downloaded file
+            LocalResource pointing to the downloaded file or crawled web directory
         """
         source_str = str(source)
         request_validator = kwargs.get("request_validator")
@@ -446,6 +446,38 @@ class HTTPAccessor(DataAccessor):
             source_str,
             request_validator=request_validator,
         )
+
+        if url_type == URLType.WEBPAGE:
+            from openviking.parse.accessors.web_importer import (
+                WebImporter,
+                parse_web_import_options,
+            )
+
+            try:
+                options = parse_web_import_options(kwargs)
+                result = await WebImporter().import_to_directory(
+                    root_url=source_str,
+                    options=options,
+                    request_validator=request_validator,
+                )
+            finally:
+                Path(temp_path).unlink(missing_ok=True)
+
+            meta.update(result.meta)
+            meta.update(
+                {
+                    "url": source_str,
+                    "downloaded": True,
+                    "url_type": URLType.WEBPAGE.value,
+                }
+            )
+            return LocalResource(
+                path=result.path,
+                source_type=SourceType.HTTP,
+                original_source=source_str,
+                meta=meta,
+                is_temporary=True,
+            )
 
         # Build metadata
         meta.update(

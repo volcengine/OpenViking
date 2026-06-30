@@ -551,7 +551,7 @@ class ResourceService:
                 avoid recursive watch task creation during scheduled execution)
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
-            args: Parser-specific options forwarded to the parser chain.
+            args: Parser/accessor-specific options forwarded to the processing chain.
             **kwargs: Extra options forwarded to the parser chain
 
         Returns:
@@ -563,7 +563,9 @@ class ResourceService:
         """
         self._ensure_initialized()
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
-        kwargs.update(normalized_args.processor_kwargs)
+        processor_args = dict(normalized_args.processor_kwargs)
+
+        kwargs.update(processor_args)
         if not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
@@ -628,7 +630,7 @@ class ResourceService:
 
             if result.get("status") == "error":
                 return result
-            elif wait:
+            if wait:
                 if stage_callback is not None:
                     stage_result = stage_callback("processing_queue")
                     if inspect.isawaitable(stage_result):
