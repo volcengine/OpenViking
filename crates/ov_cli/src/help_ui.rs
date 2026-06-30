@@ -125,7 +125,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
 const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["add-resource"],
-        purpose: "Import a local file, folder, URL, or repository into OpenViking.",
+        purpose: "Import a local file, folder, URL, repository, or whole website (sitemap/RSS) into OpenViking.",
         examples: &[
             HelpItem {
                 label: "ov add-resource ./docs --parent viking://projects/acme --wait",
@@ -134,6 +134,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov add-resource https://example.com/spec.md --to viking://specs/api.md",
                 description: "Import a URL to an exact target URI.",
+            },
+            HelpItem {
+                label: "ov add-resource https://example.com/sitemap.xml --watch-interval 1440",
+                description: "Import a whole site via sitemap/RSS and refresh it daily.",
             },
         ],
         next_steps: &[

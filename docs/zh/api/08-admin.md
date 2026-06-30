@@ -68,7 +68,8 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 2. 使用 API Key Manager 创建账户和初始管理员用户
 3. 初始化账户级目录结构
 4. 初始化管理员用户的个人目录
-5. 返回账户信息和用户密钥（非 trusted 模式下）
+5. 写入可选的初始管理员用户配置
+6. 返回账户信息和用户密钥（非 trusted 模式下）
 
 **代码入口：**
 - `openviking/server/routers/admin.py:create_account` - HTTP 路由
@@ -83,10 +84,13 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
+| user_config | object | 否 | `null` | 首个管理员用户的初始配置。当前支持 `add_targets.resource_uri` 和 `add_targets.skill_uri` |
 
 **说明：**
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
 - 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
+- `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://user/resources` 或 `viking://user/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
+- `user_config.add_targets.skill_uri` 只能是 `viking://user/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
 
 #### 3. 使用示例
 
@@ -160,6 +164,17 @@ result = client.admin_create_account("acme", "alice")
 print(f"Account created: {result['account_id']}")
 print(f"Admin user: {result['admin_user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
+
+result = client.admin_create_account(
+    "acme-private",
+    "alice",
+    user_config={
+        "add_targets": {
+            "resource_uri": "viking://user/resources",
+            "skill_uri": "viking://user/skills",
+        }
+    },
+)
 ```
 
 **Go SDK**
@@ -170,6 +185,15 @@ if err != nil {
     return err
 }
 fmt.Println(result["account_id"])
+
+result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice", &openviking.AdminCreateAccountOptions{
+    UserConfig: map[string]any{
+        "add_targets": map[string]any{
+            "resource_uri": "viking://user/resources",
+            "skill_uri":    "viking://user/skills",
+        },
+    },
+})
 ```
 
 **CLI**
@@ -177,6 +201,9 @@ fmt.Println(result["account_id"])
 ```bash
 # 需要 ROOT 权限，使用 --sudo
 ov --sudo admin create-account acme --admin alice
+
+ov --sudo admin create-account acme-private --admin alice \
+  --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources","skill_uri":"viking://user/skills"}}'
 ```
 
 **响应示例**
@@ -368,7 +395,8 @@ ov --sudo admin delete-account acme
 1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
 2. 调用 API Key Manager 注册新用户
 3. 初始化新用户的个人目录
-4. 返回用户信息和用户密钥（非 trusted 模式下）
+4. 写入可选的初始用户配置
+5. 返回用户信息和用户密钥（非 trusted 模式下）
 
 **代码入口：**
 - `openviking/server/routers/admin.py:register_user` - HTTP 路由
@@ -384,11 +412,14 @@ ov --sudo admin delete-account acme
 | account_id | str | 是 | - | 工作区 ID |
 | user_id | str | 是 | - | 用户 ID |
 | role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`。`"root"` 必须通过专门的改角色接口分配。 |
+| user_config | object | 否 | `null` | 新用户的初始配置。当前支持 `add_targets.resource_uri` 和 `add_targets.skill_uri` |
 
 **说明：**
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
 - ADMIN 只能在自己所属的 account 中注册用户
 - 无法通过用户注册接口直接创建 `"root"` 角色
+- `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://user/resources` 或 `viking://user/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
+- `user_config.add_targets.skill_uri` 只能是 `viking://user/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
 
 #### 3. 使用示例
 
@@ -419,6 +450,13 @@ client.initialize()
 result = client.admin_register_user("acme", "bob", role="user")
 print(f"User registered: {result['user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
+
+result = client.admin_register_user(
+    "acme",
+    "bob-private",
+    role="user",
+    user_config={"add_targets": {"resource_uri": "viking://user/resources/project-a"}},
+)
 ```
 
 **Go SDK**
@@ -429,6 +467,12 @@ if err != nil {
     return err
 }
 fmt.Println(result["user_id"])
+
+result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "user", &openviking.AdminRegisterUserOptions{
+    UserConfig: map[string]any{
+        "add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
+    },
+})
 ```
 
 **CLI**
@@ -439,6 +483,9 @@ fmt.Println(result["user_id"])
 ov admin register-user acme bob --role user
 # 如果使用 root_api_key（--sudo）：
 ov --sudo admin register-user acme bob --role user
+
+ov admin register-user acme bob-private --role user \
+  --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources/project-a"}}'
 ```
 
 **响应示例**
@@ -920,6 +967,45 @@ ov --sudo admin migrate --cleanup --output json
   "task_id": "legacy_migration_..."
 }
 ```
+
+---
+
+### 用户添加位置设置
+
+个人添加默认值作为用户配置存储在
+`viking://user/{user_id}/settings/user_config.json`。它只影响没有显式传目标的添加请求：
+
+1. `add_resource`：显式 `to` / `parent` 优先，然后是用户
+   `add_targets.resource_uri`，再是
+   `server.user_config_defaults.add_targets.resource_uri`，最后保持旧行为。
+2. `add_skill`：显式 `target_uri` 优先，然后是用户
+   `add_targets.skill_uri`，再是
+   `server.user_config_defaults.add_targets.skill_uri`，最后保持旧行为。
+
+#### HTTP API
+
+```
+GET /api/v1/user-settings/add-locations
+PATCH /api/v1/user-settings/add-locations
+DELETE /api/v1/user-settings/add-locations
+```
+
+`PATCH` 直接接收 add-target 字段。传 `null` 会清除单个字段；删除设置会清除整个个人覆盖配置。
+
+```bash
+curl -X PATCH http://localhost:1933/api/v1/user-settings/add-locations \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <user-key>" \
+  -d '{"resource_uri": "viking://user/resources/project-a"}'
+```
+
+`resource_uri` 必须是可写资源目录 URI：`viking://resources` 或
+`viking://resources/...`、`viking://user/resources` 或
+`viking://user/resources/...`、`viking://user/{user_id}/resources` 或
+`viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources`
+或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。`skill_uri` 只能是
+`viking://user/skills` 或 `viking://agent/skills`；v1 不支持显式写成
+`viking://user/{user_id}/skills`。配置值非法时会直接报错，不会静默回退到其它目标。
 
 ---
 

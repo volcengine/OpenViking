@@ -68,7 +68,8 @@ Create a new workspace with its first admin user.
 2. Use API Key Manager to create account and initial admin user
 3. Initialize account-level directory structure
 4. Initialize admin user's personal directory
-5. Return account info and user key (not in trusted mode)
+5. Write optional initial admin user config
+6. Return account info and user key (not in trusted mode)
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:create_account` - HTTP route
@@ -83,10 +84,13 @@ Create a new workspace with its first admin user.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | admin_user_id | str | Yes | - | First admin user ID |
+| user_config | object | No | `null` | Initial config for the first admin user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
+- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://user/resources` or `viking://user/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.skill_uri` must be `viking://user/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
 
 #### 3. Usage Examples
 
@@ -160,6 +164,17 @@ result = client.admin_create_account("acme", "alice")
 print(f"Account created: {result['account_id']}")
 print(f"Admin user: {result['admin_user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
+
+result = client.admin_create_account(
+    "acme-private",
+    "alice",
+    user_config={
+        "add_targets": {
+            "resource_uri": "viking://user/resources",
+            "skill_uri": "viking://user/skills",
+        }
+    },
+)
 ```
 
 **Go SDK**
@@ -170,6 +185,15 @@ if err != nil {
     return err
 }
 fmt.Println(result["account_id"])
+
+result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice", &openviking.AdminCreateAccountOptions{
+    UserConfig: map[string]any{
+        "add_targets": map[string]any{
+            "resource_uri": "viking://user/resources",
+            "skill_uri":    "viking://user/skills",
+        },
+    },
+})
 ```
 
 **CLI**
@@ -177,6 +201,9 @@ fmt.Println(result["account_id"])
 ```bash
 # Requires ROOT privileges, use --sudo
 ov --sudo admin create-account acme --admin alice
+
+ov --sudo admin create-account acme-private --admin alice \
+  --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources","skill_uri":"viking://user/skills"}}'
 ```
 
 **Response Example**
@@ -370,7 +397,8 @@ Register a new user in a workspace.
 1. Verify requester has ROOT privileges or is an ADMIN of the account
 2. Call API Key Manager to register new user
 3. Initialize new user's personal directory
-4. Return user info and user key (not in trusted mode)
+4. Write optional initial user config
+5. Return user info and user key (not in trusted mode)
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:register_user` - HTTP route
@@ -386,11 +414,14 @@ Register a new user in a workspace.
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
 | role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`. `"root"` must be assigned through the dedicated role-change endpoint. |
+| user_config | object | No | `null` | Initial config for the new user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
 - ADMIN can only register users in their own account
 - The `"root"` role cannot be minted through user registration
+- `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://user/resources` or `viking://user/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
+- `user_config.add_targets.skill_uri` must be `viking://user/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
 
 #### 3. Usage Examples
 
@@ -421,6 +452,13 @@ client.initialize()
 result = client.admin_register_user("acme", "bob", role="user")
 print(f"User registered: {result['user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
+
+result = client.admin_register_user(
+    "acme",
+    "bob-private",
+    role="user",
+    user_config={"add_targets": {"resource_uri": "viking://user/resources/project-a"}},
+)
 ```
 
 **Go SDK**
@@ -431,6 +469,12 @@ if err != nil {
     return err
 }
 fmt.Println(result["user_id"])
+
+result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "user", &openviking.AdminRegisterUserOptions{
+    UserConfig: map[string]any{
+        "add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
+    },
+})
 ```
 
 **CLI**
@@ -441,6 +485,9 @@ fmt.Println(result["user_id"])
 ov admin register-user acme bob --role user
 # If using root_api_key (--sudo):
 ov --sudo admin register-user acme bob --role user
+
+ov admin register-user acme bob-private --role user \
+  --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources/project-a"}}'
 ```
 
 **Response Example**
@@ -923,6 +970,50 @@ ov --sudo admin migrate --cleanup --output json
   "task_id": "legacy_migration_..."
 }
 ```
+
+---
+
+### user add-location settings
+
+Per-user add defaults are stored as user config under
+`viking://user/{user_id}/settings/user_config.json`. They affect add calls that
+omit explicit targets:
+
+1. `add_resource`: explicit `to` / `parent` wins, then user
+   `add_targets.resource_uri`, then
+   `server.user_config_defaults.add_targets.resource_uri`, then legacy behavior.
+2. `add_skill`: explicit `target_uri` wins, then user
+   `add_targets.skill_uri`, then
+   `server.user_config_defaults.add_targets.skill_uri`, then legacy behavior.
+
+#### HTTP API
+
+```
+GET /api/v1/user-settings/add-locations
+PATCH /api/v1/user-settings/add-locations
+DELETE /api/v1/user-settings/add-locations
+```
+
+`PATCH` accepts the add-target fields directly. Passing `null` clears one field;
+deleting the settings clears the whole per-user override.
+
+```bash
+curl -X PATCH http://localhost:1933/api/v1/user-settings/add-locations \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <user-key>" \
+  -d '{"resource_uri": "viking://user/resources/project-a"}'
+```
+
+`resource_uri` must be a writable resource directory URI:
+`viking://resources` or `viking://resources/...`,
+`viking://user/resources` or `viking://user/resources/...`,
+`viking://user/{user_id}/resources` or
+`viking://user/{user_id}/resources/...`, or
+`viking://user/{user_id}/peers/{peer_id}/resources` or
+`viking://user/{user_id}/peers/{peer_id}/resources/...`. `skill_uri` must be
+`viking://user/skills` or `viking://agent/skills`; explicit
+`viking://user/{user_id}/skills` is not accepted in v1. Invalid configured
+values are rejected; OpenViking does not silently fall back to another target.
 
 ---
 

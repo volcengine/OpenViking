@@ -86,11 +86,8 @@ class _FakeProcessor:
             lines.append(f"- {name}: {summary}")
         return "\n".join(lines)
 
-    def _extract_abstract_from_overview(self, overview):
-        return "abstract"
-
-    def _enforce_size_limits(self, overview, abstract):
-        return overview, abstract
+    def _normalize_overview_generation(self, overview):
+        return overview, "abstract"
 
     async def _sync_topdown_recursive(
         self, root_uri, target_uri, ctx=None, file_change_status=None, lock=None

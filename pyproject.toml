@@ -38,6 +38,8 @@ dependencies = [
     "pdfplumber>=0.10.0",
     "readabilipy>=0.2.0",
     "markdownify>=0.11.0",
+    "feedparser>=6.0.0",
+    "defusedxml>=0.7.1",
     "openai>=1.0.0",
     "requests>=2.31.0",
     "charset-normalizer>=3.4,<4",
@@ -205,7 +207,7 @@ Issues = "https://github.com/volcengine/openviking/issues"
 [project.scripts]
 ov = "openviking_cli.rust_cli:main"  # Rust CLI 入口（极简包装器）
 openviking = "openviking_cli.rust_cli:main"  # Rust CLI 入口（放弃 python CLI）
-openviking-server = "openviking_cli.server_bootstrap:main"
+openviking-server = "openviking_cli.server_bootstrap:main"  # also: `openviking-server ingest ...`
 vikingbot = "vikingbot.cli.commands:app"
 
 [tool.setuptools_scm]

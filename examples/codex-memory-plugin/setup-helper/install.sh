@@ -365,24 +365,29 @@ render_plugin_cache() {
   rm -rf "$CACHE_DIR"
   cp -R "$PLUGIN_DIR" "$CACHE_DIR"
 
-  # Codex 0.130 does not inject CODEX_PLUGIN_ROOT into hook subprocess env and
-  # does not let hooks.json declare a cwd, so relative paths in hooks.json
-  # resolve against the user's cwd (typically ~). Render the placeholder
-  # __OPENVIKING_PLUGIN_ROOT__ into the cache copy's absolute path. The repo's
-  # checked-in hooks.json keeps the placeholder; only the cached copy is
-  # rewritten at install time.
+  # The repo's checked-in hooks.json uses Codex's native ${PLUGIN_ROOT} token,
+  # which modern Codex injects into hook env AND substitutes inline in hook
+  # command strings (so a plain `codex plugin marketplace add` install works
+  # with no rendering). Older Codex (<=0.130) neither injects CODEX_PLUGIN_ROOT
+  # nor substitutes ${PLUGIN_ROOT}, so for this installer-managed cache copy we
+  # still render ${PLUGIN_ROOT} to an absolute path — harmless on modern Codex
+  # (no token left to substitute) and required on old Codex.
   local hooks_json="$CACHE_DIR/hooks/hooks.json"
   if [ -f "$hooks_json" ]; then
     local cache_esc
     cache_esc="$(printf '%s' "$CACHE_DIR" | sed -e 's/[\\/&]/\\&/g')"
-    sed -i.bak -e "s/__OPENVIKING_PLUGIN_ROOT__/$cache_esc/g" "$hooks_json"
+    sed -i.bak -e "s/\${PLUGIN_ROOT}/$cache_esc/g" "$hooks_json"
     rm -f "${hooks_json}.bak"
   fi
 
-  # Render the OpenViking /mcp URL into the cached .mcp.json (and drop the
-  # bearer_token_env_var line in no-auth mode). The repo's checked-in
-  # .mcp.json keeps the placeholder + always-present bearer field; the cache
-  # copy is what Codex actually loads.
+  # Render the OpenViking /mcp URL into the cached .mcp.json (and add the
+  # bearer_token_env_var line when an API key is configured). The repo's
+  # checked-in .mcp.json ships a local-default url with NO bearer field, so a
+  # plain `codex plugin marketplace add` install connects to unauthenticated
+  # local OV out of the box (Codex hard-fails MCP startup if
+  # bearer_token_env_var points at an unset/empty var). For this installer
+  # path, sync-mcp overwrites the url and adds bearer/identity headers based on
+  # the active ovcli.conf; the cache copy is what Codex actually loads.
   local mcp_json="$CACHE_DIR/.mcp.json"
   if [ -f "$mcp_json" ]; then
     OPENVIKING_CLI_CONFIG_FILE="$OVCLI_CONF" OPENVIKING_MCP_URL="$MCP_URL" \
@@ -607,7 +612,7 @@ validate_plugin_install() {
   if [ ! -f "$hooks_json" ]; then
     issues+=("cached hooks.json missing")
   else
-    grep -q "__OPENVIKING_PLUGIN_ROOT__" "$hooks_json" && issues+=("cached hooks.json still contains __OPENVIKING_PLUGIN_ROOT__")
+    grep -qF '${PLUGIN_ROOT}' "$hooks_json" && issues+=("cached hooks.json still contains unrendered \${PLUGIN_ROOT}")
     grep -q "$CACHE_DIR/scripts/session-start-commit.mjs" "$hooks_json" || issues+=("SessionStart hook path is not rendered to cache dir")
     grep -q '"matcher": "clear|startup|resume"' "$hooks_json" || issues+=("SessionStart matcher is not clear|startup|resume")
     grep -q '"timeout": 70' "$hooks_json" || issues+=("SessionStart timeout is not 70s")
@@ -616,7 +621,7 @@ validate_plugin_install() {
   if [ ! -f "$mcp_json" ]; then
     issues+=("cached .mcp.json missing")
   else
-    grep -q "__OPENVIKING_MCP_URL__" "$mcp_json" && issues+=("cached .mcp.json still contains __OPENVIKING_MCP_URL__")
+    grep -q '"url"[[:space:]]*:[[:space:]]*"http' "$mcp_json" || issues+=("cached .mcp.json is missing a concrete http(s) url")
     if [ "$HAS_API_KEY" != "1" ] && grep -q "bearer_token_env_var" "$mcp_json"; then
       issues+=("cached .mcp.json keeps bearer_token_env_var without configured API key")
     fi

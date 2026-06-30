@@ -299,7 +299,9 @@ class AsyncOpenViking:
         Add a resource (file/URL) to OpenViking.
 
         Args:
-            path: Local file path or URL.
+            path: Local file path or URL. A sitemap / RSS / Atom URL ingests the
+                whole site as one resource tree; pass ``args={"site": True}`` to
+                force whole-site ingestion from a bare domain.
             reason: Context/reason for adding this resource.
             instruction: Specific instruction for processing.
             wait: If True, wait for processing to complete.
@@ -307,6 +309,9 @@ class AsyncOpenViking:
             parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
+            watch_interval: Auto-refresh interval in minutes (>0 enables a watch).
+                On a sitemap/feed URL this keeps the whole site refreshed.
+            args: Parser/accessor-specific options (e.g. ``site``, ``max_pages``).
             telemetry: Whether to attach operation telemetry data to the result.
         """
         await self._ensure_initialized()

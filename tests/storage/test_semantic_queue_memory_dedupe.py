@@ -145,8 +145,8 @@ class _FakeVikingFS:
 
 
 class _FakeMemoryDirFS:
-    async def ls(self, uri, ctx=None):
-        del uri, ctx
+    async def ls(self, uri, node_limit=None, ctx=None):
+        del uri, node_limit, ctx
         return [
             {"name": "first.md", "isDir": False},
             {"name": "second.md", "isDir": False},
@@ -233,11 +233,10 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
     )
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
-    monkeypatch.setattr(processor, "_extract_abstract_from_overview", lambda overview: "abstract")
     monkeypatch.setattr(
         processor,
-        "_enforce_size_limits",
-        lambda overview, abstract: (overview, abstract),
+        "_normalize_overview_generation",
+        lambda overview: (overview, "abstract"),
     )
     monkeypatch.setattr(processor, "_write_memory_directory_semantics", write_semantics)
 
@@ -285,11 +284,10 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
     )
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
-    monkeypatch.setattr(processor, "_extract_abstract_from_overview", lambda overview: "abstract")
     monkeypatch.setattr(
         processor,
-        "_enforce_size_limits",
-        lambda overview, abstract: (overview, abstract),
+        "_normalize_overview_generation",
+        lambda overview: (overview, "abstract"),
     )
     monkeypatch.setattr(processor, "_write_memory_directory_semantics", write_semantics)
     monkeypatch.setattr(processor, "_vectorize_single_file", vectorize_single_file)

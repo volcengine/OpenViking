@@ -357,6 +357,35 @@ class VikingFS:
                 resource=normalized_uri,
             )
 
+    def _ensure_delete_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
+        self._ensure_access(uri, ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        normalized_uri, _ = self._normalized_uri_parts(uri)
+        if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
+            normalized_uri, real_ctx
+        ):
+            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
+        self._ensure_supported_delete_namespace(normalized_uri)
+        if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
+            raise PermissionDeniedError(
+                "Temp root is read-only for non-root users",
+                resource=normalized_uri,
+            )
+
+    def _ensure_supported_delete_namespace(self, normalized_uri: str) -> None:
+        parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]
+        if not parts:
+            raise PermissionDeniedError(
+                "Deleting viking:// is not supported; use a concrete scope instead.",
+                resource=normalized_uri,
+            )
+        if parts == ["user"]:
+            raise PermissionDeniedError(
+                "Deleting viking://user is not supported; use an explicit user namespace "
+                "or current-user content path instead.",
+                resource=normalized_uri,
+            )
+
     def _ensure_supported_write_namespace(self, normalized_uri: str) -> None:
         parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]
         if parts == ["user"]:
@@ -480,7 +509,7 @@ class VikingFS:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_mutable_access(uri, ctx)
+        self._ensure_delete_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
@@ -579,6 +608,12 @@ class VikingFS:
         from openviking.storage.transaction import LockContext, get_lock_manager
 
         self._ensure_mutable_access(old_uri, ctx)
+        # mv is implemented as copy + recursive rm of the source (see the
+        # ``rm(old_path, recursive=is_dir)`` below), so the source must also clear
+        # the delete guard. Without this, a protected account root such as
+        # ``viking://`` — which rm() rejects up front (#2873) — could still be
+        # destroyed via mv, since the write guard alone permits the bare root.
+        self._ensure_delete_access(old_uri, ctx)
         self._ensure_mutable_access(new_uri, ctx)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
