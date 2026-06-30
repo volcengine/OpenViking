@@ -551,6 +551,43 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
+  it("stores completed event tool_result blocks as user-role tool parts", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "assistant", content: [
+        { type: "text", text: "calling tool" },
+        { type: "toolCall", id: "call_1", name: "read", arguments: { path: "a.txt" } },
+      ] },
+      { role: "assistant", content: [
+        { type: "tool_result", tool_use_id: "call_1", content: "content of a" },
+        { type: "text", text: "all done" },
+      ] },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
+    const toolParts = client.addSessionMessage.mock.calls[1][2] as Array<{
+      type?: string;
+      tool_id?: string;
+      tool_name?: string;
+      tool_input?: Record<string, unknown>;
+      tool_output?: string;
+      tool_status?: string;
+    }>;
+    expect(toolParts).toEqual([{ type: "tool", tool_id: "call_1", tool_name: "read", tool_input: { path: "a.txt" }, tool_output: "content of a", tool_status: "completed" }]);
+    expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[2][2][0].text).toBe("all done");
+  });
+
   it("sanitizes <relevant-memories> from assistant content", async () => {
     const { engine, client } = makeEngine();
 

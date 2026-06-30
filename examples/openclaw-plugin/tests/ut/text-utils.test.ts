@@ -191,6 +191,26 @@ describe("extractNewTurnTexts", () => {
     expect(texts[0]).toContain("found 3 matches");
   });
 
+  it("formats embedded tool_result blocks from completed events", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "grep", arguments: { pattern: "TODO" } }],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_result", tool_use_id: "call_1", content: "found 3 matches" },
+          { type: "text", text: "Done." },
+        ],
+      },
+    ];
+    const { texts } = extractNewTurnTexts(messages, 0);
+    expect(texts).toContain('[toolUse: grep] {"pattern":"TODO"}');
+    expect(texts).toContain("[grep result]: found 3 matches");
+    expect(texts).toContain("[assistant]: Done.");
+  });
+
   it("respects startIndex parameter", () => {
     const messages = [
       { role: "user", content: "old message" },
