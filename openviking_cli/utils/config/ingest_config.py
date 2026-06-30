@@ -135,7 +135,5 @@ class IngestConfig(BaseModel):
         if not self.enabled:
             return {}
         return {
-            name: cfg
-            for name, cfg in self.harnesses.items()
-            if cfg.enabled and cfg.mode != "off"
+            name: cfg for name, cfg in self.harnesses.items() if cfg.enabled and cfg.mode != "off"
         }

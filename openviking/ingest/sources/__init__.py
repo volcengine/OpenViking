@@ -8,8 +8,8 @@ from openviking.ingest.sources import (  # noqa: F401
     codex,
     cursor,
     hermes,
-    opencode,
     openclaw,
+    opencode,
 )
 
 __all__ = ["claude_code", "codex", "cursor", "hermes", "opencode", "openclaw"]

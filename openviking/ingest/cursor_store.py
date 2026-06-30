@@ -24,9 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from openviking_cli.utils import get_logger
-
 from openviking.ingest.models import Cursor
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -110,9 +109,7 @@ class CursorStore:
         if row is None:
             return None
         pend = (
-            Cursor.from_json(row["cursor_kind"], row["pend_cursor"])
-            if row["pend_cursor"]
-            else None
+            Cursor.from_json(row["cursor_kind"], row["pend_cursor"]) if row["pend_cursor"] else None
         )
         return CursorRecord(
             harness=row["harness"],
@@ -136,8 +133,14 @@ class CursorStore:
 
     # --- writes -----------------------------------------------------------
     def ensure_row(
-        self, harness: str, native_session_id: str, ov_session_id: str, cursor: Cursor,
-        *, locator: Optional[str] = None, title: Optional[str] = None,
+        self,
+        harness: str,
+        native_session_id: str,
+        ov_session_id: str,
+        cursor: Cursor,
+        *,
+        locator: Optional[str] = None,
+        title: Optional[str] = None,
     ) -> None:
         """Insert a zero/initial row if absent (idempotent)."""
         self._conn.execute(
@@ -146,15 +149,26 @@ class CursorStore:
                 locator, title, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                harness, native_session_id, ov_session_id, cursor.kind, cursor.to_json(),
-                locator, title, _now_iso(),
+                harness,
+                native_session_id,
+                ov_session_id,
+                cursor.kind,
+                cursor.to_json(),
+                locator,
+                title,
+                _now_iso(),
             ),
         )
         self._conn.commit()
 
     def advance_cursor(
-        self, harness: str, native_session_id: str, ov_session_id: str, cursor: Cursor,
-        *, locator: Optional[str] = None,
+        self,
+        harness: str,
+        native_session_id: str,
+        ov_session_id: str,
+        cursor: Cursor,
+        *,
+        locator: Optional[str] = None,
     ) -> None:
         """Advance the confirmed cursor only (e.g. a read that yielded no messages)."""
         self.ensure_row(harness, native_session_id, ov_session_id, cursor, locator=locator)
@@ -167,9 +181,17 @@ class CursorStore:
         self._conn.commit()
 
     def set_pending(
-        self, harness: str, native_session_id: str, ov_session_id: str,
-        from_cursor: Cursor, pend_cursor: Cursor, pend_count: int, baseline: int,
-        *, locator: Optional[str] = None, title: Optional[str] = None,
+        self,
+        harness: str,
+        native_session_id: str,
+        ov_session_id: str,
+        from_cursor: Cursor,
+        pend_cursor: Cursor,
+        pend_count: int,
+        baseline: int,
+        *,
+        locator: Optional[str] = None,
+        title: Optional[str] = None,
     ) -> None:
         """Durably record a batch intent BEFORE appending it (crash reconciliation)."""
         self.ensure_row(
@@ -180,8 +202,15 @@ class CursorStore:
             "pend_baseline = ?, locator = COALESCE(?, locator), title = COALESCE(?, title), "
             "updated_at = ? WHERE harness = ? AND native_session_id = ?",
             (
-                ov_session_id, pend_cursor.to_json(), pend_count, baseline, locator, title,
-                _now_iso(), harness, native_session_id,
+                ov_session_id,
+                pend_cursor.to_json(),
+                pend_count,
+                baseline,
+                locator,
+                title,
+                _now_iso(),
+                harness,
+                native_session_id,
             ),
         )
         self._conn.commit()
@@ -218,9 +247,17 @@ class CursorStore:
         self._conn.commit()
 
     def upsert(
-        self, harness: str, native_session_id: str, ov_session_id: str, cursor: Cursor,
-        *, appended_delta: int = 0, pending_tokens: Optional[int] = None,
-        committed: bool = False, locator: Optional[str] = None, title: Optional[str] = None,
+        self,
+        harness: str,
+        native_session_id: str,
+        ov_session_id: str,
+        cursor: Cursor,
+        *,
+        appended_delta: int = 0,
+        pending_tokens: Optional[int] = None,
+        committed: bool = False,
+        locator: Optional[str] = None,
+        title: Optional[str] = None,
     ) -> None:
         """General cursor upsert (used by tests and simple cursor advances)."""
         now = _now_iso()
@@ -240,10 +277,20 @@ class CursorStore:
                  last_committed_at = COALESCE(?, ingest_cursor.last_committed_at),
                  updated_at = excluded.updated_at""",
             (
-                harness, native_session_id, ov_session_id, cursor.kind, cursor.to_json(),
-                locator, title, appended_delta, pending_tokens if pending_tokens is not None else 0,
-                committed_at, now, appended_delta,
-                pending_tokens, committed_at,
+                harness,
+                native_session_id,
+                ov_session_id,
+                cursor.kind,
+                cursor.to_json(),
+                locator,
+                title,
+                appended_delta,
+                pending_tokens if pending_tokens is not None else 0,
+                committed_at,
+                now,
+                appended_delta,
+                pending_tokens,
+                committed_at,
             ),
         )
         self._conn.commit()
@@ -293,9 +340,7 @@ class SingleInstanceLock:
         except OSError as exc:
             self._fh.close()
             self._fh = None
-            raise RuntimeError(
-                f"another ingest process already holds {self.path}"
-            ) from exc
+            raise RuntimeError(f"another ingest process already holds {self.path}") from exc
         self._fh.write(str(os.getpid()))
         self._fh.flush()
         return self

@@ -80,9 +80,7 @@ class ConversationReplayClient:
         return total
 
     async def commit(self, ov_session_id: str, keep_recent_count: int = 0) -> Dict[str, Any]:
-        return await self._client.commit_session(
-            ov_session_id, keep_recent_count=keep_recent_count
-        )
+        return await self._client.commit_session(ov_session_id, keep_recent_count=keep_recent_count)
 
     async def _session_info(self, ov_session_id: str) -> Dict[str, Any]:
         try:
@@ -165,8 +163,15 @@ class SessionReplayer:
         await self.client.ensure_session(sid, self.memory_policy)
         baseline = await self.client.message_count(sid)
         self.store.set_pending(
-            harness, ref.native_session_id, sid, from_cursor, new_cursor,
-            len(payloads), baseline, locator=ref.locator, title=ref.title,
+            harness,
+            ref.native_session_id,
+            sid,
+            from_cursor,
+            new_cursor,
+            len(payloads),
+            baseline,
+            locator=ref.locator,
+            title=ref.title,
         )
         await self.client.append(sid, payloads)
         self.store.confirm_append(harness, ref.native_session_id, new_cursor, len(payloads))

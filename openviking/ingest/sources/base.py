@@ -76,9 +76,7 @@ class LogSource(ABC):
         """Read up to ``limit`` messages after ``cursor``; return (messages, advanced cursor)."""
 
     # --- peer_id helpers (used by adapters) -------------------------------
-    def assistant_peer(
-        self, model: Optional[str], provider: Optional[str] = None
-    ) -> Optional[str]:
+    def assistant_peer(self, model: Optional[str], provider: Optional[str] = None) -> Optional[str]:
         return assistant_peer_id(self.name, model, provider)
 
     def user_peer(
@@ -173,7 +171,9 @@ class JsonlLogSource(LogSource):
                             except Exception as exc:  # one bad record must not abort the file
                                 logger.debug(
                                     "[ingest:%s] skip bad record in %s: %s",
-                                    self.name, path.name, exc,
+                                    self.name,
+                                    path.name,
+                                    exc,
                                 )
                     if len(messages) >= limit:
                         stop = True
@@ -228,9 +228,7 @@ class SqliteLogSource(LogSource):
             messages = self.rows_to_messages(conn, ref, complete)
             if complete:
                 last = complete[-1]
-                new_cur = Cursor(
-                    self.cursor_kind, {"time": last["time_created"], "id": last["id"]}
-                )
+                new_cur = Cursor(self.cursor_kind, {"time": last["time_created"], "id": last["id"]})
             else:
                 new_cur = cur
             return messages, new_cur

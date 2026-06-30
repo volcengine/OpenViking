@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Replay driver: SDK-client chunking/ensure, batch append, commit, and crash reconcile."""
 
-from openviking_cli.exceptions import NotFoundError
-
 from openviking.ingest.cursor_store import CursorStore
 from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, SessionRef
 from openviking.ingest.replay import ConversationReplayClient, SessionReplayer
+from openviking_cli.exceptions import NotFoundError
 
 
 class _FakeSDK:
@@ -102,7 +101,10 @@ async def test_append_batch_confirms_cursor_and_marks_needs_commit(tmp_path):
     replayer = SessionReplayer(fake, store, session_id_prefix="import")
     ref = _ref()
     added = await replayer.append_batch(
-        "claude_code", ref, _msgs(), Cursor(BYTE_OFFSET, {"offset": 0}),
+        "claude_code",
+        ref,
+        _msgs(),
+        Cursor(BYTE_OFFSET, {"offset": 0}),
         Cursor(BYTE_OFFSET, {"offset": 99}),
     )
     assert added == 2
@@ -117,8 +119,13 @@ async def test_reconcile_confirms_landed_batch(tmp_path):
     store = CursorStore(tmp_path)
     sid = "import__claude_code__s1"
     store.set_pending(
-        "claude_code", "s1", sid, Cursor(BYTE_OFFSET, {"offset": 0}),
-        Cursor(BYTE_OFFSET, {"offset": 50}), pend_count=2, baseline=0,
+        "claude_code",
+        "s1",
+        sid,
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 50}),
+        pend_count=2,
+        baseline=0,
     )
     fake = _FakeReplay(count=2)  # server already has the 2 messages -> batch landed
     replayer = SessionReplayer(fake, store)
@@ -133,8 +140,13 @@ async def test_reconcile_drops_unlanded_batch(tmp_path):
     store = CursorStore(tmp_path)
     sid = "import__claude_code__s2"
     store.set_pending(
-        "claude_code", "s2", sid, Cursor(BYTE_OFFSET, {"offset": 0}),
-        Cursor(BYTE_OFFSET, {"offset": 50}), pend_count=2, baseline=0,
+        "claude_code",
+        "s2",
+        sid,
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 50}),
+        pend_count=2,
+        baseline=0,
     )
     fake = _FakeReplay(count=0)  # batch did not land
     replayer = SessionReplayer(fake, store)
@@ -167,8 +179,13 @@ async def test_commit_if_needed_commits_when_needs_commit_and_pending(tmp_path):
     store = CursorStore(tmp_path)
     # appended-but-uncommitted: needs_commit set in store, server still has pending tokens
     store.set_pending(
-        "claude_code", "s1", "import__claude_code__s1",
-        Cursor(BYTE_OFFSET, {"offset": 0}), Cursor(BYTE_OFFSET, {"offset": 10}), 1, 0,
+        "claude_code",
+        "s1",
+        "import__claude_code__s1",
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        1,
+        0,
     )
     store.confirm_append("claude_code", "s1", Cursor(BYTE_OFFSET, {"offset": 10}), 1)
     replayer = SessionReplayer(_FakeReplay(pending=500), store)

@@ -48,9 +48,7 @@ class IngestPoller:
         self._running = False
         self._stop = asyncio.Event()
         self._dirty: Dict[Tuple[str, str], _Dirty] = {}
-        self.poll_interval = min(
-            (cfg.poll_interval_seconds for _, cfg, _ in sources), default=5.0
-        )
+        self.poll_interval = min((cfg.poll_interval_seconds for _, cfg, _ in sources), default=5.0)
 
     def stop(self) -> None:
         self._running = False
@@ -144,5 +142,7 @@ class IngestPoller:
             try:
                 await self.replayer.commit_if_needed(d.name, d.ref, d.cfg.commit.keep_recent_count)
             except Exception:  # noqa: BLE001
-                logger.exception("[ingest:%s] shutdown commit failed (needs_commit persisted)", d.name)
+                logger.exception(
+                    "[ingest:%s] shutdown commit failed (needs_commit persisted)", d.name
+                )
             self._dirty.pop(key, None)

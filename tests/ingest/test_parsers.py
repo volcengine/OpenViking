@@ -5,12 +5,12 @@
 import json
 import sqlite3
 
-from openviking_cli.utils.config.ingest_config import IngestHarnessConfig
 from openviking.ingest.sources.claude_code import ClaudeCodeSource
 from openviking.ingest.sources.codex import CodexSource
 from openviking.ingest.sources.hermes import HermesSource
-from openviking.ingest.sources.opencode import OpenCodeSource
 from openviking.ingest.sources.openclaw import OpenClawSource
+from openviking.ingest.sources.opencode import OpenCodeSource
+from openviking_cli.utils.config.ingest_config import IngestHarnessConfig
 
 
 def _write_jsonl(path, records):
@@ -123,7 +123,12 @@ def test_hermes_group_username(tmp_path):
         root / "grp.jsonl",
         [
             {"role": "session_meta", "model": "doubao-x", "platform": "feishu"},
-            {"role": "user", "content": "hi", "timestamp": "2026-06-01T00:00:00Z", "sender": "alice"},
+            {
+                "role": "user",
+                "content": "hi",
+                "timestamp": "2026-06-01T00:00:00Z",
+                "sender": "alice",
+            },
             {"role": "assistant", "content": "hello", "timestamp": "2026-06-01T00:00:01Z"},
         ],
     )

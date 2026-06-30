@@ -97,8 +97,7 @@ def _print_stats(results: dict[str, BackfillStats], dry_run: bool) -> None:
         total.merge(s)
     typer.echo(
         f"{label}: {total.sessions} sessions / {total.messages} messages / "
-        f"{total.committed} commits"
-        + (f" / {len(total.errors)} errors" if total.errors else "")
+        f"{total.committed} commits" + (f" / {len(total.errors)} errors" if total.errors else "")
     )
 
 
@@ -117,8 +116,7 @@ def list_sources() -> None:
             typer.echo(f"  {name:12s}  (not configured)")
         else:
             typer.echo(
-                f"  {name:12s}  enabled={hc.enabled} mode={hc.mode} "
-                f"paths={hc.paths or '(default)'}"
+                f"  {name:12s}  enabled={hc.enabled} mode={hc.mode} paths={hc.paths or '(default)'}"
             )
 
 

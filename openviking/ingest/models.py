@@ -30,6 +30,7 @@ def iso_from_epoch_ms(value: Any) -> Optional[str]:
     except (OverflowError, OSError, ValueError):
         return None
 
+
 # Cursor kinds.
 BYTE_OFFSET = "byte_offset"  # append-only JSONL: byte offset of last consumed line
 ROWID_TIME = "rowid_time"  # SQLite: (time_created, id) of last consumed row

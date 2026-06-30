@@ -5,8 +5,8 @@
 import json
 import os
 
-from openviking_cli.utils.config.ingest_config import IngestHarnessConfig
 from openviking.ingest.sources.hermes import HermesSource
+from openviking_cli.utils.config.ingest_config import IngestHarnessConfig
 
 
 def _src(root):
