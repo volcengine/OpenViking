@@ -11,6 +11,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from charset_normalizer import from_bytes
+
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
 from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_space_for_uri
 from openviking.server.identity import RequestContext
@@ -250,6 +252,73 @@ async def _build_image_data_uri(
         return None
 
 
+def _coerce_text_file_content(raw: Any) -> str:
+    """Coerce known text-file content returned by VikingFS into str."""
+    if isinstance(raw, bytes):
+        return _decode_text_bytes(raw)
+    return raw or ""
+
+
+def _looks_like_binary_bytes(raw: bytes) -> bool:
+    """Conservative binary check for unknown file bytes."""
+    if not raw:
+        return False
+    if b"\x00" in raw[:4096]:
+        return True
+
+    allowed_controls = {9, 10, 12, 13}
+    sample = raw[:4096]
+    control_count = sum(byte < 32 and byte not in allowed_controls for byte in sample)
+    return control_count / len(sample) > 0.3
+
+
+def _decode_text_bytes(raw: bytes) -> str:
+    """Decode file bytes for BM25 content.
+
+    Prefer UTF-8. If UTF-8 fails, reject binary-looking bytes, then try charset
+    sniffing. Return an empty string when no text encoding can be recognized.
+    """
+    if not raw:
+        return ""
+
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+
+    if _looks_like_binary_bytes(raw):
+        return ""
+
+    best = from_bytes(raw).best()
+    if best is None:
+        return ""
+
+    return str(best)
+
+
+def _decode_unknown_file_bytes(raw: bytes) -> str:
+    """Decode unknown file bytes with the shared text-byte decoding strategy."""
+    return _decode_text_bytes(raw)
+
+
+async def _read_unknown_file_text_for_fulltext(
+    file_path: str,
+    viking_fs,
+    ctx: Optional[RequestContext],
+) -> str:
+    """Best-effort raw file text for BM25/full-text indexing.
+
+    This text is intentionally separate from the embedding input. Unknown file
+    types may still embed their generated summary, while grep/BM25 should index
+    the original text when the file can be read as text-like content.
+    """
+    try:
+        return _decode_unknown_file_bytes(await viking_fs.read_file_bytes(file_path, ctx=ctx))
+    except Exception as e:
+        logger.debug(f"Failed to read full-text content for {file_path}: {e}")
+        return ""
+
+
 async def vectorize_directory_meta(
     uri: str,
     abstract: str,
@@ -300,7 +369,7 @@ async def vectorize_directory_meta(
             account_id=ctx.account_id,
             owner_space=owner_space,
         )
-        context_abstract.set_vectorize(Vectorize(text=abstract))
+        context_abstract.set_vectorize(Vectorize(text=abstract, full_text=abstract))
         msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
         _apply_scalar_overrides(
             msg_abstract,
@@ -333,7 +402,7 @@ async def vectorize_directory_meta(
                 account_id=ctx.account_id,
                 owner_space=owner_space,
             )
-            context_overview.set_vectorize(Vectorize(text=overview))
+            context_overview.set_vectorize(Vectorize(text=overview, full_text=overview))
             msg_overview = EmbeddingMsgConverter.from_context(context_overview)
             _apply_scalar_overrides(
                 msg_overview,
@@ -362,7 +431,7 @@ async def vectorize_directory_meta(
 
 async def vectorize_file(
     file_path: str,
-    summary_dict: Dict[str, str],
+    summary_dict: Dict[str, Any],
     parent_uri: str,
     context_type: str = "resource",
     ctx: Optional[RequestContext] = None,
@@ -393,6 +462,10 @@ async def vectorize_file(
         summary = summary_dict.get("summary", "")
         # Cap below the bytes_row 65535-byte abstract-scalar limit (#2774 parity).
         summary = _truncate_abstract_bytes(summary)
+        has_reusable_content = "content" in summary_dict
+        reusable_content = (
+            _coerce_text_file_content(summary_dict.get("content")) if has_reusable_content else ""
+        )
 
         created_at, updated_at = await _resolve_context_timestamps(
             file_path,
@@ -425,33 +498,42 @@ async def vectorize_file(
                 logger.warning(
                     f"Unsupported file type for {file_path}, falling back to summary for vectorization"
                 )
-                context.set_vectorize(Vectorize(text=summary))
+                full_content = (
+                    reusable_content
+                    if has_reusable_content
+                    else await _read_unknown_file_text_for_fulltext(file_path, viking_fs, ctx)
+                )
+                context.set_vectorize(Vectorize(text=summary, full_text=full_content or summary))
             else:
                 logger.warning(
                     f"Unsupported file type for {file_path} and no summary available, skipping vectorization"
                 )
                 return
         elif content_type == ResourceContentType.TEXT:
-            if summary and effective_text_source in {"summary_first", "summary_only"}:
-                context.set_vectorize(Vectorize(text=summary))
+            # Known text files use VikingFS' text read path once, then reuse that
+            # content for BM25 regardless of whether embedding uses summary or raw text.
+            try:
+                content = (
+                    reusable_content
+                    if has_reusable_content
+                    else _coerce_text_file_content(await viking_fs.read_file(file_path, ctx=ctx))
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to read file content for {file_path}, falling back to summary: {e}"
+                )
+                if summary:
+                    context.set_vectorize(Vectorize(text=summary, full_text=summary))
+                else:
+                    logger.warning(f"No summary available for {file_path}, skipping vectorization")
+                    return
             else:
-                # Read raw file content; embedders apply their own input guard.
-                try:
-                    content = await viking_fs.read_file(file_path, ctx=ctx)
-                    if isinstance(content, bytes):
-                        content = content.decode("utf-8", errors="replace")
-                    context.set_vectorize(Vectorize(text=content))
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to read file content for {file_path}, falling back to summary: {e}"
-                    )
-                    if summary:
-                        context.set_vectorize(Vectorize(text=summary))
-                    else:
-                        logger.warning(
-                            f"No summary available for {file_path}, skipping vectorization"
-                        )
-                        return
+                if summary and effective_text_source in {"summary_first", "summary_only"}:
+                    # Use summary for vectorization, but reuse the single raw text read for BM25.
+                    context.set_vectorize(Vectorize(text=summary, full_text=content or summary))
+                else:
+                    # Embedders apply their own input guard.
+                    context.set_vectorize(Vectorize(text=content, full_text=content))
         elif content_type == ResourceContentType.IMAGE and image_vectorization in {
             "image_only",
             "image_and_summary",
@@ -471,7 +553,7 @@ async def vectorize_file(
                 return
         elif summary:
             # For non-text files, use summary
-            context.set_vectorize(Vectorize(text=summary))
+            context.set_vectorize(Vectorize(text=summary, full_text=summary))
         else:
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
             return

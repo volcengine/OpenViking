@@ -1,5 +1,5 @@
 use crate::client::HttpClient;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
 use crate::theme;
 use colored::Colorize;
@@ -11,11 +11,13 @@ pub async fn create_account(
     client: &HttpClient,
     account_id: &str,
     admin_user_id: &str,
+    user_config_json: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
+    let user_config = parse_user_config_json(user_config_json, "--user-config-json")?;
     let response = client
-        .admin_create_account(account_id, admin_user_id)
+        .admin_create_account(account_id, admin_user_id, user_config.as_ref())
         .await?;
     output_success(&response, output_format, compact);
     print_admin_user_key_notice(&response, output_format, false);
@@ -65,15 +67,29 @@ pub async fn register_user(
     account_id: &str,
     user_id: &str,
     role: &str,
+    user_config_json: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
+    let user_config = parse_user_config_json(user_config_json, "--user-config-json")?;
     let response = client
-        .admin_register_user(account_id, user_id, role)
+        .admin_register_user(account_id, user_id, role, user_config.as_ref())
         .await?;
     output_success(&response, output_format, compact);
     print_admin_user_key_notice(&response, output_format, false);
     Ok(())
+}
+
+fn parse_user_config_json(value: Option<&str>, flag: &str) -> Result<Option<Value>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let parsed: Value = serde_json::from_str(value)
+        .map_err(|err| Error::Client(format!("{flag} must be valid JSON: {err}")))?;
+    if !parsed.is_object() {
+        return Err(Error::Client(format!("{flag} must be a JSON object")));
+    }
+    Ok(Some(parsed))
 }
 
 pub async fn list_users(

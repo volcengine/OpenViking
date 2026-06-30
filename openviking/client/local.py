@@ -7,8 +7,17 @@ Implements BaseClient interface using direct service calls (embedded mode).
 
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.core.peer_id import normalize_peer_id, normalize_peer_selector
+from openviking.core.peer_id import normalize_peer_id
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers.skills import (
+    _list_skill_files,
+    _list_skills_from_root,
+    _merge_skills,
+    _require_skill,
+    _restore_skill_privacy,
+    _skill_summary_from_hit,
+    _validate_skill_format,
+)
 from openviking.service import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.telemetry import TelemetryRequest
@@ -80,21 +89,21 @@ class LocalClient(BaseClient):
             path: Local storage path (overrides ov.conf storage path)
             user: Explicit account/user identity for embedded mode
             actor_peer_id: Optional view filter for the current user's peer collection.
-            agent_id: Legacy alias for actor_peer_id.
+            agent_id: Legacy alias that marks the actor peer scope as legacy agent mode.
         """
+        if actor_peer_id is not None and agent_id is not None:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+        effective_actor_peer_id = actor_peer_id or agent_id
         self._service = OpenVikingService(
             path=path,
             user=user or UserIdentifier.the_default_user(),
         )
         self._user = self._service.user
-        if actor_peer_id and agent_id:
-            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
-        self._legacy_agent_id = normalize_peer_selector(None, agent_id=agent_id)
         self._ctx = RequestContext(
             user=self._user,
             role=Role.USER,
-            actor_peer_id=normalize_peer_selector(actor_peer_id, agent_id=agent_id),
-            legacy_agent_id=self._legacy_agent_id,
+            actor_peer_id=normalize_peer_id(effective_actor_peer_id),
+            legacy_agent_id=normalize_peer_id(agent_id),
         )
 
     @property
@@ -164,6 +173,7 @@ class LocalClient(BaseClient):
         wait: bool = False,
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
         execution = await run_with_telemetry(
@@ -174,12 +184,318 @@ class LocalClient(BaseClient):
                 ctx=self._ctx,
                 wait=wait,
                 timeout=timeout,
+                target_uri=target_uri,
             ),
         )
         return attach_telemetry_payload(
             execution.result,
             execution.telemetry,
         )
+
+    async def list_skills(
+        self,
+        node_limit: int = 1000,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List installed skills."""
+        from openviking.core.namespace import canonical_user_root
+
+        service = self._service
+        ctx = self._ctx
+        if target_uri:
+            skills = await _list_skills_from_root(service, ctx, target_uri)
+            return {"root_uri": target_uri, "skills": skills, "total": len(skills)}
+        else:
+            user_skills = await _list_skills_from_root(
+                service, ctx, f"{canonical_user_root(ctx)}/skills"
+            )
+            agent_skills = await _list_skills_from_root(service, ctx, "viking://agent/skills")
+            merged = [*user_skills, *agent_skills]
+            return {
+                "root_uris": [f"{canonical_user_root(ctx)}/skills", "viking://agent/skills"],
+                "skills": merged,
+                "total": len(merged),
+            }
+
+    async def find_skills(
+        self,
+        query: str,
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        level: Optional[List[int]] = None,
+        telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Find skills by semantic search."""
+        from openviking.core.namespace import canonical_user_root
+
+        service = self._service
+        ctx = self._ctx
+
+        async def _search_at(uri: str) -> list:
+            result = await service.search.find(
+                query=query,
+                ctx=ctx,
+                target_uri=uri,
+                limit=limit,
+                score_threshold=score_threshold,
+                level=level,
+            )
+            result_dict = result.to_dict() if hasattr(result, "to_dict") else dict(result or {})
+            return [_skill_summary_from_hit(hit) for hit in result_dict.get("skills", [])]
+
+        if target_uri:
+            execution = await run_with_telemetry(
+                operation="skills.find",
+                telemetry=telemetry,
+                fn=lambda: _search_at(target_uri),
+            )
+            hits = execution.result
+            return {
+                "root_uri": target_uri,
+                "skills": hits,
+                "total": len(hits),
+            }
+        else:
+            user_root = f"{canonical_user_root(ctx)}/skills"
+            agent_root = "viking://agent/skills"
+
+            user_execution = await run_with_telemetry(
+                operation="skills.find",
+                telemetry=telemetry,
+                fn=lambda: _search_at(user_root),
+            )
+            user_hits = user_execution.result
+
+            agent_hits = await _search_at(agent_root)
+
+            merged = [*user_hits, *agent_hits]
+            if merged and "score" in merged[0]:
+                merged.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+            return {
+                "root_uris": [user_root, agent_root],
+                "skills": merged,
+                "total": len(merged),
+            }
+
+    async def get_skill(
+        self,
+        skill_name: str,
+        include_content: Optional[bool] = None,
+        include_files: bool = True,
+        include_source: bool = False,
+        level: Optional[int] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get a skill by name."""
+        from openviking.server.routers.skills import (
+            _parse_abstract_meta,
+            _relative_skill_path,
+            _skill_file_kind,
+            _skill_summary_from_meta,
+            SOURCE_METADATA_FILENAME,
+        )
+        from openviking.server.skill_source_metadata import read_skill_source_metadata
+
+        if level is not None and level not in {0, 1, 2}:
+            raise InvalidArgumentError(
+                "Skill show level must be 0, 1, or 2",
+                details={"field": "level", "allowed": [0, 1, 2]},
+            )
+
+        service = self._service
+        ctx = self._ctx
+        root_uri = await _require_skill(service, ctx, skill_name, target_uri)
+
+        abstract = await service.fs.abstract(root_uri, ctx=ctx)
+        result = _skill_summary_from_meta(skill_name, root_uri, _parse_abstract_meta(abstract))
+
+        if level is None or level == 0:
+            result["abstract"] = abstract
+        if level is None or level == 1:
+            result["overview"] = await service.fs.overview(root_uri, ctx=ctx)
+        if level == 2 or include_content is True or (level is None and include_content is not False):
+            from openviking.server.routers.skills import _skill_md_uri
+
+            result["content"] = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
+
+        if include_files:
+            entries = await _list_skill_files(service, ctx, root_uri)
+            result["files"] = [
+                {
+                    "name": entry.get("name") or skill_name,
+                    "uri": entry.get("uri", ""),
+                    "path": _relative_skill_path(root_uri, entry.get("uri", "")),
+                    "is_dir": entry.get("isDir", False),
+                    "kind": _skill_file_kind(
+                        _relative_skill_path(root_uri, entry.get("uri", "")),
+                        entry.get("isDir", False),
+                    ),
+                }
+                for entry in entries
+                if isinstance(entry, dict)
+                and _relative_skill_path(root_uri, entry.get("uri", "")) != SOURCE_METADATA_FILENAME
+            ]
+
+        if include_source:
+            result["source"] = await read_skill_source_metadata(service, ctx, root_uri)
+
+        return result
+
+    async def update_skill(
+        self,
+        skill_name: str,
+        data: Any,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Update an existing skill."""
+        service = self._service
+        ctx = self._ctx
+
+        # Verify the skill exists and determine its root URI
+        root_uri = await _require_skill(service, ctx, skill_name, target_uri)
+        skill_root_parent = root_uri.rsplit("/", 1)[0]
+
+        execution = await run_with_telemetry(
+            operation="skills.update",
+            telemetry=telemetry,
+            fn=lambda: self._update_skill_impl(
+                skill_name, data, root_uri, skill_root_parent, wait, timeout, source_metadata
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
+    async def _update_skill_impl(
+        self,
+        skill_name: str,
+        data: Any,
+        root_uri: str,
+        skill_root_parent: str,
+        wait: bool,
+        timeout: Optional[float],
+        source_metadata: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        import shutil
+        import uuid
+
+        from openviking.server.skill_source_metadata import persist_skill_source_metadata
+
+        service = self._service
+        ctx = self._ctx
+        backup_uri = f"{skill_root_parent}/.{skill_name}.update-backup-{uuid.uuid4().hex}"
+        backup_created = False
+        privacy_update_attempted = False
+        previous_privacy = None
+        preparation = None
+        privacy = service.privacy_configs
+        effective_source_metadata = source_metadata or {
+            "type": "embedded",
+            "source": "inline_content",
+            "operation": "update",
+        }
+        try:
+            if privacy is not None:
+                previous_privacy = await privacy.get_current(ctx, "skill", skill_name)
+            preparation = await service.resources._skill_processor.prepare_skill_processing(  # noqa: SLF001
+                data,
+                ctx=ctx,
+                allow_local_path_resolution=False,
+            )
+            expected_name = skill_name
+            if preparation.skill_dict.get("name") != expected_name:
+                raise InvalidArgumentError(
+                    f"Skill name mismatch: path name is '{expected_name}', content name is '{preparation.skill_dict.get('name')}'",
+                    details={
+                        "expected": expected_name,
+                        "actual": preparation.skill_dict.get("name"),
+                    },
+                )
+            await service.fs.mv(root_uri, backup_uri, ctx=ctx)
+            backup_created = True
+            result = await service.resources.add_skill(
+                data=preparation,
+                ctx=ctx,
+                wait=wait,
+                timeout=timeout,
+                allow_local_path_resolution=False,
+                apply_privacy=False,
+                privacy_change_reason="auto-extracted from update_skill",
+                target_uri=skill_root_parent,
+            )
+            await persist_skill_source_metadata(service, ctx, result, effective_source_metadata)
+            privacy_update_attempted = True
+            await service.resources._skill_processor.apply_skill_privacy(  # noqa: SLF001
+                preparation.skill_dict,
+                preparation.privacy_values,
+                ctx,
+                change_reason="auto-extracted from update_skill",
+                delete_if_empty=True,
+            )
+        except Exception:
+            if backup_created:
+                try:
+                    await service.fs.rm(root_uri, ctx=ctx, recursive=True)
+                except Exception:
+                    pass
+                try:
+                    await service.fs.mv(backup_uri, root_uri, ctx=ctx)
+                except Exception:
+                    pass
+            if privacy_update_attempted:
+                try:
+                    await _restore_skill_privacy(service, ctx, skill_name, previous_privacy)
+                except Exception:
+                    pass
+            raise
+        else:
+            if backup_created:
+                try:
+                    await service.fs.rm(backup_uri, ctx=ctx, recursive=True)
+                except Exception:
+                    pass
+            result["action"] = "update"
+            return result
+        finally:
+            if preparation and preparation.cleanup_path:
+                shutil.rmtree(preparation.cleanup_path, ignore_errors=True)
+
+    async def delete_skill(
+        self,
+        skill_name: str,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Delete a skill."""
+        service = self._service
+        ctx = self._ctx
+        root_uri = await _require_skill(service, ctx, skill_name, target_uri)
+        result = await service.fs.rm(root_uri, ctx=ctx, recursive=True)
+        return {"name": skill_name, "uri": root_uri, "root_uri": root_uri, "deleted": True}
+
+    async def validate_skill(
+        self,
+        data: Any,
+        strict: bool = False,
+        source_path: Optional[str] = None,
+        skill_dir_name: Optional[str] = None,
+        target_uri: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Validate skill data."""
+        result = _validate_skill_format(
+            self._service,
+            data,
+            strict=strict,
+            skill_dir_name=skill_dir_name,
+            source_path=source_path,
+        )
+        return result
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""
@@ -704,10 +1020,7 @@ class LocalClient(BaseClient):
                 {
                     "role": role,
                     "parts": message_parts,
-                    "peer_id": self._resolve_message_peer_id(
-                        role,
-                        message.get("peer_id"),
-                    ),
+                    "peer_id": self._resolve_message_peer_id(role, message.get("peer_id")),
                     "created_at": message.get("created_at"),
                 }
             )
@@ -719,15 +1032,17 @@ class LocalClient(BaseClient):
             "added": len(added),
         }
 
-    def _resolve_message_peer_id(self, role: str, peer_id: Optional[str]) -> Optional[str]:
-        if self._legacy_agent_id is None:
-            return normalize_peer_id(peer_id)
-        if peer_id is not None:
-            raise InvalidArgumentError(
-                "peer_id cannot be used when client is configured with legacy agent_id"
-            )
-        if role == "assistant":
-            return self._legacy_agent_id
+    def _resolve_message_peer_id(
+        self,
+        role: str,
+        peer_id: Optional[str],
+    ) -> Optional[str]:
+        normalized_peer_id = normalize_peer_id(peer_id)
+        if normalized_peer_id is not None:
+            return normalized_peer_id
+        legacy_agent_id = getattr(self._ctx, "legacy_agent_id", None)
+        if legacy_agent_id is not None and role == "assistant":
+            return legacy_agent_id
         return None
 
     # ============= Pack =============
@@ -783,6 +1098,68 @@ class LocalClient(BaseClient):
             on_conflict=on_conflict,
             vector_mode=vector_mode,
         )
+
+    # ============= Git Version Control =============
+
+    async def git_commit(
+        self,
+        *,
+        message: str,
+        paths: Optional[List[str]] = None,
+        branch: str = "main",
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a git snapshot. See VikingFS.commit for semantics."""
+        return await self._service.fs.commit(
+            message=message,
+            paths=paths,
+            branch=branch,
+            author_name=author_name,
+            author_email=author_email,
+            ctx=self._ctx,
+        )
+
+    async def git_restore(
+        self,
+        *,
+        project_dir: Optional[str] = None,
+        source_commit: str,
+        branch: str = "main",
+        dry_run: bool = False,
+        message: Optional[str] = None,
+        author_name: Optional[str] = None,
+        author_email: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Restore a subtree, or the full account tree when project_dir is omitted."""
+        return await self._service.fs.restore(
+            project_dir=project_dir,
+            source_commit=source_commit,
+            branch=branch,
+            dry_run=dry_run,
+            message=message,
+            author_name=author_name,
+            author_email=author_email,
+            ctx=self._ctx,
+        )
+
+    async def git_show(
+        self,
+        target_ref: str,
+        *,
+        path: Optional[str] = None,
+    ) -> Any:
+        """Read a commit's metadata or a single blob."""
+        return await self._service.fs.show(target_ref, path=path, ctx=self._ctx)
+
+    async def git_log(
+        self,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Walk back along parents[0] up to limit commits."""
+        return await self._service.fs.log(branch=branch, limit=limit, ctx=self._ctx)
 
     # ============= Debug =============
 

@@ -123,10 +123,7 @@ class TestLanguageDetection:
         assert language == "en"
 
     def test_detect_language_italian(self):
-        text = (
-            "Questo documento descrive le preferenze dell utente "
-            "e il progetto da completare."
-        )
+        text = "Questo documento descrive le preferenze dell utente e il progetto da completare."
         language = _detect_language_from_text(text, fallback_language="it")
         assert language == "it"
 
@@ -143,9 +140,15 @@ class TestLanguageDetection:
         [
             ("project document user data model profile", "en"),
             ("Ce document décrit les préférences de l utilisateur et le projet à terminer.", "fr"),
-            ("Este documento describe las preferencias del usuario y el proyecto para completar.", "es"),
+            (
+                "Este documento describe las preferencias del usuario y el proyecto para completar.",
+                "es",
+            ),
             ("Dieses Dokument beschreibt die Präferenzen der Benutzer und das Projekt.", "de"),
-            ("Este documento descreve as preferências do usuário e o projeto para completar.", "pt"),
+            (
+                "Este documento descreve as preferências do usuário e o projeto para completar.",
+                "pt",
+            ),
         ],
     )
     def test_detect_latin_language_conservatively(self, text, expected):
@@ -357,15 +360,19 @@ class TestGenerateTextSummaryOutputLanguage:
         mock_viking_fs = self._create_mock_viking_fs(content)
         mock_config = self._create_mock_config(mock_vlm)
 
-        with patch.dict(
-            os.environ,
-            {"LC_ALL": self._LANGUAGE_LOCALE[expected_lang]},
-        ), patch(
-            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-            return_value=mock_viking_fs,
-        ), patch(
-            "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-            return_value=mock_config,
+        with (
+            patch.dict(
+                os.environ,
+                {"LC_ALL": self._LANGUAGE_LOCALE[expected_lang]},
+            ),
+            patch(
+                "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+                return_value=mock_viking_fs,
+            ),
+            patch(
+                "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+                return_value=mock_config,
+            ),
         ):
             processor = SemanticProcessor()
             processor._current_ctx = MagicMock()
@@ -384,6 +391,7 @@ class TestGenerateTextSummaryOutputLanguage:
             assert _verify_content_language(result["summary"], expected_lang), (
                 f"{file_name}: Content language mismatch. Expected {expected_lang}, got: {result['summary']}"
             )
+            assert result["content"] == content
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -401,15 +409,19 @@ class TestGenerateTextSummaryOutputLanguage:
         mock_viking_fs = self._create_mock_viking_fs(content)
         mock_config = self._create_mock_config(mock_vlm)
 
-        with patch.dict(
-            os.environ,
-            {"LC_ALL": self._LANGUAGE_LOCALE[expected_lang]},
-        ), patch(
-            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-            return_value=mock_viking_fs,
-        ), patch(
-            "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-            return_value=mock_config,
+        with (
+            patch.dict(
+                os.environ,
+                {"LC_ALL": self._LANGUAGE_LOCALE[expected_lang]},
+            ),
+            patch(
+                "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+                return_value=mock_viking_fs,
+            ),
+            patch(
+                "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+                return_value=mock_config,
+            ),
         ):
             processor = SemanticProcessor()
             processor._current_ctx = MagicMock()
@@ -517,12 +529,16 @@ class TestOutputLanguageOverride:
             assert _resolve_system_fallback_language("en") == "ja"
 
     def test_local_timezone_hint_used_when_tz_env_absent(self):
-        with patch.dict(os.environ, {}, clear=True), patch(
-            "openviking.session.memory.utils.language.locale.getlocale",
-            return_value=("C", "UTF-8"),
-        ), patch(
-            "openviking.session.memory.utils.language.os.path.realpath",
-            return_value="/usr/share/zoneinfo.default/Asia/Shanghai",
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "openviking.session.memory.utils.language.locale.getlocale",
+                return_value=("C", "UTF-8"),
+            ),
+            patch(
+                "openviking.session.memory.utils.language.os.path.realpath",
+                return_value="/usr/share/zoneinfo.default/Asia/Shanghai",
+            ),
         ):
             assert _resolve_system_fallback_language("en") == "zh-CN"
 

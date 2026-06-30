@@ -28,7 +28,7 @@
             "name": "local-backup",
             "backend": "local",
             "local": {
-              "local_dir": "./data/backup"
+                "workspace": "./data/backup"
             }
           }
         ]
@@ -43,6 +43,7 @@
 - 顶层 `backend` 是 primary。
 - `backups.items[]` 是 backup 列表。
 - `name` 是 backup 的稳定身份，后续同步元数据会引用它。
+- `backend = "local"` 的 backup 使用 `local.workspace` 指定本地目录。
 - `sync_type` 不配置时默认按异步模式理解。
 
 ## 多 Backup 配置
@@ -62,7 +63,7 @@
             "name": "local-az2",
             "backend": "local",
             "local": {
-              "local_dir": "./data/local-az2"
+                "workspace": "./data/local-az2"
             }
           },
           {
@@ -291,7 +292,7 @@ Exclude 用于让某个 backup 跳过匹配文件。
             "name": "encrypted-backup",
             "backend": "local",
             "local": {
-              "local_dir": "./data/encrypted-backup"
+                "workspace": "./data/encrypted-backup"
             },
             "encryption": {
               "enabled": true

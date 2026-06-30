@@ -9,25 +9,25 @@ viking://{scope}/{path}
 ```
 
 - **scheme**: Always `viking`
-- **scope**: Top-level namespace (`resources`, `user`; `temp`, `queue`, and `upload` are internal)
+- **scope**: Top-level namespace (`resources`, `user`, `agent`; `temp`, `queue`, and `upload` are internal)
 - **path**: Resource path within the scope
 
 ## Scopes
 
 | Scope | Description | Lifecycle | Visibility |
 |-------|-------------|-----------|------------|
-| **resources** | Independent resources | Long-term | Global |
+| **resources** | Independent resources / objective knowledge | Long-term | Account global |
 | **user** | User-level data, including sessions | Long-term / session lifetime | Current user |
+| **agent** | Agent capabilities and configuration (skills, endpoints, tools, payments, etc.) | Long-term | Account global |
 | **queue** | Processing queue | Temporary | Internal |
 | **temp** | Temporary files | During parsing | Internal |
 | **upload** | Temporary upload files | Temporary | Internal |
 
 Public API and CLI filesystem/content operations accept the public scopes
-`resources` and `user` (plus the root URI `viking://`). `session` is retained
+`resources`, `user`, and `agent`, plus the root URI `viking://`. `session` is retained
 as a backward-compatible alias for user session paths; new session data lives
 under `viking://user/{user_id}/sessions`.
-`agent` is deprecated but remains as a read-only compatibility entry for legacy
-agent data. `temp`, `queue`, and `upload` are internal implementation
+`temp`, `queue`, and `upload` are internal implementation
 scopes and cannot be addressed directly through public API URI parameters.
 
 ## Initial Directory Structure
@@ -54,6 +54,12 @@ viking://
 │               ├── messages.jsonl
 │               ├── tools/
 │               └── history/
+│
+├── agent/                     # Agent capabilities and configuration (global)
+│   ├── skills/                # Skill definitions
+│   ├── endpoints/             # Communication endpoints (a2a, anp, etc.) (planned)
+│   ├── tools/                 # Tool configuration (mcp, etc.) (planned)
+│   └── payments/              # Payment configuration (ap2, etc.) (planned)
 │
 └── resources/{project}/      # Resource workspace
 ```
@@ -93,6 +99,20 @@ viking://user/memories/patterns/              # Learned patterns
 viking://user/{user_id}/peers/{peer_id}/memories/
 viking://user/{user_id}/peers/{peer_id}/resources/
 ```
+
+### Agent Capabilities and Configuration
+
+```
+viking://agent/skills/search-web                    # A specific skill definition
+viking://agent/skills/                              # All skill definitions
+viking://agent/endpoints/                           # Communication endpoints (a2a, anp, etc.) (planned)
+viking://agent/tools/mcp/                           # MCP tool configuration (planned)
+viking://agent/payments/ap2/                        # Payment configuration (planned)
+```
+
+`viking://agent/...` is a global shared scope, accessible to all users under the account,
+without agent_id isolation. Legacy (0.3.x) data under `viking://agent/...` remains accessible
+via a read-only compatibility entry, but new data should be written according to the new directory semantics.
 
 The short `viking://user/...` form is relative to the current request identity.
 OpenViking expands it internally to explicit namespace paths such as
@@ -212,15 +232,21 @@ viking://
 │       ├── memories/
 │       └── resources/
 │
+├── agent/                        # Agent capabilities and configuration (account global)
+│   ├── skills/                   # Skill definitions
+│   ├── endpoints/                # Communication endpoints (a2a, anp, etc.) (planned)
+│   ├── tools/                    # Tool configuration (mcp, etc.) (planned)
+│   └── payments/                 # Payment configuration (ap2, etc.) (planned)
+│
 └── user/{user_id}/sessions/{session_id}/
     ├── messages.jsonl
     ├── tools/
     └── history/
 ```
 
-`viking://agent/...` is deprecated and only kept for read-only legacy agent
-compatibility. New data should be written under
-`viking://user/{user_id}/peers/{peer_id}/...`.
+`viking://agent/...` is a global shared scope for agent capabilities, accessible to all users under the account,
+without agent_id isolation. Legacy (0.3.x) data under `viking://agent/...` remains accessible
+via a read-only compatibility entry, but new data should be written according to the new directory semantics.
 
 ## URI Operations
 
@@ -269,10 +295,16 @@ results = client.find(
     target_uri="viking://user/memories/"
 )
 
-# Search only in skills
+# Search only in user skills
 results = client.find(
     "web search",
     target_uri="viking://user/skills/"
+)
+
+# Search only in global agent skills
+results = client.find(
+    "web search",
+    target_uri="viking://agent/skills/"
 )
 ```
 
@@ -324,9 +356,19 @@ await client.add_resource(url, to="viking://resources/project/")
 # Add private resources to the current user's resource root
 await client.add_resource(path, parent="viking://user/resources/project/")
 
-# Skills always go to the current user's skills root
-await client.add_skill(skill)  # Canonical root: viking://user/{user_id}/skills/
+# Skills are added to the current user's skills root by default
+await client.add_skill(skill)  # canonical root: viking://user/skills/
+
+# Write to the global agent skills root (public/shared) via -p override
+ov skills add xxx -p viking://agent/skills/
 ```
+
+### Resources Scope Constraint
+
+The `resources` scope is for objective knowledge only (documents, code, specifications, papers, etc.).
+Storing non-knowledge data in `viking://resources/` is prohibited, including but not limited to:
+tool configurations, communication endpoint definitions, payment configurations, skill definitions, etc.
+Such data should use the `viking://agent/` scope.
 
 ## Related Documents
 

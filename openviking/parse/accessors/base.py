@@ -103,12 +103,15 @@ class DataAccessor(ABC):
     """
 
     @abstractmethod
-    def can_handle(self, source: Union[str, Path]) -> bool:
+    def can_handle(self, source: Union[str, Path], **kwargs) -> bool:
         """
         Check if this accessor can handle the given source.
 
         Args:
             source: Source string (URL, path, etc.) or Path object
+            **kwargs: Optional accessor-selection hints forwarded from
+                ``access()`` (e.g. an explicit ``site=True`` override). Most
+                accessors ignore these and decide purely from ``source``.
 
         Returns:
             True if this accessor can handle the source

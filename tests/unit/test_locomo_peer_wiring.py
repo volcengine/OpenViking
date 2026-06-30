@@ -67,8 +67,6 @@ def test_build_session_messages_non_group_uses_sample_peer_and_prefixes_speaker(
     assert messages[1]["text"] == "Bob: Hello Alice"
 
 
-
-
 @pytest.mark.asyncio
 async def test_viking_ingest_uses_message_peer_id(monkeypatch):
     calls = []

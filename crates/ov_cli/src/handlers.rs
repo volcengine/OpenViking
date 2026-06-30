@@ -87,7 +87,6 @@ pub async fn handle_add_resource(
         auth.account,
         auth.user,
         ctx.config.effective_actor_peer_id(),
-        ctx.config.agent_id.clone(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.extra_headers.clone(),
@@ -238,6 +237,7 @@ pub async fn handle_add_skill(
     data: String,
     wait: bool,
     timeout: Option<f64>,
+    parent: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -246,6 +246,7 @@ pub async fn handle_add_skill(
         &data,
         wait,
         timeout,
+        parent.as_deref(),
         ctx.should_show_progress(),
         ctx.is_verbose(),
         ctx.output_format,
@@ -504,11 +505,13 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::CreateAccount {
             account_id,
             admin_user_id,
+            user_config_json,
         } => {
             commands::admin::create_account(
                 &client,
                 &account_id,
                 &admin_user_id,
+                user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -528,12 +531,14 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             account_id,
             user_id,
             role,
+            user_config_json,
         } => {
             commands::admin::register_user(
                 &client,
                 &account_id,
                 &user_id,
                 &role,
+                user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )

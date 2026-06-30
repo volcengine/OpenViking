@@ -44,7 +44,9 @@ def resolve_media_names(file_path: Path, ext: str, **kwargs: Any) -> Tuple[str, 
         # a filename-like value ("photo.png") does not double its extension,
         # while a name that merely contains a dot ("meeting.v1") is preserved.
         candidate = Path(explicit_name)
-        display_stem = candidate.stem if candidate.suffix.lower() in MEDIA_EXTENSIONS else explicit_name
+        display_stem = (
+            candidate.stem if candidate.suffix.lower() in MEDIA_EXTENSIONS else explicit_name
+        )
         path_stem = display_stem.replace(" ", "_")
         original_filename = f"{path_stem}{ext}"
     else:

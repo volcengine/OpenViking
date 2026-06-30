@@ -54,9 +54,9 @@ async def code_outline_endpoint(
     service = get_service()
     content = await service.fs.read(request.uri, ctx=_ctx)
     if not isinstance(content, str):
-        return Response(
-            status="ok", result=f"Error: {request.uri} is not text"
-        ).model_dump(exclude_none=True)
+        return Response(status="ok", result=f"Error: {request.uri} is not text").model_dump(
+            exclude_none=True
+        )
     return Response(status="ok", result=outline_file(content, request.uri)).model_dump(
         exclude_none=True
     )
@@ -119,9 +119,9 @@ async def code_expand_endpoint(
     service = get_service()
     content = await service.fs.read(request.uri, ctx=_ctx)
     if not isinstance(content, str):
-        return Response(
-            status="ok", result=f"Error: {request.uri} is not text"
-        ).model_dump(exclude_none=True)
+        return Response(status="ok", result=f"Error: {request.uri} is not text").model_dump(
+            exclude_none=True
+        )
     return Response(
         status="ok", result=expand_symbol(content, request.uri, request.symbol)
     ).model_dump(exclude_none=True)

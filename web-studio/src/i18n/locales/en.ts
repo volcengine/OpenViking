@@ -187,8 +187,10 @@ const en = {
       title: 'User management',
     },
     page: {
-      description:
+      adminDescription:
         'Configure the active OpenViking Studio identity and manage accounts, users, and API keys.',
+      description:
+        'Configure the OpenViking Studio server URL and API key, then view data for the current identity.',
       title: 'Connection & Identity',
     },
     placeholders: {
@@ -314,7 +316,7 @@ const en = {
   requestLogs: {
     clear: 'Clear',
     description:
-      'Inspect server-side audited API requests, including status, latency, and request identifiers.',
+      'Inspect server-side audited API requests for the current identity, including status, latency, and request identifiers.',
     disabled: {
       description:
         'Usage/Audit is not initialized, so server-side request logs are unavailable.',
@@ -356,6 +358,11 @@ const en = {
     refresh: 'Refresh',
     reset: 'Reset',
     searchPlaceholder: 'Filter method, path, or status',
+    scope: {
+      currentIdentity: 'Current scope: Current API key identity',
+      currentIdentityWithName:
+        'Current scope: Current API key identity ({{identity}})',
+    },
     status: {
       error: 'ERR',
       pending: 'PENDING',
@@ -542,8 +549,23 @@ const en = {
       loadingEditor: 'Loading editor...',
       markdownPreview: 'Preview',
       markdownSource: 'Source',
+      noDirectoryContext:
+        'No abstract or overview available for this folder.',
       save: 'Save',
+      selectDirectoryContext: 'Select a chip to show folder context.',
       unsupportedBinary: 'Binary files do not support text preview.',
+      jsonl: {
+        collapse: 'Collapse',
+        dialogMode: 'Dialog',
+        emptyJsonl: 'Empty JSONL.',
+        emptyMessage: 'Empty message',
+        expand: 'Expand',
+        noArguments: 'No arguments',
+        rawMode: 'JSONL',
+        recordCount: '{{count}} record',
+        recordCount_other: '{{count}} records',
+        toolcall: 'toolcall',
+      },
     },
   },
   retrieval: {
@@ -631,6 +653,15 @@ const en = {
       toolInput: 'Input',
       toolResult: 'Result',
       loadMoreRefs: 'Load {{count}} more ({{remaining}} remaining)',
+      relativeTime: {
+        justNow: 'Just now',
+        minutesAgo: '{{count}} minute ago',
+        minutesAgo_other: '{{count}} minutes ago',
+        hoursAgo: '{{count}} hour ago',
+        hoursAgo_other: '{{count}} hours ago',
+        daysAgo: '{{count}} day ago',
+        daysAgo_other: '{{count}} days ago',
+      },
       toolStatus: {
         completed: 'Completed',
         failed: 'Failed',
@@ -722,6 +753,10 @@ const en = {
     explorer: {
       title: 'Context tree',
       addResource: 'Add resource',
+      abstractLevel: 'L0',
+      empty: 'empty',
+      loading: 'loading',
+      overviewLevel: 'L1',
       search: 'Search context',
       refresh: 'Refresh tree',
       namespaces: {
@@ -751,6 +786,7 @@ const en = {
         title: 'Please enable bot mode',
         description:
           'The current service has not enabled Agent chat. Start the service in bot mode and try again.',
+        command: 'openviking-server --with-bot',
         retry: 'Detect again',
       },
       empty: {
@@ -779,6 +815,7 @@ const en = {
       searchScopeLine: 'Search scope: {{scope}}',
       helpParameters: 'Parameters',
       helpExamples: 'Examples',
+      helpSubcommands: 'Subcommands',
       noParameters: 'No parameters',
       currentScopeAction: 'Use current directory',
       readUsage: 'Usage: /read viking://resources/...',
@@ -1118,6 +1155,30 @@ const en = {
         session: {
           description: 'Manage Agent sessions',
           usage: '/session subcommand',
+        },
+        tree: {
+          description: 'Show directory tree',
+          usage: '/tree [viking://resources/...]',
+        },
+        stat: {
+          description: 'Show resource metadata',
+          usage: '/stat viking://resources/...',
+        },
+        abstract: {
+          description: 'Read directory abstract',
+          usage: '/abstract viking://resources/...',
+        },
+        overview: {
+          description: 'Read directory overview',
+          usage: '/overview viking://resources/...',
+        },
+        health: {
+          description: 'Show backend health',
+          usage: '/health',
+        },
+        wait: {
+          description: 'Wait for service readiness',
+          usage: '/wait [--timeout seconds]',
         },
       },
     },

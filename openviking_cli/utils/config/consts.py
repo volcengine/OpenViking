@@ -75,6 +75,17 @@ OPENVIKING_GOPATH_ENV = "OPENVIKING_GOPATH"
 OPENVIKING_GOPROXY_ENV = "OPENVIKING_GOPROXY"
 
 # =============================================================================
+# Conversation-log ingest (openviking-server ingest)
+# =============================================================================
+
+OPENVIKING_INGEST_ENABLED_ENV = "OPENVIKING_INGEST_ENABLED"
+OPENVIKING_INGEST_SERVER_URL_ENV = "OPENVIKING_INGEST_SERVER_URL"
+OPENVIKING_INGEST_API_KEY_ENV = "OPENVIKING_INGEST_API_KEY"
+
+# Per-(harness, session) read-cursor state lives here (NEVER under tool-specific dirs).
+DEFAULT_INGEST_STATE_DIR = DEFAULT_CONFIG_DIR / "ingest"
+
+# =============================================================================
 # Default filenames
 # =============================================================================
 

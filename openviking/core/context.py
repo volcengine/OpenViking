@@ -41,13 +41,20 @@ class ContextLevel(int, Enum):
 
 class Vectorize:
     text: str = ""
+    full_text: str = ""  # Full content for BM25 (not embedding-truncated)
     # images: list of image references (data URIs or URLs) for multimodal embedding
     images: List[str] = []
     # video: str = ""
     # audio: str = ""
 
-    def __init__(self, text: str = "", images: Optional[List[str]] = None):
+    def __init__(
+        self,
+        text: str = "",
+        full_text: str = "",
+        images: Optional[List[str]] = None,
+    ):
         self.text = text
+        self.full_text = full_text
         self.images = list(images) if images else []
 
 

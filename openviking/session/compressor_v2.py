@@ -17,7 +17,7 @@ from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
-from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
+from openviking.session.memory.dataclass import MemoryFile, ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import (
     MemoryUpdateResult,
@@ -1168,14 +1168,43 @@ class SessionCompressorV2:
                 }
             )
 
-        # Read new content for adds and updates
-        for item in adds + updates:
+        # Read new content for adds and updates.
+        # Some upsert operations can be reported as successful even when the
+        # final file body is identical to the pre-existing content (for
+        # example, a no-op merge/patch or a write that only re-serializes the
+        # same memory). memory_diff.json should only include effective content
+        # changes, so filter no-op updates after the final content is known.
+        effective_adds = []
+        for item in adds:
             try:
                 content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
                 mf = MemoryFileUtils.read(content)
                 item["after"] = mf.content
             except Exception:
                 pass
+            effective_adds.append(item)
+
+        effective_updates = []
+        for item in updates:
+            op = upsert_by_uri.get(item["uri"])
+            old_file = op.old_memory_file_content if op else None
+            new_file = None
+            try:
+                content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
+                new_file = MemoryFileUtils.read(content, uri=item["uri"])
+                item["after"] = new_file.content
+            except Exception:
+                pass
+            if old_file is not None and self._same_memory_file(old_file, new_file):
+                logger.info(
+                    "Skipping unchanged memory file in memory_diff.json: %s",
+                    item.get("uri"),
+                )
+                continue
+            effective_updates.append(item)
+
+        adds = effective_adds
+        updates = effective_updates
 
         return {
             "archive_uri": archive_uri,
@@ -1191,6 +1220,18 @@ class SessionCompressorV2:
                 "total_deletes": len(deletes),
             },
         }
+
+    @staticmethod
+    def _same_memory_file(before: Optional[MemoryFile], after: Optional[MemoryFile]) -> bool:
+        """Return whether two parsed memory files represent the same stored memory."""
+        if before is None or after is None:
+            return False
+        # memory_type is commonly known from the operation/URI even when the raw
+        # memory file does not serialize it, so do not treat that metadata-only
+        # representation difference as a real file update.
+        return before.model_dump(exclude={"uri", "memory_type"}) == after.model_dump(
+            exclude={"uri", "memory_type"}
+        )
 
     def _get_memory_type_from_uri(self, uri: str) -> str:
         """Extract memory type from URI.

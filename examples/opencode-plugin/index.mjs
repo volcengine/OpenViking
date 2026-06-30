@@ -6,6 +6,7 @@ import { createMemorySessionManager } from "./lib/memory-session.mjs"
 import { createCodeTools } from "./lib/code-tools.mjs"
 import { createMemoryTools } from "./lib/memory-tools.mjs"
 import { createMemoryRecall } from "./lib/memory-recall.mjs"
+import { createVikingUriGuard } from "./lib/viking-uri-guard.mjs"
 import { initLogger, loadConfig, log, resolveDataDir } from "./lib/utils.mjs"
 
 const pluginRoot = dirname(fileURLToPath(import.meta.url))
@@ -26,6 +27,7 @@ export async function OpenVikingPlugin({ client, directory }) {
   const repoContext = createRepoContext({ config })
   const sessionManager = createMemorySessionManager({ config, pluginRoot: dataDir })
   const recall = createMemoryRecall({ config })
+  const vikingUriGuard = createVikingUriGuard()
   const tools = createMemoryTools({ config, sessionManager, projectDirectory: directory })
   const codeTools = createCodeTools({ config })
 
@@ -43,6 +45,8 @@ export async function OpenVikingPlugin({ client, directory }) {
         await repoContext.refreshRepos({ force: true })
       }
     },
+
+    "tool.execute.before": vikingUriGuard,
 
     tool: { ...tools, ...codeTools },
 

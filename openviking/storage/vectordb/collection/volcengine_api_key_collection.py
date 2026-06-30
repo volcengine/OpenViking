@@ -380,6 +380,7 @@ class VolcengineApiKeyCollection(ICollection):
             "limit": limit,
             "offset": offset,
         }
+        data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 

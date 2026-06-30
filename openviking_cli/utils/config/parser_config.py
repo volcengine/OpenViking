@@ -552,6 +552,56 @@ class DirectoryConfig(ParserConfig):
 
 
 @dataclass
+class WebFeedConfig(ParserConfig):
+    """
+    Configuration for whole-site ingestion via sitemap / RSS / Atom feeds.
+
+    Used by WebFeedAccessor (and its single-page detect-and-suggest helper).
+    Each setting can be overridden per call via add_resource ``args`` (e.g.
+    ``args={"max_pages": 50}``).
+
+    Attributes:
+        max_pages: Hard cap on the number of pages mirrored per site.
+        max_concurrency: Max concurrent page fetches.
+        request_timeout: Per-request timeout in seconds.
+        politeness_delay: Delay (seconds) before each page fetch, to be polite.
+        same_host_only: Only ingest URLs on the same host as the feed.
+        respect_robots: Honor robots.txt Disallow rules (and discover sitemaps).
+        max_depth: Max recursion depth when following <sitemapindex> entries.
+        suggest_feed: When adding a single webpage, probe for a sitemap/RSS and
+            append a one-line hint suggesting whole-site ingestion (never auto-crawls).
+        suggest_timeout: Hard timeout (seconds) for that single-page probe.
+    """
+
+    max_pages: int = 200
+    max_concurrency: int = 5
+    request_timeout: float = 30.0
+    politeness_delay: float = 0.2
+    same_host_only: bool = True
+    respect_robots: bool = True
+    max_depth: int = 2
+    suggest_feed: bool = True
+    suggest_timeout: float = 2.5
+
+    def validate(self) -> None:
+        """Validate web feed configuration."""
+        super().validate()
+
+        if self.max_pages <= 0:
+            raise ValueError("max_pages must be positive")
+        if self.max_concurrency <= 0:
+            raise ValueError("max_concurrency must be positive")
+        if self.request_timeout <= 0:
+            raise ValueError("request_timeout must be positive")
+        if self.politeness_delay < 0:
+            raise ValueError("politeness_delay must be non-negative")
+        if self.max_depth <= 0:
+            raise ValueError("max_depth must be positive")
+        if self.suggest_timeout <= 0:
+            raise ValueError("suggest_timeout must be positive")
+
+
+@dataclass
 class SemanticConfig:
     """
     Configuration for semantic processing (overview/abstract generation).
@@ -599,6 +649,7 @@ PARSER_CONFIG_REGISTRY = {
     "text": TextConfig,
     "directory": DirectoryConfig,
     "feishu": FeishuConfig,
+    "webfeed": WebFeedConfig,
 }
 
 

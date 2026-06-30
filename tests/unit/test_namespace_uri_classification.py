@@ -115,7 +115,10 @@ def test_session_uri_helpers_use_user_namespace():
     assert is_session_uri("viking://user/alice/sessions/s1")
     assert is_session_uri("viking://user/sessions/s1")
     assert is_session_uri("viking://session/s1")
-    assert "viking://session" not in visible_roots(ctx)
+    roots = visible_roots(ctx)
+    assert "viking://session" not in roots
+    assert "viking://agent" not in roots
+    assert "viking://agent/skills" in roots
 
 
 def test_current_user_short_content_roots_are_canonicalized_from_content_segments():
@@ -146,4 +149,3 @@ def test_current_user_short_content_roots_are_canonicalized_from_content_segment
     assert is_content_namespace_root_uri("viking://resources", ctx)
     assert is_content_root_uri("viking://resources", ctx, kind="resource")
     assert not is_content_namespace_root_uri("viking://user/resources/docs", ctx)
-

@@ -49,6 +49,16 @@ OpenViking supports various resource types, categorized by functionality:
 |------|-------------|
 | Feishu/Lark | URL-based, supports docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` |
 
+**Whole Website (sitemap / RSS / Atom)**
+
+| Type | Resource Name | Description |
+|------|---------------|-------------|
+| Sitemap | `https://host/sitemap.xml`, `https://host/sitemap-index.xml` | Parses the sitemap and ingests every listed page as a single resource tree (one child node per page). Nested `<sitemapindex>` is followed recursively. The whole site becomes one resource under `viking://resources/<host>`. |
+| RSS / Atom feed | `https://host/rss.xml`, `https://host/atom.xml`, `https://host/feed` | Parses RSS 2.0 / Atom and ingests each entry as a tree node; the article body is fetched from its link (or taken inline when the feed carries full content). |
+| Whole-site auto-discovery | `https://host` + `args.site=true` | Forces whole-site ingestion for a bare domain or ordinary page: discovers the site's sitemap/RSS via robots.txt, HTML `<link rel="alternate">` autodiscovery, and conventional paths, then ingests it. |
+
+Crawling is bounded and non-recursive beyond the listed pages, and is governed by the `parsers.webfeed` config (`max_pages`, `max_concurrency`, `politeness_delay`, `same_host_only`, `respect_robots`, `max_depth`); robots.txt is honored. Set `watch_interval` on a sitemap/feed URL to keep the **whole site** refreshed: on each run new pages are added and removed pages drop automatically. When adding a single homepage (without `args.site`), the response may append a one-line hint suggesting whole-site ingestion — it never auto-crawls.
+
 ### Resource Processing Pipeline
 
 Resources go through the following processing stages when added:
@@ -95,6 +105,7 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 #### Watch Task Creation
 - Set `watch_interval > 0` (in minutes) when calling `add_resource` to create a watch task
 - You may specify `to` to define the target URI; if omitted, the task binds to the `root_uri` returned by this import
+- Pointing a watch at a sitemap/RSS/Atom URL keeps the **whole site** in sync: each refresh re-reads the feed and rebuilds the tree, so newly published pages are added and removed pages drop automatically
 - `WatchManager` handles task persistence
 - Supports multi-tenant permission control (ROOT/ADMIN/USER permission levels)
 
@@ -157,12 +168,13 @@ This endpoint is the core entry point for resource management, supporting adding
 | exclude | string | No | None | File patterns to exclude (glob) |
 | directly_upload_media | bool | No | True | Whether to directly upload media files |
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
-| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
+| args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config, and Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
 | watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates task; <=0 cancels task; explicit `to` wins, otherwise binds to the imported `root_uri` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
 **Additional Notes**:
 - `to` and `parent` cannot be specified together. Use `create_parent=true` with `parent` when the parent directory should be created automatically.
+- If both `to` and `parent` are omitted, the server may use the current user's `add_targets.resource_uri` override, then `server.user_config_defaults.add_targets.resource_uri`. If neither is set, legacy target resolution is unchanged.
 - Resource targets may use public `viking://resources/...`, current-user shorthand `viking://user/resources/...`, explicit user `viking://user/{user_id}/resources/...`, or peer `viking://user/{user_id}/peers/{peer_id}/resources/...` paths. Current-user shorthand is canonicalized with the authenticated request identity.
 - `user_id` and `peer_id` path segments must be safe single-segment identifiers, for example `alice` or `web-visitor-alice`. Values with path separators, `.`, `..`, `:`, or `+` are rejected.
 - `path` and `temp_file_id` cannot be specified together
@@ -612,14 +624,18 @@ Skills are special resources used to define operations or tools that agents can 
 |-----------|------|----------|---------|-------------|
 | data | Any | No | - | Inline skill content or structured data. Mutually exclusive with `temp_file_id` |
 | temp_file_id | string | No | - | Temporary upload file ID (obtained via [temp_upload](#temp_upload)). Mutually exclusive with `data` |
+| target_uri | string | No | - | Skill root override. Explicit value wins over user and deployment defaults |
 | wait | bool | No | False | Whether to wait for skill processing to complete |
 | timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
-Skills are always installed under the current user's skills root. The public short form
-`viking://user/skills` is accepted for filesystem/search operations and resolves to
-`viking://user/{user_id}/skills`; `add_skill` does not accept `to`, `parent`,
-`root_uri`, or peer-scoped skill targets.
+When `target_uri` is omitted, the server may use the current user's
+`add_targets.skill_uri` override, then
+`server.user_config_defaults.add_targets.skill_uri`. If neither is set,
+legacy behavior installs under the current user's skills root. The public
+short form `viking://user/skills` resolves to
+`viking://user/{user_id}/skills`. The v1 API accepts only
+`viking://user/skills` and `viking://agent/skills` as skill add roots.
 
 #### 3. Usage Examples
 

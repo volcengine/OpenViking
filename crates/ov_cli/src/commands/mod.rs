@@ -13,5 +13,6 @@ pub mod search;
 pub mod session;
 pub mod skills;
 pub mod system;
+pub mod snapshot;
 pub mod task;
 pub mod watch;

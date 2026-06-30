@@ -522,8 +522,6 @@ class TestCalculateMemoryUris:
 
         uris = handler.calculate_memory_uris(schema, operation, extract_ctx)
 
-        assert uris == [
-            "viking://user/support_bot/peers/web-visitor-bob/memories/preferences"
-        ]
+        assert uris == ["viking://user/support_bot/peers/web-visitor-bob/memories/preferences"]
         assert operation.memory_fields["user_id"] == "support_bot"
         assert operation.memory_fields["peer_id"] == "web-visitor-bob"

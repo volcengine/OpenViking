@@ -5,7 +5,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     error::Error,
-    error_classifier::looks_like_auth_error,
+    error_classifier::{extra_forbidden_field, looks_like_auth_error},
     i18n::{Language, copy},
     terminal_ui::{fit_to_display_width, truncate_to_display_width},
     theme,
@@ -241,6 +241,27 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
             ErrorAction::new("ov config", copy(language, "Edit this config", "编辑这个配置")),
             ErrorAction::new("ov config switch", copy(language, "Use another config", "使用其他配置")),
         ]),
+        Error::Api { message, .. } if extra_forbidden_field(message).is_some() => {
+            let field = extra_forbidden_field(message).unwrap_or_default();
+            ErrorReport::new(
+                copy(language, "OpenViking API Error", "OpenViking API 错误"),
+                match language {
+                    Language::En => format!(
+                        "OpenViking rejected an unsupported field \"{field}\". This instance's version likely does not match your CLI (the field may be missing, renamed, or removed)."
+                    ),
+                    Language::ZhCn => format!(
+                        "OpenViking 拒绝了不支持的字段 \"{field}\"：该实例版本可能与当前 CLI 不匹配（字段可能缺失、改名或已被移除）。"
+                    ),
+                },
+            )
+            .with_command(command)
+            .with_detail(message)
+            .with_actions(vec![
+                ErrorAction::new("ov health", copy(language, "Check the instance version", "查看实例版本")),
+                ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
+                ErrorAction::new("ov status", copy(language, "Check OpenViking status", "查看 OpenViking 状态")),
+            ])
+        }
         Error::Api { message, .. } => ErrorReport::new(
             copy(language, "OpenViking API Error", "OpenViking API 错误"),
             api_error_message(language, message),

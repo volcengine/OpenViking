@@ -141,7 +141,7 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
         actor_peer_id = _optional_string(data.get("actor_peer_id"), path="ovcli.actor_peer_id")
         agent_id = _optional_string(data.get("agent_id"), path="ovcli.agent_id")
         if actor_peer_id is not None and agent_id is not None:
-            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+            raise ValueError("actor_peer_id cannot be used with agent_id")
 
         timeout = _optional_float(data.get("timeout"), path="ovcli.timeout")
         profile = _optional_bool(data.get("profile"), path="ovcli.profile")
@@ -191,8 +191,9 @@ def resolve_client_config(
         actor_peer_id
         or os.getenv("OPENVIKING_ACTOR_PEER_ID")
         or (cli_config.actor_peer_id if cli_config else None)
-        or (cli_config.agent_id if cli_config else None)
     )
+    if resolved_actor_peer_id is None and cli_config is not None and cli_config.agent_id:
+        resolved_actor_peer_id = cli_config.agent_id
 
     resolved_timeout = timeout
     if timeout == 60.0:

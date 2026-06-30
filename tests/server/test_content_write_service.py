@@ -335,6 +335,9 @@ class _FakeVikingFS:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
+    def _ensure_mutable_access(self, uri: str, ctx):
+        del uri, ctx
+
     async def delete_temp(self, temp_uri: str, ctx=None):
         del ctx
         self.delete_temp_calls.append(temp_uri)
@@ -616,7 +619,13 @@ async def test_memory_write_wait_skips_semantic_queue_and_releases_write_lock(mo
 class _FakeVikingFSForCreate:
     """Variant of _FakeVikingFS that supports 'file doesn't exist' scenarios."""
 
-    def __init__(self, file_uri: str, root_uri: str, file_exists: bool = True):
+    def __init__(
+        self,
+        file_uri: str,
+        root_uri: str,
+        file_exists: bool = True,
+        existing_dirs: set[str] | None = None,
+    ):
         self._file_uri = file_uri
         self._root_uri = root_uri
         self._file_exists = file_exists
@@ -624,6 +633,7 @@ class _FakeVikingFSForCreate:
         self.write_file_calls = []
         self.rm_calls = []
         self.content = {}
+        self.existing_dirs = set({root_uri} if existing_dirs is None else existing_dirs)
 
     async def stat(self, uri: str, ctx=None):
         del ctx
@@ -631,16 +641,19 @@ class _FakeVikingFSForCreate:
             if self._file_exists:
                 return {"isDir": False}
             raise NotFoundError(uri, "file")
-        if uri == self._root_uri:
+        if uri in self.existing_dirs:
             return {"isDir": True}
         # Parent directories should exist for creation
-        if uri.startswith(self._root_uri) and uri != self._file_uri:
+        if uri != self._root_uri and uri.startswith(self._root_uri) and uri != self._file_uri:
             return {"isDir": True}
         raise NotFoundError(uri, "path")
 
     def _uri_to_path(self, uri: str, ctx=None):
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
+
+    def _ensure_mutable_access(self, uri: str, ctx):
+        del uri, ctx
 
     async def delete_temp(self, temp_uri: str, ctx=None):
         del ctx
@@ -650,6 +663,12 @@ class _FakeVikingFSForCreate:
         del ctx
         self.write_file_calls.append((uri, content))
         self.content[uri] = content
+        parent = uri.rsplit("/", 1)[0]
+        while parent.startswith("viking://") and parent not in self.existing_dirs:
+            self.existing_dirs.add(parent)
+            if "/" not in parent.removeprefix("viking://"):
+                break
+            parent = parent.rsplit("/", 1)[0]
 
     async def rm(self, uri: str, *, ctx=None, lock_handle=None):
         del ctx, lock_handle
@@ -930,6 +949,38 @@ async def test_create_mode_resource_scope(monkeypatch):
     )
     assert result["context_type"] == "resource"
     assert viking_fs.content[file_uri] == "content"
+
+
+class _AnyDirVikingFS:
+    """Stats the given file uri as a file and every other uri as a directory."""
+
+    def __init__(self, file_uri: str):
+        self._file_uri = file_uri
+
+    async def stat(self, uri: str, ctx=None):
+        del ctx
+        return {"isDir": uri != self._file_uri}
+
+
+@pytest.mark.asyncio
+async def test_resource_write_anchors_nested_file_to_direct_parent():
+    """A resource content write anchors the semantic refresh at the written file's
+    direct parent directory (anchor_to_parent=True), so the changed file is a direct
+    child of the DAG run root: its own L2 vector and the parent's L0/L1 are generated
+    from a single-directory run instead of a recursive walk of the whole project subtree.
+    set_tags keeps the project-root collapse (the default), which the derived
+    ``.abstract.md`` sidecar mapping relies on."""
+    file_uri = "viking://resources/dir1/sub_dir/sub_dir_1/test.md"
+    parent_uri = "viking://resources/dir1/sub_dir/sub_dir_1"
+    project_root = "viking://resources/dir1"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    coordinator = ContentWriteCoordinator(viking_fs=_AnyDirVikingFS(file_uri))
+
+    write_anchor = await coordinator._resolve_root_uri(file_uri, ctx=ctx, anchor_to_parent=True)
+    set_tags_anchor = await coordinator._resolve_root_uri(file_uri, ctx=ctx)
+
+    assert write_anchor == parent_uri
+    assert set_tags_anchor == project_root
 
 
 @pytest.mark.asyncio

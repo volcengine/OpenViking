@@ -116,9 +116,7 @@ class ASTExtractor:
         try:
             return extractor.extract(file_name, content)
         except Exception as e:
-            logger.warning(
-                "AST extraction failed for '%s' (language: %s): %s", file_name, lang, e
-            )
+            logger.warning("AST extraction failed for '%s' (language: %s): %s", file_name, lang, e)
             return None
 
     def extract_skeleton(

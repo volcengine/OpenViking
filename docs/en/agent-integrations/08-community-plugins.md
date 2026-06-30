@@ -48,11 +48,11 @@ curl http://localhost:1933/health
 
 ### Install
 
-If you are using the published package, add the plugin to `~/.config/opencode/opencode.json`. If package installation is not available in your environment yet, use the source install path below.
+The published npm package is `@openviking/opencode-plugin`; verify availability with `npm view @openviking/opencode-plugin version`. For package installs, add the plugin to `~/.config/opencode/opencode.json`. If package installation is not available in your environment yet, use the source install path below.
 
 ```json
 {
-  "plugin": ["openviking-opencode-plugin"]
+  "plugin": ["@openviking/opencode-plugin"]
 }
 ```
 
@@ -62,7 +62,7 @@ For development, debugging, or PR testing, install the plugin from this reposito
 git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking
 mkdir -p ~/.config/opencode/plugins/openviking
-cp examples/opencode-plugin/wrappers/openviking.mjs ~/.config/opencode/plugins/openviking.mjs
+cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cd ~/.config/opencode/plugins/openviking
@@ -73,7 +73,7 @@ This source install creates the layout OpenCode can discover:
 
 ```text
 ~/.config/opencode/plugins/
-├── openviking.mjs
+├── openviking.js
 └── openviking/
     ├── index.mjs
     ├── package.json
@@ -81,7 +81,8 @@ This source install creates the layout OpenCode can discover:
     └── node_modules/
 ```
 
-The top-level `openviking.mjs` is only a wrapper that forwards OpenCode's first-level plugin entry to the installed package directory.
+The top-level `openviking.js` is only a wrapper that forwards OpenCode's first-level plugin entry to the installed package directory.
+Use the `.js` wrapper for source installs; OpenCode's local plugin scanner discovers JavaScript/TypeScript plugin files.
 
 ### Configure
 
@@ -125,8 +126,9 @@ Restart OpenCode after installation. In an OpenCode session, the plugin should e
 
 - `memsearch`, `memread`, `membrowse`
 - `memgrep`, `memglob`
-- `memadd`, `memremove`, `memqueue`
+- `memadd`, `memwrite`, `memremove`, `memqueue`
 - `memcommit`
+- `codesearch`, `codeoutline`, `codeexpand`
 
 Ask OpenCode to search or browse OpenViking memory, or request a manual session commit. Runtime state and errors are written to:
 
@@ -139,7 +141,7 @@ Ask OpenCode to search or browse OpenViking memory, or request a manual session 
 
 | Issue | What to check |
 |-------|---------------|
-| Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `openviking-opencode-plugin`, or that `~/.config/opencode/plugins/openviking.mjs` exists for source installs |
+| Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
 | Tools call the wrong server | Check `endpoint` in `~/.config/opencode/openviking-config.json`, or set `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
 | Recall is empty | Confirm the OpenViking server has indexed memories/resources and that `autoRecall.enabled` is `true` |

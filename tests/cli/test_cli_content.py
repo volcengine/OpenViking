@@ -4,7 +4,6 @@
 
 import os
 import tempfile
-import time
 import uuid
 
 import pytest
@@ -79,18 +78,7 @@ class TestContentReindex:
             f.write("# Reindex Test\n\nThis is an independent resource for reindex testing.")
             temp_path = f.name
         try:
-            r = None
-            for _attempt in range(10):
-                r = ov_add_resource(temp_path, reindex_pack)
-                if r["exit_code"] == 0:
-                    break
-                if (
-                    "CONFLICT" in (r.get("stderr") or "")
-                    or "busy" in (r.get("stderr") or "").lower()
-                ):
-                    time.sleep(10)
-                else:
-                    time.sleep(5)
+            r = ov_add_resource(temp_path, reindex_pack)
             assert r["exit_code"] == 0, f"add-resource for reindex failed: {r['stderr'][:300]}"
         finally:
             os.unlink(temp_path)
