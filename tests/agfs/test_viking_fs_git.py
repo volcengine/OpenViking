@@ -21,6 +21,7 @@ import pytest
 ragfs_python = pytest.importorskip("ragfs_python")
 
 from openviking.pyagfs.exceptions import (
+    AGFSInvalidOperationError,
     AGFSNotFoundError,
     AGFSNotSupportedError,
 )
@@ -1000,4 +1001,38 @@ async def test_vikingfs_commit_respects_account_gitignore(vfs):
 
     with pytest.raises(AGFSNotFoundError):
         await vfs.show("main", path="viking://resources/skip.log", ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_vikingfs_set_gitignore_rejects_oversized_content(vfs):
+    ctx = _make_ctx(account="acct_gitignore_too_large")
+
+    oversized = "a" * (vfs._OVGITIGNORE_MAX_BYTES + 1)
+    with pytest.raises(AGFSInvalidOperationError) as excinfo:
+        await vfs.set_gitignore(oversized, ctx=ctx)
+    assert "too large" in str(excinfo.value).lower()
+
+    # The oversized file was never persisted (write was rejected before any
+    # AGFS call): get_gitignore reports the file absent, and committing a
+    # freshly-created file works without an ignore-poison failure.
+    assert await vfs.get_gitignore(ctx=ctx) == ""
+    await vfs.write_file("viking://resources/keep.md", b"keep", ctx=ctx)
+    result = await vfs.commit(message="no ignore", ctx=ctx)
+    assert result["ignored"] == 0
+
+
+
+@pytest.mark.asyncio
+async def test_vikingfs_get_gitignore_maps_non_utf8_to_invalid_operation(vfs):
+    ctx = _make_ctx(account="acct_gitignore_bad_utf8")
+
+    # Seed a valid file (also creates the account dir), then overwrite it with
+    # non-UTF-8 bytes through the raw AGFS path, bypassing set_gitignore.
+    await vfs.set_gitignore("*.log\n", ctx=ctx)
+    path = vfs._gitignore_agfs_path(ctx)
+    await vfs._async_agfs.write(path, b"*.log\n\xff\xfe\n")
+
+    with pytest.raises(AGFSInvalidOperationError) as excinfo:
+        await vfs.get_gitignore(ctx=ctx)
+    assert "utf-8" in str(excinfo.value).lower()
 

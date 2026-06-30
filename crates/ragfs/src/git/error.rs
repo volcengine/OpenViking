@@ -137,14 +137,22 @@ pub enum GitError {
     /// `.ovgitignore` exceeds the configured size limit.
     #[error("ignore file too large: {path} is {size} bytes, limit {max} bytes")]
     IgnoreFileTooLarge {
+        /// Account-relative path of the offending file.
         path: String,
+        /// Observed size in bytes.
         size: u64,
+        /// Configured maximum size in bytes.
         max: u64,
     },
 
     /// `.ovgitignore` is syntactically invalid or cannot be decoded.
     #[error("invalid ignore file {path}: {reason}")]
-    InvalidIgnoreFile { path: String, reason: String },
+    InvalidIgnoreFile {
+        /// Account-relative path of the offending file.
+        path: String,
+        /// Human-readable explanation of why parsing failed.
+        reason: String,
+    },
 
     /// Feature not enabled
     #[error("git feature not enabled")]

@@ -41,6 +41,7 @@ from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
+    AGFSInvalidOperationError,
     AGFSNotSupportedError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
@@ -3341,6 +3342,11 @@ class VikingFS:
 
     _OVGITIGNORE_TREE_PATH = ".ovgitignore"
 
+    # Must stay in sync with `OVGITIGNORE_MAX_BYTES` in the Rust layer
+    # (`crates/ragfs/src/git/ignore.rs`); enforced here at write time so a bad
+    # file can never be persisted only to poison every later commit.
+    _OVGITIGNORE_MAX_BYTES = 64 * 1024
+
     def _gitignore_agfs_path(self, ctx: Optional[RequestContext] = None) -> str:
         real_ctx = self._ctx_or_default(ctx)
         return f"/local/{real_ctx.account_id}/{self._OVGITIGNORE_TREE_PATH}"
@@ -3422,7 +3428,12 @@ class VikingFS:
         return (op, file_uri, ContextLevel.DETAIL)
 
     async def get_gitignore(self, ctx: Optional[RequestContext] = None) -> str:
-        """Return the account-level .ovgitignore content, or an empty string if absent."""
+        """Return the account-level .ovgitignore content, or an empty string if absent.
+
+        Raises ``AGFSInvalidOperationError`` if the stored content is not valid
+        UTF-8, mirroring the Rust layer's reject-non-UTF-8 behavior at commit
+        time rather than leaking a raw ``UnicodeDecodeError``.
+        """
         path = self._gitignore_agfs_path(ctx)
         try:
             raw = await self._async_agfs.read(path, 0, -1)
@@ -3439,18 +3450,33 @@ class VikingFS:
             data = raw.content
         else:
             data = b""
-        return data.decode("utf-8")
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AGFSInvalidOperationError(
+                f"invalid ignore file {path}: must be UTF-8: {exc}"
+            ) from exc
 
     async def set_gitignore(
         self,
         content: str,
         ctx: Optional[RequestContext] = None,
     ) -> None:
-        """Write the account-level .ovgitignore control file without semantic indexing."""
+        """Write the account-level .ovgitignore control file without semantic indexing.
+
+        Validates the size limit up front so a too-large file can never be
+        persisted only to make every later ``commit`` fail. Syntax (negation,
+        escaping) is still validated at commit time by the Rust layer.
+        """
         if not isinstance(content, str):
             raise TypeError("content must be a string")
         path = self._gitignore_agfs_path(ctx)
         data = content.encode("utf-8")
+        if len(data) > self._OVGITIGNORE_MAX_BYTES:
+            raise AGFSInvalidOperationError(
+                f"ignore file too large: {path} is {len(data)} bytes, "
+                f"limit {self._OVGITIGNORE_MAX_BYTES} bytes"
+            )
         await self._ensure_parent_dirs(path, ctx=ctx)
         await self._async_agfs.write(path, data)
 
@@ -3493,8 +3519,11 @@ class VikingFS:
             ctx: Request context (provides ``account_id``).
 
         Returns:
-            Dict with ``result`` (``"created"`` / ``"noop"``) and ``commit_oid``;
-            ``changed`` count when ``result == "created"``.
+            Dict with ``result`` (``"created"`` / ``"noop"``) and ``commit_oid``.
+            When ``result == "created"`` it also includes ``changed`` (paths
+            added/updated/removed). Both variants include ``ignored``: the
+            number of candidate paths skipped by the account ``.ovgitignore``
+            rules (system pruning is not counted). Noop omits ``changed``.
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id

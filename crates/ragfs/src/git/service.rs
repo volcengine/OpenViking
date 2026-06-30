@@ -265,8 +265,25 @@ impl GitService {
                                 }
                                 let pref = format!("{}/", p);
                                 for (path, _) in prev_paths_cache.as_ref().unwrap() {
-                                    if path.starts_with(&pref) && include_path(path) {
+                                    if !path.starts_with(&pref) {
+                                        continue;
+                                    }
+                                    if should_track_path(path, &ignore_matcher) {
                                         set.insert(path.clone());
+                                    } else {
+                                        // Previously tracked under this scope but
+                                        // now ignored/pruned: drop it from the
+                                        // snapshot. Every entry here came from
+                                        // prev_tree, so the removal is a real
+                                        // change. Use should_track_path (not
+                                        // include_path) so `ignored` is not
+                                        // double-counted for paths that are also
+                                        // on disk — the on-disk pass already
+                                        // counted them.
+                                        editor
+                                            .remove(self.object_store.as_ref(), &account, path)
+                                            .await?;
+                                        changed += 1;
                                     }
                                 }
                             }
@@ -276,6 +293,27 @@ impl GitService {
                             cleanup_exact.insert(p.clone());
                             if include_path(p) {
                                 set.insert(p.clone());
+                            } else if let Some(t) = prev_tree {
+                                // Explicit file is now ignored/pruned: drop it
+                                // from the snapshot if it was previously tracked.
+                                // Only counts as a change when it actually existed
+                                // in prev_tree — TreeEditor::remove silently
+                                // no-ops for missing paths (mirrors the main
+                                // loop's NotFound branch below).
+                                let was_tracked = crate::git::tree_builder::lookup(
+                                    self.object_store.as_ref(),
+                                    &account,
+                                    t,
+                                    p,
+                                )
+                                .await?
+                                .is_some();
+                                if was_tracked {
+                                    editor
+                                        .remove(self.object_store.as_ref(), &account, p)
+                                        .await?;
+                                    changed += 1;
+                                }
                             }
                         }
                         Err(e) if is_not_found(&e) => {
@@ -310,8 +348,25 @@ impl GitService {
                                 }
                                 let pref = format!("{}/", p);
                                 for (path, _) in prev_paths_cache.as_ref().unwrap() {
-                                    if path.starts_with(&pref) && include_path(path) {
+                                    if !path.starts_with(&pref) {
+                                        continue;
+                                    }
+                                    if should_track_path(path, &ignore_matcher) {
                                         set.insert(path.clone());
+                                    } else {
+                                        // Previously tracked under this scope but
+                                        // now ignored/pruned: drop it from the
+                                        // snapshot. Every entry here came from
+                                        // prev_tree, so the removal is a real
+                                        // change. Use should_track_path (not
+                                        // include_path) so `ignored` is not
+                                        // double-counted for paths that are also
+                                        // on disk — the on-disk pass already
+                                        // counted them.
+                                        editor
+                                            .remove(self.object_store.as_ref(), &account, path)
+                                            .await?;
+                                        changed += 1;
                                     }
                                 }
                             }
@@ -347,11 +402,14 @@ impl GitService {
                     )
                     .await?;
                     for (p, _) in prev_paths {
-                        if include_path(&p) {
+                        if should_track_path(&p, &ignore_matcher) {
                             set.insert(p);
                         } else {
-                            // Ensure previously tracked ignored paths are removed
+                            // Previously tracked but now ignored/pruned: drop it
                             // from the next tree and from the commit index seed.
+                            // Use should_track_path (not include_path) so `ignored`
+                            // is not double-counted — paths still on disk were
+                            // already counted by the collect_all pass above.
                             editor
                                 .remove(self.object_store.as_ref(), &account, &p)
                                 .await?;
@@ -2503,7 +2561,10 @@ mod tests {
             } => (commit_oid, ignored),
             other => panic!("expected Created, got {other:?}"),
         };
-        assert!(ignored >= 1);
+        // The ignored file is both on disk and in prev_tree; it must be
+        // counted exactly once (regression: a previous double-count via
+        // include_path in both passes reported 2).
+        assert_eq!(ignored, 1);
 
         let second_tree = commit_tree(
             object_store.as_ref() as &dyn ObjectStore,
@@ -2596,6 +2657,93 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, GitError::InvalidIgnoreFile { .. }));
+    }
+
+    /// A scoped commit listing a *directory* must drop previously-tracked
+    /// files under that directory that the new `.ovgitignore` now excludes.
+    /// Regression: the directory branch's prev_tree loop only skipped such
+    /// paths without removing them from the editor, so the stale ignored
+    /// file lingered in the snapshot (the full-enumeration branch already
+    /// removed them). Uses LocalFileSystem so the Directory branch runs.
+    #[tokio::test]
+    async fn test_commit_scoped_directory_removes_now_ignored_prev_file() {
+        use crate::plugins::localfs::LocalFileSystem;
+
+        let store_dir = tempfile::tempdir().unwrap();
+        let object_store = Arc::new(LocalObjectStore::new(store_dir.path()));
+        let ref_store = Arc::new(LocalRefStore::new(store_dir.path()));
+        let work_dir = tempfile::tempdir().unwrap();
+        let acct_root = work_dir.path().join("local").join("acct_dir_ignore");
+        std::fs::create_dir_all(acct_root.join("docs")).unwrap();
+        std::fs::write(acct_root.join("docs/keep.md"), b"keep").unwrap();
+        std::fs::write(acct_root.join("docs/secret.log"), b"tracked before ignore").unwrap();
+        let vfs: Arc<dyn FileSystem> =
+            Arc::new(LocalFileSystem::new(work_dir.path().to_str().unwrap()).unwrap());
+        let svc = GitService::new(vfs, object_store.clone(), ref_store);
+
+        let first = make_commit(&svc, "acct_dir_ignore", "main", "first").await;
+        let first_tree = commit_tree(
+            object_store.as_ref() as &dyn ObjectStore,
+            "acct_dir_ignore",
+            first,
+        )
+        .await;
+        assert!(lookup(
+            object_store.as_ref() as &dyn ObjectStore,
+            "acct_dir_ignore",
+            first_tree,
+            "docs/secret.log",
+        )
+        .await
+        .unwrap()
+        .is_some());
+
+        // Add an ignore rule and commit ONLY the docs directory (scoped).
+        std::fs::write(acct_root.join(OVGITIGNORE_PATH), b"*.log\n").unwrap();
+        let resp = svc
+            .commit(req(
+                "acct_dir_ignore",
+                "main",
+                "scoped-ignore",
+                Some(vec!["docs".into()]),
+            ))
+            .await
+            .unwrap();
+        let (second_oid, ignored) = match resp {
+            CommitResponse::Created {
+                commit_oid,
+                ignored,
+                ..
+            } => (commit_oid, ignored),
+            other => panic!("expected Created, got {other:?}"),
+        };
+        // secret.log is both on disk and in prev_tree; counted once.
+        assert_eq!(ignored, 1);
+
+        let second_tree = commit_tree(
+            object_store.as_ref() as &dyn ObjectStore,
+            "acct_dir_ignore",
+            second_oid,
+        )
+        .await;
+        assert!(lookup(
+            object_store.as_ref() as &dyn ObjectStore,
+            "acct_dir_ignore",
+            second_tree,
+            "docs/keep.md",
+        )
+        .await
+        .unwrap()
+        .is_some());
+        assert!(lookup(
+            object_store.as_ref() as &dyn ObjectStore,
+            "acct_dir_ignore",
+            second_tree,
+            "docs/secret.log",
+        )
+        .await
+        .unwrap()
+        .is_none());
     }
 
     /// Mixing a file and a directory containing that file processes each
