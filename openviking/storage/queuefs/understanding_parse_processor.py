@@ -27,6 +27,76 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
     def __init__(self, resource_processor: Any, resource_memory_link_service: Any = None):
         self._resource_processor = resource_processor
         self._resource_memory_link_service = resource_memory_link_service
+        self._background_tasks: set[asyncio.Task] = set()
+
+    async def _monitor_queue_then_link_memory(
+        self,
+        *,
+        task_id: str,
+        telemetry_id: str,
+        ctx: RequestContext,
+        result: Dict[str, Any],
+        reason: str,
+        source_name: Optional[str],
+    ) -> None:
+        from openviking.telemetry.resource_summary import unregister_wait_telemetry
+        from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+
+        task_tracker = get_task_tracker()
+        request_wait_tracker = get_request_wait_tracker()
+        try:
+            request_wait_tracker.register_request(telemetry_id)
+            await request_wait_tracker.wait_for_request(telemetry_id)
+            status = request_wait_tracker.build_queue_status(telemetry_id)
+            errors = sum(int(group.get("error_count", 0) or 0) for group in status.values())
+            if errors:
+                await task_tracker.fail(
+                    task_id,
+                    f"queue processing failed: {status}",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                self.report_error("queue processing failed", {"task_id": task_id})
+                return
+
+            result["queue_status"] = status
+            if self._resource_memory_link_service and (reason or "").strip():
+                root_uri = result.get("root_uri")
+                if root_uri:
+                    try:
+                        link_result = await self._resource_memory_link_service.on_resource_added(
+                            ctx=ctx,
+                            resource_uri=root_uri,
+                            reason=reason,
+                            source_name=source_name,
+                            timeout=None,
+                        )
+                        result["memory_linking"] = link_result
+                    except Exception as exc:
+                        logger.warning(
+                            "[UnderstandingParse] Failed to link resource reason memory: %s",
+                            exc,
+                        )
+                        result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
+
+            await task_tracker.complete(
+                task_id,
+                result,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+            self.report_success()
+        except Exception as exc:
+            await task_tracker.fail(
+                task_id,
+                str(exc),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+            self.report_error(str(exc), {"task_id": task_id})
+        finally:
+            request_wait_tracker.cleanup(telemetry_id)
+            unregister_wait_telemetry(telemetry_id)
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not data:
@@ -49,36 +119,111 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
 
         msg = UnderstandingParseMsg.from_dict(payload)
         cleanup_local_path = msg.cleanup_local_path
-        lock_lease = None
-        try:
-            from openviking.storage.transaction.lock_lease import LockHandoffRef, OwnedLockLease
-
-            ref = LockHandoffRef.from_value(msg.lock_handoff)
-            if ref is not None:
-                lock_lease = await OwnedLockLease.from_handoff(ref)
-        except Exception:
-            lock_lease = None
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
             actor_peer_id=msg.actor_peer_id,
         )
 
+        task_tracker = get_task_tracker()
+        lock_lease = None
+        if msg.lock_handoff is not None:
+            try:
+                from openviking.storage.transaction.lock_lease import (
+                    LockHandoffRef,
+                    OwnedLockLease,
+                )
+
+                ref = LockHandoffRef.from_value(msg.lock_handoff)
+                if ref is None:
+                    raise ValueError("Invalid lock_handoff")
+                lock_lease = await OwnedLockLease.from_handoff(ref)
+            except Exception as exc:
+                retry_key = "_lock_handoff_retry"
+                raw_retry = (msg.args or {}).get(retry_key, 0)
+                try:
+                    retry_count = int(raw_retry or 0)
+                except (TypeError, ValueError):
+                    retry_count = 0
+
+                max_retries = 2
+                if retry_count < max_retries:
+                    from openviking.storage.queuefs import QueueManager, get_queue_manager
+
+                    qm = get_queue_manager()
+                    if qm is None:
+                        raise
+                    new_args = dict(msg.args or {})
+                    new_args[retry_key] = retry_count + 1
+                    retry_msg = UnderstandingParseMsg(
+                        task_id=msg.task_id,
+                        telemetry_id=msg.telemetry_id,
+                        path=msg.path,
+                        root_uri=msg.root_uri,
+                        account_id=msg.account_id,
+                        user_id=msg.user_id,
+                        role=msg.role,
+                        actor_peer_id=msg.actor_peer_id,
+                        cleanup_local_path=msg.cleanup_local_path,
+                        lock_handoff=msg.lock_handoff,
+                        reason=msg.reason,
+                        instruction=msg.instruction,
+                        build_index=msg.build_index,
+                        summarize=msg.summarize,
+                        strict=msg.strict,
+                        ignore_dirs=msg.ignore_dirs,
+                        include=msg.include,
+                        exclude=msg.exclude,
+                        directly_upload_media=msg.directly_upload_media,
+                        allow_local_path_resolution=msg.allow_local_path_resolution,
+                        enforce_public_remote_targets=msg.enforce_public_remote_targets,
+                        args=new_args,
+                        source_name=msg.source_name,
+                    )
+                    await qm.enqueue(QueueManager.EXTERNAL_PARSE, retry_msg.to_dict())
+                    self.report_requeue()
+                    return None
+
+                await task_tracker.fail(
+                    msg.task_id,
+                    f"Invalid lock_handoff: {exc}",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                self.report_error(f"Invalid lock_handoff: {exc}", data)
+                if cleanup_local_path:
+                    try:
+                        from openviking_cli.utils.config.open_viking_config import (
+                            get_openviking_config,
+                        )
+
+                        cfg = get_openviking_config()
+                        staging_root = (
+                            Path(cfg.storage.workspace).expanduser().resolve()
+                            / "temp"
+                            / "external_parse"
+                        )
+                        cleanup_path = Path(cleanup_local_path).expanduser().resolve()
+                        if cleanup_path.is_relative_to(staging_root):
+                            with suppress(FileNotFoundError):
+                                cleanup_path.unlink()
+                    except Exception:
+                        pass
+                return None
+
         logger.info(
             "[UnderstandingParse] Dequeued task_id=%s root_uri=%s",
             msg.task_id,
             msg.root_uri,
         )
-
-        task_tracker = get_task_tracker()
         resource_processor = self._resource_processor
         if resource_processor is None:
             raise RuntimeError("ResourceProcessor is None")
 
-        telemetry = resolve_telemetry(msg.task_id)
-        bind_telemetry(telemetry)
+        telemetry_id = msg.telemetry_id or ""
+        telemetry = resolve_telemetry(telemetry_id) if telemetry_id else None
 
-        with bind_execution_context():
+        with bind_execution_context(), (bind_telemetry(telemetry) if telemetry else suppress()):
             try:
                 await task_tracker.start(
                     msg.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
@@ -94,6 +239,10 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                 kwargs: Dict[str, Any] = {}
                 if lock_lease is not None and getattr(lock_lease, "active", False):
                     kwargs["resource_lock"] = lock_lease
+                if msg.enforce_public_remote_targets:
+                    from openviking.utils.network_guard import ensure_public_remote_target
+
+                    kwargs.setdefault("request_validator", ensure_public_remote_target)
                 result = await resource_processor.process_resource(
                     path=msg.path,
                     ctx=ctx,
@@ -127,6 +276,27 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                         user_id=ctx.user.user_id,
                     )
                     self.report_error("resource processing failed", data)
+                    return None
+
+                if telemetry_id:
+                    await task_tracker.update_stage(
+                        msg.task_id,
+                        "processing_queue",
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    monitor = asyncio.create_task(
+                        self._monitor_queue_then_link_memory(
+                            task_id=msg.task_id,
+                            telemetry_id=telemetry_id,
+                            ctx=ctx,
+                            result=result,
+                            reason=msg.reason,
+                            source_name=msg.source_name,
+                        )
+                    )
+                    self._background_tasks.add(monitor)
+                    monitor.add_done_callback(self._background_tasks.discard)
                     return None
 
                 if self._resource_memory_link_service and (msg.reason or "").strip():

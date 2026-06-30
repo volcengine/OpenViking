@@ -13,6 +13,7 @@ from uuid import uuid4
 class UnderstandingParseMsg:
     id: str
     task_id: str
+    telemetry_id: Optional[str]
     path: str
     root_uri: str
     cleanup_local_path: Optional[str] = None
@@ -47,6 +48,7 @@ class UnderstandingParseMsg:
         user_id: str,
         role: str,
         actor_peer_id: Optional[str] = None,
+        telemetry_id: Optional[str] = None,
         cleanup_local_path: Optional[str] = None,
         lock_handoff: Optional[Dict[str, Any]] = None,
         reason: str = "",
@@ -65,6 +67,7 @@ class UnderstandingParseMsg:
     ):
         self.id = str(uuid4())
         self.task_id = task_id
+        self.telemetry_id = telemetry_id
         self.path = path
         self.root_uri = root_uri
         self.account_id = account_id
@@ -118,6 +121,9 @@ class UnderstandingParseMsg:
             user_id=str(data.get("user_id", "default")),
             role=str(data.get("role", "root")),
             actor_peer_id=data.get("actor_peer_id"),
+            telemetry_id=str(data.get("telemetry_id"))
+            if isinstance(data.get("telemetry_id"), str)
+            else None,
             cleanup_local_path=data.get("cleanup_local_path")
             if isinstance(data.get("cleanup_local_path"), str)
             else None,

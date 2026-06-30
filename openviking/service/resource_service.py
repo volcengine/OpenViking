@@ -762,73 +762,106 @@ class ResourceService:
                     lock_lease = await _reserve_exact(root_uri)
 
                 task_tracker = get_task_tracker()
-                task = await task_tracker.create(
-                    "add_resource",
-                    resource_id=root_uri,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                )
-                await task_tracker.update_stage(
-                    task.task_id,
-                    "queued_external_parse",
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                )
-
+                task = None
                 cleanup_local_path = None
-                temp_file_id = kwargs.get("temp_file_id")
-                if isinstance(temp_file_id, str) and temp_file_id.startswith("shared_"):
-                    from pathlib import Path
-                    import shutil
-
-                    from openviking_cli.utils.config.open_viking_config import (
-                        get_openviking_config,
-                    )
-
-                    cfg = get_openviking_config()
-                    staging_dir = (
-                        Path(cfg.storage.workspace).expanduser().resolve()
-                        / "temp"
-                        / "external_parse"
-                    )
-                    staging_dir.mkdir(parents=True, exist_ok=True)
-                    suffix = Path(path).suffix or ".tmp"
-                    staged_path = staging_dir / f"{task.task_id}{suffix}"
-                    shutil.copyfile(path, staged_path)
-                    cleanup_local_path = str(staged_path)
-                    path = cleanup_local_path
-
-                lock_handoff = lock_lease.to_handoff()
-                msg = UnderstandingParseMsg(
-                    task_id=task.task_id,
-                    path=path,
-                    root_uri=root_uri,
-                    account_id=ctx.account_id,
-                    user_id=ctx.user.user_id,
-                    role=str(ctx.role),
-                    actor_peer_id=ctx.actor_peer_id,
-                    reason=reason,
-                    instruction=instruction,
-                    build_index=build_index,
-                    summarize=summarize,
-                    strict=bool(kwargs.get("strict", False)),
-                    ignore_dirs=kwargs.get("ignore_dirs"),
-                    include=kwargs.get("include"),
-                    exclude=kwargs.get("exclude"),
-                    directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    enforce_public_remote_targets=enforce_public_remote_targets,
-                    args=normalized_args.processor_kwargs,
-                    source_name=source_name,
-                    cleanup_local_path=cleanup_local_path,
-                    lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
-                )
-                qm = get_queue_manager()
                 try:
+                    task = await task_tracker.create(
+                        "add_resource",
+                        resource_id=root_uri,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    await task_tracker.update_stage(
+                        task.task_id,
+                        "queued_external_parse",
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+
+                    temp_file_id = kwargs.get("temp_file_id")
+                    if isinstance(temp_file_id, str) and temp_file_id:
+                        from pathlib import Path
+                        import shutil
+
+                        from openviking_cli.utils.config.open_viking_config import (
+                            get_openviking_config,
+                        )
+
+                        cfg = get_openviking_config()
+                        staging_dir = (
+                            Path(cfg.storage.workspace).expanduser().resolve()
+                            / "temp"
+                            / "external_parse"
+                        )
+                        staging_dir.mkdir(parents=True, exist_ok=True)
+                        suffix = Path(path).suffix or ".tmp"
+                        staged_path = staging_dir / f"{task.task_id}{suffix}"
+                        shutil.copyfile(path, staged_path)
+                        cleanup_local_path = str(staged_path)
+                        path = cleanup_local_path
+
+                    lock_handoff = lock_lease.to_handoff()
+                    msg = UnderstandingParseMsg(
+                        task_id=task.task_id,
+                        telemetry_id=telemetry_id or None,
+                        path=path,
+                        root_uri=root_uri,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        role=str(ctx.role),
+                        actor_peer_id=ctx.actor_peer_id,
+                        reason=reason,
+                        instruction=instruction,
+                        build_index=build_index,
+                        summarize=summarize,
+                        strict=bool(kwargs.get("strict", False)),
+                        ignore_dirs=kwargs.get("ignore_dirs"),
+                        include=kwargs.get("include"),
+                        exclude=kwargs.get("exclude"),
+                        directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
+                        allow_local_path_resolution=allow_local_path_resolution,
+                        enforce_public_remote_targets=enforce_public_remote_targets,
+                        args=normalized_args.processor_kwargs,
+                        source_name=source_name,
+                        cleanup_local_path=cleanup_local_path,
+                        lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
+                    )
+                    qm = get_queue_manager()
                     await qm.enqueue(QueueManager.EXTERNAL_PARSE, msg.to_dict())
                     await lock_lease.handoff()
-                except Exception:
-                    await lock_lease.close()
+                    monitor_started = True
+                except Exception as exc:
+                    if cleanup_local_path:
+                        try:
+                            from openviking_cli.utils.config.open_viking_config import (
+                                get_openviking_config,
+                            )
+
+                            cfg = get_openviking_config()
+                            staging_root = (
+                                Path(cfg.storage.workspace).expanduser().resolve()
+                                / "temp"
+                                / "external_parse"
+                            )
+                            cleanup_path = Path(cleanup_local_path).expanduser().resolve()
+                            if cleanup_path.is_relative_to(staging_root):
+                                with contextlib.suppress(FileNotFoundError):
+                                    cleanup_path.unlink()
+                        except Exception:
+                            pass
+
+                    with contextlib.suppress(Exception):
+                        await lock_lease.close()
+
+                    if task is not None:
+                        with contextlib.suppress(Exception):
+                            await task_tracker.fail(
+                                task.task_id,
+                                str(exc),
+                                account_id=ctx.account_id,
+                                user_id=ctx.user.user_id,
+                            )
+
                     raise
                 logger.info(
                     "[ResourceService] Enqueued UnderstandingParseMsg task_id=%s root_uri=%s",
