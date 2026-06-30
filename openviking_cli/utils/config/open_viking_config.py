@@ -324,7 +324,7 @@ class OpenVikingConfig(BaseModel):
 
     ingest: IngestConfig = Field(
         default_factory=IngestConfig,
-        description="Conversation-log ingest (openviking-ingest) configuration",
+        description="Conversation-log ingest (openviking-server ingest) configuration",
     )
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}

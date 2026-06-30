@@ -294,7 +294,7 @@ class SingleInstanceLock:
             self._fh.close()
             self._fh = None
             raise RuntimeError(
-                f"another openviking-ingest process already holds {self.path}"
+                f"another ingest process already holds {self.path}"
             ) from exc
         self._fh.write(str(os.getpid()))
         self._fh.flush()

@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Configuration for the conversation-log ingest subsystem (``openviking-ingest``).
+"""Configuration for the conversation-log ingest subsystem (``openviking-server ingest``).
 
 Ingest parses local agent-harness conversation logs (Claude Code, Codex, OpenCode,
 Hermes, OpenClaw, Cursor) and "replays" them through OpenViking's session pipeline.

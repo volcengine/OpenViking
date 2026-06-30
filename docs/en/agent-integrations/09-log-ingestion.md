@@ -1,6 +1,6 @@
-# Import Local Agent Logs (openviking-ingest)
+# Import Local Agent Logs (openviking-server ingest)
 
-`openviking-ingest` parses the conversation logs that AI coding / agent harnesses (Claude Code, Codex, OpenCode, Hermes, OpenClaw) already leave on your machine, then "replays" them through OpenViking's existing session pipeline (`create session → batch add messages → commit`, where commit triggers memory extraction). This turns both your historical and newly written conversations into long-term memory. It complements the per-harness memory plugins: a plugin captures **while a conversation is happening**, whereas this tool is for **importing existing logs** and **watching for new logs offline** — no plugin required and no change to the harness itself.
+`openviking-server ingest` parses the conversation logs that AI coding / agent harnesses (Claude Code, Codex, OpenCode, Hermes, OpenClaw) already leave on your machine, then "replays" them through OpenViking's existing session pipeline (`create session → batch add messages → commit`, where commit triggers memory extraction). This turns both your historical and newly written conversations into long-term memory. It complements the per-harness memory plugins: a plugin captures **while a conversation is happening**, whereas this tool is for **importing existing logs** and **watching for new logs offline** — no plugin required and no change to the harness itself.
 
 Key difference from the plugins: this tool is an OpenViking **client**. It runs where the logs live and points at a local or remote server via the SDK, and it is **off by default** — installing OpenViking does not silently scan your local files.
 
@@ -60,29 +60,29 @@ When `server_url` is empty it falls back to `OPENVIKING_URL` or `http://localhos
 
 ## Usage
 
-The `openviking-ingest` command is installed together with OpenViking.
+The `openviking-server ingest` command is installed together with OpenViking.
 
 ```bash
 # Show registered harnesses and their config
-openviking-ingest list-sources
+openviking-server ingest list-sources
 
 # Dry run first: count the sessions / messages that would be replayed, write nothing
-openviking-ingest backfill --dry-run
+openviking-server ingest backfill --dry-run
 
 # Backfill one harness, only sessions started on/after a date
-openviking-ingest backfill --harness claude_code --since 2026-06-01
+openviking-server ingest backfill --harness claude_code --since 2026-06-01
 
 # Backfill existing logs for real
-openviking-ingest backfill
+openviking-server ingest backfill
 
 # Watch for new logs and replay incrementally (blocks in the foreground)
-openviking-ingest watch --harness claude_code
+openviking-server ingest watch --harness claude_code
 
 # Honor each harness's configured mode: backfill then watch
-openviking-ingest run
+openviking-server ingest run
 
 # Show how far each session has been ingested (read the cursor state)
-openviking-ingest status
+openviking-server ingest status
 ```
 
 `--reset` deletes and recreates the OV session before replaying. Without `--reset`, re-running is idempotent — the cursor store guarantees nothing is appended twice.

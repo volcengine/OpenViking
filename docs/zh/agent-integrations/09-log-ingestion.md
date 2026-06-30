@@ -1,6 +1,6 @@
-# 导入本地 Agent 日志（openviking-ingest）
+# 导入本地 Agent 日志（openviking-server ingest）
 
-`openviking-ingest` 把你本地已有的 AI 编码 / agent harness 的对话日志（Claude Code、Codex、OpenCode、Hermes、OpenClaw）解析成标准消息，再通过 OpenViking 既有的会话管线“重放”进去（`创建会话 → 批量追加消息 → 提交`，提交时触发记忆抽取），从而把这些历史与新增对话沉淀为长期记忆。它与各 harness 的“记忆插件”互补：插件在对话**进行时**实时挂载捕获，而本工具用于**导入既有日志**与**离线监听新增日志**，无需插件、也无需改动对应 harness。
+`openviking-server ingest` 把你本地已有的 AI 编码 / agent harness 的对话日志（Claude Code、Codex、OpenCode、Hermes、OpenClaw）解析成标准消息，再通过 OpenViking 既有的会话管线“重放”进去（`创建会话 → 批量追加消息 → 提交`，提交时触发记忆抽取），从而把这些历史与新增对话沉淀为长期记忆。它与各 harness 的“记忆插件”互补：插件在对话**进行时**实时挂载捕获，而本工具用于**导入既有日志**与**离线监听新增日志**，无需插件、也无需改动对应 harness。
 
 与插件方案的关键区别：本工具是 OpenViking 的**客户端**，跑在日志所在的机器上，通过 SDK 指向本地或远端 server；它默认**完全关闭**，不会“装上就扫你本地文件”。
 
@@ -60,29 +60,29 @@
 
 ## 使用
 
-`openviking-ingest` 命令随 OpenViking 一同安装。
+`openviking-server ingest` 命令随 OpenViking 一同安装。
 
 ```bash
 # 查看已注册 harness 及其配置
-openviking-ingest list-sources
+openviking-server ingest list-sources
 
 # 先干跑：统计会回填多少 session / 消息，不写入
-openviking-ingest backfill --dry-run
+openviking-server ingest backfill --dry-run
 
 # 只回填某个 harness、且只回填某日期之后的会话
-openviking-ingest backfill --harness claude_code --since 2026-06-01
+openviking-server ingest backfill --harness claude_code --since 2026-06-01
 
 # 正式回填（存量）
-openviking-ingest backfill
+openviking-server ingest backfill
 
 # 监听新增日志并增量重放（前台阻塞）
-openviking-ingest watch --harness claude_code
+openviking-server ingest watch --harness claude_code
 
 # 按每个 harness 配置的 mode 执行：先回填再监听
-openviking-ingest run
+openviking-server ingest run
 
 # 查看各会话已导入到哪里（读取游标状态）
-openviking-ingest status
+openviking-server ingest status
 ```
 
 `--reset` 会在重放前删除并重建对应的 OV 会话；不加 `--reset` 时，重复运行是幂等的（游标保证不会重复追加）。

@@ -1,12 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""``openviking-ingest`` CLI: replay local agent-harness logs into OpenViking.
+"""``openviking-server ingest`` CLI: replay local agent-harness logs into OpenViking.
 
 Commands:
   list-sources  show registered harnesses and their config
   status        show per-session ingest progress (read cursors)
-  backfill      one-shot replay of historical logs ("存量")
-  watch         incremental, cursor-driven polling of new logs ("新增")
+  backfill      one-shot replay of existing logs
+  watch         incremental, cursor-driven polling of new logs
   run           honor each harness's configured mode (backfill then watch)
 """
 
@@ -160,7 +160,7 @@ def backfill(
         False, "--reset", help="Delete + recreate each OV session before replaying"
     ),
 ) -> None:
-    """One-shot backfill of historical logs ("存量")."""
+    """One-shot backfill of existing logs."""
     asyncio.run(_run_backfill(harness, since, dry_run, reset))
 
 
@@ -196,7 +196,7 @@ def watch(
         None, "--harness", "-H", help="Only these harnesses (default: all enabled)"
     ),
 ) -> None:
-    """Incrementally watch for new/changed logs and replay them ("新增")."""
+    """Incrementally watch for new/changed logs and replay them."""
     asyncio.run(_run_watch(harness))
 
 

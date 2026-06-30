@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Backfill orchestration ("存量"): replay each discovered session cursor->end, then commit.
+"""Backfill orchestration: replay each discovered session cursor->end, then commit.
 
-Incremental ("新增") watch mode is handled by ``IngestPoller`` (``poller.py``).
+Incremental watch mode is handled by ``IngestPoller`` (``poller.py``).
 """
 
 from __future__ import annotations

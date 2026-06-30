@@ -5,8 +5,8 @@
 Parses each harness's local conversation logs (Claude Code, Codex, OpenCode, Hermes,
 OpenClaw, Cursor) into normalized messages and replays them through OV's existing
 ``create_session -> batch_add_messages -> commit`` pipeline (commit triggers OV's
-async memory extraction). Supports one-shot backfill ("存量") and incremental,
-cursor-driven polling ("新增").
+async memory extraction). Supports one-shot backfill of existing logs and
+incremental, cursor-driven polling of new logs.
 
 Inspired by / supersedes volcengine/OpenViking#2674 by @huang-yi-dae.
 """

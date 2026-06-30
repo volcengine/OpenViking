@@ -75,7 +75,7 @@ OPENVIKING_GOPATH_ENV = "OPENVIKING_GOPATH"
 OPENVIKING_GOPROXY_ENV = "OPENVIKING_GOPROXY"
 
 # =============================================================================
-# Conversation-log ingest (openviking-ingest)
+# Conversation-log ingest (openviking-server ingest)
 # =============================================================================
 
 OPENVIKING_INGEST_ENABLED_ENV = "OPENVIKING_INGEST_ENABLED"
