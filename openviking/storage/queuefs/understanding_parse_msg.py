@@ -16,6 +16,7 @@ class UnderstandingParseMsg:
     path: str
     root_uri: str
     cleanup_local_path: Optional[str] = None
+    lock_handoff: Optional[Dict[str, Any]] = None
     status: str = "pending"
     timestamp: int = int(datetime.now().timestamp())
     account_id: str = "default"
@@ -47,6 +48,7 @@ class UnderstandingParseMsg:
         role: str,
         actor_peer_id: Optional[str] = None,
         cleanup_local_path: Optional[str] = None,
+        lock_handoff: Optional[Dict[str, Any]] = None,
         reason: str = "",
         instruction: str = "",
         build_index: bool = True,
@@ -70,6 +72,7 @@ class UnderstandingParseMsg:
         self.role = role
         self.actor_peer_id = actor_peer_id
         self.cleanup_local_path = cleanup_local_path
+        self.lock_handoff = lock_handoff
         self.reason = reason
         self.instruction = instruction
         self.build_index = build_index
@@ -117,6 +120,9 @@ class UnderstandingParseMsg:
             actor_peer_id=data.get("actor_peer_id"),
             cleanup_local_path=data.get("cleanup_local_path")
             if isinstance(data.get("cleanup_local_path"), str)
+            else None,
+            lock_handoff=data.get("lock_handoff")
+            if isinstance(data.get("lock_handoff"), dict)
             else None,
             reason=str(data.get("reason", "")),
             instruction=str(data.get("instruction", "")),

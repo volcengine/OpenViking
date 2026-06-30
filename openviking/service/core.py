@@ -336,7 +336,10 @@ class OpenVikingService:
         )
 
         if self._queue_manager:
-            external_parse_processor = UnderstandingParseProcessor(self._resource_processor)
+            external_parse_processor = UnderstandingParseProcessor(
+                self._resource_processor,
+                resource_memory_link_service=self._resource_memory_link_service,
+            )
             self._queue_manager.get_queue(
                 self._queue_manager.EXTERNAL_PARSE,
                 dequeue_handler=external_parse_processor,

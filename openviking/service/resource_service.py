@@ -716,16 +716,25 @@ class ResourceService:
                     source_format=source_info.source_format,
                     create_parent=target.create_parent,
                 )
+                lock_lease: LockLease = NO_LOCK
                 if candidate_uri:
                     root_uri, lock_lease = await self._resource_processor.reserve_unique_candidate(
                         candidate_uri=candidate_uri,
                         ctx=ctx,
                     )
-                    await lock_lease.close()
 
                 if self._viking_fs is None:
                     raise NotInitializedError("VikingFS")
-                await self._viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
+                if not lock_lease.active:
+                    from openviking.storage.transaction import get_lock_manager
+
+                    dst_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
+                    lock_lease = await self._resource_processor.acquire_resource_lock(
+                        get_lock_manager(),
+                        dst_path,
+                        uri=root_uri,
+                        timeout=0.0,
+                    )
 
                 task_tracker = get_task_tracker()
                 task = await task_tracker.create(
@@ -764,6 +773,7 @@ class ResourceService:
                     cleanup_local_path = str(staged_path)
                     path = cleanup_local_path
 
+                lock_handoff = lock_lease.to_handoff()
                 msg = UnderstandingParseMsg(
                     task_id=task.task_id,
                     path=path,
@@ -786,9 +796,15 @@ class ResourceService:
                     args=normalized_args.processor_kwargs,
                     source_name=source_name,
                     cleanup_local_path=cleanup_local_path,
+                    lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
                 )
                 qm = get_queue_manager()
-                await qm.enqueue(QueueManager.EXTERNAL_PARSE, msg.to_dict())
+                try:
+                    await qm.enqueue(QueueManager.EXTERNAL_PARSE, msg.to_dict())
+                    await lock_lease.handoff()
+                except Exception:
+                    await lock_lease.close()
+                    raise
                 logger.info(
                     "[ResourceService] Enqueued UnderstandingParseMsg task_id=%s root_uri=%s",
                     task.task_id,

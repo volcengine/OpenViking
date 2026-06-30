@@ -4,6 +4,7 @@
 
 import asyncio
 import json
+
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -23,8 +24,9 @@ logger = get_logger(__name__)
 
 
 class UnderstandingParseProcessor(DequeueHandlerBase):
-    def __init__(self, resource_processor: Any):
+    def __init__(self, resource_processor: Any, resource_memory_link_service: Any = None):
         self._resource_processor = resource_processor
+        self._resource_memory_link_service = resource_memory_link_service
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not data:
@@ -47,6 +49,15 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
 
         msg = UnderstandingParseMsg.from_dict(payload)
         cleanup_local_path = msg.cleanup_local_path
+        lock_lease = None
+        try:
+            from openviking.storage.transaction.lock_lease import LockHandoffRef, OwnedLockLease
+
+            ref = LockHandoffRef.from_value(msg.lock_handoff)
+            if ref is not None:
+                lock_lease = await OwnedLockLease.from_handoff(ref)
+        except Exception:
+            lock_lease = None
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
@@ -80,6 +91,9 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                 )
 
                 bind_telemetry_stage("parse_understanding")
+                kwargs: Dict[str, Any] = {}
+                if lock_lease is not None and getattr(lock_lease, "active", False):
+                    kwargs["resource_lock"] = lock_lease
                 result = await resource_processor.process_resource(
                     path=msg.path,
                     ctx=ctx,
@@ -101,6 +115,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     args=msg.args,
                     skip_watch_management=True,
                     watch_interval=0,
+                    **kwargs,
                 )
 
                 if result.get("status") == "error":
@@ -113,6 +128,27 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     )
                     self.report_error("resource processing failed", data)
                     return None
+
+                if self._resource_memory_link_service and (msg.reason or "").strip():
+                    root_uri = result.get("root_uri")
+                    if root_uri:
+                        try:
+                            link_result = await self._resource_memory_link_service.on_resource_added(
+                                ctx=ctx,
+                                resource_uri=root_uri,
+                                reason=msg.reason,
+                                source_name=msg.source_name,
+                                timeout=None,
+                            )
+                            result["memory_linking"] = link_result
+                        except Exception as exc:
+                            logger.warning(
+                                "[UnderstandingParse] Failed to link resource reason memory: %s",
+                                exc,
+                            )
+                            result.setdefault("warnings", []).append(
+                                f"Memory linking failed: {exc}"
+                            )
 
                 await task_tracker.complete(
                     msg.task_id,
@@ -141,6 +177,12 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                 self.report_error(str(exc), data)
                 return None
             finally:
+                try:
+                    if lock_lease is not None:
+                        await lock_lease.close()
+                except Exception:
+                    pass
+
                 if not cleanup_local_path:
                     return
                 try:
