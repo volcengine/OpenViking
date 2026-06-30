@@ -716,25 +716,50 @@ class ResourceService:
                     source_format=source_info.source_format,
                     create_parent=target.create_parent,
                 )
-                lock_lease: LockLease = NO_LOCK
-                if candidate_uri:
-                    root_uri, lock_lease = await self._resource_processor.reserve_unique_candidate(
-                        candidate_uri=candidate_uri,
-                        ctx=ctx,
-                    )
-
                 if self._viking_fs is None:
                     raise NotInitializedError("VikingFS")
-                if not lock_lease.active:
-                    from openviking.storage.transaction import get_lock_manager
+                from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+                from openviking.storage.transaction import OwnedLockLease, get_lock_manager
 
-                    dst_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-                    lock_lease = await self._resource_processor.acquire_resource_lock(
-                        get_lock_manager(),
-                        dst_path,
-                        uri=root_uri,
-                        timeout=0.0,
-                    )
+                lock_manager = get_lock_manager()
+                lock_lease: LockLease = NO_LOCK
+
+                async def _reserve_exact(uri: str) -> LockLease:
+                    dst_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+                    try:
+                        return await OwnedLockLease.acquire_exact_paths(
+                            lock_manager,
+                            [dst_path],
+                            timeout=0.0,
+                        )
+                    except LockAcquisitionError as exc:
+                        raise ResourceBusyError(
+                            f"Resource is busy: {uri}",
+                            uri=uri,
+                            conflict_type="path_busy",
+                            retryable=True,
+                        ) from exc
+
+                if candidate_uri:
+                    max_attempts = 100
+                    reserved = False
+                    for attempt in range(max_attempts + 1):
+                        attempt_uri = candidate_uri if attempt == 0 else f"{candidate_uri}_{attempt}"
+                        if await self._viking_fs.exists(attempt_uri, ctx=ctx):
+                            continue
+                        try:
+                            lock_lease = await _reserve_exact(attempt_uri)
+                            root_uri = attempt_uri
+                            reserved = True
+                            break
+                        except ResourceBusyError:
+                            continue
+                    if not reserved:
+                        raise FileExistsError(
+                            f"Cannot resolve unique name for {candidate_uri} after {max_attempts} attempts"
+                        )
+                else:
+                    lock_lease = await _reserve_exact(root_uri)
 
                 task_tracker = get_task_tracker()
                 task = await task_tracker.create(
