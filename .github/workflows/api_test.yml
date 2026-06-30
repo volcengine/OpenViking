@@ -544,18 +544,28 @@ jobs:
           export OPENVIKING_ROOT_API_KEY="test-root-api-key"
 
           echo "Running CLI integration tests (serial to avoid resource conflicts)..."
-          uv run python -m pytest \
-            test_cli_filesystem.py \
-            test_cli_content.py \
-            test_cli_resources.py \
-            test_cli_search.py \
-            test_cli_sessions.py \
-            test_cli_relations.py \
-            test_cli_system.py \
-            test_cli_skills.py \
-            test_cli_observer.py \
-            -v --tb=short -m cli_remote \
-            --html=cli-test-report.html --self-contained-html
+          if [ "${{ env.HAS_SECRETS }}" = "true" ]; then
+            uv run python -m pytest \
+              test_cli_filesystem.py \
+              test_cli_content.py \
+              test_cli_resources.py \
+              test_cli_search.py \
+              test_cli_sessions.py \
+              test_cli_relations.py \
+              test_cli_system.py \
+              test_cli_skills.py \
+              test_cli_observer.py \
+              -v --tb=short -m cli_remote \
+              --html=cli-test-report.html --self-contained-html
+          else
+            echo "Running CLI tests that do not require VLM/Embedding secrets..."
+            uv run python -m pytest \
+              test_cli_sessions.py \
+              test_cli_system.py \
+              test_cli_observer.py \
+              -v --tb=short -m cli_remote \
+              --html=cli-test-report.html --self-contained-html
+          fi
         continue-on-error: true
 
       - name: Upload test reports
