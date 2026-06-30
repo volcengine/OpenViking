@@ -686,7 +686,7 @@ func TestHealth(t *testing.T) {
 
 func TestSetTagsSendsBody(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/content/set_tags" {
+		if r.URL.Path != "/api/v1/fs/attrs/set_tags" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		if r.Method != http.MethodPost {
@@ -728,7 +728,7 @@ func TestSetTagsSendsBody(t *testing.T) {
 
 func TestSetTagsDefaultsModeAndOmitsTelemetry(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/content/set_tags" {
+		if r.URL.Path != "/api/v1/fs/attrs/set_tags" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)

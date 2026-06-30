@@ -279,7 +279,7 @@ impl HttpClient {
             "mode": mode,
             "recursive": recursive,
         });
-        self.post("/api/v1/content/set_tags", &body).await
+        self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
     fn build_write_body(

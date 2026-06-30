@@ -864,7 +864,7 @@ class AsyncHTTPClient:
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         response = await self._http.post(
-            "/api/v1/content/set_tags",
+            "/api/v1/fs/attrs/set_tags",
             json={
                 "uri": VikingURI.normalize(uri),
                 "tags": tags,

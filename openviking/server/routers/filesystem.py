@@ -4,7 +4,7 @@
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
 
 from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
@@ -15,6 +15,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.routers.content import SetTagsRequest, set_tags as content_set_tags
 from openviking.storage import VikingDBManagerProxy
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
@@ -192,6 +193,15 @@ async def attrs(
         if mapped is not None:
             raise mapped from exc
         raise
+
+
+@router.post("/attrs/set_tags")
+async def attrs_set_tags(
+    request: SetTagsRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Set explicit k=v retrieval tags metadata for a file or directory."""
+    return await content_set_tags(request, _ctx)
 
 
 class MkdirRequest(BaseModel):

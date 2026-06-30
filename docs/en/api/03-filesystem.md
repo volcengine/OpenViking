@@ -618,11 +618,17 @@ fmt.Println(metadata["tags"])
 
 ```
 GET /api/v1/fs/attrs?uri={uri}
+POST /api/v1/fs/attrs/set_tags
 ```
 
 ```bash
 curl -X GET "http://localhost:1933/api/v1/fs/attrs?uri=viking://resources/docs/api.md" \
   -H "X-API-Key: your-key"
+
+curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"uri":"viking://resources/docs","tags":["team=search"],"mode":"append","recursive":true}'
 ```
 
 **CLI**
@@ -634,6 +640,8 @@ openviking attrs get viking://user/alice/memories/experiences/foo.md memory.reso
 openviking attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
 openviking attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
 ```
+
+Directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
 
 **Response (Resource)**
 

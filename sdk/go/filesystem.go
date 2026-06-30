@@ -184,7 +184,7 @@ func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *S
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/set_tags", nil, payload, &result)
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/fs/attrs/set_tags", nil, payload, &result)
 	return result, err
 }
 
