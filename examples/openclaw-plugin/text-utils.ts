@@ -304,6 +304,62 @@ function formatToolResultContent(content: unknown): string {
   return "";
 }
 
+function normalizeToolContentType(value: unknown): string {
+  return typeof value === "string" ? value.replace(/[_-]/g, "").toLowerCase() : "";
+}
+
+function isToolResultContentBlock(block: unknown): block is Record<string, unknown> {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  return normalizeToolContentType((block as Record<string, unknown>).type) === "toolresult";
+}
+
+function isToolCallContentBlock(block: unknown): block is Record<string, unknown> {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = normalizeToolContentType((block as Record<string, unknown>).type);
+  return type === "toolcall" || type === "tooluse";
+}
+
+function readToolCallId(record: Record<string, unknown>): string | undefined {
+  for (const field of ["toolCallId", "toolUseId", "tool_call_id", "tool_use_id", "id"] as const) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function readToolName(record: Record<string, unknown>): string | undefined {
+  for (const field of ["toolName", "tool_name", "name"] as const) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function readToolInput(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  const input = record.arguments ?? record.input ?? record.toolInput ?? record.tool_input;
+  return input && typeof input === "object" && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : undefined;
+}
+
+function readToolResultIsError(record: Record<string, unknown>): boolean {
+  if (typeof record.isError === "boolean") {
+    return record.isError;
+  }
+  if (typeof record.is_error === "boolean") {
+    return record.is_error;
+  }
+  return false;
+}
+
 /**
  * 提取消息中的一个 part 的文本内容，并清理时间戳等噪音
  */
@@ -356,9 +412,10 @@ export function extractNewTurnMessages(
   const result: ExtractedMessage[] = [];
   let count = 0;
 
-  // First pass: collect toolUse inputs indexed by toolCallId/toolUseId
-  // Scan all messages (including after startIndex) to find toolUse before each toolResult
+  // First pass: collect toolUse inputs and names indexed by toolCallId/toolUseId.
+  // Scan all messages (including after startIndex) to find toolUse before each toolResult.
   const toolUseInputs: Record<string, Record<string, unknown>> = {};
+  const toolUseNames: Record<string, string> = {};
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i] as Record<string, unknown>;
     if (!msg || typeof msg !== "object") continue;
@@ -367,15 +424,16 @@ export function extractNewTurnMessages(
       const content = msg.content;
       if (Array.isArray(content)) {
         for (const block of content) {
-          const b = block as Record<string, unknown>;
-          // Handle toolCall, toolUse, tool_call types
-          if (b?.type === "toolCall" || b?.type === "toolUse" || b?.type === "tool_call") {
-            const id = (b.id as string) || (b.toolUseId as string) || (b.toolCallId as string);
-            // Try multiple field names for tool input: arguments, input, toolInput
-            const input = b.arguments ?? b.input ?? b.toolInput;
-            if (id && input && typeof input === "object") {
-              toolUseInputs[id] = input as Record<string, unknown>;
-            }
+          if (!isToolCallContentBlock(block)) continue;
+          const id = readToolCallId(block);
+          if (!id) continue;
+          const name = readToolName(block);
+          if (name) {
+            toolUseNames[id] = name;
+          }
+          const input = readToolInput(block);
+          if (input) {
+            toolUseInputs[id] = input;
           }
         }
       }
@@ -391,35 +449,57 @@ export function extractNewTurnMessages(
 
     count++;
 
-    // toolResult -> type: "tool"
+    // OV canonical session shape stores completed tool result parts on user-role messages.
     if (role === "toolResult") {
-      const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
+      const toolCallId = readToolCallId(msg);
+      const toolName = readToolName(msg) ?? (toolCallId ? toolUseNames[toolCallId] : undefined) ?? "tool";
       const output = formatToolResultContent(msg.content) || "";
-      // Try multiple field names for tool call ID
-      const toolCallId = (msg.toolCallId as string) || (msg.toolUseId as string) || (msg.tool_call_id as string);
-      const toolInput = toolCallId && toolUseInputs[toolCallId]
-        ? toolUseInputs[toolCallId]
-        : (typeof msg.toolInput === "object" && msg.toolInput !== null
-          ? msg.toolInput as Record<string, unknown>
-          : undefined);
+      const toolInput = (toolCallId && toolUseInputs[toolCallId]) || readToolInput(msg);
       if (output) {
         result.push({
           role: "user",
           parts: [{
             type: "tool",
-            toolCallId: toolCallId || undefined,
+            toolCallId,
             toolName,
             toolInput,
             toolOutput: output,
-            toolStatus: "completed",
+            toolStatus: readToolResultIsError(msg) ? "error" : "completed",
           }],
         });
       }
       continue;
     }
 
-    // user/assistant -> type: "text"
+    // Some OpenClaw runtimes deliver completed tool-result content as blocks inside
+    // a user/assistant message instead of as a top-level role="toolResult" turn.
+    // Persist those blocks as OV ToolParts under role="user" so uploaded session
+    // messages follow OpenViking's standard tool-result ownership contract.
     const content = msg.content;
+    if (Array.isArray(content)) {
+      const toolParts: Array<Extract<ExtractedMessage["parts"][number], { type: "tool" }>> = [];
+      for (const block of content) {
+        if (!isToolResultContentBlock(block)) continue;
+        const toolCallId = readToolCallId(block);
+        const toolName = readToolName(block) ?? (toolCallId ? toolUseNames[toolCallId] : undefined) ?? "tool";
+        const output = formatToolResultContent(block.content ?? block.text ?? block.output ?? block.result) || "";
+        const toolInput = (toolCallId && toolUseInputs[toolCallId]) || readToolInput(block);
+        if (!output) continue;
+        toolParts.push({
+          type: "tool",
+          toolCallId,
+          toolName,
+          toolInput,
+          toolOutput: output,
+          toolStatus: readToolResultIsError(block) ? "error" : "completed",
+        });
+      }
+      if (toolParts.length > 0) {
+        result.push({ role: "user", parts: toolParts });
+      }
+    }
+
+    // user/assistant -> type: "text"
     const text = extractPartText(content);
 
     if (text) {

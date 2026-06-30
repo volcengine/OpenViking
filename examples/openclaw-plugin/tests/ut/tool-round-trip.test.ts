@@ -69,6 +69,41 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
     const { messages: extracted } = extractNewTurnMessages(messages, 0);
     expect(extracted[0]!.role).toBe("user");
   });
+
+  it("maps embedded completed tool_result blocks to user-role tool parts", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me check." },
+          { type: "toolUse", id: "call_abc123", name: "exec", input: { command: "ls" } },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_result", tool_use_id: "call_abc123", content: "file1.txt\nfile2.txt" },
+          { type: "text", text: "Done." },
+        ],
+      },
+    ];
+
+    const { messages: extracted } = extractNewTurnMessages(messages, 0);
+
+    expect(extracted).toHaveLength(3);
+    expect(extracted[0]!.role).toBe("assistant");
+    expect(extracted[1]!.role).toBe("user");
+    const toolPart = extracted[1]!.parts[0]!;
+    expect(toolPart.type).toBe("tool");
+    if (toolPart.type === "tool") {
+      expect(toolPart.toolCallId).toBe("call_abc123");
+      expect(toolPart.toolName).toBe("exec");
+      expect(toolPart.toolInput).toEqual({ command: "ls" });
+      expect(toolPart.toolOutput).toContain("file1.txt");
+      expect(toolPart.toolStatus).toBe("completed");
+    }
+    expect(extracted[2]).toEqual({ role: "assistant", parts: [{ type: "text", text: "Done." }] });
+  });
 });
 
 describe("convertToAgentMessages: structured tool round-trip", () => {
