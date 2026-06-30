@@ -338,12 +338,17 @@ class VikingFS:
         return normalized, parts
 
     def _encrypted_temp_path(self, path: str) -> str:
-        """Build the sibling hidden `.encrypt` temp-file path for a final file path."""
-        parent, _, name = path.rpartition("/")
-        temp_name = f"{name}.encrypt" if name.startswith(".") else f".{name}.encrypt"
-        if not parent:
-            return f"/{temp_name}"
-        return f"{parent}/{temp_name}"
+        """Build the deterministic internal `.encrypt` temp-file path for a final file path."""
+        normalized = path if path.startswith("/") else f"/{path}"
+        parts = [part for part in normalized.split("/") if part]
+        if len(parts) >= 2 and parts[0] == "local":
+            temp_root = f"/local/{parts[1]}/temp/.encrypt_stage"
+        elif len(parts) >= 2:
+            temp_root = f"/{parts[0]}/temp/.encrypt_stage"
+        else:
+            temp_root = "/temp/.encrypt_stage"
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return f"{temp_root}/{digest}.encrypt"
 
     def _encrypted_write_lock_paths(self, path: str) -> List[str]:
         """Return the final and temp paths protected by the encrypted write protocol."""
@@ -353,6 +358,7 @@ class VikingFS:
         self,
         path: str,
         operation: Callable[[], Awaitable[_T]],
+        lock_handle: Optional["LockHandle"] = None,
     ) -> _T:
         """Run a write operation under a dual-path exact lock when encryption is enabled."""
         if self._encryptor is None:
@@ -364,6 +370,7 @@ class VikingFS:
             get_lock_manager(),
             self._encrypted_write_lock_paths(path),
             lock_mode="exact",
+            handle=lock_handle,
         ):
             return await operation()
 
@@ -2998,6 +3005,7 @@ class VikingFS:
         uri: str,
         content: Union[str, bytes],
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Write file directly."""
         self._ensure_mutable_access(uri, ctx)
@@ -3010,6 +3018,7 @@ class VikingFS:
         await self._run_with_encrypted_write_lock(
             path,
             lambda: self._async_agfs.write(path, content),
+            lock_handle=lock_handle,
         )
 
     async def read_file(
@@ -3111,6 +3120,7 @@ class VikingFS:
         uri: str,
         content: bytes,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Write single binary file."""
         self._ensure_mutable_access(uri, ctx)
@@ -3120,6 +3130,7 @@ class VikingFS:
         await self._run_with_encrypted_write_lock(
             path,
             lambda: self._async_agfs.write(path, content),
+            lock_handle=lock_handle,
         )
 
     async def append_file(
@@ -3127,6 +3138,7 @@ class VikingFS:
         uri: str,
         content: str,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Append content to file."""
         self._ensure_mutable_access(uri, ctx)
@@ -3152,7 +3164,11 @@ class VikingFS:
                 final_content = (existing + content).encode("utf-8")
                 await self._async_agfs.write(path, final_content)
 
-            await self._run_with_encrypted_write_lock(path, _append_under_lock)
+            await self._run_with_encrypted_write_lock(
+                path,
+                _append_under_lock,
+                lock_handle=lock_handle,
+            )
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")

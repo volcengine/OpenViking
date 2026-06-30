@@ -1134,6 +1134,18 @@ impl FileSystem for CachedFileSystem {
         Ok(())
     }
 
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let _guard = self.operation_lock.write().await;
+        self.backend.replace(src_path, dst_path).await?;
+        self.bump_generation(src_path).await;
+        self.bump_generation(dst_path).await;
+        self.invalidate_path_objects(src_path).await;
+        self.invalidate_path_objects(dst_path).await;
+        self.invalidate_parent_directory(src_path).await;
+        self.invalidate_parent_directory(dst_path).await;
+        Ok(())
+    }
+
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         let _guard = self.operation_lock.write().await;
         self.backend.chmod(path, mode).await?;

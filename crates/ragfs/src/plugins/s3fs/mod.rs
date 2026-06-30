@@ -682,6 +682,38 @@ impl FileSystem for S3FileSystem {
         Err(Error::not_found(&old_normalized))
     }
 
+
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let src_normalized = Self::normalize_path(src_path);
+        let dst_normalized = Self::normalize_path(dst_path);
+
+        if src_normalized == "/" || dst_normalized == "/" {
+            return Err(Error::invalid_operation("cannot replace root directory"));
+        }
+
+        let src_key = self.client.build_key(&src_normalized);
+        let src_meta = self
+            .client
+            .head_object(&src_key)
+            .await?
+            .ok_or_else(|| Error::not_found(&src_normalized))?;
+        if src_meta.is_dir_marker {
+            return Err(Error::invalid_operation(
+                "replace only supports files in s3fs",
+            ));
+        }
+
+        let dst_key = self.client.build_key(&dst_normalized);
+        self.client.copy_object(&src_key, &dst_key).await?;
+        self.client.delete_object(&src_key).await?;
+
+        self.dir_cache.invalidate_parent(&src_normalized).await;
+        self.dir_cache.invalidate_parent(&dst_normalized).await;
+        self.stat_cache.invalidate(&src_normalized).await;
+        self.stat_cache.invalidate(&dst_normalized).await;
+
+        Ok(())
+    }
     async fn chmod(&self, _path: &str, _mode: u32) -> Result<()> {
         // S3 doesn't support Unix permissions - no-op
         Ok(())

@@ -774,6 +774,36 @@ impl FileSystem for LocalFileSystem {
         Ok(())
     }
 
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let src_local = self.resolve_path(src_path);
+        let dst_local = self.resolve_path(dst_path);
+
+        if !src_local.exists() {
+            return Err(Error::NotFound(src_path.to_string()));
+        }
+
+        if src_local.is_dir() {
+            return Err(Error::invalid_operation(
+                "replace only supports files in localfs",
+            ));
+        }
+
+        if dst_local.is_dir() {
+            return Err(Error::IsADirectory(dst_path.to_string()));
+        }
+
+        if let Some(parent) = dst_local.parent() {
+            if !parent.exists() {
+                return Err(Error::NotFound(parent.to_string_lossy().to_string()));
+            }
+        }
+
+        fs::rename(&src_local, &dst_local)
+            .map_err(|e| Error::plugin(format!("failed to replace: {}", e)))?;
+
+        Ok(())
+    }
+
     async fn chmod(&self, path: &str, _mode: u32) -> Result<()> {
         let local_path = self.resolve_path(path);
 
@@ -949,6 +979,24 @@ mod tests {
 
         assert_eq!(result.count, 1);
         assert_eq!(result.matches[0].file, "a.txt");
+    }
+
+    #[tokio::test]
+    async fn test_localfs_replace_overwrites_existing_file() {
+        let (_dir, fs) = fallback_localfs();
+
+        fs.write("/src.txt", b"fresh", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        fs.write("/dst.txt", b"stale", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        fs.replace("/src.txt", "/dst.txt").await.unwrap();
+
+        assert!(fs.stat("/src.txt").await.is_err());
+        let data = fs.read("/dst.txt", 0, 0).await.unwrap();
+        assert_eq!(data, b"fresh");
     }
 
     #[tokio::test]

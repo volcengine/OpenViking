@@ -669,6 +669,10 @@ impl FileSystem for ArcFileSystem {
         self.0.rename(old_path, new_path).await
     }
 
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        self.0.replace(src_path, dst_path).await
+    }
+
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         self.0.chmod(path, mode).await
     }
@@ -759,6 +763,19 @@ impl FileSystem for MountableFS {
         }
 
         mount_info_old.fs.rename(&rel_old, &rel_new).await
+    }
+
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let (mount_info_src, rel_src) = self.find_mount(src_path).await?;
+        let (mount_info_dst, rel_dst) = self.find_mount(dst_path).await?;
+
+        if mount_info_src.path != mount_info_dst.path {
+            return Err(Error::InvalidOperation(
+                "Cannot replace across different mount points".to_string(),
+            ));
+        }
+
+        mount_info_src.fs.replace(&rel_src, &rel_dst).await
     }
 
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
