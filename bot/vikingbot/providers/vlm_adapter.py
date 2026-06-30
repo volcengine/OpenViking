@@ -150,6 +150,9 @@ class VLMProviderAdapter(LLMProvider):
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        extra_headers = getattr(self._vlm, "extra_headers", None)
+        if extra_headers:
+            kwargs["extra_headers"] = extra_headers
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
