@@ -157,7 +157,7 @@ const zhCN = {
       apiKey: 'API key',
       baseUrl: '服务地址',
       dataApiKey: 'User API key',
-      rootApiKey: 'Root API Key',
+      rootApiKey: 'Root or Admin API Key',
       userApiKey: 'User API Key',
       role: '角色',
       user: 'User',

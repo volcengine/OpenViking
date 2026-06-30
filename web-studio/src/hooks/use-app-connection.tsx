@@ -171,9 +171,14 @@ function applyConnection(
   })
 }
 
-async function detectConnectionRole(
+type ConnectionIdentity = {
+  accountId: string
+  role: ConnectionRole
+}
+
+async function detectConnectionIdentity(
   connection: ConnectionDraft,
-): Promise<ConnectionRole> {
+): Promise<ConnectionIdentity> {
   const headers: Record<string, string> = {}
   const apiKey = connection.adminApiKey || connection.apiKey
   if (apiKey) {
@@ -185,13 +190,20 @@ async function detectConnectionRole(
     { headers },
   )
   if (!response.ok) {
-    return 'unknown'
+    return { accountId: '', role: 'unknown' }
   }
 
+  // /health resolves the presented key and echoes back its identity:
+  // { role, account_id, user_id }. We use role to gate the admin UI and
+  // account_id to pin the assumed account for an account-admin key.
   const data = (await response.json().catch(() => null)) as {
+    account_id?: unknown
     role?: unknown
   } | null
-  return isConnectionRole(data?.role) ? data.role : 'unknown'
+  return {
+    accountId: typeof data?.account_id === 'string' ? data.account_id : '',
+    role: isConnectionRole(data?.role) ? data.role : 'unknown',
+  }
 }
 
 function readInitialConnection(): ConnectionDraft {
@@ -328,13 +340,23 @@ export function AppConnectionProvider({
       }
     }
 
-    void detectConnectionRole(connection)
-      .then((role) => {
+    void detectConnectionIdentity(connection)
+      .then(({ accountId, role }) => {
         if (cancelled) {
           return
         }
         setConnectionRole(role)
         setConnectionRoleLoading(false)
+        // An account-admin Root key is scoped to its own account. Pin that
+        // account as the assumed identity so admin and data calls target the
+        // right tenant instead of failing with a mismatch (the server rejects
+        // a foreign account with "ADMIN can only manage account: <x>"). A root
+        // key is not account-scoped, so its account selection is left intact.
+        if (role === 'admin' && accountId) {
+          setConnection((prev) =>
+            prev.accountId === accountId ? prev : { ...prev, accountId },
+          )
+        }
       })
       .catch(() => {
         if (!cancelled) {

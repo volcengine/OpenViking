@@ -158,7 +158,7 @@ const en = {
       apiKey: 'API key',
       baseUrl: 'Server URL',
       dataApiKey: 'User API key',
-      rootApiKey: 'Root API Key',
+      rootApiKey: 'Root or Admin API Key',
       userApiKey: 'User API Key',
       role: 'Role',
       user: 'User',
