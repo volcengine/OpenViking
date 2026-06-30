@@ -566,6 +566,10 @@ async def test_resource_write_rolls_back_replace_when_enqueue_fails(monkeypatch)
         )
 
     assert viking_fs.content[file_uri] == "original"
+    assert viking_fs.write_file_calls == [
+        (file_uri, "updated", lock_manager.handle),
+        (file_uri, "original", lock_manager.handle),
+    ]
     assert lock_manager.release_calls == ["lock-1"]
 
 
@@ -1341,7 +1345,10 @@ async def test_set_tags_recursive_directory_updates_descendants(monkeypatch):
         nested_file_uri,
     }
     assert sorted(fake_store.update_calls) == sorted(
-        [(file_uri, ["env=prod"], "append"), (nested_file_uri, ["env=prod"], "append")]
+        [
+            (file_uri, ["env=prod"], "append"),
+            (nested_file_uri, ["env=prod"], "append"),
+        ]
     )
     assert sorted(fake_store.directory_update_calls) == sorted(
         [

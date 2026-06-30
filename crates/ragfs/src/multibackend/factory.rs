@@ -20,6 +20,16 @@ use crate::multibackend::meta::MountRootFsContextResolver;
 use crate::multibackend::types::MultiBackendBuildContext;
 use crate::shape::validate::ensure_backend_shape;
 
+/// Return whether one backend may be wrapped by EncryptionWrappedFS.
+///
+/// Keep the check local to the wrapper creation entrypoint for this minimal
+/// fix: encrypted publish requires overwrite-on-publish semantics
+/// (`replace(temp, final)`), so unsupported backends must be rejected before
+/// the encrypted wrapper is built.
+fn supports_encrypted_publish(backend_name: &str) -> bool {
+    matches!(backend_name, "localfs" | "s3fs" | "memfs")
+}
+
 /// Initialize one backend plugin instance from config params.
 pub async fn init_backend_plugin(
     registry: &Arc<RwLock<HashMap<String, Arc<dyn ServicePlugin>>>>,
@@ -61,6 +71,12 @@ pub async fn build_multi_write_fs(
     )
     .await?;
     let primary_backend: Arc<dyn FileSystem> = if global_encryption_enabled {
+        if !supports_encrypted_publish(&config.name) {
+            return Err(Error::config(format!(
+                "encrypted backend '{}' must support replace() semantics",
+                config.name
+            )));
+        }
         Arc::new(EncryptionWrappedFS::new(
             primary_raw.clone(),
             build_ctx
@@ -116,6 +132,12 @@ pub async fn build_multi_write_fs(
         .await?;
 
         let backup_backend: Arc<dyn FileSystem> = if backup_encrypted {
+            if !supports_encrypted_publish(&item.backend) {
+                return Err(Error::config(format!(
+                    "encrypted backend '{}' must support replace() semantics",
+                    item.backend
+                )));
+            }
             Arc::new(EncryptionWrappedFS::new(
                 backup_raw,
                 build_ctx

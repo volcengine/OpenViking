@@ -322,7 +322,12 @@ class ContentWriteCoordinator:
                 await self._viking_fs.rm(uri, ctx=ctx, lock_handle=lock_handle)
                 return
             if previous_content is not None:
-                await self._viking_fs.write_file(uri, previous_content, ctx=ctx)
+                await self._viking_fs.write_file(
+                    uri,
+                    previous_content,
+                    ctx=ctx,
+                    lock_handle=lock_handle,
+                )
         except Exception:
             logger.error("Failed to rollback direct content write for %s", uri, exc_info=True)
 
