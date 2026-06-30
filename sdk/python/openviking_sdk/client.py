@@ -781,6 +781,12 @@ class AsyncHTTPClient:
         response = await self._http.get("/api/v1/fs/stat", params={"uri": VikingURI.normalize(uri)})
         return self._handle_response(response)
 
+    async def attrs(self, uri: str) -> Dict[str, Any]:
+        response = await self._http.get(
+            "/api/v1/fs/attrs", params={"uri": VikingURI.normalize(uri)}
+        )
+        return self._handle_response(response)
+
     async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         payload = {"uri": VikingURI.normalize(uri)}
         if description is not None:
@@ -1678,6 +1684,9 @@ class SyncHTTPClient:
 
     def stat(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.stat(uri))
+
+    def attrs(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.attrs(uri))
 
     def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         run_async(self._async_client.mkdir(uri, description=description))

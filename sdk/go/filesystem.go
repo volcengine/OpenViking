@@ -72,6 +72,14 @@ func (c *Client) Stat(ctx context.Context, uri string) (map[string]any, error) {
 	return result, err
 }
 
+// Attrs returns logical extended attributes for a URI.
+func (c *Client) Attrs(ctx context.Context, uri string) (map[string]any, error) {
+	query := url.Values{"uri": []string{NormalizeURI(uri)}}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/attrs", query, nil, &result)
+	return result, err
+}
+
 // Mkdir creates a directory.
 func (c *Client) Mkdir(ctx context.Context, uri string, description string) error {
 	payload := map[string]any{"uri": NormalizeURI(uri)}

@@ -586,6 +586,95 @@ The `count` field (directories only) contains the estimated number of items (fil
 
 ---
 
+### attrs()
+
+Get logical extended attributes for a file or directory.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | str | Yes | - | Viking URI |
+
+**Python SDK (HTTP)**
+
+```python
+attrs = client.attrs("viking://resources/docs/api.md")
+print(attrs["attrs"]["tags"])
+```
+
+**Go SDK**
+
+```go
+attrs, err := client.Attrs(ctx, "viking://resources/docs/api.md")
+if err != nil {
+    return err
+}
+metadata := attrs["attrs"].(map[string]any)
+fmt.Println(metadata["tags"])
+```
+
+**HTTP API**
+
+```
+GET /api/v1/fs/attrs?uri={uri}
+```
+
+```bash
+curl -X GET "http://localhost:1933/api/v1/fs/attrs?uri=viking://resources/docs/api.md" \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking attrs get viking://resources/docs/api.md
+openviking attrs get viking://resources/docs/api.md tags
+openviking attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
+openviking attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
+openviking attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+```
+
+**Response (Resource)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/docs/api.md",
+    "context_type": "resource",
+    "attrs": {
+      "tags": ["team=search", "env=prod"]
+    }
+  }
+}
+```
+
+**Response (Memory)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://user/alice/memories/experiences/foo.md",
+    "context_type": "memory",
+    "attrs": {
+      "memory": {
+        "memory_type": "experiences",
+        "name": "foo",
+        "tags": ["ui"],
+        "resource_refs": ["viking://resources/docs/api.md"]
+      },
+      "tags": ["team=search"]
+    }
+  }
+}
+```
+
+`attrs.memory` is parsed from `MEMORY_FIELDS` metadata with content removed. `attrs.tags` is the explicit retrieval tag list used by `attrs set-tags` and search filters.
+
+---
+
 ### mkdir()
 
 Create a directory.

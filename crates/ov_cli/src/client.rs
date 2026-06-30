@@ -464,6 +464,11 @@ impl HttpClient {
         self.get("/api/v1/fs/stat", &params).await
     }
 
+    pub async fn attrs(&self, uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/fs/attrs", &params).await
+    }
+
     // ============ Search Methods ============
 
     pub async fn find(
