@@ -102,7 +102,13 @@ fields:
             或没有合适 exp。
 
           最后必须有一个全局 `first_divergence(...)`，只指向最早
-          materially changes reward 的偏离点。>
+          materially changes reward 的偏离点。
+
+          对于 `MissingWrongCommunication` 错误（传达了错误的聚合值），
+          `first_divergence` 的 `expected` 和 `actual` 不能只写金额，还要写出：
+          - 期望的聚合范围（包含哪些对象、排除哪些对象）
+          - 实际使用的聚合范围
+          - 具体哪个对象被错误包含/排除>
 
       # 失败机制
       - 失败/成功关键:
@@ -111,7 +117,14 @@ fields:
       - 决策原因:
           <解释为什么 agent 会走错或走对：忽略了哪个 runtime 可见规则、
           tool fact、policy gate、用户确认、对象绑定或通信要求；不要写
-          隐藏思维过程，不要只说“忽略了评测要求”。>
+          隐藏思维过程，不要只说”忽略了评测要求”。
+
+          对于聚合值错误（错误金额、错误数量等），必须具体分析：
+          - 实际计算包含了哪些对象/条目（列出具体对象）
+          - 期望应该包含哪些对象/条目（列出具体对象）
+          - 哪个具体对象被错误包含或排除
+          - 为什么范围理解错了（时间边界？语义边界？用户原始问题 vs 操作后状态？）
+          - 错误是从哪个决策点开始的（哪条消息/工具调用后）>
       - 记忆影响:
           <说明检索/注入的经验是 missing、irrelevant、over-broad、
           misleading、ignored、too weak、only solved secondary issue、
@@ -296,10 +309,52 @@ fields:
         )
         ```
         ```
+      - 聚合值范围错误（传达了错误的总金额/数量）：
+        ```md
+        # 实际执行路径
+        - Loaded experiences:
+          - #E1=多步骤操作后信息完整沟通.md
+
+        - Execution path:
+        ```python
+        # Actual path
+        A1: user = get_user_details(user_id="<user_id>")
+        A2: res1 = get_reservation_details(reservation_id="<cancel_res_id_1>")
+        A3: res2 = get_reservation_details(reservation_id="<cancel_res_id_2>")
+        A4: other1 = get_reservation_details(reservation_id="<other_res_id_1>")
+        A5: other2 = get_reservation_details(reservation_id="<other_res_id_2>")
+        A6: other3 = get_reservation_details(reservation_id="<already_flown_res_id>")
+        A7: update_and_cancel_steps(...) -> all success
+        A8: communicate_with_user("total: $X") -> wrong aggregation
+        A9: return DONE
+
+        # Experience alignment
+        E1 "多步骤操作后信息完整沟通.md":
+          status: matched
+          L1 -> A1-A3 matched
+          L2 -> A7 matched
+
+        diagnose(E1,
+          exp_quality="correct",
+          execution_relation="followed",
+          repair_action="no_update",
+          reason="E1 correctly covered main business steps; failure was in aggregation scope understanding."
+        )
+
+        first_divergence(
+          error="MissingWrongCommunication",
+          source=[trace].A8,
+          expected="total of <other_res_id_1> + <other_res_id_2> (excluding <already_flown_res_id> and canceled ones), using original scope at user question time",
+          actual="included <already_flown_res_id> in total",
+          repair_target=None
+        )
+        ```
+        ```
 
       Few-shot focus examples（用来校准 `# 关键反思` 的主因选择；不要照抄标签，要按当前 trace 改写）：
-      - Forbidden cancellation write：反思主体写“核心教训: 取消前必须满足至少一个 allow-cancel gate；当工具事实显示 economy/no insurance/change-of-plan/no airline cancellation 且完整 timestamp arithmetic 超过 24h 时，`cancel_reservation` 是 forbidden write。违反的实际规则/成功关键: 用户/前客服口头批准不能覆盖 policy + tool facts。错误推理或风险: agent 把口头批准或错误 24h 判断当成取消资格。修正原则: 先逐项核验 gate，不满足时拒绝/沟通或按 policy handoff。”不要写“ground_truth要求仅查询”。
-      - Communication-only failure：反思主体写“核心教训: 最终沟通必须覆盖用户/evaluation 要求的聚合语义和 literal。违反的实际规则/成功关键: 业务路径已成立时，主风险是用 refund/remaining/subset total 替代 total cost，或漏说用户要求的信息。错误推理或风险: agent 把相关金额当成同义聚合值。修正原则: `done` 前按正确 inclusion set 与 time boundary 传达 required literal。”不要把已通过的业务步骤写成 forbidden，也不要把 missing write、拒绝/转人工缺失或 missing `done` 诊断为主因。
-      - Missing expected write：反思主体写“核心教训: 已满足 update 前置条件时必须调用 exact `update_reservation_flights`。违反的实际规则/成功关键: evaluated sequence 要求 reads/pricing/confirmation 后执行该 write。错误推理或风险: agent 用 refusal/handoff/cancel-and-rebook 替代 expected write。修正原则: 保留 exact tool family 和 evaluated sequence，不得换工具或换路径。”
+      - Forbidden cancellation write：反思主体写”核心教训: 取消前必须满足至少一个 allow-cancel gate；当工具事实显示 economy/no insurance/change-of-plan/no airline cancellation 且完整 timestamp arithmetic 超过 24h 时，`cancel_reservation` 是 forbidden write。违反的实际规则/成功关键: 用户/前客服口头批准不能覆盖 policy + tool facts。错误推理或风险: agent 把口头批准或错误 24h 判断当成取消资格。修正原则: 先逐项核验 gate，不满足时拒绝/沟通或按 policy handoff。”不要写”ground_truth要求仅查询”。
+      - Communication-only failure：反思主体写”核心教训: 最终沟通必须覆盖用户/evaluation 要求的聚合语义和 literal。违反的实际规则/成功关键: 业务路径已成立时，主风险是用 refund/remaining/subset total 替代 total cost，或漏说用户要求的信息。错误推理或风险: agent 把相关金额当成同义聚合值。修正原则: `done` 前按正确 inclusion set 与 time boundary 传达 required literal。”不要把已通过的业务步骤写成 forbidden，也不要把 missing write、拒绝/转人工缺失或 missing `done` 诊断为主因。
+      - Missing expected write：反思主体写”核心教训: 已满足 update 前置条件时必须调用 exact `update_reservation_flights`。违反的实际规则/成功关键: evaluated sequence 要求 reads/pricing/confirmation 后执行该 write。错误推理或风险: agent 用 refusal/handoff/cancel-and-rebook 替代 expected write。修正原则: 保留 exact tool family 和 evaluated sequence，不得换工具或换路径。”
+      - Wrong aggregation scope：反思主体写”核心教训: 计算聚合值（总金额、总数等）时必须严格按用户原始问题的范围，不能用操作后的剩余范围替代，也不能包含/排除错误对象。违反的实际规则/成功关键: 用户问”other upcoming flights”时，要按提问当时的时间边界排除已飞航班，排除正在取消的航班，不能因为后来取消了就改变原始问题的范围。错误推理或风险: agent 把”upcoming”理解成所有非取消航班，或包含了已飞的，或排除了不该排除的。修正原则: 记录用户提问当时的范围和应包含/排除的具体对象，计算后 double-check。”
 
     merge_op: patch
