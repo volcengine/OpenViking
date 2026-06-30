@@ -155,11 +155,9 @@ class DirectBackend(SandboxBackend):
         workspace = self.workspace.resolve()
         resolved = path.resolve()
 
+        allowed_roots = [workspace]
         if self.restrict_workspaces and self.session_key in self.restrict_workspaces:
-            restrict_path = Path(self.restrict_workspaces[self.session_key]).resolve()
-            if resolved != restrict_path and restrict_path not in resolved.parents:
-                raise PermissionError(f"Path outside restricted workspace: {path}")
-            return
+            allowed_roots.append(Path(self.restrict_workspaces[self.session_key]).resolve())
 
-        if resolved != workspace and workspace not in resolved.parents:
-            raise PermissionError(f"Path outside workspace: {path}")
+        if not any(resolved == root or root in resolved.parents for root in allowed_roots):
+            raise PermissionError(f"Path outside allowed workspaces: {path}")
