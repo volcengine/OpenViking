@@ -29,6 +29,10 @@ from openviking.server.local_input_guard import (
     is_remote_resource_source,
     require_remote_resource_source,
 )
+from openviking.server.user_config import (
+    effective_resource_add_target,
+    effective_skill_add_target,
+)
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.transaction import NO_LOCK, LockLease
@@ -564,6 +568,17 @@ class ResourceService:
         self._ensure_initialized()
         normalized_args = self._normalize_add_resource_args(args, watch_interval=watch_interval)
         kwargs.update(normalized_args.processor_kwargs)
+        if not to and not parent:
+            from openviking.server.dependencies import get_server_config
+
+            default_parent = await effective_resource_add_target(
+                viking_fs=self._viking_fs,
+                ctx=ctx,
+                server_config=get_server_config(),
+            )
+            if default_parent:
+                parent = default_parent
+                kwargs["create_parent"] = True
         if not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
@@ -1051,6 +1066,14 @@ class ResourceService:
             Processing result
         """
         self._ensure_initialized()
+        if not target_uri:
+            from openviking.server.dependencies import get_server_config
+
+            target_uri = await effective_skill_add_target(
+                viking_fs=self._viking_fs,
+                ctx=ctx,
+                server_config=get_server_config(),
+            )
         telemetry_id = get_current_telemetry().telemetry_id
         request_wait_tracker = get_request_wait_tracker()
         monitor_started = False

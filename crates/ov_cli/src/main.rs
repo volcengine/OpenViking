@@ -950,10 +950,11 @@ enum Commands {
         /// Viking URI
         #[arg(value_name = "uri")]
         uri: String,
-        /// Reindex mode
+        /// Reindex mode: vectors_only rebuilds vectors; semantic_and_vectors regenerates semantic artifacts, then vectors
         #[arg(
             long,
             default_value = "vectors_only",
+            value_parser = ["vectors_only", "semantic_and_vectors"],
             value_name = "mode",
             help_heading = "Common options"
         )]
@@ -1499,6 +1500,9 @@ enum AdminCommands {
         /// First admin user ID
         #[arg(long = "admin", value_name = "user-id")]
         admin_user_id: String,
+        /// Initial config for the first admin user as JSON
+        #[arg(long = "user-config-json", value_name = "json")]
+        user_config_json: Option<String>,
     },
     /// List all accounts (ROOT only)
     ListAccounts,
@@ -1525,6 +1529,9 @@ enum AdminCommands {
         /// Role: admin or user
         #[arg(long, default_value = "user", value_name = "role")]
         role: String,
+        /// Initial config for the new user as JSON
+        #[arg(long = "user-config-json", value_name = "json")]
+        user_config_json: Option<String>,
     },
     /// List all users in an account
     ListUsers {
@@ -3666,7 +3673,7 @@ mod tests {
             .expect("skills list should parse");
         match list.command {
             Commands::Skills {
-                action: SkillCommands::List { node_limit },
+                action: SkillCommands::List { node_limit, .. },
             } => assert_eq!(node_limit, 25),
             _ => panic!("expected skills list"),
         }
@@ -3788,7 +3795,9 @@ mod tests {
             .expect("skills remove --yes should parse");
         match remove.command {
             Commands::Skills {
-                action: SkillCommands::Remove { skills, yes, all },
+                action: SkillCommands::Remove {
+                    skills, yes, all, ..
+                },
             } => {
                 assert_eq!(skills, vec!["foo", "bar"]);
                 assert!(yes);
@@ -4372,6 +4381,19 @@ mod tests {
         ]);
 
         assert!(result.is_ok(), "reindex command should parse");
+    }
+
+    #[test]
+    fn cli_rejects_unknown_reindex_mode() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--mode",
+            "semantic",
+        ]);
+
+        assert!(result.is_err(), "unknown reindex mode should not parse");
     }
 
     #[test]

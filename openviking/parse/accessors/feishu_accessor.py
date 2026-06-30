@@ -150,7 +150,7 @@ class FeishuAccessor(DataAccessor):
     def priority(self) -> int:
         return self.PRIORITY
 
-    def can_handle(self, source: Union[str, Path]) -> bool:
+    def can_handle(self, source: Union[str, Path], **kwargs) -> bool:
         """
         Check if this accessor can handle the source.
 

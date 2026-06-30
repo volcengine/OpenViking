@@ -364,6 +364,29 @@ async def test_add_resource_uploads_local_file_even_when_url_is_localhost(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_admin_create_paths_accept_initial_user_config():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: {"status": "ok"}
+
+    user_config = {"add_targets": {"resource_uri": "viking://user/resources/project-a"}}
+    await client.admin_create_account("acct", "admin", user_config=user_config)
+    await client.admin_register_user("acct", "alice", "admin", user_config=user_config)
+
+    assert fake_http.post.await_args_list[0].kwargs["json"] == {
+        "account_id": "acct",
+        "admin_user_id": "admin",
+        "user_config": user_config,
+    }
+    assert fake_http.post.await_args_list[1].kwargs["json"] == {
+        "user_id": "alice",
+        "role": "admin",
+        "user_config": user_config,
+    }
+
+
+@pytest.mark.asyncio
 async def test_import_ovpack_uploads_local_file_even_when_url_is_localhost(tmp_path):
     pack_file = tmp_path / "demo.ovpack"
     pack_file.write_bytes(b"ovpack")
@@ -445,10 +468,6 @@ async def test_search_uses_session_wrapper_session_id_in_payload():
             "target_uri": "viking://resources/demo",
             "session_id": "thread-123",
             "limit": 5,
-            "score_threshold": None,
-            "filter": None,
-            "context_type": None,
-            "tags": None,
             "telemetry": False,
         },
     )

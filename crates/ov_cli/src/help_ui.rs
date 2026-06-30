@@ -125,7 +125,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
 const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["add-resource"],
-        purpose: "Import a local file, folder, URL, or repository into OpenViking.",
+        purpose: "Import a local file, folder, URL, repository, or whole website (sitemap/RSS) into OpenViking.",
         examples: &[
             HelpItem {
                 label: "ov add-resource ./docs --parent viking://projects/acme --wait",
@@ -134,6 +134,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov add-resource https://example.com/spec.md --to viking://specs/api.md",
                 description: "Import a URL to an exact target URI.",
+            },
+            HelpItem {
+                label: "ov add-resource https://example.com/sitemap.xml --watch-interval 1440",
+                description: "Import a whole site via sitemap/RSS and refresh it daily.",
             },
         ],
         next_steps: &[
@@ -1210,10 +1214,16 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["reindex"],
         purpose: "Reindex semantic/vector artifacts for a URI.",
-        examples: &[HelpItem {
-            label: "ov reindex viking://projects/acme --mode vectors_only --wait true",
-            description: "Rebuild vector artifacts and wait.",
-        }],
+        examples: &[
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode vectors_only --wait true",
+                description: "Rebuild vector artifacts and wait.",
+            },
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true",
+                description: "Regenerate semantic artifacts, then vectors.",
+            },
+        ],
         next_steps: &[
             HelpItem {
                 label: "ov task list",
@@ -2754,6 +2764,17 @@ mod tests {
         assert!(find_help.contains("Maximum final results returned"));
         assert!(search_help.contains("Maximum results per search pass."));
         assert!(search_help.contains("Search may merge multiple passes"));
+    }
+
+    #[test]
+    fn reindex_help_lists_supported_modes() {
+        let rendered = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "reindex", "--help"]))
+                .expect("reindex help should render"),
+        );
+
+        assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors>"));
+        assert!(rendered.contains("Regenerate semantic artifacts, then vectors."));
     }
 
     #[test]

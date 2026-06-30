@@ -13,7 +13,9 @@ It also wires Codex up to OpenViking's native `/mcp` endpoint (streamable HTTP, 
 
 ## Quick Start
 
-### One-line installer (recommended)
+There are two install paths. **Pick one — don't mix them** (both surface the same `openviking-memory` plugin; enabling it from both would run the hooks twice). The **one-line installer (A)** is the recommended path for most users, and the only one that supports authenticated or remote/cloud servers; the **marketplace install (B)** is a convenience for a local, unauthenticated OpenViking only.
+
+### A. One-line installer — `curl | bash` (recommended)
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
@@ -24,8 +26,8 @@ The installer:
 1. Checks `codex`, `git`, and Node.js 22+
 2. Clones or refreshes `~/.openviking/openviking-repo`
 3. Registers a local `openviking-plugins-local` marketplace, enables `openviking-memory@openviking-plugins-local`, sets `features.plugin_hooks = true`
-4. Renders the cached `.mcp.json` URL using the shared credential resolver
-5. Renders the cached `hooks.json` with absolute script paths (Codex 0.130 doesn't inject `CODEX_PLUGIN_ROOT` into hook env)
+4. Renders the cached `.mcp.json` URL **and** bearer/identity headers from your active `ovcli.conf`
+5. Renders the cached `hooks.json` `${PLUGIN_ROOT}` token to absolute script paths (so even older Codex builds that don't substitute `${PLUGIN_ROOT}` work)
 6. Appends a `codex()` shell function to your rc that resolves the active OpenViking CLI config at invocation, injects the matching env for Codex/MCP, and strips stale inherited credential env vars
 
 After install:
@@ -34,6 +36,44 @@ After install:
 source ~/.zshrc   # or ~/.bashrc
 codex             # first run: review /hooks once
 ```
+
+### B. Codex marketplace install (local only — not recommended)
+
+> **Local-only, not recommended.** This path connects the plugin to a **local, unauthenticated** OpenViking at `http://127.0.0.1:1933` only. It does **not** support authenticated or remote/cloud servers — Codex won't let user config override a plugin's MCP `url`, and the shipped `.mcp.json` carries no auth. For a remote/cloud/authenticated server — and for most users — use the **one-line installer (A)** above instead.
+
+The repo ships a Codex marketplace catalog at `.agents/plugins/marketplace.json`, so you can install with Codex's native commands — no `curl | bash`, no shell-rc wrapper:
+
+```bash
+# 1. add the OpenViking marketplace (use volcengine/OpenViking once merged
+#    upstream, or <your-fork>/OpenViking while testing a fork)
+codex plugin marketplace add volcengine/OpenViking
+
+# 2. install the plugin from that marketplace
+#    (older Codex builds spell this `codex plugin install`)
+codex plugin add openviking-memory@openviking
+```
+
+Then enable plugin hooks (if your Codex build doesn't already) by adding to `~/.codex/config.toml`:
+
+```toml
+[features]
+plugin_hooks = true
+```
+
+Finally start Codex and trust the plugin hooks once:
+
+```bash
+codex            # then run /hooks inside Codex to review & approve the hooks
+```
+
+> **Requirements & notes**
+>
+> - **Codex version**: this path relies on Codex injecting and inline-substituting `${PLUGIN_ROOT}` in plugin hook commands (current Codex does both). On an older Codex that doesn't substitute `${PLUGIN_ROOT}`, the hook script paths won't resolve — use path **A**, whose installer renders `${PLUGIN_ROOT}` to absolute paths for old Codex.
+> - **Catalog source**: the catalog entry (`.agents/plugins/marketplace.json`) uses a relative source (`./examples/codex-memory-plugin`). `codex plugin add` therefore installs the plugin from the same marketplace snapshot/ref that you added. This keeps fork, branch, tag, and upstream-main installs reproducible and testable without rewriting the catalog.
+
+This path works **out of the box against an unauthenticated local OpenViking** at `http://127.0.0.1:1933`: the shipped `.mcp.json` defaults to that `/mcp` URL and the hooks reference Codex's native `${PLUGIN_ROOT}` token (Codex injects it into the hook env and substitutes it inline), so the model gets the `/mcp` tools and all four lifecycle hooks with **zero rendering**.
+
+**Authenticated or remote/cloud servers are not supported on this path.** Codex won't let user config override a plugin's MCP `url`, and the cached `.mcp.json` ships no bearer token. For an authenticated or remote/cloud server, use the **one-line installer (A)**, which renders the cached `.mcp.json` (URL + bearer + identity headers) from your active `ovcli.conf`.
 
 ### Manual setup
 
@@ -48,7 +88,56 @@ If you don't want the installer touching your rc, do these three things yourself
 
 2. **Add the plugin** via a local marketplace pointing at this directory. See `setup-helper/install.sh` for the exact `codex plugin marketplace add` invocation.
 
-3. **Render the `__OPENVIKING_MCP_URL__` placeholder** in `.mcp.json` and the `__OPENVIKING_PLUGIN_ROOT__` placeholders in `hooks/hooks.json` to absolute values. The installer does this automatically when copying the plugin into Codex's cache; for manual setup you do it once with `sed`.
+3. **Point the cached `.mcp.json` at your server.** The checked-in `.mcp.json` defaults to `http://127.0.0.1:1933/mcp` with no bearer. For a remote/authenticated server, set the `url` and add `"bearer_token_env_var": "OPENVIKING_API_KEY"` — `node scripts/ov-credentials.mjs sync-mcp <path-to-cached .mcp.json>` does both from your active `ovcli.conf`. `hooks/hooks.json` needs **no** rendering on modern Codex: it uses the native `${PLUGIN_ROOT}` token, which Codex injects into the hook env and substitutes inline. Only older Codex builds that don't substitute `${PLUGIN_ROOT}` require replacing it with an absolute path (the installer does this for its cache copy).
+
+   Codex App stores the installed plugin under its cache, not in this source
+   tree. Common cache locations are:
+
+   - macOS/Linux: `~/.codex/plugins/cache/openviking/openviking-memory/<version>/`
+   - Windows: `%USERPROFILE%\.codex\plugins\cache\openviking\openviking-memory\<version>\`
+
+   To re-render the installed MCP config on Windows after changing
+   `~/.openviking/ovcli.conf`:
+
+   ```powershell
+   $PluginCache = Get-ChildItem "$env:USERPROFILE\.codex\plugins\cache\openviking\openviking-memory" -Directory |
+     Sort-Object LastWriteTime -Descending |
+     Select-Object -First 1
+   node "$($PluginCache.FullName)\scripts\ov-credentials.mjs" sync-mcp "$($PluginCache.FullName)\.mcp.json"
+   Get-Content -Raw "$($PluginCache.FullName)\.mcp.json"
+   ```
+
+   A rendered authenticated config looks like:
+
+   ```json
+   {
+     "mcpServers": {
+       "openviking-memory": {
+         "url": "http://localhost:1933/mcp",
+         "bearer_token_env_var": "OPENVIKING_API_KEY",
+         "env_http_headers": {
+           "X-OpenViking-Account": "OPENVIKING_ACCOUNT",
+           "X-OpenViking-User": "OPENVIKING_USER"
+         }
+       }
+     }
+   }
+   ```
+
+   Keep the API key in `ovcli.conf` or the environment; do not write the
+   secret value directly into `.mcp.json`. Restart Codex after changing MCP
+   config or environment variables.
+
+   You can also ask Codex to repair this on the user's machine with this
+   prompt:
+
+   ```text
+   Fix my installed OpenViking Memory Codex plugin MCP config.
+   Locate the newest openviking-memory plugin cache under CODEX_HOME, or ~/.codex if unset
+   (Windows: %CODEX_HOME%, or %USERPROFILE%\.codex if unset). Use ~/.openviking/ovcli.conf
+   to run scripts/ov-credentials.mjs sync-mcp against the cached .mcp.json. Do not write
+   the API key value into .mcp.json; show the redacted result and remind me to restart Codex.
+   ```
 
 ## Configuration
 
@@ -124,7 +213,7 @@ Earlier plugin versions configured tuning fields under a `codex` block in `~/.op
                     OPENVIKING_API_KEY)    add_resource, health)
 ```
 
-The plugin no longer bundles a local stdio MCP server. Codex talks to OpenViking's built-in `/mcp` endpoint directly via streamable HTTP, with `bearer_token_env_var: "OPENVIKING_API_KEY"` in `.mcp.json` so the key stays in `ovcli.conf` and the shell function — never on disk in `.mcp.json` itself.
+The plugin no longer bundles a local stdio MCP server. Codex talks to OpenViking's built-in `/mcp` endpoint directly via streamable HTTP. The checked-in `.mcp.json` ships only the local-default `url` (no `bearer_token_env_var`), so a `codex plugin marketplace add` install connects to an unauthenticated local OV out of the box. For an authenticated server, the one-line installer/wrapper adds `bearer_token_env_var: "OPENVIKING_API_KEY"` to the cached copy when an API key is configured — the key itself stays in `ovcli.conf` / the env, never on disk in `.mcp.json`. (Marketplace installs don't render this, which is why that path is local-only.)
 
 For details on OpenViking's MCP endpoint, tools, and protocol, see the [MCP Integration Guide](../../docs/en/guides/06-mcp-integration.md). The tools list and per-tool semantics are documented there once, not duplicated here.
 
@@ -218,8 +307,8 @@ codex-memory-plugin/
 │   └── plugin.json              # Plugin manifest (hooks + mcp wiring)
 ├── hooks/
 │   └── hooks.json               # SessionStart + UserPromptSubmit + Stop + PreCompact
-│                                  (uses __OPENVIKING_PLUGIN_ROOT__ placeholder;
-│                                   installer renders to absolute paths)
+│                                  (uses Codex's native ${PLUGIN_ROOT} token; no
+│                                   rendering needed on modern Codex)
 ├── scripts/
 │   ├── config.mjs               # Shared config loader (ovcli.conf + env)
 │   ├── capture-utils.mjs        # Transcript text extraction, filtering, tool compression
@@ -232,7 +321,7 @@ codex-memory-plugin/
 │   └── pre-compact-capture.mjs  # PreCompact hook
 ├── setup-helper/
 │   └── install.sh               # One-line installer
-├── .mcp.json                    # Streamable-HTTP MCP wiring (renders __OPENVIKING_MCP_URL__)
+├── .mcp.json                    # Streamable-HTTP MCP wiring (local-default url; installer adds auth)
 ├── DESIGN.md
 ├── VERIFICATION.md
 └── README.md
@@ -240,11 +329,13 @@ codex-memory-plugin/
 
 No `src/`, `servers/`, `node_modules/`, or `package.json`: there is no local MCP server to build or run. All hook scripts are zero-dep `.mjs` running on Codex's bundled Node 22.
 
+The Codex marketplace catalog that exposes this plugin for `codex plugin marketplace add` lives at the **repo root** in `.agents/plugins/marketplace.json` (Codex resolves a marketplace manifest from the source root, not from this subdirectory). The catalog points at `./examples/codex-memory-plugin` using a relative source, so the installed plugin follows the same marketplace snapshot/ref that the user added.
+
 ## Differences from the Claude Code Plugin
 
 | Aspect | Claude Code Plugin | Codex Plugin |
 |--------|--------------------|--------------|
-| Plugin root env var | `CLAUDE_PLUGIN_ROOT` (expanded by CC) | `CODEX_PLUGIN_ROOT` (NOT expanded by Codex 0.130; installer renders absolute paths into the cached copies) |
+| Plugin root env var | `CLAUDE_PLUGIN_ROOT` (expanded by CC) | `${PLUGIN_ROOT}` (injected into hook env + substituted inline by modern Codex; installer also renders it to absolute paths for older Codex) |
 | `UserPromptSubmit` injection | `decision: "approve"` + `hookSpecificOutput.additionalContext` | `hookSpecificOutput.additionalContext` only — `approve` is not a Codex output |
 | `Stop` decision | `decision: "approve"` no-op | `{}` no-op — only `block` is a valid Codex `decision` |
 | Compaction hook | n/a (Claude Code does not expose one) | `PreCompact` — full-transcript commit before context loss |

@@ -208,7 +208,23 @@ result = root_client.admin_create_account(
     admin_user_id="demo-admin",
 )
 print(result)
+
+root_client.admin_register_user(
+    account_id="demo-account",
+    user_id="alice",
+    role="user",
+    user_config={
+        "add_targets": {
+            "resource_uri": "viking://user/resources/project-a",
+            "skill_uri": "viking://user/skills",
+        }
+    },
+)
 ```
+
+`admin_create_account` also accepts `user_config` with the same shape.
+These fields initialize server-side user config; ordinary add calls still just
+omit `to` / `parent` / `target_uri` and let the server resolve defaults.
 
 ## Error Handling
 

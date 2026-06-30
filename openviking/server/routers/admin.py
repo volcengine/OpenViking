@@ -13,10 +13,11 @@ from openviking.server.auth import (
     require_auth_root,
     require_auth_root_or_admin,
 )
-from openviking.server.config import ServerConfig
+from openviking.server.config import ServerConfig, UserConfig
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
+from openviking.server.user_config import validate_add_targets, write_user_config
 from openviking.service.legacy_migration import LegacyDataMigration
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
@@ -42,11 +43,13 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
+    user_config: UserConfig | None = None
 
 
 class RegisterUserRequest(BaseModel):
     user_id: str
     role: str = "user"
+    user_config: UserConfig | None = None
 
 
 class SetRoleRequest(BaseModel):
@@ -73,6 +76,38 @@ def _check_account_access(ctx: RequestContext, account_id: str) -> None:
     """ADMIN can only operate on their own account."""
     if ctx.role == Role.ADMIN and ctx.account_id != account_id:
         raise PermissionDeniedError(f"ADMIN can only manage account: {ctx.account_id}")
+
+
+def _has_add_targets(user_config: UserConfig | None) -> bool:
+    return bool(
+        user_config and (user_config.add_targets.resource_uri or user_config.add_targets.skill_uri)
+    )
+
+
+def _validate_initial_user_config(
+    service,
+    user_ctx: RequestContext,
+    user_config: UserConfig | None,
+) -> None:
+    if not _has_add_targets(user_config):
+        return
+    if service.viking_fs is None:
+        raise FailedPreconditionError("OpenViking service is not initialized.")
+    validate_add_targets(
+        user_config.add_targets,
+        ctx=user_ctx,
+        viking_fs=service.viking_fs,
+    )
+
+
+async def _write_initial_user_config(
+    service,
+    user_ctx: RequestContext,
+    user_config: UserConfig | None,
+) -> None:
+    if not _has_add_targets(user_config):
+        return
+    await write_user_config(service.viking_fs, user_ctx, user_config)
 
 
 def _validate_register_user_role(ctx: RequestContext, role: str) -> Role:
@@ -125,18 +160,20 @@ async def create_account(
     ctx: RequestContext = Depends(get_request_context),
 ):
     """Create a new account (workspace) with its first admin user."""
-    manager = _get_api_key_manager(request)
-    user_key = await manager.create_account(
-        body.account_id,
-        body.admin_user_id,
-    )
     service = get_service()
     account_ctx = RequestContext(
         user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
     )
+    _validate_initial_user_config(service, account_ctx, body.user_config)
+    manager = _get_api_key_manager(request)
+    user_key = await manager.create_account(
+        body.account_id,
+        body.admin_user_id,
+    )
     await service.initialize_account_directories(account_ctx)
     await service.initialize_user_directories(account_ctx)
+    await _write_initial_user_config(service, account_ctx, body.user_config)
     result = {
         "account_id": body.account_id,
         "admin_user_id": body.admin_user_id,
@@ -264,14 +301,16 @@ async def register_user(
     """Register a new user in an account."""
     _check_account_access(ctx, account_id)
     resolved_role = _validate_register_user_role(ctx, body.role)
-    manager = _get_api_key_manager(request)
-    user_key = await manager.register_user(account_id, body.user_id, str(resolved_role))
     service = get_service()
     user_ctx = RequestContext(
         user=UserIdentifier(account_id, body.user_id),
-        role=Role.USER,
+        role=resolved_role,
     )
+    _validate_initial_user_config(service, user_ctx, body.user_config)
+    manager = _get_api_key_manager(request)
+    user_key = await manager.register_user(account_id, body.user_id, str(resolved_role))
     await service.initialize_user_directories(user_ctx)
+    await _write_initial_user_config(service, user_ctx, body.user_config)
     result = {
         "account_id": account_id,
         "user_id": body.user_id,

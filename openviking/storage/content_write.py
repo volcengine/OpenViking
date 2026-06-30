@@ -80,7 +80,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
 
         context_type = context_type_for_uri(normalized_uri)
-        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
+        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx, anchor_to_parent=True)
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
 
@@ -383,7 +383,9 @@ class ContentWriteCoordinator:
             raise AlreadyExistsError(uri, "file")
 
         context_type = context_type_for_uri(uri)
-        root_uri = await self._resolve_root_uri(uri, ctx=ctx, _allow_not_found=True)
+        root_uri = await self._resolve_root_uri(
+            uri, ctx=ctx, _allow_not_found=True, anchor_to_parent=True
+        )
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
 
@@ -779,6 +781,7 @@ class ContentWriteCoordinator:
         *,
         ctx: RequestContext,
         _allow_not_found: bool = False,
+        anchor_to_parent: bool = False,
     ) -> str:
         parsed = VikingURI(uri)
         parts = [part for part in parsed.full_path.split("/") if part]
@@ -788,7 +791,19 @@ class ContentWriteCoordinator:
         root_uri = uri
         if parts[0] == "resources":
             if len(parts) >= 2:
-                root_uri = VikingURI.build("resources", parts[1])
+                if anchor_to_parent:
+                    # Content writes anchor the semantic refresh at the written file's
+                    # direct parent directory, so the changed file is a direct child of
+                    # the DAG run root: its own L2 vector and the parent's L0/L1 are
+                    # (re)generated from a single-directory run, while ancestor summaries
+                    # refresh via the existing parent bubble. Collapsing to the project
+                    # root instead would force the run to traverse the whole project
+                    # subtree before the changed file's vector is even dispatched.
+                    parent = parsed.parent
+                    if parent is not None:
+                        root_uri = parent.uri
+                else:
+                    root_uri = VikingURI.build("resources", parts[1])
         elif parts[0] == "user":
             if "resources" in parts:
                 resources_idx = parts.index("resources")

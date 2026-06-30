@@ -505,11 +505,13 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::CreateAccount {
             account_id,
             admin_user_id,
+            user_config_json,
         } => {
             commands::admin::create_account(
                 &client,
                 &account_id,
                 &admin_user_id,
+                user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -529,12 +531,14 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             account_id,
             user_id,
             role,
+            user_config_json,
         } => {
             commands::admin::register_user(
                 &client,
                 &account_id,
                 &user_id,
                 &role,
+                user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )

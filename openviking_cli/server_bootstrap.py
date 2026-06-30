@@ -51,6 +51,14 @@ def main():
         with bind_log_execution_trace():
             sys.exit(doctor_main())
 
+    # `openviking-server ingest ...` runs the local-log ingestion CLI (client-side).
+    if len(sys.argv) > 1 and sys.argv[1] == "ingest":
+        from openviking.ingest.cli import app as ingest_app
+
+        with bind_log_execution_trace():
+            ingest_app(args=sys.argv[2:], prog_name="openviking-server ingest")
+        return
+
     from openviking.server.bootstrap import main as _real_main
 
     with bind_log_execution_trace():

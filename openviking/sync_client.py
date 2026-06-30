@@ -210,6 +210,11 @@ class SyncOpenViking:
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)
 
+        A sitemap / RSS / Atom URL ingests the whole site as one resource tree;
+        pass ``args={"site": True}`` to force whole-site ingestion from a bare
+        domain. A ``watch_interval`` on a sitemap/feed URL keeps the whole site
+        refreshed.
+
         Args:
             to: Exact target URI. Existing targets keep the add_resource incremental-update behavior.
             parent: Target parent URI for automatic child naming.

@@ -182,8 +182,10 @@ const en = {
       title: 'User management',
     },
     page: {
-      description:
+      adminDescription:
         'Configure the active OpenViking Studio identity and manage accounts, users, and API keys.',
+      description:
+        'Configure the OpenViking Studio server URL and API key, then view data for the current identity.',
       title: 'Connection & Identity',
     },
     placeholders: {
@@ -309,7 +311,7 @@ const en = {
   requestLogs: {
     clear: 'Clear',
     description:
-      'Inspect server-side audited API requests, including status, latency, and request identifiers.',
+      'Inspect server-side audited API requests for the current identity, including status, latency, and request identifiers.',
     disabled: {
       description:
         'Usage/Audit is not initialized, so server-side request logs are unavailable.',
@@ -351,6 +353,11 @@ const en = {
     refresh: 'Refresh',
     reset: 'Reset',
     searchPlaceholder: 'Filter method, path, or status',
+    scope: {
+      currentIdentity: 'Current scope: Current API key identity',
+      currentIdentityWithName:
+        'Current scope: Current API key identity ({{identity}})',
+    },
     status: {
       error: 'ERR',
       pending: 'PENDING',
