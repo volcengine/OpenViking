@@ -588,6 +588,46 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[2][2][0].text).toBe("all done");
   });
 
+  it("stores textless assistant tool calls before completed event results", async () => {
+    const { engine, client } = makeEngine();
+
+    const messages = [
+      { role: "assistant", content: [
+        { type: "toolCall", id: "call_read_1", name: "read", arguments: { path: "a.txt" } },
+      ] },
+      { role: "assistant", content: [
+        { type: "tool_result", tool_use_id: "call_read_1", content: "file content" },
+      ] },
+    ];
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages,
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[0][2]).toEqual([{
+      type: "tool",
+      tool_id: "call_read_1",
+      tool_name: "read",
+      tool_input: { path: "a.txt" },
+      tool_output: "",
+      tool_status: "running",
+    }]);
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[1][2]).toEqual([{
+      type: "tool",
+      tool_id: "call_read_1",
+      tool_name: "read",
+      tool_input: { path: "a.txt" },
+      tool_output: "file content",
+      tool_status: "completed",
+    }]);
+  });
+
   it("sanitizes <relevant-memories> from assistant content", async () => {
     const { engine, client } = makeEngine();
 

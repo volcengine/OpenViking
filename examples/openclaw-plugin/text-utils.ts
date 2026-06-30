@@ -471,11 +471,45 @@ export function extractNewTurnMessages(
       continue;
     }
 
+    const content = msg.content;
+    const text = extractPartText(content);
+    const cleanedText = text ? sanitizeUserTextForCapture(text) : "";
+    const hasEmbeddedToolResults = Array.isArray(content) && content.some((block) => isToolResultContentBlock(block));
+
+    // Assistant tool calls are owned by the assistant. Store the request side
+    // separately from completed tool results so OV can link them by tool_id.
+    if (role === "assistant" && !hasEmbeddedToolResults) {
+      const assistantParts: ExtractedMessage["parts"] = [];
+      if (cleanedText) {
+        assistantParts.push({
+          type: "text",
+          text: cleanedText,
+        });
+      }
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!isToolCallContentBlock(block)) continue;
+          const toolCallId = readToolCallId(block);
+          if (!toolCallId) continue;
+          assistantParts.push({
+            type: "tool",
+            toolCallId,
+            toolName: readToolName(block) ?? "tool",
+            toolInput: readToolInput(block),
+            toolOutput: "",
+            toolStatus: "running",
+          });
+        }
+      }
+      if (assistantParts.length > 0) {
+        result.push({ role: "assistant", parts: assistantParts });
+      }
+    }
+
     // Some OpenClaw runtimes deliver completed tool-result content as blocks inside
     // a user/assistant message instead of as a top-level role="toolResult" turn.
     // Persist those blocks as OV ToolParts under role="user" so uploaded session
     // messages follow OpenViking's standard tool-result ownership contract.
-    const content = msg.content;
     if (Array.isArray(content)) {
       const toolParts: Array<Extract<ExtractedMessage["parts"][number], { type: "tool" }>> = [];
       for (const block of content) {
@@ -500,22 +534,23 @@ export function extractNewTurnMessages(
     }
 
     // user/assistant -> type: "text"
-    const text = extractPartText(content);
-
-    if (text) {
+    if (cleanedText && role !== "assistant") {
       // 使用 sanitizeUserTextForCapture 清理所有噪音（Sender 元数据、时间戳等）
-      const cleanedText = sanitizeUserTextForCapture(text);
-      if (cleanedText) {
-        // 保持原始 role，assistant 保持 assistant，user 保持 user
-        const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
-        result.push({
-          role: ovRole,
-          parts: [{
-            type: "text",
-            text: cleanedText,
-          }],
-        });
-      }
+      result.push({
+        role: "user",
+        parts: [{
+          type: "text",
+          text: cleanedText,
+        }],
+      });
+    } else if (cleanedText && role === "assistant" && hasEmbeddedToolResults) {
+      result.push({
+        role: "assistant",
+        parts: [{
+          type: "text",
+          text: cleanedText,
+        }],
+      });
     }
   }
 

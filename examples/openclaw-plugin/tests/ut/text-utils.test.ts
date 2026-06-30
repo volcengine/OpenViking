@@ -243,7 +243,7 @@ describe("extractNewTurnTexts", () => {
 });
 
 describe("extractNewTurnMessages", () => {
-  it("drops assistant toolCall messages that have no text block", () => {
+  it("stores assistant toolCall messages that have no text block", () => {
     const messages = [
       {
         role: "assistant",
@@ -257,10 +257,20 @@ describe("extractNewTurnMessages", () => {
     const { messages: extracted, newCount } = extractNewTurnMessages(messages, 0);
 
     expect(newCount).toBe(1);
-    expect(extracted).toEqual([]);
+    expect(extracted).toEqual([{
+      role: "assistant",
+      parts: [{
+        type: "tool",
+        toolCallId: "call_1",
+        toolName: "read_file",
+        toolInput: { path: "a.txt" },
+        toolOutput: "",
+        toolStatus: "running",
+      }],
+    }]);
   });
 
-  it("drops assistant toolUse messages that have no text block", () => {
+  it("stores assistant toolUse messages that have no text block", () => {
     const messages = [
       {
         role: "assistant",
@@ -274,10 +284,20 @@ describe("extractNewTurnMessages", () => {
     const { messages: extracted, newCount } = extractNewTurnMessages(messages, 0);
 
     expect(newCount).toBe(1);
-    expect(extracted).toEqual([]);
+    expect(extracted).toEqual([{
+      role: "assistant",
+      parts: [{
+        type: "tool",
+        toolCallId: "call_2",
+        toolName: "grep",
+        toolInput: { pattern: "TODO" },
+        toolOutput: "",
+        toolStatus: "running",
+      }],
+    }]);
   });
 
-  it("does not synthesize placeholders for multiple textless assistant tool calls", () => {
+  it("stores multiple textless assistant tool calls without text placeholders", () => {
     const messages = [
       {
         role: "assistant",
@@ -290,7 +310,27 @@ describe("extractNewTurnMessages", () => {
 
     const { messages: extracted } = extractNewTurnMessages(messages, 0);
 
-    expect(extracted).toEqual([]);
+    expect(extracted).toEqual([{
+      role: "assistant",
+      parts: [
+        {
+          type: "tool",
+          toolCallId: "call_1",
+          toolName: "read_file",
+          toolInput: undefined,
+          toolOutput: "",
+          toolStatus: "running",
+        },
+        {
+          type: "tool",
+          toolCallId: "call_2",
+          toolName: "grep",
+          toolInput: undefined,
+          toolOutput: "",
+          toolStatus: "running",
+        },
+      ],
+    }]);
   });
 
   it("does not create a placeholder for textless assistant messages without tool calls", () => {

@@ -24,7 +24,7 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
     const { messages: extracted } = extractNewTurnMessages(messages, 0);
 
     const toolMsg = extracted.find(
-      (m) => m.parts.some((p) => p.type === "tool"),
+      (m) => m.role === "user" && m.parts.some((p) => p.type === "tool"),
     );
     expect(toolMsg).toBeDefined();
 
@@ -92,6 +92,17 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
 
     expect(extracted).toHaveLength(3);
     expect(extracted[0]!.role).toBe("assistant");
+    expect(extracted[0]!.parts).toEqual([
+      { type: "text", text: "Let me check." },
+      {
+        type: "tool",
+        toolCallId: "call_abc123",
+        toolName: "exec",
+        toolInput: { command: "ls" },
+        toolOutput: "",
+        toolStatus: "running",
+      },
+    ]);
     expect(extracted[1]!.role).toBe("user");
     const toolPart = extracted[1]!.parts[0]!;
     expect(toolPart.type).toBe("tool");
@@ -103,6 +114,49 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
       expect(toolPart.toolStatus).toBe("completed");
     }
     expect(extracted[2]).toEqual({ role: "assistant", parts: [{ type: "text", text: "Done." }] });
+  });
+
+  it("maps textless assistant tool calls to assistant-role tool parts", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_read_1", name: "read", arguments: { path: "a.txt" } },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_result", tool_use_id: "call_read_1", content: "file content" },
+        ],
+      },
+    ];
+
+    const { messages: extracted } = extractNewTurnMessages(messages, 0);
+
+    expect(extracted).toHaveLength(2);
+    expect(extracted[0]).toEqual({
+      role: "assistant",
+      parts: [{
+        type: "tool",
+        toolCallId: "call_read_1",
+        toolName: "read",
+        toolInput: { path: "a.txt" },
+        toolOutput: "",
+        toolStatus: "running",
+      }],
+    });
+    expect(extracted[1]).toEqual({
+      role: "user",
+      parts: [{
+        type: "tool",
+        toolCallId: "call_read_1",
+        toolName: "read",
+        toolInput: { path: "a.txt" },
+        toolOutput: "file content",
+        toolStatus: "completed",
+      }],
+    });
   });
 });
 
