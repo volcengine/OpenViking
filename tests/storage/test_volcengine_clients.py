@@ -798,6 +798,48 @@ def test_volcengine_adapter_update_data_supports_api_key_mode():
     assert result == ["doc-1"]
 
 
+def test_volcengine_adapter_query_filters_output_fields_against_schema():
+    captured = {}
+
+    class _SearchResult:
+        data = []
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+        def search_by_vector(self, **kwargs):
+            captured.update(kwargs)
+            return _SearchResult()
+
+    adapter = VolcengineCollectionAdapter(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        session_token=None,
+        api_key="vk-test-token",
+        host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+        project_name="default",
+        collection_name="context",
+        index_name="default",
+    )
+    adapter._collection = _Collection()
+
+    adapter.query(
+        query_vector=[0.1, 0.2],
+        output_fields=["uri", "search_tags", "abstract"],
+    )
+
+    assert captured["output_fields"] == ["uri", "abstract"]
+
+
 def test_http_collection_update_data_posts_to_update_endpoint(monkeypatch):
     captured = {}
 

@@ -469,6 +469,29 @@ class CollectionAdapter(ABC):
                 records.append(self._normalize_record_for_read(record))
         return records
 
+    def _filter_output_fields(
+        self,
+        coll: Collection,
+        output_fields: Optional[list[str]],
+    ) -> Optional[list[str]]:
+        if not output_fields:
+            return output_fields
+        try:
+            meta = coll.get_meta_data() or {}
+            fields = meta.get("Fields", [])
+            if not isinstance(fields, list) or not fields:
+                return output_fields
+            allowed = {
+                item.get("FieldName")
+                for item in fields
+                if isinstance(item, dict) and item.get("FieldName")
+            }
+            if not allowed:
+                return output_fields
+            return [field for field in output_fields if field in allowed]
+        except Exception:
+            return output_fields
+
     def query(
         self,
         *,
@@ -483,6 +506,7 @@ class CollectionAdapter(ABC):
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         vectordb_filter = self._compile_filter(filter)
+        output_fields = self._filter_output_fields(coll, output_fields)
 
         if query_vector or sparse_query_vector:
             result = coll.search_by_vector(
@@ -597,6 +621,7 @@ class CollectionAdapter(ABC):
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         compiled_filter = self._compile_filter(filter)
+        output_fields = self._filter_output_fields(coll, output_fields)
         logger.debug(
             "search_by_keywords: keywords=%s query=%s limit=%s offset=%s filter=%s output_fields=%s",
             keywords,
