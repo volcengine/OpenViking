@@ -111,9 +111,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         }
 
     def _cache_schema_field_names(self, meta: Dict[str, Any] | None) -> None:
-        names = self._schema_field_names_from_meta(meta)
-        if names:
-            self._schema_field_names = names
+        self._schema_field_names = self._schema_field_names_from_meta(meta) or None
 
     def _filter_output_fields(
         self,

@@ -846,6 +846,40 @@ def test_volcengine_adapter_query_filters_output_fields_against_cached_schema():
     assert captured["meta_calls"] == 0
 
 
+def test_volcengine_adapter_empty_schema_cache_fails_open_instead_of_reusing_old_schema():
+    captured = {}
+
+    class _SearchResult:
+        data = []
+
+    class _Collection:
+        def search_by_vector(self, **kwargs):
+            captured.update(kwargs)
+            return _SearchResult()
+
+    adapter = VolcengineCollectionAdapter(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        session_token=None,
+        api_key="vk-test-token",
+        host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+        project_name="default",
+        collection_name="context",
+        index_name="default",
+    )
+    adapter._cache_schema_field_names({"Fields": [{"FieldName": "uri"}]})
+    adapter._cache_schema_field_names({"Fields": []})
+    adapter._collection = _Collection()
+
+    adapter.query(
+        query_vector=[0.1, 0.2],
+        output_fields=["uri", "search_tags"],
+    )
+
+    assert captured["output_fields"] == ["uri", "search_tags"]
+
+
 def test_base_adapter_query_does_not_read_collection_meta_for_output_fields():
     captured = {"meta_calls": 0}
 
