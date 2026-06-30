@@ -977,6 +977,7 @@ class AgentLoop:
             if not isinstance(openviking_connection, dict):
                 openviking_connection = None
             msg.openviking_connection = openviking_connection
+            current_dir = msg.metadata.get("current_dir") if msg.metadata else None
             profile_user_list = []
             memory_peer_ids = self._metadata_memory_peer_ids(msg.metadata)
             memory_owner_user_ids = self._metadata_memory_owner_user_ids(msg.metadata)
@@ -1128,6 +1129,7 @@ class AgentLoop:
                 is_group_chat=is_group_chat,
                 eval=self._eval,
                 openviking_connection=openviking_connection,
+                current_dir=current_dir,
             )
 
             # Build initial messages (use OpenViking session context when enabled)
