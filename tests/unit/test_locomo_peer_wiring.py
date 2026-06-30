@@ -126,6 +126,70 @@ async def test_viking_ingest_uses_message_peer_id(monkeypatch):
     assert add_calls[0][1]["peer_id"] == "conv-26"
 
 
+@pytest.mark.asyncio
+async def test_process_single_session_marks_ingest_record_with_canonical_sample_id(
+    monkeypatch, tmp_path
+):
+    ingest_record = {}
+    success_csv = tmp_path / "import_success.csv"
+    record_path = tmp_path / ".ingest_record.json"
+
+    async def fake_viking_ingest(*_args, **_kwargs):
+        return {
+            "token_usage": {
+                "embedding": 1,
+                "llm_input": 2,
+                "cache": 0,
+                "reasoning": 0,
+                "llm_output": 3,
+                "total": 6,
+            },
+            "task_id": "task-1",
+            "trace_id": "trace-1",
+        }
+
+    monkeypatch.setattr(IMPORT_TO_OV, "viking_ingest", fake_viking_ingest)
+    original_save_ingest_record = IMPORT_TO_OV.save_ingest_record
+    monkeypatch.setattr(
+        IMPORT_TO_OV,
+        "save_ingest_record",
+        lambda record: original_save_ingest_record(record, str(record_path)),
+    )
+
+    result = await IMPORT_TO_OV.process_single_session(
+        messages=[{"role": "user", "text": "Alice: Hi Bob", "peer_id": "conv-26"}],
+        sample_id="conv-26",
+        display_id="sample_0",
+        session_key="session_1",
+        meta={"sample_id": "conv-26", "session_key": "session_1"},
+        run_time="2026-06-30T00:00:00",
+        ingest_record=ingest_record,
+        args=SimpleNamespace(
+            api_key="user-key",
+            auth_mode="api_key",
+            user="",
+            account="",
+            openviking_url="http://localhost:1933",
+            group_chat=False,
+            success_csv=str(success_csv),
+            error_log=str(tmp_path / "import_errors.log"),
+            _show_progress=True,
+        ),
+    )
+
+    assert result["status"] == "success"
+    assert result["sample_id"] == "conv-26"
+    assert result["display_id"] == "sample_0"
+    assert "viking:conv-26:session_1" in ingest_record
+    assert "viking:sample_0:session_1" not in ingest_record
+    assert IMPORT_TO_OV.is_already_ingested("conv-26", "session_1", ingest_record)
+    assert not IMPORT_TO_OV.is_already_ingested("sample_0", "session_1", ingest_record)
+
+    persisted = json.loads(record_path.read_text(encoding="utf-8"))
+    assert "viking:conv-26:session_1" in persisted
+    assert "viking:sample_0:session_1" not in persisted
+
+
 def test_load_locomo_qa_keeps_internal_and_original_sample_ids(tmp_path):
     input_path = tmp_path / "locomo.json"
     input_path.write_text(json.dumps([_sample_payload()]), encoding="utf-8")
@@ -158,13 +222,15 @@ def test_run_vikingbot_chat_non_group_builds_sender_without_memory_peers(monkeyp
 
     monkeypatch.setattr(RUN_EVAL.subprocess, "run", fake_run)
 
-    response, token_usage, _time_cost, iteration, tools_used_names, _log_file = RUN_EVAL.run_vikingbot_chat(
-        question="Who said hello?",
-        question_time="2023-05-08",
-        sender_peer_id="conv-26",
-        question_id="sample_0_qa0",
-        config="/tmp/ov.conf",
-        memory_peer_ids=None,
+    response, token_usage, _time_cost, iteration, tools_used_names, _log_file = (
+        RUN_EVAL.run_vikingbot_chat(
+            question="Who said hello?",
+            question_time="2023-05-08",
+            sender_peer_id="conv-26",
+            question_id="sample_0_qa0",
+            config="/tmp/ov.conf",
+            memory_peer_ids=None,
+        )
     )
 
     assert response == "ok"

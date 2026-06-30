@@ -169,7 +169,9 @@ class SessionCompressorV3:
 
         for uri in result.written_uris:
             op = upsert_by_uri.get(uri)
-            memory_type = op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
+            memory_type = (
+                op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
+            )
             old_file = op.old_memory_file_content if op else None
             if old_file:
                 updates.append(
@@ -185,7 +187,9 @@ class SessionCompressorV3:
 
         for uri in result.edited_uris:
             op = upsert_by_uri.get(uri)
-            memory_type = op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
+            memory_type = (
+                op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
+            )
             old_file = op.old_memory_file_content if op and op.old_memory_file_content else None
             updates.append(
                 {
@@ -426,9 +430,7 @@ class SessionCompressorV3:
         )
         return _V3AppliedMemory(result=result, operations=operations, memory_diff=memory_diff)
 
-    @tracer(
-        "train.compressor_v3.extract_user_memories", ignore_result=True, ignore_args=True
-    )
+    @tracer("train.compressor_v3.extract_user_memories", ignore_result=True, ignore_args=True)
     async def _extract_user_memories(
         self,
         messages: List[Message],
@@ -554,8 +556,7 @@ class SessionCompressorV3:
 
         config = get_openviking_config()
         skill_enabled = (
-            config.memory.session_skill_extraction_enabled
-            and self.skill_processor is not None
+            config.memory.session_skill_extraction_enabled and self.skill_processor is not None
         )
 
         try:
@@ -592,9 +593,7 @@ class SessionCompressorV3:
                     viking_fs=viking_fs,
                     memory_type="experiences",
                 ),
-                policy_updater=MemoryFilePolicyUpdater(
-                    viking_fs=viking_fs, vikingdb=self.vikingdb
-                ),
+                policy_updater=MemoryFilePolicyUpdater(viking_fs=viking_fs, vikingdb=self.vikingdb),
                 context=PipelineContext(
                     analysis_context=analysis_context,
                     gradient_context=gradient_context,
@@ -656,9 +655,7 @@ class SessionCompressorV3:
                     policy_snapshot_id=policy_snapshot_id,
                 )
                 # Analyze once — trajectories + skill patches co-extracted
-                analysis = await self.rollout_analyzer.analyze(
-                    rollout, analysis_context
-                )
+                analysis = await self.rollout_analyzer.analyze(rollout, analysis_context)
 
                 # Experience path: estimate gradients, then submit to exp trainer
                 exp_gradients = await ExperienceGradientEstimator(
@@ -687,8 +684,7 @@ class SessionCompressorV3:
                 # Skill path: co-extracted skill gradients go directly to skill trainer
                 if skill_trainer is not None and analysis.gradients:
                     skill_gradients = [
-                        g for g in analysis.gradients
-                        if _gradient_memory_type(g) == "skills"
+                        g for g in analysis.gradients if _gradient_memory_type(g) == "skills"
                     ]
                     if skill_gradients:
                         skill_training_result = await skill_trainer.submit_gradients(
@@ -773,10 +769,11 @@ class SessionCompressorV3:
 
         applied_uris = set(training_result.apply_result.written_uris)
         deleted_uris = set(training_result.apply_result.deleted_uris)
-        root_uri = (
-            training_result.apply_result.updated_policy_set.root_uri
-            or _experience_root_uri(ctx)
-        )
+        root_uri = training_result.apply_result.updated_policy_set.root_uri
+        if not root_uri:
+            raise ValueError(
+                "PolicyApplyResult.updated_policy_set.root_uri is required for training memory diff"
+            )
         source_trajectory_uris = set(seen_trajectory_uris)
 
         for item in training_result.plan.items:
@@ -821,9 +818,7 @@ class SessionCompressorV3:
                 except Exception:
                     old_file, new_file = None, None
                 if old_file is not None and _same_memory_file(old_file, new_file):
-                    logger.info(
-                        "Skipping unchanged experience memory in memory_diff.json: %s", uri
-                    )
+                    logger.info("Skipping unchanged experience memory in memory_diff.json: %s", uri)
                     continue
                 updates.append(
                     {
@@ -965,9 +960,7 @@ def _training_messages_after_case_spec(messages: list[Message]) -> list[Message]
 def _parse_training_case_spec_payload(text: str) -> dict[str, Any]:
     match = _JSON_FENCE_RE.search(text)
     raw_payload = (
-        match.group(1).strip()
-        if match
-        else text.removeprefix(_TRAINING_CASE_SPEC_HEADER).strip()
+        match.group(1).strip() if match else text.removeprefix(_TRAINING_CASE_SPEC_HEADER).strip()
     )
     if not raw_payload:
         raise ValueError("Training CaseSpec fast path payload is empty")
@@ -1043,8 +1036,7 @@ def _rubric_from_payload(raw_rubric: Any, *, fallback_name: str) -> Rubric:
     return Rubric(
         name=str(raw_rubric.get("name") or fallback_name),
         description=str(
-            raw_rubric.get("description")
-            or "Defines what good means for this batch training case."
+            raw_rubric.get("description") or "Defines what good means for this batch training case."
         ),
         criteria=criteria,
         metadata=dict(raw_rubric.get("metadata") or {})
@@ -1192,13 +1184,20 @@ def _fallback_case_name(op: ResolvedOperation) -> str:
     return "commit_case"
 
 
+def _user_space_from_ctx(ctx: RequestContext, *, purpose: str) -> str:
+    user_space = getattr(getattr(ctx, "user", None), "user_id", None)
+    if not user_space:
+        raise ValueError(f"RequestContext.user.user_id is required for {purpose}")
+    return str(user_space)
+
+
 def _experience_root_uri(ctx: RequestContext) -> str:
-    user_space = getattr(getattr(ctx, "user", None), "user_id", None) or "default"
+    user_space = _user_space_from_ctx(ctx, purpose="experience memory root URI")
     return f"viking://user/{user_space}/memories/experiences"
 
 
 def _skill_root_uri(ctx: RequestContext) -> str:
-    user_space = getattr(getattr(ctx, "user", None), "user_id", None) or "default"
+    user_space = _user_space_from_ctx(ctx, purpose="skill root URI")
     return f"viking://user/{user_space}/skills"
 
 
@@ -1207,6 +1206,7 @@ def _skill_trainer_key(ctx: RequestContext) -> tuple[str, str, str]:
     from openviking.session.train.components.policy_trainer import (
         make_streaming_policy_trainer_key,
     )
+
     return make_streaming_policy_trainer_key(
         policy_root_uri=_skill_root_uri(ctx),
         request_context=ctx,
@@ -1251,7 +1251,9 @@ def _case_uri_by_name(
     operations: ResolvedOperations,
     result: Any,
 ) -> dict[str, str]:
-    candidates = set((getattr(result, "written_uris", []) or []) + (getattr(result, "edited_uris", []) or []))
+    candidates = set(
+        (getattr(result, "written_uris", []) or []) + (getattr(result, "edited_uris", []) or [])
+    )
     mapping: dict[str, str] = {}
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != _CASES_MEMORY_TYPE:
@@ -1332,10 +1334,11 @@ def _case_experience_links_via_trajectories(
     touched.update(getattr(apply_result, "edited_uris", []) or [])
     result: list[StoredLink] = []
     seen: set[str] = set()
-    root_uri = (
-        getattr(getattr(apply_result, "updated_policy_set", None), "root_uri", "")
-        or _experience_root_uri(None)
-    )
+    root_uri = getattr(getattr(apply_result, "updated_policy_set", None), "root_uri", "")
+    if not root_uri:
+        raise ValueError(
+            "PolicyApplyResult.updated_policy_set.root_uri is required for case-to-experience links"
+        )
     for item in getattr(plan, "items", []) or []:
         if item.memory_type != "experiences" or item.kind != "upsert":
             continue
@@ -1587,8 +1590,7 @@ def _memory_diff_has_changes(diff: Any) -> bool:
     if not isinstance(summary, dict):
         return False
     return any(
-        int(summary.get(key) or 0) > 0
-        for key in ("total_adds", "total_updates", "total_deletes")
+        int(summary.get(key) or 0) > 0 for key in ("total_adds", "total_updates", "total_deletes")
     )
 
 

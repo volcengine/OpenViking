@@ -322,9 +322,7 @@ async def test_streaming_memory_updater_fast_path_filters_links(monkeypatch):
     fs = InMemoryVikingFS(
         {
             "viking://user/u/memories/events/existing.md": (
-                "existing\n<!-- MEMORY_FIELDS\n"
-                '{"memory_type":"events","content":"existing"}\n'
-                "-->"
+                'existing\n<!-- MEMORY_FIELDS\n{"memory_type":"events","content":"existing"}\n-->'
             )
         }
     )
@@ -753,6 +751,56 @@ def test_classify_memory_merge_mode_forces_cross_extraction_merge():
 
     assert fast_path is False
     assert reason == "cross_extraction_batch"
+
+
+def test_classify_memory_merge_mode_treats_noop_str_patch_as_unchanged():
+    old_file = MemoryFile(
+        uri="viking://user/u/memories/notes/note.md",
+        content="old content",
+        memory_type="notes",
+        extra_fields={"note_name": "note"},
+    )
+    op = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="notes",
+        uris=["viking://user/u/memories/notes/note.md"],
+        memory_fields={
+            "note_name": "note",
+            "content": StrPatch(
+                blocks=[SearchReplaceBlock(search="old content", replace="old content")]
+            ),
+        },
+    )
+
+    fast_path, reason = classify_memory_merge_mode([op], schema=_registry().get("notes"))
+
+    assert fast_path is True
+    assert reason == "single_existing_content_unchanged"
+
+
+def test_classify_memory_merge_mode_detects_changed_str_patch_after_preview():
+    old_file = MemoryFile(
+        uri="viking://user/u/memories/notes/note.md",
+        content="old content",
+        memory_type="notes",
+        extra_fields={"note_name": "note"},
+    )
+    op = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="notes",
+        uris=["viking://user/u/memories/notes/note.md"],
+        memory_fields={
+            "note_name": "note",
+            "content": StrPatch(
+                blocks=[SearchReplaceBlock(search="old content", replace="new content")]
+            ),
+        },
+    )
+
+    fast_path, reason = classify_memory_merge_mode([op], schema=_registry().get("notes"))
+
+    assert fast_path is False
+    assert reason == "single_existing_content_changed"
 
 
 @pytest.mark.asyncio

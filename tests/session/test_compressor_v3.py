@@ -11,7 +11,7 @@ import pytest
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session import create_session_compressor
-from openviking.session.compressor_v3 import SessionCompressorV3
+from openviking.session.compressor_v3 import SessionCompressorV3, _experience_root_uri
 from openviking.session.memory.dataclass import (
     MemoryFile,
     ResolvedOperation,
@@ -79,11 +79,56 @@ def test_factory_defaults_to_v3():
 
 
 def test_factory_ignores_deprecated_memory_version():
-    assert isinstance(create_session_compressor(vikingdb=None, memory_version="v2"), SessionCompressorV3)
+    assert isinstance(
+        create_session_compressor(vikingdb=None, memory_version="v2"), SessionCompressorV3
+    )
     assert isinstance(
         create_session_compressor(vikingdb=None, memory_version="unsupported"),
         SessionCompressorV3,
     )
+
+
+def test_experience_root_uri_requires_request_user():
+    with pytest.raises(ValueError, match="RequestContext.user.user_id is required"):
+        _experience_root_uri(SimpleNamespace(user=None))
+
+
+def test_case_experience_links_require_policy_root_uri():
+    traj_uri = "viking://user/u/memories/trajectories/t.md"
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type="experiences",
+                target_name="exp",
+                target_uri=None,
+                before_content=None,
+                after_content="exp",
+                links=[
+                    StoredLink(
+                        from_uri="",
+                        to_uri=traj_uri,
+                        link_type="derived_from",
+                        weight=1.0,
+                    )
+                ],
+            )
+        ]
+    )
+    apply_result = PolicyApplyResult(
+        updated_policy_set=ExperienceSet(root_uri="", policies=[]),
+        written_uris=["viking://user/u/memories/experiences/exp.md"],
+    )
+
+    from openviking.session.compressor_v3 import _case_experience_links_via_trajectories
+
+    with pytest.raises(ValueError, match="updated_policy_set.root_uri is required"):
+        _case_experience_links_via_trajectories(
+            case_uri="viking://user/u/memories/cases/case.md",
+            trajectory_uris={traj_uri},
+            plan=plan,
+            apply_result=apply_result,
+        )
 
 
 @pytest.mark.asyncio
@@ -137,6 +182,7 @@ async def test_train_from_extracted_case_memories_submits_streaming_rollout(monk
         # Return one dummy gradient so we can verify submission
         from openviking.session.memory.dataclass import MemoryFile
         from openviking.session.train import PatchSemanticGradient
+
         return [
             PatchSemanticGradient(
                 before_file=None,
@@ -343,7 +389,6 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
     assert applied_operations[0].upsert_operations[0].memory_type == "cases"
     assert [case.name for case in trained_cases] == ["重复预订处理"]
     assert contexts[0].uri.endswith("重复预订处理.md")
-
 
 
 def _training_case() -> Case:
@@ -618,20 +663,20 @@ async def test_v3_builds_training_memory_diff_from_streaming_result(monkeypatch)
                 kind="upsert",
                 memory_type="experiences",
                 target_name="booking_duplicate_handling",
-                    target_uri="viking://user/u/memories/experiences/booking_duplicate_handling.md",
-                    before_content="old exp content",
-                    after_content="new exp content fallback",
-                    links=[
-                        StoredLink(
-                            from_uri="viking://user/u/memories/experiences/booking_duplicate_handling.md",
-                            to_uri="viking://user/u/memories/trajectories/duplicate_booking.md",
-                            link_type="derived_from",
-                            weight=1.0,
-                        )
-                    ],
-                )
-            ]
-        )
+                target_uri="viking://user/u/memories/experiences/booking_duplicate_handling.md",
+                before_content="old exp content",
+                after_content="new exp content fallback",
+                links=[
+                    StoredLink(
+                        from_uri="viking://user/u/memories/experiences/booking_duplicate_handling.md",
+                        to_uri="viking://user/u/memories/trajectories/duplicate_booking.md",
+                        link_type="derived_from",
+                        weight=1.0,
+                    )
+                ],
+            )
+        ]
+    )
     training_result = RolloutTrainingResult(
         analyses=[
             RolloutAnalysis(
@@ -659,9 +704,7 @@ async def test_v3_builds_training_memory_diff_from_streaming_result(monkeypatch)
                 root_uri="viking://user/u/memories/experiences",
                 policies=[],
             ),
-            written_uris=[
-                "viking://user/u/memories/experiences/booking_duplicate_handling.md"
-            ],
+            written_uris=["viking://user/u/memories/experiences/booking_duplicate_handling.md"],
         ),
     )
 
@@ -681,7 +724,9 @@ async def test_v3_builds_training_memory_diff_from_streaming_result(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_v3_training_memory_diff_filters_batch_items_by_current_analysis_trajectory(monkeypatch):
+async def test_v3_training_memory_diff_filters_batch_items_by_current_analysis_trajectory(
+    monkeypatch,
+):
     archive_uri = "viking://user/u/sessions/s1/history/archive_001"
     traj_a = "viking://user/u/memories/trajectories/traj_a.md"
     traj_b = "viking://user/u/memories/trajectories/traj_b.md"
@@ -700,7 +745,9 @@ async def test_v3_training_memory_diff_filters_batch_items_by_current_analysis_t
     training_result = RolloutTrainingResult(
         analyses=[
             RolloutAnalysis(
-                evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+                evaluation=RubricEvaluation(
+                    passed=True, score=1.0, criterion_results=[], feedback=[]
+                ),
                 trajectories=[
                     Trajectory(
                         name="traj_a",
@@ -801,7 +848,10 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
                         uri=traj_uri,
                         content="trajectory content",
                         memory_type="trajectories",
-                        extra_fields={"memory_type": "trajectories", "trajectory_name": "duplicate_booking"},
+                        extra_fields={
+                            "memory_type": "trajectories",
+                            "trajectory_name": "duplicate_booking",
+                        },
                         backlinks=[
                             StoredLink(
                                 from_uri=exp_uri,
@@ -819,7 +869,10 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
                         uri=exp_uri,
                         content="old exp content",
                         memory_type="experiences",
-                        extra_fields={"memory_type": "experiences", "experience_name": "booking_duplicate_handling"},
+                        extra_fields={
+                            "memory_type": "experiences",
+                            "experience_name": "booking_duplicate_handling",
+                        },
                     )
                 ),
             }
@@ -882,7 +935,9 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
         async def analyze(self, rollout, context):
             del rollout, context
             return RolloutAnalysis(
-                evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+                evaluation=RubricEvaluation(
+                    passed=True, score=1.0, criterion_results=[], feedback=[]
+                ),
                 trajectories=[
                     Trajectory(
                         name="duplicate_booking",
@@ -950,8 +1005,13 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
         and link.get("description") == ""
         for link in case_file.links
     )
-    linked_experiences_section = fs.files[case_uri].split("## Linked Experiences", 1)[1].split("<!-- MEMORY_FIELDS", 1)[0]
-    assert "[booking_duplicate_handling](../experiences/booking_duplicate_handling.md)" in linked_experiences_section
+    linked_experiences_section = (
+        fs.files[case_uri].split("## Linked Experiences", 1)[1].split("<!-- MEMORY_FIELDS", 1)[0]
+    )
+    assert (
+        "[booking_duplicate_handling](../experiences/booking_duplicate_handling.md)"
+        in linked_experiences_section
+    )
     assert "duplicate_booking.md" not in linked_experiences_section
     traj_file = MemoryFileUtils.read(fs.files[traj_uri], uri=traj_uri)
     assert any(link["from_uri"] == case_uri for link in traj_file.backlinks)

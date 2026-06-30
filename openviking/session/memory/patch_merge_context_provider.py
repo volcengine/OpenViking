@@ -15,7 +15,11 @@ from openviking.session.memory.session_extract_context_provider import (
 )
 from openviking.session.memory.utils.language import resolve_output_language_from_text
 
-_SYSTEM_HIDDEN_FIELDS = {"source_extraction_id", "source_extraction_ids"}
+_SYSTEM_HIDDEN_FIELDS = {
+    "source_extraction_id",
+    "source_extraction_ids",
+    "last_update_trace_id",
+}
 _MAX_EXTRA_CANDIDATE_FILES = 10
 _PATCH_METADATA_KEYS = ("confidence",)
 
@@ -30,7 +34,9 @@ class PatchMergePatch:
 
     @property
     def target_uri(self) -> str | None:
-        return self.after_file.uri or (self.before_file.uri if self.before_file is not None else None)
+        return self.after_file.uri or (
+            self.before_file.uri if self.before_file is not None else None
+        )
 
     @property
     def memory_type(self) -> str:
@@ -224,8 +230,7 @@ def _render_field_diff_patches(patches: list[PatchMergePatch]) -> str:
     if not patches:
         return "# Memory File Patches\n\nNo patches provided."
     rendered = [
-        _render_one_field_diff_patch(index, patch)
-        for index, patch in enumerate(patches, start=1)
+        _render_one_field_diff_patch(index, patch) for index, patch in enumerate(patches, start=1)
     ]
     return "# Memory File Patches\n\n" + "\n\n".join(rendered).rstrip()
 

@@ -70,20 +70,56 @@ fields:
       - Delta: <missing action、wrong target object、wrong amount/count/status、extra action、premature handoff/done，或 no material delta>.
 
       # 实际执行路径
-      - Loaded experiences: <只列实际读取的 experience memory，并给短别名，例如 `#E1=补偿请求事实核验与转人工.md`；如果只读取了 case/trajectory 或没有读取 experience，写 none。不要把 case 名、case memory 或 trajectory memory 写成 Loaded experiences。>
-      - Execution path: <直接给出真实执行过程。按时间顺序写关键 memory_load 和业务工具：经验/案例加载可写 `read_experience/read_file/search_experience(...)[memory_load: case|experience|trajectory]`，但只有 experience memory 能分配 `#E`；业务工具调用如果能对应到 experience 行号，就在工具后标 `[#E1#L1]`，否则标 `[no_exp_line]`。不要单独再写 Experience path 或 Business path；不要输出 unavailable 的行号对齐段。>
-      # 事实链与偏离
-      - User/task intent: <用户试图完成什么>.
-      - Decisive tool facts: <决定性字段，例如 status、count、membership、insurance、lifecycle state、ownership、timestamp arithmetic 或 policy eligibility>.
-      - Correct target/path: <最符合 evaluation 和已核验 tool facts 的对象/动作>.
-      - Wrong target/path: <agent 错误走向的对象/动作，如有；无则写 none>.
-      - First critical deviation: <按时间顺序写第一个导致结果变化的读取/决策/动作偏离；不要只写最后症状>.
+      - Loaded experiences:
+          <只列实际读取的 experience memory，并给短别名，例如
+          `#E1=补偿请求事实核验与转人工.md`。如果只读取了 case/trajectory，
+          或没有读取 experience，写 none。不要把 case 名、case memory 或
+          trajectory memory 写成 Loaded experiences。>
+      - Execution path:
+          <输出一个严格 DSL 代码块，用于让 LLM/程序解析“真实业务路径 vs
+          已读取 experience 的 Approach 行”的差异，并据此判断 experience
+          是否需要修改。必须包含四段：
+          1. `# Actual path`
+          2. `# Experience alignment`
+          3. `diagnose(...)`
+          4. `first_divergence(...)`
+
+          `# Actual path` 规则：
+          - 使用 `A1:`、`A2:`... 记录完整但紧凑的业务 tool、用户确认、
+            最终沟通/完成步骤。
+          - 不记录闲聊、重复 retry、memory loading plumbing。
+          - 每行只保留关键 tool 名、泛化参数和决定性 output facts。
+
+          `# Experience alignment` 规则：
+          - 为每个实际相关的 experience 定义 `E1 "文件名"`、`E2 "文件名"`。
+          - 用 `Lx -> Ay matched`、`Lx -> ∅ missing_expected_call`、
+            `Lx -> Ay matched_but_wrong_policy`、`Lx -> Ay ambiguous_match`
+            等形式对齐 exp Approach 行和 actual step。
+          - 每个相关 experience 后必须有
+            `diagnose(Ei, exp_quality=..., execution_relation=..., repair_action=..., reason=...)`。
+          - `diagnose(...)` 必须明确区分：exp 正确但没按它执行、按 exp
+            执行所以出错、exp 没说清楚导致乱执行、exp 不适用/过宽/误导，
+            或没有合适 exp。
+
+          最后必须有一个全局 `first_divergence(...)`，只指向最早
+          materially changes reward 的偏离点。>
 
       # 失败机制
-      - 失败/成功关键: <用一句话说明直接影响 reward 的第一个关键步骤；success 时说明保持成功的关键。>
-      - 决策原因: <解释为什么 agent 会走错或走对：忽略了哪个 runtime 可见规则、tool fact、policy gate、用户确认、对象绑定或通信要求；不要写隐藏思维过程，不要只说“忽略了评测要求”。>
-      - 记忆影响: <说明检索/注入的经验是 missing、irrelevant、over-broad、misleading、ignored、too weak、only solved secondary issue、necessary、helpful-but-not-necessary 或 irrelevant，并点名具体规则类型。>
-      - 经验修正: <说明应新增/更新/跳过哪一种 experience：同一 intent + 同一 terminal tool family + 同一 policy gate；若只支持负面教训，写 Reflect-only，不写正向流程。>
+      - 失败/成功关键:
+          <用一句话说明直接影响 reward 的第一个关键步骤；success 时说明
+          保持成功的关键。>
+      - 决策原因:
+          <解释为什么 agent 会走错或走对：忽略了哪个 runtime 可见规则、
+          tool fact、policy gate、用户确认、对象绑定或通信要求；不要写
+          隐藏思维过程，不要只说“忽略了评测要求”。>
+      - 记忆影响:
+          <说明检索/注入的经验是 missing、irrelevant、over-broad、
+          misleading、ignored、too weak、only solved secondary issue、
+          necessary、helpful-but-not-necessary 或 irrelevant，并点名具体规则类型。>
+      - 经验修正:
+          <说明应新增/更新/跳过哪一种 experience：同一 intent + 同一
+          terminal tool family + 同一 policy gate；若只支持负面教训，写
+          Reflect-only，不写正向流程。>
       
       # 关键反思
       - 核心教训: <用一句话概括本次成功/失败最值得复用的反思； 比如： “前客服承诺 != cancel 授权；无 refund 接受 != 可取消”>
@@ -105,8 +141,11 @@ fields:
       - Evidence priority：Expected vs Actual 优先使用 evaluation/action_checks/CaseSpec 作为 oracle。即使最终 report 很稀疏，CaseSpec 的 `Actions`、`Communicate Info`、NL Assertions 也算证据。保留精确 evaluated/actual tool names。之后依次使用 tool facts、policy、user self-report。
       - Root-cause audit：必须先用可见证据找“第一个改变 reward 的决策点”，再写 trajectory；不要复述全流程。先按 outcome、terminal tool/action、DB/Communicate、first divergent action 对当前 trace 分桶。若 state-changing tool 返回成功但 DB failed，优先诊断 forbidden write、wrong target、wrong args；不得归因于缺少 done、缺少 post-write verification、工具成功但环境异常，除非 evaluation 明确支持。对 policy-gated write，必须从 tool outputs 重建 gate：ownership/status、完整 timestamp arithmetic、cabin、insurance、reason、airline-cancelled、confirmation/refund；用户或客服口头说法不能覆盖 policy + tool facts。若存在 sibling rollouts 或 group summary，必须比较 PASS vs FAIL 的最小差异；只沉淀能解释多数失败的一个核心规则。若 retrieved experience 与当前 tool facts/evaluation 冲突，标记为 misleading 或 over-broad，不得把它当结论。输出时按“结论 -> 证据 -> 反事实 -> 修正规则”写进既有 section，不新增标题。
       - Fix only the failed part：先分清“哪些步骤已经被结果证明是对的”和“真正失败/缺失/不一致的点”。做对的地方不要反着学：已通过的读/写/业务步骤不能写成 forbidden，也不能被总结成以后要拒绝、转人工、换路径。若业务路径已成立，只是最终回复少说或说错信息，主因只能写 missing/wrong communication，并保留原业务路径为正确路径。
-      - First divergence localization：失败轨迹必须从真实执行过程里定位第一个和预期不一致的执行线/决策线，而不是只写最后症状或 missing literal。若旧 experience 的 Approach 中有对应行，写明 `#E#L` 或代码模式；若没有对应行，写 `[no_exp_line]`。`经验修正` 必须说明是替换第一条错误 Approach 行、补一条缺失行、还是只更新 Reflect；不要顺带发明后续领域算法。
-      - Actual path extraction：`# 实际执行路径` 只输出两个 bullets：`Loaded experiences` 和 `Execution path`。直接给执行过程，不再单独输出 `Experience path`、`Business path`、`# 经验行号对齐`，也不要输出 `unavailable` 这类占位分析。路径只能来自真实 trace/tool calls；不要根据经验内容或 agent 自称补写没有实际发生的工具调用。`search_experience`、`read_experience`、经验加载用 `read_file` 可以作为 `memory_load` 出现，但要标清加载对象类型：`experience`、`case` 或 `trajectory`。只有实际读取的 experience memory 才能分配 `#E1/#E2`；case memory（例如 `tau2_airline_train_5`）和 trajectory memory 不能写进 `Loaded experiences`，也不能用于 `[#E1#L1]` 行号对齐。业务工具调用如果能对应到 experience 的 Python Approach 行，就标 `[#E1#L1]`；找不到对应行写 `[no_exp_line]`。如果没读取到带行号的 experience，就只写业务执行过程，不强行做行号对齐。
+      - First divergence localization：失败轨迹必须从真实执行过程里定位第一个和预期不一致的执行线/决策线，而不是只写最后症状或 missing literal。若旧 experience 的 Approach 中有对应行，写明 `#E#L` 或代码模式；若没有对应行，写 `[trace] no_exp_line`。`经验修正` 必须说明是替换第一条错误 Approach 行、补一条缺失行、还是只更新 Reflect；不要顺带发明后续领域算法。
+      - Actual path extraction：`# 实际执行路径` 只输出两个 bullets：`Loaded experiences` 和 `Execution path`。`Execution path` 必须是一个严格 DSL 代码块，不再单独输出 `Experience path`、`Business path`、`# 经验行号对齐`、表格或 stack-trace prose，也不要输出 `unavailable` 这类占位分析。路径只能来自真实 trace/tool calls；不要根据 experience 内容或 agent 自称补写没有实际发生的工具调用。`# Actual path` 要完整覆盖本任务的业务 tool sequence、关键用户确认、关键最终沟通/完成动作；不要记录 `search_experience`、`read_experience`、经验/案例/轨迹加载等 memory plumbing。只有实际读取的 experience memory 能分配 `#E1/#E2`；case memory（例如 `tau2_airline_train_5`）和 trajectory memory 不能写进 `Loaded experiences`，也不能用于 `E1.Lx` 行号对齐。业务工具调用如果能对应到 experience 的 Python Approach 行，就用 `Lx -> Ay` 对齐；找不到对应行写 `[trace] no_exp_line -> Ay extra_uncovered_action` 或在 `first_divergence(source=[trace].no_exp_line, ...)` 中标出。
+      - Experience-alignment DSL format：`Execution path` 的代码块必须使用以下 DSL 形状：`A1: <compact actual statement> -> <key facts>`；`E1 "<experience file>":`；缩进行 `status: <matched|first_divergence_source|skipped_not_applicable|misleading|over_broad|ignored|only_solved_secondary_issue>`；缩进行 `Lx -> Ay <verdict>` 或 `Lx -> ∅ <verdict>`；随后调用 `diagnose(E1, exp_quality="...", execution_relation="...", repair_action="...", reason="...")`；最后调用一次 `first_divergence(error="...", source=E1.Lx|[trace].no_exp_line, expected="...", actual="...", repair_target=E1|None)`。不要输出无法被简单正则解析的长段落。
+      - Diagnosis enums：`exp_quality` 只能使用 `correct`、`wrong`、`underspecified`、`over_broad`、`not_applicable`、`missing`；`execution_relation` 只能使用 `followed`、`not_followed`、`partially_followed`、`misapplied`、`ignored`、`no_applicable_exp`；`repair_action` 只能使用 `no_update`、`update_approach`、`clarify_approach`、`narrow_situation`、`add_reflect_guardrail`、`create_new_exp`、`skip_exp_update`。用这些字段直接回答：是 exp 正确但 agent 没按它执行，还是 agent 按 exp 执行所以出问题，还是 exp 没说清楚/过宽/不适用导致乱执行。
+      - Multi-experience trace policy：多个 experience 文件被读取时，每个实际影响决策的 experience 都要有一个 `E#` alignment 和 `diagnose(E#...)`；无关 experience 可以只列 `status: skipped_not_applicable` 和一行 reason。最终只能有一个全局 `first_divergence(...)`：选择时间顺序上第一个 materially changes reward 的偏离点。若偏离来自两个 experience 的冲突，`first_divergence` 指向 agent 实际采纳的错误行，并在 `diagnose` 的 reason 中写出 conflicting source。
       - Memory loading boundary：经验/案例/轨迹加载可以在 `Execution path` 里作为 `memory_load` 证据出现，但不能算作业务动作，不能标注成 `[#E1#L1]`，也不能在 `# 正确做法` 或 `# 泛化规则` 中建议未来 agent 主动调用这些加载工具。经验修正只能学习业务动作、政策 gate、对象绑定、沟通边界和 return 语义。
       - Memory effect audit：如果当前 trace 实际读取/注入了 memory_context、task_case_experience、retrieved memories 或 candidate memories，必须评估该记忆对 outcome 的作用。若 outcome 是 failure/partial/unfinished，必须在 `# 关键反思` 或 `# 事实链与偏离` 中说明记忆为什么没起作用：missing、irrelevant、over-broad、misleading/stale、ignored、too weak、conflicted with policy/tool facts、或 only solved a secondary issue。若记忆内容与当前 tool facts/evaluation 冲突，必须标为 misleading/over-broad，不得继续把该记忆沉淀成正向 Approach。若通信补全经验把“最终回复漏答”扩写成新的业务算法（例如遍历 profile/account/history、过滤对象、重新定义聚合范围），必须标为 over-broad/misleading，并建议简化为 pending_answers 机制，而不是继续强化该算法。若记忆被遵守但仍失败，必须指出“该记忆只覆盖了次要问题”，并重新定位真正决定 reward 的 first critical deviation。若 outcome 是 success，简短说明记忆是 necessary、helpful-but-not-necessary，还是 irrelevant；不要过度归因。不要泛泛写“没有充分利用记忆”；必须引用具体记忆规则和实际偏离动作。
       - `# 关键反思` 必须回答：为什么这个 reward 失败/成功，而不是 agent 自认为哪里做得好。核心教训必须能解释 DB/Communicate 的主失败信号。
@@ -120,6 +159,143 @@ fields:
       - Generalization discipline：`retrieval_anchor`、`# 关键反思`、`# 正确做法`、`# 泛化规则` 必须泛化人名、reservation/order id、路线、精确日期、金额、路径和 raw payload；只有 `# Evaluation 信号`、`# Expected vs Actual` 或必要证据可以保留 source literal。
       - Consistency check：`Outcome`、`Expected vs Actual`、`Delta`、`First critical deviation`、`# 关键反思` 必须互相一致。若 Actual 已完成 Expected 的关键动作，不要把同一动作写成 missing；重新定位真正 delta，或写 `no material delta` 并避免生成泛化规则。
       - Output discipline：严格保留八个 required headings 及顺序；不要加额外标题或结尾语。内容要密集、反思优先、证据从属。泛化姓名、ID、精确日期/金额/路线、路径和原始 payload；稳定 policy 常量或执行所需 exact tool/evaluation names 除外。只提当前 trace/evaluation 中存在的工具。
+
+      Few-shot `# 实际执行路径` examples（格式示例；不要照抄实体、ID、金额、日期或不在当前 trace 中的工具）：
+      - Exp 正确但未执行 terminal write：
+        ```md
+        # 实际执行路径
+        - Loaded experiences:
+          - #E1=航班改签确认.md
+          - #E2=改签后最终沟通.md
+
+        - Execution path:
+        ```python
+        # Actual path
+        A1: reservation = get_reservation_details(reservation_id="<reservation_id>") -> status=active, owner_verified=true
+        A2: quote = quote_flight_change(reservation=reservation, new_flights="<new_flights>") -> price_delta_accepted=true
+        A3: user_confirmed = observe_user_confirmation(quote) -> true
+        A4: communicate_with_user("change is ready")
+        A5: return DONE
+
+        # Experience alignment
+        E1 "航班改签确认.md":
+          status: first_divergence_source
+          L1 -> A1 matched
+          L3 -> A2 matched
+          L4 -> A3 matched
+          L5 -> ∅ missing_expected_call
+                expected: update_reservation_flights(...)
+                actual: A4 communicate_with_user(...) + A5 DONE
+
+        diagnose(E1,
+          exp_quality="correct",
+          execution_relation="not_followed",
+          repair_action="no_update",
+          reason="E1.L5 already required the terminal update write after quote and confirmation; actual path skipped it."
+        )
+
+        E2 "改签后最终沟通.md":
+          status: skipped_not_applicable
+          reason: applies only after terminal write succeeds; terminal write was missing
+
+        diagnose(E2,
+          exp_quality="correct",
+          execution_relation="ignored",
+          repair_action="skip_exp_update",
+          reason="Communication experience was not the cause of the first divergence."
+        )
+
+        first_divergence(
+          error="MissingExpectedCall",
+          source=E1.L5,
+          expected="update_reservation_flights(...) before final response",
+          actual="A4 communicate_with_user(...) then A5 DONE",
+          repair_target=E1
+        )
+        ```
+        ```
+      - Agent 按 exp 执行，但 exp 本身错误/过宽：
+        ```md
+        # 实际执行路径
+        - Loaded experiences:
+          - #E1=取消请求处理.md
+
+        - Execution path:
+        ```python
+        # Actual path
+        A1: reservation = get_reservation_details(reservation_id="<reservation_id>") -> status=confirmed, cabin=economy
+        A2: user = get_user_details(user_id="<user_id>") -> membership=tier_without_cancel_override
+        A3: cancel_result = cancel_reservation(reservation_id="<reservation_id>") -> success=true
+        A4: communicate_with_user("reservation cancelled")
+
+        # Experience alignment
+        E1 "取消请求处理.md":
+          status: first_divergence_source
+          L1 -> A1 matched
+          L2 -> A2 matched
+          L4 -> A3 matched_but_wrong_policy
+                expected_by_exp: cancel_reservation(...)
+                expected_by_evaluation: communicate_refusal_or_handoff(...)
+                runtime_gate: allow_cancel=false
+
+        diagnose(E1,
+          exp_quality="wrong",
+          execution_relation="followed",
+          repair_action="update_approach",
+          reason="Agent followed E1.L4, but E1.L4 allowed cancel_reservation even though all runtime-visible allow-cancel gates were false."
+        )
+
+        first_divergence(
+          error="ForbiddenSubstituteCall",
+          source=E1.L4,
+          expected="communicate_refusal_or_handoff(...) because allow_cancel=false",
+          actual="A3 cancel_reservation(...)",
+          repair_target=E1
+        )
+        ```
+        ```
+      - Exp 没说清楚导致 partial follow / premature completion：
+        ```md
+        # 实际执行路径
+        - Loaded experiences:
+          - #E1=航班改签流程.md
+
+        - Execution path:
+        ```python
+        # Actual path
+        A1: reservation = get_reservation_details(reservation_id="<reservation_id>") -> status=active
+        A2: quote = quote_flight_change(reservation=reservation, new_flights="<new_flights>") -> price_delta_available=true
+        A3: communicate_with_user("option is available")
+        A4: return DONE
+
+        # Experience alignment
+        E1 "航班改签流程.md":
+          status: first_divergence_source
+          L1 -> A1 matched
+          L2 -> A2 matched
+          L3 -> A3 ambiguous_match
+                exp_line: communicate_with_user(change_options)
+                actual: communicated option availability but did not obtain explicit confirmation
+          L4 -> ∅ missing_expected_call
+                expected: update_reservation_flights(...) after explicit confirmation
+                actual: A4 DONE
+
+        diagnose(E1,
+          exp_quality="underspecified",
+          execution_relation="partially_followed",
+          repair_action="clarify_approach",
+          reason="E1 did not separate quote communication, explicit user confirmation, and terminal update write, so agent treated option communication as completion."
+        )
+
+        first_divergence(
+          error="PrematureCompletion",
+          source=E1.L3,
+          expected="communicate quote, wait for explicit confirmation, then update_reservation_flights(...)",
+          actual="A3 communicate option then A4 DONE",
+          repair_target=E1
+        )
+        ```
+        ```
 
       Few-shot focus examples（用来校准 `# 关键反思` 的主因选择；不要照抄标签，要按当前 trace 改写）：
       - Forbidden cancellation write：反思主体写“核心教训: 取消前必须满足至少一个 allow-cancel gate；当工具事实显示 economy/no insurance/change-of-plan/no airline cancellation 且完整 timestamp arithmetic 超过 24h 时，`cancel_reservation` 是 forbidden write。违反的实际规则/成功关键: 用户/前客服口头批准不能覆盖 policy + tool facts。错误推理或风险: agent 把口头批准或错误 24h 判断当成取消资格。修正原则: 先逐项核验 gate，不满足时拒绝/沟通或按 policy handoff。”不要写“ground_truth要求仅查询”。

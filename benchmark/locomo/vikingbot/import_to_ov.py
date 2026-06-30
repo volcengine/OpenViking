@@ -673,7 +673,8 @@ async def process_single_session(
 ) -> Dict[str, Any]:
     """处理单个会话的导入任务"""
     meta = meta or {}
-    ingest_record = ingest_record or {}
+    if ingest_record is None:
+        ingest_record = {}
     csv_id = display_id or str(sample_id)
     source_sample_id = str(sample_id)
     try:
@@ -732,8 +733,10 @@ async def process_single_session(
         # 写入成功CSV
         write_success_record(result, args.success_csv)
 
-        # Mark as successfully ingested
-        mark_ingested(csv_id, session_key, ingest_record, meta)
+        # Mark as successfully ingested with the canonical source sample id.
+        # display_id/csv_id is only a human-friendly label (for example, sample_0);
+        # skip checks and success CSV keys use the real sample_id (for example, conv-26).
+        mark_ingested(source_sample_id, session_key, ingest_record, meta)
         save_ingest_record(ingest_record)  # Save immediately after success
 
         return result

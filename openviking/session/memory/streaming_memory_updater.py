@@ -392,8 +392,7 @@ class StreamingMemoryUpdater:
     ) -> StreamingMemoryUpdateResult:
         input_operations = sum(_operation_count(request.operations) for request in requests)
         input_patches = sum(
-            len(getattr(request.operations, "upsert_operations", []) or [])
-            for request in requests
+            len(getattr(request.operations, "upsert_operations", []) or []) for request in requests
         )
         input_deletes = sum(
             len(getattr(request.operations, "delete_file_contents", []) or [])
@@ -472,9 +471,7 @@ class StreamingMemoryUpdater:
             all_ops.delete_file_contents.extend(list(ops.delete_file_contents or []))
             all_ops.errors.extend(list(ops.errors or []))
             all_ops.resolved_links.extend(list(getattr(ops, "resolved_links", []) or []))
-            all_ops.delete_replacements.update(
-                dict(getattr(ops, "delete_replacements", {}) or {})
-            )
+            all_ops.delete_replacements.update(dict(getattr(ops, "delete_replacements", {}) or {}))
         return await merge_memory_operations(
             operations=all_ops,
             messages=_combined_request_messages(requests),
@@ -535,9 +532,11 @@ def split_request_by_merge_group(
                             file.uri: replacement_uri
                             for file in group_deletes
                             if file.uri
-                            if (replacement_uri := (
-                                getattr(operations, "delete_replacements", {}) or {}
-                            ).get(file.uri))
+                            if (
+                                replacement_uri := (
+                                    getattr(operations, "delete_replacements", {}) or {}
+                                ).get(file.uri)
+                            )
                         },
                     ),
                 ),
@@ -605,18 +604,14 @@ async def merge_memory_operations(
         peer_id = _peer_id_for_operation(op)
         for uri in op.uris:
             single_uri_op = clone_operation_for_uri(op, uri)
-            upsert_groups.setdefault(
-                (peer_id, single_uri_op.memory_type), []
-            ).append(single_uri_op)
+            upsert_groups.setdefault((peer_id, single_uri_op.memory_type), []).append(single_uri_op)
     for df in operations.delete_file_contents:
         peer_id = _peer_id_for_memory_file(df)
         memory_type = df.memory_type or ""
         delete_groups.setdefault((peer_id, memory_type), []).append(df)
 
     # Union all group keys from both upserts and deletes
-    all_group_keys = list(
-        dict.fromkeys(list(upsert_groups.keys()) + list(delete_groups.keys()))
-    )
+    all_group_keys = list(dict.fromkeys(list(upsert_groups.keys()) + list(delete_groups.keys())))
 
     tracer.info(
         "[streaming_memory_updater] merge batch "
@@ -695,9 +690,9 @@ async def merge_memory_operations(
         fallback_deletes = delete_groups.get(group_key, [])
         merged_deletes.extend(fallback_deletes)
         for delete_file in fallback_deletes:
-            replacement_uri = dict(
-                getattr(operations, "delete_replacements", {}) or {}
-            ).get(delete_file.uri)
+            replacement_uri = dict(getattr(operations, "delete_replacements", {}) or {}).get(
+                delete_file.uri
+            )
             if replacement_uri:
                 merged_delete_replacements[delete_file.uri] = replacement_uri
 
@@ -823,8 +818,7 @@ async def merge_one_memory_type_operations(
         )
     )
     patches = [
-        operation_to_patch(op, schema=schema, extract_context=extract_context)
-        for op in operations
+        operation_to_patch(op, schema=schema, extract_context=extract_context) for op in operations
     ] + [
         memory_file_to_delete_patch(df, schema=schema, extract_context=extract_context)
         for df in delete_files
@@ -1068,7 +1062,32 @@ def classify_memory_merge_mode(
     fields = dict(getattr(op, "memory_fields", {}) or {})
     if "content" not in fields:
         return False, "single_existing_non_content_patch"
-    if old_file.plain_content().strip() == str(fields.get("content") or "").strip():
+    old_plain_content = old_file.plain_content().strip()
+    if schema is not None:
+        try:
+            after_content = render_operation_after_file_content(
+                op,
+                schema=schema,
+                extract_context=ExtractContext([]),
+            )
+            after_file = MemoryFileUtils.read(
+                after_content, uri=_first_uri(getattr(op, "uris", []) or [])
+            )
+            if old_plain_content == after_file.plain_content().strip():
+                return True, "single_existing_content_unchanged"
+        except Exception as exc:
+            logger.debug(
+                "Failed to render memory patch preview for merge-mode classification: "
+                "memory_type=%s",
+                getattr(op, "memory_type", None),
+                exc_info=True,
+            )
+            tracer.info(
+                "[streaming_memory_updater] merge-mode preview failed; falling back to "
+                f"raw content comparison memory_type={getattr(op, 'memory_type', None)} "
+                f"error={exc}"
+            )
+    if old_plain_content == str(fields.get("content") or "").strip():
         return True, "single_existing_content_unchanged"
     return False, "single_existing_content_changed"
 
@@ -1416,7 +1435,9 @@ def combine_streaming_memory_results(
     for result in present_results:
         request_count += result.request_count
         combined_operations.upsert_operations.extend(result.operations.upsert_operations or [])
-        combined_operations.delete_file_contents.extend(result.operations.delete_file_contents or [])
+        combined_operations.delete_file_contents.extend(
+            result.operations.delete_file_contents or []
+        )
         combined_operations.errors.extend(result.operations.errors or [])
         combined_operations.resolved_links = merge_link_lists(
             combined_operations.resolved_links,

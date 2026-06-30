@@ -107,10 +107,7 @@ async def test_patch_merge_context_provider_prefetch_searches_and_reads_extra_ca
     provider.search_files = AsyncMock(
         return_value=[
             "viking://user/u/memories/experiences/book.md",
-            *[
-                f"viking://user/u/memories/experiences/candidate_{idx}.md"
-                for idx in range(10)
-            ],
+            *[f"viking://user/u/memories/experiences/candidate_{idx}.md" for idx in range(10)],
         ]
     )
     provider.read_file = AsyncMock(
@@ -145,9 +142,7 @@ async def test_patch_merge_context_provider_caps_extra_candidate_reads_at_ten():
         filename_template="{{ experience_name }}.md",
         fields=[],
     )
-    required_uris = [
-        f"viking://user/u/memories/experiences/required_{idx}.md" for idx in range(12)
-    ]
+    required_uris = [f"viking://user/u/memories/experiences/required_{idx}.md" for idx in range(12)]
     provider = PatchMergeContextProvider(
         memory_type="experiences",
         required_file_uris=required_uris,
@@ -167,10 +162,7 @@ async def test_patch_merge_context_provider_caps_extra_candidate_reads_at_ten():
     provider.search_files = AsyncMock(
         return_value=[
             *required_uris,
-            *[
-                f"viking://user/u/memories/experiences/candidate_{idx}.md"
-                for idx in range(20)
-            ],
+            *[f"viking://user/u/memories/experiences/candidate_{idx}.md" for idx in range(20)],
         ]
     )
     provider.read_file = AsyncMock(
@@ -234,6 +226,46 @@ async def test_patch_merge_context_provider_renders_compact_patch_metadata():
     assert "links" not in content
     assert "memory_fields" not in content
     assert "duplicated" not in content
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_context_provider_hides_last_update_trace_id_from_patch_diff():
+    provider = PatchMergeContextProvider(
+        memory_type="experiences",
+        required_file_uris=[],
+        patches=[
+            PatchMergePatch(
+                before_file=MemoryFile(
+                    uri="viking://user/u/memories/experiences/booking.md",
+                    content="same content",
+                    memory_type="experiences",
+                    extra_fields={
+                        "memory_type": "experiences",
+                        "experience_name": "booking",
+                        "last_update_trace_id": "trace_old",
+                    },
+                ),
+                after_file=MemoryFile(
+                    uri="viking://user/u/memories/experiences/booking.md",
+                    content="same content",
+                    memory_type="experiences",
+                    extra_fields={
+                        "memory_type": "experiences",
+                        "experience_name": "booking",
+                        "last_update_trace_id": "trace_new",
+                    },
+                ),
+            )
+        ],
+    )
+
+    messages = await provider.prefetch()
+    content = messages[0]["content"]
+
+    assert "last_update_trace_id" not in content
+    assert "trace_old" not in content
+    assert "trace_new" not in content
+    assert "(no changes)" in content
 
 
 @pytest.mark.asyncio
