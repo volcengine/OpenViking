@@ -1086,6 +1086,14 @@ class VikingFS:
         # use the maximum limit to avoid truncation.
         remote_return_limit = min(node_limit * 5, 100000) if node_limit else 100000
 
+        # VikingDB BM25 can silently time out / return empty on large corpora
+        # (see #2850). Bound the query so a hung remote cannot stall grep; a
+        # timeout is treated as unreliability and falls back to fs, same as an
+        # raised exception.
+        vikingdb_timeout = float(
+            os.environ.get("OPENVIKING_GREP_VIKINGDB_TIMEOUT_SEC", "10")
+        )
+
         # Step 1: vikingdb recall candidate files
         try:
             logger.debug(
@@ -1096,11 +1104,31 @@ class VikingFS:
                 filter_expr,
                 ["uri"],
             )
-            result = await vector_store.search_by_keywords(
-                query=query,
-                limit=remote_return_limit,
-                filter=filter_expr,
-                output_fields=["uri"],
+            result = await asyncio.wait_for(
+                vector_store.search_by_keywords(
+                    query=query,
+                    limit=remote_return_limit,
+                    filter=filter_expr,
+                    output_fields=["uri"],
+                    ctx=ctx,
+                ),
+                timeout=vikingdb_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "grep vikingdb query timed out (%.1fs) for pattern %r at %s, "
+                "falling back to fs",
+                vikingdb_timeout,
+                pattern,
+                uri,
+            )
+            return await self._grep_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
                 ctx=ctx,
             )
         except Exception as e:
@@ -1123,8 +1151,25 @@ class VikingFS:
                 if u != excluded_prefix and not u.startswith(excluded_prefix + "/")
             ]
         if not candidate_uris:
-            # BM25 returned no candidates — the index confirms no matching content
-            return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+            # BM25 returned no candidates. On large/stale corpora this can be a
+            # false negative (silent timeout, index lag) rather than a true
+            # absence of matches (#2850). Retry with fs grep so a VikingDB gap
+            # does not masquerade as "no matching content".
+            logger.warning(
+                "grep vikingdb returned 0 candidates for pattern %r at %s, "
+                "retrying with fs grep",
+                pattern,
+                uri,
+            )
+            return await self._grep_fs(
+                uri=uri,
+                pattern=pattern,
+                exclude_uri=exclude_uri,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                level_limit=level_limit,
+                ctx=ctx,
+            )
 
         # Step 2: local fs precise matching on candidate files
         return await self._grep_in_files(
