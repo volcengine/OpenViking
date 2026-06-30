@@ -451,7 +451,7 @@ async def add_message(
     service = get_service()
 
     async def _add() -> dict[str, Any]:
-        session = await service.sessions.get(session_id, _ctx, auto_create=True)
+        session = await service.sessions.get_or_create_writable(session_id, _ctx)
         parts = _resolve_message_parts(request)
 
         session.add_messages(
@@ -491,7 +491,7 @@ async def batch_add_messages(
     service = get_service()
 
     async def _batch_add() -> dict[str, Any]:
-        session = await service.sessions.get(session_id, _ctx, auto_create=True)
+        session = await service.sessions.get_or_create_writable(session_id, _ctx)
         specs = []
         for msg_request in request.messages:
             parts = _resolve_message_parts(msg_request)
@@ -526,7 +526,7 @@ async def record_used(
 ):
     """Record actually used contexts and skills in a session."""
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.get_writable(session_id, _ctx, auto_create=False)
 
     # Resolve path variables in contexts
     resolved_contexts = None

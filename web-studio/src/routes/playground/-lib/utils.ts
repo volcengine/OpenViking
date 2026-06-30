@@ -7,6 +7,7 @@ import {
 import type { VikingFsEntry } from '#/routes/resources/-types/viking-fm'
 import type { FindResultItem, GroupedFindResult } from '#/lib/retrieval'
 
+import { createRandomUuid } from '#/lib/browser-crypto'
 import { cleanVikingUri } from '#/lib/viking-uri'
 
 import { ROOT_URI, PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY } from './constants'
@@ -121,6 +122,10 @@ export function registerPlaygroundAgentSessionId(sessionId: string): string[] {
   writeStoredJson(PLAYGROUND_AGENT_SESSIONS_STORAGE_KEY, next)
 
   return next
+}
+
+export function createPlaygroundAgentSessionId(): string {
+  return `bot-${createRandomUuid()}`
 }
 
 export function createEntryFromUri(uri: string, isDir: boolean): VikingFsEntry {

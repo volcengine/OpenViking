@@ -958,6 +958,14 @@ class Session:
         self._append_messages(all_messages)
         return all_messages
 
+    def import_messages(self, messages: List[Message]) -> None:
+        """Import existing messages while preserving their IDs and timestamps."""
+        if not messages:
+            return
+        self._append_messages(
+            [Message.from_dict(message.to_dict()) for message in messages]
+        )
+
     def add_message(
         self,
         role: str,

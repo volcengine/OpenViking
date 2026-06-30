@@ -8,7 +8,8 @@ Provides session management operations: session, sessions, add_message, commit, 
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.core.namespace import canonical_session_uri
+from openviking.core.namespace import canonical_session_uri, legacy_session_uri
+from openviking.message import Message
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
@@ -142,10 +143,11 @@ class SessionService:
         self._record_lifecycle_metric("create", "attempt")
         try:
             if session_id:
-                existing = self.session(ctx, session_id)
-                if await existing.exists():
+                session = self.session(ctx, session_id)
+                if await session.exists():
                     raise AlreadyExistsError(f"Session '{session_id}' already exists")
-            session = self.session(ctx, session_id)
+            else:
+                session = self.session(ctx, session_id)
             if memory_policy is not None:
                 policy = MemoryPolicy.from_dict(memory_policy)
                 policy.validate_memory_types(
@@ -160,7 +162,12 @@ class SessionService:
             raise
 
     async def get(
-        self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        *,
+        auto_create: bool = False,
+        legacy_fallback: bool = True,
     ) -> Session:
         """Get an existing session.
 
@@ -169,14 +176,103 @@ class SessionService:
             ctx: Request context
             auto_create: If True, create the session when it does not exist.
                          Default is False (raise NotFoundError).
+            legacy_fallback: If True, allow read-only fallback to pre-user-namespace
+                             legacy sessions when the canonical session is absent.
         """
         try:
             session = self.session(ctx, session_id)
             if not await session.exists():
-                if not auto_create:
+                if auto_create:
+                    await session.ensure_exists()
+                elif legacy_fallback:
+                    legacy_session = self.session(
+                        ctx,
+                        session_id,
+                        session_uri=legacy_session_uri(session_id),
+                    )
+                    if await legacy_session.exists():
+                        session = legacy_session
+                    else:
+                        raise NotFoundError(session_id, "session")
+                else:
                     raise NotFoundError(session_id, "session")
-                await session.ensure_exists()
             await session.load()
+            self._record_lifecycle_metric("get", "ok")
+            return session
+        except Exception:
+            self._record_lifecycle_metric("get", "error")
+            raise
+
+    async def get_writable(
+        self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
+    ) -> Session:
+        """Get a canonical user session for mutating operations."""
+        return await self.get(
+            session_id,
+            ctx,
+            auto_create=auto_create,
+            legacy_fallback=False,
+        )
+
+    @staticmethod
+    def _append_unique_message(
+        messages: List[Message], seen: set[str], message: Message
+    ) -> None:
+        if message.id in seen:
+            return
+        seen.add(message.id)
+        messages.append(message)
+
+    async def _readable_messages_for_canonical_copy(self, session: Session) -> List[Message]:
+        """Collect user-visible legacy messages in chronological display order."""
+        messages: List[Message] = []
+        seen: set[str] = set()
+
+        commit_count = max(0, int(session.meta.commit_count or 0))
+        for index in range(1, commit_count + 1):
+            try:
+                archive = await session.get_session_archive(f"archive_{index:03d}")
+            except Exception:
+                continue
+            for raw_message in archive.get("messages", []):
+                if not isinstance(raw_message, dict):
+                    continue
+                try:
+                    self._append_unique_message(
+                        messages,
+                        seen,
+                        Message.from_dict(raw_message),
+                    )
+                except Exception:
+                    continue
+
+        for message in session.messages:
+            self._append_unique_message(messages, seen, message)
+
+        return messages
+
+    async def get_or_create_writable(self, session_id: str, ctx: RequestContext) -> Session:
+        """Get a canonical user session, migrating readable legacy history on first write."""
+        try:
+            session = self.session(ctx, session_id)
+            legacy_messages: List[Message] = []
+
+            if not await session.exists():
+                legacy_session = self.session(
+                    ctx,
+                    session_id,
+                    session_uri=legacy_session_uri(session_id),
+                )
+                if await legacy_session.exists():
+                    await legacy_session.load()
+                    legacy_messages = await self._readable_messages_for_canonical_copy(
+                        legacy_session
+                    )
+                await session.ensure_exists()
+
+            await session.load()
+            if legacy_messages:
+                session.import_messages(legacy_messages)
             self._record_lifecycle_metric("get", "ok")
             return session
         except Exception:
@@ -233,13 +329,12 @@ class SessionService:
         """
         self._ensure_initialized()
 
-        session_uri = canonical_session_uri(ctx, session_id)
-        session = await self.get(session_id, ctx)
+        session = await self.get_writable(session_id, ctx)
         if not await session.exists():
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
 
-        await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
+        await self._viking_fs.rm(session.uri, recursive=True, ctx=ctx)
         logger.info(f"Deleted session: {session_id}")
         self._record_lifecycle_metric("delete", "ok")
         return True
@@ -288,7 +383,7 @@ class SessionService:
             archive_uri, archived
         """
         self._ensure_initialized()
-        session = await self.get(session_id, ctx)
+        session = await self.get_writable(session_id, ctx)
         result = await session.commit_async(keep_recent_count=keep_recent_count)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
@@ -316,7 +411,7 @@ class SessionService:
         if not self._session_compressor:
             raise NotInitializedError("SessionCompressorV2")
 
-        session = await self.get(session_id, ctx)
+        session = await self.get_writable(session_id, ctx)
         archive_uri = f"{session.uri}/manual_extract"
 
         memories = await self._session_compressor.extract_long_term_memories(

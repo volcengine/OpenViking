@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
 
 import {
   createSession,
@@ -8,10 +9,48 @@ import {
   fetchSessionMessages,
   fetchSessions,
 } from './api'
+import { useAppConnection } from '#/hooks/use-app-connection'
+import {
+  getSessionMessagesQueryKey,
+  getSessionQueryKey,
+  getSessionScopeKey,
+  getSessionsQueryKey,
+} from './query-keys'
 import type { Message } from './types/message'
+import type { CreateSessionResult, SessionListItem } from './types/session'
 
-const SESSIONS_KEY = ['sessions'] as const
 const BOT_HEALTH_KEY = ['bot', 'health'] as const
+
+function useSessionScope() {
+  const { connection, connectionRole } = useAppConnection()
+  return useMemo(
+    () => getSessionScopeKey(connection, connectionRole),
+    [
+      connection.accountId,
+      connection.adminApiKey,
+      connection.apiKey,
+      connection.baseUrl,
+      connection.userId,
+      connectionRole,
+    ],
+  )
+}
+
+function appendSessionToList(
+  sessions: SessionListItem[] | undefined,
+  result: CreateSessionResult,
+): SessionListItem[] {
+  const nextSession = {
+    is_dir: true,
+    session_id: result.session_id,
+    uri: result.uri,
+  } satisfies SessionListItem
+  const existing = sessions ?? []
+  if (existing.some((session) => session.session_id === result.session_id)) {
+    return existing
+  }
+  return [...existing, nextSession]
+}
 
 export function useBotHealth() {
   return useQuery({
@@ -23,16 +62,20 @@ export function useBotHealth() {
 }
 
 export function useSessionList() {
+  const scope = useSessionScope()
+
   return useQuery({
-    queryKey: SESSIONS_KEY,
+    queryKey: getSessionsQueryKey(scope),
     queryFn: fetchSessions,
     staleTime: 30_000,
   })
 }
 
 export function useSession(sessionId: string | undefined) {
+  const scope = useSessionScope()
+
   return useQuery({
-    queryKey: [...SESSIONS_KEY, sessionId],
+    queryKey: getSessionQueryKey(scope, sessionId),
     queryFn: () => fetchSession(sessionId!),
     enabled: Boolean(sessionId),
     staleTime: 15_000,
@@ -41,8 +84,12 @@ export function useSession(sessionId: string | undefined) {
 
 /** Fetch message history for a session. */
 export function useSessionMessages(sessionId: string | undefined) {
+  const scope = useSessionScope()
+
   return useQuery<Message[]>({
-    queryKey: [...SESSIONS_KEY, sessionId, 'messages'],
+    queryKey: sessionId
+      ? getSessionMessagesQueryKey(scope, sessionId)
+      : getSessionQueryKey(scope, sessionId),
     queryFn: () => fetchSessionMessages(sessionId!),
     enabled: Boolean(sessionId),
     staleTime: 30_000, // cache for 30s to avoid flash on session switch
@@ -51,22 +98,30 @@ export function useSessionMessages(sessionId: string | undefined) {
 
 export function useCreateSession() {
   const queryClient = useQueryClient()
+  const scope = useSessionScope()
+  const sessionsKey = getSessionsQueryKey(scope)
 
   return useMutation({
     mutationFn: (sessionId?: string) => createSession(sessionId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: SESSIONS_KEY })
+    onSuccess: (result) => {
+      queryClient.setQueryData<SessionListItem[]>(sessionsKey, (sessions) =>
+        appendSessionToList(sessions, result),
+      )
+      void queryClient.invalidateQueries({ queryKey: sessionsKey })
     },
   })
 }
 
 export function useDeleteSession() {
   const queryClient = useQueryClient()
+  const scope = useSessionScope()
 
   return useMutation({
     mutationFn: (sessionId: string) => deleteSession(sessionId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: SESSIONS_KEY })
+      void queryClient.invalidateQueries({
+        queryKey: getSessionsQueryKey(scope),
+      })
     },
   })
 }
