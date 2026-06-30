@@ -143,7 +143,15 @@ class _SingleAccountBackend:
         try:
             coll = self._get_collection()
             fields = self._get_meta_data(coll).get("Fields", [])
-            allowed = {item.get("FieldName") for item in fields}
+            if not isinstance(fields, list) or not fields:
+                return {k: v for k, v in data.items() if v is not None}
+            allowed = {
+                item.get("FieldName")
+                for item in fields
+                if isinstance(item, dict) and item.get("FieldName")
+            }
+            if not allowed:
+                return {k: v for k, v in data.items() if v is not None}
             return {k: v for k, v in data.items() if k in allowed and v is not None}
         except Exception:
             return data

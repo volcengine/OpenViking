@@ -373,6 +373,107 @@ def test_volcengine_api_key_collection_update_data_sanitizes_uri_fields(monkeypa
     }
 
 
+def test_volcengine_api_key_collection_fetches_console_schema_once(monkeypatch):
+    captured = {"calls": 0}
+
+    class _ConsoleClient:
+        def __init__(self, ak, sk, region, host=None, session_token=None):
+            captured["init"] = {
+                "ak": ak,
+                "sk": sk,
+                "region": region,
+                "host": host,
+                "session_token": session_token,
+            }
+
+        def do_req(self, method, req_params=None, req_body=None):
+            captured["calls"] += 1
+            captured["method"] = method
+            captured["req_params"] = req_params
+            captured["req_body"] = req_body
+
+            class _Response:
+                status_code = 200
+
+                @staticmethod
+                def json():
+                    return {
+                        "Result": {
+                            "ProjectName": "default",
+                            "CollectionName": "context",
+                            "Fields": [
+                                {"FieldName": "id", "FieldType": "string"},
+                                {"FieldName": "uri", "FieldType": "path"},
+                                {"FieldName": "content", "FieldType": "text"},
+                            ],
+                        }
+                    }
+
+            return _Response()
+
+    monkeypatch.setattr(
+        "openviking.storage.vectordb.collection.volcengine_api_key_collection.ClientForConsoleApi",
+        _ConsoleClient,
+    )
+
+    from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
+        VolcengineApiKeyCollection,
+    )
+
+    collection = VolcengineApiKeyCollection(
+        api_key="vk-test-token",
+        host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+        region="cn-beijing",
+        ak="test-ak",
+        sk="test-sk",
+        session_token="test-session-token",
+        meta_data={"ProjectName": "default", "CollectionName": "context", "IndexName": "default"},
+    )
+
+    assert collection.get_meta_data()["Fields"] == [
+        {"FieldName": "id", "FieldType": "string"},
+        {"FieldName": "uri", "FieldType": "path"},
+        {"FieldName": "content", "FieldType": "text"},
+    ]
+    assert collection.get_meta_data()["Fields"][0]["FieldName"] == "id"
+    assert captured["calls"] == 1
+    assert captured["init"]["host"] is None
+    assert captured["init"]["session_token"] == "test-session-token"
+    assert captured["req_params"]["Action"] == "GetVikingdbCollection"
+    assert captured["req_body"] == {
+        "ProjectName": "default",
+        "CollectionName": "context",
+    }
+
+
+def test_volcengine_api_key_collection_schema_fetch_failure_returns_empty_meta(monkeypatch):
+    class _ConsoleClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def do_req(self, *args, **kwargs):
+            raise RuntimeError("console unavailable")
+
+    monkeypatch.setattr(
+        "openviking.storage.vectordb.collection.volcengine_api_key_collection.ClientForConsoleApi",
+        _ConsoleClient,
+    )
+
+    from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
+        VolcengineApiKeyCollection,
+    )
+
+    collection = VolcengineApiKeyCollection(
+        api_key="vk-test-token",
+        region="cn-beijing",
+        ak="test-ak",
+        sk="test-sk",
+        meta_data={"ProjectName": "default", "CollectionName": "context", "IndexName": "default"},
+    )
+
+    assert collection.get_meta_data() == {}
+
+
 def test_volcengine_adapter_update_data_returns_ids():
     adapter = VolcengineCollectionAdapter(
         ak="test-ak",

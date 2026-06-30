@@ -751,6 +751,38 @@ def test_single_account_backend_filters_parent_uri_against_current_schema():
     }
 
 
+def test_single_account_backend_filter_known_fields_fail_open_without_schema_fields():
+    class _Collection:
+        def get_meta_data(self):
+            return {}
+
+    class _Adapter:
+        mode = "volcengine"
+
+        def get_collection(self):
+            return _Collection()
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(
+            backend="volcengine",
+            name="context",
+            dimension=2,
+            volcengine=VolcengineConfig(api_key="vk-test-token", region="cn-beijing"),
+        ),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    payload = {
+        "id": "rec-1",
+        "uri": "viking://resources/sample",
+        "abstract": "sample",
+        "parent_uri": "viking://resources",
+    }
+
+    assert backend._filter_known_fields(payload) == payload
+
+
 @pytest.mark.asyncio
 async def test_single_account_backend_upsert_drops_legacy_parent_uri_before_write():
     captured = {}

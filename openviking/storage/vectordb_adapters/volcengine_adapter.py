@@ -103,6 +103,9 @@ class VolcengineCollectionAdapter(CollectionAdapter):
                     api_key=self._api_key or "",
                     host=self._host,
                     region=self._region,
+                    ak=self._ak,
+                    sk=self._sk,
+                    session_token=self._session_token,
                     meta_data=self._data_plane_meta(),
                 )
             )

@@ -16,6 +16,8 @@ from openviking.storage.vectordb.collection.result import (
     SearchResult,
 )
 from openviking.storage.vectordb.collection.volcengine_clients import (
+    VIKING_DB_VERSION,
+    ClientForConsoleApi,
     ClientForDataApi,
     ClientForDataApiWithApiKey,
 )
@@ -30,6 +32,9 @@ class VolcengineApiKeyCollection(ICollection):
         api_key: str,
         host: Optional[str] = None,
         region: Optional[str] = None,
+        ak: Optional[str] = None,
+        sk: Optional[str] = None,
+        session_token: Optional[str] = None,
         meta_data: Optional[Dict[str, Any]] = None,
     ):
         resolved_host = (host or "").rstrip("/") or (
@@ -42,6 +47,12 @@ class VolcengineApiKeyCollection(ICollection):
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
         self.index_name = self.meta_data.get("IndexName", "default")
+        self.console_client = (
+            ClientForConsoleApi(ak, sk, region, session_token=session_token)
+            if ak and sk and region
+            else None
+        )
+        self._fetched_meta_data = self._fetch_meta_data_once()
 
     @staticmethod
     def _build_response_error(response: Any, action: str) -> ConnectionError:
@@ -236,15 +247,54 @@ class VolcengineApiKeyCollection(ICollection):
         )
 
     def get_meta_data(self):
-        from openviking.storage.collection_schemas import CollectionSchemas
+        if self._has_schema_fields(self._fetched_meta_data):
+            return self._fetched_meta_data
+        return {}
 
-        return {
-            "ProjectName": self.project_name,
-            "CollectionName": self.collection_name,
-            "IndexName": self.index_name,
-            "Description": "data-plane only backend",
-            "Fields": CollectionSchemas.context_collection.get("Fields", []),
-        }
+    @staticmethod
+    def _has_schema_fields(meta_data: Any) -> bool:
+        return (
+            isinstance(meta_data, dict)
+            and isinstance(meta_data.get("Fields"), list)
+            and bool(meta_data["Fields"])
+        )
+
+    def _fetch_meta_data_once(self) -> Dict[str, Any]:
+        if self.console_client is None:
+            return {}
+        try:
+            response = self.console_client.do_req(
+                "POST",
+                req_params={
+                    "Action": "GetVikingdbCollection",
+                    "Version": VIKING_DB_VERSION,
+                },
+                req_body={
+                    "ProjectName": self.project_name,
+                    "CollectionName": self.collection_name,
+                },
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "Failed to fetch Volcengine collection schema for api_key mode: %s %s",
+                    response.status_code,
+                    response.text,
+                )
+                return {}
+            result = response.json()
+        except Exception as exc:
+            logger.warning(
+                "Failed to fetch Volcengine collection schema for api_key mode: %s",
+                exc,
+            )
+            return {}
+
+        if not isinstance(result, dict):
+            return {}
+        meta_data = result.get("Result") or result.get("result") or result.get("data") or {}
+        if self._has_schema_fields(meta_data):
+            return meta_data
+        return {}
 
     def close(self):
         pass
