@@ -7,12 +7,16 @@ from urllib.parse import urljoin, urlparse
 
 import scrapy
 from parsel import Selector
+from scrapy import signals
 
 from openviking.parse.accessors.http_accessor import URLType, URLTypeDetector
 from openviking.parse.accessors.web_crawler.config import CrawlConfig
 from openviking.parse.accessors.web_crawler.models import CrawledDownload, CrawledPage
 from openviking.parse.accessors.web_crawler.playwright_renderer import PlaywrightRenderer
-from openviking.parse.accessors.web_crawler.render_heuristics import should_render_with_playwright
+from openviking.parse.accessors.web_crawler.render_heuristics import (
+    looks_like_unrendered_page,
+    should_render_with_playwright,
+)
 
 
 _DOWNLOAD_URL_TYPES = frozenset(
@@ -76,6 +80,20 @@ class OpenVikingWebSpider(scrapy.Spider):
         self._success_count = 0
         self._seen_download_urls: set[str] = set()
 
+    @classmethod
+    def from_crawler(cls, crawler, *args, **kwargs):
+        spider = super().from_crawler(crawler, *args, **kwargs)
+        crawler.signals.connect(spider._on_spider_closed, signal=signals.spider_closed)
+        return spider
+
+    async def _on_spider_closed(self, spider, reason):
+        try:
+            import asyncio
+
+            await asyncio.wait_for(self.renderer.close(), timeout=5.0)
+        except Exception:
+            pass
+
     def _success_at_limit(self) -> bool:
         return 0 < self.config.max_pages <= self._success_count
 
@@ -110,8 +128,11 @@ class OpenVikingWebSpider(scrapy.Spider):
 
         page_html = response.text
         page_source = "scrapy_static"
+        needs_render = self.config.fallback_playwright and should_render_with_playwright(
+            response.text
+        )
         try:
-            if self.config.fallback_playwright and should_render_with_playwright(response.text):
+            if needs_render:
                 rendered = await self.renderer.render(final_url, self.config.playwright_timeout)
                 if rendered.is_success and rendered.html:
                     final_url = rendered.final_url or final_url
@@ -125,6 +146,21 @@ class OpenVikingWebSpider(scrapy.Spider):
                     depth=depth,
                     status="failed",
                     error=str(exc),
+                )
+            )
+            return
+
+        if needs_render and looks_like_unrendered_page(page_html):
+            self.collector.append(
+                CrawledPage(
+                    url=response.url,
+                    final_url=final_url,
+                    depth=depth,
+                    status="failed",
+                    error=(
+                        "page did not render real content "
+                        "(empty shell or anti-bot challenge page)"
+                    ),
                 )
             )
             return

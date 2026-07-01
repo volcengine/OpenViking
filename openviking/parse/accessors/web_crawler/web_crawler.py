@@ -15,10 +15,11 @@ from openviking.parse.accessors.web_crawler.models import (
 
 
 def _run_crawl_worker(root_url: str, config: CrawlConfig, result_queue) -> None:
-    import asyncio as _asyncio
+    from scrapy.utils.reactor import install_reactor
+
+    install_reactor("twisted.internet.asyncioreactor.AsyncioSelectorReactor")
 
     from scrapy.crawler import CrawlerProcess
-    from scrapy.settings import Settings
 
     from openviking.parse.accessors.web_crawler.scrapy_spider import OpenVikingWebSpider
 
@@ -38,21 +39,17 @@ def _run_crawl_worker(root_url: str, config: CrawlConfig, result_queue) -> None:
     except Exception as exc:
         result_queue.put((pages, downloads, str(exc)))
         return
-    if crawler.spider is not None:
-        try:
-            _asyncio.run(crawler.spider.renderer.close())
-        except Exception:
-            pass
     result_queue.put((pages, downloads, None))
 
 
-def _build_settings(config: CrawlConfig) -> Settings:
+def _build_settings(config: CrawlConfig):
     from scrapy.settings import Settings
 
     depth_limit = 0 if config.depth < 0 else config.depth
     close_pagecount = 0 if config.max_pages < 0 else config.max_pages
     return Settings(
         {
+            "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
             "DEPTH_LIMIT": depth_limit,
             "CLOSESPIDER_PAGECOUNT": close_pagecount,
             "CONCURRENT_REQUESTS": config.concurrency,

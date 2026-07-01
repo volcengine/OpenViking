@@ -18,6 +18,18 @@ PLAYWRIGHT_CHROMIUM_INSTALL_HINT = (
     "launched. Run `python -m playwright install chromium` and retry."
 )
 
+# Text markers of JS anti-bot interstitials that auto-redirect after a delay.
+_CHALLENGE_MARKERS = (
+    "please wait",
+    "checking your browser",
+    "verifying you are human",
+    "just a moment",
+    "attention required",
+)
+# Below this visible-text length the page is almost certainly a shell or
+# interstitial rather than rendered content.
+_CHALLENGE_MIN_TEXT_CHARS = 40
+
 
 @dataclass
 class RenderResult:
@@ -46,19 +58,11 @@ class PlaywrightRenderer:
                 self._request_validator(url)
             browser = await self._get_browser()
             page = await browser.new_page(accept_downloads=False)
-            validation_error = None
 
             if self._request_validator:
 
                 async def _validate_route(route):
-                    nonlocal validation_error
-                    try:
-                        self._request_validator(route.request.url)
-                    except Exception as exc:
-                        validation_error = exc
-                        await route.abort()
-                        return
-                    await route.continue_()
+                    await self._guard_route(route, self._request_validator)
 
                 await page.route("**/*", _validate_route)
 
@@ -67,10 +71,12 @@ class PlaywrightRenderer:
                 wait_until="domcontentloaded",
                 timeout=timeout * 1000,
             )
-            await page.wait_for_timeout(1500)
-            if validation_error:
-                raise validation_error
-            html = await page.content()
+            try:
+                await page.wait_for_load_state("networkidle", timeout=timeout * 1000)
+            except Exception:
+                pass
+            await self._wait_past_challenge(page, timeout * 1000)
+            html = await self._read_content(page)
             final_url = page.url
             if self._request_validator:
                 self._request_validator(final_url)
@@ -94,6 +100,74 @@ class PlaywrightRenderer:
         finally:
             if page:
                 await page.close()
+
+    @staticmethod
+    async def _guard_route(route, request_validator) -> None:
+        """SSRF guard for sub-resource requests.
+
+        Block requests to disallowed hosts (e.g. private-network probe
+        endpoints) by aborting them, but never let a blocked sub-resource
+        fail the whole page render. Only the main document URL and the final
+        URL (validated in ``render``) gate the overall result.
+        """
+        try:
+            request_validator(route.request.url)
+        except Exception:
+            await route.abort()
+            return
+        await route.continue_()
+
+    @staticmethod
+    async def _wait_past_challenge(page, timeout_ms: float, poll_ms: int = 500) -> None:
+        """Wait out JS anti-bot interstitials (e.g. "Please wait...").
+
+        These challenge pages run a CPU-bound JS proof-of-work and then
+        auto-redirect to the real content without further network activity,
+        so ``networkidle`` returns while the interstitial is still showing.
+        Poll the body text until real content appears or we run out of time.
+        """
+        import time
+
+        deadline = time.monotonic() + max(timeout_ms, 0) / 1000
+        while True:
+            try:
+                body = (await page.inner_text("body")).strip()
+            except Exception:
+                body = ""
+            lowered = body.lower()
+            looks_like_challenge = (
+                not body
+                or len(body) < _CHALLENGE_MIN_TEXT_CHARS
+                or any(marker in lowered for marker in _CHALLENGE_MARKERS)
+            )
+            if not looks_like_challenge or time.monotonic() >= deadline:
+                return
+            await page.wait_for_timeout(poll_ms)
+
+    @staticmethod
+    async def _read_content(page) -> str:
+        """Read page HTML, retrying through in-flight client-side navigation.
+
+        Heavy SPAs (client-side redirects, late hydration) can still be
+        navigating when we first ask for content, which raises "page is
+        navigating and changing the content". Retry until the page settles.
+        """
+        last_exc = None
+        for _ in range(6):
+            try:
+                return await page.content()
+            except Exception as exc:
+                if "navigating and changing the content" not in str(exc):
+                    raise
+                last_exc = exc
+                try:
+                    await page.wait_for_load_state("load", timeout=5000)
+                except Exception:
+                    pass
+                await page.wait_for_timeout(400)
+        if last_exc:
+            raise last_exc
+        return await page.content()
 
     async def close(self) -> None:
         async with self._browser_lock:

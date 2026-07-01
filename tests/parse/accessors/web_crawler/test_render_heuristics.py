@@ -1,4 +1,5 @@
 from openviking.parse.accessors.web_crawler.render_heuristics import (
+    looks_like_unrendered_page,
     should_render_with_playwright,
 )
 
@@ -23,6 +24,23 @@ def test_many_scripts_with_tiny_body_triggers_render():
     assert should_render_with_playwright(html) is True
 
 
-def test_static_page_without_spa_signal_skips_render():
-    html = "<html><body>Static page with short body.</body></html>"
+def test_content_rich_static_page_skips_render():
+    body = "This is a fully server-rendered article with plenty of readable text. " * 3
+    html = f"<html><body><p>{body}</p></body></html>"
     assert should_render_with_playwright(html) is False
+
+
+def test_challenge_page_is_unrendered():
+    html = "<html><body>Please wait...</body></html>"
+    assert looks_like_unrendered_page(html) is True
+
+
+def test_empty_shell_is_unrendered():
+    html = "<html><body><div id='root'></div></body></html>"
+    assert looks_like_unrendered_page(html) is True
+
+
+def test_real_content_is_not_unrendered():
+    body = "Collection 数据过滤删除任务的完整说明文档，包含请求参数、示例与返回值。" * 3
+    html = f"<html><body><article>{body}</article></body></html>"
+    assert looks_like_unrendered_page(html) is False
