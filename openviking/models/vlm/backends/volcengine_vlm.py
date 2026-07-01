@@ -81,6 +81,7 @@ class VolcEngineVLM(OpenAIVLM):
             self._sync_client = volcenginesdkarkruntime.Ark(
                 api_key=self.api_key,
                 base_url=self.api_base,
+                timeout=self.timeout,
             )
         return self._sync_client
 
@@ -95,6 +96,7 @@ class VolcEngineVLM(OpenAIVLM):
         return volcenginesdkarkruntime.AsyncArk(
             api_key=self.api_key,
             base_url=self.api_base,
+            timeout=self.timeout,
         )
 
     def get_completion(
