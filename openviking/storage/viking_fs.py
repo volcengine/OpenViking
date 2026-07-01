@@ -19,6 +19,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -83,6 +84,25 @@ LS_ALL_NODES = 2**31 - 1
 def _ensure_non_empty_search_query(query: str) -> None:
     if not query.strip():
         raise InvalidArgumentError("Search query must not be empty.")
+
+
+def _normalize_search_query(query: str) -> str:
+    """Normalize a semantic search query for consistent embedding/tokenization.
+
+    NFKC + casefold + whitespace collapse so that colloquial or CJK
+    full/half-width variants of the same query embed and tokenize
+    consistently with indexed content (e.g. "ＯｐｅｎＶｉｋｉｎｇ" / "openvaking"
+    case-fold to a form matching "OpenViking"). Idempotent and only widens
+    recall — does not alter semantics for already-normalized ASCII.
+
+    Applied only to the semantic find/search path, NOT to grep (whose
+    pattern is a regular expression; casefold/NFKC would corrupt explicit
+    character classes and the ``case_insensitive`` flag already covers
+    case folding there).
+    """
+    if not query:
+        return query
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", query).casefold()).strip()
 
 
 def _is_directory_not_empty_error(message: str) -> bool:
@@ -1865,6 +1885,7 @@ class VikingFS:
             FindResult
         """
         _ensure_non_empty_search_query(query)
+        query = _normalize_search_query(query)
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking_cli.retrieve import (
@@ -1957,6 +1978,7 @@ class VikingFS:
             FindResult
         """
         _ensure_non_empty_search_query(query)
+        query = _normalize_search_query(query)
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
