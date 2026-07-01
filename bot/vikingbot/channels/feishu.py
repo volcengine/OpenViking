@@ -555,7 +555,16 @@ class FeishuChannel(BaseChannel):
             # Determine receive_id_type based on chat_id format
             # open_id starts with "ou_", chat_id starts with "oc_"
             reply_to = msg.metadata.get("reply_to")
-            if reply_to.startswith("oc_"):
+            if reply_to is None and hasattr(msg, "session_key"):
+                chat_id = getattr(msg.session_key, "chat_id", None)
+                if chat_id:
+                    # 规范化：去掉话题群的 #root_id 后缀
+                    reply_to = chat_id.split("#")[0]
+                else:
+                    logger.warning(f"Session key chat_id is None")
+                    return
+
+            if reply_to and reply_to.startswith("oc_"):
                 receive_id_type = "chat_id"
             else:
                 receive_id_type = "open_id"
