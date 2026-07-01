@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import ipaddress
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -385,27 +386,75 @@ async def remember(messages: list[StoreMessage]) -> str:
 _DEFAULT_UPLOAD_TTL_SECONDS = 600
 
 
+def _first_header_value(value: Optional[str]) -> Optional[str]:
+    """Return the first value from a potentially comma-separated HTTP header."""
+    if not value:
+        return None
+    head = value.split(",", 1)[0].strip()
+    return head or None
+
+
+def _is_loopback_authority(authority: str) -> bool:
+    """Return True for syntactically safe localhost/loopback Host authorities.
+
+    ``authority`` may include a numeric port (``localhost:1933``) or a bracketed
+    IPv6 literal (``[::1]:1933``). Non-loopback request authorities are not
+    trusted for signed upload URLs because they can be supplied by the client.
+    """
+    host = authority.strip()
+    if not host:
+        return False
+    # Reject characters that can change URL authority interpretation when the
+    # value is interpolated into ``http://{host}`` (userinfo, paths, fragments,
+    # queries, whitespace/control chars, or scheme-relative forms).
+    if any(ch in host for ch in "@/?#\\") or any(ch.isspace() for ch in host):
+        return False
+
+    if host.startswith("["):
+        end = host.find("]")
+        if end == -1:
+            return False
+        addr = host[1:end]
+        rest = host[end + 1 :]
+        if rest:
+            if not rest.startswith(":") or not rest[1:].isdigit():
+                return False
+        host = addr
+    elif ":" in host:
+        # Host headers with a single colon are host:port. Multiple colons without
+        # brackets are IPv6 literals; leave them intact for ipaddress parsing.
+        if host.count(":") == 1:
+            name, port = host.rsplit(":", 1)
+            if not port.isdigit():
+                return False
+            host = name
+
+    host = host.rstrip(".").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _resolve_public_base_url() -> tuple[str, str]:
     """Pick the URL the agent should POST uploads to. Returns ``(base_url, source)``.
 
     Resolution order (first match wins):
-
     1. ``env`` — ``OPENVIKING_PUBLIC_BASE_URL`` environment variable. Operator-set,
        always wins.
     2. ``config`` — ``ServerConfig.public_base_url``. Operator-set baseline in ov.conf.
-    3. ``forwarded`` — ``X-Forwarded-Host`` (+ ``X-Forwarded-Proto``) from the request.
-       Set by reverse proxies (nginx, ALB, ingress controllers, MCP proxies). Reliable
-       when the proxy chain forwards these headers, which is the standard default.
-    4. ``host`` — the raw ``Host`` header from a direct connection. Reliable for
-       same-host MCP clients (e.g. local Claude Code talking to localhost server).
-    5. ``listen`` — ``http://{listen_host}:{listen_port}`` last-resort fallback.
-       Only produces an agent-reachable URL when the server is bound to a routable
-       address; commonly wrong behind reverse proxies.
+    3. ``host`` — a raw ``Host`` header only when it names localhost/loopback.
+       This preserves direct local MCP clients without letting arbitrary request
+       authorities control signed upload destinations.
+    4. ``listen`` — ``http://{listen_host}:{listen_port}`` last-resort fallback.
+       Reverse-proxy deployments that need an external upload URL should set
+       ``OPENVIKING_PUBLIC_BASE_URL`` or ``server.public_base_url`` explicitly.
 
-    Sources 1 and 2 are "explicit" — operator vouched for the URL. Sources 3-5 are
-    inferred and may be wrong when the proxy chain doesn't forward request headers.
-    Callers should append a "set OPENVIKING_PUBLIC_BASE_URL if upload fails" hint
-    in that case.
+    Sources 1 and 2 are "explicit" — operator vouched for the URL. Sources 3-4 are
+    inferred and may be wrong behind reverse proxies. Callers should append a
+    "set OPENVIKING_PUBLIC_BASE_URL if upload fails" hint in that case.
     """
     env_url = os.environ.get("OPENVIKING_PUBLIC_BASE_URL")
     if env_url:
@@ -416,22 +465,12 @@ def _resolve_public_base_url() -> tuple[str, str]:
 
     url_info = _request_url_ctx.get()
     if url_info:
-        # X-Forwarded-Host / -Proto can be comma-separated lists when the request
-        # crosses multiple proxy hops. Take the first (left-most original-client)
-        # value, matching the normalization in openviking.server.oauth.router.
-        def _first(value: Optional[str]) -> Optional[str]:
-            if not value:
-                return None
-            head = value.split(",", 1)[0].strip()
-            return head or None
-
-        xfh = _first(url_info.get("x_forwarded_host"))
-        xfp = _first(url_info.get("x_forwarded_proto"))
-        host_hdr = _first(url_info.get("host"))
-        if xfh:
-            proto = xfp or "https"
-            return f"{proto}://{xfh}", "forwarded"
-        if host_hdr:
+        # Do not infer signed upload destinations from X-Forwarded-* by default:
+        # untrusted clients can often supply these headers unless a deployment
+        # explicitly normalizes them. Operators behind proxies should configure a
+        # public base URL instead.
+        host_hdr = _first_header_value(url_info.get("host"))
+        if host_hdr and _is_loopback_authority(host_hdr):
             return f"http://{host_hdr}", "host"
 
     if config is not None:
