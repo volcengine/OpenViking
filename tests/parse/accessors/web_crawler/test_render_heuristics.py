@@ -14,6 +14,12 @@ def test_react_root_triggers_render():
     assert should_render_with_playwright(html) is True
 
 
+def test_ssr_app_root_with_rich_content_skips_render():
+    body = "OpenViking 快速开始文档，包含安装、配置、添加资源、创建集合和检索示例。" * 8
+    html = f"<html><body><div id='app'><main><p>{body}</p></main></div></body></html>"
+    assert should_render_with_playwright(html) is False
+
+
 def test_next_data_triggers_render():
     html = "<html><script>__NEXT_DATA__</script></html>"
     assert should_render_with_playwright(html) is True

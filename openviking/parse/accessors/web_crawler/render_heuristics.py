@@ -35,12 +35,12 @@ def should_render_with_playwright(html: str) -> bool:
     html_lower = html.lower()
     if any(pattern.lower() in html_lower for pattern in _SPA_EMPTY_PATTERNS):
         return True
-    if re.search(r'id=["\'](?:root|app)["\']', html_lower):
-        return True
     if "__next_data__" in html_lower:
         return True
     visible_len = visible_body_text_len(html)
     if visible_len < SHELL_VISIBLE_TEXT_CHARS:
+        return True
+    if re.search(r'id=["\'](?:root|app)["\']', html_lower) and visible_len < _MIN_VISIBLE_TEXT_CHARS:
         return True
     if html_lower.count("<script") >= 5 and visible_len < _MIN_VISIBLE_TEXT_CHARS:
         return True
