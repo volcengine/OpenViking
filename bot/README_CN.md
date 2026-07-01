@@ -170,6 +170,7 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
 - `agents`：Agent 配置
   - `model`：bot 使用的 LLM 模型名。当设置了 `provider` 时，建议直接使用 provider 原生模型名（例如 `doubao-seed-2-0-pro-260215`）。
   - `temperature`：LLM 请求的采样温度，默认 `0.7`。
+  - `timeout`：访问模型 provider 获取 chat 结果的单次请求超时时间（秒）。未配置时继承 `vlm.timeout`（默认 `60.0`）。
   - `provider`：可选的模型 provider 名称。设置后，vikingbot 会通过 OpenViking 的 `VLMFactory` + adapter 路径直接创建后端（例如 `volcengine`、`openai`、`deepseek`）。
   - `api_key`：可选，Agent 模型 provider 的 API Key。若希望 bot 使用独立凭证，可直接在这里配置。
   - `api_base`：可选，Agent 模型 provider 的 API Base。适用于 provider 网关或自定义端点，例如 VolcEngine Ark。
@@ -212,6 +213,7 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "provider": "volcengine",
       "temperature": 0.7,
+      "timeout": 60.0,
       "max_tool_iterations": 50,
       "memory_window": 50
     },

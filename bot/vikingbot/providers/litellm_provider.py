@@ -39,11 +39,13 @@ class LiteLLMProvider(LLMProvider):
         default_model: str = "anthropic/claude-opus-4-5",
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
+        timeout: float | None = None,
         langfuse_client: LangfuseClient | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
+        self.timeout = timeout
         self.langfuse = langfuse_client or LangfuseClient.get_instance()
 
         # Detect gateway / local deployment.
@@ -217,6 +219,9 @@ class LiteLLMProvider(LLMProvider):
         if self.api_base:
             kwargs["api_base"] = self.api_base
 
+        if self.timeout is not None:
+            kwargs["timeout"] = self.timeout
+
         # Pass extra headers (e.g. APP-Code for AiHubMix)
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
@@ -373,6 +378,8 @@ class LiteLLMProvider(LLMProvider):
             kwargs["api_key"] = self.api_key
         if self.api_base:
             kwargs["api_base"] = self.api_base
+        if self.timeout is not None:
+            kwargs["timeout"] = self.timeout
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
         if tools:

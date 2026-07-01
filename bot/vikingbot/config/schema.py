@@ -439,6 +439,14 @@ class AgentsConfig(BaseModel):
         le=2.0,
         description="Sampling temperature for LLM requests.",
     )
+    timeout: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Per-request timeout in seconds for LLM requests. When omitted, vikingbot "
+            "inherits vlm.timeout from ov.conf if present."
+        ),
+    )
     max_tool_iterations: int = 50
     memory_window: int = 50
     session_context_enabled: bool = False
