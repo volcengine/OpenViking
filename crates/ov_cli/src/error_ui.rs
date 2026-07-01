@@ -372,6 +372,7 @@ fn contextual_help_command(command: &str) -> Option<String> {
                 "list-users",
                 "remove-user",
                 "set-role",
+                "set-password",
                 "regenerate-key",
             ],
         )),

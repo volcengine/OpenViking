@@ -159,6 +159,7 @@ pub struct BaseClient {
     pub(crate) api_key: Option<String>,
     pub(crate) account: Option<String>,
     pub(crate) user: Option<String>,
+    pub(crate) password: Option<String>,
     pub(crate) actor_peer_id: Option<String>,
     pub(crate) profile_enabled: bool,
     pub(crate) extra_headers: Option<std::collections::HashMap<String, String>>,
@@ -170,6 +171,7 @@ impl BaseClient {
         api_key: Option<String>,
         account: Option<String>,
         user: Option<String>,
+        password: Option<String>,
         actor_peer_id: Option<String>,
         timeout_secs: f64,
         profile_enabled: bool,
@@ -186,6 +188,7 @@ impl BaseClient {
             api_key,
             account,
             user,
+            password,
             actor_peer_id,
             profile_enabled,
             extra_headers,
@@ -231,6 +234,13 @@ impl BaseClient {
         if let Some(user) = &self.user {
             if let Ok(value) = reqwest::header::HeaderValue::from_str(user) {
                 headers.insert("X-OpenViking-User", value);
+            }
+        }
+        if self.api_key.is_none() && self.account.is_some() && self.user.is_some() {
+            if let Some(password) = &self.password {
+                if let Ok(value) = reqwest::header::HeaderValue::from_str(password) {
+                    headers.insert("X-OpenViking-Password", value);
+                }
             }
         }
         if let Some(actor_peer_id) = &self.actor_peer_id {
@@ -606,6 +616,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             5.0,
             true,
             None,
@@ -627,6 +638,7 @@ mod tests {
     fn append_profile_query_keeps_existing_profile_flag() {
         let client = BaseClient::new(
             "http://localhost:1933",
+            None,
             None,
             None,
             None,

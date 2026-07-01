@@ -14,6 +14,7 @@ DEFAULT_OVCLI_CONF = Path.home() / ".openviking" / "ovcli.conf"
 class ClientConfig:
     url: str
     api_key: Optional[str]
+    password: Optional[str]
     account: Optional[str]
     user: Optional[str]
     actor_peer_id: Optional[str]
@@ -27,6 +28,7 @@ class ClientConfig:
 class OVCLIConfig:
     url: Optional[str]
     api_key: Optional[str]
+    password: Optional[str]
     account: Optional[str]
     user: Optional[str]
     actor_peer_id: Optional[str]
@@ -109,6 +111,7 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
         allowed_keys = {
             "url",
             "api_key",
+            "password",
             "account",
             "user",
             "actor_peer_id",
@@ -149,6 +152,7 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
         return OVCLIConfig(
             url=_optional_string(data.get("url"), path="ovcli.url"),
             api_key=_optional_string(data.get("api_key"), path="ovcli.api_key"),
+            password=_optional_string(data.get("password"), path="ovcli.password"),
             account=_optional_string(data.get("account"), path="ovcli.account"),
             user=_optional_string(data.get("user"), path="ovcli.user"),
             actor_peer_id=actor_peer_id,
@@ -167,6 +171,7 @@ def resolve_client_config(
     *,
     url: Optional[str] = None,
     api_key: Optional[str] = None,
+    password: Optional[str] = None,
     account: Optional[str] = None,
     user: Optional[str] = None,
     actor_peer_id: Optional[str] = None,
@@ -180,6 +185,11 @@ def resolve_client_config(
     resolved_url = url or os.getenv("OPENVIKING_URL") or (cli_config.url if cli_config else None)
     resolved_api_key = (
         api_key or os.getenv("OPENVIKING_API_KEY") or (cli_config.api_key if cli_config else None)
+    )
+    resolved_password = (
+        password
+        or os.getenv("OPENVIKING_PASSWORD")
+        or (cli_config.password if cli_config else None)
     )
     resolved_account = (
         account or os.getenv("OPENVIKING_ACCOUNT") or (cli_config.account if cli_config else None)
@@ -223,6 +233,7 @@ def resolve_client_config(
     return ClientConfig(
         url=resolved_url.rstrip("/"),
         api_key=resolved_api_key,
+        password=resolved_password,
         account=resolved_account,
         user=resolved_user,
         actor_peer_id=resolved_actor_peer_id,

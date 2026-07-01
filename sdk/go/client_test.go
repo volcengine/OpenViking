@@ -149,6 +149,38 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	}
 }
 
+func TestPasswordAuthHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-API-Key"); got != "" {
+			t.Fatalf("X-API-Key = %q", got)
+		}
+		if got := r.Header.Get("X-OpenViking-Account"); got != "acct" {
+			t.Fatalf("X-OpenViking-Account = %q", got)
+		}
+		if got := r.Header.Get("X-OpenViking-User"); got != "alice" {
+			t.Fatalf("X-OpenViking-User = %q", got)
+		}
+		if got := r.Header.Get("X-OpenViking-Password"); got != "secret" {
+			t.Fatalf("X-OpenViking-Password = %q", got)
+		}
+		writeOK(t, w, map[string]any{"resources": []any{}})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Account:  "acct",
+		User:     "alice",
+		Password: "secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Find(context.Background(), "auth", &FindOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search/find" {
@@ -168,10 +200,12 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 func TestAdminCreatePathsAcceptInitialUserConfig(t *testing.T) {
 	var seen []map[string]any
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/admin/accounts" && r.URL.Path != "/api/v1/admin/accounts/acct/users" {
+		if r.URL.Path != "/api/v1/admin/accounts" &&
+			r.URL.Path != "/api/v1/admin/accounts/acct/users" &&
+			r.URL.Path != "/api/v1/admin/accounts/acct/users/alice/password" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		if r.Method != http.MethodPost {
+		if r.Method != http.MethodPost && r.Method != http.MethodPut {
 			t.Fatalf("method = %s", r.Method)
 		}
 		body := readJSONBody(t, r)
@@ -184,20 +218,34 @@ func TestAdminCreatePathsAcceptInitialUserConfig(t *testing.T) {
 		"add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
 	}
 	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
+		Password:   "admin-pw",
 		UserConfig: userConfig,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.AdminRegisterUserWithOptions(context.Background(), "acct", "alice", "admin", &AdminRegisterUserOptions{
+		Password:   "alice-pw",
 		UserConfig: userConfig,
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := client.AdminSetPassword(context.Background(), "acct", "alice", "new-pw"); err != nil {
+		t.Fatal(err)
+	}
+	if got := seen[0]["password"]; got != "admin-pw" {
+		t.Fatalf("create password = %#v", got)
+	}
+	if got := seen[1]["password"]; got != "alice-pw" {
+		t.Fatalf("register password = %#v", got)
 	}
 	if got := seen[0]["user_config"].(map[string]any)["add_targets"].(map[string]any)["resource_uri"]; got != "viking://user/resources/project-a" {
 		t.Fatalf("user_config resource_uri = %#v", got)
 	}
 	if got := seen[1]["user_config"].(map[string]any)["add_targets"].(map[string]any)["resource_uri"]; got != "viking://user/resources/project-a" {
 		t.Fatalf("user_config resource_uri = %#v", got)
+	}
+	if got := seen[2]["password"]; got != "new-pw" {
+		t.Fatalf("set password = %#v", got)
 	}
 }
 

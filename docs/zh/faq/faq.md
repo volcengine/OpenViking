@@ -143,7 +143,7 @@ client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 ```
 
-SDK 构造函数仅接受 `url`、`api_key`、`path` 参数。其他配置（embedding、vlm 等）通过 `ov.conf` 配置文件管理。
+HTTP client 构造函数支持 `url`、`api_key`、`account`、`user`、`password` 等连接/认证参数。嵌入模式和服务端运行时配置（embedding、vlm 等）通过 `ov.conf` 配置文件管理。
 
 ### 支持哪些文件格式？
 

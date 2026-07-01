@@ -391,6 +391,56 @@ async def test_register_user(admin_client: httpx.AsyncClient):
     assert resp.status_code == 200
 
 
+async def test_admin_password_endpoints(admin_client: httpx.AsyncClient):
+    acct = _uid()
+    resp = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice", "password": "alice-secret"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+
+    resp = await admin_client.get(
+        "/api/v1/fs/ls?uri=viking://",
+        headers={
+            "X-OpenViking-Account": acct,
+            "X-OpenViking-User": "alice",
+            "X-OpenViking-Password": "alice-secret",
+        },
+    )
+    assert resp.status_code == 200
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user", "password": "old-secret"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+
+    bob_headers = {
+        "X-OpenViking-Account": acct,
+        "X-OpenViking-User": "bob",
+        "X-OpenViking-Password": "old-secret",
+    }
+    resp = await admin_client.get("/api/v1/fs/ls?uri=viking://", headers=bob_headers)
+    assert resp.status_code == 200
+
+    resp = await admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/users/bob/password",
+        json={"password": "new-secret"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"]["password_set"] is True
+
+    resp = await admin_client.get("/api/v1/fs/ls?uri=viking://", headers=bob_headers)
+    assert resp.status_code == 401
+
+    bob_headers["X-OpenViking-Password"] = "new-secret"
+    resp = await admin_client.get("/api/v1/fs/ls?uri=viking://", headers=bob_headers)
+    assert resp.status_code == 200
+
+
 async def test_root_can_register_admin_role_user(
     lightweight_admin_client: httpx.AsyncClient,
 ):

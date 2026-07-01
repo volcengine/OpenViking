@@ -49,12 +49,15 @@ The client sends the same identity headers as the Python HTTP client:
 | `APIKey` | `X-API-Key` |
 | `Account` | `X-OpenViking-Account` |
 | `User` | `X-OpenViking-User` |
+| `Password` | `X-OpenViking-Password` |
 | `ActorPeerID` | `X-OpenViking-Actor-Peer` |
 
 For the common `api_key` deployment mode, `APIKey` is enough because the server
-derives account and user identity from the key. Set `Account` and `User` only
-for trusted deployments or gateways where the upstream explicitly forwards
-tenant identity through OpenViking headers.
+derives account and user identity from the key. If you use password auth, set
+`Account`, `User`, and `Password`. API keys take precedence when both are set.
+Set `Account` and `User` without `Password` only for trusted deployments or
+gateways where the upstream explicitly forwards tenant identity through
+OpenViking headers.
 
 This SDK is HTTP-only. It does not implement Python embedded mode or legacy
 `agent_id` compatibility.
@@ -116,7 +119,7 @@ Implemented:
 | Sessions and tasks | `CreateSession`, `ListSessions`, `GetSession`, `SessionExists`, `GetSessionContext`, `GetSessionArchive`, `DeleteSession`, `AddMessage`, `BatchAddMessages`, `CommitSession`, `GetTask`, `ListTasks` |
 | Packs | `ExportOVPack`, `BackupOVPack`, `ImportOVPack`, `RestoreOVPack` |
 | System and observer | `Health`, `CheckConsistency`, `GetStatus`, `IsHealthy`, `QueueStatus`, `VikingDBStatus`, `ModelsStatus` |
-| Admin | `AdminCreateAccount`, `AdminCreateAccountWithOptions`, `AdminListAccounts`, `AdminDeleteAccount`, `AdminRegisterUser`, `AdminRegisterUserWithOptions`, `AdminListUsers`, `AdminRemoveUser`, `AdminSetRole`, `AdminRegenerateKey`, `AdminMigrate` |
+| Admin | `AdminCreateAccount`, `AdminCreateAccountWithOptions`, `AdminListAccounts`, `AdminDeleteAccount`, `AdminRegisterUser`, `AdminRegisterUserWithOptions`, `AdminListUsers`, `AdminRemoveUser`, `AdminSetRole`, `AdminRegenerateKey`, `AdminSetPassword`, `AdminMigrate` |
 
 Not implemented in Go SDK v1:
 
@@ -136,6 +139,7 @@ and let the server resolve user and deployment defaults.
 
 ```go
 _, err := client.AdminRegisterUserWithOptions(ctx, "acme", "alice", "user", &openviking.AdminRegisterUserOptions{
+	Password: "alice-password",
 	UserConfig: map[string]any{
 		"add_targets": map[string]any{
 			"resource_uri": "viking://user/resources/project-a",

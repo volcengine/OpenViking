@@ -179,9 +179,9 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 ### 5. 数据 API 身份来自 user 或 admin key
 
 在 `api_key` 模式下，`ls`、`find`、`sessions` 这类租户级数据 API 会从 API
-key 自身解析有效的 account 和 user。不要在该模式下发送
-`X-OpenViking-Account` 或 `X-OpenViking-User`；基于 header 的身份断言只属于
-trusted mode。
+key 自身解析有效的 account 和 user。Key 认证请求不要额外发送
+`X-OpenViking-Account` 或 `X-OpenViking-User`；不带 password 的身份 header
+只属于 trusted mode。
 
 `ADMIN` key 可以用它自己的 account/user 身份访问数据 API：
 

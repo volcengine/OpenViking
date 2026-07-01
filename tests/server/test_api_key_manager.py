@@ -84,6 +84,33 @@ async def test_create_account(manager: APIKeyManager):
     assert identity.user_id == "alice"
 
 
+async def test_password_auth_lifecycle(manager: APIKeyManager):
+    acct = _uid()
+    await manager.create_account(acct, "alice", password="admin-secret")
+
+    identity = manager.resolve_password(acct, "alice", "admin-secret")
+    assert identity.role == Role.ADMIN
+    assert identity.account_id == acct
+    assert identity.user_id == "alice"
+
+    stored = manager._legacy._accounts[acct].users["alice"]
+    assert stored["password_hash"].startswith("$argon2")
+    assert stored["password_hash"] != "admin-secret"
+
+    with pytest.raises(UnauthenticatedError):
+        manager.resolve_password(acct, "alice", "wrong")
+
+    await manager.register_user(acct, "bob", "user", password="old-secret")
+    await manager.set_password(acct, "bob", "new-secret")
+
+    with pytest.raises(UnauthenticatedError):
+        manager.resolve_password(acct, "bob", "old-secret")
+    identity = manager.resolve_password(acct, "bob", "new-secret")
+    assert identity.role == Role.USER
+    assert identity.account_id == acct
+    assert identity.user_id == "bob"
+
+
 async def test_create_duplicate_account_raises(manager: APIKeyManager):
     """Creating duplicate account should raise AlreadyExistsError."""
     acct = _uid()

@@ -88,6 +88,9 @@ OpenViking provides two layers of encryption protection:
 | **File Layer** | `encryption.enabled` | AES-GCM | ✅ Yes | Protects entire storage files |
 | **API Key Field Layer** | `encryption.api_key_hashing.enabled` | Argon2id | ❌ No | Protects API keys themselves |
 
+User passwords are always stored as Argon2id hashes in user records. This is
+independent of `encryption.api_key_hashing.enabled`.
+
 ### ⚠️ Breaking Change Notice
 
 **Version Change**: OpenViking v0.3.12 → later versions

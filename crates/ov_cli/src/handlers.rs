@@ -86,6 +86,7 @@ pub async fn handle_add_resource(
         auth.api_key,
         auth.account,
         auth.user,
+        auth.password,
         ctx.config.effective_actor_peer_id(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
@@ -505,12 +506,14 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::CreateAccount {
             account_id,
             admin_user_id,
+            password,
             user_config_json,
         } => {
             commands::admin::create_account(
                 &client,
                 &account_id,
                 &admin_user_id,
+                password.as_deref(),
                 user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
@@ -531,6 +534,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             account_id,
             user_id,
             role,
+            password,
             user_config_json,
         } => {
             commands::admin::register_user(
@@ -538,6 +542,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 &account_id,
                 &user_id,
                 &role,
+                password.as_deref(),
                 user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
@@ -597,6 +602,21 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 &client,
                 &account_id,
                 &user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::SetPassword {
+            account_id,
+            user_id,
+            password,
+        } => {
+            commands::admin::set_password(
+                &client,
+                &account_id,
+                &user_id,
+                &password,
                 ctx.output_format,
                 ctx.compact,
             )

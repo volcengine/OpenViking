@@ -435,7 +435,6 @@ async fn edit_saved_config(
         secret_input(args.root_api_key_stdin, args.root_api_key_env.as_deref()),
         "root API key",
     )?;
-
     let mut edited = existing.clone();
     if let Some(url) = args.url.as_deref() {
         edited.url = normalize_custom_url(url);
@@ -502,13 +501,19 @@ fn build_custom_config(
     mut user: Option<String>,
     actor_peer_id: Option<String>,
 ) -> AgentResult<Config> {
-    if api_key.is_none() && root_api_key.is_none() && custom_requires_api_key(&url) {
+    if api_key.is_none()
+        && root_api_key.is_none()
+        && custom_requires_api_key(&url)
+    {
         return Err(AgentError::bad_input(
             "Remote custom servers require --api-key-stdin, --api-key-env, --root-api-key-stdin, or --root-api-key-env.",
         ));
     }
 
-    if api_key.is_none() && root_api_key.is_none() && custom_allows_empty_api_key(&url) {
+    if api_key.is_none()
+        && root_api_key.is_none()
+        && custom_allows_empty_api_key(&url)
+    {
         account.get_or_insert_with(|| "default".to_string());
         user.get_or_insert_with(|| "default".to_string());
     }

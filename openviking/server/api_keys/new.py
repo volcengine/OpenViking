@@ -161,6 +161,7 @@ class NewAPIKeyManager:
         self,
         account_id: str,
         admin_user_id: str,
+        password: Optional[str] = None,
     ) -> str:
         """Create a new account (workspace) with its first admin user.
 
@@ -205,6 +206,8 @@ class NewAPIKeyManager:
             "role": "admin",
             "key": stored_key,
         }
+        if password is not None:
+            user_info["password_hash"] = self._legacy._hash_password(password)
         if self._legacy._api_key_hashing_enabled:
             user_info["key_prefix"] = key_prefix
 
@@ -239,7 +242,13 @@ class NewAPIKeyManager:
         """Delete an account and remove all its user keys from the index."""
         await self._legacy.delete_account(account_id)
 
-    async def register_user(self, account_id: str, user_id: str, role: str = "user") -> str:
+    async def register_user(
+        self,
+        account_id: str,
+        user_id: str,
+        role: str = "user",
+        password: Optional[str] = None,
+    ) -> str:
         """Register a new user in an account. Returns the user's API key in new format."""
         # Validate user_id format
         verr = validate_user_id(user_id)
@@ -273,6 +282,8 @@ class NewAPIKeyManager:
             "role": role,
             "key": stored_key,
         }
+        if password is not None:
+            user_info["password_hash"] = self._legacy._hash_password(password)
         if self._legacy._api_key_hashing_enabled:
             user_info["key_prefix"] = key_prefix
 
@@ -371,6 +382,14 @@ class NewAPIKeyManager:
     async def set_role(self, account_id: str, user_id: str, role: str) -> None:
         """Update a user's role."""
         await self._legacy.set_role(account_id, user_id, role)
+
+    async def set_password(self, account_id: str, user_id: str, password: str) -> None:
+        """Set or replace a user's password hash."""
+        await self._legacy.set_password(account_id, user_id, password)
+
+    def resolve_password(self, account_id: str, user_id: str, password: str) -> ResolvedIdentity:
+        """Resolve account/user/password credentials to an identity."""
+        return self._legacy.resolve_password(account_id, user_id, password)
 
     def get_accounts(self) -> list:
         """List all accounts."""

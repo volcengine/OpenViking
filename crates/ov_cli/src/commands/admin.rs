@@ -11,13 +11,14 @@ pub async fn create_account(
     client: &HttpClient,
     account_id: &str,
     admin_user_id: &str,
+    password: Option<&str>,
     user_config_json: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let user_config = parse_user_config_json(user_config_json, "--user-config-json")?;
     let response = client
-        .admin_create_account(account_id, admin_user_id, user_config.as_ref())
+        .admin_create_account(account_id, admin_user_id, password, user_config.as_ref())
         .await?;
     output_success(&response, output_format, compact);
     print_admin_user_key_notice(&response, output_format, false);
@@ -67,13 +68,14 @@ pub async fn register_user(
     account_id: &str,
     user_id: &str,
     role: &str,
+    password: Option<&str>,
     user_config_json: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let user_config = parse_user_config_json(user_config_json, "--user-config-json")?;
     let response = client
-        .admin_register_user(account_id, user_id, role, user_config.as_ref())
+        .admin_register_user(account_id, user_id, role, password, user_config.as_ref())
         .await?;
     output_success(&response, output_format, compact);
     print_admin_user_key_notice(&response, output_format, false);
@@ -150,6 +152,21 @@ pub async fn regenerate_key(
     let response = client.admin_regenerate_key(account_id, user_id).await?;
     output_success(&response, output_format, compact);
     print_admin_user_key_notice(&response, output_format, true);
+    Ok(())
+}
+
+pub async fn set_password(
+    client: &HttpClient,
+    account_id: &str,
+    user_id: &str,
+    password: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response = client
+        .admin_set_password(account_id, user_id, password)
+        .await?;
+    output_success(&response, output_format, compact);
     Ok(())
 }
 

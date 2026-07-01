@@ -15,6 +15,7 @@ type Client struct {
 	baseURL      string
 	httpClient   *http.Client
 	apiKey       string
+	password     string
 	account      string
 	user         string
 	actorPeerID  string
@@ -52,6 +53,7 @@ func NewClient(cfg Config) (*Client, error) {
 		baseURL:      baseURL,
 		httpClient:   httpClient,
 		apiKey:       cfg.APIKey,
+		password:     cfg.Password,
 		account:      cfg.Account,
 		user:         cfg.User,
 		actorPeerID:  cfg.ActorPeerID,

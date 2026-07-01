@@ -42,8 +42,8 @@ Choose this when you want OpenViking hosted as a managed service on VolcEngine C
 Choose this when you connect to a custom OpenViking server hosted somewhere other than the current machine.
 
 - Server URL is provided by the user or server administrator.
-- API key may be required.
-- Root-key-only configs require `--account` and `--user`.
+- API key or password authentication may be required.
+- Root-key-only configs and password-auth configs require `--account` and `--user`.
 
 ### Local Custom
 
@@ -65,9 +65,9 @@ You need:
 - A reachable OpenViking target:
   - OpenViking Service (VolcEngine Cloud), or
   - a custom OpenViking server.
-- An API key if your target requires authentication.
+- An API key or password if your target requires authentication.
 
-API keys are sensitive. Prefer entering them through the interactive `ov config` prompt when you configure `ov` yourself. Only provide API keys to an agent through a channel you intentionally trust. The agent should pass the key through stdin and must not put it in shell commands, logs, long-term memory, or raw config output. Use an environment variable only when the key is already present in the shell environment.
+API keys and passwords are sensitive. Prefer entering API keys through the interactive `ov config` prompt when you configure `ov` yourself. Password authentication is configured in `ovcli.conf`. Only provide credentials to an agent through a channel you intentionally trust. The agent should not put credentials in shell commands, logs, long-term memory, or raw config output.
 
 ## Install `ov`
 
@@ -119,6 +119,7 @@ On macOS and Linux, the global npm binary directory is usually `$(npm prefix -g)
 OpenViking CLI configs can hold a user key, a root key, or both.
 
 - User key: use this for normal data commands such as `ov add-resource`, `ov find`, and `ov tree`. The server derives the identity from the key, so you usually do not pass `--account` or `--user`. This is what most users want.
+- Password: use `account`, `user`, and `password` in `ovcli.conf` for password authentication. If both `api_key` and `password` are configured, the API key wins.
 - Root key: use this for admin work and commands that require `--sudo`. A root key has no built-in tenant identity. If a config only has a root key, it must also include `--account` and `--user`; that root key then serves normal commands for that identity and `--sudo` commands.
 - User key plus root key: use this when the same config should support daily data work and occasional admin work. Normal commands use the user key. `--sudo` commands use the root key with the configured account and user.
 
@@ -163,7 +164,7 @@ Use this path when an agent is setting up `ov` for a user. The agent should read
 5. If you have long-term memory and the user permits it, store a short summary of the current `ov --help` command surface. Do not store API keys or other secrets.
 6. Use non-interactive `ov config` commands when the required values are known.
 7. Always pass `--name` for agent setup so retries target the same saved config.
-8. If the agent already holds the API key through a trusted channel, pass it with `--api-key-stdin` or `--root-api-key-stdin` and write only the key bytes to stdin. Use `--api-key-env` or `--root-api-key-env` only when that environment variable already exists. Do not ask the user to open a separate shell just to export a key for the agent.
+8. If the agent already holds an API key through a trusted channel, pass it with `--api-key-stdin` or `--root-api-key-stdin` and write only the key bytes to stdin. Use `--api-key-env` or `--root-api-key-env` only when that environment variable already exists. Do not ask the user to open a separate shell just to export a key for the agent.
 9. Use `-o json` and branch on the JSON result plus the process exit code.
 10. Validate the active config with `ov config validate`, then check `ov health` and `ov status`.
 11. If non-interactive setup fails because values are missing, auth is unclear, or terminal input is safer, guide the user through `ov config` instead.
@@ -392,10 +393,12 @@ Agents should refresh this help before running unfamiliar commands. If an agent 
 ## Credential Safety
 
 - API keys may grant access to your OpenViking data.
+- Passwords may grant access to your OpenViking data.
 - Prefer the interactive `ov config` prompt for manual setup.
+- For password-auth CLI configs, manage the credential in `ovcli.conf` and avoid printing the raw file.
 - For agent-assisted setup, provide API keys only through a channel you intentionally trust.
-- Agents should pass keys through stdin. Use environment variables only when they already exist in the shell.
-- Do not include API keys directly in shell commands that may be saved in shell history.
+- Agents should pass API keys through stdin. Use API key environment variables only when they already exist in the shell.
+- Do not include API keys or passwords directly in shell commands that may be saved in shell history.
 - Do not print raw `~/.openviking/ovcli.conf`.
 - Do not share screenshots that reveal API keys.
 - Use temporary or revocable keys for demos and trials.

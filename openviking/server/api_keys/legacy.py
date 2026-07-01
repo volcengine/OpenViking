@@ -209,6 +209,7 @@ class LegacyAPIKeyManager:
         self,
         account_id: str,
         admin_user_id: str,
+        password: Optional[str] = None,
     ) -> str:
         """Create a new account (workspace) with its first admin user.
 
@@ -241,6 +242,8 @@ class LegacyAPIKeyManager:
             "role": "admin",
             "key": stored_key,
         }
+        if password is not None:
+            user_info["password_hash"] = self._hash_password(password)
         if self._api_key_hashing_enabled:
             user_info["key_prefix"] = key_prefix
 
@@ -280,7 +283,13 @@ class LegacyAPIKeyManager:
 
         await self._save_accounts_json()
 
-    async def register_user(self, account_id: str, user_id: str, role: str = "user") -> str:
+    async def register_user(
+        self,
+        account_id: str,
+        user_id: str,
+        role: str = "user",
+        password: Optional[str] = None,
+    ) -> str:
         """Register a new user in an account. Returns the user's API key (legacy format)."""
         # Validate user_id format
         verr = validate_user_id(user_id)
@@ -308,6 +317,8 @@ class LegacyAPIKeyManager:
             "role": role,
             "key": stored_key,
         }
+        if password is not None:
+            user_info["password_hash"] = self._hash_password(password)
         if self._api_key_hashing_enabled:
             user_info["key_prefix"] = key_prefix
 
@@ -451,6 +462,32 @@ class LegacyAPIKeyManager:
 
         await self._save_users_json(account_id)
 
+    async def set_password(self, account_id: str, user_id: str, password: str) -> None:
+        """Set or replace a user's password hash."""
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+        if user_id not in account.users:
+            raise NotFoundError(user_id, "user")
+
+        account.users[user_id]["password_hash"] = self._hash_password(password)
+        await self._save_users_json(account_id)
+
+    def resolve_password(self, account_id: str, user_id: str, password: str) -> ResolvedIdentity:
+        """Resolve account/user/password credentials to an identity."""
+        account = self._accounts.get(account_id)
+        user = account.users.get(user_id) if account is not None else None
+        password_hash = user.get("password_hash", "") if user is not None else ""
+        if not password_hash or not isinstance(password, str) or not password.strip():
+            raise UnauthenticatedError("Invalid password")
+        if not self._verify_api_key(password, password_hash):
+            raise UnauthenticatedError("Invalid password")
+        return ResolvedIdentity(
+            role=Role(user.get("role", "user")),
+            account_id=account_id,
+            user_id=user_id,
+        )
+
     def get_accounts(self) -> list:
         """List all accounts."""
         result = []
@@ -584,6 +621,11 @@ class LegacyAPIKeyManager:
             hash_len=ARGON2_HASH_LENGTH,
         )
         return ph.hash(api_key)
+
+    def _hash_password(self, password: str) -> str:
+        if not isinstance(password, str) or not password.strip():
+            raise InvalidArgumentError("password must not be empty")
+        return self._hash_api_key(password)
 
     def _verify_api_key(self, api_key: str, hashed_key: str) -> bool:
         """Verify if API Key matches the hash."""

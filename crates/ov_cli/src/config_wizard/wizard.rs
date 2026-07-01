@@ -28,8 +28,7 @@ use super::store::{
     ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore, IdentityField,
     OPENVIKING_SERVICE_URL, build_config, custom_allows_empty_api_key, normalize_custom_url,
     validate_candidate_config, validate_candidate_config_with_role, validate_config,
-    validate_config_name, validate_identity_value, validation_error_copy,
-    validation_error_copy_zh,
+    validate_config_name, validate_identity_value, validation_error_copy, validation_error_copy_zh,
 };
 
 const OPENVIKING_SERVICE_API_KEY_URL: &str =
@@ -922,6 +921,7 @@ async fn status_box_runtime(active: Option<&Config>) -> StatusBoxRuntime {
         auth.api_key,
         auth.account,
         auth.user,
+        auth.password,
         config.actor_peer_id.clone(),
         STATUS_BOX_PROBE_TIMEOUT_SECS,
         config.profile,
@@ -4599,6 +4599,7 @@ fn root_admin_client(config: &Config, root_api_key: &str) -> BaseClient {
     BaseClient::new(
         &config.url,
         Some(root_api_key.to_string()),
+        None,
         None,
         None,
         None,

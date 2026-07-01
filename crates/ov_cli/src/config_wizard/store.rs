@@ -540,7 +540,7 @@ pub(crate) fn normalize_custom_url(url: &str) -> String {
 pub fn redacted_config_value(config: &Config) -> Result<Value> {
     let mut value = serde_json::to_value(config)?;
     if let Some(object) = value.as_object_mut() {
-        for key in ["api_key", "root_api_key"] {
+        for key in ["api_key", "root_api_key", "password"] {
             if object.get(key).is_some_and(|value| !value.is_null()) {
                 object.insert(key.to_string(), Value::String("********".to_string()));
             }
@@ -570,6 +570,7 @@ pub(crate) async fn validate_candidate_config_with_role(
     if require_api_key && api_key.is_none() {
         return Err(Error::Config("API key is required".to_string()));
     }
+    let has_password = non_empty_option(config.password.as_deref()).is_some();
 
     let timeout = config.timeout.clamp(1.0, 10.0);
     let auth = config.effective_auth(false);
@@ -578,6 +579,7 @@ pub(crate) async fn validate_candidate_config_with_role(
         auth.api_key.clone(),
         auth.account,
         auth.user,
+        auth.password,
         config.actor_peer_id.clone(),
         timeout,
         config.profile,
@@ -595,7 +597,11 @@ pub(crate) async fn validate_candidate_config_with_role(
         ));
     }
 
-    if should_run_authenticated_probe(&value, require_api_key, auth.api_key.is_some()) {
+    if should_run_authenticated_probe(
+        &value,
+        require_api_key,
+        auth.api_key.is_some() || has_password,
+    ) {
         let _: Value = client.get("/api/v1/system/status", &[]).await?;
     }
 
@@ -668,10 +674,15 @@ pub(crate) fn validation_error_copy(kind: ConfigKind, error: &Error) -> String {
             status: Some(401 | 403),
             ..
         } => "API key was rejected. Check your API key.".to_string(),
-        Error::Api { status: Some(404), .. } => {
+        Error::Api {
+            status: Some(404), ..
+        } => {
             "Server responded but the API endpoint was not found. Check the server URL.".to_string()
         }
-        Error::Api { status: Some(status), .. } => {
+        Error::Api {
+            status: Some(status),
+            ..
+        } => {
             format!("Server returned HTTP {status}. Check the server configuration.")
         }
         Error::Api { .. } => {
@@ -698,23 +709,22 @@ pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> Strin
             ConfigKind::OpenVikingService => {
                 "无法连接 OpenViking 服务。请检查网络连接。".to_string()
             }
-            ConfigKind::Custom => {
-                "无法连接服务器。请检查 URL 和网络连接。".to_string()
-            }
+            ConfigKind::Custom => "无法连接服务器。请检查 URL 和网络连接。".to_string(),
         },
         Error::Api {
             status: Some(401 | 403),
             ..
         } => "API Key 被拒绝。请检查 API Key。".to_string(),
-        Error::Api { status: Some(404), .. } => {
-            "服务器响应了，但 API 端点未找到。请检查服务器 URL。".to_string()
-        }
-        Error::Api { status: Some(status), .. } => {
+        Error::Api {
+            status: Some(404), ..
+        } => "服务器响应了，但 API 端点未找到。请检查服务器 URL。".to_string(),
+        Error::Api {
+            status: Some(status),
+            ..
+        } => {
             format!("服务器返回 HTTP {status}。请检查服务器配置。")
         }
-        Error::Api { .. } => {
-            "服务器验证时返回错误。请检查服务器日志。".to_string()
-        }
+        Error::Api { .. } => "服务器验证时返回错误。请检查服务器日志。".to_string(),
         Error::Config(msg) => msg.clone(),
         _ => match kind {
             ConfigKind::OpenVikingService => "验证失败。请检查 API Key 后重试。".to_string(),

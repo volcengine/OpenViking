@@ -41,6 +41,8 @@ pub struct Config {
     pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", alias = "account_id")]
     pub account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", alias = "user_id")]
@@ -91,6 +93,7 @@ pub(crate) struct EffectiveAuth {
     pub api_key: Option<String>,
     pub account: Option<String>,
     pub user: Option<String>,
+    pub password: Option<String>,
 }
 
 fn default_url() -> String {
@@ -151,6 +154,7 @@ impl Default for Config {
             url: DEFAULT_CUSTOM_URL.to_string(),
             api_key: None,
             root_api_key: None,
+            password: None,
             account: None,
             user: None,
             actor_peer_id: None,
@@ -297,6 +301,11 @@ impl Config {
         };
 
         EffectiveAuth {
+            password: if sudo || api_key.is_some() {
+                None
+            } else {
+                self.password.clone()
+            },
             api_key,
             account: send_identity.then_some(account).flatten(),
             user: send_identity.then_some(user).flatten(),

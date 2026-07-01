@@ -35,6 +35,7 @@ class DevAuthPlugin(AuthPlugin):
         api_key: Optional[str] = None,
         x_openviking_account: Optional[str] = None,
         x_openviking_user: Optional[str] = None,
+        x_openviking_password: Optional[str] = None,
     ) -> ResolvedIdentity:
         """Dev mode: no authentication, always return ROOT."""
         return ResolvedIdentity(

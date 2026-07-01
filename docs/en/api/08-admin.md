@@ -23,6 +23,7 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | Register/remove users | Y | Y (own account) | N |
 | List agents (deprecated, returns empty list) | Y | Y (own account) | N |
 | Regenerate user key | Y | Y (own account) | N |
+| Set user password | Y | Y (own account) | N |
 | Change user role | Y | N | N |
 
 ## CLI `--sudo` Option
@@ -84,6 +85,7 @@ Create a new workspace with its first admin user.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | admin_user_id | str | Yes | - | First admin user ID |
+| password | str | No | `null` | Initial password for the first admin user. Stored as a server-side hash. |
 | user_config | object | No | `null` | Initial config for the first admin user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
 
 **Notes:**
@@ -106,7 +108,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice"
+    "admin_user_id": "alice",
+    "password": "alice-password"
   }'
 ```
 
@@ -160,7 +163,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-result = client.admin_create_account("acme", "alice")
+result = client.admin_create_account("acme", "alice", password="alice-password")
 print(f"Account created: {result['account_id']}")
 print(f"Admin user: {result['admin_user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
@@ -187,6 +190,7 @@ if err != nil {
 fmt.Println(result["account_id"])
 
 result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice", &openviking.AdminCreateAccountOptions{
+    Password: "alice-password",
     UserConfig: map[string]any{
         "add_targets": map[string]any{
             "resource_uri": "viking://user/resources",
@@ -201,6 +205,7 @@ result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice",
 ```bash
 # Requires ROOT privileges, use --sudo
 ov --sudo admin create-account acme --admin alice
+ov --sudo admin create-account acme-password --admin alice --password "$PASSWORD"
 
 ov --sudo admin create-account acme-private --admin alice \
   --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources","skill_uri":"viking://user/skills"}}'
@@ -414,6 +419,7 @@ Register a new user in a workspace.
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
 | role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`. `"root"` must be assigned through the dedicated role-change endpoint. |
+| password | str | No | `null` | Initial password for the user. Stored as a server-side hash. |
 | user_config | object | No | `null` | Initial config for the new user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
 
 **Notes:**
@@ -437,7 +443,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>" \
   -d '{
     "user_id": "bob",
-    "role": "user"
+    "role": "user",
+    "password": "bob-password"
   }'
 ```
 
@@ -449,7 +456,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-result = client.admin_register_user("acme", "bob", role="user")
+result = client.admin_register_user("acme", "bob", role="user", password="bob-password")
 print(f"User registered: {result['user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 
@@ -471,6 +478,7 @@ if err != nil {
 fmt.Println(result["user_id"])
 
 result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "user", &openviking.AdminRegisterUserOptions{
+    Password: "bob-password",
     UserConfig: map[string]any{
         "add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
     },
@@ -483,6 +491,7 @@ result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "u
 # Either ROOT or account ADMIN can execute
 # If using regular user's api_key who is an ADMIN of acme:
 ov admin register-user acme bob --role user
+ov admin register-user acme bob-password --role user --password "$PASSWORD"
 # If using root_api_key (--sudo):
 ov --sudo admin register-user acme bob --role user
 
@@ -873,6 +882,82 @@ ov --sudo admin regenerate-key acme bob
 
 ---
 
+### set_password
+
+#### 1. API Implementation Overview
+
+Set or replace a user's password. Existing API keys are not changed.
+
+**Processing Flow:**
+1. Verify requester has ROOT privileges or is an ADMIN of the account
+2. Hash the password server-side
+3. Store the hash on the user record
+4. Return `password_set: true`
+
+#### 2. Interface and Parameters
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| account_id | str | Yes | - | Workspace ID |
+| user_id | str | Yes | - | User ID |
+| password | str | Yes | - | New password |
+
+**Notes:**
+- ADMIN can only set passwords for users in their own account
+- Passwords are stored as hashes and are never returned by the API
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+PUT /api/v1/admin/accounts/{account_id}/users/{user_id}/password
+```
+
+```bash
+curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/password \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-or-admin-key>" \
+  -d '{"password": "new-password"}'
+```
+
+**Python SDK**
+
+```python
+result = client.admin_set_password("acme", "bob", "new-password")
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminSetPassword(ctx, "acme", "bob", "new-password")
+```
+
+**CLI**
+
+```bash
+ov admin set-password acme bob --password "$NEW_PASSWORD"
+ov --sudo admin set-password acme bob --password "$NEW_PASSWORD"
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "account_id": "acme",
+    "user_id": "bob",
+    "password_set": true
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### migrate_legacy_data
 
 #### 1. API Implementation Overview
@@ -1022,13 +1107,13 @@ values are rejected; OpenViking does not silently fall back to another target.
 ### Typical Admin Workflow
 
 ```bash
-# Step 1: ROOT creates workspace with alice as first admin (requires --sudo)
-ov --sudo admin create-account acme --admin alice
+# Step 1: Create a workspace and first admin (requires --sudo)
+ov --sudo admin create-account acme --admin alice --password "$ALICE_PASSWORD"
 # Returns alice's user_key
 
-# Step 2: alice (admin) registers regular user bob
-# Configure api_key in config file to alice's user_key, no --sudo needed
-ov admin register-user acme bob --role user
+# Step 2: Register a regular user
+# Configure api_key in config file to alice's user_key
+ov admin register-user acme bob --role user --password "$BOB_PASSWORD"
 # Returns bob's user_key
 
 # Step 3: List all users in the account
@@ -1037,14 +1122,16 @@ ov admin list-users acme
 # Step 4: ROOT promotes bob to admin (requires --sudo)
 ov --sudo admin set-role acme bob admin
 
-# Step 5: bob lost their key, regenerate (old key immediately invalidated)
-# alice as admin can do this, no --sudo needed
+# Step 5: Regenerate bob's API key (old key immediately invalidated)
 ov admin regenerate-key acme bob
 
-# Step 6: Remove user
+# Step 6: Set bob's password
+ov admin set-password acme bob --password "$NEW_BOB_PASSWORD"
+
+# Step 7: Remove user
 ov admin remove-user acme bob
 
-# Step 7: Delete entire workspace (requires --sudo)
+# Step 8: Delete entire workspace (requires --sudo)
 ov --sudo admin delete-account acme
 ```
 
@@ -1055,13 +1142,13 @@ ov --sudo admin delete-account acme
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-key>" \
-  -d '{"account_id": "acme", "admin_user_id": "alice"}'
+  -d '{"account_id": "acme", "admin_user_id": "alice", "password": "alice-password"}'
 
 # Step 2: Register user (using alice's admin key)
 curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <alice-key>" \
-  -d '{"user_id": "bob", "role": "user"}'
+  -d '{"user_id": "bob", "role": "user", "password": "bob-password"}'
 
 # Step 3: List users
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
@@ -1078,11 +1165,17 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users/bob/key \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <alice-key>"
 
-# Step 6: Remove user
+# Step 6: Set password
+curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/password \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <alice-key>" \
+  -d '{"password": "new-password"}'
+
+# Step 7: Remove user
 curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/users/bob \
   -H "X-API-Key: <alice-key>"
 
-# Step 7: Delete workspace
+# Step 8: Delete workspace
 curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
   -H "X-API-Key: <root-key>"
 ```

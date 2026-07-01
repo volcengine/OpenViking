@@ -101,11 +101,14 @@ The Go SDK sends the same identity headers as the Python HTTP client:
 | `APIKey` | `X-API-Key` |
 | `Account` | `X-OpenViking-Account` |
 | `User` | `X-OpenViking-User` |
+| `Password` | `X-OpenViking-Password` |
 | `ActorPeerID` | `X-OpenViking-Actor-Peer` |
 
 For normal `api_key` deployments, `APIKey` is enough because the server derives
-tenant identity from the key. Set `Account` and `User` only for trusted
-deployments or gateways that explicitly forward tenant identity.
+tenant identity from the key. If you use password authentication instead, set
+`Account`, `User`, and `Password`. API keys take precedence when both are set.
+Set `Account` and `User` without `Password` only for trusted deployments or
+gateways that explicitly forward tenant identity.
 
 It does not implement Python embedded mode or legacy `agent_id` compatibility.
 See [`sdk/go/README.md`](../../../sdk/go/README.md) for package-level examples.
@@ -135,8 +138,12 @@ Configuration field description:
 | `api_key` | API Key | `null` (no auth) |
 | `account` | Default account header for tenant-scoped requests | `null` |
 | `user` | Default user header for tenant-scoped requests | `null` |
+| `password` | Password used with `account` + `user` when no API key is configured | `null` |
 | `timeout` | HTTP request timeout in seconds | `60.0` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
+
+For password authentication, omit `api_key` and set `account`, `user`, and
+`password`.
 
 See the [Configuration Guide](../guides/01-configuration.md#ovcliconf) for details.
 
@@ -159,6 +166,7 @@ client.initialize()
 ⚠️ **Note**: The client will attempt to load the configuration file if any of the following conditions are met:
 - `url` is `None`
 - `api_key` is `None`
+- `password` is `None`
 - `timeout` equals `60.0` (default value)
 - `extra_headers` is `None`
 
@@ -546,6 +554,7 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove user | ROOT/ADMIN |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change user role | ROOT |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate user key | ROOT/ADMIN |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/password` | Set user password | ROOT/ADMIN |
 
 ### VikingBot Interaction Endpoints (Optional)
 

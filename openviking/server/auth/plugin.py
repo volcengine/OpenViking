@@ -35,6 +35,7 @@ class AuthPlugin(abc.ABC):
         api_key: Optional[str] = None,
         x_openviking_account: Optional[str] = None,
         x_openviking_user: Optional[str] = None,
+        x_openviking_password: Optional[str] = None,
     ) -> ResolvedIdentity:
         """Resolve identity from request credentials.
 
@@ -43,6 +44,7 @@ class AuthPlugin(abc.ABC):
             api_key: Extracted API key from X-API-Key or Authorization header.
             x_openviking_account: Normalized X-OpenViking-Account header value.
             x_openviking_user: Normalized X-OpenViking-User header value.
+            x_openviking_password: Normalized X-OpenViking-Password header value.
 
         Returns:
             ResolvedIdentity with role and user identification.

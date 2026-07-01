@@ -29,7 +29,7 @@ from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 SDK 支持三种配置方式，优先级从高到低如下：
 
 1. 显式构造参数
-2. 环境变量，例如 `OPENVIKING_URL`、`OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_ACTOR_PEER_ID` 和 `OPENVIKING_TIMEOUT`
+2. 环境变量，例如 `OPENVIKING_URL`、`OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_PASSWORD`、`OPENVIKING_ACTOR_PEER_ID` 和 `OPENVIKING_TIMEOUT`
 3. `ovcli.conf`，来源可以是 `OPENVIKING_CLI_CONFIG_FILE` 指定的路径，或者默认路径 `~/.openviking/ovcli.conf`
 
 这意味着之前依赖 `ovcli.conf` 的配置方式，在 SDK 拆分之后仍然可以继续使用。
@@ -44,6 +44,7 @@ SDK 支持三种配置方式，优先级从高到低如下：
 - `api_key`：root key 或 user key
 - `account`：可选的 account 覆盖，通常只在使用 root key 时需要
 - `user`：可选的 user 覆盖，通常只在使用 root key 时需要
+- `password`：未配置 API Key 时，配合 `account` + `user` 使用的密码
 - `user_id`：`user` 的兼容旧别名
 - `actor_peer_id`：可选的 actor peer 覆盖
 - `agent_id`：`actor_peer_id` 的兼容旧别名
@@ -76,6 +77,21 @@ client = SyncHTTPClient(
     user="demo-user",
 )
 ```
+
+如果使用 password 认证：
+
+```python
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(
+    url="http://127.0.0.1:1933",
+    account="demo-account",
+    user="demo-user",
+    password="your-password",
+)
+```
+
+如果同时配置 `api_key` 和 `password`，API Key 优先生效。
 
 ## 快速开始：同步客户端
 
@@ -191,6 +207,7 @@ print(result)
 - `admin_list_accounts`
 - `admin_list_users`
 - `admin_regenerate_key`
+- `admin_set_password`
 - `admin_delete_account`
 
 示例：
@@ -206,6 +223,7 @@ root_client = SyncHTTPClient(
 result = root_client.admin_create_account(
     account_id="demo-account",
     admin_user_id="demo-admin",
+    password="demo-admin-password",
 )
 print(result)
 
@@ -213,6 +231,7 @@ root_client.admin_register_user(
     account_id="demo-account",
     user_id="alice",
     role="user",
+    password="alice-password",
     user_config={
         "add_targets": {
             "resource_uri": "viking://user/resources/project-a",
@@ -220,6 +239,8 @@ root_client.admin_register_user(
         }
     },
 )
+
+root_client.admin_set_password("demo-account", "alice", "new-password")
 ```
 
 `admin_create_account` 也接受同样结构的 `user_config`。这些字段用于初始化服务端用户配置；普通添加调用仍然只需省略 `to` / `parent` / `target_uri`，由服务端解析默认值。

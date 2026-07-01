@@ -9,6 +9,7 @@ import (
 type Config struct {
 	BaseURL     string
 	APIKey      string
+	Password    string
 	Account     string
 	User        string
 	ActorPeerID string
@@ -52,11 +53,13 @@ type AddSkillOptions struct {
 
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
 type AdminCreateAccountOptions struct {
+	Password   string
 	UserConfig map[string]any
 }
 
 // AdminRegisterUserOptions controls AdminRegisterUserWithOptions.
 type AdminRegisterUserOptions struct {
+	Password   string
 	UserConfig map[string]any
 }
 

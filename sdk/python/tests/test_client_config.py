@@ -5,6 +5,7 @@ from openviking_sdk import AsyncHTTPClient
 def test_explicit_arguments_win_over_env(monkeypatch):
     monkeypatch.setenv("OPENVIKING_URL", "http://env-host:1933")
     monkeypatch.setenv("OPENVIKING_API_KEY", "env-key")
+    monkeypatch.setenv("OPENVIKING_PASSWORD", "env-password")
     monkeypatch.setenv("OPENVIKING_ACCOUNT", "env-account")
     monkeypatch.setenv("OPENVIKING_USER", "env-user")
     monkeypatch.setenv("OPENVIKING_ACTOR_PEER_ID", "env-actor")
@@ -13,6 +14,7 @@ def test_explicit_arguments_win_over_env(monkeypatch):
     client = AsyncHTTPClient(
         url="http://explicit-host:1933",
         api_key="explicit-key",
+        password="explicit-password",
         account="explicit-account",
         user="explicit-user",
         actor_peer_id="explicit-actor",
@@ -21,6 +23,7 @@ def test_explicit_arguments_win_over_env(monkeypatch):
 
     assert client._url == "http://explicit-host:1933"
     assert client._api_key == "explicit-key"
+    assert client._password == "explicit-password"
     assert client._account == "explicit-account"
     assert client._user_id == "explicit-user"
     assert client._actor_peer_id == "explicit-actor"
@@ -30,6 +33,7 @@ def test_explicit_arguments_win_over_env(monkeypatch):
 def test_env_values_fill_missing_fields(monkeypatch):
     monkeypatch.setenv("OPENVIKING_URL", "http://env-host:1933")
     monkeypatch.setenv("OPENVIKING_API_KEY", "env-key")
+    monkeypatch.setenv("OPENVIKING_PASSWORD", "env-password")
     monkeypatch.setenv("OPENVIKING_ACCOUNT", "env-account")
     monkeypatch.setenv("OPENVIKING_USER", "env-user")
     monkeypatch.setenv("OPENVIKING_ACTOR_PEER_ID", "env-actor")
@@ -39,6 +43,7 @@ def test_env_values_fill_missing_fields(monkeypatch):
 
     assert client._url == "http://env-host:1933"
     assert client._api_key == "env-key"
+    assert client._password == "env-password"
     assert client._account == "env-account"
     assert client._user_id == "env-user"
     assert client._actor_peer_id == "env-actor"

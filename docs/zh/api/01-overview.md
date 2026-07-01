@@ -100,9 +100,10 @@ Go SDK 发送的身份请求头与 Python HTTP client 一致：
 | `APIKey` | `X-API-Key` |
 | `Account` | `X-OpenViking-Account` |
 | `User` | `X-OpenViking-User` |
+| `Password` | `X-OpenViking-Password` |
 | `ActorPeerID` | `X-OpenViking-Actor-Peer` |
 
-普通 `api_key` 部署下只需要设置 `APIKey`，服务端会从 API key 推导租户身份。只有在 trusted 部署或网关显式透传租户身份时，才需要设置 `Account` 和 `User`。
+普通 `api_key` 部署下只需要设置 `APIKey`，服务端会从 API key 推导租户身份。如果改用 password 认证，需要同时设置 `Account`、`User` 和 `Password`。如果 API Key 和 password 同时设置，API Key 优先生效。只有在 trusted 部署或网关显式透传租户身份时，才只设置 `Account` 和 `User`。
 
 Go SDK 不支持 Python embedded 模式，也不保留旧 `agent_id` 兼容路径。更多示例见 [`sdk/go/README_CN.md`](../../../sdk/go/README_CN.md)。
 
@@ -131,8 +132,11 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | `api_key` | API Key | `null`（无认证） |
 | `account` | 租户级请求的默认账户请求头 | `null` |
 | `user` | 租户级请求的默认用户请求头 | `null` |
+| `password` | 未配置 API Key 时，配合 `account` + `user` 使用的密码 | `null` |
 | `timeout` | HTTP 请求超时时间（秒） | `60.0` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
+
+如需使用 password 认证，请省略 `api_key`，并设置 `account`、`user` 和 `password`。
 
 详细内容请参见 [配置指南](../guides/01-configuration.md#ovcliconf)。
 
@@ -155,6 +159,7 @@ client.initialize()
 ⚠️ **注意**：只要以下任一条件满足，客户端就会尝试加载配置文件：
 - `url` 为 `None`
 - `api_key` 为 `None`
+- `password` 为 `None`
 - `timeout` 等于 `60.0`（默认值）
 - `extra_headers` 为 `None`
 
@@ -542,6 +547,7 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 | ROOT/ADMIN |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 修改用户角色 | ROOT |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成 User Key | ROOT/ADMIN |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/password` | 设置用户密码 | ROOT/ADMIN |
 
 ### VikingBot 交互端点（可选）
 

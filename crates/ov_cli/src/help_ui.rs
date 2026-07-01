@@ -70,7 +70,8 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "add-memory",
 ];
 
-const FILESYSTEM: &[HelpCommand] = help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "get"];
+const FILESYSTEM: &[HelpCommand] =
+    help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "attrs", "get"];
 
 const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
     "find", "search", "grep", "glob", "abstract", "overview", "read"
@@ -320,6 +321,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Inspect related resources.",
             },
         ],
+    },
+    CommandHelpSpec {
+        path: &["attrs"],
+        purpose: "Get logical extended attributes or update retrieval tags metadata.",
+        examples: &[
+            HelpItem {
+                label: "ov attrs get viking://projects/acme/spec.md",
+                description: "Read all logical attributes for a resource.",
+            },
+            HelpItem {
+                label: "ov attrs set-tags viking://projects/acme --tags team=search",
+                description: "Set retrieval tags on a resource.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov stat <uri>",
+            description: "Inspect resource metadata.",
+        }],
     },
     CommandHelpSpec {
         path: &["read"],
@@ -1150,6 +1169,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov admin register-user <account> <user>",
                 description: "Register a user in an account.",
+            },
+            HelpItem {
+                label: "ov admin set-password <account> <user> --password <password>",
+                description: "Set or reset a user's password.",
             },
             HelpItem {
                 label: "ov admin migrate --sudo",
@@ -2202,6 +2225,7 @@ fn localized_command_description<'a>(
         "rm" => "删除资源",
         "mv" => "移动或重命名资源",
         "stat" => "查看资源元数据",
+        "attrs" => "查看或更新资源属性",
         "get" => "下载文件",
         "search" => "上下文感知检索",
         "grep" => "模式搜索",

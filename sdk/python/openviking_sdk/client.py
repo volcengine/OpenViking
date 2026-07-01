@@ -216,6 +216,7 @@ class AsyncHTTPClient:
         extra_headers: Optional[Dict[str, str]] = None,
         profile_enabled: Optional[bool] = None,
         upload_mode: Optional[str] = None,
+        password: Optional[str] = None,
     ):
         if actor_peer_id and agent_id:
             raise ValueError("actor_peer_id cannot be used with agent_id")
@@ -224,6 +225,7 @@ class AsyncHTTPClient:
         config = resolve_client_config(
             url=url,
             api_key=api_key,
+            password=password,
             account=account,
             user=effective_user,
             actor_peer_id=effective_actor,
@@ -234,6 +236,7 @@ class AsyncHTTPClient:
         )
         self._url = config.url
         self._api_key = config.api_key
+        self._password = config.password
         self._account = config.account
         self._user_id = config.user
         self._actor_peer_id = config.actor_peer_id
@@ -253,6 +256,8 @@ class AsyncHTTPClient:
             headers["X-OpenViking-Account"] = self._account
         if self._user_id:
             headers["X-OpenViking-User"] = self._user_id
+        if not self._api_key and self._account and self._user_id and self._password:
+            headers["X-OpenViking-Password"] = self._password
         if self._actor_peer_id:
             headers["X-OpenViking-Actor-Peer"] = self._actor_peer_id
         headers.update(self._extra_headers)
@@ -1234,8 +1239,11 @@ class AsyncHTTPClient:
         account_id: str,
         admin_user_id: str,
         user_config: Optional[Dict[str, Any]] = None,
+        password: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"account_id": account_id, "admin_user_id": admin_user_id}
+        if password is not None:
+            payload["password"] = password
         if user_config is not None:
             payload["user_config"] = user_config
         response = await self._http.post(
@@ -1258,8 +1266,11 @@ class AsyncHTTPClient:
         user_id: str,
         role: str = "user",
         user_config: Optional[Dict[str, Any]] = None,
+        password: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"user_id": user_id, "role": role}
+        if password is not None:
+            payload["password"] = password
         if user_config is not None:
             payload["user_config"] = user_config
         response = await self._http.post(
@@ -1280,6 +1291,15 @@ class AsyncHTTPClient:
         response = await self._http.put(
             f"/api/v1/admin/accounts/{account_id}/users/{user_id}/role",
             json={"role": role},
+        )
+        return self._handle_response(response)
+
+    async def admin_set_password(
+        self, account_id: str, user_id: str, password: str
+    ) -> Dict[str, Any]:
+        response = await self._http.put(
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}/password",
+            json={"password": password},
         )
         return self._handle_response(response)
 
@@ -1994,12 +2014,14 @@ class SyncHTTPClient:
         account_id: str,
         admin_user_id: str,
         user_config: Optional[Dict[str, Any]] = None,
+        password: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.admin_create_account(
                 account_id,
                 admin_user_id,
                 user_config=user_config,
+                password=password,
             )
         )
 
@@ -2015,6 +2037,7 @@ class SyncHTTPClient:
         user_id: str,
         role: str = "user",
         user_config: Optional[Dict[str, Any]] = None,
+        password: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.admin_register_user(
@@ -2022,6 +2045,7 @@ class SyncHTTPClient:
                 user_id,
                 role,
                 user_config=user_config,
+                password=password,
             )
         )
 
@@ -2033,6 +2057,9 @@ class SyncHTTPClient:
 
     def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_set_role(account_id, user_id, role))
+
+    def admin_set_password(self, account_id: str, user_id: str, password: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_set_password(account_id, user_id, password))
 
     def admin_regenerate_key(self, account_id: str, user_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_regenerate_key(account_id, user_id))

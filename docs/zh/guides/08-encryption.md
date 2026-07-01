@@ -88,6 +88,9 @@ OpenViking 提供两层加密保护：
 | **文件层** | `encryption.enabled` | AES-GCM | ✅ 可逆 | 保护整个存储文件 |
 | **API key 字段层** | `encryption.api_key_hashing.enabled` | Argon2id | ❌ 不可逆 | 保护 API key 本身 |
 
+用户 password 始终以 Argon2id hash 形式存储在用户记录中，不受
+`encryption.api_key_hashing.enabled` 影响。
+
 ### ⚠️ Breaking Change 说明
 
 **版本变更**：OpenViking v0.3.12 → later versions

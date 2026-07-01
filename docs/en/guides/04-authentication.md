@@ -4,7 +4,9 @@ OpenViking Server supports three built-in authentication modes with role-based a
 
 ## Overview
 
-OpenViking uses a two-layer API key system:
+OpenViking uses a two-layer API key system. In `api_key` mode, tenant users can
+also authenticate with `account` + `user` + `password`; API keys take
+precedence when both are present.
 
 | Key Type | Created By | Role | Purpose |
 |----------|-----------|------|---------|
@@ -17,7 +19,7 @@ All API keys are plain random tokens with no embedded identity. The server resol
 
 | Mode | `server.auth_mode` | Identity Source | Typical Use |
 |------|--------------------|-----------------|-------------|
-| API key mode | `"api_key"` | API key. Data ownership is resolved from the user/admin key. | Standard multi-tenant deployment |
+| API key mode | `"api_key"` | API key, or `account` + `user` + `password`. Data ownership is resolved from the credential. | Standard multi-tenant deployment |
 | Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User`, plus `root_api_key` on non-localhost deployments. Role is looked up from APIKeyManager if the user exists. | Behind a trusted gateway or internal network boundary |
 | Dev mode | `"dev"` | No authentication, always ROOT | Local development only |
 
@@ -54,7 +56,7 @@ The server uses a plugin-based auth architecture. Each `auth_mode` maps to an `A
 
 | Method | Purpose |
 |--------|---------|
-| `resolve_identity(request, api_key, x_openviking_account, x_openviking_user)` | Resolve credentials to a `ResolvedIdentity`. |
+| `resolve_identity(request, api_key, x_openviking_account, x_openviking_user, x_openviking_password)` | Resolve credentials to a `ResolvedIdentity`. |
 | `validate_config(config)` | Validate `ServerConfig` at startup; should `sys.exit(1)` on fatal misconfiguration. |
 | `initialize(app, service, config)` | Initialize runtime state (e.g., `APIKeyManager`) on `app.state`. |
 | `get_request_context_checks(path, identity)` | Optional post-auth path/identity checks. |
@@ -72,7 +74,7 @@ from openviking.server.identity import ResolvedIdentity, Role
 class LDAPAuthPlugin(AuthPlugin):
     auth_mode = "ldap"
 
-    async def resolve_identity(self, request, *, api_key=None, x_openviking_account=None, x_openviking_user=None):
+    async def resolve_identity(self, request, *, api_key=None, x_openviking_account=None, x_openviking_user=None, x_openviking_password=None):
         # ... LDAP bind and identity resolution ...
         return ResolvedIdentity(role=Role.USER, account_id="...", user_id="...")
 
@@ -99,7 +101,7 @@ Custom roles work with `require_role()` and `require_auth_role()` decorators out
 
 ## Managing Accounts and Users
 
-Normal requests in both `api_key` and `trusted` modes do not need Admin API as a prerequisite for ordinary reads, writes, search, or session access. Admin API is still the place to create accounts, register users, change roles, and issue user keys.
+Normal requests in both `api_key` and `trusted` modes do not need Admin API as a prerequisite for ordinary reads, writes, search, or session access. Admin API is still the place to create accounts, register users, change roles, issue user keys, and set user passwords. Passwords are stored server-side as hashes and cannot be recovered.
 
 Use the root key to create accounts (workspaces) and users via the Admin API:
 
@@ -108,14 +110,14 @@ Use the root key to create accounts (workspaces) and users via the Admin API:
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: your-secret-root-key" \
   -H "Content-Type: application/json" \
-  -d '{"account_id": "acme", "admin_user_id": "alice"}'
+  -d '{"account_id": "acme", "admin_user_id": "alice", "password": "alice-password"}'
 # Returns: {"result": {"account_id": "acme", "admin_user_id": "alice", "user_key": "..."}}
 
 # Register a regular user (as ROOT or ADMIN)
 curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: your-secret-root-key" \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "bob", "role": "user"}'
+  -d '{"user_id": "bob", "role": "user", "password": "bob-password"}'
 # Returns: {"result": {"account_id": "acme", "user_id": "bob", "user_key": "..."}}
 ```
 
@@ -151,7 +153,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   }'
 ```
 
-## Using API Keys (Client Side)
+## Using API Keys and Passwords (Client Side)
 
 OpenViking accepts API keys via two headers:
 
@@ -190,13 +192,18 @@ client = ov.SyncHTTPClient(
 ```
 
 When you use a user key or admin key, the server derives `account` and `user`
-from the key. Do not send `X-OpenViking-Account` / `X-OpenViking-User` in
-`api_key` mode; those identity headers are accepted only in `trusted` mode.
+from the key. Do not add `X-OpenViking-Account` / `X-OpenViking-User` to key
+auth requests; identity headers without a password are accepted only in
+`trusted` mode.
 
-**CLI override flags**
+Password authentication is available only in `api_key` mode and requires all
+three headers:
 
 ```bash
-openviking ls viking://
+curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
+  -H "X-OpenViking-Account: acme" \
+  -H "X-OpenViking-User: alice" \
+  -H "X-OpenViking-Password: <password>"
 ```
 
 ### Using --sudo with Root API Key
@@ -361,6 +368,7 @@ curl http://localhost:1933/health
 | DELETE | `/api/v1/admin/accounts/{id}/users/{uid}` | ROOT, ADMIN | Remove user |
 | PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT | Change user role |
 | POST | `/api/v1/admin/accounts/{id}/users/{uid}/key` | ROOT, ADMIN | Regenerate user key |
+| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/password` | ROOT, ADMIN | Set user password |
 
 ## Related Documentation
 

@@ -13,6 +13,7 @@ def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, m
             {
                 "url": "http://config-host:1933",
                 "api_key": "config-key",
+                "password": "config-password",
                 "account": "config-account",
                 "user": "config-user",
                 "timeout": 12.5,
@@ -22,11 +23,13 @@ def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, m
     monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
     monkeypatch.delenv("OPENVIKING_URL", raising=False)
     monkeypatch.delenv("OPENVIKING_API_KEY", raising=False)
+    monkeypatch.delenv("OPENVIKING_PASSWORD", raising=False)
 
     client = AsyncHTTPClient()
 
     assert client._url == "http://config-host:1933"
     assert client._api_key == "config-key"
+    assert client._password == "config-password"
     assert client._account == "config-account"
     assert client._user_id == "config-user"
     assert client._timeout == 12.5

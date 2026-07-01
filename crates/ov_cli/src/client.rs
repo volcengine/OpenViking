@@ -62,7 +62,11 @@ pub struct SnapshotRestoreReq {
 
 pub enum SnapshotShowResult {
     Metadata(Value),
-    Blob { oid: String, size: u64, bytes: Vec<u8> },
+    Blob {
+        oid: String,
+        size: u64,
+        bytes: Vec<u8>,
+    },
 }
 
 // ============ HttpClient ============
@@ -79,6 +83,7 @@ impl HttpClient {
         api_key: Option<String>,
         account: Option<String>,
         user: Option<String>,
+        password: Option<String>,
         actor_peer_id: Option<String>,
         timeout_secs: f64,
         profile_enabled: bool,
@@ -90,6 +95,7 @@ impl HttpClient {
                 api_key,
                 account,
                 user,
+                password,
                 actor_peer_id,
                 timeout_secs,
                 profile_enabled,
@@ -1251,6 +1257,7 @@ impl HttpClient {
         &self,
         account_id: &str,
         admin_user_id: &str,
+        password: Option<&str>,
         user_config: Option<&Value>,
     ) -> Result<Value> {
         let mut body = Map::new();
@@ -1264,6 +1271,9 @@ impl HttpClient {
         );
         if let Some(config) = user_config {
             body.insert("user_config".to_string(), config.clone());
+        }
+        if let Some(password) = password {
+            body.insert("password".to_string(), Value::String(password.to_string()));
         }
         self.post("/api/v1/admin/accounts", &Value::Object(body))
             .await
@@ -1283,6 +1293,7 @@ impl HttpClient {
         account_id: &str,
         user_id: &str,
         role: &str,
+        password: Option<&str>,
         user_config: Option<&Value>,
     ) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/users", account_id);
@@ -1291,6 +1302,9 @@ impl HttpClient {
         body.insert("role".to_string(), Value::String(role.to_string()));
         if let Some(config) = user_config {
             body.insert("user_config".to_string(), config.clone());
+        }
+        if let Some(password) = password {
+            body.insert("password".to_string(), Value::String(password.to_string()));
         }
         self.post(&path, &Value::Object(body)).await
     }
@@ -1338,6 +1352,20 @@ impl HttpClient {
             account_id, user_id
         );
         self.post(&path, &serde_json::json!({})).await
+    }
+
+    pub async fn admin_set_password(
+        &self,
+        account_id: &str,
+        user_id: &str,
+        password: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/users/{}/password",
+            account_id, user_id
+        );
+        self.put(&path, &serde_json::json!({ "password": password }))
+            .await
     }
 
     pub async fn admin_migrate(&self, cleanup: bool) -> Result<Value> {
@@ -1555,7 +1583,8 @@ impl HttpClient {
         path: Option<&str>,
     ) -> Result<SnapshotShowResult> {
         let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
-        let mut query: Vec<(String, String)> = vec![("target_ref".to_string(), target_ref.to_string())];
+        let mut query: Vec<(String, String)> =
+            vec![("target_ref".to_string(), target_ref.to_string())];
         if let Some(p) = path {
             query.push(("path".to_string(), p.to_string()));
         }
@@ -1578,7 +1607,10 @@ impl HttpClient {
             .unwrap_or("")
             .to_string();
 
-        if path.is_some() && status.is_success() && content_type.starts_with("application/octet-stream") {
+        if path.is_some()
+            && status.is_success()
+            && content_type.starts_with("application/octet-stream")
+        {
             let oid = response
                 .headers()
                 .get("x-snapshot-oid")
@@ -1702,6 +1734,7 @@ mod tests {
             Some("test-key".to_string()),
             Some("acme".to_string()),
             Some("alice".to_string()),
+            None,
             Some("peer-a".to_string()),
             5.0,
             true,
@@ -1769,7 +1802,7 @@ mod tests {
     #[tokio::test]
     async fn ls_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let client = HttpClient::new(base_url, None, None, None, None, None, 5.0, false, None);
 
         client
             .ls("viking://resources", false, false, "agent", 256, false, 1)
@@ -1785,7 +1818,7 @@ mod tests {
     #[tokio::test]
     async fn tree_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let client = HttpClient::new(base_url, None, None, None, None, None, 5.0, false, None);
 
         client
             .tree("viking://resources", "agent", 256, false, 1, 3)

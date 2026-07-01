@@ -64,12 +64,19 @@ class ApiKeyAuthPlugin(AuthPlugin):
         api_key: Optional[str] = None,
         x_openviking_account: Optional[str] = None,
         x_openviking_user: Optional[str] = None,
+        x_openviking_password: Optional[str] = None,
     ) -> ResolvedIdentity:
         api_key_manager = getattr(request.app.state, "api_key_manager", None)
         if api_key_manager is None:
             raise RuntimeError("api_key_manager not initialized in api_key mode")
 
         if not api_key:
+            if x_openviking_account and x_openviking_user and x_openviking_password:
+                return api_key_manager.resolve_password(
+                    x_openviking_account,
+                    x_openviking_user,
+                    x_openviking_password,
+                )
             raise UnauthenticatedError("Missing API Key when resolving identity.")
 
         # OAuth 2.1 fast path
@@ -78,6 +85,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
             api_key,
             x_openviking_account=x_openviking_account,
             x_openviking_user=x_openviking_user,
+            x_openviking_password=x_openviking_password,
         )
         if oauth_identity is not None:
             return oauth_identity
@@ -93,6 +101,8 @@ class ApiKeyAuthPlugin(AuthPlugin):
             _remove_header(request, b"x-openviking-account")
         if x_openviking_user:
             _remove_header(request, b"x-openviking-user")
+        if x_openviking_password:
+            _remove_header(request, b"x-openviking-password")
 
         return identity
 
@@ -103,6 +113,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
         *,
         x_openviking_account: Optional[str],
         x_openviking_user: Optional[str],
+        x_openviking_password: Optional[str],
     ) -> Optional[ResolvedIdentity]:
         """Attempt to verify the bearer as an OAuth-issued opaque access token.
 
@@ -160,6 +171,8 @@ class ApiKeyAuthPlugin(AuthPlugin):
             _remove_header(request, b"x-openviking-account")
         if x_openviking_user:
             _remove_header(request, b"x-openviking-user")
+        if x_openviking_password:
+            _remove_header(request, b"x-openviking-password")
 
         return ResolvedIdentity(
             role=role,

@@ -99,6 +99,7 @@ impl CliContext {
             auth.api_key,
             auth.account,
             auth.user,
+            auth.password,
             self.config.effective_actor_peer_id(),
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
@@ -1533,6 +1534,9 @@ enum AdminCommands {
         /// First admin user ID
         #[arg(long = "admin", value_name = "user-id")]
         admin_user_id: String,
+        /// Password for the first admin user
+        #[arg(long, value_name = "password")]
+        password: Option<String>,
         /// Initial config for the first admin user as JSON
         #[arg(long = "user-config-json", value_name = "json")]
         user_config_json: Option<String>,
@@ -1562,6 +1566,9 @@ enum AdminCommands {
         /// Role: admin or user
         #[arg(long, default_value = "user", value_name = "role")]
         role: String,
+        /// Password for the new user
+        #[arg(long, value_name = "password")]
+        password: Option<String>,
         /// Initial config for the new user as JSON
         #[arg(long = "user-config-json", value_name = "json")]
         user_config_json: Option<String>,
@@ -1610,6 +1617,18 @@ enum AdminCommands {
         /// User ID
         #[arg(value_name = "user-id")]
         user_id: String,
+    },
+    /// Set or reset a user's password
+    SetPassword {
+        /// Account ID
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        /// User ID
+        #[arg(value_name = "user-id")]
+        user_id: String,
+        /// New password
+        #[arg(long, value_name = "password")]
+        password: String,
     },
 }
 
@@ -2201,6 +2220,7 @@ fn is_admin_subcommand(token: &str) -> bool {
             | "list-users"
             | "remove-user"
             | "set-role"
+            | "set-password"
             | "regenerate-key"
     )
 }
@@ -3525,6 +3545,7 @@ mod tests {
             &["ov", "admin", "list-users"],
             &["ov", "admin", "remove-user"],
             &["ov", "admin", "set-role"],
+            &["ov", "admin", "set-password"],
             &["ov", "admin", "regenerate-key"],
             &["ov", "system", "wait"],
             &["ov", "system", "status"],
@@ -4240,6 +4261,7 @@ mod tests {
             url: DEFAULT_CUSTOM_URL.to_string(),
             api_key: Some("test-key".to_string()),
             root_api_key: None,
+            password: None,
             account: Some("from-config-account".to_string()),
             user: Some("from-config-user".to_string()),
             actor_peer_id: Some("from-config-peer".to_string()),
@@ -4279,6 +4301,7 @@ mod tests {
             url: DEFAULT_CUSTOM_URL.to_string(),
             api_key: Some("test-key".to_string()),
             root_api_key: None,
+            password: None,
             account: None,
             user: None,
             actor_peer_id: None,
@@ -4316,6 +4339,7 @@ mod tests {
             url: DEFAULT_CUSTOM_URL.to_string(),
             api_key: Some("user-key".to_string()),
             root_api_key: Some("root-key".to_string()),
+            password: None,
             account: None,
             user: None,
             actor_peer_id: Some("peer-a".to_string()),

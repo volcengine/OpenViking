@@ -104,8 +104,17 @@ def _explicit_identity_from_request(request: Request) -> tuple[Optional[str], Op
 def _get_plugin(request: Request):
     """Get the active auth plugin from app state."""
     plugin = getattr(request.app.state, "auth_plugin", None)
-    if plugin is None:
+    if plugin is not None:
+        return plugin
+
+    import openviking.server.auth.plugins  # noqa: F401
+    from openviking.server.auth.registry import get_registry
+
+    plugin_cls = get_registry().get(_auth_mode(request))
+    if plugin_cls is None:
         raise UnauthenticatedError("Auth plugin not initialized")
+    plugin = plugin_cls()
+    request.app.state.auth_plugin = plugin
     return plugin
 
 
@@ -115,10 +124,12 @@ async def resolve_identity(
     authorization: Optional[str] = Header(None),
     x_openviking_account: Optional[str] = Header(None, alias="X-OpenViking-Account"),
     x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
+    x_openviking_password: Optional[str] = Header(None, alias="X-OpenViking-Password"),
 ) -> ResolvedIdentity:
     """Resolve API key to identity via the active auth plugin."""
     x_openviking_account = _normalize_header_value(x_openviking_account)
     x_openviking_user = _normalize_header_value(x_openviking_user)
+    x_openviking_password = _normalize_header_value(x_openviking_password)
     api_key = _extract_api_key(x_api_key, authorization)
 
     plugin = _get_plugin(request)
@@ -127,6 +138,7 @@ async def resolve_identity(
         api_key=api_key,
         x_openviking_account=x_openviking_account,
         x_openviking_user=x_openviking_user,
+        x_openviking_password=x_openviking_password,
     )
 
 

@@ -9,6 +9,41 @@ from openviking_sdk.errors import NotFoundError
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_sends_password_auth_header():
+    client = AsyncHTTPClient(
+        url="http://localhost:1933",
+        account="acct",
+        user="alice",
+        password="secret",
+    )
+    await client.initialize()
+    try:
+        assert client._http.headers["X-OpenViking-Account"] == "acct"
+        assert client._http.headers["X-OpenViking-User"] == "alice"
+        assert client._http.headers["X-OpenViking-Password"] == "secret"
+        assert "X-API-Key" not in client._http.headers
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_prefers_api_key_over_password_header():
+    client = AsyncHTTPClient(
+        url="http://localhost:1933",
+        api_key="key",
+        account="acct",
+        user="alice",
+        password="secret",
+    )
+    await client.initialize()
+    try:
+        assert client._http.headers["X-API-Key"] == "key"
+        assert "X-OpenViking-Password" not in client._http.headers
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_batch_add_messages_posts_batch_payload():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -366,24 +401,45 @@ async def test_add_resource_uploads_local_file_even_when_url_is_localhost(tmp_pa
 @pytest.mark.asyncio
 async def test_admin_create_paths_accept_initial_user_config():
     client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    fake_http = SimpleNamespace(
+        post=AsyncMock(return_value=object()),
+        put=AsyncMock(return_value=object()),
+    )
     client._http = fake_http
     client._handle_response = lambda _response: {"status": "ok"}
 
     user_config = {"add_targets": {"resource_uri": "viking://user/resources/project-a"}}
-    await client.admin_create_account("acct", "admin", user_config=user_config)
-    await client.admin_register_user("acct", "alice", "admin", user_config=user_config)
+    await client.admin_create_account(
+        "acct",
+        "admin",
+        user_config=user_config,
+        password="admin-pw",
+    )
+    await client.admin_register_user(
+        "acct",
+        "alice",
+        "admin",
+        user_config=user_config,
+        password="alice-pw",
+    )
+    await client.admin_set_password("acct", "alice", "new-pw")
 
     assert fake_http.post.await_args_list[0].kwargs["json"] == {
         "account_id": "acct",
         "admin_user_id": "admin",
+        "password": "admin-pw",
         "user_config": user_config,
     }
     assert fake_http.post.await_args_list[1].kwargs["json"] == {
         "user_id": "alice",
         "role": "admin",
+        "password": "alice-pw",
         "user_config": user_config,
     }
+    fake_http.put.assert_awaited_once_with(
+        "/api/v1/admin/accounts/acct/users/alice/password",
+        json={"password": "new-pw"},
+    )
 
 
 @pytest.mark.asyncio

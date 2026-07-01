@@ -43,17 +43,23 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
+    password: str | None = None
     user_config: UserConfig | None = None
 
 
 class RegisterUserRequest(BaseModel):
     user_id: str
     role: str = "user"
+    password: str | None = None
     user_config: UserConfig | None = None
 
 
 class SetRoleRequest(BaseModel):
     role: str
+
+
+class SetPasswordRequest(BaseModel):
+    password: str
 
 
 class MigrateLegacyDataRequest(BaseModel):
@@ -170,6 +176,7 @@ async def create_account(
     user_key = await manager.create_account(
         body.account_id,
         body.admin_user_id,
+        password=body.password,
     )
     await service.initialize_account_directories(account_ctx)
     await service.initialize_user_directories(account_ctx)
@@ -308,7 +315,12 @@ async def register_user(
     )
     _validate_initial_user_config(service, user_ctx, body.user_config)
     manager = _get_api_key_manager(request)
-    user_key = await manager.register_user(account_id, body.user_id, str(resolved_role))
+    user_key = await manager.register_user(
+        account_id,
+        body.user_id,
+        str(resolved_role),
+        password=body.password,
+    )
     await service.initialize_user_directories(user_ctx)
     await _write_initial_user_config(service, user_ctx, body.user_config)
     result = {
@@ -390,3 +402,26 @@ async def regenerate_key(
     manager = _get_api_key_manager(request)
     new_key = await manager.regenerate_key(account_id, user_id)
     return Response(status="ok", result={"user_key": new_key})
+
+
+@router.put("/accounts/{account_id}/users/{user_id}/password")
+@require_auth_root_or_admin
+async def set_password(
+    body: SetPasswordRequest,
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    user_id: str = Path(..., description="User ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Set or reset a user's password."""
+    _check_account_access(ctx, account_id)
+    manager = _get_api_key_manager(request)
+    await manager.set_password(account_id, user_id, body.password)
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "user_id": user_id,
+            "password_set": True,
+        },
+    )

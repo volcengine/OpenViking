@@ -151,7 +151,9 @@ client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 ```
 
-The SDK constructor only accepts `url`, `api_key`, and `path` parameters. Other configuration (embedding, vlm, etc.) is managed through the `ov.conf` config file.
+HTTP clients accept connection/auth parameters such as `url`, `api_key`,
+`account`, `user`, and `password`. Embedded/server runtime configuration
+(embedding, vlm, etc.) is managed through `ov.conf`.
 
 ### What file formats are supported?
 

@@ -29,7 +29,7 @@ from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 You can configure the SDK in three ways, with this precedence:
 
 1. Explicit constructor arguments
-2. Environment variables such as `OPENVIKING_URL`, `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_ACTOR_PEER_ID`, and `OPENVIKING_TIMEOUT`
+2. Environment variables such as `OPENVIKING_URL`, `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PASSWORD`, `OPENVIKING_ACTOR_PEER_ID`, and `OPENVIKING_TIMEOUT`
 3. `ovcli.conf`, either from `OPENVIKING_CLI_CONFIG_FILE` or the default path `~/.openviking/ovcli.conf`
 
 This means existing setups that relied on `ovcli.conf` continue to work after the SDK split.
@@ -44,6 +44,7 @@ Common client fields:
 - `api_key`: root key or user key
 - `account`: optional account override, usually only needed with a root key
 - `user`: optional user override, usually only needed with a root key
+- `password`: password used with `account` + `user` when no API key is configured
 - `user_id`: legacy alias for `user`
 - `actor_peer_id`: optional actor peer override
 - `agent_id`: legacy alias for `actor_peer_id`
@@ -76,6 +77,21 @@ client = SyncHTTPClient(
     user="demo-user",
 )
 ```
+
+For password authentication:
+
+```python
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(
+    url="http://127.0.0.1:1933",
+    account="demo-account",
+    user="demo-user",
+    password="your-password",
+)
+```
+
+API keys take precedence when both `api_key` and `password` are configured.
 
 ## Quick Start: Sync Client
 
@@ -191,6 +207,7 @@ If you connect with a root key, the SDK also exposes admin APIs such as:
 - `admin_list_accounts`
 - `admin_list_users`
 - `admin_regenerate_key`
+- `admin_set_password`
 - `admin_delete_account`
 
 Example:
@@ -206,6 +223,7 @@ root_client = SyncHTTPClient(
 result = root_client.admin_create_account(
     account_id="demo-account",
     admin_user_id="demo-admin",
+    password="demo-admin-password",
 )
 print(result)
 
@@ -213,6 +231,7 @@ root_client.admin_register_user(
     account_id="demo-account",
     user_id="alice",
     role="user",
+    password="alice-password",
     user_config={
         "add_targets": {
             "resource_uri": "viking://user/resources/project-a",
@@ -220,6 +239,8 @@ root_client.admin_register_user(
         }
     },
 )
+
+root_client.admin_set_password("demo-account", "alice", "new-password")
 ```
 
 `admin_create_account` also accepts `user_config` with the same shape.

@@ -17,6 +17,9 @@ func (c *Client) AdminCreateAccountWithOptions(ctx context.Context, accountID, a
 		"account_id":    accountID,
 		"admin_user_id": adminUserID,
 	}
+	if opts != nil && opts.Password != "" {
+		payload["password"] = opts.Password
+	}
 	if opts != nil && opts.UserConfig != nil {
 		payload["user_config"] = opts.UserConfig
 	}
@@ -53,6 +56,9 @@ func (c *Client) AdminRegisterUserWithOptions(ctx context.Context, accountID, us
 		"user_id": userID,
 		"role":    role,
 	}
+	if opts != nil && opts.Password != "" {
+		payload["password"] = opts.Password
+	}
 	if opts != nil && opts.UserConfig != nil {
 		payload["user_config"] = opts.UserConfig
 	}
@@ -80,6 +86,15 @@ func (c *Client) AdminSetRole(ctx context.Context, accountID, userID, role strin
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPut, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users/"+url.PathEscape(userID)+"/role", nil, map[string]any{
 		"role": role,
+	}, &result)
+	return result, err
+}
+
+// AdminSetPassword sets or resets a user's password.
+func (c *Client) AdminSetPassword(ctx context.Context, accountID, userID, password string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPut, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users/"+url.PathEscape(userID)+"/password", nil, map[string]any{
+		"password": password,
 	}, &result)
 	return result, err
 }

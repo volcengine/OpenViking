@@ -73,6 +73,7 @@ class TrustedAuthPlugin(AuthPlugin):
         api_key: Optional[str] = None,
         x_openviking_account: Optional[str] = None,
         x_openviking_user: Optional[str] = None,
+        x_openviking_password: Optional[str] = None,
     ) -> ResolvedIdentity:
         configured_root_api_key = _configured_root_api_key(request)
         if configured_root_api_key:

@@ -178,9 +178,9 @@ This lets the server resolve identity directly from the key, without extra tenan
 ### 5. Data API identity comes from the user or admin key
 
 In `api_key` mode, tenant-scoped data APIs such as `ls`, `find`, and `sessions`
-resolve the effective account and user from the API key itself. Do not send
-`X-OpenViking-Account` or `X-OpenViking-User` in this mode; header-based identity
-assertion belongs to trusted mode.
+resolve the effective account and user from the API key itself. Do not add
+`X-OpenViking-Account` or `X-OpenViking-User` to key-auth requests; identity
+headers without a password belong to trusted mode.
 
 An `ADMIN` key can call data APIs as its own account/user:
 

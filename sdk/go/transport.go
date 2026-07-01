@@ -51,6 +51,9 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 	if c.user != "" {
 		req.Header.Set("X-OpenViking-User", c.user)
 	}
+	if c.apiKey == "" && c.account != "" && c.user != "" && c.password != "" {
+		req.Header.Set("X-OpenViking-Password", c.password)
+	}
 	if c.actorPeerID != "" {
 		req.Header.Set("X-OpenViking-Actor-Peer", c.actorPeerID)
 	}

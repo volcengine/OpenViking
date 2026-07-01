@@ -23,6 +23,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 | 注册/移除用户 | Y | Y（本 account） | N |
 | 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
 | 重新生成 User Key | Y | Y（本 account） | N |
+| 设置用户密码 | Y | Y（本 account） | N |
 | 修改用户角色 | Y | N | N |
 
 ## CLI `--sudo` 选项
@@ -84,6 +85,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 |------|------|------|--------|------|
 | account_id | str | 是 | - | 工作区 ID |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
+| password | str | 否 | `null` | 首个管理员用户的初始密码。服务端以 hash 形式保存。 |
 | user_config | object | 否 | `null` | 首个管理员用户的初始配置。当前支持 `add_targets.resource_uri` 和 `add_targets.skill_uri` |
 
 **说明：**
@@ -106,7 +108,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice"
+    "admin_user_id": "alice",
+    "password": "alice-password"
   }'
 ```
 
@@ -160,7 +163,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-result = client.admin_create_account("acme", "alice")
+result = client.admin_create_account("acme", "alice", password="alice-password")
 print(f"Account created: {result['account_id']}")
 print(f"Admin user: {result['admin_user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
@@ -187,6 +190,7 @@ if err != nil {
 fmt.Println(result["account_id"])
 
 result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice", &openviking.AdminCreateAccountOptions{
+    Password: "alice-password",
     UserConfig: map[string]any{
         "add_targets": map[string]any{
             "resource_uri": "viking://user/resources",
@@ -201,6 +205,7 @@ result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice",
 ```bash
 # 需要 ROOT 权限，使用 --sudo
 ov --sudo admin create-account acme --admin alice
+ov --sudo admin create-account acme-password --admin alice --password "$PASSWORD"
 
 ov --sudo admin create-account acme-private --admin alice \
   --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources","skill_uri":"viking://user/skills"}}'
@@ -412,6 +417,7 @@ ov --sudo admin delete-account acme
 | account_id | str | 是 | - | 工作区 ID |
 | user_id | str | 是 | - | 用户 ID |
 | role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`。`"root"` 必须通过专门的改角色接口分配。 |
+| password | str | 否 | `null` | 用户初始密码。服务端以 hash 形式保存。 |
 | user_config | object | 否 | `null` | 新用户的初始配置。当前支持 `add_targets.resource_uri` 和 `add_targets.skill_uri` |
 
 **说明：**
@@ -435,7 +441,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>" \
   -d '{
     "user_id": "bob",
-    "role": "user"
+    "role": "user",
+    "password": "bob-password"
   }'
 ```
 
@@ -447,7 +454,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-result = client.admin_register_user("acme", "bob", role="user")
+result = client.admin_register_user("acme", "bob", role="user", password="bob-password")
 print(f"User registered: {result['user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 
@@ -469,6 +476,7 @@ if err != nil {
 fmt.Println(result["user_id"])
 
 result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "user", &openviking.AdminRegisterUserOptions{
+    Password: "bob-password",
     UserConfig: map[string]any{
         "add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
     },
@@ -481,6 +489,7 @@ result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "u
 # ROOT 或本账户的 ADMIN 都可以执行
 # 如果使用普通用户的 api_key 但该用户是 acme 的 ADMIN：
 ov admin register-user acme bob --role user
+ov admin register-user acme bob-password --role user --password "$PASSWORD"
 # 如果使用 root_api_key（--sudo）：
 ov --sudo admin register-user acme bob --role user
 
@@ -870,6 +879,82 @@ ov --sudo admin regenerate-key acme bob
 
 ---
 
+### set_password
+
+#### 1. API 实现介绍
+
+设置或替换用户密码。已有 API Key 不会改变。
+
+**处理流程：**
+1. 验证请求者具有 ROOT 权限，或为本账户的 ADMIN
+2. 服务端对密码做 hash
+3. 将 hash 写入用户记录
+4. 返回 `password_set: true`
+
+#### 2. 接口和参数说明
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| account_id | str | 是 | - | 工作区 ID |
+| user_id | str | 是 | - | 用户 ID |
+| password | str | 是 | - | 新密码 |
+
+**说明：**
+- ADMIN 只能为自己所属 account 中的用户设置密码
+- 密码以 hash 形式保存，API 永远不会返回明文密码
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```
+PUT /api/v1/admin/accounts/{account_id}/users/{user_id}/password
+```
+
+```bash
+curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/password \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-or-admin-key>" \
+  -d '{"password": "new-password"}'
+```
+
+**Python SDK**
+
+```python
+result = client.admin_set_password("acme", "bob", "new-password")
+```
+
+**Go SDK**
+
+```go
+result, err := client.AdminSetPassword(ctx, "acme", "bob", "new-password")
+```
+
+**CLI**
+
+```bash
+ov admin set-password acme bob --password "$NEW_PASSWORD"
+ov --sudo admin set-password acme bob --password "$NEW_PASSWORD"
+```
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "account_id": "acme",
+    "user_id": "bob",
+    "password_set": true
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### migrate_legacy_data
 
 #### 1. API 实现介绍
@@ -1014,13 +1099,13 @@ curl -X PATCH http://localhost:1933/api/v1/user-settings/add-locations \
 ### 典型管理流程
 
 ```bash
-# 步骤 1：ROOT 创建工作区，指定 alice 为首个 admin（需要 --sudo）
-ov --sudo admin create-account acme --admin alice
+# 步骤 1：创建工作区和首个 admin（需要 --sudo）
+ov --sudo admin create-account acme --admin alice --password "$ALICE_PASSWORD"
 # 返回 alice 的 user_key
 
-# 步骤 2：alice（admin）注册普通用户 bob
-# 配置文件中的 api_key 设为 alice 的 user_key，不需要 --sudo
-ov admin register-user acme bob --role user
+# 步骤 2：注册普通用户 bob
+# 配置文件中的 api_key 设为 alice 的 user_key
+ov admin register-user acme bob --role user --password "$BOB_PASSWORD"
 # 返回 bob 的 user_key
 
 # 步骤 3：查看账户下所有用户
@@ -1029,14 +1114,16 @@ ov admin list-users acme
 # 步骤 4：ROOT 将 bob 提升为 admin（需要 --sudo）
 ov --sudo admin set-role acme bob admin
 
-# 步骤 5：bob 丢失 key，重新生成（旧 key 立即失效）
-# alice 作为 admin 可以执行，不需要 --sudo
+# 步骤 5：重新生成 bob 的 API Key（旧 key 立即失效）
 ov admin regenerate-key acme bob
 
-# 步骤 6：移除用户
+# 步骤 6：设置 bob 的 password
+ov admin set-password acme bob --password "$NEW_BOB_PASSWORD"
+
+# 步骤 7：移除用户
 ov admin remove-user acme bob
 
-# 步骤 7：删除整个工作区（需要 --sudo）
+# 步骤 8：删除整个工作区（需要 --sudo）
 ov --sudo admin delete-account acme
 ```
 
@@ -1047,13 +1134,13 @@ ov --sudo admin delete-account acme
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-key>" \
-  -d '{"account_id": "acme", "admin_user_id": "alice"}'
+  -d '{"account_id": "acme", "admin_user_id": "alice", "password": "alice-password"}'
 
 # 步骤 2：注册用户（使用 alice 的 admin key）
 curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <alice-key>" \
-  -d '{"user_id": "bob", "role": "user"}'
+  -d '{"user_id": "bob", "role": "user", "password": "bob-password"}'
 
 # 步骤 3：列出用户
 curl -X GET http://localhost:1933/api/v1/admin/accounts/acme/users \
@@ -1070,11 +1157,17 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users/bob/key \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <alice-key>"
 
-# 步骤 6：移除用户
+# 步骤 6：设置密码
+curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/password \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <alice-key>" \
+  -d '{"password": "new-password"}'
+
+# 步骤 7：移除用户
 curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/users/bob \
   -H "X-API-Key: <alice-key>"
 
-# 步骤 7：删除工作区
+# 步骤 8：删除工作区
 curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
   -H "X-API-Key: <root-key>"
 ```

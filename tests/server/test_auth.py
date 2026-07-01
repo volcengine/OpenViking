@@ -310,6 +310,32 @@ async def test_user_key_access(auth_client: httpx.AsyncClient, user_key: str):
     assert resp.status_code == 200
 
 
+async def test_password_header_access(auth_client: httpx.AsyncClient, auth_app):
+    """Account/user/password headers should grant access when no API key is present."""
+    manager = auth_app.state.api_key_manager
+    account_id = _uid()
+    await manager.create_account(account_id, "admin", password="admin-secret")
+    user_key = await manager.register_user(account_id, "alice", "user", password="alice-secret")
+
+    headers = {
+        "X-OpenViking-Account": account_id,
+        "X-OpenViking-User": "alice",
+        "X-OpenViking-Password": "alice-secret",
+    }
+    resp = await auth_client.get("/api/v1/fs/ls?uri=viking://", headers=headers)
+    assert resp.status_code == 200
+
+    bad_headers = dict(headers)
+    bad_headers["X-OpenViking-Password"] = "wrong"
+    resp = await auth_client.get("/api/v1/fs/ls?uri=viking://", headers=bad_headers)
+    assert resp.status_code == 401
+
+    api_key_headers = dict(bad_headers)
+    api_key_headers["X-API-Key"] = user_key
+    resp = await auth_client.get("/api/v1/fs/ls?uri=viking://", headers=api_key_headers)
+    assert resp.status_code == 200
+
+
 async def test_missing_key_returns_401(auth_client: httpx.AsyncClient):
     """Request without API key should return 401."""
     resp = await auth_client.get("/api/v1/system/status")
