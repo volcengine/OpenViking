@@ -363,15 +363,13 @@ async def test_add_resource_local_path_returns_upload_instruction(service):
 
     upload_token_store.clear()
     result = await add_resource(path="/tmp/sample_local_file_xyz.pdf")
-    assert "upload required" in result.lower()
-    assert "Step 1." in result
-    assert "Step 2." in result
-    assert "/api/v1/resources/temp_upload_signed" in result
-    assert "token=" in result
-    # The server now mints temp_file_id at upload time; the prose tells the agent
-    # to read it from the upload response.
-    assert "temp_file_id" in result
-    assert "<id from step 1>" in result
+    assert "local file detected" in result.lower()
+    # Single-step flow: POST the file and the server auto-ingests. No second call, no
+    # temp_file_id handshake exposed to the agent.
+    assert "/api/v1/resources/temp_upload?token=" in result
+    assert "temp_upload_signed" not in result
+    assert "automatically" in result.lower()
+    assert "temp_file_id" not in result
     # Default fixture sets neither env nor config.public_base_url → URL is auto-inferred
     # and the troubleshooting hint must appear.
     assert "OPENVIKING_PUBLIC_BASE_URL" in result
@@ -384,7 +382,7 @@ async def test_add_resource_local_path_uses_env_var_when_set(service, monkeypatc
     upload_token_store.clear()
     monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://my-ov.example.com")
     result = await add_resource(path="/tmp/x.pdf")
-    assert "https://my-ov.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "https://my-ov.example.com/api/v1/resources/temp_upload?token=" in result
     # Explicit source → no troubleshooting hint
     assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
     upload_token_store.clear()
@@ -402,7 +400,7 @@ async def test_add_resource_local_path_uses_config_when_env_unset(service, monke
     )
 
     result = await add_resource(path="/tmp/x.pdf")
-    assert "https://configured.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "https://configured.example.com/api/v1/resources/temp_upload?token=" in result
     assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
     upload_token_store.clear()
 
@@ -426,7 +424,7 @@ async def test_add_resource_local_path_infers_from_x_forwarded_headers(service, 
     finally:
         _request_url_ctx.reset(token)
 
-    assert "https://ov.public.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "https://ov.public.example.com/api/v1/resources/temp_upload?token=" in result
     # Inferred → hint must appear
     assert "OPENVIKING_PUBLIC_BASE_URL" in result
     upload_token_store.clear()
@@ -486,6 +484,24 @@ async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
     assert captured["path"] == str(target.resolve())
     assert captured["allow_local_path_resolution"] is True
     upload_token_store.clear()
+
+
+async def test_add_resource_temp_file_id_ingest_error_is_surfaced(
+    service, upload_temp_dir, monkeypatch
+):
+    """add_resource returns a business-error dict without raising; MCP must surface it."""
+    tfid = "upload_deadbeef.md"
+    (upload_temp_dir / tfid).write_text("junk")
+
+    async def failing_add_resource(*, path, ctx, **kwargs):
+        return {"status": "error", "errors": ["parse failed"]}
+
+    monkeypatch.setattr(service.resources, "add_resource", failing_add_resource)
+
+    result = await add_resource(temp_file_id=tfid)
+    assert "Error adding resource" in result
+    assert "parse failed" in result
+    assert "Resource added" not in result
 
 
 async def test_add_resource_watch_without_to_is_forwarded(service, monkeypatch):

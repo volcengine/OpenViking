@@ -124,16 +124,14 @@ claude mcp add --transport http openviking \
 
 > 未传 `args.feishu_access_token` 的飞书/Lark 导入保持现有应用/tenant token 行为，也支持 watch。飞书/Lark 一次性用户 token 导入只传 `args.feishu_access_token`；飞书/Lark 用户 token watch 还必须传 `args.feishu_refresh_token`，并要求 OpenViking 服务端配置同一个飞书应用凭证。
 
-### 添加本地文件资源(渐进式上传)
+### 添加本地文件资源(单步上传)
 
 `add_resource` 工具同时接受**远程 URL** 和**本地文件路径**。两者的处理路径不同:
 
 - **远程 URL**(`http(s)://`、`git@`、`ssh://`、`git://`):一次调用即完成,server 直接拉取并入库。
-- **本地文件路径**:返回**两步上传指令**(纯文本,Step 1 / Step 2 排版),agent 需要:
-  1. 把文件以 `multipart/form-data` POST 到响应里给出的 `temp_upload_signed` URL(URL 内嵌一次性 token,默认 10 分钟过期)。Server 在写入时 mint `temp_file_id`,通过 JSON `{"temp_file_id": "..."}` 返回。
-  2. 从响应体读出 `temp_file_id`,再次调用 `add_resource(temp_file_id="<step 1 返回的 id>")`,server 通过 `TempUploadStore` 解析文件并入库。
+- **本地文件路径**:返回**上传指令**(纯文本)。agent 把文件以 `multipart/form-data`(字段名 `file`)POST 到响应里给出的 `temp_upload` URL。该 URL 内嵌一次性 token(默认 10 分钟过期)作为鉴权凭证,无需 API Key。Server 随后在**同一次请求内自动入库**并返回最终结果,agent **无需**再次调用 `add_resource`。
 
-这样设计是为了让任何 MCP 客户端(包括无本地文件系统的 Claude web、Manus 等沙箱环境)都能往 OpenViking 灌文件,而不需要客户端预装 `ov` CLI。签名端点和认证版的 `temp_upload` 共享同一个持久化层(`TempUploadStore`),所以 `local` / `shared` 上传模式(以及 `shared` 模式带来的多 worker 支持)在两个端点上行为一致。
+这样设计是为了让任何 MCP 客户端(包括无本地文件系统的 Claude web、Manus 等沙箱环境)都能往 OpenViking 灌文件,而不需要客户端预装 `ov` CLI。token 上传复用认证版的 `temp_upload` 路由(API Key 优先,否则走一次性 `?token=`)及其 `TempUploadStore` 持久化,所以 `local` / `shared` 上传模式行为一致。注意:一次性 token 保存在进程内,因此多 worker 部署下 `add_resource` 调用与后续的上传 POST 必须落到同一个 worker(或以单 worker 运行),token 才能被解析。
 
 #### 必须配置 `OPENVIKING_PUBLIC_BASE_URL` 的场景
 

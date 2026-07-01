@@ -4,21 +4,20 @@
 
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import require_remote_resource_source
+from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.responses import response_from_result
 from openviking.server.skill_source_metadata import persist_skill_source_metadata
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
-from openviking.server.upload_token_store import UploadTokenError, upload_token_store
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
-from openviking_cli.session.user_id import UserIdentifier
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
 
@@ -128,65 +127,45 @@ async def temp_upload(
     file: UploadFile = File(...),
     telemetry: bool = Form(False),
     upload_mode: str = Form("local"),
-    _ctx: RequestContext = Depends(get_request_context),
+    _ctx: RequestContext = Depends(get_upload_request_context),
 ):
-    """Upload a temporary file for add_resource or import_ovpack."""
+    """Upload a temporary file for add_resource or import_ovpack.
 
-    async def _upload() -> dict[str, str]:
+    Two auth layers (see :func:`get_upload_request_context`): with an API key the file is
+    stored and its ``temp_file_id`` returned (used by the CLI and ``import_ovpack``). With a
+    signed ``?token=`` — minted by the MCP ``add_resource`` tool for local-file paths — the
+    server additionally finishes ingestion in-request: it resolves the upload, calls
+    ``add_resource`` with the token-bound ``to``/``reason``, and returns the final result, so
+    the agent never needs a second call. The ``?token=`` query param is consumed by the auth
+    dependency.
+    """
+    signed = getattr(request.state, "signed_upload", None)
+
+    async def _upload() -> dict[str, Any]:
         store = TempUploadStore.build(request.app.state.config)
         temp_file_id = await store.save_upload(file, upload_mode, _ctx)
-        return {"temp_file_id": temp_file_id}
-
-    execution = await run_operation(
-        operation="resources.temp_upload",
-        telemetry=telemetry,
-        fn=_upload,
-    )
-    return response_from_result(execution.result, telemetry=execution.telemetry)
-
-
-@router.post("/resources/temp_upload_signed")
-async def temp_upload_signed(
-    request: Request,
-    file: UploadFile = File(...),
-    token: str = Query(..., min_length=1),
-    upload_mode: str = Query("local"),
-):
-    """Upload via short-lived signed token. Used by the MCP progressive-upload flow.
-
-    No identity headers required — the token (issued by ``add_resource`` MCP for local-file
-    paths) carries the bound (account_id, user_id). The token is consumed on first
-    use; subsequent attempts return 401. The server mints the ``temp_file_id`` at write time
-    and returns it in the response body; the caller then calls ``add_resource`` with that id.
-
-    Persistence flows through :class:`TempUploadStore`, so the same local/shared upload modes
-    and size limit (``temp_upload.shared_max_size_bytes``) as the auth'd ``/temp_upload`` route
-    apply here too.
-    """
-    try:
-        account_id, user_id = upload_token_store.consume(token)
-    except UploadTokenError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-
-    try:
-        ctx = RequestContext(
-            user=UserIdentifier(account_id, user_id),
-            role=Role.USER,
+        if signed is None:
+            return {"temp_file_id": temp_file_id}
+        return await ingest_temp_upload(
+            store, temp_file_id, _ctx, to=signed.to, reason=signed.reason
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"invalid identity in token: {exc}") from exc
 
-    store = TempUploadStore.build(request.app.state.config)
     try:
-        temp_file_id = await store.save_upload(file, upload_mode, ctx)
+        execution = await run_operation(
+            operation="resources.temp_upload",
+            telemetry=telemetry,
+            fn=_upload,
+        )
     except InvalidArgumentError as exc:
-        # save_upload raises InvalidArgumentError for both bad mode and oversize.
-        # Map oversize specifically to 413; the rest stay 400.
+        if signed is None:
+            raise
+        # save_upload raises InvalidArgumentError for both bad mode and oversize. The signed
+        # route mapped oversize to 413 and the rest to 400 before the routes merged; preserve
+        # that contract for the token path.
         msg = str(exc)
         status = 413 if "exceeds size limit" in msg else 400
         raise HTTPException(status_code=status, detail=msg) from exc
-
-    return {"temp_file_id": temp_file_id}
+    return response_from_result(execution.result, telemetry=execution.telemetry)
 
 
 @router.post("/resources")
