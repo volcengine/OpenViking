@@ -294,3 +294,32 @@ async def test_http_ignore_get_set_delete_roundtrip(http_app, http_service):
         # Gone -> empty string again.
         r = await c.get("/api/v1/snapshot/ignore")
         assert r.json()["result"] == ""
+
+
+async def test_http_sdk_snapshot_ignore_roundtrip(http_git_client, http_service):
+    """Drive ignore management through the real AsyncHTTPClient.snapshot namespace.
+
+    Unlike test_http_ignore_get_set_delete_roundtrip (which hits the routes
+    with raw httpx), this exercises the SDK surface end-to-end:
+    AsyncHTTPClient.snapshot.get/set/delete_gitignore -> httpx -> FastAPI ->
+    FsService -> VikingFS, including the rule taking effect at commit time.
+    """
+    client = http_git_client
+
+    # Absent -> empty string.
+    assert await client.snapshot.get_gitignore() == ""
+
+    # Set a rule via the SDK namespace.
+    await client.snapshot.set_gitignore(content="*.log\n")
+    assert await client.snapshot.get_gitignore() == "*.log\n"
+
+    # The rule affects a commit performed through the same SDK namespace.
+    await _write_blob(http_service, "viking://resources/sdk_keep.md", b"keep")
+    await _write_blob(http_service, "viking://resources/sdk_skip.log", b"skip")
+    commit = await client.snapshot.commit(message="sdk ignore")
+    assert commit["result"] == "created"
+    assert commit["ignored"] == 1
+
+    # Delete via the SDK namespace, then confirm it is gone.
+    await client.snapshot.delete_gitignore()
+    assert await client.snapshot.get_gitignore() == ""
