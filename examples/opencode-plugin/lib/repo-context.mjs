@@ -61,6 +61,36 @@ export function createRepoContext({ config }) {
   }
 }
 
+/**
+ * Merge the repo-context system prompt into OpenCode's system array without
+ * adding a new system block.
+ *
+ * OpenCode serializes every entry of `output.system` into its own
+ * `{ role: "system" }` message and only re-collapses the array when it holds
+ * more than two entries (session/llm/request.ts). Pushing a new entry onto the
+ * single collapsed system prompt therefore produces two leading system
+ * messages, which providers that require a single system message (e.g. litellm
+ * proxying to OpenAI) reject with "System message must be at the beginning".
+ * Appending to the last existing entry keeps the block count unchanged, so the
+ * conversation still starts with exactly one system message. See issue #2885.
+ *
+ * @param {{ system?: string[] }} output OpenCode system-transform hook output.
+ * @param {string | null | undefined} prompt Repo-context prompt to inject.
+ * @returns {boolean} Whether the prompt was injected.
+ */
+export function applyRepoSystemPrompt(output, prompt) {
+  if (!prompt) return false
+  const system = output?.system
+  if (!Array.isArray(system)) return false
+  if (system.length > 0) {
+    const last = system[system.length - 1]
+    system[system.length - 1] = last ? `${last}\n\n${prompt}` : prompt
+  } else {
+    system.push(prompt)
+  }
+  return true
+}
+
 function formatRepoLine(item) {
   const name = item.uri.replace("viking://resources/", "").replace(/\/$/, "") || "resources"
   const abstract = item.abstract || item.overview
