@@ -3,11 +3,13 @@
 """Scrapy spider for recursive web resource import."""
 
 import os
+from collections.abc import Iterator
 from urllib.parse import urljoin, urlparse
 
 import scrapy
 from parsel import Selector
 from scrapy import signals
+from scrapy.exceptions import CloseSpider
 
 from openviking.parse.accessors.http_accessor import URLType, URLTypeDetector
 from openviking.parse.accessors.web_crawler.config import CrawlConfig
@@ -97,26 +99,25 @@ class OpenVikingWebSpider(scrapy.Spider):
     def _success_at_limit(self) -> bool:
         return 0 < self.config.max_pages <= self._success_count
 
+    def _stop_if_success_at_limit(self) -> bool:
+        if not self._success_at_limit():
+            return False
+        if getattr(self, "crawler", None) and getattr(self.crawler, "engine", None):
+            raise CloseSpider("max_pages_reached")
+        return True
+
     async def start(self):
         yield scrapy.Request(self.root_url, callback=self.parse, errback=self.errback)
 
     async def parse(self, response):
-        if self._success_at_limit():
+        if self._stop_if_success_at_limit():
             return
         final_url = response.url
         depth = int(response.meta.get("depth", 0) or 0)
         try:
             self._validate_url(final_url)
         except Exception as exc:
-            self.collector.append(
-                CrawledPage(
-                    url=response.url,
-                    final_url=final_url,
-                    depth=depth,
-                    status="failed",
-                    error=str(exc),
-                )
-            )
+            self._add_failed(response.url, final_url, depth, str(exc))
             return
 
         if not self._is_html_response(response):
@@ -139,44 +140,22 @@ class OpenVikingWebSpider(scrapy.Spider):
                     page_html = rendered.html
                     page_source = "playwright"
                 elif rendered.error:
-                    self.collector.append(
-                        CrawledPage(
-                            url=response.url,
-                            final_url=final_url,
-                            depth=depth,
-                            status="failed",
-                            error=rendered.error,
-                        )
-                    )
+                    self._add_failed(response.url, final_url, depth, rendered.error)
                     return
         except Exception as exc:
-            self.collector.append(
-                CrawledPage(
-                    url=response.url,
-                    final_url=final_url,
-                    depth=depth,
-                    status="failed",
-                    error=str(exc),
-                )
-            )
+            self._add_failed(response.url, final_url, depth, str(exc))
             return
 
         if needs_render and looks_like_unrendered_page(page_html):
-            self.collector.append(
-                CrawledPage(
-                    url=response.url,
-                    final_url=final_url,
-                    depth=depth,
-                    status="failed",
-                    error=(
-                        "page did not render real content "
-                        "(empty shell or anti-bot challenge page)"
-                    ),
-                )
+            self._add_failed(
+                response.url,
+                final_url,
+                depth,
+                "page did not render real content (empty shell or anti-bot challenge page)",
             )
             return
 
-        if self._success_at_limit():
+        if self._stop_if_success_at_limit():
             return
         self.collector.append(
             CrawledPage(
@@ -189,14 +168,14 @@ class OpenVikingWebSpider(scrapy.Spider):
         )
         self._success_count += 1
 
-        if self._success_at_limit():
+        if self._stop_if_success_at_limit():
             return
         if self.config.depth >= 0 and depth >= self.config.depth:
             return
         for url in self._extract_download_urls(page_html, final_url, depth + 1):
             self.download_collector.append(CrawledDownload(url=url, depth=depth + 1))
             self._success_count += 1
-            if self._success_at_limit():
+            if self._stop_if_success_at_limit():
                 return
         for url in self._extract_child_urls(page_html, final_url):
             yield response.follow(
@@ -208,33 +187,27 @@ class OpenVikingWebSpider(scrapy.Spider):
     def errback(self, failure):
         request = failure.request
         depth = int(request.meta.get("depth", 0) or 0)
-        self.collector.append(
-            CrawledPage(
-                url=request.url,
-                final_url=request.url,
-                depth=depth,
-                status="failed",
-                error=failure.getErrorMessage(),
-            )
-        )
+        self._add_failed(request.url, request.url, depth, failure.getErrorMessage())
 
-    def _extract_child_urls(self, html: str, base_url: str) -> list[str]:
-        accepted: list[str] = []
-        seen: set[str] = set()
+    def _iter_unique_links(self, html: str, base_url: str) -> Iterator[str]:
         try:
-            selector = Selector(text=html or "")
-            hrefs = selector.css("a::attr(href)").getall()
+            hrefs = Selector(text=html or "").css("a::attr(href)").getall()
         except Exception:
             hrefs = []
+        seen: set[str] = set()
         for href in hrefs:
             href = (href or "").strip()
             if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
                 continue
-            url = urljoin(base_url, href)
-            url = url.split("#", 1)[0]
+            url = urljoin(base_url, href).split("#", 1)[0]
             if url in seen:
                 continue
             seen.add(url)
+            yield url
+
+    def _extract_child_urls(self, html: str, base_url: str) -> list[str]:
+        accepted: list[str] = []
+        for url in self._iter_unique_links(html, base_url):
             if self._accept_child_url(url):
                 accepted.append(url)
                 if len(accepted) >= self.config.max_links_per_page:
@@ -245,23 +218,10 @@ class OpenVikingWebSpider(scrapy.Spider):
         if self.config.skip_download_links:
             return []
         accepted: list[str] = []
-        seen: set[str] = set()
-        try:
-            selector = Selector(text=html or "")
-            hrefs = selector.css("a::attr(href)").getall()
-        except Exception:
-            hrefs = []
-        for href in hrefs:
+        for url in self._iter_unique_links(html, base_url):
             if self._success_at_limit():
                 break
-            href = (href or "").strip()
-            if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
-                continue
-            url = urljoin(base_url, href).split("#", 1)[0]
-            if url in seen or url in self._seen_download_urls:
-                continue
-            seen.add(url)
-            if not self._accept_download_url(url):
+            if url in self._seen_download_urls or not self._accept_download_url(url):
                 continue
             self._seen_download_urls.add(url)
             accepted.append(url)
@@ -271,33 +231,22 @@ class OpenVikingWebSpider(scrapy.Spider):
 
     def _accept_child_url(self, url: str) -> bool:
         parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return False
-        if not self.config.allow_external_links and parsed.netloc.lower() != self.root_host:
-            return False
         ext = os.path.splitext(parsed.path.lower())[1]
         if ext in self.ASSET_EXTENSIONS or ext in self.DOWNLOAD_EXTENSIONS:
             return False
-        if self.config.include_paths and not self._matches_any(
-            parsed.path, self.config.include_paths
-        ):
-            return False
-        if self.config.exclude_paths and self._matches_any(parsed.path, self.config.exclude_paths):
-            return False
-        try:
-            self._validate_url(url)
-        except Exception:
-            return False
-        return True
+        return self._passes_url_filters(url, parsed)
 
     def _accept_download_url(self, url: str) -> bool:
         parsed = urlparse(url)
+        ext = os.path.splitext(parsed.path.lower())[1]
+        if ext not in self.DOWNLOAD_EXTENSIONS:
+            return False
+        return self._passes_url_filters(url, parsed)
+
+    def _passes_url_filters(self, url: str, parsed) -> bool:
         if parsed.scheme not in ("http", "https"):
             return False
         if not self.config.allow_external_links and parsed.netloc.lower() != self.root_host:
-            return False
-        ext = os.path.splitext(parsed.path.lower())[1]
-        if ext not in self.DOWNLOAD_EXTENSIONS:
             return False
         if self.config.include_paths and not self._matches_any(
             parsed.path, self.config.include_paths
@@ -327,4 +276,15 @@ class OpenVikingWebSpider(scrapy.Spider):
     def _add_skipped(self, url: str, depth: int, reason: str) -> None:
         self.collector.append(
             CrawledPage(url=url, final_url=url, depth=depth, status="skipped", error=reason)
+        )
+
+    def _add_failed(self, url: str, final_url: str, depth: int, error: str) -> None:
+        self.collector.append(
+            CrawledPage(
+                url=url,
+                final_url=final_url,
+                depth=depth,
+                status="failed",
+                error=error,
+            )
         )

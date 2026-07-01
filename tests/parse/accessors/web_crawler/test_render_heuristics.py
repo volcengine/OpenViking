@@ -44,3 +44,14 @@ def test_real_content_is_not_unrendered():
     body = "Collection 数据过滤删除任务的完整说明文档，包含请求参数、示例与返回值。" * 3
     html = f"<html><body><article>{body}</article></body></html>"
     assert looks_like_unrendered_page(html) is False
+
+
+def test_unrendered_check_fails_closed_on_parser_error(monkeypatch):
+    from openviking.parse.accessors.web_crawler import render_heuristics
+
+    def raise_parser_error(*_args, **_kwargs):
+        raise RuntimeError("parser failed")
+
+    monkeypatch.setattr(render_heuristics, "BeautifulSoup", raise_parser_error)
+
+    assert render_heuristics.looks_like_unrendered_page("<html></html>") is True

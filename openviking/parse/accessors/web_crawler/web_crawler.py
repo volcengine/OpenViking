@@ -46,12 +46,17 @@ def _build_settings(config: CrawlConfig):
     from scrapy.settings import Settings
 
     depth_limit = 0 if config.depth < 0 else config.depth
-    close_pagecount = 0 if config.max_pages < 0 else config.max_pages
     return Settings(
         {
             "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
             "DEPTH_LIMIT": depth_limit,
-            "CLOSESPIDER_PAGECOUNT": close_pagecount,
+            # max_pages is enforced inside the spider by successful-resource count
+            # (OpenVikingWebSpider._success_at_limit). Scrapy's
+            # CLOSESPIDER_PAGECOUNT counts every response, including failed and
+            # skipped ones, so enabling it would stop the crawl on a different
+            # metric and yield fewer successful pages than requested. Keep it
+            # disabled so the spider is the single source of truth.
+            "CLOSESPIDER_PAGECOUNT": 0,
             "CONCURRENT_REQUESTS": config.concurrency,
             "DOWNLOAD_TIMEOUT": config.timeout,
             "DOWNLOAD_DELAY": config.download_delay,
@@ -80,12 +85,15 @@ class ScrapyWebCrawler:
             args=(root_url, self.config, result_queue),
         )
         process.start()
-        pages, downloads, error = await self._wait_worker_result(process, result_queue)
-        if error:
-            raise RuntimeError(error)
-        if process.exitcode not in (0, None):
-            raise RuntimeError(f"Scrapy crawler exited with code {process.exitcode}.")
-        return self._build_result(pages, downloads)
+        try:
+            pages, downloads, error = await self._wait_worker_result(process, result_queue)
+            if error:
+                raise RuntimeError(error)
+            if process.exitcode not in (0, None):
+                raise RuntimeError(f"Scrapy crawler exited with code {process.exitcode}.")
+            return self._build_result(pages, downloads)
+        finally:
+            await self._cleanup_worker(process, result_queue)
 
     @staticmethod
     async def _wait_worker_result(
@@ -108,9 +116,23 @@ class ScrapyWebCrawler:
         result_queue,
     ) -> tuple[list[CrawledPage], list[CrawledDownload], str | None]:
         try:
-            return result_queue.get_nowait()
+            return result_queue.get(True, 0.2)
         except queue.Empty:
             return [], [], "Scrapy crawler did not return a result."
+
+    @staticmethod
+    async def _cleanup_worker(process, result_queue) -> None:
+        if process.is_alive():
+            process.terminate()
+            await asyncio.to_thread(process.join, 5.0)
+            if process.is_alive():
+                process.kill()
+                await asyncio.to_thread(process.join, 5.0)
+        try:
+            result_queue.close()
+            result_queue.join_thread()
+        except Exception:
+            pass
 
     @staticmethod
     def _build_result(pages: list[CrawledPage], downloads: list[CrawledDownload]) -> CrawlResult:

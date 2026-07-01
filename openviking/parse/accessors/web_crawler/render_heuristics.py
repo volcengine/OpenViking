@@ -16,11 +16,11 @@ _SPA_EMPTY_PATTERNS = (
 )
 
 _MIN_VISIBLE_TEXT_CHARS = 200
-_SHELL_VISIBLE_TEXT_CHARS = 40
+SHELL_VISIBLE_TEXT_CHARS = 40
 
 # Text markers of JS anti-bot interstitials that briefly show before the real
 # page loads (e.g. volcengine's proof-of-work gate renders only "Please wait...").
-_CHALLENGE_MARKERS = (
+CHALLENGE_MARKERS = (
     "please wait",
     "checking your browser",
     "verifying you are human",
@@ -40,7 +40,7 @@ def should_render_with_playwright(html: str) -> bool:
     if "__next_data__" in html_lower:
         return True
     visible_len = visible_body_text_len(html)
-    if visible_len < _SHELL_VISIBLE_TEXT_CHARS:
+    if visible_len < SHELL_VISIBLE_TEXT_CHARS:
         return True
     if html_lower.count("<script") >= 5 and visible_len < _MIN_VISIBLE_TEXT_CHARS:
         return True
@@ -53,16 +53,19 @@ def looks_like_unrendered_page(html: str) -> bool:
     Used to reject content that must not be stored as real page text: the
     static SPA shell or a JS interstitial such as "Please wait...".
     """
-    html = html or ""
-    soup = BeautifulSoup(html, "html.parser")
-    body = soup.body or soup
-    for el in body(["script", "style", "noscript"]):
-        el.decompose()
-    text = body.get_text(strip=True)
-    lowered = text.lower()
-    if any(marker in lowered for marker in _CHALLENGE_MARKERS):
+    try:
+        html = html or ""
+        soup = BeautifulSoup(html, "html.parser")
+        body = soup.body or soup
+        for el in body(["script", "style", "noscript"]):
+            el.decompose()
+        text = body.get_text(strip=True)
+        lowered = text.lower()
+        if any(marker in lowered for marker in CHALLENGE_MARKERS):
+            return True
+        return len(text) < SHELL_VISIBLE_TEXT_CHARS
+    except Exception:
         return True
-    return len(text) < _SHELL_VISIBLE_TEXT_CHARS
 
 
 def visible_body_text_len(html: str) -> int:

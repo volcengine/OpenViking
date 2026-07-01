@@ -13,6 +13,10 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 
 from openviking.parse.accessors.http_accessor import HTTPAccessor
 from openviking.parse.accessors.web_crawler import CrawlConfig, ScrapyWebCrawler
+from openviking.parse.accessors.web_crawler.playwright_renderer import (
+    PLAYWRIGHT_CHROMIUM_INSTALL_HINT,
+    PLAYWRIGHT_PACKAGE_INSTALL_HINT,
+)
 from openviking.parse.accessors.web_feed_accessor import (
     FeedEntry,
     _dedup_relpath,
@@ -21,10 +25,23 @@ from openviking.parse.accessors.web_feed_accessor import (
     url_to_relpath,
 )
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils.logger import get_logger
 
+logger = get_logger(__name__)
 
 DEPTH_UNLIMITED = -1
 MAX_PAGES_UNLIMITED = -1
+
+# Actionable install hints the renderer records on CrawledPage.error when the
+# Playwright fallback is needed but unavailable. These are surfaced to the user
+# even for non-entry pages, which would otherwise only show up as a failure
+# count.
+_RENDER_INSTALL_HINTS = frozenset(
+    {
+        PLAYWRIGHT_PACKAGE_INSTALL_HINT,
+        PLAYWRIGHT_CHROMIUM_INSTALL_HINT,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -99,6 +116,15 @@ class WebImporter:
                 message = f"{message} ({detail})"
             raise RuntimeError(message)
 
+        render_hints = self._render_install_hints(crawl_result.pages)
+        if render_hints:
+            logger.warning(
+                "Some pages could not be rendered during web import of %s and were "
+                "skipped: %s",
+                root_url,
+                " ".join(render_hints),
+            )
+
         temp_root = Path(tempfile.mkdtemp(prefix="ov_web_"))
         temp_dir = temp_root / _host_name(root_url)
         try:
@@ -129,9 +155,27 @@ class WebImporter:
                 "page_count": len(success_pages),
                 "download_count": len(downloaded_files),
                 "crawl_result": _crawl_summary(crawl_result),
+                "render_hints": render_hints,
                 "original_filename": _host_name(root_url),
             },
         )
+
+    @staticmethod
+    def _render_install_hints(pages) -> list[str]:
+        """Collect actionable render-install hints from failed pages (any depth).
+
+        Child SPA pages that fail because Playwright is unavailable only record
+        the hint on ``CrawledPage.error``; the entry page still succeeds, so the
+        caller would otherwise see the hint nowhere. Surface each distinct hint
+        once so the user can act on it.
+        """
+        hints: list[str] = []
+        for page in pages:
+            if page.status == "success" or not page.error:
+                continue
+            if page.error in _RENDER_INSTALL_HINTS and page.error not in hints:
+                hints.append(page.error)
+        return hints
 
     @staticmethod
     def _entry_failure_detail(pages) -> str:

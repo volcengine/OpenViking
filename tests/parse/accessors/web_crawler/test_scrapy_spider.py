@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import MagicMock
 
+from scrapy.exceptions import CloseSpider
+
 from openviking.parse.accessors.web_crawler.config import CrawlConfig
 from openviking.parse.accessors.web_crawler.scrapy_spider import OpenVikingWebSpider
 
@@ -231,6 +233,19 @@ class TestParseGate:
         assert spider._success_count == 1
         success = [p for p in spider.collector if p.status == "success"]
         assert len(success) == 1
+
+    async def test_reaching_limit_closes_scrapy_engine(self):
+        spider = _make_spider(CrawlConfig(max_pages=1, fallback_playwright=False))
+        spider.crawler = MagicMock()
+        spider.crawler.engine = MagicMock()
+        resp = _make_response(body=_RICH_HTML)
+
+        with pytest.raises(CloseSpider) as exc_info:
+            await _drive_parse(spider, resp)
+
+        assert exc_info.value.reason == "max_pages_reached"
+        assert spider._success_count == 1
+        assert len(spider.collector) == 1
 
     async def test_skipped_on_non_html_response(self):
         spider = _make_spider(CrawlConfig(fallback_playwright=False))

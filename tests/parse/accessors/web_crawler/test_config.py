@@ -32,6 +32,14 @@ class TestCrawlConfigValidation:
         with pytest.raises(ValueError):
             CrawlConfig(timeout=-1.0)
 
+    def test_download_delay_negative_rejected(self):
+        with pytest.raises(ValueError):
+            CrawlConfig(download_delay=-0.1)
+
+    def test_retry_times_negative_rejected(self):
+        with pytest.raises(ValueError):
+            CrawlConfig(retry_times=-1)
+
     def test_max_links_per_page_zero_rejected(self):
         with pytest.raises(ValueError):
             CrawlConfig(max_links_per_page=0)
@@ -39,3 +47,7 @@ class TestCrawlConfigValidation:
     def test_max_html_bytes_zero_rejected(self):
         with pytest.raises(ValueError):
             CrawlConfig(max_html_bytes=0)
+
+    def test_playwright_timeout_non_positive_rejected(self):
+        with pytest.raises(ValueError):
+            CrawlConfig(playwright_timeout=0)

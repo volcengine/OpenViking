@@ -7,6 +7,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 
+from openviking.parse.accessors.web_crawler.render_heuristics import (
+    CHALLENGE_MARKERS,
+    SHELL_VISIBLE_TEXT_CHARS,
+)
+
 
 PLAYWRIGHT_PACKAGE_INSTALL_HINT = (
     "Playwright fallback was needed, but the Python package is not installed. "
@@ -17,18 +22,6 @@ PLAYWRIGHT_CHROMIUM_INSTALL_HINT = (
     "Playwright fallback was needed, but Chromium is not installed or cannot be "
     "launched. Run `python -m playwright install chromium` and retry."
 )
-
-# Text markers of JS anti-bot interstitials that auto-redirect after a delay.
-_CHALLENGE_MARKERS = (
-    "please wait",
-    "checking your browser",
-    "verifying you are human",
-    "just a moment",
-    "attention required",
-)
-# Below this visible-text length the page is almost certainly a shell or
-# interstitial rather than rendered content.
-_CHALLENGE_MIN_TEXT_CHARS = 40
 
 
 @dataclass
@@ -99,7 +92,10 @@ class PlaywrightRenderer:
             return RenderResult(final_url=url, error=error)
         finally:
             if page:
-                await page.close()
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     @staticmethod
     async def _guard_route(route, request_validator) -> None:
@@ -137,8 +133,8 @@ class PlaywrightRenderer:
             lowered = body.lower()
             looks_like_challenge = (
                 not body
-                or len(body) < _CHALLENGE_MIN_TEXT_CHARS
-                or any(marker in lowered for marker in _CHALLENGE_MARKERS)
+                or len(body) < SHELL_VISIBLE_TEXT_CHARS
+                or any(marker in lowered for marker in CHALLENGE_MARKERS)
             )
             if not looks_like_challenge or time.monotonic() >= deadline:
                 return
@@ -186,4 +182,4 @@ class PlaywrightRenderer:
                 if self._playwright_manager is None:
                     self._playwright_manager = await async_playwright().start()
                 self._browser = await self._playwright_manager.chromium.launch(headless=True)
-        return self._browser
+            return self._browser

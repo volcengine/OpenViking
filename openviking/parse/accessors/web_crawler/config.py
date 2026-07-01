@@ -27,15 +27,21 @@ class CrawlConfig:
     request_validator: Optional[Callable[[str], None]] = None
 
     def __post_init__(self) -> None:
-        if self.depth < -1 :
+        if self.depth < -1:
             raise ValueError("depth must be >= -1 (use -1 for unlimited) for recursive web crawling.")
         if self.max_pages < 1 and self.max_pages != -1:
-            raise ValueError("max_pages must be >= -1 (use -1 for unlimited) for recursive web crawling.")
+            raise ValueError("max_pages must be -1 (unlimited) or >= 1 for recursive web crawling.")
         if self.concurrency < 1:
             raise ValueError("concurrency must be >= 1 for recursive web crawling.")
         if self.timeout <= 0:
             raise ValueError("timeout must be > 0 for recursive web crawling.")
+        if self.download_delay < 0:
+            raise ValueError("download_delay must be >= 0 for recursive web crawling.")
+        if self.retry_times < 0:
+            raise ValueError("retry_times must be >= 0 for recursive web crawling.")
         if self.max_links_per_page < 1:
             raise ValueError("max_links_per_page must be >= 1.")
         if self.max_html_bytes < 1:
             raise ValueError("max_html_bytes must be >= 1.")
+        if self.playwright_timeout <= 0:
+            raise ValueError("playwright_timeout must be > 0 for recursive web crawling.")

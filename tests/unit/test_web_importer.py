@@ -221,6 +221,57 @@ class TestWebImporter:
                 options=WebImportOptions(),
             )
 
+    async def test_child_render_hint_surfaces_in_meta(self, monkeypatch):
+        from openviking.parse.accessors.web_crawler.playwright_renderer import (
+            PLAYWRIGHT_PACKAGE_INSTALL_HINT,
+        )
+
+        class FakeCrawler:
+            def __init__(self, config):
+                self.config = config
+
+            async def crawl(self, root_url):
+                return SimpleNamespace(
+                    pages=[
+                        SimpleNamespace(
+                            url=root_url,
+                            final_url=root_url,
+                            depth=0,
+                            status="success",
+                            html="<html><body><h1>Home</h1></body></html>",
+                            error=None,
+                        ),
+                        SimpleNamespace(
+                            url=f"{root_url}/spa",
+                            final_url=f"{root_url}/spa",
+                            depth=1,
+                            status="failed",
+                            html=None,
+                            error=PLAYWRIGHT_PACKAGE_INSTALL_HINT,
+                        ),
+                    ],
+                    downloads=[],
+                    total_crawled=1,
+                    total_downloads=0,
+                    total_failed=1,
+                    total_skipped=0,
+                    fallback_rendered=0,
+                )
+
+        monkeypatch.setattr("openviking.parse.accessors.web_importer.ScrapyWebCrawler", FakeCrawler)
+
+        result = await WebImporter().import_to_directory(
+            root_url="https://example.com",
+            options=WebImportOptions(depth=1, max_pages=5),
+        )
+        try:
+            assert result.meta["render_hints"] == [PLAYWRIGHT_PACKAGE_INSTALL_HINT]
+            assert result.meta["page_count"] == 1
+        finally:
+            import shutil
+
+            shutil.rmtree(result.path.parent, ignore_errors=True)
+
     async def test_import_to_directory_downloads_child_links(self, monkeypatch, tmp_path):
         class FakeCrawler:
             def __init__(self, config):
