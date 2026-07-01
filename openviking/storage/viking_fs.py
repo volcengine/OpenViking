@@ -385,6 +385,16 @@ class VikingFS:
                 "or current-user content path instead.",
                 resource=normalized_uri,
             )
+        if parts == ["agent"]:
+            # Parity with _ensure_supported_write_namespace, which forbids the
+            # account-shared viking://agent root: deleting it would recursively
+            # wipe every account's agent skills/endpoints/tools/payments. Concrete
+            # sub-paths (viking://agent/skills/...) remain deletable.
+            raise PermissionDeniedError(
+                "Deleting viking://agent root is not supported; use a concrete "
+                "agent sub-path (e.g. viking://agent/skills/...) instead.",
+                resource=normalized_uri,
+            )
 
     def _ensure_supported_write_namespace(self, normalized_uri: str) -> None:
         parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]
