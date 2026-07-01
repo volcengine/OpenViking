@@ -1,6 +1,7 @@
 """Context builder for assembling agent prompts."""
 
 import base64
+import json
 import mimetypes
 import platform
 import time as _time
@@ -131,7 +132,8 @@ class ContextBuilder:
         # user asks about "the current directory" this is the one they mean.
         if self._current_dir:
             parts.append(
-                f"## User-Selected Directory\n\nThe user has selected the following directory in the Studio resource tree. When the user refers to 'the current directory', they mean this one:\n`{self._current_dir}`"
+                "## User-Selected Directory\n\nThe user has selected the following directory in the Studio resource tree. When the user refers to 'the current directory', they mean this one:\n"
+                + json.dumps({"current_dir": self._current_dir}, ensure_ascii=False)
             )
 
         # Bootstrap files
