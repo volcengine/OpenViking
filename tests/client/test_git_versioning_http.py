@@ -239,3 +239,58 @@ async def test_http_restore_dry_run_does_not_mutate(http_git_client, http_servic
 
     log_after = await client.snapshot.log(limit=10)
     assert len(log_after) == len(log_before)
+
+
+_AUTH_HEADERS = {
+    "X-API-Key": "test-key",
+    "X-OpenViking-Account": "git_http_test_account",
+    "X-OpenViking-User": "git_http_test_user",
+}
+
+
+async def test_http_ignore_get_set_delete_roundtrip(http_app, http_service):
+    """Drive the /api/v1/snapshot/ignore routes directly via httpx.
+
+    Bypasses AsyncHTTPClient (whose snapshot namespace is not wired in this
+    environment) and confirms the FastAPI routes -> FsService -> VikingFS
+    path works end-to-end, including the ignore rule taking effect at commit.
+    """
+    transport = httpx.ASGITransport(app=http_app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", headers=_AUTH_HEADERS, timeout=30.0
+    ) as c:
+        # Absent -> empty string result.
+        r = await c.get("/api/v1/snapshot/ignore")
+        assert r.status_code == 200
+        assert r.json()["result"] == ""
+
+        # Set via PUT.
+        r = await c.put("/api/v1/snapshot/ignore", json={"content": "*.log\n"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "ok"
+
+        # Read back.
+        r = await c.get("/api/v1/snapshot/ignore")
+        assert r.json()["result"] == "*.log\n"
+
+        # The rule affects commits over HTTP: a .log file is skipped.
+        await _write_blob(http_service, "viking://resources/h_keep.md", b"keep")
+        await _write_blob(http_service, "viking://resources/h_skip.log", b"skip")
+        r = await c.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "http ignore"},
+        )
+        assert r.status_code == 200
+        body = r.json()["result"]
+        assert body["result"] == "created"
+        assert body["ignored"] == 1
+
+        # Delete is idempotent.
+        r = await c.delete("/api/v1/snapshot/ignore")
+        assert r.status_code == 200
+        r = await c.delete("/api/v1/snapshot/ignore")
+        assert r.status_code == 200
+
+        # Gone -> empty string again.
+        r = await c.get("/api/v1/snapshot/ignore")
+        assert r.json()["result"] == ""

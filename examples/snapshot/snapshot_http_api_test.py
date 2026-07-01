@@ -97,18 +97,35 @@ def print_find(client: httpx.Client, query: str, root_uri: str) -> None:
     )
 
 
-def commit_snapshot(client: httpx.Client, message: str) -> dict[str, Any]:
+def commit_snapshot(client: httpx.Client, message: str, paths: list[str] | None = None) -> dict[str, Any]:
+    body: dict[str, Any] = {"message": message}
+    if paths:
+        body["paths"] = paths
     data = request_json(
         client,
         "POST",
         "/api/v1/snapshot/commit",
-        json={"message": message},
+        json=body,
     )
     return data.get("result") or {}
 
 
 def show_snapshot(client: httpx.Client, target_ref: str) -> None:
     request_json(client, "GET", "/api/v1/snapshot/show", label=f"snapshot show {target_ref}", params={"target_ref": target_ref})
+
+
+def get_gitignore(client: httpx.Client) -> str:
+    data = request_json(client, "GET", "/api/v1/snapshot/ignore", label="get .ovgitignore")
+    result = data.get("result")
+    return result if isinstance(result, str) else ""
+
+
+def set_gitignore(client: httpx.Client, content: str) -> None:
+    request_json(client, "PUT", "/api/v1/snapshot/ignore", label="set .ovgitignore", json={"content": content})
+
+
+def delete_gitignore(client: httpx.Client) -> None:
+    request_json(client, "DELETE", "/api/v1/snapshot/ignore", label="delete .ovgitignore")
 
 
 def wait_for_task(client: httpx.Client, task_id: str | None, *, timeout: float = WAIT_TIMEOUT, poll_interval: float = 0.5) -> None:
@@ -164,14 +181,14 @@ def main() -> None:
         print_section("v1 initial import")
         write_text(client, uris["guide"], f"# Guide\n\nInitial HTTP content with {alpha}.\n", "create")
         write_text(client, uris["todo"], f"# Todo\n\nRemember {todo}.\n", "create")
-        v1 = commit_snapshot(client, "http v1 initial import")
+        v1 = commit_snapshot(client, "http v1 initial import", paths=[root_uri])
         print_find(client, alpha, root_uri)
 
         print_section("v2 modify delete add")
         write_text(client, uris["guide"], f"# Guide\n\nUpdated HTTP content with {beta}.\n", "replace")
         remove_resource(client, uris["todo"])
         write_text(client, uris["changelog"], f"# Changelog\n\nCreated {changelog}.\n", "create")
-        v2 = commit_snapshot(client, "http v2 modify delete add")
+        v2 = commit_snapshot(client, "http v2 modify delete add", paths=[root_uri])
         print_find(client, beta, root_uri)
         print_find(client, todo, root_uri)
         print_find(client, changelog, root_uri)
@@ -180,7 +197,7 @@ def main() -> None:
         mkdir(client, f"{root_uri}/archive")
         write_text(client, uris["changelog"], f"# Changelog\n\nCreated {changelog}. Added {gamma}.\n", "replace")
         write_text(client, uris["archive"], f"# Archive\n\nArchived marker {archive}.\n", "create")
-        v3 = commit_snapshot(client, "http v3 second changes")
+        v3 = commit_snapshot(client, "http v3 second changes", paths=[root_uri])
         print_find(client, gamma, root_uri)
         print_find(client, archive, root_uri)
         request_json(
@@ -222,6 +239,35 @@ def main() -> None:
             label="snapshot log after restore",
             params={"branch": "main", "limit": 10},
         )
+
+        print_section("ovgitignore exclude")
+        set_gitignore(client, "*.txt\n")
+        print(f"get_gitignore: {get_gitignore(client)!r}")
+        # Write two files: debug.txt matches *.txt (excluded), notes.md does not.
+        ignored_uri = f"{root_uri}/debug.txt"
+        kept_uri = f"{root_uri}/notes.md"
+        write_text(client, ignored_uri, f"# Scratch\n\ndebug noise {archive}.\n", "create")
+        write_text(client, kept_uri, f"# Notes\n\nkept marker {archive}.\n", "create")
+        v4 = commit_snapshot(client, "http v4 with ovgitignore", paths=[root_uri])
+        print(f"ignored count: {v4.get('ignored')}")
+        # debug.txt matches *.txt -> reading it from the snapshot 404s.
+        request_json(
+            client,
+            "GET",
+            "/api/v1/snapshot/show",
+            label=f"debug.txt excluded from v4: {ignored_uri}",
+            params={"target_ref": v4.get("commit_oid", ""), "path": ignored_uri},
+        )
+        # notes.md is not ignored -> readable from the snapshot.
+        request_json(
+            client,
+            "GET",
+            "/api/v1/snapshot/show",
+            label=f"notes.md kept in v4: {kept_uri}",
+            params={"target_ref": v4.get("commit_oid", ""), "path": kept_uri},
+        )
+        delete_gitignore(client)
+        print(f"get_gitignore after delete: {get_gitignore(client)!r}")
 
     print_section("done")
     print("HTTP API snapshot multi-version example finished")
