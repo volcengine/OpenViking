@@ -214,6 +214,7 @@ type SearchOptions struct {
 type GrepOptions struct {
 	CaseInsensitive bool
 	NodeLimit       *int
+	LevelLimit      *int
 	ExcludeURI      string
 }
 
