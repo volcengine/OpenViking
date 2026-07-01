@@ -201,6 +201,52 @@ func TestAdminCreatePathsAcceptInitialUserConfig(t *testing.T) {
 	}
 }
 
+func TestAdminSeedPayloads(t *testing.T) {
+	var seen []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/admin/accounts",
+			"/api/v1/admin/accounts/acct/users",
+			"/api/v1/admin/accounts/acct/users/alice/key":
+		default:
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		seen = append(seen, body)
+		writeOK(t, w, body)
+	}))
+	defer closeServer()
+
+	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
+		Seed: "admin-seed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AdminRegisterUserWithOptions(context.Background(), "acct", "alice", "admin", &AdminRegisterUserOptions{
+		Seed: "alice-seed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AdminRegenerateKeyWithOptions(context.Background(), "acct", "alice", &AdminRegenerateKeyOptions{
+		Seed: "new-seed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := seen[0]["seed"]; got != "admin-seed" {
+		t.Fatalf("create seed = %#v", got)
+	}
+	if got := seen[1]["seed"]; got != "alice-seed" {
+		t.Fatalf("register seed = %#v", got)
+	}
+	if got := seen[2]["seed"]; got != "new-seed" {
+		t.Fatalf("regenerate seed = %#v", got)
+	}
+}
+
 func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search/search" {

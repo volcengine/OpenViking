@@ -505,12 +505,14 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::CreateAccount {
             account_id,
             admin_user_id,
+            seed,
             user_config_json,
         } => {
             commands::admin::create_account(
                 &client,
                 &account_id,
                 &admin_user_id,
+                seed.as_deref(),
                 user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
@@ -531,6 +533,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             account_id,
             user_id,
             role,
+            seed,
             user_config_json,
         } => {
             commands::admin::register_user(
@@ -538,6 +541,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 &account_id,
                 &user_id,
                 &role,
+                seed.as_deref(),
                 user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
@@ -592,11 +596,13 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::RegenerateKey {
             account_id,
             user_id,
+            seed,
         } => {
             commands::admin::regenerate_key(
                 &client,
                 &account_id,
                 &user_id,
+                seed.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )

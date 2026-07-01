@@ -1234,8 +1234,11 @@ class AsyncHTTPClient:
         account_id: str,
         admin_user_id: str,
         user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"account_id": account_id, "admin_user_id": admin_user_id}
+        if seed is not None:
+            payload["seed"] = seed
         if user_config is not None:
             payload["user_config"] = user_config
         response = await self._http.post(
@@ -1258,8 +1261,11 @@ class AsyncHTTPClient:
         user_id: str,
         role: str = "user",
         user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"user_id": user_id, "role": role}
+        if seed is not None:
+            payload["seed"] = seed
         if user_config is not None:
             payload["user_config"] = user_config
         response = await self._http.post(
@@ -1283,8 +1289,16 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def admin_regenerate_key(self, account_id: str, user_id: str) -> Dict[str, Any]:
-        response = await self._http.post(f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key")
+    async def admin_regenerate_key(
+        self, account_id: str, user_id: str, seed: Optional[str] = None
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        if seed is not None:
+            payload["seed"] = seed
+        response = await self._http.post(
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
+            json=payload,
+        )
         return self._handle_response(response)
 
     async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
@@ -1994,11 +2008,13 @@ class SyncHTTPClient:
         account_id: str,
         admin_user_id: str,
         user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.admin_create_account(
                 account_id,
                 admin_user_id,
+                seed=seed,
                 user_config=user_config,
             )
         )
@@ -2015,12 +2031,14 @@ class SyncHTTPClient:
         user_id: str,
         role: str = "user",
         user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.admin_register_user(
                 account_id,
                 user_id,
                 role,
+                seed=seed,
                 user_config=user_config,
             )
         )
@@ -2034,8 +2052,10 @@ class SyncHTTPClient:
     def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_set_role(account_id, user_id, role))
 
-    def admin_regenerate_key(self, account_id: str, user_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_regenerate_key(account_id, user_id))
+    def admin_regenerate_key(
+        self, account_id: str, user_id: str, seed: Optional[str] = None
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_regenerate_key(account_id, user_id, seed=seed))
 
     def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
         return run_async(self._async_client.admin_migrate(cleanup=cleanup))

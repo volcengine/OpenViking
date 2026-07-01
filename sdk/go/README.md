@@ -116,7 +116,7 @@ Implemented:
 | Sessions and tasks | `CreateSession`, `ListSessions`, `GetSession`, `SessionExists`, `GetSessionContext`, `GetSessionArchive`, `DeleteSession`, `AddMessage`, `BatchAddMessages`, `CommitSession`, `GetTask`, `ListTasks` |
 | Packs | `ExportOVPack`, `BackupOVPack`, `ImportOVPack`, `RestoreOVPack` |
 | System and observer | `Health`, `CheckConsistency`, `GetStatus`, `IsHealthy`, `QueueStatus`, `VikingDBStatus`, `ModelsStatus` |
-| Admin | `AdminCreateAccount`, `AdminCreateAccountWithOptions`, `AdminListAccounts`, `AdminDeleteAccount`, `AdminRegisterUser`, `AdminRegisterUserWithOptions`, `AdminListUsers`, `AdminRemoveUser`, `AdminSetRole`, `AdminRegenerateKey`, `AdminMigrate` |
+| Admin | `AdminCreateAccount`, `AdminCreateAccountWithOptions`, `AdminListAccounts`, `AdminDeleteAccount`, `AdminRegisterUser`, `AdminRegisterUserWithOptions`, `AdminListUsers`, `AdminRemoveUser`, `AdminSetRole`, `AdminRegenerateKey`, `AdminRegenerateKeyWithOptions`, `AdminMigrate` |
 
 Not implemented in Go SDK v1:
 
@@ -136,14 +136,22 @@ and let the server resolve user and deployment defaults.
 
 ```go
 _, err := client.AdminRegisterUserWithOptions(ctx, "acme", "alice", "user", &openviking.AdminRegisterUserOptions{
-	UserConfig: map[string]any{
+    Seed: "alice-seed",
+    UserConfig: map[string]any{
 		"add_targets": map[string]any{
 			"resource_uri": "viking://user/resources/project-a",
 			"skill_uri":    "viking://user/skills",
 		},
 	},
 })
+
+_, err = client.AdminRegenerateKeyWithOptions(ctx, "acme", "alice", &openviking.AdminRegenerateKeyOptions{
+    Seed: "alice-new-seed",
+})
 ```
+
+When `Seed` is set, the returned API key is derived from
+`sha256(user_id + "\0" + seed)`; omit it for random key generation.
 
 ## Files, Directories, and Packs
 

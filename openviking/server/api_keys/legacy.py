@@ -45,6 +45,12 @@ LEGACY_ARGON2_PARALLELISM = ARGON2_PARALLELISM
 LEGACY_ARGON2_HASH_LENGTH = ARGON2_HASH_LENGTH
 
 
+def derive_seeded_api_key_secret(user_id: str, seed: str) -> str:
+    if not isinstance(seed, str) or seed == "":
+        raise InvalidArgumentError("seed must not be empty")
+    return hashlib.sha256(f"{user_id}\0{seed}".encode("utf-8")).hexdigest()
+
+
 class LegacyAPIKeyManager:
     """Manages API keys for multi-tenant authentication (legacy implementation)."""
 
@@ -209,6 +215,7 @@ class LegacyAPIKeyManager:
         self,
         account_id: str,
         admin_user_id: str,
+        seed: Optional[str] = None,
     ) -> str:
         """Create a new account (workspace) with its first admin user.
 
@@ -226,7 +233,11 @@ class LegacyAPIKeyManager:
             raise AlreadyExistsError(account_id, "account")
 
         now = datetime.now(timezone.utc).isoformat()
-        key = self._generate_api_key()
+        key = (
+            derive_seeded_api_key_secret(admin_user_id, seed)
+            if seed is not None
+            else self._generate_api_key()
+        )
 
         if self._api_key_hashing_enabled:
             stored_key = self._hash_api_key(key)
@@ -280,7 +291,13 @@ class LegacyAPIKeyManager:
 
         await self._save_accounts_json()
 
-    async def register_user(self, account_id: str, user_id: str, role: str = "user") -> str:
+    async def register_user(
+        self,
+        account_id: str,
+        user_id: str,
+        role: str = "user",
+        seed: Optional[str] = None,
+    ) -> str:
         """Register a new user in an account. Returns the user's API key (legacy format)."""
         # Validate user_id format
         verr = validate_user_id(user_id)
@@ -293,7 +310,11 @@ class LegacyAPIKeyManager:
         if user_id in account.users:
             raise AlreadyExistsError(user_id, "user")
 
-        key = self._generate_api_key()
+        key = (
+            derive_seeded_api_key_secret(user_id, seed)
+            if seed is not None
+            else self._generate_api_key()
+        )
 
         if self._api_key_hashing_enabled:
             stored_key = self._hash_api_key(key)
@@ -360,7 +381,7 @@ class LegacyAPIKeyManager:
 
         await self._save_users_json(account_id)
 
-    async def regenerate_key(self, account_id: str, user_id: str) -> str:
+    async def regenerate_key(self, account_id: str, user_id: str, seed: Optional[str] = None) -> str:
         """Regenerate a user's API key. Old key is immediately invalidated."""
         account = self._accounts.get(account_id)
         if account is None:
@@ -387,7 +408,11 @@ class LegacyAPIKeyManager:
                 del self._prefix_index[old_key_prefix]
 
         # Generate new key
-        new_key = self._generate_api_key()
+        new_key = (
+            derive_seeded_api_key_secret(user_id, seed)
+            if seed is not None
+            else self._generate_api_key()
+        )
 
         if self._api_key_hashing_enabled:
             new_stored_key = self._hash_api_key(new_key)

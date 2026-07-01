@@ -70,7 +70,8 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "add-memory",
 ];
 
-const FILESYSTEM: &[HelpCommand] = help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "get"];
+const FILESYSTEM: &[HelpCommand] =
+    help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "attrs", "get"];
 
 const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
     "find", "search", "grep", "glob", "abstract", "overview", "read"
@@ -318,6 +319,30 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov relations <uri>",
                 description: "Inspect related resources.",
+            },
+        ],
+    },
+    CommandHelpSpec {
+        path: &["attrs"],
+        purpose: "Get or update logical extended attributes for a resource.",
+        examples: &[
+            HelpItem {
+                label: "ov attrs get viking://projects/acme/spec.md",
+                description: "Show all logical attributes for a resource.",
+            },
+            HelpItem {
+                label: "ov attrs set-tags viking://projects/acme/spec.md --tags team=search",
+                description: "Set retrieval tags on a resource.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov stat <uri>",
+                description: "Inspect resource metadata.",
+            },
+            HelpItem {
+                label: "ov find \"query\" -u <uri>",
+                description: "Search with updated context.",
             },
         ],
     },
@@ -1150,6 +1175,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov admin register-user <account> <user>",
                 description: "Register a user in an account.",
+            },
+            HelpItem {
+                label: "ov admin regenerate-key <account> <user> --seed <seed>",
+                description: "Regenerate a predictable API key from a seed.",
             },
             HelpItem {
                 label: "ov admin migrate --sudo",

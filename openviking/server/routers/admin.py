@@ -4,7 +4,7 @@
 
 import asyncio
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Body, Depends, Path, Request
 from pydantic import BaseModel
 
 from openviking.server.auth import (
@@ -43,17 +43,23 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 class CreateAccountRequest(BaseModel):
     account_id: str
     admin_user_id: str
+    seed: str | None = None
     user_config: UserConfig | None = None
 
 
 class RegisterUserRequest(BaseModel):
     user_id: str
     role: str = "user"
+    seed: str | None = None
     user_config: UserConfig | None = None
 
 
 class SetRoleRequest(BaseModel):
     role: str
+
+
+class RegenerateKeyRequest(BaseModel):
+    seed: str | None = None
 
 
 class MigrateLegacyDataRequest(BaseModel):
@@ -170,6 +176,7 @@ async def create_account(
     user_key = await manager.create_account(
         body.account_id,
         body.admin_user_id,
+        seed=body.seed,
     )
     await service.initialize_account_directories(account_ctx)
     await service.initialize_user_directories(account_ctx)
@@ -308,7 +315,12 @@ async def register_user(
     )
     _validate_initial_user_config(service, user_ctx, body.user_config)
     manager = _get_api_key_manager(request)
-    user_key = await manager.register_user(account_id, body.user_id, str(resolved_role))
+    user_key = await manager.register_user(
+        account_id,
+        body.user_id,
+        str(resolved_role),
+        seed=body.seed,
+    )
     await service.initialize_user_directories(user_ctx)
     await _write_initial_user_config(service, user_ctx, body.user_config)
     result = {
@@ -381,6 +393,7 @@ async def set_user_role(
 @require_auth_root_or_admin
 async def regenerate_key(
     request: Request,
+    body: RegenerateKeyRequest | None = Body(default=None),
     account_id: str = Path(..., description="Account ID"),
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
@@ -388,5 +401,9 @@ async def regenerate_key(
     """Regenerate a user's API key. Old key is immediately invalidated."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
-    new_key = await manager.regenerate_key(account_id, user_id)
+    new_key = await manager.regenerate_key(
+        account_id,
+        user_id,
+        seed=body.seed if body is not None else None,
+    )
     return Response(status="ok", result={"user_key": new_key})
