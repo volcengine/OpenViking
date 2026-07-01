@@ -16,91 +16,119 @@ import {
 } from './-lib/api'
 import { isDisabledPayload } from './-lib/format'
 import { useAppConnection } from '#/hooks/use-app-connection'
+import type {
+  ConnectionDraft,
+  ConnectionRole,
+} from '#/hooks/use-app-connection'
 
 export const Route = createFileRoute('/home')({
   component: HomePage,
 })
 
+function hashSecret(value: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function getMetricsScopeKey(
+  connection: ConnectionDraft,
+  connectionRole: ConnectionRole,
+) {
+  const metricsKey = connection.apiKey || connection.adminApiKey
+  return {
+    accountId: connection.accountId,
+    baseUrl: connection.baseUrl,
+    keyHash: metricsKey ? hashSecret(metricsKey) : 'none',
+    keySource: connection.apiKey
+      ? 'api'
+      : connection.adminApiKey
+        ? 'admin'
+        : 'none',
+    role: connectionRole,
+    userId: connection.userId,
+  }
+}
+
 function HomePage() {
   const { t } = useTranslation('home')
-  const { connectionRole, isConnectionRoleLoading } = useAppConnection()
-  const hasAdminRole = connectionRole === 'admin' || connectionRole === 'root'
-  const canQueryAdminMetrics = !isConnectionRoleLoading && hasAdminRole
+  const { connection, connectionRole, isConnectionRoleLoading } =
+    useAppConnection()
+  const canQueryMetrics =
+    !isConnectionRoleLoading && connectionRole !== 'unknown'
+  const metricsScopeKey = getMetricsScopeKey(connection, connectionRole)
 
   const dashboard = useQuery({
-    enabled: canQueryAdminMetrics,
+    enabled: canQueryMetrics,
     queryFn: fetchConsoleDashboardSummary,
-    queryKey: ['console-dashboard-summary'],
+    queryKey: ['console-dashboard-summary', metricsScopeKey],
     refetchInterval: 30_000,
   })
 
   const tokenSeries = useQuery({
-    enabled: canQueryAdminMetrics,
+    enabled: canQueryMetrics,
     queryFn: fetchConsoleTokenSeries,
-    queryKey: ['console-token-series', 'last-14-days'],
+    queryKey: ['console-token-series', 'last-14-days', metricsScopeKey],
     refetchInterval: 60_000,
   })
 
   const contextCommits = useQuery({
-    enabled: canQueryAdminMetrics,
+    enabled: canQueryMetrics,
     queryFn: fetchConsoleContextCommits,
-    queryKey: ['console-context-commits', 'last-365-days'],
+    queryKey: ['console-context-commits', 'last-365-days', metricsScopeKey],
     refetchInterval: 60_000,
   })
 
   const summary = dashboard.data
-  const usageDisabled = isDisabledPayload(summary)
-
-  if (!isConnectionRoleLoading && !hasAdminRole) {
-    return (
-      <div className="flex min-h-[calc(100svh-8rem)] items-center justify-center px-4 py-10">
-        <section className="w-full max-w-xl rounded-lg border bg-card px-6 py-5 shadow-sm">
-          <h1 className="text-lg font-semibold">{t('limited.title')}</h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {t('limited.description')}
-          </p>
-        </section>
-      </div>
-    )
-  }
+  const metricsUnavailable =
+    (!isConnectionRoleLoading && connectionRole === 'unknown') ||
+    isDisabledPayload(summary)
+  const isMetricsLoading = isConnectionRoleLoading || dashboard.isLoading
+  const isSeriesLoading = isConnectionRoleLoading || tokenSeries.isLoading
+  const isCommitsLoading = isConnectionRoleLoading || contextCommits.isLoading
 
   return (
     <div className="flex flex-col gap-5 pb-8">
       <div className="grid gap-4 md:grid-cols-3">
         <ContextDataPanel
           data={summary?.context_counts}
-          disabled={usageDisabled}
+          disabled={metricsUnavailable}
           isError={dashboard.isError}
-          isLoading={dashboard.isLoading}
+          isLoading={isMetricsLoading}
           t={t}
         />
         <TodayTokensPanel
           data={summary?.today_tokens}
-          disabled={usageDisabled}
+          disabled={metricsUnavailable}
           isError={dashboard.isError}
-          isLoading={dashboard.isLoading}
+          isLoading={isMetricsLoading}
           t={t}
         />
         <TodayRetrievalsPanel
           data={summary?.today_retrievals}
-          disabled={usageDisabled}
+          disabled={metricsUnavailable}
           isError={dashboard.isError}
-          isLoading={dashboard.isLoading}
+          isLoading={isMetricsLoading}
           t={t}
         />
       </div>
 
       <TokenTrendPanel
         data={tokenSeries.data}
+        disabled={metricsUnavailable}
         isError={tokenSeries.isError}
-        isLoading={tokenSeries.isLoading}
+        isLoading={isSeriesLoading}
         t={t}
       />
 
       <ContextCommitsPanel
         data={contextCommits.data}
+        disabled={metricsUnavailable}
         isError={contextCommits.isError}
-        isLoading={contextCommits.isLoading}
+        isLoading={isCommitsLoading}
         t={t}
       />
     </div>

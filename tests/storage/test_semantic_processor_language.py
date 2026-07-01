@@ -208,6 +208,9 @@ class TestOverviewGenerationFlow:
             },
         )
         assert f"Output Language: {lang}" in prompt
+        assert "Output in Markdown format" in prompt
+        assert "Brief Description" in prompt
+        assert "abstract_max_chars" not in prompt
 
     def test_overview_generation_prompt_preserves_repository_hierarchy(self):
         prompt = render_prompt(
@@ -233,7 +236,6 @@ class TestOverviewGenerationFlow:
             "- When the summaries suggest a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders."
             in prompt
         )
-
 
 class LanguageAwareMockVLM:
     """语言感知的 MockVLM，根据 prompt 中的 Output Language 返回对应语言的响应。"""

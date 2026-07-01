@@ -175,6 +175,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 **补充说明**：
 - `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
+- 如果同时省略 `to` 和 `parent`，服务端会先尝试使用当前用户的 `add_targets.resource_uri` 覆盖配置，再使用 `server.user_config_defaults.add_targets.resource_uri`。两者都没有配置时，保持旧的目标解析行为。
 - 资源目标可以使用公共 `viking://resources/...`、当前用户短写 `viking://user/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。当前用户短写会按请求身份 canonicalize。
 - `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
@@ -623,13 +624,16 @@ cancel_watch(to_uri="viking://resources/guide.md")        # 按 URI 幂等删除
 |------|------|------|--------|------|
 | data | Any | 否 | - | 内联技能内容或结构化数据。与 `temp_file_id` 二选一 |
 | temp_file_id | string | 否 | - | 临时上传文件 ID（通过 [temp_upload](#temp_upload) 获取）。与 `data` 二选一 |
+| target_uri | string | 否 | - | 技能添加根目录覆盖值。显式值优先于用户默认值和部署默认值 |
 | wait | bool | 否 | False | 是否等待技能处理完成 |
 | timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
-技能始终安装到当前用户的 skills 根。公共短写 `viking://user/skills` 可用于文件系统和检索操作，
-会解析为 `viking://user/{user_id}/skills`；`add_skill` 不接受 `to`、`parent`、`root_uri`
-或 peer-scoped skill 目标。
+未传 `target_uri` 时，服务端会先尝试使用当前用户的 `add_targets.skill_uri` 覆盖配置，
+再使用 `server.user_config_defaults.add_targets.skill_uri`。两者都没有配置时，保持旧行为，
+安装到当前用户的 skills 根。公共短写 `viking://user/skills` 会解析为
+`viking://user/{user_id}/skills`。v1 API 只允许 `viking://user/skills` 和
+`viking://agent/skills` 作为技能添加根目录。
 
 #### 3. 使用示例
 

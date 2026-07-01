@@ -23,6 +23,7 @@ from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
 from .git_config import GitConfig
 from .grep_config import GrepConfig
+from .ingest_config import IngestConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
 from .oauth_config import OAuthConfig
@@ -319,6 +320,11 @@ class OpenVikingConfig(BaseModel):
     prompts: PromptsConfig = Field(
         default_factory=PromptsConfig,
         description="Prompt template configuration",
+    )
+
+    ingest: IngestConfig = Field(
+        default_factory=IngestConfig,
+        description="Conversation-log ingest (openviking-server ingest) configuration",
     )
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}

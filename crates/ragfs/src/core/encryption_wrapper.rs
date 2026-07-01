@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::crypto;
@@ -131,6 +132,23 @@ impl EncryptionWrappedFS {
         }
         Ok(())
     }
+
+    /// Build a deterministic internal temp-file path for a final file path.
+    fn encrypted_temp_path(path: &str) -> String {
+        let normalized = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{}", path)
+        };
+        let parts: Vec<&str> = normalized.split('/').filter(|part| !part.is_empty()).collect();
+        let temp_root = match parts.as_slice() {
+            ["local", account_id, ..] => format!("/local/{}/temp/.encrypt_stage", account_id),
+            [mount_root, _, ..] => format!("/{}/temp/.encrypt_stage", mount_root),
+            _ => "/temp/.encrypt_stage".to_string(),
+        };
+        let digest = Sha256::digest(normalized.as_bytes());
+        format!("{}/{:x}.encrypt", temp_root, digest)
+    }
 }
 
 /// Slice `data` by `(offset, size)` with `size == 0` meaning "to end", matching plugin read semantics.
@@ -211,7 +229,28 @@ impl FileSystem for EncryptionWrappedFS {
         let ct = crypto::aes_gcm_encrypt(&file_key, &data_iv, data)?;
         let enc_key = crypto::aes_gcm_encrypt(&account_key, &key_iv, &file_key)?;
         let envelope = crypto::build_envelope(self.provider_type, &enc_key, &key_iv, &data_iv, &ct);
-        self.inner.write(path, &envelope, 0, flags).await
+        let temp_path = Self::encrypted_temp_path(path);
+        self.inner.ensure_parent_dirs(&temp_path, 0o755).await?;
+
+        match self.inner.remove(&temp_path).await {
+            Ok(()) | Err(Error::NotFound(_)) => {}
+            Err(err) => return Err(err),
+        }
+
+        let written = self
+            .inner
+            .write(&temp_path, &envelope, 0, WriteFlag::Create)
+            .await?;
+        if written != envelope.len() as u64 {
+            return Err(Error::internal(format!(
+                "encrypted temp write incomplete: wrote {} of {} bytes",
+                written,
+                envelope.len()
+            )));
+        }
+
+        self.inner.replace(&temp_path, path).await?;
+        Ok(written)
     }
 
     async fn grep(
@@ -552,5 +591,64 @@ mod tests {
             })
             .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn write_replaces_stale_internal_temp_file_before_publish() {
+        let inner = memfs_stack().await;
+        let enc = EncryptionWrappedFS::new(inner.clone(), [6u8; 32], crypto::PROVIDER_LOCAL);
+        let temp_path =
+            "/mem/temp/.encrypt_stage/18d3740a61555bfecb941730d4b708dd3090a1b0ba2fcafe8c696d55c5e4b67a.encrypt";
+
+        inner.ensure_parent_dirs(temp_path, 0o755).await.unwrap();
+        inner
+            .write(temp_path, b"stale-temp", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        FS_CTX
+            .scope(ctx("tenant-1"), async {
+                enc.write("/mem/a.txt", b"fresh", 0, WriteFlag::Create)
+                    .await
+                    .unwrap();
+                let out = enc.read("/mem/a.txt", 0, 0).await.unwrap();
+                assert_eq!(out, b"fresh");
+            })
+            .await;
+
+        assert!(
+            inner
+                .stat(temp_path)
+                .await
+                .is_err()
+        );
+        let raw = inner.read("/mem/a.txt", 0, 0).await.unwrap();
+        assert!(crypto::is_encrypted(&raw));
+    }
+
+    #[test]
+    fn encrypted_temp_path_mapping_matches_python() {
+        let cases = [
+            (
+                "/local/default/resources/note.md",
+                "/local/default/temp/.encrypt_stage/823e7fa1698ab91f00481e4960d38764c6d77fa9230a86a0cca178bf87becc93.encrypt",
+            ),
+            (
+                "/local/default/resources/.abstract.md",
+                "/local/default/temp/.encrypt_stage/86cb67683e7cee2a07dce5921d450af2b6d5757bec1f05f5c1738b966cdc8edd.encrypt",
+            ),
+            (
+                "/note.md",
+                "/temp/.encrypt_stage/71f3eca3f3ad54df082026dd6b40f2f3b2c2ba67b51bb5d24fda5632044c3228.encrypt",
+            ),
+            (
+                ".abstract.md",
+                "/temp/.encrypt_stage/2f3429bdbec8a484aec67cd1584e5dd64d8cf139d2fc4b4cca97d9cdc9b66ad3.encrypt",
+            ),
+        ];
+
+        for (final_path, temp_path) in cases {
+            assert_eq!(EncryptionWrappedFS::encrypted_temp_path(final_path), temp_path);
+        }
     }
 }

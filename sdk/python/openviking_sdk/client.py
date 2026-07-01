@@ -781,6 +781,12 @@ class AsyncHTTPClient:
         response = await self._http.get("/api/v1/fs/stat", params={"uri": VikingURI.normalize(uri)})
         return self._handle_response(response)
 
+    async def attrs(self, uri: str) -> Dict[str, Any]:
+        response = await self._http.get(
+            "/api/v1/fs/attrs", params={"uri": VikingURI.normalize(uri)}
+        )
+        return self._handle_response(response)
+
     async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         payload = {"uri": VikingURI.normalize(uri)}
         if description is not None:
@@ -858,7 +864,7 @@ class AsyncHTTPClient:
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         response = await self._http.post(
-            "/api/v1/content/set_tags",
+            "/api/v1/fs/attrs/set_tags",
             json={
                 "uri": VikingURI.normalize(uri),
                 "tags": tags,
@@ -1223,10 +1229,18 @@ class AsyncHTTPClient:
         response = await self._http.get("/api/v1/observer/system")
         return self._handle_response(response)
 
-    async def admin_create_account(self, account_id: str, admin_user_id: str) -> Dict[str, Any]:
+    async def admin_create_account(
+        self,
+        account_id: str,
+        admin_user_id: str,
+        user_config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"account_id": account_id, "admin_user_id": admin_user_id}
+        if user_config is not None:
+            payload["user_config"] = user_config
         response = await self._http.post(
             "/api/v1/admin/accounts",
-            json={"account_id": account_id, "admin_user_id": admin_user_id},
+            json=payload,
         )
         return self._handle_response(response)
 
@@ -1239,11 +1253,18 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def admin_register_user(
-        self, account_id: str, user_id: str, role: str = "user"
+        self,
+        account_id: str,
+        user_id: str,
+        role: str = "user",
+        user_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"user_id": user_id, "role": role}
+        if user_config is not None:
+            payload["user_config"] = user_config
         response = await self._http.post(
             f"/api/v1/admin/accounts/{account_id}/users",
-            json={"user_id": user_id, "role": role},
+            json=payload,
         )
         return self._handle_response(response)
 
@@ -1664,6 +1685,9 @@ class SyncHTTPClient:
     def stat(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.stat(uri))
 
+    def attrs(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.attrs(uri))
+
     def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         run_async(self._async_client.mkdir(uri, description=description))
 
@@ -1965,8 +1989,19 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.reindex(uri=uri, mode=mode, wait=wait))
 
-    def admin_create_account(self, account_id: str, admin_user_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_create_account(account_id, admin_user_id))
+    def admin_create_account(
+        self,
+        account_id: str,
+        admin_user_id: str,
+        user_config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.admin_create_account(
+                account_id,
+                admin_user_id,
+                user_config=user_config,
+            )
+        )
 
     def admin_list_accounts(self) -> List[Any]:
         return run_async(self._async_client.admin_list_accounts())
@@ -1975,9 +2010,20 @@ class SyncHTTPClient:
         return run_async(self._async_client.admin_delete_account(account_id))
 
     def admin_register_user(
-        self, account_id: str, user_id: str, role: str = "user"
+        self,
+        account_id: str,
+        user_id: str,
+        role: str = "user",
+        user_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_register_user(account_id, user_id, role))
+        return run_async(
+            self._async_client.admin_register_user(
+                account_id,
+                user_id,
+                role,
+                user_config=user_config,
+            )
+        )
 
     def admin_list_users(self, account_id: str) -> List[Any]:
         return run_async(self._async_client.admin_list_users(account_id))

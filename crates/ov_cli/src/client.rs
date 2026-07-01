@@ -279,7 +279,7 @@ impl HttpClient {
             "mode": mode,
             "recursive": recursive,
         });
-        self.post("/api/v1/content/set_tags", &body).await
+        self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
     fn build_write_body(
@@ -462,6 +462,11 @@ impl HttpClient {
     pub async fn stat(&self, uri: &str) -> Result<serde_json::Value> {
         let params = vec![("uri".to_string(), uri.to_string())];
         self.get("/api/v1/fs/stat", &params).await
+    }
+
+    pub async fn attrs(&self, uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/fs/attrs", &params).await
     }
 
     // ============ Search Methods ============
@@ -1246,12 +1251,22 @@ impl HttpClient {
         &self,
         account_id: &str,
         admin_user_id: &str,
+        user_config: Option<&Value>,
     ) -> Result<Value> {
-        let body = serde_json::json!({
-            "account_id": account_id,
-            "admin_user_id": admin_user_id,
-        });
-        self.post("/api/v1/admin/accounts", &body).await
+        let mut body = Map::new();
+        body.insert(
+            "account_id".to_string(),
+            Value::String(account_id.to_string()),
+        );
+        body.insert(
+            "admin_user_id".to_string(),
+            Value::String(admin_user_id.to_string()),
+        );
+        if let Some(config) = user_config {
+            body.insert("user_config".to_string(), config.clone());
+        }
+        self.post("/api/v1/admin/accounts", &Value::Object(body))
+            .await
     }
 
     pub async fn admin_list_accounts(&self) -> Result<Value> {
@@ -1268,13 +1283,16 @@ impl HttpClient {
         account_id: &str,
         user_id: &str,
         role: &str,
+        user_config: Option<&Value>,
     ) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/users", account_id);
-        let body = serde_json::json!({
-            "user_id": user_id,
-            "role": role,
-        });
-        self.post(&path, &body).await
+        let mut body = Map::new();
+        body.insert("user_id".to_string(), Value::String(user_id.to_string()));
+        body.insert("role".to_string(), Value::String(role.to_string()));
+        if let Some(config) = user_config {
+            body.insert("user_config".to_string(), config.clone());
+        }
+        self.post(&path, &Value::Object(body)).await
     }
 
     pub async fn admin_list_users(

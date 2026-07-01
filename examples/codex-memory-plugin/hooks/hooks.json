@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/session-start-commit.mjs",
+            "command": "node ${PLUGIN_ROOT}/scripts/session-start-commit.mjs",
             "timeout": 70
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/auto-recall.mjs",
+            "command": "node ${PLUGIN_ROOT}/scripts/auto-recall.mjs",
             "timeout": 130
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/auto-capture.mjs",
+            "command": "node ${PLUGIN_ROOT}/scripts/auto-capture.mjs",
             "timeout": 30
           }
         ]
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/pre-compact-capture.mjs",
+            "command": "node ${PLUGIN_ROOT}/scripts/pre-compact-capture.mjs",
             "timeout": 60
           }
         ]

@@ -182,6 +182,7 @@ This endpoint is the core entry point for resource management, supporting adding
 
 **Additional Notes**:
 - `to` and `parent` cannot be specified together. Use `create_parent=true` with `parent` when the parent directory should be created automatically.
+- If both `to` and `parent` are omitted, the server may use the current user's `add_targets.resource_uri` override, then `server.user_config_defaults.add_targets.resource_uri`. If neither is set, legacy target resolution is unchanged.
 - Resource targets may use public `viking://resources/...`, current-user shorthand `viking://user/resources/...`, explicit user `viking://user/{user_id}/resources/...`, or peer `viking://user/{user_id}/peers/{peer_id}/resources/...` paths. Current-user shorthand is canonicalized with the authenticated request identity.
 - `user_id` and `peer_id` path segments must be safe single-segment identifiers, for example `alice` or `web-visitor-alice`. Values with path separators, `.`, `..`, `:`, or `+` are rejected.
 - `path` and `temp_file_id` cannot be specified together
@@ -631,14 +632,18 @@ Skills are special resources used to define operations or tools that agents can 
 |-----------|------|----------|---------|-------------|
 | data | Any | No | - | Inline skill content or structured data. Mutually exclusive with `temp_file_id` |
 | temp_file_id | string | No | - | Temporary upload file ID (obtained via [temp_upload](#temp_upload)). Mutually exclusive with `data` |
+| target_uri | string | No | - | Skill root override. Explicit value wins over user and deployment defaults |
 | wait | bool | No | False | Whether to wait for skill processing to complete |
 | timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
-Skills are always installed under the current user's skills root. The public short form
-`viking://user/skills` is accepted for filesystem/search operations and resolves to
-`viking://user/{user_id}/skills`; `add_skill` does not accept `to`, `parent`,
-`root_uri`, or peer-scoped skill targets.
+When `target_uri` is omitted, the server may use the current user's
+`add_targets.skill_uri` override, then
+`server.user_config_defaults.add_targets.skill_uri`. If neither is set,
+legacy behavior installs under the current user's skills root. The public
+short form `viking://user/skills` resolves to
+`viking://user/{user_id}/skills`. The v1 API accepts only
+`viking://user/skills` and `viking://agent/skills` as skill add roots.
 
 #### 3. Usage Examples
 

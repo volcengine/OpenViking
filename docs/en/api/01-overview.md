@@ -431,6 +431,8 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | GET | `/api/v1/fs/ls` | List directory |
 | GET | `/api/v1/fs/tree` | Directory tree |
 | GET | `/api/v1/fs/stat` | Resource status |
+| GET | `/api/v1/fs/attrs` | Logical extended attributes |
+| POST | `/api/v1/fs/attrs/set_tags` | Set retrieval tags |
 | POST | `/api/v1/fs/mkdir` | Create directory |
 | DELETE | `/api/v1/fs` | Delete resource |
 | POST | `/api/v1/fs/mv` | Move/rename resource |

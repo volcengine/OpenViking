@@ -18,9 +18,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
-import { FilePreview } from '#/routes/resources/-components/file-preview'
 import { AddResourceForm } from '#/routes/resources/-components/add-resource-page'
 import { UploadTaskDialog } from '#/routes/resources/-components/upload-task-dialog'
+import { LazyFilePreview } from '#/routes/resources/-components/lazy-file-preview'
 import {
   ResourceUploadProvider,
   useResourceUpload,
@@ -568,7 +568,7 @@ function PlaygroundWorkbench() {
             </div>
           </div>
           <div className="min-h-0 flex-1">
-            <FilePreview
+            <LazyFilePreview
               file={selectedFile}
               hideDirectoryHeader
               onClose={() => setSelectedFile(null)}

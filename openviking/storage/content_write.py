@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
@@ -34,6 +34,9 @@ from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from openviking.storage.transaction.lock_handle import LockHandle
 
 _DERIVED_FILENAMES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
 _CREATE_ALLOWED_EXTENSIONS = frozenset(
@@ -80,7 +83,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"write only supports existing files, got directory: {uri}")
 
         context_type = context_type_for_uri(normalized_uri)
-        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
+        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx, anchor_to_parent=True)
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
 
@@ -257,7 +260,13 @@ class ContentWriteCoordinator:
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
-            await self._write_in_place(uri, content, mode=mode, ctx=ctx)
+            await self._write_in_place(
+                uri,
+                content,
+                mode=mode,
+                ctx=ctx,
+                lock_handle=handle,
+            )
             content_written = True
             await self._enqueue_semantic_refresh(
                 root_uri=root_uri,
@@ -265,7 +274,6 @@ class ContentWriteCoordinator:
                 context_type=context_type,
                 ctx=ctx,
                 change_type="added" if mode == "create" else "modified",
-                recursive=True,
             )
             semantic_enqueued = True
             await lock_manager.release(handle)
@@ -314,7 +322,12 @@ class ContentWriteCoordinator:
                 await self._viking_fs.rm(uri, ctx=ctx, lock_handle=lock_handle)
                 return
             if previous_content is not None:
-                await self._viking_fs.write_file(uri, previous_content, ctx=ctx)
+                await self._viking_fs.write_file(
+                    uri,
+                    previous_content,
+                    ctx=ctx,
+                    lock_handle=lock_handle,
+                )
         except Exception:
             logger.error("Failed to rollback direct content write for %s", uri, exc_info=True)
 
@@ -384,7 +397,9 @@ class ContentWriteCoordinator:
             raise AlreadyExistsError(uri, "file")
 
         context_type = context_type_for_uri(uri)
-        root_uri = await self._resolve_root_uri(uri, ctx=ctx, _allow_not_found=True)
+        root_uri = await self._resolve_root_uri(
+            uri, ctx=ctx, _allow_not_found=True, anchor_to_parent=True
+        )
         written_bytes = len(content.encode("utf-8"))
         telemetry_id = get_current_telemetry().telemetry_id
 
@@ -421,6 +436,7 @@ class ContentWriteCoordinator:
         *,
         mode: str,
         ctx: RequestContext,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         if context_type_for_uri(uri) == "memory":
             if mode == "replace":
@@ -434,7 +450,12 @@ class ContentWriteCoordinator:
             else:
                 mf = MemoryFileUtils.read(content, uri=uri)
             sync_memory_resource_refs(mf, source=RESOURCE_REF_SOURCE_CONTENT_WRITE)
-            await self._viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+            await self._viking_fs.write_file(
+                uri,
+                MemoryFileUtils.write(mf),
+                ctx=ctx,
+                lock_handle=lock_handle,
+            )
             return
 
         if mode == "append":
@@ -442,9 +463,14 @@ class ContentWriteCoordinator:
             mf = MemoryFileUtils.read(existing_raw, uri=uri)
             mf.content = mf.content + content
             updated_raw = MemoryFileUtils.write(mf)
-            await self._viking_fs.write_file(uri, updated_raw, ctx=ctx)
+            await self._viking_fs.write_file(
+                uri,
+                updated_raw,
+                ctx=ctx,
+                lock_handle=lock_handle,
+            )
             return
-        await self._viking_fs.write_file(uri, content, ctx=ctx)
+        await self._viking_fs.write_file(uri, content, ctx=ctx, lock_handle=lock_handle)
 
     async def _enqueue_semantic_refresh(
         self,
@@ -538,7 +564,13 @@ class ContentWriteCoordinator:
         released = False
         request_registered = False
         try:
-            await self._write_in_place(uri, content, mode=mode, ctx=ctx)
+            await self._write_in_place(
+                uri,
+                content,
+                mode=mode,
+                ctx=ctx,
+                lock_handle=handle,
+            )
             await lock_manager.release(handle)
             released = True
             if wait and telemetry_id and self._vikingdb_has_queue():
@@ -780,6 +812,7 @@ class ContentWriteCoordinator:
         *,
         ctx: RequestContext,
         _allow_not_found: bool = False,
+        anchor_to_parent: bool = False,
     ) -> str:
         parsed = VikingURI(uri)
         parts = [part for part in parsed.full_path.split("/") if part]
@@ -789,7 +822,19 @@ class ContentWriteCoordinator:
         root_uri = uri
         if parts[0] == "resources":
             if len(parts) >= 2:
-                root_uri = VikingURI.build("resources", parts[1])
+                if anchor_to_parent:
+                    # Content writes anchor the semantic refresh at the written file's
+                    # direct parent directory, so the changed file is a direct child of
+                    # the DAG run root: its own L2 vector and the parent's L0/L1 are
+                    # (re)generated from a single-directory run, while ancestor summaries
+                    # refresh via the existing parent bubble. Collapsing to the project
+                    # root instead would force the run to traverse the whole project
+                    # subtree before the changed file's vector is even dispatched.
+                    parent = parsed.parent
+                    if parent is not None:
+                        root_uri = parent.uri
+                else:
+                    root_uri = VikingURI.build("resources", parts[1])
         elif parts[0] == "user":
             if "resources" in parts:
                 resources_idx = parts.index("resources")

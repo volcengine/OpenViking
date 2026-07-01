@@ -8,11 +8,20 @@ import (
 
 // AdminCreateAccount creates an account with its first admin user.
 func (c *Client) AdminCreateAccount(ctx context.Context, accountID, adminUserID string) (map[string]any, error) {
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts", nil, map[string]any{
+	return c.AdminCreateAccountWithOptions(ctx, accountID, adminUserID, nil)
+}
+
+// AdminCreateAccountWithOptions creates an account with its first admin user.
+func (c *Client) AdminCreateAccountWithOptions(ctx context.Context, accountID, adminUserID string, opts *AdminCreateAccountOptions) (map[string]any, error) {
+	payload := map[string]any{
 		"account_id":    accountID,
 		"admin_user_id": adminUserID,
-	}, &result)
+	}
+	if opts != nil && opts.UserConfig != nil {
+		payload["user_config"] = opts.UserConfig
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts", nil, payload, &result)
 	return result, err
 }
 
@@ -32,14 +41,23 @@ func (c *Client) AdminDeleteAccount(ctx context.Context, accountID string) (map[
 
 // AdminRegisterUser registers a user in an account.
 func (c *Client) AdminRegisterUser(ctx context.Context, accountID, userID, role string) (map[string]any, error) {
+	return c.AdminRegisterUserWithOptions(ctx, accountID, userID, role, nil)
+}
+
+// AdminRegisterUserWithOptions registers a user in an account.
+func (c *Client) AdminRegisterUserWithOptions(ctx context.Context, accountID, userID, role string, opts *AdminRegisterUserOptions) (map[string]any, error) {
 	if role == "" {
 		role = "user"
 	}
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users", nil, map[string]any{
+	payload := map[string]any{
 		"user_id": userID,
 		"role":    role,
-	}, &result)
+	}
+	if opts != nil && opts.UserConfig != nil {
+		payload["user_config"] = opts.UserConfig
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users", nil, payload, &result)
 	return result, err
 }
 

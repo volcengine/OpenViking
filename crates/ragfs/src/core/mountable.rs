@@ -86,6 +86,15 @@ struct MountCacheConfig {
 }
 
 impl MountableFS {
+    /// Return whether one plugin may be wrapped by EncryptionWrappedFS.
+    ///
+    /// Encrypted whole-file publish now depends on overwrite-on-publish
+    /// semantics (`replace(temp, final)`). Keep this gate at the wrapper
+    /// creation entrypoint so unsupported backends fail fast before mounting.
+    fn supports_encrypted_publish(plugin_name: &str) -> bool {
+        matches!(plugin_name, "localfs" | "s3fs" | "memfs")
+    }
+
     /// Return the raw backend for one mounted path when raw access is supported.
     fn raw_backend_for_mount<'a>(
         mount_info: &'a MountInfo,
@@ -301,6 +310,12 @@ impl MountableFS {
                 } else {
                     match (enc_root_key, enc_provider_type) {
                         (Some(rk), Some(pt)) => {
+                            if !Self::supports_encrypted_publish(&config.name) {
+                                return Err(Error::config(format!(
+                                      "encrypted backend '{}' must support replace() semantics",
+                                      config.name
+                                  )));
+                            }
                             Arc::new(EncryptionWrappedFS::new(storage_fs, rk, pt))
                         }
                         _ => storage_fs,
@@ -669,6 +684,10 @@ impl FileSystem for ArcFileSystem {
         self.0.rename(old_path, new_path).await
     }
 
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        self.0.replace(src_path, dst_path).await
+    }
+
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         self.0.chmod(path, mode).await
     }
@@ -759,6 +778,19 @@ impl FileSystem for MountableFS {
         }
 
         mount_info_old.fs.rename(&rel_old, &rel_new).await
+    }
+
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let (mount_info_src, rel_src) = self.find_mount(src_path).await?;
+        let (mount_info_dst, rel_dst) = self.find_mount(dst_path).await?;
+
+        if mount_info_src.path != mount_info_dst.path {
+            return Err(Error::InvalidOperation(
+                "Cannot replace across different mount points".to_string(),
+            ));
+        }
+
+        mount_info_src.fs.replace(&rel_src, &rel_dst).await
     }
 
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {

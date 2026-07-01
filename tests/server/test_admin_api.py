@@ -21,6 +21,7 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.user_config import read_user_add_targets
 from openviking.service.core import OpenVikingService
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
@@ -67,6 +68,18 @@ class _FakeAGFS:
 class _FakeVikingFS:
     def __init__(self):
         self.agfs = _FakeAGFS()
+        self.files = {}
+
+    async def read_file(self, uri, **_kwargs):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
+        return self.files[uri]
+
+    async def write_file(self, uri, content, **_kwargs):
+        self.files[uri] = content
+
+    async def rm(self, uri, **_kwargs):
+        self.files.pop(uri, None)
 
 
 class _FakeService:
@@ -88,6 +101,7 @@ def _build_lightweight_admin_test_app() -> FastAPI:
     app = FastAPI()
     app.state.config = ServerConfig(root_api_key=ROOT_KEY)
     fake_service = _FakeService()
+    app.state.fake_service = fake_service
     set_service(fake_service)
 
     @app.exception_handler(OpenVikingError)
@@ -249,6 +263,48 @@ async def test_create_account(admin_client: httpx.AsyncClient, admin_service: Op
     ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
     assert await admin_service.viking_fs.abstract("viking://resources", ctx=ctx)
     assert await admin_service.viking_fs.abstract("viking://user", ctx=ctx)
+
+
+async def test_create_user_paths_accept_initial_user_config(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    viking_fs = lightweight_admin_app.state.fake_service.viking_fs
+
+    resp = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/admin"}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    alice_settings = await read_user_add_targets(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
+    )
+    assert alice_settings.resource_uri == "viking://user/resources/admin"
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={
+            "user_id": "bob",
+            "role": "user",
+            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/bob"}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    bob_settings = await read_user_add_targets(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
+    )
+    assert bob_settings.resource_uri == "viking://user/resources/bob"
 
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):
