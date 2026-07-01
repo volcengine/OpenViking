@@ -665,7 +665,7 @@ ov session delete a1b2c3d4
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `enabled` | bool | 否 | 是否启用该 session 的自动 commit。设为 `false` 时会关闭该 session 的自动触发 |
+| `enabled` | bool | 是 | 是否启用该 session 的自动 commit。设为 `false` 时会关闭该 session 的自动触发 |
 | `token_threshold` | int | 否 | token 阈值。消息写入后若 `pending_tokens` 达到该值，会尝试立即触发自动 commit |
 | `idle_timeout_seconds` | int | 否 | idle 超时时间，单位秒。配置后该 session 会进入服务端 idle 调度范围 |
 | `keep_recent_count` | int | 否 | commit 后保留最近多少条 live message，不参与归档删除。修改后会同步更新 session meta，并触发 `pending_tokens` 重建 |
@@ -677,6 +677,7 @@ ov session delete a1b2c3d4
 - `token_threshold` 会在消息写入后立即参与判断，不依赖 idle scheduler。
 - `idle_timeout_seconds` 是否生效，还取决于服务端全局配置 `server.session_auto_commit.idle_enabled` 是否开启。
 - 当 idle scheduler 开启后，服务端会通过固定周期扫描 session `.meta.json` 来判断哪些 session 到达 idle 触发条件。
+- `auto_commit_last_error` 只记录自动触发和 phase-1 commit 调度阶段的错误。phase-2 extraction 失败会体现在后台 task 和 `.failed.json`，不会写入该字段。
 
 **Part 类型（Python SDK）**
 

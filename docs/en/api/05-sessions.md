@@ -666,7 +666,7 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `enabled` | bool | No | Enables or disables automatic commit for the session. Setting it to `false` turns off auto-triggering for that session |
+| `enabled` | bool | Yes | Enables or disables automatic commit for the session. Setting it to `false` turns off auto-triggering for that session |
 | `token_threshold` | int | No | Token threshold. After a message write, OpenViking tries an immediate auto commit when `pending_tokens` reaches this value |
 | `idle_timeout_seconds` | int | No | Idle timeout in seconds. When configured, the session becomes eligible for the server-side idle scheduler |
 | `keep_recent_count` | int | No | Number of recent live messages to keep after commit. Updating it also updates session metadata and rebuilds `pending_tokens` |
@@ -678,6 +678,7 @@ Additional notes:
 - `token_threshold` is evaluated immediately after message writes and does not depend on the idle scheduler.
 - `idle_timeout_seconds` only takes effect when the server-wide `server.session_auto_commit.idle_enabled` switch is enabled.
 - When idle scheduling is enabled, the server detects due idle commits by periodic scans of session `.meta.json` files.
+- `auto_commit_last_error` records errors from automatic triggering and phase-1 commit scheduling. Phase-2 extraction failures are reported on the background task and `.failed.json`, not through this field.
 
 **Part Types (Python SDK)**
 

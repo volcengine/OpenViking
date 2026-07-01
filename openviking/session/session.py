@@ -1118,6 +1118,7 @@ class Session:
         Returns a task_id for tracking Phase 2 progress.
         """
         from openviking.service.task_tracker import get_task_tracker
+        from openviking.storage.errors import LockAcquisitionError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
         trace_id = tracer.get_trace_id()
@@ -1150,74 +1151,92 @@ class Session:
 
         # Use filesystem-based distributed lock so this works across workers/processes.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        async with LockContext(get_lock_manager(), [session_path], lock_mode="exact"):
-            # Authoritative check under lock: handles the race where two concurrent
-            # callers both passed the pre-check but only the first should archive.
-            if not self._messages:
-                self._meta.pending_tokens = 0
-                self._meta.keep_recent_count = keep_recent_count
-                await self._save_meta()
-                get_current_telemetry().set("memory.extracted", 0)
-                return {
-                    "session_id": self.session_id,
-                    "status": "skipped",
-                    "task_id": None,
-                    "archive_uri": None,
-                    "archived": False,
-                    "reason": "no_messages",
-                    "trace_id": trace_id,
-                }
+        try:
+            async with LockContext(
+                get_lock_manager(),
+                [session_path],
+                lock_mode="exact",
+            ):
+                # Authoritative check under lock: handles the race where two concurrent
+                # callers both passed the pre-check but only the first should archive.
+                if not self._messages:
+                    self._meta.pending_tokens = 0
+                    self._meta.keep_recent_count = keep_recent_count
+                    await self._save_meta()
+                    get_current_telemetry().set("memory.extracted", 0)
+                    return {
+                        "session_id": self.session_id,
+                        "status": "skipped",
+                        "task_id": None,
+                        "archive_uri": None,
+                        "archived": False,
+                        "reason": "no_messages",
+                        "trace_id": trace_id,
+                    }
 
-            # WM v2 boundary: if all live messages already fit inside the keep
-            # window, there is nothing to archive — just remember the new
-            # keep_recent_count and reset pending_tokens so the next
-            # add_message uses the sliding-window path.
-            total = len(self._messages)
-            if keep_recent_count > 0 and total <= keep_recent_count:
-                self._meta.pending_tokens = 0
-                self._meta.keep_recent_count = keep_recent_count
-                self._meta.message_count = total
-                await self._save_meta()
-                get_current_telemetry().set("memory.extracted", 0)
-                return {
-                    "session_id": self.session_id,
-                    "status": "skipped",
-                    "task_id": None,
-                    "archive_uri": None,
-                    "archived": False,
-                    "reason": "all_within_keep_window",
-                    "trace_id": trace_id,
-                }
+                # WM v2 boundary: if all live messages already fit inside the keep
+                # window, there is nothing to archive — just remember the new
+                # keep_recent_count and reset pending_tokens so the next
+                # add_message uses the sliding-window path.
+                total = len(self._messages)
+                if keep_recent_count > 0 and total <= keep_recent_count:
+                    self._meta.pending_tokens = 0
+                    self._meta.keep_recent_count = keep_recent_count
+                    self._meta.message_count = total
+                    await self._save_meta()
+                    get_current_telemetry().set("memory.extracted", 0)
+                    return {
+                        "session_id": self.session_id,
+                        "status": "skipped",
+                        "task_id": None,
+                        "archive_uri": None,
+                        "archived": False,
+                        "reason": "all_within_keep_window",
+                        "trace_id": trace_id,
+                    }
 
-            self._compression.compression_index += 1
-            archive_uri = (
-                f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
-            )
-            if keep_recent_count > 0:
-                split_idx = total - keep_recent_count
-                messages_to_archive = self._messages[:split_idx]
-                retained_messages = self._messages[split_idx:]
-            else:
-                messages_to_archive = self._messages.copy()
-                retained_messages = []
+                self._compression.compression_index += 1
+                archive_uri = (
+                    f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+                )
+                if keep_recent_count > 0:
+                    split_idx = total - keep_recent_count
+                    messages_to_archive = self._messages[:split_idx]
+                    retained_messages = self._messages[split_idx:]
+                else:
+                    messages_to_archive = self._messages.copy()
+                    retained_messages = []
 
-            try:
-                # Persist archive raw messages before trimming live messages so
-                # an archive write failure cannot drop live conversation history.
-                if self._viking_fs:
-                    lines = [m.to_jsonl() for m in messages_to_archive]
-                    await self._viking_fs.write_file(
-                        uri=f"{archive_uri}/messages.jsonl",
-                        content="\n".join(lines) + "\n",
-                        ctx=self.ctx,
-                    )
-                self._messages = retained_messages
-                await self._write_to_agfs_async(messages=self._messages)
-            except Exception as e:
-                logger.error(f"[commit] Failed to persist archive/live messages: {e}")
-                self._messages = list(messages_to_archive) + list(retained_messages)
-                self._compression.compression_index -= 1
-                raise
+                try:
+                    # Persist archive raw messages before trimming live messages so
+                    # an archive write failure cannot drop live conversation history.
+                    if self._viking_fs:
+                        lines = [m.to_jsonl() for m in messages_to_archive]
+                        await self._viking_fs.write_file(
+                            uri=f"{archive_uri}/messages.jsonl",
+                            content="\n".join(lines) + "\n",
+                            ctx=self.ctx,
+                        )
+                    self._messages = retained_messages
+                    await self._write_to_agfs_async(messages=self._messages)
+                except Exception as e:
+                    logger.error(f"[commit] Failed to persist archive/live messages: {e}")
+                    self._messages = list(messages_to_archive) + list(retained_messages)
+                    self._compression.compression_index -= 1
+                    raise
+        except LockAcquisitionError:
+            self._meta.pending_tokens = 0
+            self._meta.keep_recent_count = keep_recent_count
+            await self._save_meta()
+            get_current_telemetry().set("memory.extracted", 0)
+            return {
+                "session_id": self.session_id,
+                "status": "accepted",
+                "task_id": None,
+                "archive_uri": None,
+                "archived": False,
+                "trace_id": trace_id,
+            }
         # Lock released; live session now contains only the retained tail.
 
         # WM v2: live session is now the retained tail; pending_tokens resets
@@ -3318,14 +3337,26 @@ class Session:
         """Append multiple messages to messages.jsonl in a single write."""
         if not self._viking_fs:
             return
+        run_async(self._append_messages_to_jsonl_batch_async(messages))
+
+    async def _append_messages_to_jsonl_batch_async(self, messages: List[Message]) -> None:
+        """Append messages under the same session lock used by commit live rewrites."""
+        if not self._viking_fs:
+            return
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         batch_content = "".join(msg.to_jsonl() + "\n" for msg in messages)
-        run_async(
-            self._viking_fs.append_file(
+        async with LockContext(
+            get_lock_manager(),
+            [session_path],
+            lock_mode="exact",
+        ):
+            await self._viking_fs.append_file(
                 f"{self._session_uri}/messages.jsonl",
                 batch_content,
                 ctx=self.ctx,
             )
-        )
 
     def _update_message_in_jsonl(self) -> None:
         """Update message in messages.jsonl."""

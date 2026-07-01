@@ -7,6 +7,9 @@ import asyncio
 
 from openviking import AsyncOpenViking
 from openviking.message import TextPart
+from openviking.server.identity import RequestContext, Role
+from openviking.storage.errors import LockAcquisitionError
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class TestCommitRace:
@@ -68,3 +71,51 @@ class TestCommitRace:
         # The new message should still be in the session
         assert len(session.messages) == 1
         assert session.messages[0].content == "New message during commit"
+
+    async def test_message_append_conflicts_with_commit_live_rewrite_lock_without_data_loss(
+        self, client: AsyncOpenViking
+    ):
+        """Appending during a commit should fail fast instead of being overwritten."""
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+        session_id = "race_test_commit_append_lock"
+        committing = await client._client._service.sessions.create(ctx, session_id=session_id)
+        appending = client._client._service.sessions.session(ctx, session_id)
+
+        committing.add_message("user", [TextPart("Original message")])
+        await appending.load()
+
+        rewrite_started = asyncio.Event()
+        allow_rewrite = asyncio.Event()
+        original_write = committing._write_to_agfs_async
+
+        async def gated_write(messages):
+            rewrite_started.set()
+            await allow_rewrite.wait()
+            await original_write(messages)
+
+        committing._write_to_agfs_async = gated_write
+
+        commit_task = asyncio.create_task(committing.commit_async())
+        await rewrite_started.wait()
+
+        try:
+            await asyncio.to_thread(
+                appending.add_message,
+                "user",
+                [TextPart("New message during commit rewrite")],
+            )
+        except LockAcquisitionError:
+            pass
+        else:
+            raise AssertionError("add_message should fail while commit rewrite holds the lock")
+
+        allow_rewrite.set()
+        result = await commit_task
+        appending.add_message("user", [TextPart("New message after commit rewrite")])
+
+        assert result.get("archived") is True
+        reloaded = client._client._service.sessions.session(ctx, session_id)
+        await reloaded.load()
+        assert [message.content for message in reloaded.messages] == [
+            "New message after commit rewrite"
+        ]
