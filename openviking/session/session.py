@@ -956,7 +956,39 @@ class Session:
                 all_messages.append(msg)
 
         self._append_messages(all_messages)
+        self._maybe_auto_commit()
         return all_messages
+
+    def _maybe_auto_commit(self) -> None:
+        """Trigger a background commit when accumulated pending tokens cross the
+        auto-commit threshold.
+
+        The threshold (``_auto_commit_threshold``) and the ``pending_tokens``
+        signal were both maintained by ``_append_messages`` but never connected,
+        so in-process sessions (HTTP/SDK ``add_messages`` path) never
+        auto-committed — only the offline ingest poller
+        (``maybe_commit_on_threshold``) did. This left real-time sessions
+        accumulating without extraction, the root cause of the low
+        session→memory conversion rate.
+
+        Fire-and-forget: archive (Phase 1) and extraction (Phase 2) both run
+        in the background so ``add_messages`` stays non-blocking.
+        ``commit_async``'s path-lock + empty-messages early-return make a
+        concurrent plugin-initiated commit a safe no-op. Threshold <= 0
+        disables. No-op when no running event loop (sync CLI callers).
+        """
+        threshold = int(self._auto_commit_threshold or 0)
+        if threshold <= 0:
+            return
+        if int(self._meta.pending_tokens or 0) < threshold:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # No running loop (sync CLI path) — skip, plugin/HTTP will commit.
+        loop.create_task(
+            self.commit_async(keep_recent_count=int(self._meta.keep_recent_count or 0))
+        )
 
     def add_message(
         self,
