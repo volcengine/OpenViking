@@ -138,6 +138,17 @@ class OpenVikingWebSpider(scrapy.Spider):
                     final_url = rendered.final_url or final_url
                     page_html = rendered.html
                     page_source = "playwright"
+                elif rendered.error:
+                    self.collector.append(
+                        CrawledPage(
+                            url=response.url,
+                            final_url=final_url,
+                            depth=depth,
+                            status="failed",
+                            error=rendered.error,
+                        )
+                    )
+                    return
         except Exception as exc:
             self.collector.append(
                 CrawledPage(

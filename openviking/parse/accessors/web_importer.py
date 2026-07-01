@@ -93,7 +93,11 @@ class WebImporter:
         crawl_result = await ScrapyWebCrawler(config).crawl(root_url)
         success_pages = self._dedupe_success_pages(crawl_result.pages)
         if not any(page.depth == 0 for page in success_pages):
-            raise RuntimeError(f"Failed to fetch entry page: {root_url}")
+            detail = self._entry_failure_detail(crawl_result.pages)
+            message = f"Failed to fetch entry page: {root_url}"
+            if detail:
+                message = f"{message} ({detail})"
+            raise RuntimeError(message)
 
         temp_root = Path(tempfile.mkdtemp(prefix="ov_web_"))
         temp_dir = temp_root / _host_name(root_url)
@@ -128,6 +132,19 @@ class WebImporter:
                 "original_filename": _host_name(root_url),
             },
         )
+
+    @staticmethod
+    def _entry_failure_detail(pages) -> str:
+        """Return the failure reason of the entry page, if one was recorded.
+
+        The renderer surfaces actionable hints (e.g. missing Playwright
+        install) via ``CrawledPage.error``; without this the caller only sees
+        the generic "Failed to fetch entry page" message.
+        """
+        for page in pages:
+            if page.depth == 0 and page.status != "success" and page.error:
+                return page.error
+        return ""
 
     @staticmethod
     def _dedupe_success_pages(pages) -> list[Any]:

@@ -188,6 +188,39 @@ class TestWebImporter:
                 options=WebImportOptions(),
             )
 
+    async def test_entry_failure_surfaces_renderer_hint(self, monkeypatch):
+        class FakeCrawler:
+            def __init__(self, config):
+                self.config = config
+
+            async def crawl(self, root_url):
+                return SimpleNamespace(
+                    pages=[
+                        SimpleNamespace(
+                            url=root_url,
+                            final_url=root_url,
+                            depth=0,
+                            status="failed",
+                            html=None,
+                            error="Playwright fallback was needed, but the Python package is not installed.",
+                        )
+                    ],
+                    downloads=[],
+                    total_crawled=0,
+                    total_downloads=0,
+                    total_failed=1,
+                    total_skipped=0,
+                    fallback_rendered=0,
+                )
+
+        monkeypatch.setattr("openviking.parse.accessors.web_importer.ScrapyWebCrawler", FakeCrawler)
+
+        with pytest.raises(RuntimeError, match="Playwright fallback was needed"):
+            await WebImporter().import_to_directory(
+                root_url="https://example.com",
+                options=WebImportOptions(),
+            )
+
     async def test_import_to_directory_downloads_child_links(self, monkeypatch, tmp_path):
         class FakeCrawler:
             def __init__(self, config):
