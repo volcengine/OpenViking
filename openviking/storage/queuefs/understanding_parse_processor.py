@@ -221,7 +221,17 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
             raise RuntimeError("ResourceProcessor is None")
 
         telemetry_id = msg.telemetry_id or ""
+        if telemetry_id:
+            from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+
+            get_request_wait_tracker().register_request(telemetry_id)
+
         telemetry = resolve_telemetry(telemetry_id) if telemetry_id else None
+        if telemetry_id and telemetry is None:
+            from openviking.telemetry.operation import OperationTelemetry
+
+            telemetry = OperationTelemetry(operation="noop", enabled=False)
+            telemetry.telemetry_id = telemetry_id
 
         with bind_execution_context(), (bind_telemetry(telemetry) if telemetry else suppress()):
             try:
