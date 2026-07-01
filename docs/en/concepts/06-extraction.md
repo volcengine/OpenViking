@@ -25,7 +25,7 @@ Parser handles document format conversion and structuring, creating file structu
 | Markdown | MarkdownParser | .md, .markdown | Supported |
 | Plain text | TextParser | .txt | Supported |
 | PDF | PDFParser | .pdf | Supported |
-| HTML | HTMLParser | .html, .htm | Supported, body extracted with trafilatura |
+| HTML | HTMLParser | .html, .htm | Supported |
 | Code | CodeRepositoryParser | .py, .js, .go, etc. | Respects `.gitignore` and ignores common non-code directories |
 | Image | ImageParser | .png, .jpg, etc. |  |
 | Video | VideoParser | .mp4, .avi, etc. |  |
