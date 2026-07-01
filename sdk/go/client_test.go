@@ -220,18 +220,21 @@ func TestAdminSeedPayloads(t *testing.T) {
 	}))
 	defer closeServer()
 
+	adminSeed := "admin-seed"
 	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
-		Seed: "admin-seed",
+		Seed: &adminSeed,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	aliceSeed := "alice-seed"
 	if _, err := client.AdminRegisterUserWithOptions(context.Background(), "acct", "alice", "admin", &AdminRegisterUserOptions{
-		Seed: "alice-seed",
+		Seed: &aliceSeed,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	newSeed := "new-seed"
 	if _, err := client.AdminRegenerateKeyWithOptions(context.Background(), "acct", "alice", &AdminRegenerateKeyOptions{
-		Seed: "new-seed",
+		Seed: &newSeed,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -244,6 +247,39 @@ func TestAdminSeedPayloads(t *testing.T) {
 	}
 	if got := seen[2]["seed"]; got != "new-seed" {
 		t.Fatalf("regenerate seed = %#v", got)
+	}
+}
+
+func TestAdminEmptySeedPayloadsAreSent(t *testing.T) {
+	var seen []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		seen = append(seen, body)
+		writeOK(t, w, body)
+	}))
+	defer closeServer()
+
+	emptySeed := ""
+	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
+		Seed: &emptySeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AdminRegisterUserWithOptions(context.Background(), "acct", "alice", "admin", &AdminRegisterUserOptions{
+		Seed: &emptySeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AdminRegenerateKeyWithOptions(context.Background(), "acct", "alice", &AdminRegenerateKeyOptions{
+		Seed: &emptySeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, body := range seen {
+		if got, ok := body["seed"]; !ok || got != "" {
+			t.Fatalf("request %d seed = %#v, present = %v", i, got, ok)
+		}
 	}
 }
 

@@ -20,8 +20,8 @@ func (c *Client) AdminCreateAccountWithOptions(ctx context.Context, accountID, a
 	if opts != nil && opts.UserConfig != nil {
 		payload["user_config"] = opts.UserConfig
 	}
-	if opts != nil && opts.Seed != "" {
-		payload["seed"] = opts.Seed
+	if opts != nil && opts.Seed != nil {
+		payload["seed"] = *opts.Seed
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts", nil, payload, &result)
@@ -59,8 +59,8 @@ func (c *Client) AdminRegisterUserWithOptions(ctx context.Context, accountID, us
 	if opts != nil && opts.UserConfig != nil {
 		payload["user_config"] = opts.UserConfig
 	}
-	if opts != nil && opts.Seed != "" {
-		payload["seed"] = opts.Seed
+	if opts != nil && opts.Seed != nil {
+		payload["seed"] = *opts.Seed
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users", nil, payload, &result)
@@ -98,8 +98,8 @@ func (c *Client) AdminRegenerateKey(ctx context.Context, accountID, userID strin
 // AdminRegenerateKeyWithOptions regenerates a user's API key.
 func (c *Client) AdminRegenerateKeyWithOptions(ctx context.Context, accountID, userID string, opts *AdminRegenerateKeyOptions) (map[string]any, error) {
 	var payload map[string]any
-	if opts != nil && opts.Seed != "" {
-		payload = map[string]any{"seed": opts.Seed}
+	if opts != nil && opts.Seed != nil {
+		payload = map[string]any{"seed": *opts.Seed}
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/users/"+url.PathEscape(userID)+"/key", nil, payload, &result)

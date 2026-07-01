@@ -135,8 +135,9 @@ config. Ordinary add calls do not need SDK defaults; omit `To` / `TargetURI`
 and let the server resolve user and deployment defaults.
 
 ```go
+seed := "alice-seed"
 _, err := client.AdminRegisterUserWithOptions(ctx, "acme", "alice", "user", &openviking.AdminRegisterUserOptions{
-    Seed: "alice-seed",
+    Seed: &seed,
     UserConfig: map[string]any{
 		"add_targets": map[string]any{
 			"resource_uri": "viking://user/resources/project-a",
@@ -145,13 +146,16 @@ _, err := client.AdminRegisterUserWithOptions(ctx, "acme", "alice", "user", &ope
 	},
 })
 
+newSeed := "alice-new-seed"
 _, err = client.AdminRegenerateKeyWithOptions(ctx, "acme", "alice", &openviking.AdminRegenerateKeyOptions{
-    Seed: "alice-new-seed",
+    Seed: &newSeed,
 })
 ```
 
 When `Seed` is set, the returned API key is derived from
 `sha256(user_id + "\0" + seed)`; omit it for random key generation.
+Use `nil` to omit `Seed`; set `Seed` to a string pointer to send it, including
+an empty string that the server rejects.
 
 ## Files, Directories, and Packs
 

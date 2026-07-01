@@ -189,8 +189,9 @@ if err != nil {
 }
 fmt.Println(result["account_id"])
 
+seed := "alice-seed"
 result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice", &openviking.AdminCreateAccountOptions{
-    Seed: "alice-seed",
+    Seed: &seed,
     UserConfig: map[string]any{
         "add_targets": map[string]any{
             "resource_uri": "viking://user/resources",
@@ -476,8 +477,9 @@ if err != nil {
 }
 fmt.Println(result["user_id"])
 
+seed := "bob-seed"
 result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "user", &openviking.AdminRegisterUserOptions{
-    Seed: "bob-seed",
+    Seed: &seed,
     UserConfig: map[string]any{
         "add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
     },
@@ -858,8 +860,9 @@ if err != nil {
 }
 fmt.Println(result["user_key"])
 
+seed := "bob-new-seed"
 result, err = client.AdminRegenerateKeyWithOptions(ctx, "acme", "bob", &openviking.AdminRegenerateKeyOptions{
-    Seed: "bob-new-seed",
+    Seed: &seed,
 })
 ```
 

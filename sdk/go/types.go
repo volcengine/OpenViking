@@ -53,18 +53,18 @@ type AddSkillOptions struct {
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
 type AdminCreateAccountOptions struct {
 	UserConfig map[string]any
-	Seed       string
+	Seed       *string
 }
 
 // AdminRegisterUserOptions controls AdminRegisterUserWithOptions.
 type AdminRegisterUserOptions struct {
 	UserConfig map[string]any
-	Seed       string
+	Seed       *string
 }
 
 // AdminRegenerateKeyOptions controls AdminRegenerateKeyWithOptions.
 type AdminRegenerateKeyOptions struct {
-	Seed string
+	Seed *string
 }
 
 // ListSkillsOptions controls ListSkills.
