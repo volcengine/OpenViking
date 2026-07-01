@@ -887,3 +887,37 @@ func TestSetTagsDefaultsModeAndOmitsTelemetry(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGrepForwardsLevelLimit(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method+" "+r.URL.Path != "POST /api/v1/search/grep" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		if got, ok := body["level_limit"]; !ok || got != float64(3) {
+			t.Fatalf("level_limit = %#v (ok=%v)", body["level_limit"], ok)
+		}
+		writeOK(t, w, map[string]any{"matches": []any{}})
+	}))
+	defer closeServer()
+
+	level := 3
+	if _, err := client.Grep(context.Background(), "viking://user", "pat", &GrepOptions{LevelLimit: &level}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGrepOmitsLevelLimitWhenUnset(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["level_limit"]; ok {
+			t.Fatalf("level_limit should be omitted when unset, got %#v", body["level_limit"])
+		}
+		writeOK(t, w, map[string]any{"matches": []any{}})
+	}))
+	defer closeServer()
+
+	if _, err := client.Grep(context.Background(), "viking://user", "pat", nil); err != nil {
+		t.Fatal(err)
+	}
+}
