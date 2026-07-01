@@ -6,7 +6,6 @@ import asyncio
 import json
 
 from contextlib import suppress
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from openviking.observability.context import (
@@ -118,7 +117,6 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                 payload["id"] = data["id"]
 
         msg = UnderstandingParseMsg.from_dict(payload)
-        cleanup_local_path = msg.cleanup_local_path
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
@@ -164,7 +162,6 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                         user_id=msg.user_id,
                         role=msg.role,
                         actor_peer_id=msg.actor_peer_id,
-                        cleanup_local_path=msg.cleanup_local_path,
                         lock_handoff=msg.lock_handoff,
                         reason=msg.reason,
                         instruction=msg.instruction,
@@ -182,6 +179,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     )
                     await qm.enqueue(QueueManager.EXTERNAL_PARSE, retry_msg.to_dict())
                     self.report_requeue()
+                    self.report_success()
                     return None
 
                 await task_tracker.fail(
@@ -191,24 +189,6 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                 )
                 self.report_error(f"Invalid lock_handoff: {exc}", data)
-                if cleanup_local_path:
-                    try:
-                        from openviking_cli.utils.config.open_viking_config import (
-                            get_openviking_config,
-                        )
-
-                        cfg = get_openviking_config()
-                        staging_root = (
-                            Path(cfg.storage.workspace).expanduser().resolve()
-                            / "temp"
-                            / "external_parse"
-                        )
-                        cleanup_path = Path(cleanup_local_path).expanduser().resolve()
-                        if cleanup_path.is_relative_to(staging_root):
-                            with suppress(FileNotFoundError):
-                                cleanup_path.unlink()
-                    except Exception:
-                        pass
                 return None
 
         logger.info(
@@ -362,23 +342,3 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                         await lock_lease.close()
                 except Exception:
                     pass
-
-                if not cleanup_local_path:
-                    return
-                try:
-                    from openviking_cli.utils.config.open_viking_config import (
-                        get_openviking_config,
-                    )
-
-                    cfg = get_openviking_config()
-                    staging_root = (
-                        Path(cfg.storage.workspace).expanduser().resolve()
-                        / "temp"
-                        / "external_parse"
-                    )
-                    cleanup_path = Path(cleanup_local_path).expanduser().resolve()
-                    if cleanup_path.is_relative_to(staging_root):
-                        with suppress(FileNotFoundError):
-                            cleanup_path.unlink()
-                except Exception:
-                    return

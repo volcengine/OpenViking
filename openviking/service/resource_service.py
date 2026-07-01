@@ -690,6 +690,7 @@ class ResourceService:
                 not wait
                 and not is_git_repo_url(path)
                 and self._should_use_understanding_api(path)
+                and not allow_local_path_resolution
                 and self._resource_processor is not None
             ):
                 from openviking.service.task_tracker import get_task_tracker
@@ -724,14 +725,10 @@ class ResourceService:
                 lock_manager = get_lock_manager()
                 lock_lease: LockLease = NO_LOCK
 
-                async def _reserve_exact(uri: str) -> LockLease:
+                async def _reserve_tree(uri: str) -> LockLease:
                     dst_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
                     try:
-                        return await OwnedLockLease.acquire_exact_paths(
-                            lock_manager,
-                            [dst_path],
-                            timeout=0.0,
-                        )
+                        return await OwnedLockLease.acquire_tree(lock_manager, dst_path, timeout=0.0)
                     except LockAcquisitionError as exc:
                         raise ResourceBusyError(
                             f"Resource is busy: {uri}",
@@ -748,7 +745,7 @@ class ResourceService:
                         if await self._viking_fs.exists(attempt_uri, ctx=ctx):
                             continue
                         try:
-                            lock_lease = await _reserve_exact(attempt_uri)
+                            lock_lease = await _reserve_tree(attempt_uri)
                             root_uri = attempt_uri
                             reserved = True
                             break
@@ -759,11 +756,10 @@ class ResourceService:
                             f"Cannot resolve unique name for {candidate_uri} after {max_attempts} attempts"
                         )
                 else:
-                    lock_lease = await _reserve_exact(root_uri)
+                    lock_lease = await _reserve_tree(root_uri)
 
                 task_tracker = get_task_tracker()
                 task = None
-                cleanup_local_path = None
                 try:
                     task = await task_tracker.create(
                         "add_resource",
@@ -777,28 +773,6 @@ class ResourceService:
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
                     )
-
-                    temp_file_id = kwargs.get("temp_file_id")
-                    if isinstance(temp_file_id, str) and temp_file_id:
-                        from pathlib import Path
-                        import shutil
-
-                        from openviking_cli.utils.config.open_viking_config import (
-                            get_openviking_config,
-                        )
-
-                        cfg = get_openviking_config()
-                        staging_dir = (
-                            Path(cfg.storage.workspace).expanduser().resolve()
-                            / "temp"
-                            / "external_parse"
-                        )
-                        staging_dir.mkdir(parents=True, exist_ok=True)
-                        suffix = Path(path).suffix or ".tmp"
-                        staged_path = staging_dir / f"{task.task_id}{suffix}"
-                        shutil.copyfile(path, staged_path)
-                        cleanup_local_path = str(staged_path)
-                        path = cleanup_local_path
 
                     lock_handoff = lock_lease.to_handoff()
                     msg = UnderstandingParseMsg(
@@ -823,7 +797,6 @@ class ResourceService:
                         enforce_public_remote_targets=enforce_public_remote_targets,
                         args=normalized_args.processor_kwargs,
                         source_name=source_name,
-                        cleanup_local_path=cleanup_local_path,
                         lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
                     )
                     qm = get_queue_manager()
@@ -831,25 +804,6 @@ class ResourceService:
                     await lock_lease.handoff()
                     monitor_started = True
                 except Exception as exc:
-                    if cleanup_local_path:
-                        try:
-                            from openviking_cli.utils.config.open_viking_config import (
-                                get_openviking_config,
-                            )
-
-                            cfg = get_openviking_config()
-                            staging_root = (
-                                Path(cfg.storage.workspace).expanduser().resolve()
-                                / "temp"
-                                / "external_parse"
-                            )
-                            cleanup_path = Path(cleanup_local_path).expanduser().resolve()
-                            if cleanup_path.is_relative_to(staging_root):
-                                with contextlib.suppress(FileNotFoundError):
-                                    cleanup_path.unlink()
-                        except Exception:
-                            pass
-
                     with contextlib.suppress(Exception):
                         await lock_lease.close()
 

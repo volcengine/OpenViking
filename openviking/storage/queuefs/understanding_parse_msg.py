@@ -16,7 +16,6 @@ class UnderstandingParseMsg:
     telemetry_id: Optional[str]
     path: str
     root_uri: str
-    cleanup_local_path: Optional[str] = None
     lock_handoff: Optional[Dict[str, Any]] = None
     status: str = "pending"
     timestamp: int = int(datetime.now().timestamp())
@@ -49,7 +48,6 @@ class UnderstandingParseMsg:
         role: str,
         actor_peer_id: Optional[str] = None,
         telemetry_id: Optional[str] = None,
-        cleanup_local_path: Optional[str] = None,
         lock_handoff: Optional[Dict[str, Any]] = None,
         reason: str = "",
         instruction: str = "",
@@ -74,7 +72,6 @@ class UnderstandingParseMsg:
         self.user_id = user_id
         self.role = role
         self.actor_peer_id = actor_peer_id
-        self.cleanup_local_path = cleanup_local_path
         self.lock_handoff = lock_handoff
         self.reason = reason
         self.instruction = instruction
@@ -123,9 +120,6 @@ class UnderstandingParseMsg:
             actor_peer_id=data.get("actor_peer_id"),
             telemetry_id=str(data.get("telemetry_id"))
             if isinstance(data.get("telemetry_id"), str)
-            else None,
-            cleanup_local_path=data.get("cleanup_local_path")
-            if isinstance(data.get("cleanup_local_path"), str)
             else None,
             lock_handoff=data.get("lock_handoff")
             if isinstance(data.get("lock_handoff"), dict)
