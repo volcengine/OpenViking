@@ -657,6 +657,7 @@ class AgentLoop:
         memory_owner_user_ids: list[str] | None = None,
         disabled_tools: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        channel_metadata: dict[str, Any] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -671,6 +672,7 @@ class AgentLoop:
                 trusted-mode owner-user memory lookup
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
+            channel_metadata: Channel-specific metadata for tools that publish outbound messages
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -799,6 +801,7 @@ class AgentLoop:
                         memory_peer_ids=memory_peer_ids,
                         memory_owner_user_ids=memory_owner_user_ids,
                         openviking_connection=openviking_connection,
+                        channel_metadata=channel_metadata,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     return idx, tool_call, result, tool_execute_duration
@@ -1177,6 +1180,7 @@ class AgentLoop:
                     memory_owner_user_ids=memory_owner_user_ids,
                     disabled_tools=disabled_tools,
                     openviking_connection=openviking_connection,
+                    channel_metadata=msg.metadata,
                 )
 
             if auto_memory_tool:
@@ -1439,6 +1443,7 @@ class AgentLoop:
             publish_events=False,
             ov_tools_enable=ov_tools_enable,
             memory_peer_ids=None,
+            channel_metadata=msg.metadata,
         )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):

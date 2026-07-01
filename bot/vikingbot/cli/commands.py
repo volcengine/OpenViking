@@ -482,6 +482,7 @@ def prepare_cron(bus, quiet: bool = False) -> CronService:
         """Execute a cron job through the agent."""
         session_key = SessionKey(**json.loads(job.payload.session_key_str))
         message = job.payload.message
+        channel_metadata = dict(job.payload.channel_metadata or {})
 
         if agent_holder["agent"] is None:
             raise RuntimeError("Agent not initialized yet")
@@ -504,6 +505,7 @@ Reminder message to deliver:
         response = await agent_holder["agent"].process_direct(
             cron_instruction,
             session_key=session_key,
+            metadata=channel_metadata,
         )
         if job.payload.deliver:
             from vikingbot.bus.events import OutboundMessage
@@ -512,6 +514,7 @@ Reminder message to deliver:
                 OutboundMessage(
                     session_key=session_key,
                     content=response or "",
+                    metadata=channel_metadata,
                 )
             )
         return response

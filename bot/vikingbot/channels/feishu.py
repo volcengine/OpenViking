@@ -555,6 +555,11 @@ class FeishuChannel(BaseChannel):
             # Determine receive_id_type based on chat_id format
             # open_id starts with "ou_", chat_id starts with "oc_"
             reply_to = msg.metadata.get("reply_to")
+            if not isinstance(reply_to, str) or not reply_to:
+                logger.warning(
+                    f"Skipping Feishu message without reply_to metadata: session={msg.session_key}"
+                )
+                return
             if reply_to.startswith("oc_"):
                 receive_id_type = "chat_id"
             else:
@@ -566,13 +571,10 @@ class FeishuChannel(BaseChannel):
             content_with_mentions = cleaned_content
 
             # --- Build interactive card with markdown rendering ---
-            reply_to_message_id = None
             original_sender_id = None
             chat_type = "group"
+            reply_to_message_id = self._reply_to_message_id_from_metadata(msg.metadata)
             if msg.metadata:
-                reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get(
-                    "message_id"
-                )
                 original_sender_id = msg.metadata.get("sender_id")
                 chat_type = msg.metadata.get("chat_type", "group")
 
@@ -664,6 +666,23 @@ class FeishuChannel(BaseChannel):
 
         except Exception as e:
             logger.exception(f"Error sending Feishu message: {e}")
+
+    @staticmethod
+    def _reply_to_message_id_from_metadata(metadata: dict[str, Any] | None) -> str | None:
+        """Resolve the Feishu message id to reply to, including scheduled thread delivery."""
+        if not metadata:
+            return None
+
+        for key in ("reply_to_message_id", "message_id"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value:
+                return value
+
+        root_id = metadata.get("root_id")
+        if metadata.get("chat_mode") == "thread" and isinstance(root_id, str) and root_id:
+            return root_id
+
+        return None
 
     @staticmethod
     def _should_reply_in_thread(
