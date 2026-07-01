@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -24,6 +25,8 @@ use super::filesystem::{compile_grep_regex, normalize_prefix_path, FileSystem};
 use super::types::{FileInfo, GrepResult, TreeEntry, WriteFlag};
 
 const SYSTEM_ACCOUNT_ID: &str = "_system";
+const TEMP_ROOT_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+const TEMP_ROOT_CACHE_CAP: usize = 1024;
 
 /// A `FileSystem` wrapper that applies envelope encryption to file content.
 pub struct EncryptionWrappedFS {
@@ -35,6 +38,8 @@ pub struct EncryptionWrappedFS {
     provider_type: u8,
     /// Lazily-derived Account Key cache, keyed by account_id.
     account_keys: RwLock<HashMap<String, [u8; 32]>>,
+    /// Lazily-warmed temp root cache, keyed by temp_root path.
+    temp_root_ready: RwLock<HashMap<String, Instant>>,
 }
 
 impl EncryptionWrappedFS {
@@ -50,6 +55,7 @@ impl EncryptionWrappedFS {
             root_key,
             provider_type,
             account_keys: RwLock::new(HashMap::new()),
+            temp_root_ready: RwLock::new(HashMap::new()),
         }
     }
 
@@ -133,22 +139,66 @@ impl EncryptionWrappedFS {
         Ok(())
     }
 
-    /// Build a deterministic internal temp-file path for a final file path.
-    fn encrypted_temp_path(path: &str) -> String {
+    /// Compute the encrypted temp root directory for a final file path.
+    fn encrypted_temp_root(path: &str) -> String {
         let normalized = if path.starts_with('/') {
             path.to_string()
         } else {
             format!("/{}", path)
         };
         let parts: Vec<&str> = normalized.split('/').filter(|part| !part.is_empty()).collect();
-        let temp_root = match parts.as_slice() {
+        match parts.as_slice() {
             ["local", account_id, ..] => format!("/local/{}/temp/.encrypt_stage", account_id),
             [mount_root, _, ..] => format!("/{}/temp/.encrypt_stage", mount_root),
             _ => "/temp/.encrypt_stage".to_string(),
+        }
+    }
+
+    /// Compute the deterministic encrypted temp-file path for a final file path.
+    fn encrypted_temp_path(path: &str) -> String {
+        let normalized = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{}", path)
         };
+        let temp_root = Self::encrypted_temp_root(&normalized);
         let digest = Sha256::digest(normalized.as_bytes());
         format!("{}/{:x}.encrypt", temp_root, digest)
     }
+
+    /// Return true when a temp-root cache entry is still within TTL.
+    fn temp_root_cache_is_fresh(seen_at: Instant, now: Instant) -> bool {
+        now.saturating_duration_since(seen_at) <= TEMP_ROOT_CACHE_TTL
+    }
+
+    /// Prune expired and over-capacity temp-root cache entries.
+    fn prune_temp_root_cache(cache: &mut HashMap<String, Instant>, now: Instant) {
+        cache.retain(|_, seen_at| Self::temp_root_cache_is_fresh(*seen_at, now));
+        // ponytail: O(n) oldest-entry eviction; switch to a more complex structure only if the cap becomes hot.
+        while cache.len() > TEMP_ROOT_CACHE_CAP {
+            let Some(oldest_key) = cache
+                .iter()
+                .min_by_key(|(_, seen_at)| *seen_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            cache.remove(&oldest_key);
+        }
+    }
+
+    /// Create the encrypted temp root and refresh its cache entry.
+    async fn create_temp_root(&self, temp_root: &str) -> Result<()> {
+        let now = Instant::now();
+        let probe_path = format!("{temp_root}/.probe");
+        self.inner.ensure_parent_dirs(&probe_path, 0o755).await?;
+
+        let mut cache = self.temp_root_ready.write().unwrap();
+        cache.insert(temp_root.to_string(), now);
+        Self::prune_temp_root_cache(&mut cache, now);
+        Ok(())
+    }
+
 }
 
 /// Slice `data` by `(offset, size)` with `size == 0` meaning "to end", matching plugin read semantics.
@@ -229,18 +279,41 @@ impl FileSystem for EncryptionWrappedFS {
         let ct = crypto::aes_gcm_encrypt(&file_key, &data_iv, data)?;
         let enc_key = crypto::aes_gcm_encrypt(&account_key, &key_iv, &file_key)?;
         let envelope = crypto::build_envelope(self.provider_type, &enc_key, &key_iv, &data_iv, &ct);
+        let temp_root = Self::encrypted_temp_root(path);
         let temp_path = Self::encrypted_temp_path(path);
-        self.inner.ensure_parent_dirs(&temp_path, 0o755).await?;
-
-        match self.inner.remove(&temp_path).await {
-            Ok(()) | Err(Error::NotFound(_)) => {}
-            Err(err) => return Err(err),
+        let now = Instant::now();
+        let temp_root_ready = self
+            .temp_root_ready
+            .read()
+            .unwrap()
+            .get(&temp_root)
+            .is_some_and(|seen_at| Self::temp_root_cache_is_fresh(*seen_at, now));
+        if !temp_root_ready {
+            self.create_temp_root(&temp_root).await?;
         }
-
-        let written = self
+        let written = match self
             .inner
             .write(&temp_path, &envelope, 0, WriteFlag::Create)
-            .await?;
+            .await
+        {
+            Ok(written) => written,
+            Err(Error::NotFound(_)) => {
+                self.create_temp_root(&temp_root).await?;
+                self.inner
+                    .write(&temp_path, &envelope, 0, WriteFlag::Create)
+                    .await?
+            }
+            Err(Error::AlreadyExists(_)) => {
+                match self.inner.remove(&temp_path).await {
+                    Ok(()) | Err(Error::NotFound(_)) => {}
+                    Err(err) => return Err(err),
+                }
+                self.inner
+                    .write(&temp_path, &envelope, 0, WriteFlag::Create)
+                    .await?
+            }
+            Err(err) => return Err(err),
+        };
         if written != envelope.len() as u64 {
             return Err(Error::internal(format!(
                 "encrypted temp write incomplete: wrote {} of {} bytes",
