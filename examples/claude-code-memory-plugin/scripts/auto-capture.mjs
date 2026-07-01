@@ -358,12 +358,23 @@ function buildParts(content, toolNameById) {
     if (block.type === "text" && typeof block.text === "string") {
       if (block.text.trim()) out.push({ type: "text", text: block.text });
     } else if (block.type === "tool_use" && typeof block.name === "string") {
+      // Mirror extractAllTurns' prose path: compact tool_input for summary-mode
+      // tools (Write/Edit/Bash/Task*) so structured parts get the same ~10x
+      // storage reduction as the inlined text path. Non-summary tools keep
+      // full input via formatToolInput. Respects cfg.toolInputCompaction.
+      const maxChars = cfg?.toolInputMaxChars || 0;
+      const useCompaction = cfg ? cfg.toolInputCompaction !== false : true;
+      const rawInput = block.input && typeof block.input === "object" ? block.input : undefined;
+      const tool_input = rawInput
+        ? (useCompaction
+            ? compactToolInput(block.name, block.input, maxChars)
+            : formatToolInput(block.input))
+        : undefined;
       out.push({
         type: "tool",
         tool_id: typeof block.id === "string" ? block.id : undefined,
         tool_name: block.name,
-        tool_input:
-          block.input && typeof block.input === "object" ? block.input : undefined,
+        tool_input,
         tool_status: "running",
       });
     } else if (block.type === "tool_result") {

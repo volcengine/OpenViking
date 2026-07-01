@@ -356,6 +356,68 @@ test("Compression ratio: realistic mixed session data", () => {
   assert.ok(ratio >= 3, `expected ≥3x compression, got ${ratio.toFixed(1)}x`);
 });
 
+// ─── buildParts: structured tool parts must mirror the prose compaction path ──
+//
+// buildParts() produces the structured `tool_input` field sent to OV as tool
+// parts (vs extractAllTurns which inlines tool input into per-turn text). Both
+// paths must apply the same compaction so storage savings are uniform.
+// This inline copy mirrors the patched buildParts tool_use branch.
+
+function buildPartsToolInput(block, { toolInputCompaction = true, toolInputMaxChars = 0 } = {}) {
+  if (block.type !== "tool_use" || typeof block.name !== "string") return undefined;
+  const rawInput = block.input && typeof block.input === "object" ? block.input : undefined;
+  if (!rawInput) return undefined;
+  const useCompaction = toolInputCompaction !== false;
+  return useCompaction
+    ? compactToolInput(block.name, block.input, toolInputMaxChars)
+    : formatToolInput(block.input);
+}
+
+test("buildParts: Write tool_input compacted (matches prose path)", () => {
+  const block = { type: "tool_use", name: "Write", input: { file_path: "/src/a.ts", content: longContent(50, 60) } };
+  const fromParts = buildPartsToolInput(block);
+  const fromProse = compactToolInput(block.name, block.input, 0);
+  assert.equal(fromParts, fromProse);
+  const parsed = JSON.parse(fromParts);
+  assert.equal(parsed.file_path, "/src/a.ts");
+  assert.ok(parsed.content_summary.endsWith(" chars"));
+});
+
+test("buildParts: Edit tool_input compacted to diff summary", () => {
+  const block = { type: "tool_use", name: "Edit", input: { file_path: "/src/b.ts", old_string: "old", new_string: "new" } };
+  const result = buildPartsToolInput(block);
+  const parsed = JSON.parse(result);
+  assert.equal(parsed.file_path, "/src/b.ts");
+  assert.equal(parsed.old_summary, "3 chars");
+  assert.equal(parsed.new_summary, "3 chars");
+});
+
+test("buildParts: Bash tool_input keeps command only", () => {
+  const block = { type: "tool_use", name: "Bash", input: { command: "npm test", description: "ignored" } };
+  const result = buildPartsToolInput(block);
+  const parsed = JSON.parse(result);
+  assert.equal(parsed.command, "npm test");
+  assert.ok(!parsed.description);
+});
+
+test("buildParts: Read (non-summary tool) keeps full input, not compacted", () => {
+  const block = { type: "tool_use", name: "Read", input: { file_path: "/src/index.ts" } };
+  const result = buildPartsToolInput(block);
+  // Read is in TOOL_INPUT_POLICIES.full → compactToolInput returns formatToolInput (full)
+  assert.equal(result, formatToolInput(block.input));
+});
+
+test("buildParts: compaction=off falls back to formatToolInput", () => {
+  const block = { type: "tool_use", name: "Write", input: { file_path: "/src/a.ts", content: longContent(10, 60) } };
+  const result = buildPartsToolInput(block, { toolInputCompaction: false });
+  assert.equal(result, formatToolInput(block.input));
+});
+
+test("buildParts: non-object input yields undefined tool_input", () => {
+  const block = { type: "tool_use", name: "Write", input: "just a string" };
+  assert.equal(buildPartsToolInput(block), undefined);
+});
+
 // ─── Summary ────────────────────────────────────────────────────────────────
 
 console.log(`\n${pass + fail} tests: ${pass} passed, ${fail} failed\n`);
