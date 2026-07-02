@@ -313,3 +313,210 @@ async def add_skill(
         fn=_add,
     )
     return response_from_result(execution.result, telemetry=execution.telemetry)
+
+
+class UrlImageIndexRequest(BaseModel):
+    """Request model for the URL-image vector index endpoint.
+
+    Index a remote image as a multimodal vector under ``target_uri`` without
+    persisting the image bytes in OpenViking's storage layer. The configured
+    multimodal embedder is given the URL directly and is expected to fetch
+    the image itself (Volcengine / Doubao multimodal endpoints accept
+    ``image_url`` natively).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_uri: str = Field(
+        ...,
+        description=(
+            "Viking URI to index the resulting vector at, e.g. "
+            "``viking://resources/products/M14253/images/0.embed``. The URI's "
+            "scope must match the request's ``X-OpenViking-Account``."
+        ),
+    )
+    image_url: str = Field(
+        ...,
+        description=(
+            "Remote ``https://`` URL of the image to embed. Forwarded to the "
+            "multimodal embedder as-is; the embedder (or its upstream provider) "
+            "fetches the URL. The URL is also recorded in the vectordb scalar "
+            "fields for later lookup."
+        ),
+    )
+    summary: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional text accompanying the image (mirrors the "
+            "``image_and_summary`` ingest mode). When set, the multimodal "
+            "embedding is computed over both the text and the image."
+        ),
+    )
+    name: Optional[str] = Field(
+        default=None,
+        description="Optional display name for the indexed record. Defaults to the URI tail.",
+    )
+    context_type: str = Field(
+        default="resource",
+        description="Vectordb scalar field 'context_type'. One of 'resource', 'memory', 'skill'.",
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Extra scalar fields to attach to the indexed record (e.g. sku, "
+            "image_idx). Reserved keys (uri, account_id, vector, id, level, "
+            "context_type, abstract, content, name) are stripped — those are "
+            "set by the server."
+        ),
+    )
+    telemetry: TelemetryRequest = False
+
+
+_URL_IMAGE_RESERVED_KEYS = {
+    "id",
+    "uri",
+    "account_id",
+    "owner_user_id",
+    "vector",
+    "sparse_vector",
+    "abstract",
+    "overview",
+    "content",
+    "name",
+    "level",
+    "context_type",
+    "created_at",
+    "updated_at",
+}
+
+
+@router.post("/resources/url_image_index")
+async def url_image_index(
+    http_request: Request,
+    request: UrlImageIndexRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Embed a remote image URL and insert the vector at ``target_uri`` without
+    persisting any bytes in agfs.
+
+    This is the "bring your own image hosting" entrypoint: the caller's image
+    lives in some external bucket (tenant-owned S3, public CDN, etc.) and only
+    the resulting vector is stored locally. Compared to the standard ingest
+    pipeline (``temp_upload`` + ``/resources``) this endpoint:
+
+    * Does **not** write any file to ``agfs`` (no temp upload, no resource tree).
+    * Does **not** spawn semantic / abstract-generation work — there is no
+      ``.abstract.md`` / ``.overview.md`` produced for the indexed URI.
+    * Does **not** go through the embedding queue. The embedder is called
+      synchronously and the vector is upserted before the response returns.
+
+    The configured multimodal embedder is reused as-is: the same provider /
+    failover / circuit-breaker / dim-validation enforcement applies as the
+    normal ingest path. A text-only embedder (``supports_multimodal`` is
+    ``False``) is rejected with HTTP 400.
+    """
+    from openviking.core.namespace import canonicalize_uri
+    from openviking.core.uri_validation import validate_viking_uri
+    from openviking.models.embedder.base import embed_compat
+    from openviking_cli.utils.config import get_openviking_config
+    import hashlib
+
+    service = get_service()
+    vikingdb = service.vikingdb_manager
+    if vikingdb is None:
+        raise HTTPException(status_code=503, detail="vectordb not initialized")
+
+    # Rejects malformed URIs (wrong scheme, internal scopes, etc.) — surfaced
+    # as InvalidURIError → 400 by the standard error middleware.
+    raw_uri = validate_viking_uri(request.target_uri, field_name="target_uri")
+
+    image_url = (request.image_url or "").strip()
+    if not image_url or not (
+        image_url.startswith("http://")
+        or image_url.startswith("https://")
+        or image_url.startswith("data:image/")
+    ):
+        raise InvalidArgumentError(
+            "image_url must be a remote http(s) URL or a data:image/* URI"
+        )
+
+    if request.context_type not in {"resource", "memory", "skill"}:
+        raise InvalidArgumentError(
+            "context_type must be one of: resource, memory, skill"
+        )
+
+    canonical_uri = canonicalize_uri(raw_uri, _ctx)
+
+    config = get_openviking_config()
+    embedder = config.embedding.get_embedder()
+    if embedder is None:
+        raise HTTPException(status_code=503, detail="embedder not initialized")
+    if not getattr(embedder, "supports_multimodal", False):
+        raise InvalidArgumentError(
+            "configured embedder does not support multimodal input — "
+            "this endpoint requires a multimodal embedder (e.g. Volcengine "
+            "with input='multimodal')"
+        )
+
+    # Build the multimodal embedding input directly. The volcengine embedder's
+    # `to_multimodal_input` passes each entry's `image_url.url` straight through
+    # to the upstream Ark / DashScope API — both accept remote https URLs.
+    parts: list[Dict[str, Any]] = []
+    summary_text = (request.summary or "").strip()
+    if summary_text:
+        parts.append({"type": "text", "text": summary_text})
+    parts.append({"type": "image_url", "image_url": {"url": image_url}})
+
+    async def _embed_and_upsert() -> Dict[str, Any]:
+        result = await embed_compat(embedder, parts, is_query=False)
+        vector = result.dense_vector
+        if not vector:
+            raise HTTPException(status_code=502, detail="embedder returned empty vector")
+        expected_dim = config.embedding.dimension
+        if expected_dim and len(vector) != expected_dim:
+            raise InvalidArgumentError(
+                f"embedder returned dim {len(vector)}, expected {expected_dim}"
+            )
+
+        # Deterministic ID matching the convention used by TextEmbeddingHandler
+        # so that repeat calls with the same (account, uri) upsert in place.
+        record_id = hashlib.md5(
+            f"{_ctx.account_id}:{canonical_uri}".encode("utf-8")
+        ).hexdigest()
+
+        record_name = request.name or canonical_uri.rsplit("/", 1)[-1] or canonical_uri
+
+        # Strip reserved keys from caller metadata to avoid spoofing of fields
+        # the server controls (id, vector, account_id, ...).
+        extra_meta = {
+            k: v
+            for k, v in (request.metadata or {}).items()
+            if k not in _URL_IMAGE_RESERVED_KEYS
+        }
+
+        inserted_data: Dict[str, Any] = {
+            "id": record_id,
+            "uri": canonical_uri,
+            "account_id": _ctx.account_id,
+            "context_type": request.context_type,
+            "level": 2,
+            "name": record_name,
+            "abstract": summary_text,
+            "content": summary_text,
+            "vector": vector,
+            "image_url": image_url,
+            **extra_meta,
+        }
+
+        if result.sparse_vector is not None:
+            inserted_data["sparse_vector"] = result.sparse_vector
+
+        await vikingdb.upsert(inserted_data, ctx=_ctx, partial_update=True)
+        return {"status": "ok", "uri": canonical_uri, "id": record_id}
+
+    execution = await run_operation(
+        operation="resources.url_image_index",
+        telemetry=request.telemetry,
+        fn=_embed_and_upsert,
+    )
+    return response_from_result(execution.result, telemetry=execution.telemetry)
