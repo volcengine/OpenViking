@@ -1951,6 +1951,7 @@ class VikingFS:
             embedder=embedder,
             rerank_config=self.rerank_config,
             retrieval_config=self.retrieval_config,
+            viking_fs=self,
         )
 
         typed_query = TypedQuery(
@@ -2082,6 +2083,7 @@ class VikingFS:
             embedder=embedder,
             rerank_config=self.rerank_config,
             retrieval_config=self.retrieval_config,
+            viking_fs=self,
         )
 
         async def _execute(tq: TypedQuery):
