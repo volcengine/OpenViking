@@ -6,6 +6,10 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from openviking.storage.vectordb_adapters.factory import create_collection_adapter
+from openviking.storage.vectordb_adapters.pgvector_adapter import (
+    PgVectorCollectionAdapter,
+)
 from openviking_cli.utils.config.vectordb_config import (
     PgVectorConfig,
     VectorDBBackendConfig,
@@ -44,6 +48,36 @@ def test_pgvector_backend_config_validation():
     assert config.pgvector.port == 5432
     assert config.pgvector.db_name == "postgres"
     assert config.pgvector.schema_name == "public"
+
+
+def test_factory_creates_pgvector_adapter_without_connecting():
+    adapter = create_collection_adapter(_build_config())
+
+    assert isinstance(adapter, PgVectorCollectionAdapter)
+    assert adapter.mode == "pgvector"
+    assert adapter.collection_name == "context"
+    assert adapter.index_name == "default"
+    assert adapter.physical_table_name == "ov_default_context"
+
+
+def test_from_config_reads_top_level_index_distance_dimension():
+    config = VectorDBBackendConfig.model_validate(
+        {
+            "backend": "pgvector",
+            "project": "acme",
+            "name": "docs",
+            "index_name": "hnsw_idx",
+            "distance_metric": "l2",
+            "dimension": 384,
+            "pgvector": {"host": "127.0.0.1"},
+        }
+    )
+    adapter = create_collection_adapter(config)
+
+    assert adapter.index_name == "hnsw_idx"
+    assert adapter._distance_metric == "l2"
+    assert adapter._dimension == 384
+    assert adapter.physical_table_name == "ov_acme_docs"
 
 
 def test_pgvector_config_new_field_defaults():
