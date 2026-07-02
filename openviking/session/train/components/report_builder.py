@@ -152,11 +152,20 @@ class PipelineReportBuilder:
     ) -> dict[str, Any]:
         analyses = _analyses_from_rollout_evaluations(rollouts)
         train_eval = self.train_evaluation_report(analyses)
+        cache_hits = [
+            rollout
+            for rollout in rollouts
+            if isinstance(rollout.metadata, dict)
+            and bool(rollout.metadata.get("train_rollout_cache_hit"))
+        ]
         return {
             "epoch": epoch,
             "snapshot_id": snapshot_id,
             "snapshot_ids": [snapshot_id],
             **train_eval,
+            "cache_hit_count": len(cache_hits),
+            "cache_miss_count": max(len(rollouts) - len(cache_hits), 0),
+            "from_cache": bool(cache_hits) and len(cache_hits) == len(rollouts),
         }
 
     def train_epoch_report(

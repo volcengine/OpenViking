@@ -161,6 +161,7 @@ class PatchMergePolicyOptimizer:
             context_provider=provider,
             isolation_handler=isolation_handler,
             max_iterations=1,
+            thinking=self.memory_type in {"trajectories", "experiences"},
         )
         operations, _ = await orchestrator.run()
         return operations

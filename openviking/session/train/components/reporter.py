@@ -309,6 +309,7 @@ class ConsolePipelineReporter(NoopPipelineLifecycleHook):
             [
                 ("epoch", report["epoch"]),
                 ("cases", report["case_count"]),
+                *_cache_field(report),
                 (
                     "accuracy",
                     fmt_percent(report["accuracy"]),
@@ -487,6 +488,18 @@ def _cost_field(report: dict[str, Any]) -> list[tuple[str, str, str]]:
     if cost_seconds is None:
         return []
     return [("cost", format_duration(float(cost_seconds)), "magenta bold")]
+
+
+def _cache_field(report: dict[str, Any]) -> list[tuple[str, str, str]]:
+    hit_count = int(report.get("cache_hit_count") or 0)
+    if hit_count <= 0:
+        return []
+    total = int(report.get("case_count") or 0)
+    if bool(report.get("from_cache")):
+        value = "all" if total <= 0 else f"{hit_count}/{total}"
+    else:
+        value = f"partial({hit_count}/{total})" if total > 0 else str(hit_count)
+    return [("from_cache", value, "cyan bold")]
 
 
 def _split_field(split: Any) -> list[tuple[str, str, str]]:

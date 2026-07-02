@@ -69,15 +69,6 @@ class MemoryConfig(BaseModel):
             "stateless deployments."
         ),
     )
-    working_memory_enabled: bool = Field(
-        default=True,
-        description=(
-            "When enabled (default), session commit generates a Working Memory "
-            "summary for each archive. When disabled, commit still archives messages "
-            "and can still extract configured long-term/execution memories, but skips "
-            "the archive summary LLM call."
-        ),
-    )
     session_skill_extraction_enabled: bool = Field(
         default=False,
         description=(
@@ -99,14 +90,21 @@ class MemoryConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def drop_deprecated_agent_memory_enabled(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "agent_memory_enabled" in data:
+    def drop_deprecated_memory_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
             data = dict(data)
-            data.pop("agent_memory_enabled", None)
-            logger.debug(
-                "memory.agent_memory_enabled is deprecated and ignored; "
-                "use session memory_policy.memory_types to control trajectory/experience extraction"
-            )
+            if "agent_memory_enabled" in data:
+                data.pop("agent_memory_enabled", None)
+                logger.debug(
+                    "memory.agent_memory_enabled is deprecated and ignored; "
+                    "use session memory_policy.memory_types to control trajectory/experience extraction"
+                )
+            if "working_memory_enabled" in data:
+                data.pop("working_memory_enabled", None)
+                logger.debug(
+                    "memory.working_memory_enabled is deprecated and ignored; "
+                    "use session memory_policy.working_memory.enabled to control archive summaries"
+                )
         return data
 
     @field_validator("version", mode="before")

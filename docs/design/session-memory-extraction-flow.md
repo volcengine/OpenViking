@@ -6,12 +6,13 @@ code-modification reference, so it avoids proposed or removed flows.
 ## Policy
 
 `memory_policy` carries target switches plus an optional global memory type
-whitelist:
+whitelist, and can disable per-archive Working Memory summaries:
 
 ```json
 {
   "self": { "enabled": true },
   "peer": { "enabled": false },
+  "working_memory": { "enabled": false },
   "memory_types": ["profile", "preferences"]
 }
 ```
@@ -19,6 +20,8 @@ whitelist:
 When `memory_types` is omitted or `null`, all enabled schemas from
 `MemoryTypeRegistry` are allowed, including custom prompt/schema types. When it
 is set, extraction is limited to those names for both self and peer writes.
+When `working_memory.enabled` is `false`, commit still archives messages and
+runs configured memory extraction, but skips the archive summary.
 
 ## Memory Type Groups
 

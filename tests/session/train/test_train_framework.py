@@ -1303,7 +1303,10 @@ async def test_session_commit_policy_trainer_records_commit_trace_id():
     assert client.created_sessions == [
         (
             commit_result["session_id"],
-            {"memory_types": ["cases", "trajectories", "experiences"]},
+            {
+                "memory_types": ["cases", "trajectories", "experiences"],
+                "working_memory": {"enabled": False},
+            },
         )
     ]
 

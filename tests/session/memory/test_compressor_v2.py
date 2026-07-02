@@ -875,7 +875,7 @@ class TestExtractLoopPatchRepair:
                 ]
                 self.messages = []
 
-            async def get_completion_async(self, messages, tools=None, tool_choice=None):
+            async def get_completion_async(self, messages, tools=None, tool_choice=None, thinking=False):
                 self.messages.append(list(messages))
                 return self.responses.pop(0)
 
@@ -975,7 +975,7 @@ class TestExtractLoopPatchRepair:
                 ]
                 self.messages = []
 
-            async def get_completion_async(self, messages, tools=None, tool_choice=None):
+            async def get_completion_async(self, messages, tools=None, tool_choice=None, thinking=False):
                 self.messages.append(list(messages))
                 return self.responses.pop(0)
 
@@ -1073,7 +1073,7 @@ class TestExtractLoopPatchRepair:
                 ]
                 self.messages = []
 
-            async def get_completion_async(self, messages, tools=None, tool_choice=None):
+            async def get_completion_async(self, messages, tools=None, tool_choice=None, thinking=False):
                 self.messages.append(list(messages))
                 return self.responses.pop(0)
 

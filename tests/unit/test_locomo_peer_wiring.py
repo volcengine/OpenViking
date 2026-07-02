@@ -10,6 +10,9 @@ import pytest
 def _load_module(module_name: str, relative_path: str):
     repo_root = Path(__file__).resolve().parents[2]
     module_path = repo_root / relative_path
+    module_dir = str(module_path.parent)
+    if module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None and spec.loader is not None
@@ -50,6 +53,7 @@ def test_build_memory_policy_writes_peer_only_user_memories():
     expected = {
         "self": {"enabled": False},
         "peer": {"enabled": True},
+        "working_memory": {"enabled": False},
         "memory_types": ["entities", "events", "preferences", "profile"],
     }
     assert IMPORT_TO_OV.build_memory_policy(False) == expected

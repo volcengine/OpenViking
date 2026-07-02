@@ -124,6 +124,14 @@ def parse_args() -> argparse.Namespace:
         help="Run each train case N times per epoch (default: 1).",
     )
     parser.add_argument(
+        "--reuse-train-rollout-cache",
+        action="store_true",
+        help=(
+            "Reuse cached epoch-0 train rollouts when available. Default is off; "
+            "cache misses still execute rollouts and populate the cache."
+        ),
+    )
+    parser.add_argument(
         "--keep-recent-results",
         type=int,
         default=5,
@@ -200,6 +208,7 @@ async def main_async() -> int:
             eval_split=args.eval_split,
             trials=args.trials,
             train_trials=args.train_trials,
+            reuse_train_rollout_cache=args.reuse_train_rollout_cache,
             clean_result=args.clean_result,
             keep_recent_results=args.keep_recent_results,
         )

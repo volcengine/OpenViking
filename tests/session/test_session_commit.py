@@ -194,7 +194,6 @@ class TestCommit:
     ):
         config = MagicMock()
         config.memory.extraction_enabled = True
-        config.memory.working_memory_enabled = False
         config.memory.session_skill_extraction_enabled = False
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
 
@@ -220,7 +219,9 @@ class TestCommit:
                 return_value={"contexts": [], "session_skills": []}
             )
 
-        result = await session_with_messages.commit_async()
+        result = await session_with_messages.commit_async(
+            memory_policy={"working_memory": {"enabled": False}}
+        )
         task_result = await _wait_for_task(result["task_id"])
 
         assert task_result["status"] == "completed"
@@ -374,7 +375,6 @@ class TestCommit:
     ):
         config = MagicMock()
         config.memory.extraction_enabled = True
-        config.memory.working_memory_enabled = True
         config.memory.session_skill_extraction_enabled = False
         config.vlm = SimpleNamespace(is_available=lambda: False)
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
@@ -478,7 +478,6 @@ class TestCommit:
         """Second commit should pass the latest completed archive overview into Phase 2."""
         config = MagicMock()
         config.memory.extraction_enabled = True
-        config.memory.working_memory_enabled = True
         config.memory.session_skill_extraction_enabled = False
         config.vlm = SimpleNamespace(is_available=lambda: False)
         monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)

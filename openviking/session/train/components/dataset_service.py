@@ -8,6 +8,7 @@ import asyncio
 import atexit
 import json
 import logging
+import re
 import shutil
 import tempfile
 import threading
@@ -39,6 +40,53 @@ CaseLoaderFactory = Callable[[str, str, str, dict[str, Any]], Any]
 RolloutExecutorFactory = Callable[[dict[str, Any]], Any]
 logger = logging.getLogger(__name__)
 _rollout_worker_state = threading.local()
+
+SENSITIVE_FIELD_NAMES = frozenset(
+    {
+        "api_key",
+        "openviking_api_key",
+        "root_api_key",
+        "authorization",
+        "x-api-key",
+        "token",
+        "secret",
+    }
+)
+_SENSITIVE_TEXT_RE = re.compile(
+    r"(?i)(openviking_api_key|root_api_key|api_key|x-api-key|authorization|token|secret)"
+    r"(\s*[:=]\s*)"
+    r"(['\"]?)([^'\"\s,}]+)(\3)"
+)
+
+
+def _redact_sensitive_text(text: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        return (
+            f"{match.group(1)}{match.group(2)}"
+            f"{match.group(3)}<redacted>{match.group(5)}"
+        )
+
+    return _SENSITIVE_TEXT_RE.sub(_replace, text)
+
+
+def redact_sensitive(value: Any) -> Any:
+    """Return a copy with known credential fields redacted for logs/errors."""
+    if isinstance(value, str):
+        return _redact_sensitive_text(value)
+    if isinstance(value, dict):
+        redacted: dict[Any, Any] = {}
+        for key, item in value.items():
+            key_text = str(key).lower()
+            if key_text in SENSITIVE_FIELD_NAMES or key_text.endswith("_api_key"):
+                redacted[key] = "<redacted>"
+            else:
+                redacted[key] = redact_sensitive(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_sensitive(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_sensitive(item) for item in value)
+    return value
 
 
 class CasesQueryRequest(BaseModel):
@@ -237,7 +285,7 @@ class RolloutExecutionStore:
             "status": self._FAILED,
             "updated_at": now,
             "finished_at": now,
-            "error": error,
+            "error": str(redact_sensitive({"error": error})["error"]),
         }
         failed_path = self._path(self._FAILED, execution_id)
         _atomic_write_json(failed_path, payload)
@@ -378,7 +426,10 @@ async def _run_rollout_execution(
             case.name,
         )
         try:
-            await app.state.rollout_executions.mark_failed(execution_id, str(exc))
+            await app.state.rollout_executions.mark_failed(
+                execution_id,
+                str(redact_sensitive({"error": str(exc)})["error"]),
+            )
         except Exception:
             # Last-ditch: do not let failures in the failure-recording path
             # raise into the event loop (the task was already fire-and-forget).

@@ -446,6 +446,10 @@ class AgentsConfig(BaseModel):
     commit_token_threshold: int = 200000
     commit_keep_recent_count: int = 5
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
+    thinking: bool = Field(
+        default=True,
+        description="Enable model thinking/reasoning mode for VikingBot agent calls.",
+    )
     provider: str = ""
     api_key: str = ""
     api_base: str = ""

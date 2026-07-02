@@ -7,6 +7,7 @@ from pathlib import Path
 
 from openviking.session.train.batch_runner import (
     BatchTrainEvalConfig,
+    CachedEpochZeroTrainRolloutExecutor,
     _baseline_cache_key,
     _clean_result_dir,
     _load_baseline_cache,
@@ -14,6 +15,28 @@ from openviking.session.train.batch_runner import (
     _result_base_dir,
     _write_baseline_cache,
 )
+
+
+def _case():
+    from openviking.session.train.domain import Case, Rubric, RubricCriterion
+
+    return Case(
+        name="case-1",
+        task_signature="booking_duplicate",
+        input={"user_request": "cancel duplicate booking"},
+        rubric=Rubric(
+            name="booking_rubric",
+            description="Cancel only the verified duplicate booking.",
+            criteria=[
+                RubricCriterion(
+                    name="verify_duplicate",
+                    description="Verify duplicate status first.",
+                    required=True,
+                    weight=1.0,
+                )
+            ],
+        ),
+    )
 
 
 def test_baseline_cache_key_depends_on_trials_eval_index_and_split():
@@ -342,3 +365,180 @@ def test_print_baseline_cache_hit_formats_as_stage_label(capsys, tmp_path: Path)
     assert "5.00pp" in output
     assert "trials=8 cases_per_trial=20" in output
     assert "(from cache: airline_test_index-all_trials-8_523a9bffb6c24543.json)" in output
+
+
+def test_train_rollout_cache_key_depends_on_train_trials_and_index():
+    from openviking.session.train.batch_runner import _train_rollout_cache_key_prefix
+
+    base = BatchTrainEvalConfig(
+        dataset="tau2",
+        domain="airline",
+        train_index=25,
+        train_trials=1,
+        benchmark_service_url="http://127.0.0.1:1944",
+    )
+
+    assert _train_rollout_cache_key_prefix(base) == _train_rollout_cache_key_prefix(
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            train_index=25,
+            train_trials=1,
+            benchmark_service_url="http://127.0.0.1:1944",
+        )
+    )
+    assert _train_rollout_cache_key_prefix(base) != _train_rollout_cache_key_prefix(
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            train_index=25,
+            train_trials=2,
+            benchmark_service_url="http://127.0.0.1:1944",
+        )
+    )
+    assert _train_rollout_cache_key_prefix(base) != _train_rollout_cache_key_prefix(
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            train_index=10,
+            train_trials=1,
+            benchmark_service_url="http://127.0.0.1:1944",
+        )
+    )
+
+
+async def test_cached_epoch_zero_train_rollout_executor_reuses_epoch_zero_cache(tmp_path: Path):
+    from openviking.message import Message, TextPart
+    from openviking.session.train.context import ExecutionContext
+    from openviking.session.train.domain import Rollout
+
+    calls = []
+    completed = []
+
+    class Delegate:
+        async def execute(self, cases, policy_set, context):
+            calls.append((list(cases), dict(context.metadata)))
+            return [
+                Rollout(
+                    case=case,
+                    messages=[Message(id=f"m-{case.name}", role="user", parts=[TextPart("hello")])],
+                    policy_snapshot_id=context.policy_snapshot_id,
+                    metadata={"source": "delegate"},
+                )
+                for case in cases
+            ]
+
+    executor = CachedEpochZeroTrainRolloutExecutor(
+        delegate=Delegate(),
+        cache_dir=tmp_path / "cache",
+        cache_key_prefix="unit-prefix",
+    )
+    executor.on_rollout_complete = lambda **kwargs: completed.append(kwargs)
+    case = _case()
+    context = ExecutionContext(
+        policy_snapshot_id="snapshot-1", metadata={"training": True, "epoch": 0}
+    )
+
+    first = await executor.execute([case], None, context)
+    cached_context = ExecutionContext(
+        policy_snapshot_id="snapshot-2", metadata={"training": True, "epoch": 0}
+    )
+    second = await executor.execute([case], None, cached_context)
+
+    assert len(calls) == 1
+    assert len(completed) == 2
+    assert first[0].messages[0].content == "hello"
+    assert second[0].messages[0].content == "hello"
+    assert second[0].policy_snapshot_id == "snapshot-2"
+    assert second[0].metadata["source"] == "delegate"
+    assert second[0].metadata["train_rollout_cache_hit"] is True
+    assert str(tmp_path / "cache") in second[0].metadata["train_rollout_cache_path"]
+
+
+def test_train_rollout_report_marks_full_and_partial_cache_hits():
+    from openviking.message import Message, TextPart
+    from openviking.session.train.components.report_builder import PipelineReportBuilder
+    from openviking.session.train.domain import CriterionResult, Rollout, RubricEvaluation
+
+    case = _case()
+    cached = Rollout(
+        case=case,
+        messages=[Message(id="m-cached", role="user", parts=[TextPart("cached")])],
+        policy_snapshot_id="snapshot-1",
+        metadata={"train_rollout_cache_hit": True},
+    )
+    fresh = Rollout(
+        case=case,
+        messages=[Message(id="m-fresh", role="user", parts=[TextPart("fresh")])],
+        policy_snapshot_id="snapshot-1",
+    )
+    evaluation = RubricEvaluation(
+        passed=True,
+        score=1.0,
+        criterion_results=[
+            CriterionResult(
+                criterion_name="verify_duplicate",
+                passed=True,
+                score=1.0,
+                feedback=[],
+                evidence=[],
+            )
+        ],
+        feedback=[],
+    )
+    cached.evaluation = evaluation
+    fresh.evaluation = evaluation
+    builder = PipelineReportBuilder()
+
+    full = builder.train_rollout_report(epoch=0, rollouts=[cached], snapshot_id="snapshot-1")
+    partial = builder.train_rollout_report(
+        epoch=0, rollouts=[cached, fresh], snapshot_id="snapshot-1"
+    )
+
+    assert full["cache_hit_count"] == 1
+    assert full["cache_miss_count"] == 0
+    assert full["from_cache"] is True
+    assert partial["cache_hit_count"] == 1
+    assert partial["cache_miss_count"] == 1
+    assert partial["from_cache"] is False
+
+
+async def test_cached_epoch_zero_train_rollout_executor_does_not_reuse_later_epochs(tmp_path: Path):
+    from openviking.message import Message, TextPart
+    from openviking.session.train.context import ExecutionContext
+    from openviking.session.train.domain import Rollout
+
+    calls = []
+
+    class Delegate:
+        async def execute(self, cases, policy_set, context):
+            calls.append(dict(context.metadata))
+            return [
+                Rollout(
+                    case=case,
+                    messages=[
+                        Message(
+                            id=f"m-{len(calls)}", role="user", parts=[TextPart(str(len(calls)))]
+                        )
+                    ],
+                    policy_snapshot_id=context.policy_snapshot_id,
+                )
+                for case in cases
+            ]
+
+    executor = CachedEpochZeroTrainRolloutExecutor(
+        delegate=Delegate(),
+        cache_dir=tmp_path / "cache",
+        cache_key_prefix="unit-prefix",
+    )
+    case = _case()
+    context = ExecutionContext(
+        policy_snapshot_id="snapshot-1", metadata={"training": True, "epoch": 1}
+    )
+
+    first = await executor.execute([case], None, context)
+    second = await executor.execute([case], None, context)
+
+    assert len(calls) == 2
+    assert first[0].messages[0].content == "1"
+    assert second[0].messages[0].content == "2"

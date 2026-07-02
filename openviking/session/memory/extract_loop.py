@@ -99,6 +99,7 @@ class ExtractLoop:
         ctx: Optional[RequestContext] = None,
         context_provider: Optional[Any] = None,  # ExtractContextProvider
         isolation_handler: MemoryIsolationHandler = None,
+        thinking: bool = False,
     ):
         """
         Initialize the ExtractLoop.
@@ -110,6 +111,7 @@ class ExtractLoop:
             max_iterations: Maximum number of ReAct iterations (default: 5)
             ctx: Request context
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
+            thinking: Whether to explicitly enable model thinking for this extraction loop.
         """
         self.vlm = vlm
         self.viking_fs = viking_fs or get_viking_fs()
@@ -117,6 +119,7 @@ class ExtractLoop:
         self.max_iterations = max_iterations
         self.ctx = ctx
         self.context_provider = context_provider
+        self.thinking = bool(thinking)
         # Use provided isolation_handler or create one in run()
         self._isolation_handler = isolation_handler
         # Track format error retry (max 1 retry)
@@ -715,6 +718,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 messages=messages,
                 tools=tools,
                 tool_choice=tool_choice,
+                thinking=self.thinking,
             )
         tracer.info(f"llm_response={response}")
         self._last_llm_failure_kind = None

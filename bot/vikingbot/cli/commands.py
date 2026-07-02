@@ -311,6 +311,7 @@ def _make_provider(config, langfuse_client: None = None):
     api_base = p.api_base if p else None
     provider_name = p.provider if p else None
     extra_headers = p.extra_headers if p else {}
+    thinking = p.thinking if p else True
 
     if not model:
         raise RuntimeError("No LLM model configured. Please set it in ~/.openviking/ov.conf")
@@ -327,6 +328,7 @@ def _make_provider(config, langfuse_client: None = None):
             "provider": provider_name,
             "model": model,
             "temperature": temperature,
+            "thinking": thinking,
         }
         if api_key:
             vlm_config["api_key"] = api_key
@@ -353,6 +355,7 @@ def _make_provider(config, langfuse_client: None = None):
         default_model=model,
         extra_headers=extra_headers,
         provider_name=provider_name,
+        thinking=thinking,
         langfuse_client=langfuse_client,
     )
 

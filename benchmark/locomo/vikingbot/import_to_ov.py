@@ -188,6 +188,7 @@ def build_memory_policy(group_chat: bool) -> Dict[str, Any]:
     return {
         "self": {"enabled": False},
         "peer": {"enabled": True},
+        "working_memory": {"enabled": False},
         "memory_types": ["entities", "events", "preferences", "profile"],
     }
 

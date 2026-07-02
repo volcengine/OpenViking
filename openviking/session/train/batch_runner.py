@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import shutil
@@ -13,6 +14,7 @@ from typing import Any
 
 from openviking.server.config import load_server_config
 from openviking.server.identity import AuthMode
+from openviking.session.train.components.dataset_service import rollout_from_dict, rollout_to_dict
 from openviking.session.train.components.event_recorder import (
     CompositeEventRecorder,
     JsonlEventRecorder,
@@ -34,8 +36,9 @@ from openviking.session.train.components.rollout_artifact_recorder import (
 )
 from openviking.session.train.components.session_commit import SessionCommitPolicyTrainer
 from openviking.session.train.components.snapshotter import ContentHashPolicySnapshotter
-from openviking.session.train.context import PipelineContext
+from openviking.session.train.context import ExecutionContext, PipelineContext
 from openviking.session.train.domain import (
+    Case,
     ExperienceSet,
     PolicyUpdatePlan,
     Rollout,
@@ -78,6 +81,7 @@ class BatchTrainEvalConfig:
     skip_final_eval: bool = False
     trials: int = 8
     train_trials: int = 1
+    reuse_train_rollout_cache: bool = False
     clean_result: bool = True
     keep_recent_results: int = 5
     events_path: str | None = None
@@ -187,6 +191,7 @@ class BatchTrainEvalReport:
     skip_baseline_eval: bool = False
     trials: int = 8
     train_trials: int = 1
+    reuse_train_rollout_cache: bool = False
     rollouts_root: str | None = None
     rollouts_index_path: str | None = None
     latest_failed_rollout: str | None = None
@@ -226,6 +231,7 @@ class BatchTrainEvalReport:
             "skip_baseline_eval": self.skip_baseline_eval,
             "trials": self.trials,
             "train_trials": self.train_trials,
+            "reuse_train_rollout_cache": self.reuse_train_rollout_cache,
             "rollouts_root": self.rollouts_root,
             "rollouts_index_path": self.rollouts_index_path,
             "latest_failed_rollout": self.latest_failed_rollout,
@@ -275,6 +281,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             eval_index=_index_payload(config.eval_index),
             trials=config.trials,
             train_trials=config.train_trials,
+            reuse_train_rollout_cache=config.reuse_train_rollout_cache,
             clean_result=config.clean_result,
             keep_recent_results=config.keep_recent_results,
             result_dir_name=config.result_dir_name,
@@ -305,7 +312,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             latest_pointer_path=_latest_rollouts_path(config),
         )
         remote_executor = getattr(pipeline, "rollout_executor", None)
-        if isinstance(remote_executor, RemoteRolloutExecutor):
+        if isinstance(remote_executor, (RemoteRolloutExecutor, CachedEpochZeroTrainRolloutExecutor)):
             remote_executor.on_rollout_complete = (
                 rollout_artifact_recorder.record_rollout_completion
             )
@@ -461,6 +468,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             skip_baseline_eval=config.skip_baseline_eval,
             trials=config.trials,
             train_trials=config.train_trials,
+            reuse_train_rollout_cache=config.reuse_train_rollout_cache,
             rollouts_root=rollout_artifact_index.rollouts_root,
             rollouts_index_path=str(run_dir / "rollouts_index.json"),
             latest_failed_rollout=rollout_artifact_index.latest_failed_rollout,
@@ -498,6 +506,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 "epochs": config.epochs,
                 "trials": config.trials,
                 "train_trials": config.train_trials,
+                "reuse_train_rollout_cache": config.reuse_train_rollout_cache,
                 "run_id": policy_trainer.run_id,
                 "trace_id": report.trace_id,
                 "baseline_cache_hit": report.baseline_cache_hit,
@@ -706,19 +715,26 @@ def _build_pipeline(
     config: BatchTrainEvalConfig,
     policy_trainer: SessionCommitPolicyTrainer,
 ) -> OfflinePolicyOptimizationPipeline:
+    rollout_executor: Any = RemoteRolloutExecutor(
+        service_url=_require_benchmark_service_url(config),
+        concurrency=config.concurrency,
+        show_progress=True,
+        progress_label="rollout",
+        options={
+            "config_path": config.config_path,
+            "keep_default_tools": config.keep_default_tools,
+            "max_iterations": config.max_iterations,
+        },
+    )
+    if config.reuse_train_rollout_cache:
+        rollout_executor = CachedEpochZeroTrainRolloutExecutor(
+            delegate=rollout_executor,
+            cache_dir=_train_rollout_cache_dir(config),
+            cache_key_prefix=_train_rollout_cache_key_prefix(config),
+        )
     return OfflinePolicyOptimizationPipeline(
         snapshotter=ContentHashPolicySnapshotter(prefix=f"{config.dataset}-policy-snapshot"),
-        rollout_executor=RemoteRolloutExecutor(
-            service_url=_require_benchmark_service_url(config),
-            concurrency=config.concurrency,
-            show_progress=True,
-            progress_label="rollout",
-            options={
-                "config_path": config.config_path,
-                "keep_default_tools": config.keep_default_tools,
-                "max_iterations": config.max_iterations,
-            },
-        ),
+        rollout_executor=rollout_executor,
         rollout_analyzer=UnusedRolloutAnalyzer(),
         gradient_estimator=UnusedGradientEstimator(),
         policy_optimizer=UnusedPolicyOptimizer(),
@@ -788,6 +804,124 @@ def _case_loader(
     )
 
 
+@dataclass(slots=True)
+class CachedEpochZeroTrainRolloutExecutor:
+    """Reuse cached train rollouts only for epoch 0.
+
+    The first training epoch is the no-new-memory rollout used to generate the
+    initial training signal. Later epochs intentionally execute again so they
+    can observe policy/memory updates from earlier commits.
+    """
+
+    delegate: Any
+    cache_dir: Path
+    cache_key_prefix: str
+    on_rollout_complete: Any | None = None
+
+    async def execute(
+        self,
+        cases: list[Case],
+        policy_set: ExperienceSet,
+        context: ExecutionContext,
+    ) -> list[Rollout]:
+        metadata = dict(context.metadata or {})
+        if not bool(metadata.get("training")) or int(metadata.get("epoch", 0) or 0) != 0:
+            return await self.delegate.execute(cases, policy_set, context)
+
+        case_list = list(cases)
+        results: list[Rollout | None] = [None] * len(case_list)
+        misses: list[tuple[int, Case]] = []
+        for index, case in enumerate(case_list):
+            cached = self._load(case)
+            if cached is None:
+                misses.append((index, case))
+            else:
+                cached.policy_snapshot_id = context.policy_snapshot_id
+                metadata = dict(cached.metadata or {})
+                metadata["train_rollout_cache_hit"] = True
+                metadata["train_rollout_cache_path"] = str(self._path(case))
+                cached.metadata = metadata
+                results[index] = cached
+                await self._emit_rollout_complete(
+                    rollout=cached,
+                    index=index,
+                    context=context,
+                )
+
+        if misses:
+            miss_rollouts = await self.delegate.execute(
+                [case for _, case in misses],
+                policy_set,
+                context,
+            )
+            for (index, case), rollout in zip(misses, miss_rollouts, strict=True):
+                self._write(case, rollout)
+                results[index] = rollout
+                await self._emit_rollout_complete(
+                    rollout=rollout,
+                    index=index,
+                    context=context,
+                )
+
+        return [rollout for rollout in results if rollout is not None]
+
+    def _path(self, case: Case) -> Path:
+        payload = {
+            "prefix": self.cache_key_prefix,
+            "case": {
+                "name": case.name,
+                "task_signature": case.task_signature,
+                "input": case.input,
+                "metadata": case.metadata,
+            },
+        }
+        stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        digest = sha256(stable.encode("utf-8")).hexdigest()[:24]
+        return self.cache_dir / f"{_cache_slug(case.name)}_{digest}.json"
+
+    def _load(self, case: Case) -> Rollout | None:
+        path = self._path(case)
+        if not path.exists():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("cache_version") != 1:
+            raise ValueError(f"unsupported train rollout cache version in {path}")
+        rollout_data = payload.get("rollout")
+        if not isinstance(rollout_data, dict):
+            raise ValueError(f"train rollout cache file has no rollout: {path}")
+        return rollout_from_dict(rollout_data)
+
+    def _write(self, case: Case, rollout: Rollout) -> None:
+        path = self._path(case)
+        payload = {
+            "cache_version": 1,
+            "cache_key_prefix": self.cache_key_prefix,
+            "case_name": case.name,
+            "task_signature": case.task_signature,
+            "created_at": datetime.now().isoformat(),
+            "rollout": rollout_to_dict(rollout),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    async def _emit_rollout_complete(
+        self,
+        *,
+        rollout: Rollout,
+        index: int,
+        context: ExecutionContext,
+    ) -> None:
+        if self.on_rollout_complete is None:
+            return
+        result = self.on_rollout_complete(
+            rollout=rollout,
+            index=index,
+            context=context,
+        )
+        if inspect.isawaitable(result):
+            await result
+
+
 def _require_benchmark_service_url(config: BatchTrainEvalConfig) -> str:
     if not config.benchmark_service_url:
         raise ValueError(
@@ -851,6 +985,31 @@ def _default_output_path(config: BatchTrainEvalConfig) -> str:
 
 def _baseline_cache_path(config: BatchTrainEvalConfig) -> Path:
     return _result_base_dir(config) / "cache" / "baseline" / f"{_baseline_cache_key(config)}.json"
+
+
+def _train_rollout_cache_dir(config: BatchTrainEvalConfig) -> Path:
+    return (
+        _result_base_dir(config)
+        / "cache"
+        / "train_rollouts"
+        / _train_rollout_cache_key_prefix(config)
+    )
+
+
+def _train_rollout_cache_key_prefix(config: BatchTrainEvalConfig) -> str:
+    payload = {
+        "dataset": config.dataset,
+        "domain": config.domain,
+        "split": "train",
+        "train_index": _index_payload(config.train_index),
+        "train_trials": config.train_trials,
+        "max_iterations": config.max_iterations,
+        "keep_default_tools": config.keep_default_tools,
+    }
+    stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
+    index = _index_label(config.train_index)
+    return f"{_cache_slug(config.domain)}_train_index-{index}_trials-{config.train_trials}_{digest}"
 
 
 def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:

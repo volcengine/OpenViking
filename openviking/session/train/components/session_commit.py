@@ -323,7 +323,10 @@ def _rollout_event_fields(
 
 
 def _training_commit_memory_policy() -> dict[str, Any]:
-    return {"memory_types": list(_TRAINING_COMMIT_MEMORY_TYPES)}
+    return {
+        "memory_types": list(_TRAINING_COMMIT_MEMORY_TYPES),
+        "working_memory": {"enabled": False},
+    }
 
 
 def _analysis_from_rollout(rollout: Rollout) -> RolloutAnalysis:
