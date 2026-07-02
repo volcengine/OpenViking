@@ -220,6 +220,71 @@ def test_upsert_uses_on_conflict(columns, values, expect_update):
         assert "ON CONFLICT (id) DO NOTHING" in sql
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected_fragments", "expected_params"),
+    [
+        ({"op": "must", "field": "account_id", "conds": ["acme"]}, ['"account_id" = %s'], ["acme"]),
+        (
+            {"op": "must", "field": "account_id", "conds": ["a", "b"]},
+            ['"account_id" IN (%s, %s)'],
+            ["a", "b"],
+        ),
+        (
+            {"op": "must", "field": "scope_roots", "conds": ["/resources/acme/docs"]},
+            ['"scope_roots" LIKE %s'],
+            ["%\n/resources/acme/docs\n%"],
+        ),
+        (
+            {
+                "op": "range",
+                "field": "updated_at",
+                "gte": "2026-05-01T00:00:00+00:00",
+                "lt": "2026-06-01T00:00:00+00:00",
+            },
+            ['"updated_at" >= %s', '"updated_at" < %s'],
+            ["2026-05-01T00:00:00+00:00", "2026-06-01T00:00:00+00:00"],
+        ),
+        (
+            {
+                "op": "time_range",
+                "field": "updated_at",
+                "gte": "2026-05-01T00:00:00+00:00",
+                "lte": "2026-06-01T00:00:00+00:00",
+            },
+            ['"updated_at" >= %s', '"updated_at" <= %s'],
+            ["2026-05-01T00:00:00+00:00", "2026-06-01T00:00:00+00:00"],
+        ),
+        (
+            {"op": "contains", "field": "abstract", "substring": "report"},
+            ['"abstract" LIKE %s'],
+            ["%report%"],
+        ),
+        ({"op": "prefix", "field": "uri", "prefix": "/r"}, ['"uri" LIKE %s'], ["/r%"]),
+        (
+            {
+                "op": "and",
+                "conds": [
+                    {"op": "must", "field": "account_id", "conds": ["acme"]},
+                    {"op": "contains", "field": "abstract", "substring": "report"},
+                ],
+            },
+            ['"account_id" = %s', '"abstract" LIKE %s', " AND "],
+            ["acme", "%report%"],
+        ),
+    ],
+    ids=["eq", "in", "scope_roots", "range", "time_range", "contains", "prefix", "and"],
+)
+def test_collection_filter_to_sql(payload, expected_fragments, expected_params):
+    collection = object.__new__(PgVectorCollection)
+    collection._field_types = {"updated_at": "date_time"}
+
+    clause, params = collection._compile_filter(payload)
+
+    for fragment in expected_fragments:
+        assert fragment in clause
+    assert params == expected_params
+
+
 def test_factory_creates_pgvector_adapter_without_connecting():
     adapter = create_collection_adapter(_build_config())
 
