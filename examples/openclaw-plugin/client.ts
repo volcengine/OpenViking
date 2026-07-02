@@ -21,6 +21,7 @@ export type FindResultItem = {
   category?: string;
   score?: number;
   match_reason?: string;
+  preview_url?: string;
 };
 
 export type FindResult = {
@@ -28,6 +29,10 @@ export type FindResult = {
   resources?: FindResultItem[];
   skills?: FindResultItem[];
   total?: number;
+};
+
+export type PreviewUrlResult = {
+  preview_url: string;
 };
 
 export type FsListEntry = string | Record<string, unknown>;
@@ -483,6 +488,16 @@ export class OpenVikingClient {
       undefined,
       actorPeerId,
     );
+  }
+
+  async getPreviewUrl(uri: string, actorPeerId?: string): Promise<string> {
+    const result = await this.request<PreviewUrlResult>(
+      `/api/v1/content/preview_url?uri=${encodeURIComponent(uri)}`,
+      {},
+      undefined,
+      actorPeerId,
+    );
+    return result.preview_url;
   }
 
   async list(

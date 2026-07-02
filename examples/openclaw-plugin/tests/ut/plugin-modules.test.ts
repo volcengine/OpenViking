@@ -292,6 +292,99 @@ describe("plugin module seams", () => {
     expect(readResult.content[0].text).toContain("--- START OF viking://resources/spec.md ---");
   });
 
+  it("adds preview_url to ov_search image resource output", async () => {
+    const find = vi.fn().mockResolvedValue({
+      memories: [],
+      resources: [{
+        uri: "viking://resources/gallery/photo.png#chunk-1",
+        abstract: "Reference image",
+        score: 0.91,
+        category: "image",
+      }],
+      skills: [],
+      total: 1,
+    });
+    const getPreviewUrl = vi.fn().mockResolvedValue("https://tos.example.com/photo.png?sig=1");
+    const runtime = createOpenVikingQueryRuntime({
+      getClient: async () => ({
+        find,
+        read: vi.fn(),
+        list: vi.fn().mockResolvedValue([]),
+        getPreviewUrl,
+      }),
+      queryConfigStore: { getEffective: vi.fn().mockResolvedValue({ ovSearchLimit: 2 }) },
+      toQueryConfigContext: (session) => session,
+      traceRecorder: { recordAndFlush: vi.fn() },
+      inferRecallResourceType: () => "resource",
+      createTraceId: () => "trace-query-preview",
+      boundTraceQuery: (query) => ({ query }),
+      previewText: (value) => typeof value === "string" ? value : undefined,
+      logger: { warn: vi.fn() },
+      cfg: {
+        traceRecallMaxResultsPerSearch: 5,
+        traceRecallPreviewChars: 80,
+        traceRecallQueryMaxChars: 120,
+        enableResourcePreviewUrls: true,
+      },
+    });
+
+    const search = await runtime.searchOpenViking(
+      { query: "photo", uri: "viking://resources/gallery" },
+      "agent-main",
+      { agentId: "agent-main", sessionId: "session-1" },
+    ) as any;
+
+    expect(getPreviewUrl).toHaveBeenCalledWith("viking://resources/gallery/photo.png", "agent-main");
+    expect(search.content[0].text).toContain("https://tos.example.com/photo.png?sig=1");
+    expect(search.details.resources[0].preview_url).toBe("https://tos.example.com/photo.png?sig=1");
+  });
+
+  it("does not fetch preview_url for ov_search when resource preview urls are disabled", async () => {
+    const find = vi.fn().mockResolvedValue({
+      memories: [],
+      resources: [{
+        uri: "viking://resources/gallery/photo.png#chunk-1",
+        abstract: "Reference image",
+        score: 0.91,
+        category: "image",
+      }],
+      skills: [],
+      total: 1,
+    });
+    const getPreviewUrl = vi.fn().mockResolvedValue("https://tos.example.com/photo.png?sig=1");
+    const runtime = createOpenVikingQueryRuntime({
+      getClient: async () => ({
+        find,
+        read: vi.fn(),
+        list: vi.fn().mockResolvedValue([]),
+        getPreviewUrl,
+      }),
+      queryConfigStore: { getEffective: vi.fn().mockResolvedValue({ ovSearchLimit: 2 }) },
+      toQueryConfigContext: (session) => session,
+      traceRecorder: { recordAndFlush: vi.fn() },
+      inferRecallResourceType: () => "resource",
+      createTraceId: () => "trace-query-preview-disabled",
+      boundTraceQuery: (query) => ({ query }),
+      previewText: (value) => typeof value === "string" ? value : undefined,
+      logger: { warn: vi.fn() },
+      cfg: {
+        traceRecallMaxResultsPerSearch: 5,
+        traceRecallPreviewChars: 80,
+        traceRecallQueryMaxChars: 120,
+      },
+    });
+
+    const search = await runtime.searchOpenViking(
+      { query: "photo", uri: "viking://resources/gallery" },
+      "agent-main",
+      { agentId: "agent-main", sessionId: "session-1" },
+    ) as any;
+
+    expect(getPreviewUrl).not.toHaveBeenCalled();
+    expect(search.content[0].text).not.toContain("preview_url");
+    expect(search.details.resources[0].preview_url).toBeUndefined();
+  });
+
   it("handles OpenViking query config commands through a dedicated module", async () => {
     const session = { agentId: "agent-main", sessionId: "session-1", sessionKey: "key-1", ovSessionId: "ov-session-1" };
     const queryCtx = { agentId: "agent-main", sessionId: "session-1", sessionKey: "key-1", ovSessionId: "ov-session-1" };
@@ -1004,5 +1097,83 @@ describe("plugin module seams", () => {
       requestLimit: 4,
       recallMaxInjectedChars: 500,
     });
+  });
+
+  it("adds preview_url to memory_recall image resource lines before formatting", async () => {
+    const registerTool = vi.fn();
+    const image = {
+      uri: "viking://resources/gallery/photo.png#chunk-2",
+      category: "",
+      abstract: "Reference product image.",
+      score: 0.93,
+      level: 2,
+    };
+    const find = vi.fn().mockResolvedValue({ memories: [], resources: [image], total: 1 });
+    const read = vi.fn().mockResolvedValue("Reference product image.");
+    const getPreviewUrl = vi.fn().mockResolvedValue("https://tos.example.com/photo.png?sig=1");
+    const getDefaultAgentId = vi.fn().mockReturnValue("default-agent");
+    const buildMemoryLinesWithBudget = vi.fn(async (items, readFn) => {
+      await readFn(items[0].uri);
+      return {
+        lines: [`- [resource:image] ${items[0].abstract}\n  <preview_url>${items[0].preview_url}</preview_url>`],
+        estimatedTokens: 12,
+      };
+    });
+
+    registerOpenVikingMemoryRecallTools({
+      registerTool,
+      getClient: async () => ({ find, read, getPreviewUrl, getDefaultAgentId }),
+      queryConfigStore: {
+        getEffective: vi.fn().mockResolvedValue({
+          recallLimit: 1,
+          scoreThreshold: 0.5,
+          targetUri: "viking://resources/gallery",
+          resourceTypes: ["resource"],
+          candidateLimit: 4,
+          maxInjectedChars: 500,
+          rankingWeights: {},
+          categoryWeights: {},
+          resourceTypeWeights: {},
+        }),
+      },
+      toQueryConfigContext: (session) => ({ agentId: session.agentId, sessionId: session.sessionId, sessionKey: session.sessionKey, ovSessionId: session.ovSessionId }),
+      resolvePluginSessionRouting: () => ({
+        agentId: "agent-main",
+        sessionId: "session-1",
+        sessionKey: "agent:agent-main:session-1",
+        ovSessionId: "ov-session-1",
+      }),
+      isBypassedSession: () => false,
+      makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),
+      resolveRecallSearchPlan: vi.fn(),
+      postProcessMemories: (items) => items,
+      pickMemoriesForInjection: (items) => items.slice(0, 1),
+      buildMemoryLinesWithBudget,
+      inferRecallResourceType: (uri) => uri.startsWith("viking://resources/") ? "resource" : "user",
+      createTraceId: () => "memory_recall-preview-trace",
+      boundTraceQuery: (query) => ({ query }),
+      previewText: (value) => typeof value === "string" ? value : undefined,
+      traceRecorder: { recordAndFlush: vi.fn() },
+      cfg: {
+        recallTargetTypes: ["resource"],
+        traceRecallMaxResultsPerSearch: 5,
+        traceRecallPreviewChars: 120,
+        traceRecallQueryMaxChars: 200,
+        logFindRequests: false,
+        enableResourcePreviewUrls: true,
+      },
+      logger: { info: vi.fn() },
+    });
+
+    const recallFactory = registerTool.mock.calls[0]?.[0];
+    const recallTool = recallFactory({ sessionId: "session-1" });
+    const result = await recallTool.execute("call-1", { query: "product image" });
+
+    expect(getPreviewUrl).toHaveBeenCalledWith("viking://resources/gallery/photo.png", "agent-main");
+    expect(buildMemoryLinesWithBudget.mock.calls[0]![0][0]).toMatchObject({
+      uri: "viking://resources/gallery/photo.png#chunk-2",
+      preview_url: "https://tos.example.com/photo.png?sig=1",
+    });
+    expect(result.content[0].text).toContain("<preview_url>https://tos.example.com/photo.png?sig=1</preview_url>");
   });
 });

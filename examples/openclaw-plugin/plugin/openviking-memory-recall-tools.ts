@@ -5,6 +5,7 @@ import type { BuildMemoryLinesWithBudgetOptions } from "../auto-recall.js";
 import type { RankingOptions } from "../memory-ranking.js";
 import type { EffectiveQueryConfig, QueryConfigContext, RuntimeQueryParams } from "../query-config.js";
 import type { RecallResourceType } from "../registries/recall-resource-types.js";
+import { withPreviewUrls } from "../preview-url.js";
 import type {
   RecallTraceEntry,
   RecallTraceResult,
@@ -36,6 +37,7 @@ export type OpenVikingMemoryRecallClient = {
     },
   ) => Promise<FindResult>;
   read: (uri: string, agentId?: string) => Promise<string>;
+  getPreviewUrl?: (uri: string, actorPeerId?: string) => Promise<string>;
   getDefaultAgentId: () => string;
 };
 
@@ -89,6 +91,7 @@ export type OpenVikingMemoryRecallToolsDeps = {
     traceRecallPreviewChars: number;
     traceRecallQueryMaxChars: number;
     logFindRequests: boolean;
+    enableResourcePreviewUrls?: boolean;
   };
   logger: {
     info?: (message: string) => void;
@@ -254,16 +257,22 @@ export function registerOpenVikingMemoryRecallTools(
           };
         }
 
-        const leafOnly = (result.memories ?? []).filter((m) => !m.level || m.level === 2);
+        const leafOnly = [
+          ...(result.memories ?? []),
+          ...(result.resources ?? []),
+        ].filter((m) => !m.level || m.level === 2);
         const processed = deps.postProcessMemories(leafOnly, {
           limit: requestLimit,
           scoreThreshold,
         });
-        const memories = deps.pickMemoriesForInjection(processed, limit, query, scoreThreshold, {
+        const pickedMemories = deps.pickMemoriesForInjection(processed, limit, query, scoreThreshold, {
           weights: queryConfig.rankingWeights,
           categoryWeights: queryConfig.categoryWeights,
           resourceTypeWeights: queryConfig.resourceTypeWeights,
         });
+        const memories = deps.cfg.enableResourcePreviewUrls
+          ? await withPreviewUrls(pickedMemories, recallClient, session.agentId)
+          : pickedMemories;
         const candidateTraceResults = leafOnly
           .map((item) => toTraceResult(item, deps.inferRecallResourceType(item.uri) === "resource" ? "resource" : "memory", deps))
           .slice(0, deps.cfg.traceRecallMaxResultsPerSearch);

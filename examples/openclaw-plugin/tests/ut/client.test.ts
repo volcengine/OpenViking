@@ -82,6 +82,35 @@ describe("isMemoryUri", () => {
 });
 
 describe("OpenVikingClient resource and skill import", () => {
+  it("getPreviewUrl requests the content preview URL with plugin auth headers", async () => {
+    const transport = vi.fn().mockResolvedValue(
+      okResponse({ preview_url: "https://tos.example.com/image.png?sig=1" }),
+    );
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "sk-user", "agent", 5000, "", "", undefined, false, true, { transport });
+    const result = await client.getPreviewUrl("viking://resources/gallery/image.png#chunk-1", "agent-main");
+
+    expect(result).toBe("https://tos.example.com/image.png?sig=1");
+    expect(transport).toHaveBeenCalledTimes(1);
+    const [url, init] = transport.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:1933/api/v1/content/preview_url?uri=viking%3A%2F%2Fresources%2Fgallery%2Fimage.png%23chunk-1");
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-API-Key")).toBe("sk-user");
+    expect(headers.get("X-OpenViking-Actor-Peer")).toBe("agent-main");
+  });
+
+  it("getPreviewUrl surfaces OpenViking error payloads through the shared request path", async () => {
+    const transport = vi.fn().mockResolvedValue(
+      errorResponse("cannot preview directory", "InvalidParameter"),
+    );
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "sk-user", "agent", 5000, "", "", undefined, false, true, { transport });
+
+    await expect(client.getPreviewUrl("viking://resources/gallery/")).rejects.toThrow(
+      "OpenViking request failed [InvalidParameter]: cannot preview directory",
+    );
+  });
+
   it("addResource posts remote URL as path", async () => {
     const transport = vi.fn().mockResolvedValue(
       okResponse({ root_uri: "viking://resources/site", status: "success" }),

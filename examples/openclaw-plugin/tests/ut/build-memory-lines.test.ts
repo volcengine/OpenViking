@@ -84,6 +84,52 @@ describe("buildMemoryLines", () => {
     ]);
   });
 
+  it("includes preview_url metadata when present", async () => {
+    const memories = [
+      makeMemory({
+        uri: "viking://resources/gallery/photo.png",
+        category: "",
+        abstract: "A reference photo.",
+        preview_url: "https://tos.example.com/photo.png?sig=1",
+      }),
+    ];
+    const readFn = vi.fn();
+
+    const lines = await buildMemoryLines(memories, readFn, {
+      recallPreferAbstract: true,
+      includeUri: true,
+    });
+
+    expect(lines).toEqual([
+      [
+        "- [resource:image]",
+        "  <uri>viking://resources/gallery/photo.png</uri>",
+        "  <preview_url>https://tos.example.com/photo.png?sig=1</preview_url>",
+        "  A reference photo.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("includes preview_url without uri metadata for explicit recall output", async () => {
+    const memories = [
+      makeMemory({
+        uri: "viking://resources/gallery/photo.jpg",
+        category: "",
+        abstract: "A second reference photo.",
+        preview_url: "https://tos.example.com/photo.jpg?sig=1",
+      }),
+    ];
+    const readFn = vi.fn();
+
+    const lines = await buildMemoryLines(memories, readFn, {
+      recallPreferAbstract: true,
+    });
+
+    expect(lines).toEqual([
+      "- [resource:image] A second reference photo.\n  <preview_url>https://tos.example.com/photo.jpg?sig=1</preview_url>",
+    ]);
+  });
+
   it("uses abstract when recallPreferAbstract=true", async () => {
     const memories = [makeMemory({ abstract: "The abstract text" })];
     const readFn = vi.fn();
@@ -217,6 +263,30 @@ describe("buildMemoryLinesWithBudget", () => {
       {
         recallPreferAbstract: true,
         recallMaxInjectedChars: 20,
+      },
+    );
+
+    expect(lines).toHaveLength(0);
+    expect(estimatedTokens).toBe(0);
+  });
+
+  it("counts preview_url text against the injected character budget", async () => {
+    const memories = [
+      makeMemory({
+        uri: "viking://resources/gallery/too-large.png",
+        abstract: "short",
+        preview_url: "https://tos.example.com/" + "x".repeat(100),
+      }),
+    ];
+    const readFn = vi.fn();
+
+    const { lines, estimatedTokens } = await buildMemoryLinesWithBudget(
+      memories,
+      readFn,
+      {
+        recallPreferAbstract: true,
+        recallMaxInjectedChars: 30,
+        includeUri: true,
       },
     );
 
@@ -452,5 +522,96 @@ describe("buildAutoRecallContext trace", () => {
     });
     expect(recorded.selected[0]).toMatchObject({ injected: true });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("auto-recall search failed"));
+  });
+
+  it("injects preview_url for auto-recalled image resources", async () => {
+    const cfg = makeCfg({
+      recallTargetTypes: ["resource"],
+      recallPreferAbstract: true,
+      enableResourcePreviewUrls: true,
+    });
+    const image = makeMemory({
+      uri: "viking://resources/gallery/photo.png#chunk-1",
+      category: "",
+      abstract: "Reference product image.",
+      score: 0.9,
+    });
+    const client = {
+      healthCheck: vi.fn().mockResolvedValue(undefined),
+      find: vi.fn().mockResolvedValue({ resources: [image], total: 1 }),
+      read: vi.fn().mockResolvedValue("unused"),
+      getPreviewUrl: vi.fn().mockResolvedValue("https://tos.example.com/photo.png?sig=1"),
+    };
+
+    const result = await buildAutoRecallContext({
+      cfg,
+      client: client as any,
+      agentId: "agent-1",
+      queryText: "show me the product image",
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(client.getPreviewUrl).toHaveBeenCalledWith("viking://resources/gallery/photo.png", "agent-1");
+    expect(result.block).toContain("<preview_url>https://tos.example.com/photo.png?sig=1</preview_url>");
+    expect(result.block).toContain("If you reference an image result");
+  });
+
+  it("does not call preview_url lookup when resource preview urls are disabled", async () => {
+    const cfg = makeCfg({ recallTargetTypes: ["resource"], recallPreferAbstract: true });
+    const image = makeMemory({
+      uri: "viking://resources/gallery/photo.png#chunk-1",
+      category: "",
+      abstract: "Reference product image.",
+      score: 0.9,
+    });
+    const client = {
+      healthCheck: vi.fn().mockResolvedValue(undefined),
+      find: vi.fn().mockResolvedValue({ resources: [image], total: 1 }),
+      read: vi.fn().mockResolvedValue("unused"),
+      getPreviewUrl: vi.fn().mockResolvedValue("https://tos.example.com/photo.png?sig=1"),
+    };
+
+    const result = await buildAutoRecallContext({
+      cfg,
+      client: client as any,
+      agentId: "agent-1",
+      queryText: "show me the product image",
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(client.getPreviewUrl).not.toHaveBeenCalled();
+    expect(result.block).toContain("Reference product image.");
+    expect(result.block).not.toContain("<preview_url>");
+    expect(result.block).not.toContain("If you reference an image result");
+  });
+
+  it("keeps auto-recall injection when preview_url lookup fails", async () => {
+    const cfg = makeCfg({
+      recallTargetTypes: ["resource"],
+      recallPreferAbstract: true,
+      enableResourcePreviewUrls: true,
+    });
+    const image = makeMemory({
+      uri: "viking://resources/gallery/photo.webp",
+      abstract: "Fallback image abstract.",
+      score: 0.9,
+    });
+    const client = {
+      healthCheck: vi.fn().mockResolvedValue(undefined),
+      find: vi.fn().mockResolvedValue({ resources: [image], total: 1 }),
+      read: vi.fn().mockResolvedValue("unused"),
+      getPreviewUrl: vi.fn().mockRejectedValue(new Error("preview unavailable")),
+    };
+
+    const result = await buildAutoRecallContext({
+      cfg,
+      client: client as any,
+      agentId: "agent-1",
+      queryText: "show me the fallback image",
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(result.block).toContain("Fallback image abstract.");
+    expect(result.block).not.toContain("<preview_url>https://");
   });
 });

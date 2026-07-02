@@ -13,6 +13,7 @@
       "context-engine.ts",
       "auto-recall.ts",
       "client.ts",
+      "preview-url.ts",
       "process-manager.ts",
       "memory-ranking.ts",
       "token-estimator.ts",

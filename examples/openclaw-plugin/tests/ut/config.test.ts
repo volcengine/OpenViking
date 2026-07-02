@@ -23,6 +23,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.captureMode).toBe("semantic");
     expect(cfg.captureMaxLength).toBe(24000);
     expect(cfg.autoRecallTimeoutMs).toBe(5000);
+    expect(cfg.enableResourcePreviewUrls).toBe(false);
     expect(cfg.recallMaxContentChars).toBe(5000);
     expect(cfg.peer_role).toBe("assistant");
     expect(cfg.peer_prefix).toBe("");
@@ -62,6 +63,14 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(enabled.enableAddResourceTool).toBe(true);
     expect(enabled.enabledTools).toContain("add_resource");
     expect(enabled.disabledTools).not.toContain("add_resource");
+  });
+
+  it("enables resource preview urls only when explicitly allowed", () => {
+    const disabled = memoryOpenVikingConfigSchema.parse({});
+    expect(disabled.enableResourcePreviewUrls).toBe(false);
+
+    const enabled = memoryOpenVikingConfigSchema.parse({ enableResourcePreviewUrls: true });
+    expect(enabled.enableResourcePreviewUrls).toBe(true);
   });
 
   it("expands enabled and disabled tool groups", () => {

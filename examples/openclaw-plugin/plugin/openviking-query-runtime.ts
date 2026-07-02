@@ -1,4 +1,5 @@
 import type { FindResult, FindResultItem, FsListResult } from "../client.js";
+import { withFindResultPreviewUrls } from "../preview-url.js";
 import type { RecallResourceType } from "../registries/recall-resource-types.js";
 import type { RecallTraceEntry, RecallTraceResult } from "../recall-trace.js";
 
@@ -52,6 +53,7 @@ type OpenVikingQueryClient = {
     agentId?: string,
   ) => Promise<FindResult>;
   read: (uri: string, agentId?: string) => Promise<unknown>;
+  getPreviewUrl?: (uri: string, actorPeerId?: string) => Promise<string>;
   list: (
     uri: string,
     options?: { recursive?: boolean; simple?: boolean; nodeLimit?: number },
@@ -77,6 +79,7 @@ export type OpenVikingQueryRuntimeDeps<TQueryConfigContext> = {
     traceRecallMaxResultsPerSearch: number;
     traceRecallPreviewChars: number;
     traceRecallQueryMaxChars: number;
+    enableResourcePreviewUrls?: boolean;
   };
 };
 
@@ -117,6 +120,7 @@ function formatOVSearchRows(result: FindResult): string[] {
   if (items.length === 0) {
     return [];
   }
+  const includePreviewUrls = items.some(({ item }) => Boolean(item.preview_url));
   const numberHeader = "no";
   const numberWidth = Math.max(numberHeader.length, String(items.length).length);
   const typeWidth = Math.max("type".length, ...items.map(({ contextType }) => contextType.length));
@@ -126,12 +130,17 @@ function formatOVSearchRows(result: FindResult): string[] {
     "score".length,
     ...items.map(({ item }) => (typeof item.score === "number" ? item.score.toFixed(2).length : 0)),
   );
+  const previewWidth = includePreviewUrls
+    ? Math.max("preview_url".length, ...items.map(({ item }) => item.preview_url?.length ?? 0))
+    : 0;
+  const previewHeader = includePreviewUrls ? `  ${"preview_url".padEnd(previewWidth)}` : "";
   return [
-    `${numberHeader.padEnd(numberWidth)}  ${"type".padEnd(typeWidth)}  ${"uri".padEnd(uriWidth)}  ${"level".padEnd(levelWidth)}  ${"score".padEnd(scoreWidth)}  abstract`,
+    `${numberHeader.padEnd(numberWidth)}  ${"type".padEnd(typeWidth)}  ${"uri".padEnd(uriWidth)}  ${"level".padEnd(levelWidth)}  ${"score".padEnd(scoreWidth)}${previewHeader}  abstract`,
     ...items.map(({ contextType, item }, index) => {
       const score = typeof item.score === "number" ? item.score.toFixed(2) : "";
+      const previewColumn = includePreviewUrls ? `  ${(item.preview_url ?? "").padEnd(previewWidth)}` : "";
       const summary = truncateSummary(item.abstract || item.overview || "(no summary)");
-      return `${String(index + 1).padEnd(numberWidth)}  ${contextType.padEnd(typeWidth)}  ${item.uri.padEnd(uriWidth)}  ${String(item.level ?? "").padEnd(levelWidth)}  ${score.padEnd(scoreWidth)}  ${summary}`;
+      return `${String(index + 1).padEnd(numberWidth)}  ${contextType.padEnd(typeWidth)}  ${item.uri.padEnd(uriWidth)}  ${String(item.level ?? "").padEnd(levelWidth)}  ${score.padEnd(scoreWidth)}${previewColumn}  ${summary}`;
     }),
   ];
 }
@@ -411,6 +420,9 @@ export function createOpenVikingQueryRuntime<TQueryConfigContext>(deps: OpenViki
         deps.logger.warn?.(`openviking: skill search failed: ${String(skillsSettled.reason)}`);
       }
       result = mergeFindResults(successful);
+    }
+    if (deps.cfg.enableResourcePreviewUrls) {
+      result = await withFindResultPreviewUrls(result, client, agentId);
     }
     const selected = [
       ...(result.memories ?? []).map((item) => ({

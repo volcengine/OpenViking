@@ -16,7 +16,12 @@ describe("openviking query formatters", () => {
         { uri: "viking://user/memory/1", level: 2, score: 0.987, abstract: "remember this" },
       ],
       resources: [
-        { uri: "viking://resources/doc", score: 0.7, overview: "resource overview" },
+        {
+          uri: "viking://resources/doc",
+          score: 0.7,
+          overview: "resource overview",
+          preview_url: "https://tos.example.com/doc?sig=1",
+        },
       ],
       skills: [
         { uri: "skill://openviking-context-database", abstract: "skill overview" },
@@ -25,12 +30,24 @@ describe("openviking query formatters", () => {
     });
 
     expect(rows[0]).toContain("no  type");
+    expect(rows[0]).toContain("preview_url");
     expect(rows[1]).toContain("memory");
     expect(rows[1]).toContain("viking://user/memory/1");
     expect(rows[1]).toContain("0.99");
     expect(rows[1]).toContain("remember this");
     expect(rows.join("\n")).toContain("resource overview");
+    expect(rows.join("\n")).toContain("https://tos.example.com/doc?sig=1");
     expect(rows.join("\n")).toContain("skill overview");
+  });
+
+  it("omits preview_url column when no search row has a preview url", () => {
+    const rows = formatOVSearchRows({
+      resources: [{ uri: "viking://resources/doc", score: 0.7, overview: "resource overview" }],
+      total: 1,
+    });
+
+    expect(rows[0]).not.toContain("preview_url");
+    expect(rows.join("\n")).toContain("resource overview");
   });
 
   it("formats search text and empty search text", () => {
