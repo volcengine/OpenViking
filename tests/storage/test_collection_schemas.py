@@ -338,6 +338,48 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
 
 
 @pytest.mark.asyncio
+async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypatch):
+    """A credential (401/403) failure must fail terminally, not re-enqueue: an
+    infinite re-enqueue holds the resource's tree lock and add-resource --wait
+    open, and must not trip the circuit breaker (which re-enqueues too). #2916."""
+
+    class _QueueingVikingDB:
+        is_closing = False
+        has_queue_manager = True
+
+        def __init__(self):
+            self.enqueued = []
+
+        async def enqueue_embedding_msg(self, msg):
+            self.enqueued.append(msg.id)
+            return None
+
+    class _AuthErrorEmbedder(_DummyEmbedder):
+        async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+            raise RuntimeError("Error code: 401 - {'code': 'AuthenticationError'} Unauthorized")
+
+    vikingdb = _QueueingVikingDB()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(_AuthErrorEmbedder()),
+    )
+    handler = TextEmbeddingHandler(vikingdb)
+    status = {"success": 0, "requeue": 0, "error": 0}
+    handler.set_callbacks(
+        on_success=lambda: status.__setitem__("success", status["success"] + 1),
+        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
+        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
+    )
+
+    result = await handler.on_dequeue(_build_queue_payload_for_account("acct"))
+
+    assert result is None
+    assert vikingdb.enqueued == []  # terminal: not re-enqueued
+    assert status == {"success": 0, "requeue": 0, "error": 1}
+    handler._circuit_breaker.check()  # breaker not tripped (would raise if open)
+
+
+@pytest.mark.asyncio
 async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypatch):
     class _ClosingDuringUpsertVikingDB:
         def __init__(self):

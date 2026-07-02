@@ -271,6 +271,7 @@ def _make_provider(config, langfuse_client: None = None):
     p = config.agents
     model = p.model if p else None
     temperature = p.temperature if p else 0.7
+    thinking = p.thinking if p else True
     api_key = p.api_key if p else None
     api_base = p.api_base if p else None
     provider_name = p.provider if p else None
@@ -292,6 +293,7 @@ def _make_provider(config, langfuse_client: None = None):
             "provider": provider_name,
             "model": model,
             "temperature": temperature,
+            "thinking": thinking,
         }
         if timeout is not None:
             vlm_config["timeout"] = timeout
@@ -321,6 +323,7 @@ def _make_provider(config, langfuse_client: None = None):
         extra_headers=extra_headers,
         provider_name=provider_name,
         timeout=timeout,
+        thinking=thinking,
         langfuse_client=langfuse_client,
     )
 

@@ -1031,6 +1031,7 @@ class SessionCompressorV2:
                         normalized_traj_uris,
                         ctx,
                         viking_fs,
+                        lock_handle=lock_handle,
                     )
             except Exception as e:
                 logger.warning(f"Failed to append source trajectories to {exp_uri}: {e}")
@@ -1041,6 +1042,7 @@ class SessionCompressorV2:
         traj_uris: List[str],
         ctx,
         viking_fs,
+        lock_handle=None,
     ) -> None:
         from datetime import timezone
 
@@ -1064,7 +1066,13 @@ class SessionCompressorV2:
         mf.links = new_exp_links
 
         if links_changed:
-            await viking_fs.write_file(exp_uri, MemoryFileUtils.write(mf), ctx=ctx)
+            # TODO: This must be optimized once pathlock is pushed down into ragfs.
+            await viking_fs.write_file(
+                exp_uri,
+                MemoryFileUtils.write(mf),
+                ctx=ctx,
+                lock_handle=lock_handle,
+            )
             tracer.info(
                 f"[agent_link] wrote exp→traj links -> {exp_uri} (traj_count={len(traj_uris)})"
             )

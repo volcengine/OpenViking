@@ -237,6 +237,7 @@ async def oauth_protected_resource(request: Request) -> JSONResponse:
     metadata = ProtectedResourceMetadata(
         resource=AnyHttpUrl(resource),
         authorization_servers=[AnyHttpUrl(issuer)],
+        scopes_supported=["mcp"],
         bearer_methods_supported=["header"],
         resource_name="OpenViking MCP",
     )

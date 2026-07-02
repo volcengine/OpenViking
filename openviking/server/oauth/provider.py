@@ -120,6 +120,7 @@ class OpenVikingOAuthProvider(
             token_endpoint_auth_method=record["token_endpoint_auth_method"],
             grant_types=record["grant_types"],
             response_types=record["response_types"],
+            scope=record.get("scope"),
             client_name=record.get("client_name"),
             client_id_issued_at=record["created_at"],
         )
@@ -161,6 +162,7 @@ class OpenVikingOAuthProvider(
                 if client_info.response_types
                 else None,
                 client_secret=None,  # public client; never stored
+                scope=client_info.scope,
             )
         except ValueError as exc:
             raise RegistrationError(

@@ -1109,6 +1109,19 @@ pub(crate) enum SnapshotCmd {
         #[arg(long, default_value_t = 20)]
         limit: u32,
     },
+    /// Get the account .ovgitignore content
+    IgnoreGet,
+    /// Set the account .ovgitignore content
+    IgnoreSet {
+        /// .ovgitignore content passed inline
+        #[arg(long = "content")]
+        content: Option<String>,
+        /// File to read the content from; takes precedence over --content
+        #[arg(long = "file")]
+        file: Option<std::path::PathBuf>,
+    },
+    /// Delete the account .ovgitignore
+    IgnoreDelete,
 }
 
 #[derive(Subcommand)]

@@ -286,7 +286,8 @@ impl MountableFS {
             None => {
                 // Single backend: initialize plugin, optionally wrap raw storage with cache, then
                 // wrap with encryption. This keeps shared cache providers ciphertext-only.
-                // Control plugins (queuefs, serverinfofs) are never encrypted.
+                // Control plugins (queuefs, serverinfofs) are dynamic virtual filesystems; never
+                // cache or encrypt them.
                 let raw = plugin.initialize(config.clone()).await?;
                 let raw_arc: Arc<dyn FileSystem> = Arc::from(raw);
                 let is_control_plugin = matches!(config.name.as_str(), "queuefs" | "serverinfofs");
@@ -301,7 +302,11 @@ impl MountableFS {
                     .await?;
                 }
                 #[cfg(feature = "cache")]
-                let storage_fs = self.maybe_wrap_cache(raw_arc.clone(), &normalized_path);
+                let storage_fs = if is_control_plugin {
+                    raw_arc.clone()
+                } else {
+                    self.maybe_wrap_cache(raw_arc.clone(), &normalized_path)
+                };
                 #[cfg(not(feature = "cache"))]
                 let storage_fs = raw_arc.clone();
 
@@ -1282,6 +1287,52 @@ mod tests {
             b"backend:/file.txt"
         );
         assert_eq!(reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn queuefs_mount_bypasses_cache_even_when_cache_is_configured() {
+        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+        use crate::plugins::QueueFSPlugin;
+
+        let provider = Arc::new(MemoryCacheProvider::new());
+        let mfs = MountableFS::with_cache(
+            provider.clone(),
+            CacheNamespace::new("queue-cache-test"),
+            CachePolicy::default().with_bypass_prefix("/queue"),
+        );
+        mfs.register_plugin(QueueFSPlugin::new()).await;
+        mfs.mount(PluginConfig::single_backend(
+            "queuefs",
+            "/queue",
+            HashMap::new(),
+        ))
+        .await
+        .unwrap();
+        mfs.mkdir("/queue/Embedding", 0o755).await.unwrap();
+
+        assert_eq!(
+            mfs.read("/queue/Embedding/size", 0, 0).await.unwrap(),
+            b"0"
+        );
+        mfs.write(
+            "/queue/Embedding/enqueue",
+            br#"{"id":"one"}"#,
+            0,
+            WriteFlag::Create,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            mfs.read("/queue/Embedding/size", 0, 0).await.unwrap(),
+            b"1",
+            "queuefs size is dynamic and must not be served from cache"
+        );
+        assert!(
+            provider.keys().await.is_empty(),
+            "queuefs control filesystem should not populate shared cache"
+        );
     }
 
     #[cfg(feature = "cache")]

@@ -178,6 +178,8 @@ pub fn map_git_error(py: Python<'_>, e: ragfs::git::GitError) -> PyErr {
         GitError::InvalidPath(_) => new_py_err_pub(py, "AGFSInvalidPathError", msg),
         GitError::BlobTooLarge { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
         GitError::TooManyFiles { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
+        GitError::IgnoreFileTooLarge { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
+        GitError::InvalidIgnoreFile { .. } => new_py_err_pub(py, "AGFSInvalidOperationError", msg),
         GitError::CorruptedObject(_) => new_py_err_pub(py, "AGFSInternalError", msg),
         GitError::RefStore(RefStoreError::NotFound(_)) => {
             new_py_err_pub(py, "AGFSNotFoundError", msg)
@@ -357,14 +359,20 @@ pub fn commit_response_to_pydict(py: Python<'_>, resp: CommitResponse) -> PyResu
         CommitResponse::Created {
             commit_oid,
             changed,
+            ignored,
         } => {
             d.set_item("result", "created")?;
             d.set_item("commit_oid", oid_hex(&commit_oid))?;
             d.set_item("changed", changed)?;
+            d.set_item("ignored", ignored)?;
         }
-        CommitResponse::Noop { commit_oid } => {
+        CommitResponse::Noop {
+            commit_oid,
+            ignored,
+        } => {
             d.set_item("result", "noop")?;
             d.set_item("commit_oid", oid_hex(&commit_oid))?;
+            d.set_item("ignored", ignored)?;
         }
     }
     Ok(d.into_any().unbind())
@@ -753,14 +761,15 @@ mod tests {
             let oid = gix_hash::ObjectId::null(gix_hash::Kind::Sha1);
             let resp = ragfs::git::CommitResponse::Created {
                 commit_oid: oid,
-                changed: 3,
+                changed: 2,
+                ignored: 3,
             };
             let obj = commit_response_to_pydict(py, resp).expect("converts");
-            let d: &Bound<PyDict> = obj.bind(py).downcast().unwrap();
-            let result: String = d.get_item("result").unwrap().unwrap().extract().unwrap();
-            assert_eq!(result, "created");
-            let changed: usize = d.get_item("changed").unwrap().unwrap().extract().unwrap();
-            assert_eq!(changed, 3);
+            let d = obj.bind(py).downcast::<PyDict>().unwrap();
+            assert_eq!(d.get_item("result").unwrap().unwrap().extract::<String>().unwrap(), "created");
+            assert_eq!(d.get_item("commit_oid").unwrap().unwrap().extract::<String>().unwrap(), oid.to_hex().to_string());
+            assert_eq!(d.get_item("changed").unwrap().unwrap().extract::<usize>().unwrap(), 2);
+            assert_eq!(d.get_item("ignored").unwrap().unwrap().extract::<usize>().unwrap(), 3);
         });
     }
 
@@ -769,11 +778,15 @@ mod tests {
         pyo3::prepare_freethreaded_python();
         Python::attach(|py| {
             let oid = gix_hash::ObjectId::null(gix_hash::Kind::Sha1);
-            let resp = ragfs::git::CommitResponse::Noop { commit_oid: oid };
+            let resp = ragfs::git::CommitResponse::Noop {
+                commit_oid: oid,
+                ignored: 4,
+            };
             let obj = commit_response_to_pydict(py, resp).expect("converts");
-            let d: &Bound<PyDict> = obj.bind(py).downcast().unwrap();
-            let result: String = d.get_item("result").unwrap().unwrap().extract().unwrap();
-            assert_eq!(result, "noop");
+            let d = obj.bind(py).downcast::<PyDict>().unwrap();
+            assert_eq!(d.get_item("result").unwrap().unwrap().extract::<String>().unwrap(), "noop");
+            assert_eq!(d.get_item("commit_oid").unwrap().unwrap().extract::<String>().unwrap(), oid.to_hex().to_string());
+            assert_eq!(d.get_item("ignored").unwrap().unwrap().extract::<usize>().unwrap(), 4);
         });
     }
 

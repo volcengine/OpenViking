@@ -1566,12 +1566,24 @@ impl HttpClient {
         self.get("/api/v1/snapshot/log", &params).await
     }
 
+    pub async fn snapshot_ignore_get(&self) -> Result<Value> {
+        self.get("/api/v1/snapshot/ignore", &[]).await
+    }
+
+    pub async fn snapshot_ignore_set(&self, content: &str) -> Result<Value> {
+        self.put("/api/v1/snapshot/ignore", &serde_json::json!({ "content": content }))
+            .await
+    }
+
+    pub async fn snapshot_ignore_delete(&self) -> Result<Value> {
+        self.delete("/api/v1/snapshot/ignore", &[]).await
+    }
+
     pub async fn snapshot_show(
         &self,
         target_ref: &str,
         path: Option<&str>,
-    ) -> Result<SnapshotShowResult> {
-        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
+    ) -> Result<SnapshotShowResult> {        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
         let mut query: Vec<(String, String)> = vec![("target_ref".to_string(), target_ref.to_string())];
         if let Some(p) = path {
             query.push(("path".to_string(), p.to_string()));

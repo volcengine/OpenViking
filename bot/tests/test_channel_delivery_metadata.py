@@ -115,3 +115,98 @@ async def test_feishu_send_skips_normal_message_without_reply_to():
             content="hello",
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_feishu_upload_image_uses_detected_jpeg_format(monkeypatch):
+    channel = FeishuChannel(FeishuChannelConfig(app_id="cli_app"), MessageBus())
+    jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01fake-jpeg"
+    captured = {}
+
+    async def fake_token():
+        return "tenant-token"
+
+    class FakeResponse:
+        is_error = False
+        status_code = 200
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"code": 0, "data": {"image_key": "img_key"}}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers, data, files):
+            captured.update(url=url, headers=headers, data=data, files=files)
+            return FakeResponse()
+
+    monkeypatch.setattr(channel, "_get_tenant_access_token", fake_token)
+    monkeypatch.setattr("vikingbot.channels.feishu.httpx.AsyncClient", FakeClient)
+
+    image_key = await channel._upload_image_to_feishu(jpeg_bytes)
+
+    filename, file_obj, mime_type = captured["files"]["image"]
+    assert image_key == "img_key"
+    assert filename == "image.jpg"
+    assert mime_type == "image/jpeg"
+    assert file_obj.read() == jpeg_bytes
+
+
+@pytest.mark.asyncio
+async def test_feishu_upload_retries_with_normalized_image_after_bad_request(monkeypatch):
+    channel = FeishuChannel(FeishuChannelConfig(app_id="cli_app"), MessageBus())
+    original_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01original-with-metadata"
+    normalized_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01normalized"
+    uploads = []
+
+    async def fake_token():
+        return "tenant-token"
+
+    class FakeResponse:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self.text = body
+            self.is_error = status_code >= 400
+
+        def json(self):
+            return {"code": 0, "data": {"image_key": "img_key"}}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers, data, files):
+            filename, file_obj, mime_type = files["image"]
+            uploads.append((filename, mime_type, file_obj.read()))
+            if len(uploads) == 1:
+                return FakeResponse(400, '{"code":234011,"msg":"can not recognize image"}')
+            return FakeResponse(200, '{"code":0}')
+
+    monkeypatch.setattr(channel, "_get_tenant_access_token", fake_token)
+    monkeypatch.setattr(channel, "_normalize_image_for_feishu", lambda data: normalized_bytes)
+    monkeypatch.setattr("vikingbot.channels.feishu.httpx.AsyncClient", FakeClient)
+
+    image_key = await channel._upload_image_to_feishu(original_bytes)
+
+    assert image_key == "img_key"
+    assert uploads == [
+        ("image.jpg", "image/jpeg", original_bytes),
+        ("image.jpg", "image/jpeg", normalized_bytes),
+    ]

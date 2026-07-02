@@ -1406,6 +1406,25 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
+    async def git_get_ignore(self) -> str:
+        """Return the account ``.ovgitignore`` content (empty string if absent)."""
+        response = await self._http.get("/api/v1/snapshot/ignore")
+        result = self._handle_response(response)
+        return result if isinstance(result, str) else ""
+
+    async def git_set_ignore(self, *, content: str) -> None:
+        """Write the account ``.ovgitignore`` control file."""
+        response = await self._http.put(
+            "/api/v1/snapshot/ignore",
+            json={"content": content},
+        )
+        self._handle_response(response)
+
+    async def git_delete_ignore(self) -> None:
+        """Delete the account ``.ovgitignore`` control file (missing is success)."""
+        response = await self._http.delete("/api/v1/snapshot/ignore")
+        self._handle_response(response)
+
     @property
     def snapshot(self) -> "AsyncHTTPSnapshotNamespace":
         """Snapshot version control namespace (async HTTP)."""
@@ -2148,6 +2167,15 @@ class AsyncHTTPSnapshotNamespace:
     ) -> List[Dict[str, Any]]:
         return await self._client.git_log(branch=branch, limit=limit)
 
+    async def get_gitignore(self) -> str:
+        return await self._client.git_get_ignore()
+
+    async def set_gitignore(self, *, content: str) -> None:
+        await self._client.git_set_ignore(content=content)
+
+    async def delete_gitignore(self) -> None:
+        await self._client.git_delete_ignore()
+
 
 class SyncHTTPSnapshotNamespace:
     """Synchronous wrapper around the HTTP client's snapshot namespace."""
@@ -2215,3 +2243,12 @@ class SyncHTTPSnapshotNamespace:
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         return run_async(self._ns().log(branch=branch, limit=limit))
+
+    def get_gitignore(self) -> str:
+        return run_async(self._ns().get_gitignore())
+
+    def set_gitignore(self, *, content: str) -> None:
+        run_async(self._ns().set_gitignore(content=content))
+
+    def delete_gitignore(self) -> None:
+        run_async(self._ns().delete_gitignore())
