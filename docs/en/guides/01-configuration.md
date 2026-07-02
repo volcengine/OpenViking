@@ -807,6 +807,40 @@ To ingest from private/internal network addresses (e.g. an internal mirror), set
 
 The `PermissionDeniedError` message names the exact key to add for the blocked host.
 
+### webfeed
+
+Controls whole-site ingestion from sitemap, sitemapindex, RSS, and Atom URLs. This section lives under `parsers.webfeed`:
+
+```json
+{
+  "parsers": {
+    "webfeed": {
+      "max_pages": 200,
+      "max_concurrency": 5,
+      "request_timeout": 30.0,
+      "politeness_delay": 0.2,
+      "same_host_only": true,
+      "respect_robots": true,
+      "max_depth": 2,
+      "suggest_feed": true
+    }
+  }
+}
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `max_pages` | int | Maximum number of pages mirrored from one feed or discovered site before truncation | `200` |
+| `max_concurrency` | int | Maximum concurrent page fetches while mirroring feed entries | `5` |
+| `request_timeout` | float | Per-request timeout in seconds for feed, sitemap, robots.txt, and page fetches | `30.0` |
+| `politeness_delay` | float | Delay in seconds between requests to the same host | `0.2` |
+| `same_host_only` | bool | Keep mirrored pages on the feed site's host and skip cross-host entries | `true` |
+| `respect_robots` | bool | Check robots.txt before fetching mirrored pages | `true` |
+| `max_depth` | int | Maximum sitemapindex recursion depth | `2` |
+| `suggest_feed` | bool | Append a non-blocking sitemap/RSS suggestion when adding a single root page that exposes a feed | `true` |
+
+When you call `add_resource` with a sitemap, sitemapindex, RSS, or Atom URL, OpenViking mirrors the listed pages into one resource tree. Setting `watch_interval` on that feed URL refreshes the tree from the feed on each watch run. Passing `args={"site": true}` asks OpenViking to discover the site's feed from a bare domain or homepage; passing `args={"site": false}` keeps a feed-looking URL on the single-page HTTP path.
+
 ### rerank
 
 Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, and OpenAI-compatible APIs.
@@ -1311,7 +1345,7 @@ openviking-server --config /path/to/ov.conf
 
 ### ov.conf
 
-The config sections documented above (embedding, vlm, rerank, retrieval, grep, storage) all belong to `ov.conf`. SDK embedded mode and server share this file.
+The config sections documented above (embedding, vlm, rerank, retrieval, grep, parsers, storage) all belong to `ov.conf`. SDK embedded mode and server share this file.
 
 For memory-related settings, add a `memory` section in `ov.conf`:
 
@@ -1644,6 +1678,18 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
   },
   "code": {
     "code_summary_mode": "ast"
+  },
+  "parsers": {
+    "webfeed": {
+      "max_pages": 200,
+      "max_concurrency": 5,
+      "request_timeout": 30.0,
+      "politeness_delay": 0.2,
+      "same_host_only": true,
+      "respect_robots": true,
+      "max_depth": 2,
+      "suggest_feed": true
+    }
   },
   "server": {
     "host": "127.0.0.1",
