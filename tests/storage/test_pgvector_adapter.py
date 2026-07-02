@@ -15,6 +15,7 @@ from openviking.storage.vectordb_adapters.opengauss_adapter import (
 from openviking.storage.vectordb_adapters.pgvector_adapter import (
     PgVectorCollection,
     PgVectorCollectionAdapter,
+    _normalize_distance,
 )
 from openviking_cli.utils.config.vectordb_config import (
     PgVectorConfig,
@@ -65,6 +66,25 @@ def test_vector_literal_and_identifier_safety():
 
     # PgVectorCollection re-targets OpenGaussCollection and is-a ICollection.
     assert issubclass(PgVectorCollection, ICollection)
+
+
+@pytest.mark.parametrize(
+    ("metric", "valid"),
+    [
+        ("cosine", True),
+        ("l2", True),
+        ("ip", True),
+        ("dot", False),
+        ("euclid", False),
+    ],
+    ids=["cosine", "l2", "ip", "reject-dot", "reject-euclid"],
+)
+def test_pgvector_distance_validation(metric, valid):
+    if valid:
+        assert _normalize_distance(metric) == metric
+    else:
+        with pytest.raises(ValueError, match="supports only cosine, l2, and ip"):
+            _normalize_distance(metric)
 
 
 def test_factory_creates_pgvector_adapter_without_connecting():
