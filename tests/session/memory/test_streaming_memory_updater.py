@@ -20,13 +20,14 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.merge_op.base import FieldType, MergeOp, SearchReplaceBlock, StrPatch
 from openviking.session.memory.streaming_memory_updater import (
     MemoryMergeGroupKey,
     MemoryUpdateRequest,
     StreamingMemoryUpdater,
     StreamingMemoryUpdaterConfig,
+    StreamingMemoryUpdateResult,
     classify_memory_merge_mode,
     enforce_merge_group_peer_id,
     merge_one_memory_type_operations,
@@ -433,10 +434,56 @@ async def test_streaming_memory_updater_batches_non_append_only_submits(monkeypa
         ),
     )
 
-    assert result1 is result2
-    assert result1.request_count == 2
+    assert result1 is not result2
+    assert result1.request_count == 1
+    assert result2.request_count == 1
     assert result1.metadata["flush_reason"] == "count"
-    assert sorted(result1.apply_result.written_uris) == sorted([op1.uris[0], op2.uris[0]])
+    assert result1.metadata["batch_request_count"] == 2
+    assert result1.metadata["scoped_to_submitter"] is True
+    assert result1.apply_result.written_uris == [op1.uris[0]]
+    assert result2.apply_result.written_uris == [op2.uris[0]]
+    assert sorted(result1.metadata["unscoped_written_uris"]) == sorted([op1.uris[0], op2.uris[0]])
+
+
+def test_scope_memory_update_result_to_submitter_filters_shared_batch_by_source():
+    from openviking.session.memory.streaming_memory_updater import (
+        scope_memory_update_result_to_submitter,
+    )
+
+    op_a = _note_op_with_source("scoped_a", "extract_a")
+    op_b = _note_op_with_source("scoped_b", "extract_b")
+    apply_result = MemoryUpdateResult()
+    apply_result.add_written(op_a.uris[0])
+    apply_result.add_written(op_b.uris[0])
+    batch_result = StreamingMemoryUpdateResult(
+        operations=ResolvedOperations(
+            upsert_operations=[op_a, op_b],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        apply_result=apply_result,
+        request_count=2,
+        metadata={"flush_reason": "count", "operation_count": 2},
+    )
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[op_a],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        messages=[Message(id="m1", role="user", parts=[TextPart("note A")])],
+        ctx=_ctx(),
+        metadata={"source_extraction_id": "extract_a", "session_id": "session_a"},
+    )
+
+    scoped = scope_memory_update_result_to_submitter(batch_result, request)
+
+    assert scoped.request_count == 1
+    assert scoped.metadata["batch_request_count"] == 2
+    assert scoped.metadata["scoped_to_source_extraction_id"] == "extract_a"
+    assert scoped.apply_result.written_uris == [op_a.uris[0]]
+    assert scoped.operations.upsert_operations == [op_a]
+    assert scoped.metadata["unscoped_written_uris"] == [op_a.uris[0], op_b.uris[0]]
 
 
 def test_split_request_by_merge_group_groups_by_peer_and_memory_type():
@@ -635,11 +682,14 @@ async def test_streaming_memory_updater_batches_per_merge_group(monkeypatch):
         ),
     )
 
-    assert result1 is result2
-    assert result1.request_count == 2
+    assert result1 is not result2
+    assert result1.request_count == 1
+    assert result2.request_count == 1
     assert result1.metadata["flush_reason"] == "count"
+    assert result1.metadata["batch_request_count"] == 2
     assert result1.metadata["merge_group"] == "peer=self,memory_type=notes"
-    assert sorted(result1.apply_result.written_uris) == sorted([note_a.uris[0], note_b.uris[0]])
+    assert result1.apply_result.written_uris == [note_a.uris[0]]
+    assert result2.apply_result.written_uris == [note_b.uris[0]]
 
     assert peer_result is not result1
     assert peer_result.request_count == 1
@@ -685,7 +735,8 @@ async def test_streaming_memory_updater_submit_waits_for_all_merge_groups(monkey
     )
 
     assert result.metadata["combined_result"] is True
-    assert result.request_count == 2
+    assert result.request_count == 1
+    assert result.metadata["batch_request_count"] == 2
     assert sorted(result.apply_result.written_uris) == sorted([self_op.uris[0], peer_op.uris[0]])
     assert self_op.uris[0] in fs.files
     assert peer_op.uris[0] in fs.files

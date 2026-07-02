@@ -21,7 +21,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_LLM_HIDDEN_MEMORY_FIELDS = {"source_extraction_id", "last_update_trace_id"}
+_LLM_HIDDEN_MEMORY_FIELDS = {
+    "source_extraction_id",
+    "source_extraction_ids",
+    "last_update_trace_id",
+}
 
 
 def optimize_search_result(result: Any, limit: int = 10) -> Any:

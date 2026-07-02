@@ -196,6 +196,7 @@ class StreamingMemoryUpdater:
             fallback_request_count=1,
         )
         self._last_result = result
+        scoped_result = scope_memory_update_result_to_submitter(result, request)
         tracer.info(
             "StreamingMemoryUpdater submit finished "
             f"batch_id={result.metadata.get('batch_id')} "
@@ -203,13 +204,13 @@ class StreamingMemoryUpdater:
             f"flush_reason={result.metadata.get('flush_reason')} "
             f"request_count={result.request_count} "
             f"operation_count={result.metadata.get('operation_count')} "
-            f"written_uris={result.apply_result.written_uris} "
-            f"edited_uris={result.apply_result.edited_uris} "
-            f"deleted_uris={result.apply_result.deleted_uris} "
-            f"errors={result.apply_result.errors}",
+            f"written_uris={scoped_result.apply_result.written_uris} "
+            f"edited_uris={scoped_result.apply_result.edited_uris} "
+            f"deleted_uris={scoped_result.apply_result.deleted_uris} "
+            f"errors={scoped_result.apply_result.errors}",
             console=self.config.trace_console,
         )
-        return result
+        return scoped_result
 
     async def _submit_grouped_merge_request(
         self,
@@ -658,6 +659,7 @@ async def merge_memory_operations(
                 registry=registry,
                 ctx=ctx,
             )
+            _inherit_source_metadata_to_merged_operations(ops_list, merged.upsert_operations)
             merged_upserts.extend(merged.upsert_operations)
             merged_deletes.extend(merged.delete_file_contents)
             merged_delete_replacements.update(
@@ -1092,6 +1094,61 @@ def classify_memory_merge_mode(
     return False, "single_existing_content_changed"
 
 
+def _inherit_source_metadata_to_merged_operations(
+    input_operations: list[ResolvedOperation],
+    merged_operations: list[ResolvedOperation],
+) -> None:
+    """Best-effort provenance restore after patch-merge LLM output.
+
+    Patch merge hides system provenance fields from the model, so generated
+    operations can lose source_extraction_id. Reattach it by exact URI match
+    where possible. If a merged output has no URI match but only one input
+    source exists, copy that source; otherwise record all input source IDs as an
+    ambiguous multi-source operation.
+    """
+
+    input_by_uri: dict[str, list[ResolvedOperation]] = {}
+    all_source_ids: set[str] = set()
+    for input_op in input_operations or []:
+        op_source_ids = _operation_source_extraction_ids(input_op)
+        all_source_ids.update(op_source_ids)
+        for uri in list(getattr(input_op, "uris", []) or []):
+            if uri:
+                input_by_uri.setdefault(uri, []).append(input_op)
+
+    if not all_source_ids:
+        return
+
+    for merged_op in merged_operations or []:
+        if _operation_source_extraction_ids(merged_op):
+            continue
+        matched_inputs: list[ResolvedOperation] = []
+        for uri in list(getattr(merged_op, "uris", []) or []):
+            matched_inputs.extend(input_by_uri.get(uri, []))
+        matched_ids = {
+            source_id
+            for input_op in matched_inputs
+            for source_id in _operation_source_extraction_ids(input_op)
+        }
+        if len(matched_ids) == 1:
+            _set_operation_source_extraction_id(merged_op, next(iter(matched_ids)))
+        elif len(matched_ids) > 1:
+            merged_op.memory_fields["source_extraction_ids"] = sorted(matched_ids)
+        elif len(all_source_ids) == 1:
+            _set_operation_source_extraction_id(merged_op, next(iter(all_source_ids)))
+        else:
+            merged_op.memory_fields["source_extraction_ids"] = sorted(all_source_ids)
+
+
+def _set_operation_source_extraction_id(op: ResolvedOperation, extraction_id: str) -> None:
+    op.memory_fields["source_extraction_id"] = extraction_id
+    source = getattr(op, "source", None)
+    if source is None:
+        op.source = MemoryOperationSource(extraction_id=extraction_id)
+    elif not getattr(source, "extraction_id", None):
+        source.extraction_id = extraction_id
+
+
 def enforce_merge_group_peer_id(
     operations: list[ResolvedOperation],
     *,
@@ -1400,6 +1457,270 @@ def clone_memory_update_request(
         isolation_options=dict(request.isolation_options or {}),
         metadata=dict(request.metadata or {}),
     )
+
+
+def scope_memory_update_result_to_submitter(
+    result: StreamingMemoryUpdateResult,
+    request: MemoryUpdateRequest,
+) -> StreamingMemoryUpdateResult:
+    """Return the submitting request's view of a shared streaming flush.
+
+    StreamingBatcher intentionally resolves every waiter in one flush with the
+    same aggregate batch result. Per-session consumers (archive memory_diff,
+    contexts, case URI mapping) must not see writes/deletes that were produced
+    by other concurrently flushed commits.
+    """
+
+    scope = _memory_submitter_scope_from_request(request)
+    if scope.is_empty:
+        return result
+
+    scoped_operations = _scope_operations_to_submitter(result.operations, scope=scope)
+    operation_uris = _operation_uri_set(scoped_operations)
+    submitter_uris = _request_uri_set(request)
+    scoped_link_uris = _link_endpoint_uri_set(
+        getattr(scoped_operations, "resolved_links", []) or []
+    )
+    scoped_uris = operation_uris | submitter_uris | scoped_link_uris
+
+    scoped_apply_result = _scope_apply_result_to_uris(
+        result.apply_result,
+        scoped_uris=scoped_uris,
+    )
+    metadata = dict(result.metadata or {})
+    metadata.update(
+        {
+            "batch_request_count": result.request_count,
+            "batch_operation_count": metadata.get("operation_count"),
+            "request_count": 1,
+            "operation_count": _operation_count(scoped_operations),
+            "source": "streaming_memory_scoped",
+            "scoped_to_submitter": True,
+        }
+    )
+    if scope.extraction_id:
+        metadata["scoped_to_source_extraction_id"] = scope.extraction_id
+    if scope.archive_uri:
+        metadata["scoped_to_archive_uri"] = scope.archive_uri
+    if scope.session_id:
+        metadata["scoped_to_session_id"] = scope.session_id
+    metadata["unscoped_written_uris"] = list(getattr(result.apply_result, "written_uris", []) or [])
+    metadata["unscoped_edited_uris"] = list(getattr(result.apply_result, "edited_uris", []) or [])
+    metadata["unscoped_deleted_uris"] = list(getattr(result.apply_result, "deleted_uris", []) or [])
+
+    return StreamingMemoryUpdateResult(
+        operations=scoped_operations,
+        apply_result=scoped_apply_result,
+        request_count=1,
+        metadata=metadata,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _MemorySubmitterScope:
+    extraction_id: str | None = None
+    session_id: str | None = None
+    archive_uri: str | None = None
+    request_uris: frozenset[str] = frozenset()
+
+    @property
+    def is_empty(self) -> bool:
+        return (
+            not self.extraction_id
+            and not self.session_id
+            and not self.archive_uri
+            and not self.request_uris
+        )
+
+
+def _memory_submitter_scope_from_request(request: MemoryUpdateRequest) -> _MemorySubmitterScope:
+    metadata = dict(getattr(request, "metadata", {}) or {})
+    source = memory_operation_source_from_request(request)
+    extraction_id = _optional_str(
+        metadata.get("source_extraction_id")
+        or metadata.get("extraction_id")
+        or getattr(source, "extraction_id", None)
+    )
+    return _MemorySubmitterScope(
+        extraction_id=extraction_id,
+        session_id=_optional_str(metadata.get("session_id") or getattr(source, "session_id", None)),
+        archive_uri=_optional_str(
+            metadata.get("archive_uri") or getattr(source, "archive_uri", None)
+        ),
+        request_uris=frozenset(_request_uri_set(request)),
+    )
+
+
+def _scope_operations_to_submitter(
+    operations: ResolvedOperations,
+    *,
+    scope: _MemorySubmitterScope,
+) -> ResolvedOperations:
+    upserts = [
+        op
+        for op in list(getattr(operations, "upsert_operations", []) or [])
+        if _operation_matches_scope(op, scope=scope)
+    ]
+    deletes = [
+        file
+        for file in list(getattr(operations, "delete_file_contents", []) or [])
+        if _memory_file_matches_scope(file, scope=scope)
+    ]
+    kept_uris = _operation_uri_set(
+        ResolvedOperations(upsert_operations=upserts, delete_file_contents=deletes, errors=[])
+    )
+    request_uris = set(scope.request_uris)
+    return ResolvedOperations(
+        upsert_operations=upserts,
+        delete_file_contents=deletes,
+        errors=list(getattr(operations, "errors", []) or []),
+        resolved_links=[
+            link
+            for link in list(getattr(operations, "resolved_links", []) or [])
+            if _link_matches_scoped_uris(link, scoped_uris=kept_uris, request_uris=request_uris)
+        ],
+        delete_replacements={
+            str(deleted_uri): str(replacement_uri)
+            for deleted_uri, replacement_uri in dict(
+                getattr(operations, "delete_replacements", {}) or {}
+            ).items()
+            if str(deleted_uri) in kept_uris or str(replacement_uri) in kept_uris
+        },
+    )
+
+
+def _scope_apply_result_to_uris(
+    apply_result: MemoryUpdateResult,
+    *,
+    scoped_uris: set[str],
+) -> MemoryUpdateResult:
+    scoped = MemoryUpdateResult()
+    scoped.written_uris = [
+        uri for uri in list(getattr(apply_result, "written_uris", []) or []) if uri in scoped_uris
+    ]
+    scoped.edited_uris = [
+        uri for uri in list(getattr(apply_result, "edited_uris", []) or []) if uri in scoped_uris
+    ]
+    scoped.deleted_uris = [
+        uri for uri in list(getattr(apply_result, "deleted_uris", []) or []) if uri in scoped_uris
+    ]
+    scoped.errors = [
+        error
+        for error in list(getattr(apply_result, "errors", []) or [])
+        if _apply_error_matches_scoped_uris(error, scoped_uris=scoped_uris)
+    ]
+    return scoped
+
+
+def _operation_matches_scope(op: ResolvedOperation, *, scope: _MemorySubmitterScope) -> bool:
+    if scope.extraction_id and scope.extraction_id in _operation_source_extraction_ids(op):
+        return True
+    source = getattr(op, "source", None)
+    if (
+        scope.archive_uri
+        and _optional_str(getattr(source, "archive_uri", None)) == scope.archive_uri
+    ):
+        return True
+    if scope.session_id and _optional_str(getattr(source, "session_id", None)) == scope.session_id:
+        return True
+    if scope.request_uris and any(
+        uri in scope.request_uris for uri in list(getattr(op, "uris", []) or [])
+    ):
+        return True
+    return False
+
+
+def _memory_file_matches_scope(file: MemoryFile, *, scope: _MemorySubmitterScope) -> bool:
+    fields = dict(getattr(file, "extra_fields", {}) or {})
+    if scope.extraction_id and scope.extraction_id in _source_extraction_ids_from_fields(fields):
+        return True
+    uri = getattr(file, "uri", None)
+    return bool(uri and uri in scope.request_uris)
+
+
+def _operation_source_extraction_ids(op: ResolvedOperation) -> set[str]:
+    fields = dict(getattr(op, "memory_fields", {}) or {})
+    ids = _source_extraction_ids_from_fields(fields)
+    source_id = source_extraction_id_for_operation(op)
+    if source_id:
+        ids.add(source_id)
+    return ids
+
+
+def _source_extraction_ids_from_fields(fields: dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    value = fields.get("source_extraction_id")
+    if value:
+        ids.add(str(value))
+    values = fields.get("source_extraction_ids")
+    if isinstance(values, (list, tuple, set)):
+        ids.update(str(item) for item in values if item)
+    elif values:
+        ids.add(str(values))
+    return ids
+
+
+def _request_uri_set(request: MemoryUpdateRequest) -> set[str]:
+    return _operation_uri_set(getattr(request, "operations", None))
+
+
+def _operation_uri_set(operations: ResolvedOperations | None) -> set[str]:
+    if operations is None:
+        return set()
+    uris = {
+        uri
+        for op in list(getattr(operations, "upsert_operations", []) or [])
+        for uri in list(getattr(op, "uris", []) or [])
+        if uri
+    }
+    uris.update(
+        str(file.uri)
+        for file in list(getattr(operations, "delete_file_contents", []) or [])
+        if getattr(file, "uri", None)
+    )
+    return uris
+
+
+def _link_endpoint_uri_set(links: list[StoredLink]) -> set[str]:
+    uris: set[str] = set()
+    for link in links or []:
+        from_uri = str(getattr(link, "from_uri", "") or "")
+        to_uri = str(getattr(link, "to_uri", "") or "")
+        if from_uri:
+            uris.add(from_uri)
+        if to_uri:
+            uris.add(to_uri)
+    return uris
+
+
+def _link_matches_scoped_uris(
+    link: StoredLink,
+    *,
+    scoped_uris: set[str],
+    request_uris: set[str],
+) -> bool:
+    if not scoped_uris:
+        return False
+    from_uri = str(getattr(link, "from_uri", "") or "")
+    to_uri = str(getattr(link, "to_uri", "") or "")
+    # Keep links between this submitter's touched files and their neighbors, but
+    # do not leak links that only connect other submitters' files.
+    return (
+        from_uri in scoped_uris
+        or to_uri in scoped_uris
+        or from_uri in request_uris
+        or to_uri in request_uris
+    )
+
+
+def _apply_error_matches_scoped_uris(error: Any, *, scoped_uris: set[str]) -> bool:
+    if not scoped_uris:
+        return False
+    try:
+        uri = error[0]
+    except Exception:
+        return True
+    return str(uri) in scoped_uris or str(uri) == "unknown"
 
 
 def combine_streaming_memory_results(
