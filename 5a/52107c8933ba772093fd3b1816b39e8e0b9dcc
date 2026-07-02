@@ -1,0 +1,14 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "5a52107c8933ba772093fd3b1816b39e8e0b9dcc",
+  "prompts": {},
+  "humans": {
+    "h_a2bdc3e253e7d8": {
+      "author": "chenxiaobin@bytedance.com <chenxiaobin@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

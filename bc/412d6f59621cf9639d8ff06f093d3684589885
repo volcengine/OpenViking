@@ -1,0 +1,17 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "bc412d6f59621cf9639d8ff06f093d3684589885",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "h_b23a6a8439c0dd": {
+      "author": "unknown"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
