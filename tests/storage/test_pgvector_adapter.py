@@ -480,6 +480,81 @@ def test_register_vector_optional(monkeypatch, pool_size, expect_pool):
         assert len(connect_calls) == 1
 
 
+class _ExtCursor:
+    def __init__(self, fail_create, ext_present):
+        self._fail_create = fail_create
+        self._ext_present = ext_present
+        self._last = None
+        self.create_attempted = False
+
+    def execute(self, sql, params=None):
+        self._last = sql
+        if "CREATE EXTENSION" in sql:
+            self.create_attempted = True
+            if self._fail_create:
+                raise RuntimeError("permission denied to create extension vector")
+
+    def fetchone(self):
+        if self._last and "pg_extension" in self._last:
+            return (1,) if self._ext_present else None
+        return None
+
+    def close(self):
+        pass
+
+
+class _ExtConn:
+    closed = 0
+
+    def __init__(self, fail_create, ext_present):
+        self._fail_create = fail_create
+        self._ext_present = ext_present
+        self.cursors = []
+
+    def cursor(self):
+        cur = _ExtCursor(self._fail_create, self._ext_present)
+        self.cursors.append(cur)
+        return cur
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+
+@pytest.mark.parametrize(
+    ("create_extension", "fail_create", "ext_present", "expect_raise", "expect_attempt"),
+    [
+        (True, False, False, False, True),
+        (True, True, False, True, True),
+        (True, True, True, False, True),
+        (False, False, False, False, False),
+    ],
+    ids=["creates-ok", "fail-absent-raises", "fail-present-ok", "disabled-skips"],
+)
+def test_create_extension_failure_is_actionable(
+    create_extension, fail_create, ext_present, expect_raise, expect_attempt
+):
+    config = VectorDBBackendConfig.model_validate(
+        {
+            "backend": "pgvector",
+            "pgvector": {"host": "127.0.0.1", "create_extension": create_extension},
+        }
+    )
+    adapter = create_collection_adapter(config)
+    conn = _ExtConn(fail_create, ext_present)
+    adapter._conn = conn
+
+    if expect_raise:
+        with pytest.raises(RuntimeError, match="CREATE EXTENSION vector"):
+            adapter._ensure_extension()
+    else:
+        adapter._ensure_extension()
+
+    assert any(c.create_attempted for c in conn.cursors) is expect_attempt
+
+
 def test_factory_creates_pgvector_adapter_without_connecting():
     adapter = create_collection_adapter(_build_config())
 

@@ -22,6 +22,7 @@ SQL ``ICollection`` and live connection seam are filled in over B3-B4.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from typing import Any, Dict, List
 
@@ -43,6 +44,12 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 _DEFAULT_SCHEMA = "public"
+
+# Stable 64-bit advisory-lock key so concurrent workers serialize the one-time
+# ``CREATE EXTENSION`` instead of racing (onyx-dot-app/onyx: sha256(name) -> int64).
+_EXTENSION_ADVISORY_KEY = int.from_bytes(
+    hashlib.sha256(b"openviking.pgvector.create_extension").digest()[:8], "big", signed=True
+)
 
 
 def _import_psycopg2():
@@ -440,6 +447,50 @@ class PgVectorCollectionAdapter(CollectionAdapter):
                 f"pgvector {extversion} is too old for OpenViking; HNSW indexing requires "
                 ">= 0.5.0. Upgrade the extension (e.g. `ALTER EXTENSION vector UPDATE`)."
             )
+
+    def _extension_present(self) -> bool:
+        conn = self._conn
+        if conn is None:
+            return False
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+            return cur.fetchone() is not None
+        finally:
+            cur.close()
+
+    def _ensure_extension(self) -> None:
+        """Create the ``vector`` extension on connect, under an advisory lock so
+        concurrent workers don't race. If it fails (e.g. a least-privileged role
+        on managed PostgreSQL), re-check ``pg_extension`` — another worker or a
+        DBA may have installed it — and only then raise a literal remediation.
+        ``create_extension=False`` skips this entirely for pre-provisioned
+        deployments (RDS/Cloud SQL).[^flag]
+
+        [^flag]: open-webui / danny-avila/rag_api gate this on a
+        ``PGVECTOR_CREATE_EXTENSION`` flag; onyx-dot-app/onyx serializes it with
+        an advisory lock; serengil/deepface raises the actionable command.
+        """
+        if not self._create_extension:
+            return
+        conn = self._conn
+        if conn is None:
+            return
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", [_EXTENSION_ADVISORY_KEY])
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            if not self._extension_present():
+                raise RuntimeError(
+                    "Failed to enable the pgvector 'vector' extension and it is not "
+                    "installed. Have a superuser run `CREATE EXTENSION vector;`, or set "
+                    "`create_extension=false` if the extension is pre-provisioned."
+                ) from exc
+        finally:
+            cur.close()
 
     def _load_existing_collection_if_needed(self) -> None:
         raise NotImplementedError
