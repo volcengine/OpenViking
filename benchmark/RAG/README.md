@@ -53,7 +53,7 @@ benchmark/RAG/
 
 ```bash
 cd OpenViking
-uv pip install -e ".[benchmark]"
+uv pip install -e ".[benchmark,bot]"
 source .venv/bin/activate
 ```
 
@@ -205,7 +205,10 @@ cd benchmark/RAG
 # Run complete evaluation (data ingestion, answer generation, evaluation, and data deletion)
 python run.py --config config/locomo_config.yaml
 
-# Only run data ingestion and answer generation stage
+# Only run data ingestion stage
+python run.py --config config/locomo_config.yaml --step ingest
+
+# Only run answer generation stage (requires data ingestion from previous step)
 python run.py --config config/locomo_config.yaml --step gen
 
 # Only run evaluation stage (requires generated answers from previous step)
@@ -213,7 +216,45 @@ python run.py --config config/locomo_config.yaml --step eval
 
 # Only run data deletion stage
 python run.py --config config/locomo_config.yaml --step del
+
+# Run with VikingBot (bot configuration files are in config/bot/ directory)
+# Note: When using VikingBot, the `retrieval_topk` configuration is not effective,
+# as VikingBot has its own search mechanism.
+# Run complete evaluation with VikingBot
+python run.py --config config/bot/locomo_bot_config.yaml
+
+# Only run data ingestion stage with VikingBot
+python run.py --config config/bot/locomo_bot_config.yaml --step ingest
+
+# Only run answer generation stage with VikingBot
+python run.py --config config/bot/locomo_bot_config.yaml --step gen
+
+# Only run evaluation stage with VikingBot
+python run.py --config config/bot/locomo_bot_config.yaml --step eval
+
+# Only run data deletion stage with VikingBot
+python run.py --config config/bot/locomo_bot_config.yaml --step del
 ```
+
+#### Resume from Checkpoint
+
+The framework supports resuming from checkpoint in both generation stage (`--step gen`) and evaluation stage (`--step eval`), which works for both bot and non-bot modes:
+
+```bash
+# Resume from where you left off
+python run.py --config config/locomo_config.yaml --step gen --resume
+
+# Resume also works with VikingBot
+python run.py --config config/bot/locomo_bot_config.yaml --step gen --resume
+```
+
+>&gt; **Note**: The resume feature works in both `--step gen` and `--step eval` stages. The framework automatically saves progress to the `benchmark_checkpoint.json` file in the `output_dir` directory.
+&gt; 
+&gt; **How Checkpoint Works**:
+&gt; - The framework computes a hash of the current configuration and saves it to the checkpoint
+&gt; - When using `--resume`, it compares the current config hash with the one saved in the checkpoint
+&gt; - If the configs don't match, the checkpoint won't be loaded to prevent overwriting incorrect experimental results
+&gt; - Any configuration change (including `use_vikingbot`, `retrieval_topk`, `llm.model`, etc.) will cause the config hash to change
 
 ### Supported Datasets
 
@@ -271,7 +312,6 @@ RAG uses YAML configuration files to control the evaluation process. Each datase
    - `ingest_workers`: Number of worker threads for document ingestion
    - `retrieval_topk`: Number of documents to retrieve
    - `max_queries`: Limit the number of queries to process (null = all)
-   - `skip_ingestion`: Skip document ingestion (use existing index)
    - `ingest_mode`: Document ingestion mode ("directory" or "per\_file")
    - `retrieval_instruction`: Custom instruction for retrieval (empty by default)
 4. **Path Configuration**:
@@ -326,7 +366,7 @@ Output/
         ├── generated_answers.json       # Generated answers from LLM
         ├── qa_eval_detailed_results.json # Detailed evaluation results
         ├── benchmark_metrics_report.json # Aggregated metrics report
-        ├── docs/                         # Processed documents (if skip_ingestion=false)
+        ├── docs/                         # Processed documents
         └── benchmark.log                 # Log file
 ```
 
@@ -465,7 +505,7 @@ Example (single result):
 
 **5.** **`docs/`** **- Processed Documents**
 
-- **What it contains**: Processed documents in Markdown format (if `skip_ingestion=false`)
+- **What it contains**: Processed documents in Markdown format
 - **How to view**: Open `.md` files directly in any Markdown viewer or text editor
 
 ### Benchmark Results Reference
@@ -493,6 +533,44 @@ Below are the benchmark results (top-5 retrieval) for reference:
 
 All datasets used the same LLM and execution configuration, with dataset-specific adapters and paths configured in their respective YAML files.
 
+#### VikingBot Small Test Results
+
+Below are the results of a small 10-QA test using VikingBot on the Qasper dataset, for reference:
+
+> **Test Data Source**: The first 10 QA pairs sampled from the Qasper dataset using the project's one-click sampling script (`tools/sample_datasets.py`).
+
+| Metric              | Value  |
+| ------------------- | ------ |
+| **Dataset**         | Qasper |
+| **Queries Evaluated** | 10    |
+| **Average F1 Score** | 0.191 |
+| **Average Accuracy (0-4)** | 3.4 |
+| **Normalized Accuracy** | 0.85 |
+
+> **Note**: Average Recall is not recorded in VikingBot mode.
+
+**Test Configuration Details:**
+
+- **LLM Model:** `doubao-seed-2-0-pro-260215`
+- **API Base URL:** `https://ark.cn-beijing.volces.com/api/v3`
+- **Temperature:** 0 (deterministic)
+- **Retrieval Top-K:** 5 (Note: Not effective when using VikingBot)
+- **Max Workers:** 8 (Note: In bot mode, this parameter only controls parallelism in eval stage, gen stage is serial)
+- **Ingest Workers:** 8
+- **Ingest Mode:** directory
+- **Retrieval Instruction:** (empty)
+- **Use VikingBot:** Yes
+- **VikingBot Max Iterations:** 50
+- **Evaluation Metrics:** F1 Score, Accuracy (0-4 scale)
+
+**Query Efficiency Metrics:**
+
+- **Average Retrieval Time:** 87.5 seconds/query
+- **Average Input Tokens:** 36,796/query
+- **Average Output Tokens:** 1,652/query
+
+> **Note**: This test result is for demonstration purposes only. Actual performance may vary depending on configuration and hardware environment. VikingBot uses its own search mechanism, so the `retrieval_topk` configuration is not effective in this test.
+
 ### Reproducing the Experiment
 
 To reproduce the benchmark results, follow these steps:
@@ -501,7 +579,7 @@ To reproduce the benchmark results, follow these steps:
 cd OpenViking/benchmark/RAG
 
 # 1. Install dependencies (if not already installed)
-uv pip install -e ".[benchmark]"
+uv pip install -e ".[benchmark,bot]"
 source .venv/bin/activate
 
 # 2. Download all datasets
@@ -551,6 +629,51 @@ retrieval_instruction: "Target_modality: text.\nInstruction:Locate the part of t
 - `Query:` - Mark the start of the actual query
 
 When `retrieval_instruction` is empty, the system will use the raw question for retrieval.
+
+#### VikingBot Prompt Configuration
+
+> **Important Note**: When using VikingBot, the `retrieval_topk` configuration is not effective, as VikingBot has its own search mechanism.
+
+You can customize the prompt used by VikingBot in the bot configuration files (`config/bot/*.yaml`). There are two ways to customize the prompt:
+
+**Option 1: Fully Custom Prompt**
+
+Use a completely custom prompt with the `{question}` placeholder:
+
+```yaml
+# ===========VikingBot Configuration============
+vikingbot:
+  max_iterations: 50
+  
+  # Custom prompt with placeholder
+  prompt: |
+    Answer this question as concisely as possible using only the information in the database.
+    Do not use any external knowledge or web search.
+    
+    Question: {question}
+```
+
+**Option 2: Custom Base Instruction**
+
+Only customize the base instruction while keeping the default structure:
+
+```yaml
+# ===========VikingBot Configuration============
+vikingbot:
+  max_iterations: 50
+  
+  # Custom base instruction
+  base_instruction: "Answer this question briefly. Use only database information."
+```
+
+**Default Prompt (if not customized):**
+
+```
+You are given a question and you need to answer it.
+Please use the tools provided to search for relevant information before answering.
+
+Question: {question}
+```
 
 #### Customizing Prompts
 
@@ -644,11 +767,8 @@ This project integrates with OpenViking through:
 
 ### Frequently Asked Questions (FAQ)
 
-**Q: How do I skip the data ingestion stage if I already have a vector index?**
-A: Set `skip_ingestion: true` in the configuration file. This will use the existing vector index.
-
 **Q: Can I run only the evaluation stage without re-ingesting documents?**
-A: Yes! First run `--step gen` to generate answers, then run `--step eval` to evaluate the generated answers.
+A: Yes! First run `--step ingest` to ingest documents, then `--step gen` to generate answers, and finally `--step eval` to evaluate the generated answers.
 
 **Q: What should I do if I get an API key error?**
 A: Make sure you have set a valid API key in the `llm.api_key` field of your configuration file. Keep your API key secure and do not commit it to version control.
