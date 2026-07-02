@@ -179,7 +179,34 @@ class SubagentManager:
                     final_result = response.content
                     break
 
-            if final_result is None:
+            if final_result is None and iteration >= max_iterations:
+                # Hit the iteration limit while the model was still calling tools.
+                # Mirror the main agent loop (#2810): ask for a tool-free final
+                # answer so the work gathered across the iterations is summarized
+                # instead of discarded as a content-free placeholder.
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Tool-use iteration limit reached. Do not call any more "
+                            "tools. Answer the original task directly using only the "
+                            "conversation and tool results already gathered above. If "
+                            "the information is incomplete, give the best-known answer "
+                            "and clearly note what remains uncertain."
+                        ),
+                    }
+                )
+                final_response = await self.provider.chat(
+                    messages=messages,
+                    tools=[],
+                    model=self.model,
+                    temperature=self.temperature,
+                )
+                final_result = final_response.content
+
+            if final_result is None or (
+                isinstance(final_result, str) and not final_result.strip()
+            ):
                 final_result = "Task completed but no final response was generated."
 
             logger.info(f"Subagent [{task_id}] completed successfully")
