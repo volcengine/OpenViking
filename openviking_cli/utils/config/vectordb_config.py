@@ -126,6 +126,40 @@ class OpenGaussConfig(BaseModel):
         return self
 
 
+class PgVectorConfig(BaseModel):
+    """Configuration for PostgreSQL + pgvector native vector backend."""
+
+    host: Optional[str] = Field(
+        default="127.0.0.1",
+        description="PostgreSQL host address.",
+    )
+    port: int = Field(default=5432, description="PostgreSQL port")
+    user: str = Field(default="postgres", description="Database user")
+    password: str = Field(default="", description="Database password")
+    db_name: str = Field(default="postgres", description="Database name")
+    schema_name: str = Field(
+        default="public",
+        alias="schema",
+        description="Database schema for OpenViking tables",
+    )
+    connect_timeout: int = Field(default=10, description="Database connection timeout in seconds")
+    dense_vector_name: str = Field(default="vector", description="Dense vector column name")
+    sparse_vector_name: str = Field(
+        default="sparse_vector", description="Sparse vector JSON column name"
+    )
+
+    model_config = {"extra": "forbid", "populate_by_name": True}
+
+    @model_validator(mode="after")
+    def validate_pgvector(self):
+        self.schema_name = (self.schema_name or "public").strip()
+        if not self.schema_name:
+            raise ValueError("pgvector schema must not be empty")
+        self.dense_vector_name = (self.dense_vector_name or "vector").strip()
+        self.sparse_vector_name = (self.sparse_vector_name or "sparse_vector").strip()
+        return self
+
+
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
@@ -203,6 +237,11 @@ class VectorDBBackendConfig(BaseModel):
         description="openGauss configuration for 'opengauss' type",
     )
 
+    pgvector: Optional[PgVectorConfig] = Field(
+        default_factory=PgVectorConfig,
+        description="PostgreSQL + pgvector configuration for 'pgvector' type",
+    )
+
     custom_params: Dict[str, Any] = Field(
         default_factory=dict,
         description="Custom parameters for custom backend adapters",
@@ -213,7 +252,15 @@ class VectorDBBackendConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        standard_backends = ["local", "http", "volcengine", "vikingdb", "qdrant", "opengauss"]
+        standard_backends = [
+            "local",
+            "http",
+            "volcengine",
+            "vikingdb",
+            "qdrant",
+            "opengauss",
+            "pgvector",
+        ]
 
         # Allow custom backend classes (containing dot) without standard validation
         if "." in self.backend:
