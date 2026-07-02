@@ -1,7 +1,7 @@
 import { dirname } from "path"
 import { fileURLToPath } from "url"
 import { initializeRuntime } from "./lib/runtime.mjs"
-import { createRepoContext } from "./lib/repo-context.mjs"
+import { applyRepoSystemPrompt, createRepoContext } from "./lib/repo-context.mjs"
 import { createMemorySessionManager } from "./lib/memory-session.mjs"
 import { createCodeTools } from "./lib/code-tools.mjs"
 import { createMemoryTools } from "./lib/memory-tools.mjs"
@@ -51,8 +51,7 @@ export async function OpenVikingPlugin({ client, directory }) {
     tool: { ...tools, ...codeTools },
 
     "experimental.chat.system.transform": (_input, output) => {
-      const prompt = repoContext.getRepoSystemPrompt()
-      if (prompt) output.system.push(prompt)
+      applyRepoSystemPrompt(output, repoContext.getRepoSystemPrompt())
     },
 
     "chat.message": async (input, output) => {
