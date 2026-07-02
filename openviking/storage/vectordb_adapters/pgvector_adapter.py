@@ -111,6 +111,34 @@ class PgVectorCollection(OpenGaussCollection):
             self._execute(statement)
         self._save_collection_meta(meta_data)
 
+    def _upsert_row(self, columns: List[str], values: List[Any]) -> None:
+        """Single-row upsert via native ``INSERT ... ON CONFLICT (id) DO UPDATE``.
+
+        Replaces the inherited openGauss UPDATE-then-INSERT + 23505 retry with the
+        portable pgvector idiom: one atomic round trip. The dense-vector column is
+        cast with ``%s::vector`` in VALUES, and ``EXCLUDED`` carries that typed
+        value into the SET list. Identifiers are quoted with the shared
+        ``_quote_ident`` (codebase idiom); the ``ON CONFLICT``/``EXCLUDED`` shape
+        follows langchain-postgres / mem0 (see design.md provenance).
+        """
+        insert_cols = ", ".join(_quote_ident(column) for column in columns)
+        placeholders = ", ".join(
+            "%s::vector" if column == self._dense_vector_name else "%s" for column in columns
+        )
+        update_columns = [column for column in columns if column != "id"]
+        if update_columns:
+            set_clause = ", ".join(
+                f"{_quote_ident(column)} = EXCLUDED.{_quote_ident(column)}"
+                for column in update_columns
+            )
+            conflict = f"ON CONFLICT (id) DO UPDATE SET {set_clause}"
+        else:
+            conflict = "ON CONFLICT (id) DO NOTHING"
+        self._execute(
+            f"INSERT INTO {self._table_ref()} ({insert_cols}) VALUES ({placeholders}) {conflict}",
+            values,
+        )
+
 
 class PgVectorCollectionAdapter(CollectionAdapter):
     """CollectionAdapter for PostgreSQL with the pgvector extension."""

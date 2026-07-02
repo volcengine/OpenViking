@@ -183,6 +183,43 @@ def test_vector_search_binds_vector_before_filter_params():
     assert captured["params"] == ["[0.1,0.2]", "%\n/a\n%", "[0.1,0.2]", 10, 0]
 
 
+@pytest.mark.parametrize(
+    ("columns", "values", "expect_update"),
+    [
+        (["id", "content", "vector"], ["doc-1", "hi", "[0.1,0.2]"], True),
+        (["id"], ["doc-1"], False),
+    ],
+    ids=["multi-col-do-update", "id-only-do-nothing"],
+)
+def test_upsert_uses_on_conflict(columns, values, expect_update):
+    collection = object.__new__(PgVectorCollection)
+    collection._schema_name = "public"
+    collection._table_name = "ov_test"
+    collection._dense_vector_name = "vector"
+    captured = {}
+    collection._table_ref = lambda: '"public"."ov_test"'
+
+    def execute(sql, params=None, *, fetch=False):
+        captured["sql"] = sql
+        captured["params"] = params
+        return []
+
+    collection._execute = execute
+    collection._upsert_row(columns, values)
+
+    sql = captured["sql"]
+    assert "INSERT INTO" in sql
+    assert captured["params"] == values
+    if expect_update:
+        assert "ON CONFLICT (id) DO UPDATE SET" in sql
+        assert '"content" = EXCLUDED."content"' in sql
+        assert '"vector" = EXCLUDED."vector"' in sql
+        assert "%s::vector" in sql  # dense vector cast in VALUES
+        assert 'EXCLUDED."id"' not in sql  # id is the conflict key, never updated
+    else:
+        assert "ON CONFLICT (id) DO NOTHING" in sql
+
+
 def test_factory_creates_pgvector_adapter_without_connecting():
     adapter = create_collection_adapter(_build_config())
 
