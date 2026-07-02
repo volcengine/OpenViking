@@ -28,11 +28,40 @@ from typing import Any, Dict
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
 from openviking.storage.vectordb_adapters.opengauss_adapter import (
+    OpenGaussCollection,
     _normalize_distance,
     _safe_identifier,
 )
 
 _DEFAULT_SCHEMA = "public"
+
+# pgvector keeps its collection/index metadata in its own sidecar tables so a
+# pgvector deployment never collides with an openGauss one in the same schema.
+_COLLECTION_META_TABLE = "__openviking_pgvector_collections"
+_INDEX_META_TABLE = "__openviking_pgvector_indexes"
+
+# openGauss meta-table constants that the inherited collection SQL bakes into its
+# statements; PgVectorCollection remaps them to the pgvector names above.
+_OPENGAUSS_META_REMAP = {
+    "__openviking_opengauss_collections": _COLLECTION_META_TABLE,
+    "__openviking_opengauss_indexes": _INDEX_META_TABLE,
+}
+
+
+class PgVectorCollection(OpenGaussCollection):
+    """SQL collection for PostgreSQL + pgvector.
+
+    Re-targets :class:`OpenGaussCollection` (openGauss ships a pgvector fork, so
+    the generated SQL is already pgvector-shaped). It inherits the read paths,
+    filter compilation, and identifier/vector helpers verbatim, overriding only
+    the parts where stock PostgreSQL diverges: its own metadata-table names (via
+    ``_meta_table_ref``), native ``ON CONFLICT`` upsert, ``CREATE EXTENSION``
+    ordering, and the per-query iterative-scan GUC bundle. Those overrides land
+    in their respective build-loop slices (B3.3/B3.6/B3.8).
+    """
+
+    def _meta_table_ref(self, table_name: str) -> str:
+        return super()._meta_table_ref(_OPENGAUSS_META_REMAP.get(table_name, table_name))
 
 
 class PgVectorCollectionAdapter(CollectionAdapter):

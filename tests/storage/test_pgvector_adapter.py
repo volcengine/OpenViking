@@ -6,8 +6,14 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from openviking.storage.vectordb.collection.collection import ICollection
 from openviking.storage.vectordb_adapters.factory import create_collection_adapter
+from openviking.storage.vectordb_adapters.opengauss_adapter import (
+    _safe_identifier,
+    _vector_literal,
+)
 from openviking.storage.vectordb_adapters.pgvector_adapter import (
+    PgVectorCollection,
     PgVectorCollectionAdapter,
 )
 from openviking_cli.utils.config.vectordb_config import (
@@ -48,6 +54,17 @@ def test_pgvector_backend_config_validation():
     assert config.pgvector.port == 5432
     assert config.pgvector.db_name == "postgres"
     assert config.pgvector.schema_name == "public"
+
+
+def test_vector_literal_and_identifier_safety():
+    assert _vector_literal([1, 2.5, float("nan")]) == "[1,2.5,0]"
+
+    name = _safe_identifier("Project/With Space", "Context.Table", prefix="ov")
+    assert name.startswith("ov_project_with_space_context_table")
+    assert len(name.encode("utf-8")) <= 63
+
+    # PgVectorCollection re-targets OpenGaussCollection and is-a ICollection.
+    assert issubclass(PgVectorCollection, ICollection)
 
 
 def test_factory_creates_pgvector_adapter_without_connecting():
