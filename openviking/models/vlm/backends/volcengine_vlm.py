@@ -154,6 +154,7 @@ class VolcEngineVLM(OpenAIVLM):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously via Chat Completions API."""
         effective_thinking = self.thinking if thinking is None else thinking
@@ -170,6 +171,8 @@ class VolcEngineVLM(OpenAIVLM):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        if response_format:
+            kwargs["response_format"] = response_format
 
         # 用 tracer.info 打印请求
         tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
