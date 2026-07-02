@@ -349,6 +349,39 @@ pub async fn commit_session(
     Ok(())
 }
 
+/// Update (merge) free-form session metadata.
+///
+/// ``key_values`` is a list of ``key=value`` pairs. Pass ``replace=true`` to
+/// overwrite the dict entirely instead of merging.
+pub async fn set_session_metadata(
+    client: &HttpClient,
+    session_id: &str,
+    key_values: &[(String, String)],
+    replace: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    if key_values.is_empty() {
+        return Err(Error::Client(
+            "set-metadata requires at least one --key/--value pair".to_string(),
+        ));
+    }
+    let mut metadata = serde_json::Map::new();
+    for (key, value) in key_values {
+        metadata.insert(key.clone(), Value::String(value.clone()));
+    }
+    let path = format!("/api/v1/sessions/{}/metadata", url_encode(session_id));
+    let body = json!({"metadata": Value::Object(metadata)});
+    let params: Vec<(String, String)> = if replace {
+        vec![("replace".to_string(), "true".to_string())]
+    } else {
+        Vec::new()
+    };
+    let response: serde_json::Value = client.patch(&path, &body, &params).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}
+
 /// Add memory in one shot: creates a session, adds messages, and commits.
 ///
 /// Input can be:

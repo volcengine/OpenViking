@@ -232,6 +232,7 @@ class SessionCompressorV2:
         allowed_memory_types: Optional[set[str]] = None,
         allow_self_memory: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
+        session_metadata: Optional[Dict[str, Any]] = None,
     ) -> List[Context]:
         """Extract long-term memories from messages using v2 templating system.
 
@@ -307,6 +308,7 @@ class SessionCompressorV2:
                 ctx=ctx,
                 viking_fs=viking_fs,
                 transaction_handle=transaction_handle,
+                session_metadata=session_metadata,
             )
             await context_provider.prepare_extraction_messages()
             extract_context = context_provider.get_extract_context()

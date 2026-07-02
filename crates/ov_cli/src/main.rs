@@ -1241,6 +1241,21 @@ enum SessionCommands {
         #[arg(value_name = "session-id")]
         session_id: String,
     },
+    /// Merge free-form session metadata (or replace it)
+    SetMetadata {
+        /// Session ID
+        #[arg(value_name = "session-id")]
+        session_id: String,
+        /// Metadata key (repeatable, paired positionally with --value)
+        #[arg(long = "key", value_name = "key", num_args = 1..)]
+        keys: Vec<String>,
+        /// Metadata value (repeatable, paired positionally with --key)
+        #[arg(long = "value", value_name = "value", num_args = 1..)]
+        values: Vec<String>,
+        /// Replace existing metadata entirely instead of merging
+        #[arg(long)]
+        replace: bool,
+    },
 }
 
 #[derive(Subcommand)]
