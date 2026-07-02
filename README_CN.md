@@ -21,7 +21,7 @@
 
 👋 加入我们的社区
 
-📱 <a href="./docs/zh/about/01-about-us.md#lark-group">飞书群</a> · <a href="./docs/zh/about/01-about-us.md#wechat-group">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+📱 <a href="./docs/zh/about/01-about-us.md#飞书群">飞书群</a> · <a href="./docs/zh/about/01-about-us.md#微信群">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
 
 </div>
 
@@ -838,8 +838,8 @@ OpenViking 仍处于早期阶段，有许多改进和探索的空间。我们真
 - 为我们点亮一颗珍贵的 **Star**，给我们前进的动力。
 - 访问我们的[**官网**](https://www.openviking.ai)了解我们传达的理念，并通过[**文档**](https://www.openviking.ai/docs)在您的项目中使用它。感受它带来的变化，并给我们最真实的体验反馈。
 - 加入我们的社区，分享您的见解，帮助回答他人的问题，共同创造开放互助的技术氛围：
-  - 📱 **飞书群**：扫码加入 → [查看二维码](./docs/zh/about/01-about-us.md#lark-group)
-  - 💬 **微信群**：扫码添加助手 → [查看二维码](./docs/zh/about/01-about-us.md#wechat-group)
+  - 📱 **飞书群**：扫码加入 → [查看二维码](./docs/zh/about/01-about-us.md#飞书群)
+  - 💬 **微信群**：扫码添加助手 → [查看二维码](./docs/zh/about/01-about-us.md#微信群)
   - 🎮 **Discord**：[加入 Discord 服务器](https://discord.com/invite/eHvx8E9XF3)
   - 🐦 **X (Twitter)**：[关注我们](https://x.com/openvikingai)
 - 成为**贡献者**，无论是提交错误修复还是贡献新功能，您的每一行代码都将是 OpenViking 成长的重要基石。
