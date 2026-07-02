@@ -3881,6 +3881,7 @@ dependencies = [
  "dashmap",
  "flate2",
  "futures",
+ "globset",
  "gix-actor",
  "gix-date",
  "gix-features",

@@ -22,8 +22,8 @@ use super::context::{FsContext, FS_CTX};
 use super::errors::{Error, Result};
 use super::filesystem::{normalize_prefix_path, relative_match_file, FileSystem};
 use super::types::{
-    BackendRole, BackendSyncState, FileInfo, GrepResult, OperationItemConfig, RedirectEntry,
-    RedirectPolicy, SyncLogEntry, SyncOp, SyncType, TreeEntry, WriteFlag,
+    BackendRole, BackendSyncState, FileInfo, GrepResult, OperationItemConfig,
+    RedirectEntry, RedirectPolicy, SyncLogEntry, SyncOp, SyncType, TreeEntry, WriteFlag,
 };
 use crate::multibackend::meta::{
     current_required_ctx, file_name, parent_dir, DefaultFsContextResolver, FsContextResolver,

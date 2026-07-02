@@ -135,6 +135,52 @@ where
     Ok(result)
 }
 
+/// Build one ordered page of `TreeEntry` values from a single S3 listing page.
+///
+/// Compared with `build_tree_entries_from_flat_listing`, this variant drops the
+/// leading ancestor entries that were already emitted by a previous listing
+/// page, so callers can stitch paginated S3 scans into one stable DFS stream.
+pub(super) fn build_tree_entries_from_listing_page<F>(
+    query_root: &str,
+    objects: &[client::ObjectMeta],
+    show_hidden: bool,
+    level_limit: Option<usize>,
+    prev_rel_parts: &[String],
+    key_to_path: F,
+) -> Result<Vec<TreeEntry>>
+where
+    F: Fn(&str) -> String,
+{
+    let mut entries =
+        build_tree_entries_from_flat_listing(query_root, objects, show_hidden, level_limit, key_to_path)?;
+    if prev_rel_parts.is_empty() || entries.is_empty() {
+        return Ok(entries);
+    }
+
+    let mut skip = 0usize;
+    while skip < entries.len() {
+        let parts = rel_parts(&entries[skip].rel_path);
+        if parts.len() <= prev_rel_parts.len() && prev_rel_parts[..parts.len()] == parts[..] {
+            skip += 1;
+            continue;
+        }
+        break;
+    }
+
+    if skip > 0 {
+        entries.drain(..skip);
+    }
+    Ok(entries)
+}
+
+pub(super) fn rel_parts(rel_path: &str) -> Vec<String> {
+    rel_path
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .map(ToString::to_string)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +367,58 @@ mod tests {
         // Only the single file under the query root should appear; no ancestors
         // (`/tenant_x`, `/tenant_x/resources`) and not the query root itself.
         assert_eq!(paths, vec!["/tenant_x/resources/res_1/res_1.md"]);
+    }
+
+    #[test]
+    fn test_build_tree_entries_page_drops_cross_page_duplicate_ancestors() {
+        let first_page = vec![make_meta("a/b/first.txt", 100, false)];
+        let first = build_tree_entries_from_listing_page(
+            "/",
+            &first_page,
+            false,
+            None,
+            &[],
+            identity_key_to_path,
+        )
+        .unwrap();
+        let last_rel_parts = first
+            .last()
+            .unwrap()
+            .rel_path
+            .split('/')
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        let second_page = vec![make_meta("a/b/second.txt", 100, false)];
+        let second = build_tree_entries_from_listing_page(
+            "/",
+            &second_page,
+            false,
+            None,
+            &last_rel_parts,
+            identity_key_to_path,
+        )
+        .unwrap();
+
+        let paths: Vec<&str> = second.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["/a/b/second.txt"]);
+    }
+
+    #[test]
+    fn test_build_tree_entries_page_keeps_diverging_suffix_after_common_prefix() {
+        let prev_rel_parts = vec!["a".to_string(), "b".to_string(), "first.txt".to_string()];
+        let page = vec![make_meta("a/c/second.txt", 100, false)];
+        let result = build_tree_entries_from_listing_page(
+            "/",
+            &page,
+            false,
+            None,
+            &prev_rel_parts,
+            identity_key_to_path,
+        )
+        .unwrap();
+
+        let paths: Vec<&str> = result.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["/a/c", "/a/c/second.txt"]);
     }
 }

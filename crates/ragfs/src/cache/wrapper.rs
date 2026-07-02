@@ -9,7 +9,8 @@ use crate::core::filesystem::{
     relative_match_file,
 };
 use crate::core::{
-    FileInfo, FileSystem, GrepMatch, GrepResult, MultiWriteWrappedFS, Result, TreeEntry, WriteFlag,
+    FileInfo, FileSystem, GlobPage, GrepMatch, GrepResult, MultiWriteWrappedFS, Result,
+    TreeEntry, WriteFlag,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -1231,6 +1232,27 @@ impl FileSystem for CachedFileSystem {
 
         self.backend
             .tree_directory(path, show_hidden, node_limit, level_limit)
+            .await
+    }
+
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        self.backend
+            .glob_directory(
+                path,
+                pattern,
+                show_hidden,
+                page_size,
+                level_limit,
+                continuation_token,
+            )
             .await
     }
 }
