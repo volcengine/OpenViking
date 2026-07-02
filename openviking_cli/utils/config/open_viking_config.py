@@ -102,6 +102,21 @@ class ParserApiConfig(BaseModel):
         return self
 
 
+class PipelineConfig(BaseModel):
+    """Controls for upload-to-processing pipeline behavior."""
+
+    auto_trigger_seconds: float = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Delay resource processing after upload. 0 preserves the legacy "
+            "immediate pipeline; values > 0 stage uploads and trigger later."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class OpenVikingConfig(BaseModel):
     """Main configuration for OpenViking."""
 
@@ -200,6 +215,11 @@ class OpenVikingConfig(BaseModel):
     parser_api: ParserApiConfig = Field(
         default_factory=ParserApiConfig,
         description="Third-party parser API configuration (files/responses)",
+    )
+
+    pipeline: PipelineConfig = Field(
+        default_factory=PipelineConfig,
+        description="Resource ingestion pipeline controls",
     )
 
     auto_generate_l0: bool = Field(

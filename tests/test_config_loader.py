@@ -236,6 +236,21 @@ def test_openviking_config_retrieval_hotness_alpha_defaults_to_zero(monkeypatch)
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_openviking_config_preserves_pipeline_auto_trigger_seconds(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict({"pipeline": {"auto_trigger_seconds": 30}})
+
+    assert config.pipeline.auto_trigger_seconds == 30
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 def test_openviking_config_transaction_redo_recovery_enabled_can_be_disabled(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
