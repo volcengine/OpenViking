@@ -156,6 +156,33 @@ def test_vector_index_creation_supports_hnsw(distance, opclass):
     assert "ef_construction = 128" in sql
 
 
+def test_vector_search_binds_vector_before_filter_params():
+    collection = object.__new__(PgVectorCollection)
+    collection._dense_vector_name = "vector"
+    collection._distance_metric = "cosine"
+    collection._select_columns = lambda output_fields, include_sparse=False: ["id"]
+    collection._where_sql = lambda filters: (' WHERE "scope_roots" LIKE %s', ["%\n/a\n%"])
+    collection._table_ref = lambda: '"public"."ov_test"'
+    captured = {}
+
+    def execute(sql, params=None, *, fetch=False):
+        captured["sql"] = sql
+        captured["params"] = params
+        captured["fetch"] = fetch
+        return []
+
+    collection._execute = execute
+
+    collection.search_by_vector(
+        "default",
+        dense_vector=[0.1, 0.2],
+        filters={"op": "must", "field": "scope_roots", "conds": ["/a"]},
+    )
+
+    assert captured["fetch"] is True
+    assert captured["params"] == ["[0.1,0.2]", "%\n/a\n%", "[0.1,0.2]", 10, 0]
+
+
 def test_factory_creates_pgvector_adapter_without_connecting():
     adapter = create_collection_adapter(_build_config())
 
