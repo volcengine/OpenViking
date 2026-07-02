@@ -26,12 +26,15 @@ import threading
 from typing import Any, Dict, List
 
 from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb.collection.result import SearchItemResult, SearchResult
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
 from openviking.storage.vectordb_adapters.opengauss_adapter import (
+    _VECTOR_OPS,
     OpenGaussCollection,
     _normalize_distance,
     _quote_ident,
     _safe_identifier,
+    _vector_literal,
 )
 
 _DEFAULT_SCHEMA = "public"
@@ -138,6 +141,86 @@ class PgVectorCollection(OpenGaussCollection):
             f"INSERT INTO {self._table_ref()} ({insert_cols}) VALUES ({placeholders}) {conflict}",
             values,
         )
+
+    def _supports_iterative_scan(self) -> bool:
+        """Whether the connected server has pgvector >= 0.8 (iterative scan).
+
+        Wired by the version gate on connect (B4.2). Defaults to ``False`` so a
+        pre-0.8 server falls back to the inherited plain scan rather than issuing
+        GUCs it cannot parse (which would abort the transaction).
+        """
+        return bool(getattr(self, "_iterative_scan_supported", False))
+
+    def _iterative_scan_guc_prefix(self) -> str:
+        """The ``SET LOCAL`` bundle that keeps HNSW recall under a selective
+        filter (metabase's tested shape). Values are inlined integers (clamped),
+        never user input, so they compose safely ahead of the parameterized
+        SELECT in one transaction.[^metabase]
+
+        [^metabase]: metabase/metabase
+        enterprise/backend/src/metabase_enterprise/semantic_search/index.clj
+        (iterative_scan/ef_search[clamp 1..1000]/max_scan_tuples + enable_seqscan);
+        Tencent/WeKnora gates it on version ("ignore failure on older pgvector").
+        """
+        ef_search = max(1, min(int(getattr(self, "_ef_search", 100)), 1000))
+        max_scan_tuples = int(getattr(self, "_max_scan_tuples", 20000))
+        return (
+            "SET LOCAL hnsw.iterative_scan = strict_order; "
+            f"SET LOCAL hnsw.ef_search = {ef_search}; "
+            f"SET LOCAL hnsw.max_scan_tuples = {max_scan_tuples}; "
+            "SET LOCAL enable_seqscan = off; "
+        )
+
+    def search_by_vector(
+        self,
+        index_name: str,
+        dense_vector: list[float] | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        filters: dict[str, Any] | None = None,
+        sparse_vector: dict[str, float] | None = None,
+        output_fields: list[str] | None = None,
+    ) -> SearchResult:
+        """Dense ANN search that issues the iterative-scan GUC bundle when a
+        scalar filter is present (and the server supports it). Plain HNSW
+        post-filters at most ``ef_search`` candidates, so a selective filter can
+        silently return fewer than ``LIMIT`` rows; the bundle makes the scan keep
+        pulling candidates until ``LIMIT`` is satisfied. Everything else (no
+        filter, sparse/hybrid, unsupported server) delegates to the inherited
+        implementation unchanged — the param order stays ``[vec, …where…, vec,
+        limit, offset]`` (pinned by ``test_vector_search_binds_..._filter_params``).
+        """
+        if (
+            dense_vector is None
+            or sparse_vector
+            or not filters
+            or not self._supports_iterative_scan()
+        ):
+            return super().search_by_vector(
+                index_name, dense_vector, limit, offset, filters, sparse_vector, output_fields
+            )
+        if limit <= 0:
+            return SearchResult()
+        fetch_limit = max(limit + offset, limit)
+        columns = self._select_columns(output_fields, include_sparse=False)
+        where_sql, params = self._where_sql(filters)
+        operator = _VECTOR_OPS[self._distance_metric]["operator"]
+        vector_text = _vector_literal(dense_vector)
+        sql = self._iterative_scan_guc_prefix() + (
+            f"SELECT {', '.join(_quote_ident(col) for col in columns)}, "
+            f"{_quote_ident(self._dense_vector_name)} {operator} %s::vector AS _distance "
+            f"FROM {self._table_ref()}"
+            f"{where_sql} "
+            f"ORDER BY {_quote_ident(self._dense_vector_name)} {operator} %s::vector "
+            "LIMIT %s OFFSET %s"
+        )
+        rows = self._execute(sql, [vector_text, *params, vector_text, fetch_limit, 0], fetch=True)
+        scored_items: list[SearchItemResult] = []
+        for row in rows:
+            record_id, payload = self._row_to_payload(row[:-1], columns)
+            score = self._distance_to_score(row[-1], self._distance_metric)
+            scored_items.append(SearchItemResult(id=record_id, fields=payload, score=score))
+        return SearchResult(data=scored_items[offset : offset + limit])
 
 
 class PgVectorCollectionAdapter(CollectionAdapter):

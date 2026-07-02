@@ -285,6 +285,53 @@ def test_collection_filter_to_sql(payload, expected_fragments, expected_params):
     assert params == expected_params
 
 
+@pytest.mark.parametrize(
+    ("supported", "expect_guc"),
+    [(True, True), (False, False)],
+    ids=["v0.8-iterative-scan", "pre-0.8-fallback"],
+)
+def test_iterative_scan_set_when_filtered(supported, expect_guc):
+    collection = object.__new__(PgVectorCollection)
+    collection._schema_name = "public"
+    collection._table_name = "ov_test"
+    collection._dense_vector_name = "vector"
+    collection._distance_metric = "cosine"
+    collection._iterative_scan_supported = supported
+    collection._select_columns = lambda output_fields, include_sparse=False: ["id"]
+    collection._where_sql = lambda filters: (' WHERE "scope_roots" LIKE %s', ["%\n/a\n%"])
+    collection._table_ref = lambda: '"public"."ov_test"'
+    collection._row_to_payload = lambda row, cols: (row[0], {})
+    captured = {}
+
+    def execute(sql, params=None, *, fetch=False):
+        captured["sql"] = sql
+        captured["params"] = params
+        return [(f"id-{i}", 0.1) for i in range(3)]  # full LIMIT of rows
+
+    collection._execute = execute
+
+    result = collection.search_by_vector(
+        "default",
+        dense_vector=[0.1, 0.2],
+        limit=3,
+        filters={"op": "must", "field": "scope_roots", "conds": ["/a"]},
+    )
+
+    sql = captured["sql"]
+    if expect_guc:
+        assert "SET LOCAL hnsw.iterative_scan = strict_order" in sql
+        assert "SET LOCAL hnsw.ef_search" in sql
+        assert "SET LOCAL hnsw.max_scan_tuples" in sql
+        assert "SET LOCAL enable_seqscan = off" in sql
+    else:
+        assert "SET LOCAL hnsw.iterative_scan" not in sql
+
+    # B3.5 param order preserved regardless of the GUC prefix.
+    assert captured["params"] == ["[0.1,0.2]", "%\n/a\n%", "[0.1,0.2]", 3, 0]
+    # Full LIMIT returned under a selective filter.
+    assert len(result.data) == 3
+
+
 def test_factory_creates_pgvector_adapter_without_connecting():
     adapter = create_collection_adapter(_build_config())
 
