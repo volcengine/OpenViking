@@ -8,7 +8,7 @@ import types
 import pytest
 from pydantic import ValidationError
 
-from openviking.storage.vectordb.collection.collection import ICollection
+from openviking.storage.vectordb.collection.collection import Collection, ICollection
 from openviking.storage.vectordb_adapters import pgvector_adapter as pgvector_module
 from openviking.storage.vectordb_adapters.factory import create_collection_adapter
 from openviking.storage.vectordb_adapters.opengauss_adapter import (
@@ -553,6 +553,93 @@ def test_create_extension_failure_is_actionable(
         adapter._ensure_extension()
 
     assert any(c.create_attempted for c in conn.cursors) is expect_attempt
+
+
+class _RecordingCursor:
+    def __init__(self, log):
+        self._log = log
+        self._last = None
+
+    def execute(self, sql, params=None):
+        self._log.append(sql)
+        self._last = sql
+
+    def fetchone(self):
+        if self._last and "extversion" in self._last:
+            return ("0.8.2",)
+        if self._last and "pg_extension" in self._last:
+            return (1,)
+        return None  # information_schema table-exists -> absent
+
+    def fetchall(self):
+        return []
+
+    def close(self):
+        pass
+
+
+class _RecordingConn:
+    closed = 0
+
+    def __init__(self, log):
+        self._log = log
+
+    def cursor(self):
+        return _RecordingCursor(self._log)
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+
+def _fake_psycopg2(log):
+    return types.SimpleNamespace(
+        connect=lambda *a, **k: _RecordingConn(log),
+        pool=types.SimpleNamespace(ThreadedConnectionPool=lambda *a, **k: None),
+    )
+
+
+def test_create_backend_collection_wires_pgvector_live_flow(monkeypatch):
+    log: list[str] = []
+    monkeypatch.setattr(
+        pgvector_module, "_import_psycopg2", lambda: _fake_psycopg2(log), raising=False
+    )
+    adapter = create_collection_adapter(_build_config())
+    meta = {
+        "CollectionName": "context",
+        "Fields": [
+            {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+            {"FieldName": "vector", "FieldType": "vector", "Dim": 2},
+        ],
+    }
+
+    collection = adapter._create_backend_collection(meta)
+
+    assert isinstance(collection, Collection)
+    joined = " ".join(log)
+    assert "__openviking_pgvector_collections" in joined
+    assert "__openviking_pgvector_indexes" in joined
+    assert "vector(2)" in joined
+    # version gate ran during _ensure_ready (fake extversion 0.8.2)
+    assert adapter._supports_iterative_scan is True
+
+
+def test_new_collection_threads_feature_flags(monkeypatch):
+    log: list[str] = []
+    monkeypatch.setattr(
+        pgvector_module, "_import_psycopg2", lambda: _fake_psycopg2(log), raising=False
+    )
+    adapter = create_collection_adapter(_build_config())
+
+    raw = adapter._new_collection()
+
+    assert isinstance(raw, pgvector_module.PgVectorCollection)
+    assert raw._iterative_scan_supported is True  # extversion 0.8.2 -> >= 0.8
+    assert raw._create_extension is True
+    assert raw._ef_search == 100
+    assert raw._max_scan_tuples == 20000
 
 
 def test_factory_creates_pgvector_adapter_without_connecting():

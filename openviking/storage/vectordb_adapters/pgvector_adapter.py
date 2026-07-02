@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from packaging.version import InvalidVersion, Version
 
@@ -35,6 +35,7 @@ from openviking.storage.vectordb_adapters.opengauss_adapter import (
     _VECTOR_OPS,
     OpenGaussCollection,
     _normalize_distance,
+    _qualify,
     _quote_ident,
     _safe_identifier,
     _vector_literal,
@@ -89,6 +90,13 @@ class PgVectorCollection(OpenGaussCollection):
     in their respective build-loop slices (B3.3/B3.6/B3.8).
     """
 
+    # Knobs threaded from the adapter in ``_new_collection``; the class defaults
+    # keep ``object.__new__`` Tier-C construction (and mypy) happy.
+    _create_extension: bool = True
+    _iterative_scan_supported: bool = False
+    _ef_search: int = 100
+    _max_scan_tuples: int = 20000
+
     def update_data(self, data_list: List[Dict[str, Any]]) -> Any:
         """Update rows by primary key.
 
@@ -124,7 +132,7 @@ class PgVectorCollection(OpenGaussCollection):
                 seen.add(field_name)
 
         statements: list[str] = []
-        if getattr(self, "_create_extension", True):
+        if self._create_extension:
             statements.append("CREATE EXTENSION IF NOT EXISTS vector")
         statements.append(f"CREATE TABLE IF NOT EXISTS {self._table_ref()} ({', '.join(columns)})")
         return statements
@@ -174,7 +182,7 @@ class PgVectorCollection(OpenGaussCollection):
         pre-0.8 server falls back to the inherited plain scan rather than issuing
         GUCs it cannot parse (which would abort the transaction).
         """
-        return bool(getattr(self, "_iterative_scan_supported", False))
+        return self._iterative_scan_supported
 
     def _iterative_scan_guc_prefix(self) -> str:
         """The ``SET LOCAL`` bundle that keeps HNSW recall under a selective
@@ -187,8 +195,8 @@ class PgVectorCollection(OpenGaussCollection):
         (iterative_scan/ef_search[clamp 1..1000]/max_scan_tuples + enable_seqscan);
         Tencent/WeKnora gates it on version ("ignore failure on older pgvector").
         """
-        ef_search = max(1, min(int(getattr(self, "_ef_search", 100)), 1000))
-        max_scan_tuples = int(getattr(self, "_max_scan_tuples", 20000))
+        ef_search = max(1, min(self._ef_search, 1000))
+        max_scan_tuples = self._max_scan_tuples
         return (
             "SET LOCAL hnsw.iterative_scan = strict_order; "
             f"SET LOCAL hnsw.ef_search = {ef_search}; "
@@ -307,6 +315,7 @@ class PgVectorCollectionAdapter(CollectionAdapter):
         self._supports_halfvec = False
         self._supports_sparsevec = False
         self._supports_iterative_scan = False
+        self._ready = False
 
     @classmethod
     def from_config(cls, config: Any) -> "PgVectorCollectionAdapter":
@@ -492,8 +501,96 @@ class PgVectorCollectionAdapter(CollectionAdapter):
         finally:
             cur.close()
 
+    def _ensure_meta_tables(self) -> None:
+        """Create the pgvector-named sidecar metadata tables (openGauss's schema,
+        pgvector names). The collection reads/writes these via ``_meta_table_ref``,
+        which remaps the inherited openGauss constants to these names."""
+        conn = self._conn
+        if conn is None:
+            return
+        cur = conn.cursor()
+        try:
+            cur.execute(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(self._schema_name)}")
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {_qualify(self._schema_name, _COLLECTION_META_TABLE)} (
+                    table_name TEXT PRIMARY KEY,
+                    logical_collection_name TEXT NOT NULL,
+                    project_name TEXT NOT NULL,
+                    meta_json TEXT NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {_qualify(self._schema_name, _INDEX_META_TABLE)} (
+                    table_name TEXT NOT NULL,
+                    index_name TEXT NOT NULL,
+                    meta_json TEXT NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (table_name, index_name)
+                )
+                """
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+
+    def _ensure_ready(self) -> None:
+        """Connect and run the one-time bootstrap (extension → version gate →
+        meta tables). Idempotent: the bootstrap runs once per adapter lifetime,
+        but ``_connect`` still reconnects a dropped connection on every call."""
+        self._connect()
+        if self._ready:
+            return
+        self._ensure_extension()
+        self._detect_version()
+        self._ensure_meta_tables()
+        self._ready = True
+
+    def _new_collection(self, meta: Optional[Dict[str, Any]] = None) -> PgVectorCollection:
+        self._ensure_ready()
+        collection = PgVectorCollection(
+            conn=self._conn,
+            schema_name=self._schema_name,
+            table_name=self.physical_table_name,
+            logical_collection_name=self._collection_name,
+            project_name=self._project_name,
+            dense_vector_name=self._dense_vector_name,
+            sparse_vector_name=self._sparse_vector_name,
+            distance_metric=self._distance_metric,
+            meta=meta,
+            lock=self._lock,
+            reconnect=self._connect,
+        )
+        # Thread the adapter-resolved knobs onto the live collection so the
+        # CREATE EXTENSION (B3.3) and iterative-scan GUC (B3.8) overrides fire.
+        collection._create_extension = self._create_extension
+        collection._iterative_scan_supported = self._supports_iterative_scan
+        collection._ef_search = int(self._index_params.get("ef_search", 100))
+        collection._max_scan_tuples = int(self._index_params.get("max_scan_tuples", 20000))
+        return collection
+
     def _load_existing_collection_if_needed(self) -> None:
-        raise NotImplementedError
+        if self._collection is not None:
+            return
+        raw_collection = self._new_collection()
+        if not raw_collection._table_exists():
+            return
+        meta = raw_collection.get_meta_data()
+        if not meta:
+            raise RuntimeError(
+                "pgvector collection table exists but OpenViking metadata is missing: "
+                f"{self.physical_table_name}. Use a different project/name, restore metadata, "
+                "or drop the stale table."
+            )
+        self._collection = Collection(self._new_collection(meta))
 
     def _create_backend_collection(self, meta: Dict[str, Any]) -> Collection:
-        raise NotImplementedError
+        raw_collection = self._new_collection(meta)
+        raw_collection.create_remote_collection(meta)
+        return Collection(raw_collection)
