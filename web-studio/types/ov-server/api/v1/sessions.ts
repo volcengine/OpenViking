@@ -12,6 +12,7 @@ export type TokenUsage = {
 
 export type SessionListItem = {
   is_dir: boolean
+  mod_time: string
   session_id: string
   uri: string
 }
