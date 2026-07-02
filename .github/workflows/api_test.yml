@@ -39,7 +39,7 @@ jobs:
         os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'release') && fromJSON('["ubuntu-24.04", "macos-14", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 100
