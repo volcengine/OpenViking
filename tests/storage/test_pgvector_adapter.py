@@ -118,6 +118,44 @@ def test_create_extension_emitted_before_vector_ddl(create_extension, expect_ext
         assert all("CREATE EXTENSION" not in s for s in statements)
 
 
+@pytest.mark.parametrize(
+    ("distance", "opclass"),
+    [
+        ("cosine", "vector_cosine_ops"),
+        ("l2", "vector_l2_ops"),
+        ("ip", "vector_ip_ops"),
+    ],
+    ids=["cosine", "l2", "ip"],
+)
+def test_vector_index_creation_supports_hnsw(distance, opclass):
+    collection = object.__new__(PgVectorCollection)
+    collection._schema_name = "public"
+    collection._table_name = "ov_test"
+    collection._dense_vector_name = "vector"
+    statements: list[str] = []
+    collection._all_columns = lambda: ["id", "vector"]
+    collection._execute = lambda sql, params=None, fetch=False: statements.append(sql)
+
+    collection._create_vector_index(
+        "default",
+        distance,
+        {
+            "VectorIndex": {
+                "IndexType": "hnsw",
+                "Distance": distance,
+                "M": 24,
+                "EfConstruction": 128,
+            }
+        },
+    )
+
+    sql = " ".join(statements).lower()
+    assert "using hnsw" in sql
+    assert opclass in sql
+    assert "m = 24" in sql
+    assert "ef_construction = 128" in sql
+
+
 def test_factory_creates_pgvector_adapter_without_connecting():
     adapter = create_collection_adapter(_build_config())
 
