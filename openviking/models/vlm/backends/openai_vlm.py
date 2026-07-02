@@ -52,7 +52,7 @@ def _build_openai_client_kwargs(
     api_base: str,
     api_version: str | None,
     extra_headers: Dict[str, str] | None,
-    timeout: float = 60.0,
+    timeout: float = 600.0,
 ) -> Dict[str, Any]:
     """Build kwargs dict shared by sync and async OpenAI/Azure client constructors."""
     if provider == "azure":
