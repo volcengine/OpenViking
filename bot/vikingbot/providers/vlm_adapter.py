@@ -86,6 +86,7 @@ class VLMProviderAdapter(LLMProvider):
                 try:
                     result = await self._vlm.get_completion_async(
                         messages=messages,
+                        thinking=getattr(self._vlm, "thinking", None),
                         tools=tools,
                         tool_choice="auto" if tools else None,
                     )
@@ -168,6 +169,9 @@ class VLMProviderAdapter(LLMProvider):
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        extra_headers = getattr(self._vlm, "extra_headers", None)
+        if extra_headers:
+            kwargs["extra_headers"] = extra_headers
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"

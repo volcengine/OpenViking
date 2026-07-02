@@ -716,7 +716,7 @@ function extractRuntimeAgentId(runtimeContext: Record<string, unknown> | undefin
 }
 
 function isToolOnlyMessage(msg: ExtractedTurnMessage): boolean {
-  return msg.role === "user" && msg.parts.length > 0 && msg.parts.every((part) => part.type === "tool");
+  return msg.role === "assistant" && msg.parts.length > 0 && msg.parts.every((part) => part.type === "tool");
 }
 
 function coalesceConsecutiveToolMessages(messages: ExtractedTurnMessage[]): ExtractedTurnMessage[] {
@@ -733,7 +733,7 @@ function coalesceConsecutiveToolMessages(messages: ExtractedTurnMessage[]): Extr
   for (const msg of messages) {
     if (isToolOnlyMessage(msg)) {
       if (!pendingTools) {
-        pendingTools = { role: "user", parts: [] };
+        pendingTools = { role: "assistant", parts: [] };
       }
       pendingTools.parts.push(...msg.parts);
       continue;

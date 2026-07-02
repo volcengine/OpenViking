@@ -695,6 +695,7 @@ class AgentLoop:
         openviking_connection: dict[str, Any] | None = None,
         stop_tool_names: list[str] | None = None,
         on_plain_text: Any | None = None,
+        channel_metadata: dict[str, Any] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -716,6 +717,7 @@ class AgentLoop:
                 loop (e.g. forward it to a user simulator) or treat it as the final reply. When
                 None, plain text is treated as the final assistant reply (default chatbot
                 semantics).
+            channel_metadata: Channel-specific metadata for tools that publish outbound messages
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -845,6 +847,7 @@ class AgentLoop:
                         memory_peer_ids=memory_peer_ids,
                         memory_owner_user_ids=memory_owner_user_ids,
                         openviking_connection=openviking_connection,
+                        channel_metadata=channel_metadata,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     return idx, tool_call, result, tool_execute_duration
@@ -1297,6 +1300,7 @@ class AgentLoop:
                     memory_owner_user_ids=memory_owner_user_ids,
                     disabled_tools=disabled_tools,
                     openviking_connection=openviking_connection,
+                    channel_metadata=msg.metadata,
                 )
 
             if auto_memory_tool:
@@ -1568,6 +1572,7 @@ class AgentLoop:
             publish_events=False,
             ov_tools_enable=ov_tools_enable,
             memory_peer_ids=None,
+            channel_metadata=msg.metadata,
         )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):

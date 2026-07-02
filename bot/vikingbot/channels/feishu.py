@@ -14,7 +14,7 @@ import httpx
 from loguru import logger
 
 from vikingbot.config import load_config
-from vikingbot.utils import get_data_path
+from vikingbot.utils import detect_image_format, get_data_path
 
 # Optional HTML processing libraries
 try:
@@ -153,23 +153,85 @@ class FeishuChannel(BaseChannel):
         Upload image to Feishu media library and get image_key.
         """
 
+        if not image_data:
+            raise ValueError("Feishu image upload requires a non-empty image")
+
         token = await self._get_tenant_access_token()
         url = "https://open.feishu.cn/open-apis/im/v1/images"
 
         headers = {"Authorization": f"Bearer {token}"}
-
-        # Use io.BytesIO properly
-        files = {"image": ("image.png", io.BytesIO(image_data), "image/png")}
         data = {"image_type": "message"}
 
+        async def post_image(client: httpx.AsyncClient, upload_data: bytes) -> httpx.Response:
+            image_format = detect_image_format(upload_data)
+            files = {
+                "image": (
+                    f"image.{image_format.extension}",
+                    io.BytesIO(upload_data),
+                    image_format.mime_type,
+                )
+            }
+            return await client.post(url, headers=headers, data=data, files=files)
+
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers=headers, data=data, files=files)
-            # logger.debug(f"Upload response status: {resp.status_code}")
-            resp.raise_for_status()
+            upload_data = image_data
+            resp = await post_image(client, upload_data)
+
+            if resp.status_code == 400:
+                normalized = self._normalize_image_for_feishu(image_data)
+                if normalized != image_data:
+                    logger.warning(
+                        "Retrying Feishu image upload after re-encoding image "
+                        f"({len(image_data)} -> {len(normalized)} bytes)"
+                    )
+                    upload_data = normalized
+                    resp = await post_image(client, upload_data)
+
+            if resp.is_error:
+                raise Exception(
+                    "Failed to upload image to Feishu: "
+                    f"status={resp.status_code}, body={resp.text}, "
+                    f"image_size={len(upload_data)}"
+                )
+
             result = resp.json()
             if result.get("code") != 0:
-                raise Exception(f"Failed to upload image: {result}")
+                raise Exception(
+                    f"Failed to upload image to Feishu: response={result}, "
+                    f"image_size={len(upload_data)}"
+                )
             return result["data"]["image_key"]
+
+    @staticmethod
+    def _normalize_image_for_feishu(image_data: bytes) -> bytes:
+        """Re-encode an image to strip metadata that Feishu may reject."""
+        try:
+            from PIL import Image, ImageOps
+        except ImportError:
+            logger.warning("Pillow is not installed; cannot normalize image for Feishu upload")
+            return image_data
+
+        try:
+            with Image.open(io.BytesIO(image_data)) as source:
+                image = ImageOps.exif_transpose(source)
+                if image.mode in ("RGBA", "LA") or (
+                    image.mode == "P" and "transparency" in image.info
+                ):
+                    rgba = image.convert("RGBA")
+                    background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                    image = Image.alpha_composite(background, rgba).convert("RGB")
+                elif image.mode not in ("RGB", "L"):
+                    image = image.convert("RGB")
+                else:
+                    image = image.copy()
+
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=92, optimize=True)
+            normalized = output.getvalue()
+            return normalized if normalized else image_data
+        except Exception as exc:
+            logger.warning(f"Failed to normalize image for Feishu upload: {exc}")
+            return image_data
 
     async def _download_feishu_image(self, image_key: str, message_id: str | None = None) -> bytes:
         """
@@ -555,6 +617,11 @@ class FeishuChannel(BaseChannel):
             # Determine receive_id_type based on chat_id format
             # open_id starts with "ou_", chat_id starts with "oc_"
             reply_to = msg.metadata.get("reply_to")
+            if not isinstance(reply_to, str) or not reply_to:
+                logger.warning(
+                    f"Skipping Feishu message without reply_to metadata: session={msg.session_key}"
+                )
+                return
             if reply_to.startswith("oc_"):
                 receive_id_type = "chat_id"
             else:
@@ -566,13 +633,10 @@ class FeishuChannel(BaseChannel):
             content_with_mentions = cleaned_content
 
             # --- Build interactive card with markdown rendering ---
-            reply_to_message_id = None
             original_sender_id = None
             chat_type = "group"
+            reply_to_message_id = self._reply_to_message_id_from_metadata(msg.metadata)
             if msg.metadata:
-                reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get(
-                    "message_id"
-                )
                 original_sender_id = msg.metadata.get("sender_id")
                 chat_type = msg.metadata.get("chat_type", "group")
 
@@ -664,6 +728,23 @@ class FeishuChannel(BaseChannel):
 
         except Exception as e:
             logger.exception(f"Error sending Feishu message: {e}")
+
+    @staticmethod
+    def _reply_to_message_id_from_metadata(metadata: dict[str, Any] | None) -> str | None:
+        """Resolve the Feishu message id to reply to, including scheduled thread delivery."""
+        if not metadata:
+            return None
+
+        for key in ("reply_to_message_id", "message_id"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value:
+                return value
+
+        root_id = metadata.get("root_id")
+        if metadata.get("chat_mode") == "thread" and isinstance(root_id, str) and root_id:
+            return root_id
+
+        return None
 
     @staticmethod
     def _should_reply_in_thread(

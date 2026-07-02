@@ -586,3 +586,15 @@ class BaseClient(ABC):
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """Walk back along parents[0] up to limit commits."""
+
+    @abstractmethod
+    async def git_get_ignore(self) -> str:
+        """Return the account .ovgitignore content (empty string if absent)."""
+
+    @abstractmethod
+    async def git_set_ignore(self, *, content: str) -> None:
+        """Write the account .ovgitignore control file."""
+
+    @abstractmethod
+    async def git_delete_ignore(self) -> None:
+        """Delete the account .ovgitignore control file (missing is success)."""

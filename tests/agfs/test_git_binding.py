@@ -314,3 +314,97 @@ def test_cas_conflict_surface(client):
         assert errors == [], errors
         assert len(results) == 2
         assert results[0]["commit_oid"] != results[1]["commit_oid"]
+
+
+def test_commit_respects_account_ovgitignore(client):
+    account = "acct_ignore_binding"
+    _write(client, account, ".ovgitignore", b"*.log\n")
+    _write(client, account, "resources/keep.md", b"keep")
+    _write(client, account, "resources/skip.log", b"skip")
+
+    resp = client.git_commit(
+        account=account,
+        branch="main",
+        message="ignore",
+        author_name="tester",
+        author_email="tester@example.com",
+    )
+
+    assert resp["result"] == "created"
+    assert resp["ignored"] == 1
+    assert client.git_show(
+        account=account,
+        target_ref="main",
+        path="resources/keep.md",
+    )["bytes"] == b"keep"
+    assert client.git_show(
+        account=account,
+        target_ref="main",
+        path=".ovgitignore",
+    )["bytes"] == b"*.log\n"
+
+    from openviking.pyagfs import AGFSNotFoundError
+    with pytest.raises(AGFSNotFoundError):
+        client.git_show(
+            account=account,
+            target_ref="main",
+            path="resources/skip.log",
+        )
+
+
+def test_commit_invalid_ovgitignore_maps_to_invalid_operation(client):
+    account = "acct_bad_ignore_binding"
+    _write(client, account, ".ovgitignore", b"!keep.log\n")
+
+    from openviking.pyagfs import AGFSInvalidOperationError
+    with pytest.raises(AGFSInvalidOperationError) as excinfo:
+        client.git_commit(
+            account=account,
+            branch="main",
+            message="bad ignore",
+            author_name="tester",
+            author_email="tester@example.com",
+        )
+
+    assert "invalid ignore file" in str(excinfo.value).lower()
+    assert "negation" in str(excinfo.value).lower()
+
+
+def test_restore_does_not_apply_current_ovgitignore(client):
+    account = "acct_restore_ignore"
+    _write(client, account, "resources/proj/a.log", b"v1")
+    v1 = client.git_commit(
+        account=account,
+        branch="main",
+        message="v1",
+        author_name="tester",
+        author_email="tester@example.com",
+    )
+
+    _write(client, account, ".ovgitignore", b"*.log\n")
+    client.write(f"/local/{account}/resources/proj/a.log", b"v2")
+    v2 = client.git_commit(
+        account=account,
+        branch="main",
+        message="ignore logs",
+        author_name="tester",
+        author_email="tester@example.com",
+    )
+    assert v2["ignored"] >= 1
+
+    restored = client.git_restore(
+        account=account,
+        branch="main",
+        project_dir="resources/proj",
+        source_commit=v1["commit_oid"],
+        author_name="tester",
+        author_email="tester@example.com",
+    )
+
+    assert restored["result"] == "applied"
+    assert client.read(f"/local/{account}/resources/proj/a.log") == b"v1"
+    assert client.git_show(
+        account=account,
+        target_ref="main",
+        path="resources/proj/a.log",
+    )["bytes"] == b"v1"

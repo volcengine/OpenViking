@@ -404,7 +404,7 @@ export function extractNewTurnMessages(
           : undefined);
       if (output) {
         result.push({
-          role: "user",
+          role: "assistant",
           parts: [{
             type: "tool",
             toolCallId: toolCallId || undefined,

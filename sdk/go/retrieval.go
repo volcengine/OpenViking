@@ -85,6 +85,9 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 	if opts.NodeLimit != nil {
 		payload["node_limit"] = *opts.NodeLimit
 	}
+	if opts.LevelLimit != nil {
+		payload["level_limit"] = *opts.LevelLimit
+	}
 	if opts.ExcludeURI != "" {
 		payload["exclude_uri"] = NormalizeURI(opts.ExcludeURI)
 	}

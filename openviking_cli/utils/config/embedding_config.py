@@ -783,6 +783,7 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
                     "config": dict(runtime_config),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
             ("volcengine", "sparse"): (
@@ -792,6 +793,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "config": dict(runtime_config),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
             ("volcengine", "hybrid"): (
@@ -803,6 +805,7 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
                     "config": dict(runtime_config),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
             ("vikingdb", "dense"): (

@@ -618,3 +618,24 @@ class FSService:
         """Forward to VikingFS.log. Walks parents[0] up to limit commits."""
         viking_fs = self._ensure_initialized()
         return await viking_fs.log(branch=branch, limit=limit, ctx=ctx)
+
+    async def get_gitignore(self, *, ctx: RequestContext) -> str:
+        """Forward to VikingFS.get_gitignore. Returns the account .ovgitignore
+        content, or an empty string if absent."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs.get_gitignore(ctx=ctx)
+
+    async def set_gitignore(
+        self, *, content: str, ctx: RequestContext
+    ) -> None:
+        """Forward to VikingFS.set_gitignore. Writes the account .ovgitignore
+        control file (validates the size limit)."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs.set_gitignore(content, ctx=ctx)
+
+    async def delete_gitignore(self, *, ctx: RequestContext) -> None:
+        """Forward to VikingFS.delete_gitignore. Removes the account
+        .ovgitignore; missing is success."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs.delete_gitignore(ctx=ctx)
+

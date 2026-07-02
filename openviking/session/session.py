@@ -1132,10 +1132,11 @@ class Session:
             get_current_telemetry().set("memory.extracted", 0)
             return {
                 "session_id": self.session_id,
-                "status": "accepted",
+                "status": "skipped",
                 "task_id": None,
                 "archive_uri": None,
                 "archived": False,
+                "reason": "no_messages",
                 "trace_id": trace_id,
             }
 
@@ -1151,10 +1152,11 @@ class Session:
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
-                    "status": "accepted",
+                    "status": "skipped",
                     "task_id": None,
                     "archive_uri": None,
                     "archived": False,
+                    "reason": "no_messages",
                     "trace_id": trace_id,
                 }
 
@@ -1171,7 +1173,7 @@ class Session:
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
-                    "status": "accepted",
+                    "status": "skipped",
                     "task_id": None,
                     "archive_uri": None,
                     "archived": False,

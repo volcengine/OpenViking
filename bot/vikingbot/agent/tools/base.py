@@ -31,6 +31,8 @@ class ToolContext:
         openviking_connection: Optional request-scoped OpenViking identity. Studio
             requests use this so tools call OpenViking with the same connection
             selected in the browser.
+        channel_metadata: Channel-specific metadata from the inbound message. Tools
+            that publish outbound messages can reuse this to preserve delivery context.
 
     Example:
         >>> context = ToolContext(
@@ -48,12 +50,15 @@ class ToolContext:
     memory_owner_user_ids: list[str] | None = None
     memory_user_ids: list[str] | None = None  # Deprecated alias for memory_owner_user_ids.
     openviking_connection: dict[str, Any] | None = None
+    channel_metadata: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.memory_owner_user_ids is None and self.memory_user_ids is not None:
             self.memory_owner_user_ids = self.memory_user_ids
         elif self.memory_user_ids is None and self.memory_owner_user_ids is not None:
             self.memory_user_ids = self.memory_owner_user_ids
+        if self.channel_metadata is None:
+            self.channel_metadata = {}
 
 
 class Tool(ABC):

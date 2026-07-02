@@ -3,6 +3,7 @@
 
 """Tests for APIKeyManager (openviking/server/api_keys.py)."""
 
+import hashlib
 import uuid
 
 import pytest
@@ -12,13 +13,22 @@ from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.identity import Role
 from openviking.service.core import OpenVikingService
-from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, UnauthenticatedError
+from openviking_cli.exceptions import (
+    AlreadyExistsError,
+    InvalidArgumentError,
+    NotFoundError,
+    UnauthenticatedError,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
 def _uid() -> str:
     """Generate a unique account name to avoid cross-test collisions."""
     return f"acme_{uuid.uuid4().hex[:8]}"
+
+
+def _seed_secret(user_id: str, seed: str) -> str:
+    return hashlib.sha256(f"{user_id}\0{seed}".encode("utf-8")).hexdigest()
 
 
 ROOT_KEY = "test-root-key-abcdef1234567890abcdef1234567890"
@@ -550,6 +560,70 @@ async def test_register_user_generates_new_format(manager: APIKeyManager):
     assert identity.role == Role.USER
     assert identity.account_id == acct
     assert identity.user_id == "bob"
+
+
+async def test_seeded_new_format_keys_are_predictable(manager: APIKeyManager):
+    from openviking.server.api_keys import parse_api_key
+
+    seed = "client-known-seed"
+    acct1 = _uid()
+    acct2 = _uid()
+
+    key1 = await manager.create_account(acct1, "alice", seed=seed)
+    key2 = await manager.create_account(acct2, "alice", seed=seed)
+
+    account1, user1, secret1 = parse_api_key(key1)
+    account2, user2, secret2 = parse_api_key(key2)
+
+    assert account1 == acct1
+    assert account2 == acct2
+    assert user1 == user2 == "alice"
+    assert secret1 == secret2 == _seed_secret("alice", seed)
+    assert key1 != key2
+
+
+async def test_seeded_register_and_regenerate_key(manager: APIKeyManager):
+    from openviking.server.api_keys import parse_api_key
+
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    old_key = await manager.register_user(acct, "bob", "user", seed="first-seed")
+    _, _, old_secret = parse_api_key(old_key)
+    assert old_secret == _seed_secret("bob", "first-seed")
+
+    new_key = await manager.regenerate_key(acct, "bob", seed="second-seed")
+    _, _, new_secret = parse_api_key(new_key)
+    assert new_secret == _seed_secret("bob", "second-seed")
+    assert new_key != old_key
+
+    with pytest.raises(UnauthenticatedError):
+        manager.resolve(old_key)
+    assert manager.resolve(new_key).user_id == "bob"
+
+
+async def test_seed_must_not_be_empty(manager: APIKeyManager):
+    acct = _uid()
+    with pytest.raises(InvalidArgumentError):
+        await manager.create_account(acct, "alice", seed="")
+
+
+async def test_seeded_key_with_hashing_enabled(manager_service):
+    from openviking.server.api_keys import parse_api_key
+
+    acct = _uid()
+    mgr = APIKeyManager(
+        root_key=ROOT_KEY, viking_fs=manager_service.viking_fs, api_key_hashing_enabled=True
+    )
+    await mgr.load()
+
+    key = await mgr.create_account(acct, "alice", seed="seeded-secret")
+    _, _, secret = parse_api_key(key)
+    assert secret == _seed_secret("alice", "seeded-secret")
+
+    stored_hash = _get_stored_hash(mgr, acct, "alice")
+    _assert_argon2_hash(stored_hash)
+    assert stored_hash != key
+    assert mgr.resolve(key).user_id == "alice"
 
 
 async def test_regenerate_key_upgrades_to_new_format(manager_service):

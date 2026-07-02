@@ -68,7 +68,50 @@ pub async fn dispatch(
             print_log(&value, output_format, compact);
             Ok(())
         }
+        SnapshotCmd::IgnoreGet => {
+            let value = client.snapshot_ignore_get().await?;
+            print_ignore_get(&value, output_format, compact);
+            Ok(())
+        }
+        SnapshotCmd::IgnoreSet { content, file } => {
+            let content = resolve_ignore_content(content.as_deref(), file.as_deref())?;
+            client.snapshot_ignore_set(&content).await?;
+            output_success(&json!({ "result": "set" }), output_format, compact);
+            Ok(())
+        }
+        SnapshotCmd::IgnoreDelete => {
+            client.snapshot_ignore_delete().await?;
+            output_success(&json!({ "result": "deleted" }), output_format, compact);
+            Ok(())
+        }
     }
+}
+
+/// Resolve `.ovgitignore` content: `--file` takes precedence over `--content`;
+/// if neither is given, the content is left empty (clears the rules).
+fn resolve_ignore_content(
+    content: Option<&str>,
+    file: Option<&std::path::Path>,
+) -> Result<String> {
+    if let Some(path) = file {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::fs::File::open(path)?.read_to_string(&mut buf)?;
+        return Ok(buf);
+    }
+    Ok(content.unwrap_or("").to_string())
+}
+
+fn print_ignore_get(value: &Value, output_format: OutputFormat, compact: bool) {
+    if matches!(output_format, OutputFormat::Json) {
+        output_success(value, output_format, compact);
+        return;
+    }
+    // Plain mode: print the raw content verbatim so it can be redirected to a file.
+    let content = value.as_str().unwrap_or("");
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(content.as_bytes());
+    let _ = stdout.flush();
 }
 
 fn print_commit(value: &Value, output_format: OutputFormat, compact: bool) {

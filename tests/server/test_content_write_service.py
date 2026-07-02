@@ -346,9 +346,9 @@ class _FakeVikingFS:
         del ctx
         return self.content[uri]
 
-    async def write_file(self, uri: str, content: str, ctx=None):
+    async def write_file(self, uri: str, content: str, ctx=None, lock_handle=None):
         del ctx
-        self.write_file_calls.append((uri, content))
+        self.write_file_calls.append((uri, content, lock_handle))
         self.content[uri] = content
 
     async def rm(self, uri: str, ctx=None, lock_handle=None):
@@ -463,6 +463,42 @@ async def test_write_timeout_after_enqueue_releases_resource_lock(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_write_direct_reuses_outer_lock_handle_for_viking_fs(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager()
+
+    async def _fake_enqueue_semantic_refresh(**kwargs):
+        del kwargs
+        return None
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager",
+        lambda: lock_manager,
+    )
+    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
+
+    result = await coordinator._write_direct_with_refresh(
+        uri=file_uri,
+        root_uri=root_uri,
+        content="updated",
+        mode="replace",
+        context_type="resource",
+        wait=False,
+        timeout=None,
+        ctx=ctx,
+        written_bytes=len("updated".encode("utf-8")),
+        telemetry_id="",
+    )
+
+    assert result["uri"] == file_uri
+    assert viking_fs.write_file_calls == [(file_uri, "updated", lock_manager.handle)]
+
+
+@pytest.mark.asyncio
 async def test_resource_write_updates_target_and_queues_refresh_before_return(monkeypatch):
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
@@ -530,6 +566,10 @@ async def test_resource_write_rolls_back_replace_when_enqueue_fails(monkeypatch)
         )
 
     assert viking_fs.content[file_uri] == "original"
+    assert viking_fs.write_file_calls == [
+        (file_uri, "updated", lock_manager.handle),
+        (file_uri, "original", lock_manager.handle),
+    ]
     assert lock_manager.release_calls == ["lock-1"]
 
 
@@ -580,8 +620,8 @@ async def test_memory_write_wait_skips_semantic_queue_and_releases_write_lock(mo
         lambda: lock_manager,
     )
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx):
-        del uri, content, mode, ctx
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None):
+        del uri, content, mode, ctx, lock_handle
         return None
 
     async def _fail_wait_for_request(*, telemetry_id, timeout):
@@ -659,9 +699,9 @@ class _FakeVikingFSForCreate:
         del ctx
         self.delete_temp_calls.append(temp_uri)
 
-    async def write_file(self, uri: str, content: str, *, ctx=None):
+    async def write_file(self, uri: str, content: str, *, ctx=None, lock_handle=None):
         del ctx
-        self.write_file_calls.append((uri, content))
+        self.write_file_calls.append((uri, content, lock_handle))
         self.content[uri] = content
         parent = uri.rsplit("/", 1)[0]
         while parent.startswith("viking://") and parent not in self.existing_dirs:
@@ -692,8 +732,8 @@ async def test_create_mode_new_file_success(monkeypatch):
 
     write_calls = []
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx):
-        del mode, ctx
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None):
+        del mode, ctx, lock_handle
         write_calls.append((uri, content))
         return content
 
@@ -731,8 +771,8 @@ async def test_create_mode_canonicalizes_user_shorthand_memory_uri(monkeypatch):
     write_calls = []
     refresh_calls = []
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx):
-        del mode, ctx
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None):
+        del mode, ctx, lock_handle
         write_calls.append((uri, content))
         return content
 
@@ -770,8 +810,8 @@ async def test_create_mode_existing_file_raises_409(monkeypatch):
     viking_fs = _FakeVikingFSForCreate(file_uri=file_uri, root_uri=root_uri, file_exists=True)
     coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx):
-        del uri, content, mode, ctx
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None):
+        del uri, content, mode, ctx, lock_handle
         return None
 
     async def _fake_wait_for_queues(*, timeout):
@@ -793,8 +833,8 @@ async def test_create_mode_invalid_extension_raises_400(monkeypatch):
     viking_fs = _FakeVikingFSForCreate(file_uri=file_uri, root_uri=root_uri, file_exists=False)
     coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx):
-        del uri, content, mode, ctx
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None):
+        del uri, content, mode, ctx, lock_handle
         return None
 
     async def _fake_wait_for_queues(*, timeout):
@@ -821,8 +861,8 @@ async def test_create_mode_parent_dirs_auto_created(monkeypatch):
 
     write_calls = []
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx):
-        del mode, ctx
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None):
+        del mode, ctx, lock_handle
         write_calls.append((uri, content))
         return content
 
@@ -861,8 +901,8 @@ async def test_create_mode_valid_extensions_pass(monkeypatch):
             "openviking.storage.content_write.get_lock_manager", lambda _l=_captured_lock: _l
         )
 
-        async def _fake_write_in_place(uri, content, *, mode, ctx):
-            del uri, mode, ctx
+        async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None):
+            del uri, mode, ctx, lock_handle
             return content
 
         async def _fake_wait_for_queues(*, timeout):
@@ -889,8 +929,8 @@ async def test_create_mode_memory_scope(monkeypatch):
 
     monkeypatch.setattr("openviking.storage.content_write.get_lock_manager", lambda: lock_manager)
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx):
-        del uri, mode, ctx
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None):
+        del uri, mode, ctx, lock_handle
         return content
 
     refresh_calls = []
@@ -994,10 +1034,10 @@ async def test_create_mode_regression_replace_unchanged(monkeypatch):
 
     monkeypatch.setattr("openviking.storage.content_write.get_lock_manager", lambda: lock_manager)
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx):
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None):
         # Verify mode="replace" still works
         assert mode == "replace"
-        del uri, content, ctx
+        del uri, content, ctx, lock_handle
         return None
 
     async def _fake_wait_for_queues(*, timeout):
@@ -1025,10 +1065,10 @@ async def test_create_mode_regression_append_unchanged(monkeypatch):
 
     monkeypatch.setattr("openviking.storage.content_write.get_lock_manager", lambda: lock_manager)
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx):
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None):
         # Verify mode="append" still works
         assert mode == "append"
-        del uri, content, ctx
+        del uri, content, ctx, lock_handle
         return None
 
     async def _fake_wait_for_queues(*, timeout):
@@ -1305,7 +1345,10 @@ async def test_set_tags_recursive_directory_updates_descendants(monkeypatch):
         nested_file_uri,
     }
     assert sorted(fake_store.update_calls) == sorted(
-        [(file_uri, ["env=prod"], "append"), (nested_file_uri, ["env=prod"], "append")]
+        [
+            (file_uri, ["env=prod"], "append"),
+            (nested_file_uri, ["env=prod"], "append"),
+        ]
     )
     assert sorted(fake_store.directory_update_calls) == sorted(
         [

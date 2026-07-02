@@ -53,11 +53,18 @@ type AddSkillOptions struct {
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
 type AdminCreateAccountOptions struct {
 	UserConfig map[string]any
+	Seed       *string
 }
 
 // AdminRegisterUserOptions controls AdminRegisterUserWithOptions.
 type AdminRegisterUserOptions struct {
 	UserConfig map[string]any
+	Seed       *string
+}
+
+// AdminRegenerateKeyOptions controls AdminRegenerateKeyWithOptions.
+type AdminRegenerateKeyOptions struct {
+	Seed *string
 }
 
 // ListSkillsOptions controls ListSkills.
@@ -214,6 +221,7 @@ type SearchOptions struct {
 type GrepOptions struct {
 	CaseInsensitive bool
 	NodeLimit       *int
+	LevelLimit      *int
 	ExcludeURI      string
 }
 

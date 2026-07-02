@@ -11,13 +11,14 @@ pub async fn create_account(
     client: &HttpClient,
     account_id: &str,
     admin_user_id: &str,
+    seed: Option<&str>,
     user_config_json: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let user_config = parse_user_config_json(user_config_json, "--user-config-json")?;
     let response = client
-        .admin_create_account(account_id, admin_user_id, user_config.as_ref())
+        .admin_create_account(account_id, admin_user_id, seed, user_config.as_ref())
         .await?;
     output_success(&response, output_format, compact);
     print_admin_user_key_notice(&response, output_format, false);
@@ -67,13 +68,14 @@ pub async fn register_user(
     account_id: &str,
     user_id: &str,
     role: &str,
+    seed: Option<&str>,
     user_config_json: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     let user_config = parse_user_config_json(user_config_json, "--user-config-json")?;
     let response = client
-        .admin_register_user(account_id, user_id, role, user_config.as_ref())
+        .admin_register_user(account_id, user_id, role, seed, user_config.as_ref())
         .await?;
     output_success(&response, output_format, compact);
     print_admin_user_key_notice(&response, output_format, false);
@@ -144,10 +146,13 @@ pub async fn regenerate_key(
     client: &HttpClient,
     account_id: &str,
     user_id: &str,
+    seed: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response = client.admin_regenerate_key(account_id, user_id).await?;
+    let response = client
+        .admin_regenerate_key(account_id, user_id, seed)
+        .await?;
     output_success(&response, output_format, compact);
     print_admin_user_key_notice(&response, output_format, true);
     Ok(())
