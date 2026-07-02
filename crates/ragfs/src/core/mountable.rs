@@ -301,7 +301,16 @@ impl MountableFS {
                     .await?;
                 }
                 #[cfg(feature = "cache")]
-                let storage_fs = self.maybe_wrap_cache(raw_arc.clone(), &normalized_path);
+                let storage_fs = if is_control_plugin {
+                    // Control plugins (queuefs/serverinfofs) serve live control
+                    // files (size/enqueue/dequeue/heartbeat/...) whose values change
+                    // on every access; caching them serves stale reads (the #2935
+                    // failure mode). Never cache-wrap them, regardless of the
+                    // configured bypass_prefixes.
+                    raw_arc.clone()
+                } else {
+                    self.maybe_wrap_cache(raw_arc.clone(), &normalized_path)
+                };
                 #[cfg(not(feature = "cache"))]
                 let storage_fs = raw_arc.clone();
 
@@ -341,15 +350,15 @@ impl MountableFS {
                     arc
                 } else {
                     match &self.cache {
-                        Some(cache) => Arc::new(CachedFileSystem::new(
-                            Box::new(ArcFileSystem(arc)),
-                            cache.provider.clone(),
-                            mount_namespace(&cache.namespace, &normalized_path),
-                            cache
-                                .policy
-                                .clone()
-                                .with_traversal_mode(CacheTraversalMode::Backend),
-                        )),
+                        Some(cache) => match cache.policy.rebase_for_mount(&normalized_path) {
+                            Some(policy) => Arc::new(CachedFileSystem::new(
+                                Box::new(ArcFileSystem(arc)),
+                                cache.provider.clone(),
+                                mount_namespace(&cache.namespace, &normalized_path),
+                                policy.with_traversal_mode(CacheTraversalMode::Backend),
+                            )),
+                            None => arc,
+                        },
                         None => arc,
                     }
                 };
@@ -405,15 +414,17 @@ impl MountableFS {
     fn maybe_wrap_cache(&self, fs: Arc<dyn FileSystem>, mount_path: &str) -> Arc<dyn FileSystem> {
         match &self.cache {
             Some(cache) => {
-                let policy = if cache.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
+                let Some(base_policy) = cache.policy.rebase_for_mount(mount_path) else {
+                    // Mount path itself falls under a bypass prefix — skip cache
+                    // wrapping entirely so reads always hit the backend.
+                    return fs;
+                };
+                let policy = if base_policy.traversal_mode() == CacheTraversalMode::CachedTraversal
                     && Self::as_multiwrite(&fs).is_some()
                 {
-                    cache
-                        .policy
-                        .clone()
-                        .with_traversal_mode(CacheTraversalMode::Backend)
+                    base_policy.with_traversal_mode(CacheTraversalMode::Backend)
                 } else {
-                    cache.policy.clone()
+                    base_policy
                 };
                 Arc::new(CachedFileSystem::new(
                     Box::new(ArcFileSystem(fs)),
@@ -1282,6 +1293,153 @@ mod tests {
             b"backend:/file.txt"
         );
         assert_eq!(reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn mount_cache_bypass_honors_rebased_prefixes() {
+        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+
+        /// One end-to-end bypass scenario: mount `CountingPlugin` at `mount`
+        /// with `bypass` prefixes, read `path` twice, and expect `backend_reads`
+        /// backend hits (1 = cached, 2 = bypassed).
+        struct Case {
+            name: &'static str,
+            mount: &'static str,
+            bypass: &'static [&'static str],
+            path: &'static str,
+            backend_reads: u64,
+        }
+
+        let cases = [
+            Case {
+                name: "whole-mount bypass (regression guard for #2935)",
+                mount: "/queue",
+                bypass: &["/queue"],
+                path: "/queue/Embedding/size",
+                backend_reads: 2,
+            },
+            Case {
+                name: "nested prefix rebased and bypassed",
+                mount: "/data",
+                bypass: &["/data/raw"],
+                path: "/data/raw/x",
+                backend_reads: 2,
+            },
+            Case {
+                name: "sibling path outside the bypass prefix stays cached",
+                mount: "/data",
+                bypass: &["/data/raw"],
+                path: "/data/cached/x",
+                backend_reads: 1,
+            },
+            Case {
+                name: "no bypass configured -> cached",
+                mount: "/data",
+                bypass: &[],
+                path: "/data/x",
+                backend_reads: 1,
+            },
+        ];
+
+        for case in cases {
+            // `mount()` consumes the config and each case needs its own policy,
+            // so build a fresh MountableFS per case.
+            let reads = Arc::new(AtomicU64::new(0));
+            let mut policy = CachePolicy::default();
+            for prefix in case.bypass {
+                policy = policy.with_bypass_prefix(*prefix);
+            }
+            let mfs = MountableFS::with_cache(
+                Arc::new(MemoryCacheProvider::new()),
+                CacheNamespace::new("bypass-table"),
+                policy,
+            );
+            mfs.register_plugin(CountingPlugin {
+                reads: reads.clone(),
+            })
+            .await;
+            mfs.mount(PluginConfig::single_backend(
+                "counting",
+                case.mount,
+                HashMap::new(),
+            ))
+            .await
+            .unwrap();
+
+            reads.store(0, Ordering::Relaxed);
+            let first = mfs.read(case.path, 0, 0).await.unwrap();
+            let second = mfs.read(case.path, 0, 0).await.unwrap();
+            assert_eq!(
+                first, second,
+                "case '{}': both reads must return the same bytes",
+                case.name
+            );
+            assert_eq!(
+                reads.load(Ordering::Relaxed),
+                case.backend_reads,
+                "case '{}': unexpected backend read count",
+                case.name
+            );
+        }
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn queuefs_control_files_are_never_cached_even_without_bypass_config() {
+        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+        use crate::plugins::QueueFSPlugin;
+
+        // NO `.with_bypass_prefix` here: the default policy would happily cache a
+        // control file named `size` (it is not in the built-in control-name deny
+        // list). Only the type-based guard added in mount() can protect it, so
+        // this exercises that guard in isolation.
+        let mfs = MountableFS::with_cache(
+            Arc::new(MemoryCacheProvider::new()),
+            CacheNamespace::new("queue-type-guard"),
+            CachePolicy::default(),
+        );
+        mfs.register_plugin(QueueFSPlugin::new()).await;
+        mfs.mount(PluginConfig::single_backend(
+            "queuefs",
+            "/queue",
+            HashMap::new(),
+        ))
+        .await
+        .unwrap();
+
+        // Behavioral proof: drive the queue so `size` changes, then re-read it.
+        // queuefs is context-free (no FS_CTX needed) and deterministic.
+        mfs.mkdir("/queue/semantic", 0o755).await.unwrap();
+        mfs.write("/queue/semantic/enqueue", b"payload", 0, WriteFlag::None)
+            .await
+            .unwrap();
+
+        // First read populates any cache with "1".
+        let size_after_enqueue = mfs.read("/queue/semantic/size", 0, 0).await.unwrap();
+        assert_eq!(String::from_utf8(size_after_enqueue).unwrap(), "1");
+
+        // Dequeue removes the message; the live size is now 0.
+        let dequeued = mfs.read("/queue/semantic/dequeue", 0, 0).await.unwrap();
+        assert!(!dequeued.is_empty());
+
+        // A re-read of `size` must reflect the new state ("0"). If `size` were
+        // cached, this would return the stale "1" — the #2935 failure mode.
+        let size_after_dequeue = mfs.read("/queue/semantic/size", 0, 0).await.unwrap();
+        assert_eq!(
+            String::from_utf8(size_after_dequeue).unwrap(),
+            "0",
+            "queuefs control file `size` must never be served from cache"
+        );
+
+        // Structural proof (definitive): the mounted /queue stack contains no
+        // CachedFileSystem layer at all, so the type guard is what removed it.
+        let mounts = mfs.mounts.read().await;
+        let mount_info = mounts.get("/queue").expect("mounted entry should exist");
+        assert!(
+            MountableFS::as_cached(&mount_info.fs).is_none(),
+            "control-plugin mount must never be wrapped in CachedFileSystem"
+        );
     }
 
     #[cfg(feature = "cache")]

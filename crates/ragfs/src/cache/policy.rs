@@ -124,6 +124,32 @@ impl CachePolicy {
         self.cache_directory(path) && entry_count <= self.max_cached_dir_entries
     }
 
+    /// Rebase globally-configured (absolute) bypass prefixes into a mount's
+    /// relative path space. Returns `None` when the mount path itself falls
+    /// under a bypass prefix, meaning the whole mount should be excluded from
+    /// caching.
+    pub fn rebase_for_mount(&self, mount_path: &str) -> Option<CachePolicy> {
+        let mount_path = normalize_path(mount_path);
+        let mut rebased_prefixes = Vec::new();
+        for prefix in &self.bypass_prefixes {
+            if is_same_or_descendant(&mount_path, prefix) {
+                return None;
+            }
+            if mount_path == "/" {
+                rebased_prefixes.push(prefix.clone());
+                continue;
+            }
+            if let Some(rel) = prefix.strip_prefix(mount_path.as_str()) {
+                if rel.starts_with('/') {
+                    rebased_prefixes.push(rel.to_string());
+                }
+            }
+        }
+        let mut rebased = self.clone();
+        rebased.bypass_prefixes = rebased_prefixes;
+        Some(rebased)
+    }
+
     fn cache_path(&self, path: &str) -> bool {
         let normalized = normalize_path(path);
         if self
@@ -178,4 +204,119 @@ fn is_same_or_descendant(path: &str, prefix: &str) -> bool {
         || path
             .strip_prefix(prefix)
             .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One `rebase_for_mount` scenario. `expect == None` means the whole mount
+    /// is bypassed; `Some(prefixes)` is the exact (order-preserving) list of
+    /// mount-relative bypass prefixes expected after rebasing.
+    struct Case {
+        name: &'static str,
+        bypass: &'static [&'static str],
+        mount: &'static str,
+        expect: Option<&'static [&'static str]>,
+    }
+
+    #[test]
+    fn rebase_for_mount_table() {
+        let cases = [
+            Case {
+                name: "mount equals bypass prefix -> whole mount bypassed",
+                bypass: &["/queue"],
+                mount: "/queue",
+                expect: None,
+            },
+            Case {
+                name: "mount nested under bypass prefix -> whole mount bypassed",
+                bypass: &["/queue"],
+                mount: "/queue/sub",
+                expect: None,
+            },
+            Case {
+                name: "nested prefix rebased to mount-relative path",
+                bypass: &["/local/_system"],
+                mount: "/local",
+                expect: Some(&["/_system"]),
+            },
+            Case {
+                name: "deeper nested prefix rebased",
+                bypass: &["/a/b/c"],
+                mount: "/a/b",
+                expect: Some(&["/c"]),
+            },
+            Case {
+                name: "prefix outside mount is dropped",
+                bypass: &["/other/thing"],
+                mount: "/local",
+                expect: Some(&[]),
+            },
+            Case {
+                name: "root mount keeps prefixes verbatim",
+                bypass: &["/queue"],
+                mount: "/",
+                expect: Some(&["/queue"]),
+            },
+            Case {
+                name: "multiple prefixes: in-mount rebased, out-of-mount dropped",
+                bypass: &["/local/_system", "/local/tmp", "/other"],
+                mount: "/local",
+                expect: Some(&["/_system", "/tmp"]),
+            },
+            Case {
+                name: "sibling prefix must not match (boundary)",
+                bypass: &["/queuex"],
+                mount: "/queue",
+                expect: Some(&[]),
+            },
+            Case {
+                name: "shorter mount name must not match prefix (boundary)",
+                bypass: &["/queue"],
+                mount: "/q",
+                expect: Some(&[]),
+            },
+            Case {
+                name: "trailing slash on mount path is normalized",
+                bypass: &["/queue"],
+                mount: "/queue/",
+                expect: None,
+            },
+            Case {
+                name: "empty bypass list yields empty rebased list",
+                bypass: &[],
+                mount: "/anything",
+                expect: Some(&[]),
+            },
+        ];
+
+        for case in cases {
+            let mut policy = CachePolicy::default();
+            for prefix in case.bypass {
+                policy = policy.with_bypass_prefix(*prefix);
+            }
+            let rebased = policy.rebase_for_mount(case.mount);
+            match case.expect {
+                None => assert!(
+                    rebased.is_none(),
+                    "case '{}': expected whole mount to be bypassed (None), got {:?}",
+                    case.name,
+                    rebased.map(|p| p.bypass_prefixes),
+                ),
+                Some(expected) => {
+                    let rebased = rebased.unwrap_or_else(|| {
+                        panic!("case '{}': expected Some, got None", case.name)
+                    });
+                    let expected: Vec<String> =
+                        expected.iter().map(|p| p.to_string()).collect();
+                    assert_eq!(
+                        rebased.bypass_prefixes, expected,
+                        "case '{}': rebased bypass prefixes mismatch",
+                        case.name,
+                    );
+                }
+            }
+        }
+    }
 }
