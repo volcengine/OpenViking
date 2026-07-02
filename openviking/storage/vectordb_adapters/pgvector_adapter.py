@@ -290,7 +290,8 @@ class PgVectorCollectionAdapter(CollectionAdapter):
         self._index_type = index_type
         self._index_params = dict(index_params or {})
         self._dimension = int(dimension)
-        self._conn = None
+        self._conn: Any = None
+        self._pool: Any = None
         self._lock = threading.RLock()
         # Feature flags resolved from the live extension version on connect
         # (_detect_version). Conservative defaults: everything off until proven.
@@ -348,13 +349,35 @@ class PgVectorCollectionAdapter(CollectionAdapter):
     def physical_table_name(self) -> str:
         return _safe_identifier(self._project_name, self._collection_name, prefix="ov")
 
+    def _conninfo(self) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """psycopg2 ``connect`` args/kwargs. A DSN ``url`` wins over discrete
+        host/port/user/password (mem0's priority chain); ``sslmode`` is injected
+        for both forms."""
+        if self._url:
+            return (self._url,), {
+                "sslmode": self._sslmode,
+                "connect_timeout": self._connect_timeout,
+            }
+        return (), {
+            "host": self._host,
+            "port": self._port,
+            "user": self._user,
+            "password": self._password,
+            "dbname": self._db_name,
+            "sslmode": self._sslmode,
+            "connect_timeout": self._connect_timeout,
+        }
+
     def _connect(self):
         """Open (or reuse) a psycopg2 connection.
 
-        Priority chain: a DSN ``url`` wins over discrete host/port/user/password
-        (mem0's shape). ``sslmode`` is injected as a keyword either way so it
-        applies to both URI and discrete conninfo forms. The ``_import_psycopg2``
-        seam is module-level so tests can mock the driver without a live server.
+        ``pool_size > 1`` uses a ``ThreadedConnectionPool``; otherwise a single
+        lock-serialized connection (openGauss's model). ``register_vector`` is
+        intentionally *never* called: the reused ``%s::vector`` literal path needs
+        no driver-level type binding, so a plain psycopg2 works (mem0 ships this
+        way). If a deployment later opts into binding, it would run per
+        checked-out connection right here. The ``_import_psycopg2`` seam is
+        module-level so tests can mock the driver without a live server.
         """
         if self._conn is not None and not getattr(self._conn, "closed", 0):
             return self._conn
@@ -364,20 +387,15 @@ class PgVectorCollectionAdapter(CollectionAdapter):
             except Exception:
                 logger.debug("Failed to close stale pgvector connection", exc_info=True)
         psycopg2 = _import_psycopg2()
-        if self._url:
-            self._conn = psycopg2.connect(
-                self._url, sslmode=self._sslmode, connect_timeout=self._connect_timeout
-            )
+        args, kwargs = self._conninfo()
+        if self._pool_size > 1:
+            if self._pool is None:
+                self._pool = psycopg2.pool.ThreadedConnectionPool(
+                    1, self._pool_size, *args, **kwargs
+                )
+            self._conn = self._pool.getconn()
         else:
-            self._conn = psycopg2.connect(
-                host=self._host,
-                port=self._port,
-                user=self._user,
-                password=self._password,
-                dbname=self._db_name,
-                sslmode=self._sslmode,
-                connect_timeout=self._connect_timeout,
-            )
+            self._conn = psycopg2.connect(*args, **kwargs)
         return self._conn
 
     def _gate_features(self, extversion: str) -> None:

@@ -431,6 +431,55 @@ def test_version_gate_rejects_pre_hnsw_pgvector():
         adapter._detect_version()
 
 
+@pytest.mark.parametrize(
+    ("pool_size", "expect_pool"),
+    [(1, False), (3, True)],
+    ids=["single-conn", "threaded-pool"],
+)
+def test_register_vector_optional(monkeypatch, pool_size, expect_pool):
+    connect_calls = []
+    pool_calls = {}
+
+    class _Conn:
+        closed = 0
+
+    def fake_connect(*args, **kwargs):
+        connect_calls.append((args, kwargs))
+        return _Conn()
+
+    class _FakePool:
+        def __init__(self, minconn, maxconn, *args, **kwargs):
+            pool_calls["maxconn"] = maxconn
+            pool_calls["args"] = args
+            pool_calls["kwargs"] = kwargs
+
+        def getconn(self):
+            return _Conn()
+
+    # No register_vector attribute on the fake driver: the %s::vector literal
+    # path must work without any driver-level type binding.
+    fake_psycopg2 = types.SimpleNamespace(
+        connect=fake_connect,
+        pool=types.SimpleNamespace(ThreadedConnectionPool=_FakePool),
+    )
+    monkeypatch.setattr(pgvector_module, "_import_psycopg2", lambda: fake_psycopg2, raising=False)
+
+    config = VectorDBBackendConfig.model_validate(
+        {"backend": "pgvector", "pgvector": {"host": "10.0.0.9", "pool_size": pool_size}}
+    )
+    adapter = create_collection_adapter(config)
+    conn = adapter._connect()
+
+    assert conn is not None
+    if expect_pool:
+        assert adapter._pool is not None
+        assert pool_calls["maxconn"] == pool_size
+        assert connect_calls == []  # pool path, no direct connect
+    else:
+        assert adapter._pool is None
+        assert len(connect_calls) == 1
+
+
 def test_factory_creates_pgvector_adapter_without_connecting():
     adapter = create_collection_adapter(_build_config())
 
