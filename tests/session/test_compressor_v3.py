@@ -391,6 +391,114 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
     assert contexts[0].uri.endswith("重复预订处理.md")
 
 
+@pytest.mark.asyncio
+async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypatch):
+    trained_kwargs = []
+    canonical_uri = "viking://user/u/memories/cases/duplicate_booking.md"
+    loser_uri = "viking://user/u/memories/cases/duplicate_booking_duplicate.md"
+    canonical_fields = {
+        "case_name": "duplicate_booking",
+        "task_signature": "Handle duplicate bookings safely.",
+        "input": '{"summary":"cancel only the confirmed duplicate booking"}',
+        "rubric": (
+            '{"name":"duplicate_booking_rubric","description":"Verify duplicate handling",'
+            '"criteria":[{"name":"verify_duplicate","description":"The assistant verifies '
+            'which booking is duplicate before cancellation.","required":true,"weight":1.0}]}'
+        ),
+        "evidence": "Canonical merged case evidence.",
+    }
+
+    def case_op(uri: str, name: str) -> ResolvedOperation:
+        fields = dict(canonical_fields)
+        fields["case_name"] = name
+        return ResolvedOperation(
+            old_memory_file_content=None,
+            memory_type="cases",
+            uris=[uri],
+            memory_fields=fields,
+        )
+
+    class DummyRegistry:
+        async def initialize_memory_files(self, ctx):
+            return None
+
+    class DummyOrchestrator:
+        async def run(self):
+            return (
+                ResolvedOperations(
+                    upsert_operations=[
+                        case_op(canonical_uri, "duplicate_booking"),
+                        case_op(loser_uri, "duplicate_booking_duplicate"),
+                    ],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                [],
+            )
+
+    class FakeFS:
+        async def read_file(self, uri, ctx=None):
+            del ctx
+            if uri != canonical_uri:
+                raise FileNotFoundError(uri)
+            return MemoryFileUtils.write(
+                MemoryFile(
+                    uri=canonical_uri,
+                    content="",
+                    memory_type="cases",
+                    extra_fields=dict(canonical_fields),
+                )
+            )
+
+        async def write_file(self, uri, content, ctx=None):
+            del uri, content, ctx
+
+    class FakeStreamingUpdater:
+        async def submit(self, request):
+            del request
+            result = MemoryUpdateResult()
+            result.add_written(canonical_uri)
+            return SimpleNamespace(
+                operations=ResolvedOperations(
+                    upsert_operations=[case_op(canonical_uri, "duplicate_booking")],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                apply_result=result,
+            )
+
+    compressor = SessionCompressorV3(vikingdb=None)
+    compressor._get_or_create_react = lambda **kwargs: DummyOrchestrator()
+
+    async def fake_train_from_extracted_cases(**kwargs):
+        trained_kwargs.append(kwargs)
+        return {"case_count": len(kwargs["cases"]), "submitted": len(kwargs["cases"])}
+
+    compressor.train_from_extracted_cases = fake_train_from_extracted_cases
+
+    monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: FakeFS())
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.create_default_registry",
+        lambda: DummyRegistry(),
+    )
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_streaming_memory_updater",
+        AsyncMock(return_value=FakeStreamingUpdater()),
+    )
+
+    contexts = await compressor.extract_long_term_memories(
+        messages=_messages(),
+        ctx=_ctx(),
+        allowed_memory_types={"cases", "profile"},
+    )
+
+    assert [context.uri for context in contexts] == [canonical_uri]
+    assert len(trained_kwargs) == 1
+    assert [case.name for case in trained_kwargs[0]["cases"]] == ["duplicate_booking"]
+    assert trained_kwargs[0]["cases"][0].metadata["case_uris"] == [canonical_uri]
+    assert trained_kwargs[0]["case_uri_by_name"] == {"duplicate_booking": canonical_uri}
+
+
 def _training_case() -> Case:
     return Case(
         name="duplicate_booking",

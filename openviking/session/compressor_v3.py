@@ -485,7 +485,6 @@ class SessionCompressorV3:
 
         extraction_id = uuid4().hex
         extracted_at = datetime.now(timezone.utc).isoformat()
-        extracted_cases = _operations_to_cases(operations)
 
         updater = await get_streaming_memory_updater(
             key=make_streaming_memory_updater_key(request_context=ctx),
@@ -528,11 +527,17 @@ class SessionCompressorV3:
             )
 
         contexts = _contexts_from_update_result(result)
+        canonical_cases = await _canonical_cases_from_update_result(
+            operations=patch_operations,
+            result=result,
+            viking_fs=viking_fs,
+            ctx=ctx,
+        )
         return _V3ExtractionResult(
             contexts=contexts,
-            cases=extracted_cases,
+            cases=canonical_cases,
             memory_diff=memory_diff,
-            case_uri_by_name=_case_uri_by_name(extracted_cases, patch_operations, result),
+            case_uri_by_name=_case_uri_by_name(canonical_cases, patch_operations, result),
         )
 
     @tracer("train.compressor_v3.train_from_extracted_cases", ignore_result=True, ignore_args=True)
@@ -1093,6 +1098,107 @@ def _operations_to_cases(operations: ResolvedOperations) -> list[Case]:
     return cases
 
 
+async def _canonical_cases_from_update_result(
+    *,
+    operations: ResolvedOperations,
+    result: Any,
+    viking_fs: Any,
+    ctx: RequestContext,
+) -> list[Case]:
+    """Build training cases from canonical case files after patch merge/apply.
+
+    The extractor can emit multiple case proposals, but ``StreamingMemoryUpdater``
+    may merge, rename, or deduplicate them before storage.  Training must follow
+    the actual persisted case-first state, so only cases whose canonical URI was
+    written/edited by this update are returned.
+    """
+
+    touched_uris = _case_result_touched_uris(result)
+    if not touched_uris:
+        return []
+
+    case_ops_by_uri: dict[str, ResolvedOperation] = {}
+    for op in getattr(operations, "upsert_operations", []) or []:
+        if getattr(op, "memory_type", None) != _CASES_MEMORY_TYPE:
+            continue
+        for uri in getattr(op, "uris", []) or []:
+            if uri in touched_uris and uri not in case_ops_by_uri:
+                case_ops_by_uri[uri] = op
+
+    cases: list[Case] = []
+    for uri in touched_uris:
+        if uri not in case_ops_by_uri:
+            continue
+        case = await _case_from_persisted_memory_file(uri=uri, viking_fs=viking_fs, ctx=ctx)
+        if case is None:
+            case = _operation_to_case(
+                case_ops_by_uri[uri].model_copy(update={"uris": [uri]}, deep=True)
+            )
+        if case is not None:
+            cases.append(case)
+    return cases
+
+
+def _case_result_touched_uris(result: Any) -> list[str]:
+    uris = list(getattr(result, "written_uris", []) or []) + list(
+        getattr(result, "edited_uris", []) or []
+    )
+    return [
+        uri
+        for uri in dict.fromkeys(str(uri) for uri in uris if uri)
+        if _uri_is_case_memory_file(uri)
+    ]
+
+
+def _uri_is_case_memory_file(uri: str) -> bool:
+    return "/memories/cases/" in str(uri or "") and not str(uri).rstrip("/").endswith(
+        ("/.overview.md", "/.abstract.md")
+    )
+
+
+async def _case_from_persisted_memory_file(
+    *,
+    uri: str,
+    viking_fs: Any,
+    ctx: RequestContext,
+) -> Case | None:
+    try:
+        raw = await viking_fs.read_file(uri, ctx=ctx)
+    except Exception as exc:
+        tracer.info(f"Failed to read canonical case memory for training {uri}: {exc}")
+        return None
+    try:
+        memory_file = MemoryFileUtils.read(raw or "", uri=uri)
+    except Exception as exc:
+        tracer.info(f"Failed to parse canonical case memory for training {uri}: {exc}")
+        return None
+    return _memory_file_to_case(memory_file)
+
+
+def _memory_file_to_case(memory_file: MemoryFile) -> Case | None:
+    fields = dict(getattr(memory_file, "extra_fields", {}) or {})
+    uri = str(getattr(memory_file, "uri", "") or "")
+    name = str(fields.get("case_name") or fields.get("name") or _basename_case_name(uri)).strip()
+    task_signature = str(fields.get("task_signature") or name).strip()
+    if not name or not task_signature:
+        return None
+    memory_fields = dict(fields)
+    if uri:
+        memory_fields.setdefault("uri", uri)
+    return Case(
+        name=name,
+        task_signature=task_signature,
+        input=_parse_case_input(fields.get("input")),
+        rubric=_parse_rubric(fields.get("rubric"), fallback_name=f"{name}_rubric"),
+        metadata={
+            "source": "session_commit_case_memory",
+            "case_uris": [uri] if uri else [],
+            "evidence": str(fields.get("evidence") or ""),
+            "memory_fields": memory_fields,
+        },
+    )
+
+
 def _operation_to_case(op: ResolvedOperation) -> Case | None:
     fields = dict(getattr(op, "memory_fields", {}) or {})
     name = str(fields.get("case_name") or fields.get("name") or _fallback_case_name(op)).strip()
@@ -1179,9 +1285,16 @@ def _first_uri(uris: list[str] | None) -> str | None:
 
 def _fallback_case_name(op: ResolvedOperation) -> str:
     uri = _first_uri(getattr(op, "uris", []) or [])
+    name = _basename_case_name(uri)
+    if name:
+        return name
+    return "commit_case"
+
+
+def _basename_case_name(uri: str | None) -> str:
     if uri:
         return uri.rstrip("/").split("/")[-1].removesuffix(".md")
-    return "commit_case"
+    return ""
 
 
 def _user_space_from_ctx(ctx: RequestContext, *, purpose: str) -> str:
