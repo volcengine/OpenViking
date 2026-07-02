@@ -25,6 +25,8 @@ from __future__ import annotations
 import threading
 from typing import Any, Dict, List
 
+from packaging.version import InvalidVersion, Version
+
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import SearchItemResult, SearchResult
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
@@ -290,6 +292,13 @@ class PgVectorCollectionAdapter(CollectionAdapter):
         self._dimension = int(dimension)
         self._conn = None
         self._lock = threading.RLock()
+        # Feature flags resolved from the live extension version on connect
+        # (_detect_version). Conservative defaults: everything off until proven.
+        self._pgvector_version = ""
+        self._supports_hnsw = False
+        self._supports_halfvec = False
+        self._supports_sparsevec = False
+        self._supports_iterative_scan = False
 
     @classmethod
     def from_config(cls, config: Any) -> "PgVectorCollectionAdapter":
@@ -370,6 +379,49 @@ class PgVectorCollectionAdapter(CollectionAdapter):
                 connect_timeout=self._connect_timeout,
             )
         return self._conn
+
+    def _gate_features(self, extversion: str) -> None:
+        """Resolve feature flags from a pgvector ``extversion`` string.
+
+        HNSW indexing needs >= 0.5.0; ``halfvec``/``sparsevec`` need >= 0.7.0;
+        the ``hnsw.iterative_scan`` GUC needs >= 0.8.0. An unparseable version
+        leaves every flag off (conservative).[^raglite]
+
+        [^raglite]: superlinear-ai/raglite gates iterative scan on the parsed
+        ``extversion`` the same way.
+        """
+        self._pgvector_version = str(extversion or "")
+        try:
+            version: Version | None = Version(self._pgvector_version)
+        except (InvalidVersion, TypeError):
+            version = None
+        self._supports_hnsw = version is not None and version >= Version("0.5.0")
+        self._supports_halfvec = version is not None and version >= Version("0.7.0")
+        self._supports_sparsevec = self._supports_halfvec
+        self._supports_iterative_scan = version is not None and version >= Version("0.8.0")
+
+    def _detect_version(self) -> None:
+        """Read the live pgvector version and gate features on it. Raises a
+        friendly error if the server predates HNSW support (< 0.5.0)."""
+        conn = self._conn
+        if conn is None:
+            return
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+            row = cur.fetchone()
+        finally:
+            cur.close()
+        extversion = row[0] if row else None
+        if not extversion:
+            self._gate_features("0")
+            return
+        self._gate_features(str(extversion))
+        if not self._supports_hnsw:
+            raise RuntimeError(
+                f"pgvector {extversion} is too old for OpenViking; HNSW indexing requires "
+                ">= 0.5.0. Upgrade the extension (e.g. `ALTER EXTENSION vector UPDATE`)."
+            )
 
     def _load_existing_collection_if_needed(self) -> None:
         raise NotImplementedError

@@ -372,6 +372,65 @@ def test_sslmode_passed_to_connect(monkeypatch, pgvector_cfg, sslmode, expect_ur
         assert captured["kwargs"]["host"] == "10.0.0.5"
 
 
+class _FakeCursor:
+    def __init__(self, extversion):
+        self._extversion = extversion
+        self.executed = None
+        self.closed = False
+
+    def execute(self, sql, params=None):
+        self.executed = sql
+
+    def fetchone(self):
+        return (self._extversion,) if self._extversion is not None else None
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeConn:
+    closed = 0
+
+    def __init__(self, extversion):
+        self._extversion = extversion
+        self.last_cursor = None
+
+    def cursor(self):
+        self.last_cursor = _FakeCursor(self._extversion)
+        return self.last_cursor
+
+
+@pytest.mark.parametrize(
+    ("extversion", "hnsw", "halfvec", "iterative"),
+    [
+        ("0.8.2", True, True, True),
+        ("0.7.0", True, True, False),
+        ("0.5.1", True, False, False),
+    ],
+    ids=["v0.8-iterative", "v0.7-halfvec", "v0.5-hnsw-only"],
+)
+def test_version_gate_reads_extversion(extversion, hnsw, halfvec, iterative):
+    adapter = create_collection_adapter(_build_config())
+    adapter._conn = _FakeConn(extversion)
+
+    adapter._detect_version()
+
+    assert "extversion" in adapter._conn.last_cursor.executed
+    assert "extname" in adapter._conn.last_cursor.executed
+    assert adapter._supports_hnsw is hnsw
+    assert adapter._supports_halfvec is halfvec
+    assert adapter._supports_iterative_scan is iterative
+    assert adapter._pgvector_version == extversion
+
+
+def test_version_gate_rejects_pre_hnsw_pgvector():
+    adapter = create_collection_adapter(_build_config())
+    adapter._conn = _FakeConn("0.4.4")
+
+    with pytest.raises(RuntimeError, match="0.5"):
+        adapter._detect_version()
+
+
 def test_factory_creates_pgvector_adapter_without_connecting():
     adapter = create_collection_adapter(_build_config())
 
