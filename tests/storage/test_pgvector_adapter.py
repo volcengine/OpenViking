@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import os
 import types
+import uuid
 
 import pytest
 from pydantic import ValidationError
@@ -722,3 +724,93 @@ def test_pgvector_backend_url_priority_and_whitespace_normalization():
         VectorDBBackendConfig.model_validate(
             {"backend": "pgvector", "pgvector": {"url": "   ", "host": ""}}
         )
+
+
+def _pgvector_smoke_config(project):
+    return VectorDBBackendConfig.model_validate(
+        {
+            "backend": "pgvector",
+            "project": project,
+            "name": "context",
+            "index_name": "default",
+            "distance_metric": "cosine",
+            "dimension": 3,
+            "pgvector": {
+                "host": os.getenv("OPENVIKING_PGVECTOR_HOST", "127.0.0.1"),
+                "port": int(os.getenv("OPENVIKING_PGVECTOR_PORT", "15432")),
+                "user": os.getenv("OPENVIKING_PGVECTOR_USER", "postgres"),
+                "password": os.getenv("OPENVIKING_PGVECTOR_PASSWORD", "postgres"),
+                "db_name": os.getenv("OPENVIKING_PGVECTOR_DB", "postgres"),
+                "schema": os.getenv("OPENVIKING_PGVECTOR_SCHEMA", "public"),
+            },
+        }
+    )
+
+
+# A golden fixture whose nearest neighbour to the query [1, 0, 0] is unambiguous:
+# doc-a is identical, doc-b is close, doc-c is orthogonal — all under the same
+# scope so a scope_roots filter keeps all three.
+_SMOKE_QUERY = [1.0, 0.0, 0.0]
+_SMOKE_RECORDS = [
+    ("doc-a", "viking://resources/acme/docs/a.md", [1.0, 0.0, 0.0]),
+    ("doc-b", "viking://resources/acme/docs/b.md", [0.8, 0.2, 0.0]),
+    ("doc-c", "viking://resources/acme/docs/c.md", [0.0, 1.0, 0.0]),
+]
+_SMOKE_META = {
+    "CollectionName": "context",
+    "Fields": [
+        {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+        {"FieldName": "uri", "FieldType": "path"},
+        {"FieldName": "vector", "FieldType": "vector", "Dim": 3},
+        {"FieldName": "abstract", "FieldType": "string"},
+    ],
+}
+
+
+def _run_pgvector_smoke(adapter):
+    collection = adapter._new_collection(_SMOKE_META)
+    try:
+        collection.create_remote_collection(_SMOKE_META)
+        collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "hnsw", "Distance": "cosine"},
+                "ScalarIndex": ["uri", "parent_uri", "scope_roots"],
+            },
+        )
+        collection.upsert_data(
+            [
+                adapter._normalize_record_for_write(
+                    {"id": rid, "uri": uri, "vector": vec, "abstract": rid}
+                )
+                for rid, uri, vec in _SMOKE_RECORDS
+            ]
+        )
+
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=_SMOKE_QUERY,
+            limit=3,
+            filters={"op": "must", "field": "scope_roots", "conds": ["/resources/acme/docs"]},
+        )
+        count = collection.aggregate_data("default")
+
+        ids = [item.id for item in result.data]
+        assert ids[0] == "doc-a", ids  # exact nearest
+        assert ids == ["doc-a", "doc-b", "doc-c"], ids  # cosine-distance order
+        assert len(result.data) == 3  # min(K, limit) under a selective filter
+        assert count.agg["_total"] == 3
+    finally:
+        collection.drop()
+        adapter.close()
+
+
+@pytest.mark.skipif(
+    not os.getenv("OPENVIKING_PGVECTOR_HOST"),
+    reason="set OPENVIKING_PGVECTOR_HOST to run the pgvector integration smoke test",
+)
+def test_pgvector_adapter_integration_smoke():
+    suffix = uuid.uuid4().hex[:8]
+    adapter = create_collection_adapter(_pgvector_smoke_config(f"pytest_{suffix}"))
+    _run_pgvector_smoke(adapter)

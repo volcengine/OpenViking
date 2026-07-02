@@ -34,6 +34,7 @@ from openviking.storage.vectordb_adapters.base import CollectionAdapter
 from openviking.storage.vectordb_adapters.opengauss_adapter import (
     _VECTOR_OPS,
     OpenGaussCollection,
+    OpenGaussCollectionAdapter,
     _normalize_distance,
     _qualify,
     _quote_ident,
@@ -256,11 +257,21 @@ class PgVectorCollection(OpenGaussCollection):
         return SearchResult(data=scored_items[offset : offset + limit])
 
 
-class PgVectorCollectionAdapter(CollectionAdapter):
-    """CollectionAdapter for PostgreSQL with the pgvector extension."""
+class PgVectorCollectionAdapter(OpenGaussCollectionAdapter):
+    """CollectionAdapter for PostgreSQL with the pgvector extension.
+
+    Re-targets :class:`OpenGaussCollectionAdapter` (symmetric with
+    :class:`PgVectorCollection` re-targeting :class:`OpenGaussCollection`). It
+    inherits the adapter-level path plane verbatim — ``_normalize_record_for_write``
+    (scope_roots/uri_depth augmentation), ``_normalize_record_for_read``,
+    ``_sanitize_scalar_index_fields``, ``_build_default_index_meta``, and the
+    ``PathScope`` filter compilation — and overrides only the connection/driver
+    seam and collection construction (DSN connect, version gate, extension,
+    pgvector meta tables, PgVectorCollection). The openGauss-only distributed
+    helpers are inherited but never called.
+    """
 
     mode = "pgvector"
-    INTERNAL_PATH_FIELDS = ["parent_uri", "scope_roots", "uri_depth"]
 
     def __init__(
         self,
@@ -286,7 +297,9 @@ class PgVectorCollectionAdapter(CollectionAdapter):
         index_params: Dict[str, Any],
         dimension: int = 0,
     ) -> None:
-        super().__init__(collection_name=collection_name, index_name=index_name)
+        # Skip OpenGaussCollectionAdapter.__init__ (openGauss host/mode/shard_count
+        # signature); pgvector sets its own connection state below.
+        CollectionAdapter.__init__(self, collection_name=collection_name, index_name=index_name)
         self._url = url
         self._host = host
         self._port = int(port)
