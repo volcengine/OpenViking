@@ -291,16 +291,16 @@ class ResourceProcessor:
                         if resource_lock.active:
                             root_uri = candidate_uri
                         else:
-                            root_uri, resource_lock, auto_named = await self.reserve_unique_candidate(
+                            root_uri, resource_lock = await self.reserve_unique_candidate(
                                 candidate_uri=candidate_uri,
                                 ctx=ctx,
                             )
                             result["root_uri"] = root_uri
-                            if auto_named:
-                                result["warnings"] = result.get("warnings", []) + [
+                            if root_uri != candidate_uri:
+                                result.setdefault("warnings", []).append(
                                     f"'{candidate_uri}' already exists. Creating '{root_uri}'. "
                                     f"Tip: Use --to <path> to specify exact target."
-                                ]
+                                )
                     else:
                         target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
                         if not resource_lock.active:
@@ -400,13 +400,8 @@ class ResourceProcessor:
         candidate_uri: str,
         ctx: RequestContext,
         max_attempts: int = 100,
-    ) -> tuple[str, OwnedLockLease, bool]:
-        """Pick the first free candidate URI and reserve it with a resource TreeLock.
-
-        Returns:
-            Tuple of (root_uri, resource_lock, auto_named) where auto_named is True
-            if a numbered suffix was added because the original target existed.
-        """
+    ) -> tuple[str, OwnedLockLease]:
+        """Pick the first free candidate URI and reserve it with a resource TreeLock."""
         from openviking.storage.errors import ResourceBusyError
         from openviking.storage.transaction import get_lock_manager
 
@@ -423,7 +418,7 @@ class ResourceProcessor:
                 resource_lock = await self.acquire_resource_lock(
                     lock_manager, dst_path, uri=root_uri, timeout=0.0
                 )
-                return root_uri, resource_lock, attempt > 0
+                return root_uri, resource_lock
             except ResourceBusyError:
                 continue
 
