@@ -118,7 +118,8 @@ class AgentLoop:
             ...     max_iterations=30,
             ... )
         """
-        from vikingbot.config.schema import ExecToolConfig  # noqa: F811
+        # 在这里导入 ExecToolConfig 以避免 F811 警告
+        from vikingbot.config.schema import ExecToolConfig
 
         self.bus = bus
         self.provider = provider
@@ -659,34 +660,49 @@ class AgentLoop:
         openviking_connection: dict[str, Any] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
-        Run the core agent loop: call LLM, execute tools, repeat until done.
+        运行核心代理循环：调用LLM，执行工具，重复直到完成。
+        
+        此函数实现了智能体的核心工作流程，包括：
+        1. 与语言模型对话获取响应
+        2. 处理工具调用（如果存在）
+        3. 并行执行多个工具
+        4. 收集结果并决定是否继续迭代
+        5. 最终返回处理结果
 
         Args:
-            messages: Initial message list
-            session_key: Session key for tool execution context
-            publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
-            ov_tools_enable: Whether to enable OpenViking tools for this session
-            memory_peer_ids: List of peer IDs for memory retrieval
-            memory_owner_user_ids: List of explicit OpenViking user IDs for
-                trusted-mode owner-user memory lookup
-            disabled_tools: Tool names to hide from the model for this request
-            openviking_connection: Request-scoped OpenViking identity for tools
+            messages: 初始消息列表，用于构建对话上下文
+            session_key: 工具执行上下文的会话键
+            publish_events: 是否将迭代/推理/工具调用事件发布到总线
+            sender_id: 发送者ID，可选
+            ov_tools_enable: 是否为此会话启用OpenViking工具
+            memory_peer_ids: 用于内存检索的对等ID列表
+            memory_owner_user_ids: 用于可信模式所有者用户内存查找的显式OpenViking用户ID列表
+            disabled_tools: 在此请求中对模型隐藏的工具名称
+            openviking_connection: 工具的请求范围OpenViking身份
 
         Returns:
-            tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
+            包含以下元素的元组:
+            - final_content: 最终内容（字符串或None）
+            - final_reasoning_content: 最终推理内容（字符串或None）
+            - tools_used: 使用的工具列表，每个元素包含工具使用详情
+            - token_usage: 令牌使用统计字典，包含提示、补全和总计令牌数
+            - iteration: 实际迭代次数
         """
+        # 初始化变量以跟踪迭代过程中的状态
         iteration = 0
         final_content = None
         final_reasoning_content = None
         tools_used: list[dict] = []
         token_usage = {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
+            "prompt_tokens": 0,        # 输入消耗tokens
+            "completion_tokens": 0,    # 输出消耗tokens
+            "total_tokens": 0,         # 总消耗tokens
         }
+        # 标记是否已注入经验记忆
         write_exp_injected = False
 
         def accumulate_token_usage(response: Any) -> None:
+            """累加响应中的令牌使用量到总使用量统计中"""
             if not response.usage:
                 return
             cur_token = response.usage
@@ -694,9 +710,11 @@ class AgentLoop:
             token_usage["completion_tokens"] += cur_token.get("completion_tokens", 0)
             token_usage["total_tokens"] += cur_token.get("total_tokens", 0)
 
+        # 主循环：运行最多max_iterations次迭代
         while iteration < self.max_iterations:
             iteration += 1
 
+            # 发布迭代事件到消息总线（如果启用）
             if publish_events:
                 await self.bus.publish_outbound(
                     OutboundMessage(
@@ -706,10 +724,13 @@ class AgentLoop:
                     )
                 )
 
+            # 获取可用的工具定义
             tool_definitions = self.tools.get_definitions(
                 ov_tools_enable=ov_tools_enable,
                 disabled_tools=disabled_tools,
             )
+            
+            # 与聊天模型交互，获取响应和流内容
             response, _streamed_content, streamed_reasoning = await self._chat_with_stream_events(
                 messages=messages,
                 tools=tool_definitions,
@@ -718,6 +739,7 @@ class AgentLoop:
             )
             accumulate_token_usage(response)
 
+            # 发布推理内容事件（如果启用且未流式传输推理内容）
             if publish_events and response.reasoning_content and not streamed_reasoning:
                 await self.bus.publish_outbound(
                     OutboundMessage(
@@ -727,15 +749,16 @@ class AgentLoop:
                     )
                 )
 
+            # 检查是否有工具调用
             if response.has_tool_calls:
-                # Inject experience memory before write-related tool calls (once per session)
+                # 在写入相关工具调用之前注入经验记忆（每个会话一次）
                 if not write_exp_injected:
                     _ov_cfg = load_config().ov_server
                     _write_tools = set(_ov_cfg.exp_write_tools)
                     if any(tc.name in _write_tools for tc in response.tool_calls):
                         write_exp_injected = True
                         try:
-                            # Build query from last 3 user messages
+                            # 从最后3个用户消息构建查询
                             _user_msgs = [
                                 m["content"]
                                 for m in messages
@@ -766,8 +789,13 @@ class AgentLoop:
                         except Exception as _e:
                             logger.warning(f"[WRITE_EXP]: failed to load experience: {_e}")
 
+                # 更新最终推理内容
                 final_reasoning_content = response.reasoning_content
+                
+                # 准备工具调用参数
                 args_list = [tc.arguments for tc in response.tool_calls]
+                
+                # 将工具调用转换为字典格式
                 tool_call_dicts = [
                     {
                         "id": tc.id,
@@ -779,6 +807,8 @@ class AgentLoop:
                     }
                     for tc, args in zip(response.tool_calls, args_list, strict=False)
                 ]
+                
+                # 添加助手消息到对话历史
                 messages = self.context.add_assistant_message(
                     messages,
                     response.content,
@@ -786,9 +816,9 @@ class AgentLoop:
                     reasoning_content=response.reasoning_content,
                 )
 
-                # Stage 2: Execute all tools in parallel
+                # 第二阶段：并行执行所有工具
                 async def execute_single_tool(idx: int, tool_call):
-                    """Execute a single tool and track execution time."""
+                    """执行单个工具并跟踪执行时间。"""
                     tool_execute_start_time = time.time()
                     result = await self.tools.execute(
                         tool_call.name,
@@ -803,11 +833,13 @@ class AgentLoop:
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     return idx, tool_call, result, tool_execute_duration
 
-                # Run all tool executions in parallel
+                # 并行运行所有工具执行任务
                 tool_tasks = [
                     execute_single_tool(idx, tool_call)
                     for idx, tool_call in enumerate(response.tool_calls)
                 ]
+                
+                # 发布工具调用事件（如果启用）
                 if publish_events:
                     for tool_call in response.tool_calls:
                         args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
@@ -818,14 +850,17 @@ class AgentLoop:
                                 event_type=OutboundEventType.TOOL_CALL,
                             )
                         )
+                        
+                # 等待所有工具执行完成
                 results = await asyncio.gather(*tool_tasks)
 
-                # Stage 3: Process results sequentially in original order
+                # 第三阶段：按原始顺序顺序处理结果
                 for _idx, tool_call, result, tool_execute_duration in results:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
                     logger.info(f"[RESULT]: {str(result)[:600]}")
 
+                    # 发布工具结果事件（如果启用）
                     if publish_events:
                         await self.bus.publish_outbound(
                             OutboundMessage(
@@ -834,10 +869,13 @@ class AgentLoop:
                                 event_type=OutboundEventType.TOOL_RESULT,
                             )
                         )
+                        
+                    # 将工具结果添加到消息历史
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
 
+                    # 记录使用的工具信息
                     tool_used_dict = {
                         "tool_name": tool_call.name,
                         "args": args_str,
@@ -849,16 +887,20 @@ class AgentLoop:
                     }
                     tools_used.append(tool_used_dict)
 
+                # 添加反思提示，让模型决定下一步操作
                 messages.append(
                     {"role": "user", "content": "Reflect on the results and decide next steps."}
                 )
             else:
+                # 没有工具调用，结束循环
                 final_content = response.content
                 final_reasoning_content = response.reasoning_content
                 break
 
+        # 处理迭代限制情况：如果达到最大迭代次数但没有最终内容
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
             if iteration >= self.max_iterations:
+                # 构建提示让用户模型直接回答原始请求
                 messages.append(
                     {
                         "role": "user",
@@ -871,6 +913,8 @@ class AgentLoop:
                         ),
                     }
                 )
+                
+                # 最后一次与模型对话以获取答案
                 response, _streamed_content, streamed_reasoning = await self._chat_with_stream_events(
                     messages=messages,
                     tools=[],
@@ -881,6 +925,7 @@ class AgentLoop:
                 final_content = response.content
                 final_reasoning_content = response.reasoning_content
 
+                # 发布最终推理内容事件（如果启用且未流式传输推理内容）
                 if publish_events and response.reasoning_content and not streamed_reasoning:
                     await self.bus.publish_outbound(
                         OutboundMessage(
@@ -890,6 +935,7 @@ class AgentLoop:
                         )
                     )
 
+        # 设置默认内容（如果没有获得有效内容）
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
             if iteration >= self.max_iterations:
                 final_content = (
