@@ -7,6 +7,7 @@ Reference: bot/vikingbot/agent/tools/base.py design pattern
 """
 
 import json
+import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -268,7 +269,42 @@ class MemorySearchTool(MemoryTool):
                 limit=limit + 10,
                 ctx=request_ctx,
             )
-            return optimize_search_result(search_result.to_dict(), limit=limit)
+            result_dict = search_result.to_dict()
+            memories = result_dict.get("memories") or []
+            if memories:
+                return optimize_search_result(result_dict, limit=limit)
+            # Semantic recall returned nothing. Before reporting an empty
+            # result, retry with a literal grep so that an embedding/index gap
+            # does not masquerade as "no matching content". The query is
+            # regex-escaped so it matches as a literal substring; case-
+            # insensitive covers any residual case mismatch. grep returns
+            # {line, uri, content} matches — project onto the {uri, score}
+            # memory shape so optimize_search_result can filter/limit uniformly.
+            if query:
+                try:
+                    grep_result = await ctx.viking_fs.grep(
+                        target_uri,
+                        pattern=re.escape(query),
+                        case_insensitive=True,
+                        node_limit=limit + 10,
+                        ctx=request_ctx,
+                    )
+                except Exception as grep_err:
+                    tracer.error(f"search grep fallback failed: {grep_err}")
+                    grep_result = {"matches": []}
+                grep_memories = [
+                    {
+                        "uri": m.get("uri", ""),
+                        "score": 0.0,
+                        "line": m.get("line", 0),
+                        "content": m.get("content", ""),
+                    }
+                    for m in (grep_result.get("matches") or [])
+                    if m.get("uri")
+                ]
+                if grep_memories:
+                    result_dict = {"memories": grep_memories}
+            return optimize_search_result(result_dict, limit=limit)
         except Exception as e:
             tracer.error(f"Failed to execute search: {e}")
             return {"error": str(e)}
