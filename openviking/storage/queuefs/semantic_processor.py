@@ -1008,7 +1008,13 @@ class SemanticProcessor(DequeueHandlerBase):
                 except Exception:
                     continue  # no sidecar at this level
                 try:
-                    await viking_fs.write_file(target_mapping, mapping_content, ctx=ctx)
+                    # TODO: This must be optimized once pathlock is pushed down into ragfs.
+                    await viking_fs.write_file(
+                        target_mapping,
+                        mapping_content,
+                        ctx=ctx,
+                        lock_handle=lock.handle,
+                    )
                 except Exception:
                     # Target subtree may not exist (doc removed in sync); skip.
                     pass
@@ -1173,9 +1179,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         first_sentence_end = None
         last_sentence_end_within_limit = None
-        for sentence_end_match in re.finditer(
-            r"\.(?!\d)(?=\s|$)|[!?](?=\s|$)|[。？！]", text
-        ):
+        for sentence_end_match in re.finditer(r"\.(?!\d)(?=\s|$)|[!?](?=\s|$)|[。？！]", text):
             sentence_end = sentence_end_match.end()
             if first_sentence_end is None:
                 first_sentence_end = sentence_end
