@@ -57,6 +57,18 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_DIRECTORY_ABSTRACT_NOT_READY_SUFFIX = "[Directory abstract is not ready]"
+
+
+def _is_not_ready_directory_abstract(text: str) -> bool:
+    if not text:
+        return True
+    head = text.rstrip()
+    if not head.endswith(_DIRECTORY_ABSTRACT_NOT_READY_SUFFIX):
+        return False
+    head = head[: -len(_DIRECTORY_ABSTRACT_NOT_READY_SUFFIX)].strip()
+    return head.startswith("#") and "\n" not in head
+
 
 @dataclass
 class DiffResult:
@@ -547,16 +559,23 @@ class SemanticProcessor(DequeueHandlerBase):
                 raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
 
             file_paths: List[str] = []
+            child_dirs: List[str] = []
             for entry in entries:
                 name = entry.get("name", "")
                 if not name or name.startswith(".") or name in [".", ".."]:
                     continue
-                if not entry.get("isDir", False):
-                    item_uri = VikingURI(dir_uri).join(name).uri
+                item_uri = VikingURI(dir_uri).join(name).uri
+                if entry.get("isDir", False):
+                    child_dirs.append(item_uri)
+                else:
                     file_paths.append(item_uri)
 
-            if not file_paths:
-                logger.info(f"No memory files found in {dir_uri}")
+            children_abstracts = (
+                await self._collect_children_abstracts(child_dirs, ctx=ctx) if child_dirs else []
+            )
+
+            if not file_paths and not children_abstracts:
+                logger.info(f"No memory files or child abstracts found in {dir_uri}")
                 _mark_done()
                 return
 
@@ -654,7 +673,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 if file_path in paths_to_vectorize and summary is not None
             ]
             generated_content = await self._generate_overview(
-                dir_uri, completed_summaries, [], llm_sem=llm_sem
+                dir_uri, completed_summaries, children_abstracts, llm_sem=llm_sem
             )
             overview, abstract = self._normalize_overview_generation(generated_content)
 
@@ -1032,7 +1051,13 @@ class SemanticProcessor(DequeueHandlerBase):
         results = []
 
         for child_uri in children_uris:
-            abstract = await viking_fs.abstract(child_uri, ctx=ctx)
+            try:
+                abstract = await viking_fs.abstract(child_uri, ctx=ctx)
+            except Exception as e:
+                logger.debug(f"Failed to read child abstract for {child_uri}: {e}")
+                continue
+            if _is_not_ready_directory_abstract(abstract):
+                continue
             dir_name = child_uri.split("/")[-1]
             results.append({"name": dir_name, "abstract": abstract})
         return results

@@ -153,6 +153,21 @@ class _FakeMemoryDirFS:
         ]
 
 
+class _FakeMemoryParentDirFS:
+    async def ls(self, uri, node_limit=None, ctx=None):
+        del uri, node_limit, ctx
+        return [
+            {"name": "2026", "isDir": True},
+            {"name": "empty", "isDir": True},
+        ]
+
+    async def abstract(self, uri, ctx=None):
+        del ctx
+        if uri.endswith("/2026"):
+            return "# 2026\n\nrolled up event summaries"
+        return f"# {uri} [Directory abstract is not ready]"
+
+
 @pytest.mark.asyncio
 async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
     lock_manager = _FakeLockManager()
@@ -249,6 +264,54 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
     )
 
     assert [item["name"] for item in summaries] == ["first.md", "second.md"]
+
+
+@pytest.mark.asyncio
+async def test_memory_directory_rolls_up_child_abstracts_without_direct_files(monkeypatch):
+    processor = SemanticProcessor(max_concurrent_llm=4)
+    dir_uri = "viking://user/default/memories/events"
+    captured_children = []
+    captured_directory_vectorize = []
+
+    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
+        del dir_uri, file_summaries, llm_sem
+        captured_children.extend(children_abstracts)
+        return "overview"
+
+    async def write_semantics(**kwargs):
+        del kwargs
+        return True
+
+    async def vectorize_directory(**kwargs):
+        captured_directory_vectorize.append(kwargs)
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeMemoryParentDirFS(),
+    )
+    monkeypatch.setattr(processor, "_generate_overview", generate_overview)
+    monkeypatch.setattr(
+        processor,
+        "_normalize_overview_generation",
+        lambda overview: (overview, "abstract"),
+    )
+    monkeypatch.setattr(processor, "_write_memory_directory_semantics", write_semantics)
+    monkeypatch.setattr(processor, "_vectorize_directory", vectorize_directory)
+
+    await processor._process_memory_directory(
+        SemanticMsg(
+            uri=dir_uri,
+            context_type="memory",
+        )
+    )
+
+    assert captured_children == [
+        {"name": "2026", "abstract": "# 2026\n\nrolled up event summaries"}
+    ]
+    assert len(captured_directory_vectorize) == 1
+    assert captured_directory_vectorize[0]["uri"] == dir_uri
+    assert captured_directory_vectorize[0]["abstract"] == "abstract"
+    assert captured_directory_vectorize[0]["overview"] == "overview"
 
 
 @pytest.mark.asyncio
