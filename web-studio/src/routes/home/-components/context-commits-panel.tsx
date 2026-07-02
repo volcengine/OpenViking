@@ -30,12 +30,14 @@ const ContextCommitsHeatmap = lazy(() =>
 export function ContextCommitsPanel({
   data,
   disabled: disabledProp,
+  disabledMessage,
   isError,
   isLoading,
   t,
 }: {
   data: ConsoleSeries<ContextCommitItem> | undefined
   disabled?: boolean
+  disabledMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -82,7 +84,7 @@ export function ContextCommitsPanel({
       ) : isError ? (
         <EmptyState>{t('requestFailed')}</EmptyState>
       ) : disabled ? (
-        <EmptyState>{t('usageDisabled')}</EmptyState>
+        <EmptyState>{disabledMessage ?? t('usageDisabled')}</EmptyState>
       ) : items.length === 0 ? (
         <EmptyState>{t('contextCommits.empty')}</EmptyState>
       ) : (
