@@ -220,6 +220,36 @@ def is_code_hosting_url(url: str) -> bool:
     return _domain_matches(urlparse(url), all_domains)
 
 
+def is_code_hosting_blob_url(url: str) -> bool:
+    """Check whether a URL points to a single file on a code hosting platform.
+
+    Recognizes GitHub/GitLab ``blob`` URLs and GitHub ``raw`` URLs, e.g.
+    ``https://github.com/org/repo/blob/main/README.md`` or
+    ``https://raw.githubusercontent.com/org/repo/main/README.md``. These
+    historically go through HTTPAccessor (with optional blob->raw rewriting),
+    not the recursive web crawler.
+    """
+    if not url.startswith(("http://", "https://")):
+        return False
+
+    config = get_openviking_config()
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+
+    raw_hosts = {"raw.githubusercontent.com"}
+    if host in raw_hosts:
+        return True
+
+    code_hosts = set(config.code.github_domains) | set(config.code.gitlab_domains)
+    if host not in code_hosts:
+        return False
+
+    path_parts = [p for p in parsed.path.split("/") if p]
+    return "blob" in path_parts or "raw" in path_parts
+
+
 def validate_git_ssh_uri(url: str) -> None:
     """Validate a git@ SSH URI format.
 
