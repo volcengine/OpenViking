@@ -12,7 +12,6 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.skills import (
     _list_skill_files,
     _list_skills_from_root,
-    _merge_skills,
     _require_skill,
     _restore_skill_privacy,
     _skill_summary_from_hit,
@@ -290,11 +289,11 @@ class LocalClient(BaseClient):
     ) -> Dict[str, Any]:
         """Get a skill by name."""
         from openviking.server.routers.skills import (
+            SOURCE_METADATA_FILENAME,
             _parse_abstract_meta,
             _relative_skill_path,
             _skill_file_kind,
             _skill_summary_from_meta,
-            SOURCE_METADATA_FILENAME,
         )
         from openviking.server.skill_source_metadata import read_skill_source_metadata
 
@@ -315,7 +314,11 @@ class LocalClient(BaseClient):
             result["abstract"] = abstract
         if level is None or level == 1:
             result["overview"] = await service.fs.overview(root_uri, ctx=ctx)
-        if level == 2 or include_content is True or (level is None and include_content is not False):
+        if (
+            level == 2
+            or include_content is True
+            or (level is None and include_content is not False)
+        ):
             from openviking.server.routers.skills import _skill_md_uri
 
             result["content"] = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
@@ -476,7 +479,7 @@ class LocalClient(BaseClient):
         service = self._service
         ctx = self._ctx
         root_uri = await _require_skill(service, ctx, skill_name, target_uri)
-        result = await service.fs.rm(root_uri, ctx=ctx, recursive=True)
+        await service.fs.rm(root_uri, ctx=ctx, recursive=True)
         return {"name": skill_name, "uri": root_uri, "root_uri": root_uri, "deleted": True}
 
     async def validate_skill(
@@ -913,6 +916,7 @@ class LocalClient(BaseClient):
         parts: Optional[List[Dict[str, Any]]] = None,
         created_at: Optional[str] = None,
         peer_id: Optional[str] = None,
+        auto_commit_policy: dict[str, Any] | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add a message to a session.
@@ -937,6 +941,7 @@ class LocalClient(BaseClient):
                 parts,
                 created_at,
                 peer_id,
+                auto_commit_policy,
             ),
         )
         return attach_telemetry_payload(
@@ -952,6 +957,7 @@ class LocalClient(BaseClient):
         parts: Optional[List[Dict[str, Any]]],
         created_at: Optional[str],
         peer_id: Optional[str],
+        auto_commit_policy: dict[str, Any] | None,
     ) -> Dict[str, Any]:
         from openviking.message.part import Part, TextPart, part_from_dict
 
@@ -971,6 +977,16 @@ class LocalClient(BaseClient):
             peer_id=self._resolve_message_peer_id(role, peer_id),
             created_at=created_at,
         )
+        await self._service.sessions.persist_auto_commit_policy_and_schedule(
+            session,
+            auto_commit_policy=auto_commit_policy,
+            policy_provided=auto_commit_policy is not None,
+        )
+        await self._service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            self._ctx,
+            reason_hint="token_threshold",
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
@@ -980,13 +996,18 @@ class LocalClient(BaseClient):
         self,
         session_id: str,
         messages: List[Dict[str, Any]],
+        auto_commit_policy: dict[str, Any] | None = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add multiple messages to a session in one batch."""
         execution = await run_with_telemetry(
             operation="session.batch_add_messages",
             telemetry=telemetry,
-            fn=lambda: self._batch_add_messages_impl(session_id, messages),
+            fn=lambda: self._batch_add_messages_impl(
+                session_id,
+                messages,
+                auto_commit_policy,
+            ),
         )
         return attach_telemetry_payload(
             execution.result,
@@ -997,6 +1018,7 @@ class LocalClient(BaseClient):
         self,
         session_id: str,
         messages: List[Dict[str, Any]],
+        auto_commit_policy: dict[str, Any] | None,
     ) -> Dict[str, Any]:
         from openviking.message.part import Part, TextPart, part_from_dict
 
@@ -1026,6 +1048,16 @@ class LocalClient(BaseClient):
             )
 
         added = session.add_messages(specs)
+        await self._service.sessions.persist_auto_commit_policy_and_schedule(
+            session,
+            auto_commit_policy=auto_commit_policy,
+            policy_provided=auto_commit_policy is not None,
+        )
+        await self._service.sessions.maybe_schedule_auto_commit(
+            session_id,
+            self._ctx,
+            reason_hint="token_threshold",
+        )
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

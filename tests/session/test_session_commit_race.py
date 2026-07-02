@@ -4,11 +4,15 @@
 """Tests for session commit race condition fix (#580)."""
 
 import asyncio
+import json
+
+import pytest
 
 from openviking import AsyncOpenViking
 from openviking.message import TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -24,10 +28,15 @@ class TestCommitRace:
         results = await asyncio.gather(
             session.commit_async(),
             session.commit_async(),
+            return_exceptions=True,
         )
 
-        archived_count = sum(1 for r in results if r.get("archived") is True)
+        archived_count = sum(
+            1 for r in results if isinstance(r, dict) and r.get("archived") is True
+        )
         assert archived_count == 1, f"Expected exactly 1 archived commit, got {archived_count}"
+        conflicts = [r for r in results if isinstance(r, LockAcquisitionError)]
+        assert len(conflicts) == 1
 
         # Messages should be cleared after commit
         assert len(session.messages) == 0
@@ -158,3 +167,23 @@ class TestCommitRace:
         result = await commit_task
 
         assert result.get("archived") is True
+
+    async def test_commit_lock_conflict_preserves_pending_tokens(self, client: AsyncOpenViking):
+        """A commit lock conflict is retryable and must not clear pending tokens."""
+        session = client.session(session_id="race_test_commit_lock_conflict")
+        session.add_message("user", [TextPart("Original message")])
+        session.meta.pending_tokens = 123
+        await session._save_meta()
+
+        session_path = session._viking_fs._uri_to_path(session._session_uri, ctx=session.ctx)
+        async with LockContext(get_lock_manager(), [session_path], lock_mode="exact"):
+            with pytest.raises(LockAcquisitionError):
+                await session.commit_async()
+
+        assert session.meta.pending_tokens == 123
+
+        raw_meta = await session._viking_fs.read_file(
+            f"{session._session_uri}/.meta.json",
+            ctx=session.ctx,
+        )
+        assert json.loads(raw_meta)["pending_tokens"] == 123

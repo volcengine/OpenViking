@@ -42,6 +42,7 @@ class Session:
         parts: Optional[List[Part]] = None,
         created_at: Optional[str] = None,
         peer_id: Optional[str] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add a message to the session.
 
@@ -65,6 +66,7 @@ class Session:
                 parts=parts_dicts,
                 created_at=created_at,
                 peer_id=peer_id,
+                auto_commit_policy=auto_commit_policy,
             )
         return await self._client.add_message(
             self.session_id,
@@ -72,11 +74,13 @@ class Session:
             content=content,
             created_at=created_at,
             peer_id=peer_id,
+            auto_commit_policy=auto_commit_policy,
         )
 
     async def batch_add_messages(
         self,
         messages: List[Dict[str, Any]],
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add multiple messages to the session in a single request.
 
@@ -90,6 +94,7 @@ class Session:
         return await self._client.batch_add_messages(
             self.session_id,
             messages=messages,
+            auto_commit_policy=auto_commit_policy,
         )
 
     async def commit(
