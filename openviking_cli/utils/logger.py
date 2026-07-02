@@ -59,6 +59,42 @@ except ImportError:
     format_trace_id = None
 
 
+# Concurrent-safe rotating file handler. Its doRollover() coordinates across
+# processes/handles, avoiding the Windows PermissionError [WinError 32] the
+# stdlib TimedRotatingFileHandler raises at midnight rollover when another
+# handle holds the log file open.
+#
+# concurrent-log-handler is a REQUIRED dependency (declared in pyproject.toml), so
+# this import normally succeeds. The guard is a defensive last resort: rather than
+# crash the whole logging subsystem in a broken/incomplete environment, we degrade
+# to the stdlib handler and warn loudly.
+#
+# We catch ImportError (the parent of ModuleNotFoundError) so BOTH degraded cases
+# fall back: the package absent entirely (ModuleNotFoundError naming
+# concurrent_log_handler) and the package present-but-incompatible so the symbol is
+# missing (a plain ImportError, which is NOT a ModuleNotFoundError). We re-raise
+# only a ModuleNotFoundError naming some *other* module (e.g. a missing transitive
+# dep such as portalocker), so genuine install breakage surfaces instead of being
+# silently masked.
+try:
+    from concurrent_log_handler import ConcurrentTimedRotatingFileHandler
+except ImportError as exc:
+    if isinstance(exc, ModuleNotFoundError) and exc.name != "concurrent_log_handler":
+        raise
+    import warnings
+
+    warnings.warn(
+        "concurrent-log-handler is unavailable; falling back to the stdlib "
+        "TimedRotatingFileHandler. Midnight log rotation is NOT concurrent-safe and "
+        "can raise PermissionError [WinError 32] on Windows. Reinstall the required "
+        "'concurrent-log-handler' package to restore safe rotation.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
+    ConcurrentTimedRotatingFileHandler = TimedRotatingFileHandler  # type: ignore[assignment,misc]
+
+
 # Global OTel log handler state
 _otel_log_handler_initialized = False
 _otel_log_handler: Any = None
@@ -66,6 +102,7 @@ _otel_log_handler: Any = None
 _MANAGED_LOGGER_ROOTS = ("openviking", "openviking_cli", "uvicorn")
 _shared_log_handler: Optional[logging.Handler] = None
 _shared_log_handler_key: Optional[tuple[Any, ...]] = None
+_shared_log_handler_lock = threading.RLock()
 
 # QueueListeners for thread-safe stdout/stderr logging (avoids StreamHandler stalls
 # on application threads when process managers redirect streams).
@@ -719,7 +756,7 @@ def _create_log_handler(log_output: str, config: Optional[Any]) -> logging.Handl
                         when = log_rotation_interval
                         interval = 1
 
-                    return TimedRotatingFileHandler(
+                    return ConcurrentTimedRotatingFileHandler(
                         log_output,
                         when=when,
                         interval=interval,
@@ -728,7 +765,21 @@ def _create_log_handler(log_output: str, config: Optional[Any]) -> logging.Handl
                     )
                 else:
                     return logging.FileHandler(log_output, encoding="utf-8")
-            except Exception:
+            except Exception as exc:
+                # Preserve the fallback — a working non-rotating handler beats
+                # crashing logging setup — but make the downgrade observable.
+                # Otherwise a ConcurrentTimedRotatingFileHandler construction
+                # failure (e.g. a portalocker lock error on a network/cloud-synced
+                # path) would silently discard the concurrent-safe rotation this
+                # module configures, with nothing explaining why rotation stopped.
+                logging.getLogger(__name__).warning(
+                    "Falling back to a non-rotating FileHandler for %r: could not "
+                    "construct the rotating log handler (%s: %s). Log rotation is "
+                    "disabled for this handler.",
+                    log_output,
+                    type(exc).__name__,
+                    exc,
+                )
                 return logging.FileHandler(log_output, encoding="utf-8")
         else:
             return logging.FileHandler(log_output, encoding="utf-8")
@@ -766,22 +817,23 @@ def _get_shared_handler(
 ) -> logging.Handler:
     global _shared_log_handler, _shared_log_handler_key
 
-    if config is None:
-        handler_key = (log_output, format_string, None)
-    else:
-        handler_key = (
-            log_output,
-            format_string,
-            bool(config.log.rotation),
-            config.log.rotation_interval,
-            config.log.rotation_days,
-        )
-    if not force and _shared_log_handler is not None and _shared_log_handler_key == handler_key:
-        return _shared_log_handler
+    with _shared_log_handler_lock:
+        if config is None:
+            handler_key = (log_output, format_string, None)
+        else:
+            handler_key = (
+                log_output,
+                format_string,
+                bool(config.log.rotation),
+                config.log.rotation_interval,
+                config.log.rotation_days,
+            )
+        if not force and _shared_log_handler is not None and _shared_log_handler_key == handler_key:
+            return _shared_log_handler
 
-    _shared_log_handler = _build_standard_handler(log_output, config, format_string)
-    _shared_log_handler_key = handler_key
-    return _shared_log_handler
+        _shared_log_handler = _build_standard_handler(log_output, config, format_string)
+        _shared_log_handler_key = handler_key
+        return _shared_log_handler
 
 
 def _configure_logger_instance(
