@@ -10,7 +10,7 @@
 
 English / [中文](README_CN.md) / [日本語](README_JA.md)
 
-<a href="https://www.openviking.ai">Website</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="./docs">Docs</a>
+<a href="https://www.openviking.ai">Website</a> · <a href="https://openviking.ai/studio">Live Demo</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="./docs">Docs</a>
 
 [![](https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff\&labelColor=black\&logo=github\&style=flat-square)](https://github.com/volcengine/OpenViking/releases)
 [![](https://img.shields.io/github/stars/volcengine/OpenViking?labelColor\&style=flat-square\&color=ffcb47)](https://github.com/volcengine/OpenViking)
@@ -58,6 +58,8 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 - **Automatic Session Management** → **Context Self-Iteration**: Automatically compresses content, resource references, tool calls, etc., in conversations, extracting long-term memory, making the Agent smarter with use.
 
 ## Quick Start
+
+> 💡 **Want to see it in action first?** Try [OpenViking Studio](https://openviking.ai/studio) — a live hosted instance with a context playground, semantic search, and a multi-agent hub. No installation required.
 
 ### Local Deployment
 
