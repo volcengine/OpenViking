@@ -148,6 +148,13 @@ class SessionAutoCommitScheduler:
             content = await agfs.read(meta_path)
             raw = content.decode("utf-8") if isinstance(content, bytes) else str(content)
             meta = json.loads(raw)
+            if not isinstance(meta, dict):
+                logger.warning(
+                    "Invalid session meta object for idle auto-commit: %s (%s)",
+                    meta_path,
+                    type(meta).__name__,
+                )
+                return None
         except json.JSONDecodeError as exc:
             logger.warning(
                 "Invalid session meta JSON for idle auto-commit: %s (%s)",

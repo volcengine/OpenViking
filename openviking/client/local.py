@@ -1026,6 +1026,12 @@ class LocalClient(BaseClient):
         specs: list[dict[str, Any]] = []
 
         for index, message in enumerate(messages):
+            if "auto_commit_policy" in message:
+                raise ValueError(
+                    "Per-message auto_commit_policy is not allowed in batch requests; "
+                    "use the top-level auto_commit_policy field instead"
+                )
+
             role = message.get("role")
             if not role:
                 raise ValueError(f"messages[{index}]: missing required key 'role'")

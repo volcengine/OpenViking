@@ -13,8 +13,12 @@ from types import SimpleNamespace
 import pytest
 
 import openviking.service.session_auto_commit as auto_commit_module
+import openviking.service.session_service as session_service_module
+from openviking.server.config import SessionAutoCommitConfig
 from openviking.server.identity import RequestContext
 from openviking.service.session_auto_commit import SessionAutoCommitScheduler
+from openviking.service.session_service import SessionService
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class _FakeVikingFS:
@@ -124,6 +128,77 @@ class _FakeSessionService:
         return True
 
 
+class _FakeSessionMeta:
+    def __init__(
+        self,
+        *,
+        auto_commit_policy: dict,
+        pending_tokens: int = 0,
+        message_count: int = 0,
+        keep_recent_count: int = 0,
+        last_message_at: str = "",
+    ) -> None:
+        self.auto_commit_policy = auto_commit_policy
+        self.pending_tokens = pending_tokens
+        self.message_count = message_count
+        self.keep_recent_count = keep_recent_count
+        self.last_message_at = last_message_at
+        self.auto_commit_last_error = ""
+        self.auto_commit_last_error_at = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "auto_commit_policy": self.auto_commit_policy,
+            "pending_tokens": self.pending_tokens,
+            "message_count": self.message_count,
+            "keep_recent_count": self.keep_recent_count,
+            "last_message_at": self.last_message_at,
+        }
+
+
+class _FakeAutoCommitSession:
+    def __init__(self, meta: _FakeSessionMeta) -> None:
+        self.meta = meta
+        self.commit_calls: list[int] = []
+        self.save_calls = 0
+
+    async def commit_async(self, *, keep_recent_count: int = 0):
+        self.commit_calls.append(keep_recent_count)
+        return {"archived": True}
+
+    async def _save_meta(self):
+        self.save_calls += 1
+
+
+class _FakeTaskTracker:
+    async def has_running(self, *args, **kwargs) -> bool:
+        return False
+
+
+def _auto_commit_ctx() -> RequestContext:
+    return RequestContext(
+        user=UserIdentifier(account_id="acct_a", user_id="user_b"),
+        role="user",
+    )
+
+
+def _session_service_for_auto_commit_test(
+    monkeypatch: pytest.MonkeyPatch,
+    session: _FakeAutoCommitSession,
+) -> SessionService:
+    service = SessionService()
+    service.set_session_auto_commit_config(
+        SessionAutoCommitConfig(idle_enabled=True, check_interval_seconds=60.0)
+    )
+
+    async def fake_get(session_id, ctx, auto_create=False):
+        return session
+
+    monkeypatch.setattr(service, "get", fake_get)
+    monkeypatch.setattr(session_service_module, "get_task_tracker", lambda: _FakeTaskTracker())
+    return service
+
+
 def _meta(
     *,
     account_id: str = "acct_a",
@@ -153,6 +228,49 @@ def _meta(
 
 def _session_entry(session_id: str) -> dict[str, object]:
     return {"name": session_id, "isDir": True}
+
+
+@pytest.mark.asyncio
+async def test_run_auto_commit_rechecks_token_threshold_before_committing(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={
+                "enabled": True,
+                "token_threshold": 100,
+                "keep_recent_count": 0,
+            },
+            pending_tokens=10,
+            message_count=1,
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+
+    await service.run_auto_commit("session_a", _auto_commit_ctx(), reason="token_threshold")
+
+    assert session.commit_calls == []
+    assert session.save_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_run_auto_commit_rechecks_idle_timeout_before_committing(monkeypatch):
+    session = _FakeAutoCommitSession(
+        _FakeSessionMeta(
+            auto_commit_policy={
+                "enabled": True,
+                "idle_timeout_seconds": 300,
+                "keep_recent_count": 0,
+            },
+            pending_tokens=1,
+            message_count=1,
+            last_message_at=datetime.now(timezone.utc).isoformat(),
+        )
+    )
+    service = _session_service_for_auto_commit_test(monkeypatch, session)
+
+    await service.run_auto_commit("session_a", _auto_commit_ctx(), reason="idle_timeout")
+
+    assert session.commit_calls == []
+    assert session.save_calls == 0
 
 
 @pytest.mark.asyncio
@@ -391,6 +509,28 @@ async def test_scheduler_warns_for_invalid_meta_json(caplog):
 
     assert "Invalid session meta JSON for idle auto-commit" in caplog.text
     assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_skips_non_object_meta_without_aborting_batch(caplog):
+    service = _FakeSessionService(
+        [_session_entry("bad_session"), _session_entry("good_session")],
+        {
+            "/local/acct_a/user/user_b/sessions/bad_session/.meta.json": [],
+            "/local/acct_a/user/user_b/sessions/good_session/.meta.json": _meta(),
+        },
+    )
+    scheduler = SessionAutoCommitScheduler(
+        service,
+        SimpleNamespace(idle_enabled=True, check_interval_seconds=60.0),
+        check_interval=60.0,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="openviking.service.session_auto_commit"):
+        await scheduler._scan_once()
+
+    assert "Session auto-commit scheduler loop failed" not in caplog.text
+    assert service.calls == [("good_session", "idle_timeout", "user_b")]
 
 
 @pytest.mark.asyncio

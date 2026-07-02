@@ -5,6 +5,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from openviking import AsyncOpenViking
 
 
@@ -125,6 +127,21 @@ class TestClientInitialization:
         assert result["added"] == 1
         detail = await client.get_session("embedded-batch-auto-commit-policy")
         assert detail["auto_commit_policy"] == policy
+
+    async def test_batch_add_messages_rejects_per_message_auto_commit_policy_in_embedded_mode(
+        self, client: AsyncOpenViking
+    ):
+        with pytest.raises(ValueError, match="Per-message auto_commit_policy is not allowed"):
+            await client.batch_add_messages(
+                "embedded-batch-per-message-auto-commit-policy",
+                [
+                    {
+                        "role": "user",
+                        "content": "hello",
+                        "auto_commit_policy": {"enabled": True, "token_threshold": 1},
+                    }
+                ],
+            )
 
 
 class TestClientClose:

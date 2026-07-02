@@ -388,28 +388,7 @@ class SessionService:
         """Best-effort automatic commit scheduler entrypoint."""
         session = await self.get(session_id, ctx, auto_create=False)
         policy = session.meta.auto_commit_policy
-        if not should_enable_auto_commit(policy):
-            return False
-
-        if reason_hint == "token_threshold":
-            threshold = get_token_threshold(policy)
-            if threshold is None or int(session.meta.pending_tokens or 0) < threshold:
-                return False
-        elif reason_hint == "idle_timeout":
-            if not self._session_auto_commit_config.idle_enabled:
-                return False
-            idle_timeout = get_idle_timeout_seconds(policy)
-            if idle_timeout is None or not self._has_uncommitted_content(session):
-                return False
-            next_check_at = compute_next_check_at(session.meta.last_message_at, idle_timeout)
-            if not next_check_at:
-                return False
-            is_due = is_next_check_due(next_check_at, datetime.now())
-            if is_due is None:
-                return False
-            if not is_due:
-                return False
-        else:
+        if not self._should_run_auto_commit(session, policy, reason_hint):
             return False
 
         claim = (ctx.account_id, ctx.user.user_id, session_id)
@@ -444,7 +423,7 @@ class SessionService:
 
             session = await self.get(session_id, ctx, auto_create=False)
             policy = session.meta.auto_commit_policy
-            if not should_enable_auto_commit(policy):
+            if not self._should_run_auto_commit(session, policy, reason):
                 return
 
             keep_recent_count = int((policy or {}).get("keep_recent_count", 0) or 0)
@@ -471,3 +450,31 @@ class SessionService:
     @staticmethod
     def _has_uncommitted_content(session: Session) -> bool:
         return has_uncommitted_content(session.meta.to_dict())
+
+    def _should_run_auto_commit(self, session: Session, policy: Any, reason: str) -> bool:
+        """Validate the current session state still satisfies the trigger reason."""
+        if not should_enable_auto_commit(policy):
+            return False
+
+        if reason == "token_threshold":
+            threshold = get_token_threshold(policy)
+            if threshold is None:
+                return False
+            try:
+                pending_tokens = int(session.meta.pending_tokens or 0)
+            except (TypeError, ValueError):
+                return False
+            return pending_tokens >= threshold
+
+        if reason == "idle_timeout":
+            if not self._session_auto_commit_config.idle_enabled:
+                return False
+            idle_timeout = get_idle_timeout_seconds(policy)
+            if idle_timeout is None or not self._has_uncommitted_content(session):
+                return False
+            next_check_at = compute_next_check_at(session.meta.last_message_at, idle_timeout)
+            if not next_check_at:
+                return False
+            return is_next_check_due(next_check_at, datetime.now()) is True
+
+        return False
