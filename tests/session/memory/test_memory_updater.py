@@ -1297,3 +1297,95 @@ class TestConsecutivePatchesSameURI:
         assert "ALPHA" in parsed["content"]
         assert "BETA" in parsed["content"]
         assert "gamma" in parsed["content"]
+
+
+class TestUpsertTimestamps:
+    """Regression tests: _apply_upsert must inject created_at and updated_at
+    into MEMORY_FIELDS for both new and updated files."""
+
+    def _make_updater(self, memory_type="notes"):
+        schema = MemoryTypeSchema(
+            memory_type=memory_type,
+            description="notes",
+            fields=[
+                MemoryField(
+                    name="content", field_type=FieldType.STRING, merge_op=MergeOp.PATCH
+                ),
+            ],
+        )
+        registry = MemoryTypeRegistry()
+        registry.register(schema)
+        return MemoryUpdater(registry=registry)
+
+    def _make_fs(self):
+        store: dict[str, str] = {}
+        mock_fs = MagicMock()
+
+        async def mock_read_file(uri, **kwargs):
+            return store.get(uri)
+
+        async def mock_write_file(uri, content, **kwargs):
+            store[uri] = content
+
+        mock_fs.read_file = mock_read_file
+        mock_fs.write_file = mock_write_file
+        return store, mock_fs
+
+    @pytest.mark.asyncio
+    async def test_upsert_injects_timestamps_on_new_file(self):
+        """A brand-new file (no old_content) must get created_at and updated_at."""
+        uri = "viking://user/test/memories/notes/new.md"
+        updater = self._make_updater()
+        store, mock_fs = self._make_fs()
+        updater._get_viking_fs = MagicMock(return_value=mock_fs)
+
+        op = ResolvedOperation(
+            old_memory_file_content=None,
+            memory_fields={"content": "Hello world"},
+            memory_type="notes",
+            uris=[uri],
+        )
+        await updater._apply_upsert(op, MagicMock())
+
+        parsed = parse_memory_file_with_fields(store[uri])
+        assert "created_at" in parsed, "created_at must be present in MEMORY_FIELDS"
+        assert "updated_at" in parsed, "updated_at must be present in MEMORY_FIELDS"
+        assert parsed["created_at"] == parsed["updated_at"]
+
+    @pytest.mark.asyncio
+    async def test_upsert_preserves_created_at_updates_updated_at(self):
+        """Updating an existing file must keep created_at and refresh updated_at."""
+        from datetime import datetime, timezone
+
+        uri = "viking://user/test/memories/notes/existing.md"
+        updater = self._make_updater()
+        store, mock_fs = self._make_fs()
+        updater._get_viking_fs = MagicMock(return_value=mock_fs)
+
+        old_created = "2026-01-01T00:00:00+00:00"
+        old_updated = "2026-01-01T00:00:00+00:00"
+
+        # Seed the store with an existing file that has timestamps
+        existing = MemoryFile(
+            uri=uri,
+            content="Old content",
+            extra_fields={"created_at": old_created, "updated_at": old_updated},
+        )
+        existing_content = MemoryFileUtils.write(existing)
+        store[uri] = existing_content
+
+        patch = StrPatch(blocks=[SearchReplaceBlock(search="Old", replace="New")])
+        op = ResolvedOperation(
+            old_memory_file_content=existing,
+            memory_fields={"content": patch},
+            memory_type="notes",
+            uris=[uri],
+        )
+        await updater._apply_upsert(op, MagicMock())
+
+        parsed = parse_memory_file_with_fields(store[uri])
+        assert parsed["created_at"] == old_created, "created_at must be preserved from original"
+        assert parsed["updated_at"] != old_updated, "updated_at must be refreshed"
+        # updated_at should be a recent UTC time
+        updated_dt = datetime.fromisoformat(parsed["updated_at"])
+        assert updated_dt.tzinfo is not None, "updated_at must be timezone-aware"
