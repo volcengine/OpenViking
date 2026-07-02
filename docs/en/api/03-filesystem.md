@@ -314,6 +314,49 @@ openviking write viking://resources/docs/api.md \
 
 ---
 
+### set_tags()
+
+Update explicit retrieval tags metadata for a file or directory. Tagged content can then be found with the `tags` filters on `find()` and `search()`.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | str | Yes | - | File or directory URI to tag |
+| tags | List[str] | Yes | - | Tags to apply, for example `project:alpha` or `env:prod` |
+| mode | str | No | `replace` | `replace` overwrites explicit tags; `append` adds tags without removing existing ones |
+| recursive | bool | No | `false` | Apply the tag update to descendants when `uri` is a directory |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+client.set_tags(
+    "viking://resources/projects/alpha",
+    tags=["project:alpha", "env:prod"],
+    recursive=True,
+)
+```
+
+**HTTP API**
+
+```
+POST /api/v1/content/set_tags
+```
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/content/set_tags" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources/projects/alpha",
+    "tags": ["project:alpha", "env:prod"],
+    "mode": "replace",
+    "recursive": true
+  }'
+```
+
+---
+
 ### ls()
 
 List directory contents.

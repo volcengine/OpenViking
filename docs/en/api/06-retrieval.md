@@ -60,6 +60,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
+| tags | List[str] | No | None | Return only content with matching retrieval tags |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
@@ -251,6 +252,9 @@ openviking find "authentication" --context-type memory,resource
 # With time filter
 openviking find "invoice" --after 7d
 
+# With retrieval tags
+openviking find "deployment notes" --tags project:alpha,env:prod
+
 # With limit
 openviking find "how to authenticate users" --limit 20
 
@@ -335,6 +339,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
+| tags | List[str] | No | None | Return only content with matching retrieval tags |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
@@ -447,6 +452,9 @@ openviking search "best practices" --context-type skill
 
 # Search with time filter
 openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
+
+# Search with retrieval tags
+openviking search "deployment notes" --tags project:alpha,env:prod
 
 # Search without session (still performs intent analysis)
 openviking search "how to implement OAuth 2.0 authorization code flow"
