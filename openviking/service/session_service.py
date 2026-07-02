@@ -203,6 +203,7 @@ class SessionService:
                     "session_id": name,
                     "uri": f"{session_base_uri}/{name}",
                     "is_dir": entry.get("isDir", False),
+                    "mod_time": entry.get("modTime", ""),
                 }
         except Exception:
             logger.debug("Failed to list sessions", exc_info=True)
@@ -217,6 +218,7 @@ class SessionService:
                     "session_id": name,
                     "uri": entry.get("uri", f"viking://session/{name}"),
                     "is_dir": entry.get("isDir", False),
+                    "mod_time": entry.get("modTime", ""),
                 }
         except Exception:
             logger.debug("Failed to list legacy sessions", exc_info=True)

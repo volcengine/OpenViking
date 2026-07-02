@@ -225,7 +225,13 @@ export function visibleContextEntries(
 
 export function sortTreeEntries(entries: VikingFsEntry[]): VikingFsEntry[] {
   return [...entries].sort((left, right) => {
+    // Directories first.
     if (left.isDir !== right.isDir) return left.isDir ? -1 : 1
+    // Sort by modTime descending (newest first). Fall back to name when
+    // timestamps are missing or equal.
+    const leftTime = left.modTimestamp ?? 0
+    const rightTime = right.modTimestamp ?? 0
+    if (leftTime !== rightTime) return rightTime - leftTime
     return left.name.localeCompare(right.name)
   })
 }

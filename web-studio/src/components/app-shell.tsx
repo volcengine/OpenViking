@@ -51,7 +51,7 @@ import {
 } from '#/hooks/use-app-connection'
 import { cn } from '#/lib/utils'
 import {
-  useSessionList,
+  useSessionListByRecency,
   useCreateSession,
   useDeleteSession,
 } from '#/lib/sessions/use-sessions'
@@ -209,7 +209,7 @@ function NavSessionsItem({
   const isActive = pathname === '/sessions' || pathname.startsWith('/sessions/')
   const [open, setOpen] = React.useState(isActive)
 
-  const { data: sessions, isLoading } = useSessionList()
+  const { data: sessions, isLoading } = useSessionListByRecency()
   const { getTitle } = useSessionTitles()
   const createSession = useCreateSession()
   const deleteSession = useDeleteSession()
@@ -250,11 +250,6 @@ function NavSessionsItem({
     [deleteSession, activeSessionId, navigate],
   )
 
-  const reversedSessions = React.useMemo(
-    () => (sessions ?? []).slice().reverse(),
-    [sessions],
-  )
-
   return (
     <Collapsible
       open={open}
@@ -288,14 +283,14 @@ function NavSessionsItem({
                   </span>
                 </div>
               </SidebarMenuSubItem>
-            ) : reversedSessions.length === 0 ? (
+            ) : sessions.length === 0 ? (
               <SidebarMenuSubItem>
                 <div className="px-2 py-1.5 text-xs text-muted-foreground">
                   {t('sidebar.noSessions', { ns: 'appShell' })}
                 </div>
               </SidebarMenuSubItem>
             ) : (
-              reversedSessions.map((s) => {
+              sessions.map((s) => {
                 const sessionTitle = getTitle(s.session_id)
                 const isSessionActive = activeSessionId === s.session_id
 

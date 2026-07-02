@@ -23,7 +23,7 @@ import { useChat } from '#/lib/sessions/use-chat'
 import {
   useBotHealth,
   useCreateSession,
-  useSessionList,
+  useSessionListByRecency,
   useSessionMessages,
 } from '#/lib/sessions/use-sessions'
 import {
@@ -58,7 +58,8 @@ export function AgentPanel({
   const creationStartedRef = useRef(false)
   const botHealth = useBotHealth()
   const createSession = useCreateSession()
-  const { data: sessions, isLoading: isLoadingSessions } = useSessionList()
+  const { data: sessions, isLoading: isLoadingSessions } =
+    useSessionListByRecency()
   const { getTitle } = useSessionTitles()
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
     () => readPlaygroundAgentSessionIds(),
@@ -176,16 +177,11 @@ export function AgentPanel({
   const isStreaming = chat.status === 'streaming'
   const botModeError = botHealth.isError ? getErrorMessage(botHealth.error) : ''
   const isCreating = !sessionId && isCreatingSession
-  const reversedSessions = useMemo(() => {
-    const sessionById = new Map(
-      (sessions ?? []).map((session) => [session.session_id, session]),
-    )
-
-    return playgroundSessionIds
-      .map((playgroundSessionId) => sessionById.get(playgroundSessionId))
-      .filter((session): session is NonNullable<typeof session> =>
-        Boolean(session),
-      )
+  const playgroundSessions = useMemo(() => {
+    // `sessions` is already sorted by recency (newest first). Filter to
+    // sessions that were opened in this playground, preserving recency order.
+    const playgroundSet = new Set(playgroundSessionIds)
+    return sessions.filter((s) => playgroundSet.has(s.session_id))
   }, [sessions, playgroundSessionIds])
 
   return (
@@ -310,13 +306,13 @@ export function AgentPanel({
                 <Loader2Icon className="size-4 animate-spin" />
                 {t('agent.loadingSessions')}
               </div>
-            ) : reversedSessions.length === 0 ? (
+            ) : playgroundSessions.length === 0 ? (
               <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
                 {t('agent.noSessions')}
               </div>
             ) : (
               <div className="grid gap-2">
-                {reversedSessions.map((session) => {
+                {playgroundSessions.map((session) => {
                   const active = session.session_id === sessionId
                   const title = getTitle(session.session_id)
 
