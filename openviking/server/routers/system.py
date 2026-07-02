@@ -3,6 +3,8 @@
 """System endpoints for OpenViking HTTP Server."""
 
 import asyncio
+import shutil
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
@@ -18,6 +20,7 @@ from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -35,6 +38,16 @@ def _is_ready_check_ok(value) -> bool:
             return True
         return all(_is_ready_check_ok(item) for item in nested.values())
     return value in ("ok", "not_configured", "not_supported")
+
+
+def _disk_pressure_state(usage_percent: float, disk_pressure_config) -> str:
+    warning_threshold = float(getattr(disk_pressure_config, "warning_threshold_percent", 85))
+    critical_threshold = float(getattr(disk_pressure_config, "critical_threshold_percent", 95))
+    if usage_percent >= critical_threshold:
+        return "critical"
+    if usage_percent >= warning_threshold:
+        return "warning"
+    return "normal"
 
 
 async def _probe_agfs_readiness() -> dict[str, object]:
@@ -199,6 +212,37 @@ async def readiness_check(request: Request):
     return JSONResponse(
         status_code=status_code,
         content={"status": "ready" if all_ok else "not_ready", "checks": checks},
+    )
+
+
+@router.get("/api/v1/system/disk", tags=["system"])
+async def disk_status(
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Return workspace disk usage for probes and dashboards."""
+    del ctx
+    ov_config = get_openviking_config()
+    workspace = Path(ov_config.storage.workspace).expanduser().resolve()
+    usage = shutil.disk_usage(workspace)
+    usage_percent = 0.0 if usage.total <= 0 else (usage.used / usage.total) * 100
+    disk_pressure = ov_config.storage.safety.disk_pressure
+    state = _disk_pressure_state(usage_percent, disk_pressure)
+
+    return Response(
+        status="ok",
+        result={
+            "state": state,
+            "enabled": bool(disk_pressure.enabled),
+            "workspace": str(workspace),
+            "usage_percent": round(usage_percent, 2),
+            "total_bytes": usage.total,
+            "used_bytes": usage.used,
+            "free_bytes": usage.free,
+            "free_gb": round(usage.free / (1024**3), 2),
+            "warning_threshold_percent": disk_pressure.warning_threshold_percent,
+            "critical_threshold_percent": disk_pressure.critical_threshold_percent,
+            "action_on_critical": disk_pressure.action_on_critical,
+        },
     )
 
 

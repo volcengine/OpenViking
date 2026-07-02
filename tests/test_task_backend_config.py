@@ -1,10 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import pytest
+
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker
 from openviking_cli.utils.config import storage_config as storage_config_module
-from openviking_cli.utils.config.storage_config import StorageConfig
+from openviking_cli.utils.config.storage_config import DiskPressureSafetyConfig, StorageConfig
 
 
 class _FakeAgfs:
@@ -48,6 +50,23 @@ def test_storage_config_defaults_skip_process_lock_to_false():
 def test_storage_config_accepts_skip_process_lock():
     config = StorageConfig(skip_process_lock=True)
     assert config.skip_process_lock is True
+
+
+def test_storage_safety_defaults_are_disabled():
+    config = StorageConfig()
+    assert config.safety.resource_retention.enabled is False
+    assert config.safety.disk_pressure.enabled is False
+    assert config.safety.disk_pressure.warning_threshold_percent == 85
+    assert config.safety.disk_pressure.critical_threshold_percent == 95
+    assert config.safety.disk_pressure.action_on_critical == "block_writes"
+
+
+def test_disk_pressure_rejects_critical_below_warning():
+    with pytest.raises(ValueError, match="critical_threshold_percent"):
+        DiskPressureSafetyConfig(
+            warning_threshold_percent=90,
+            critical_threshold_percent=80,
+        )
 
 
 def test_storage_config_builds_persistent_task_tracker():

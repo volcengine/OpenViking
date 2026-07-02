@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -12,6 +12,48 @@ from .transaction_config import TransactionConfig
 from .vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
+
+
+class ResourceRetentionSafetyConfig(BaseModel):
+    """Opt-in resource version retention controls."""
+
+    enabled: bool = False
+    max_versions: int = Field(default=5, ge=1)
+    prune_on_import: bool = True
+
+    model_config = {"extra": "forbid"}
+
+
+class DiskPressureSafetyConfig(BaseModel):
+    """Opt-in disk pressure awareness controls."""
+
+    enabled: bool = False
+    check_interval_seconds: int = Field(default=30, gt=0)
+    warning_threshold_percent: float = Field(default=85, ge=0, le=100)
+    critical_threshold_percent: float = Field(default=95, ge=0, le=100)
+    action_on_critical: Literal["warn", "block_writes"] = "block_writes"
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_thresholds(self):
+        if self.critical_threshold_percent < self.warning_threshold_percent:
+            raise ValueError(
+                "critical_threshold_percent must be greater than or equal to "
+                "warning_threshold_percent"
+            )
+        return self
+
+
+class StorageSafetyConfig(BaseModel):
+    """Defense-in-depth storage safety features, disabled by default."""
+
+    resource_retention: ResourceRetentionSafetyConfig = Field(
+        default_factory=ResourceRetentionSafetyConfig
+    )
+    disk_pressure: DiskPressureSafetyConfig = Field(default_factory=DiskPressureSafetyConfig)
+
+    model_config = {"extra": "forbid"}
 
 
 class StorageConfig(BaseModel):
@@ -45,6 +87,10 @@ class StorageConfig(BaseModel):
 
     params: Dict[str, Any] = Field(
         default_factory=dict, description="Additional storage-specific parameters"
+    )
+    safety: StorageSafetyConfig = Field(
+        default_factory=StorageSafetyConfig,
+        description="Opt-in operational safety features",
     )
 
     model_config = {"extra": "forbid"}

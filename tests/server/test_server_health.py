@@ -80,6 +80,46 @@ async def test_system_status(client: httpx.AsyncClient):
     assert body["result"]["initialized"] is True
 
 
+async def test_system_disk_status_reports_workspace_usage(
+    client: httpx.AsyncClient,
+    tmp_path,
+    monkeypatch,
+):
+    disk_pressure = SimpleNamespace(
+        enabled=False,
+        warning_threshold_percent=85,
+        critical_threshold_percent=95,
+        action_on_critical="block_writes",
+    )
+    fake_config = SimpleNamespace(
+        storage=SimpleNamespace(
+            workspace=str(tmp_path),
+            safety=SimpleNamespace(disk_pressure=disk_pressure),
+        )
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.system.get_openviking_config",
+        lambda: fake_config,
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.system.shutil.disk_usage",
+        lambda path: SimpleNamespace(total=100, used=90, free=10),
+    )
+
+    resp = await client.get("/api/v1/system/disk")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    assert result["state"] == "warning"
+    assert result["enabled"] is False
+    assert result["workspace"] == str(tmp_path.resolve())
+    assert result["usage_percent"] == 90.0
+    assert result["free_bytes"] == 10
+    assert result["action_on_critical"] == "block_writes"
+
+
 async def test_backend_sync_status_endpoint(client: httpx.AsyncClient, service):
     calls: list[str] = []
 
