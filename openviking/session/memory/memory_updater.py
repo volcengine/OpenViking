@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from openviking.message import Message
 from openviking.message.part import TextPart
+from openviking.privacy.secret_scrub import scrub_secrets
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -102,7 +103,9 @@ async def write_stored_links(
                 mf.backlinks = merge_links(
                     mf.backlinks, [l.model_dump() for l in link_groups["backlinks"]]
                 )
-            await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+            await viking_fs.write_file(
+                uri, scrub_secrets(MemoryFileUtils.write(mf))[0], ctx=ctx
+            )
         except Exception as e:
             tracer.error(f"Failed to apply links to {uri}: {e}")
 
@@ -862,7 +865,9 @@ class MemoryUpdater:
                     source=RESOURCE_REF_SOURCE_SESSION_COMMIT,
                 )
                 if changed:
-                    await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+                    await viking_fs.write_file(
+                        uri, scrub_secrets(MemoryFileUtils.write(mf))[0], ctx=ctx
+                    )
             except Exception as exc:
                 logger.warning("Failed to sync resource refs for %s: %s", uri, exc)
 
@@ -970,7 +975,9 @@ class MemoryUpdater:
                 content_template=schema.content_template,
                 extract_context=extract_context,
             )
-            await viking_fs.write_file(uri, new_full_content, ctx=ctx)
+            await viking_fs.write_file(
+                uri, scrub_secrets(new_full_content)[0], ctx=ctx
+            )
 
     def _distribute_links_to_operations(self, operations: ResolvedOperations) -> None:
         """Distribute resolved_links to corresponding upsert operations by URI.
@@ -1286,6 +1293,8 @@ class MemoryUpdater:
         # Write .overview.md to the directory
         overview_path = f"{directory.rstrip('/')}/.overview.md"
         try:
-            await viking_fs.write_file(overview_path, rendered, ctx=ctx)
+            await viking_fs.write_file(
+                overview_path, scrub_secrets(rendered)[0], ctx=ctx
+            )
         except Exception as e:
             tracer.error(f"Failed to write overview {overview_path}: {e}")
