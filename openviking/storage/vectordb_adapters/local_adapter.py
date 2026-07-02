@@ -10,8 +10,11 @@ from typing import Any, Dict, List
 
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
+from openviking_cli.utils import get_logger
 
 from .base import CollectionAdapter
+
+logger = get_logger(__name__)
 
 
 class LocalCollectionAdapter(CollectionAdapter):
@@ -19,10 +22,19 @@ class LocalCollectionAdapter(CollectionAdapter):
 
     DEFAULT_LOCAL_PROJECT_NAME = "vectordb"
 
-    def __init__(self, collection_name: str, project_path: str, index_name: str):
+    def __init__(
+        self,
+        collection_name: str,
+        project_path: str,
+        index_name: str,
+        distance: str = "cosine",
+        sparse_weight: float = 0.0,
+    ):
         super().__init__(collection_name=collection_name, index_name=index_name)
         self.mode = "local"
         self._project_path = project_path
+        self._distance = distance
+        self._sparse_weight = sparse_weight
 
     @classmethod
     def from_config(cls, config: Any):
@@ -33,6 +45,8 @@ class LocalCollectionAdapter(CollectionAdapter):
             collection_name=config.name or "context",
             project_path=project_path,
             index_name=config.index_name or "default",
+            distance=getattr(config, "distance_metric", None) or "cosine",
+            sparse_weight=getattr(config, "sparse_weight", 0.0) or 0.0,
         )
 
     def _collection_path(self) -> str:
@@ -49,6 +63,35 @@ class LocalCollectionAdapter(CollectionAdapter):
         meta_path = os.path.join(collection_path, "collection_meta.json")
         if os.path.exists(meta_path):
             self._collection = get_or_create_local_collection(path=collection_path)
+            self._recover_missing_default_index()
+
+    def _recover_missing_default_index(self) -> None:
+        """Rebuild the default index from the store when it is missing on load.
+
+        A collection can end up persisted with store content but no usable index
+        (e.g. the ``index/`` directory was emptied, or an index subdir survived
+        but its ``index_meta.json`` was lost/corrupted). ``_recover()`` only
+        restores indexes that still have valid on-disk metadata, so such dirty
+        states leave the collection with no searchable index and ``search``
+        silently returns nothing. Rebuilding from the store (a full scan of the
+        candidate table) makes the data searchable again.
+        """
+        coll = self._collection
+        if coll is None or coll.has_index(self._index_name):
+            return
+        index_meta = self.build_default_index_meta(
+            index_name=self._index_name,
+            distance=self._distance,
+            use_sparse=self._sparse_weight > 0.0,
+            sparse_weight=self._sparse_weight,
+            scalar_index_fields=[],
+        )
+        coll.create_index(self._index_name, index_meta)
+        logger.warning(
+            "Rebuilt missing index '%s' from store for local collection '%s'",
+            self._index_name,
+            self._collection_name,
+        )
 
     def _create_backend_collection(self, meta: Dict[str, Any]) -> Collection:
         collection_path = self._collection_path()
