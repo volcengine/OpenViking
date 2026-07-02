@@ -24,7 +24,7 @@ import { useChat } from '#/lib/sessions/use-chat'
 import {
   useBotHealth,
   useCreateSession,
-  useSessionList,
+  useSessionListByRecency,
   useSessionMessages,
 } from '#/lib/sessions/use-sessions'
 import {
@@ -61,7 +61,8 @@ export function AgentPanel({
   const creationStartedRef = useRef(false)
   const botHealth = useBotHealth()
   const createSession = useCreateSession()
-  const { data: sessions, isLoading: isLoadingSessions } = useSessionList()
+  const { data: sessions, isLoading: isLoadingSessions } =
+    useSessionListByRecency()
   const { getTitle } = useSessionTitles()
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
     () => readPlaygroundAgentSessionIds(),
@@ -152,6 +153,8 @@ export function AgentPanel({
   const isStreaming = chat.status === 'streaming'
   const botModeError = botHealth.isError ? getErrorMessage(botHealth.error) : ''
   const reversedSessions = useMemo(() => {
+    // `sessions` is already sorted by recency (newest first). Filter to
+    // sessions that were opened in this playground, preserving recency order.
     const sessionById = new Map(
       (sessions ?? []).map((session) => [session.session_id, session]),
     )
