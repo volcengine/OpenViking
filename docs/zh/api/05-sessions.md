@@ -653,12 +653,31 @@ ov session delete a1b2c3d4
 | content | str | 条件必填 | - | 消息文本内容（HTTP API 简单模式，与 parts 二选一） |
 | created_at | str | 否 | None | 可选的 ISO 8601 时间戳，会原样保存到消息中 |
 | peer_id | str | 否 | None | 可选的稳定交互对象 ID |
+| auto_commit_policy | object | 否 | None | 可选的 session 级自动 commit 策略。传入后会持久化到 session meta，并用于后续服务端自动触发 |
 
 > **注意**：HTTP API 支持两种模式：
 > 1. **简单模式**：使用 `content` 字符串（向后兼容）
 > 2. **Parts 模式**：使用 `parts` 数组（完整 Part 支持）
 >
 > 如果同时提供 `content` 和 `parts`，`parts` 优先。
+
+`auto_commit_policy` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `enabled` | bool | 是 | 是否启用该 session 的自动 commit。设为 `false` 时会关闭该 session 的自动触发 |
+| `token_threshold` | int | 否 | token 阈值。消息写入后若 `pending_tokens` 达到该值，会尝试立即触发自动 commit |
+| `idle_timeout_seconds` | int | 否 | idle 超时时间，单位秒。配置后该 session 会进入服务端 idle 调度范围 |
+| `keep_recent_count` | int | 否 | commit 后保留最近多少条 live message，不参与归档删除。修改后会同步更新 session meta，并触发 `pending_tokens` 重建 |
+
+补充说明：
+
+- `auto_commit_policy` 是 session 级配置，不是单条 message 级配置。
+- 一旦写入，后续服务端自动触发以 session meta 中的持久化值为准。
+- `token_threshold` 会在消息写入后立即参与判断，不依赖 idle scheduler。
+- `idle_timeout_seconds` 是否生效，还取决于服务端全局配置 `server.session_auto_commit.idle_enabled` 是否开启。
+- 当 idle scheduler 开启后，服务端会通过固定周期扫描 session `.meta.json` 来判断哪些 session 到达 idle 触发条件。
+- `auto_commit_last_error` 只记录自动触发和 phase-1 commit 调度阶段的错误。phase-2 extraction 失败会体现在后台 task 和 `.failed.json`，不会写入该字段。
 
 **Part 类型（Python SDK）**
 
@@ -823,9 +842,13 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 会话 ID |
 | messages | List[AddMessageRequest] | 是 | - | 消息列表，每条消息格式与 `add_message()` 相同，最多 100 条 |
+| auto_commit_policy | object | 否 | None | 可选的 session 级自动 commit 策略。只允许在 batch 顶层传一次 |
 | telemetry | bool | 否 | False | 是否附加操作遥测数据 |
 
-> **注意**：每条消息的格式与 `add_message()` 完全一致，支持 `content`（简单模式）和 `parts`（Parts 模式）。超过 100 条需分批调用。
+> **注意**：
+> 1. 每条消息支持 `content`（简单模式）和 `parts`（Parts 模式），超过 100 条需分批调用。
+> 2. `auto_commit_policy` 只允许出现在 batch 顶层。
+> 3. `messages[*].auto_commit_policy` 不允许，服务端会直接拒绝请求。
 
 #### 3. 使用示例
 

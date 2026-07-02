@@ -671,6 +671,44 @@ async def test_reindex_upsert_context_preserves_existing_search_tags(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_reindex_upsert_context_uses_uri_owner_for_owner_space(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor
+
+    captured = {}
+
+    class FakeVikingDB:
+        async def get_context_by_uri(self, uri, owner_space=None, level=None, limit=1, *, ctx=None):
+            return []
+
+        async def enqueue_embedding_msg(self, msg):
+            captured["context_data"] = dict(msg.context_data)
+            return True
+
+    fake_service = type("Svc", (), {"vikingdb_manager": FakeVikingDB()})()
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: fake_service)
+
+    service = ReindexExecutor()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="admin"),
+        role=Role.ROOT,
+    )
+
+    await service._upsert_context(
+        uri="viking://user/alice/memories/preferences/food.md",
+        parent_uri="viking://user/alice/memories/preferences",
+        abstract="likes spicy food",
+        vector_text="likes spicy food",
+        is_leaf=True,
+        context_type="memory",
+        level=ContextLevel.DETAIL,
+        ctx=ctx,
+    )
+
+    assert captured["context_data"]["owner_user_id"] == "alice"
+    assert captured["context_data"]["owner_space"] == "alice"
+
+
+@pytest.mark.asyncio
 async def test_reindex_resource_vectors_only_continues_after_single_record_failure(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
     from openviking_cli.exceptions import OpenVikingError
