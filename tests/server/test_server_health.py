@@ -72,6 +72,31 @@ async def test_health_endpoint(client: httpx.AsyncClient):
     assert body["status"] == "ok"
 
 
+async def test_health_endpoint_never_resolves_identity(caplog):
+    app = create_app(
+        config=ServerConfig(
+            auth_mode="trusted",
+            host="127.0.0.1",
+            root_api_key="test-root-key",
+        ),
+        service=SimpleNamespace(),
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    with caplog.at_level("WARNING", logger="openviking.server.routers.system"):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/health", headers={"X-API-Key": "test-root-key"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["auth_mode"] == "trusted"
+    assert "account_id" not in body
+    assert "user_id" not in body
+    assert "role" not in body
+    assert "Failed to resolve identity" not in caplog.text
+
+
 async def test_system_status(client: httpx.AsyncClient):
     resp = await client.get("/api/v1/system/status")
     assert resp.status_code == 200

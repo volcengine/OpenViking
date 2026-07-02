@@ -299,6 +299,10 @@ openviking-server doctor
 
 > **注意**：对于 embedding 模型，支持 `volcengine`（豆包）、`openai`、`azure`、`jina`、`ollama`、`voyage`、`dashscope`、`minimax`、`cohere`、`vikingdb`、`gemini`（需 `pip install "google-genai>=1.0.0"`）、`litellm` 和 `local`。对于 VLM 模型，常见提供商包括 `volcengine`、`openai`、`openai-codex`、`kimi`、`glm`。
 
+> **Memory 配置**：OpenViking 始终使用 v3 记忆抽取链路。旧的 `memory.version` 配置项已废弃且会被忽略；已有配置中保留该字段仍可正常加载，但不会改变行为。
+
+> **Memory schema 作用域**：Memory schema YAML 默认 `stage: "user"` 且 `peer_enabled: true`。trajectories/experiences 这类执行派生 schema 使用 `stage: "agent"`；如果某类记忆必须保留在当前用户目录而不是 peer 目录，设置 `peer_enabled: false`。
+
 ##### 服务器配置示例
 
 👇 展开查看您的模型服务的配置示例：

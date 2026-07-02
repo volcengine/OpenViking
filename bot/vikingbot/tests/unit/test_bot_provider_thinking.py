@@ -219,6 +219,34 @@ async def test_litellm_bot_provider_enables_openai_reasoning_model(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_litellm_bot_provider_respects_thinking_disabled(monkeypatch):
+    captured = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="ok", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=None,
+        )
+
+    monkeypatch.setattr("vikingbot.providers.litellm_provider.acompletion", fake_acompletion)
+
+    provider = LiteLLMProvider(
+        api_key="ak-test",
+        default_model="volcengine/ep-test",
+        thinking=False,
+    )
+    await provider.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert "thinking" not in captured
+
+
+@pytest.mark.asyncio
 async def test_litellm_bot_provider_does_not_send_dashscope_param_to_gemini(monkeypatch):
     captured = {}
 

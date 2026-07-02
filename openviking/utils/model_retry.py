@@ -87,6 +87,25 @@ TRANSIENT_API_ERROR_PATTERNS = (
     "connection reset",
 )
 
+RETRYABLE_RATE_LIMIT_MARKERS = (
+    "TooManyRequests",
+    "RateLimitExceeded",
+    "ModelAccountTpmRateLimitExceeded",
+    "TPM (Tokens Per Minute) limit",
+    "RPM (Requests Per Minute) limit",
+    "rate limit",
+    "rate_limit",
+)
+
+_RATE_LIMIT_STATUS_RE = re.compile(
+    r"(?:\b(?:error\s*code|status(?:\s*code)?|http(?:\s*status)?|code)"
+    r"\s*[:=]?\s*429(?!\w)|(?<![\w-])429(?![\w-]))",
+    re.IGNORECASE,
+)
+_RATE_LIMIT_ERROR_CLASSES: tuple[type[BaseException], ...] = ()
+RATE_LIMIT_RETRY_BASE_DELAY_SECONDS = 5.0
+RATE_LIMIT_RETRY_MAX_DELAY_SECONDS = 120.0
+
 # Pre-compile regex for numeric status-code patterns to avoid substring false positives
 # (e.g. "413" matching inside request IDs like "d7c9130f344..." or "req-413-abcd").
 _NUMERIC_PATTERN_RE: dict[str, re.Pattern] = {}
@@ -188,6 +207,95 @@ def classify_api_error(error: Exception) -> str:
 def is_retryable_api_error(error: Exception) -> bool:
     """Return True if the error should be retried."""
     return classify_api_error(error) == ERROR_CLASS_TRANSIENT
+
+
+def _load_rate_limit_error_classes() -> tuple[type[BaseException], ...]:
+    classes: list[type[BaseException]] = []
+    try:
+        import openai
+
+        classes.append(openai.RateLimitError)
+    except Exception:
+        pass
+    try:
+        from volcenginesdkarkruntime._exceptions import ArkRateLimitError
+
+        classes.append(ArkRateLimitError)
+    except Exception:
+        pass
+    return tuple(classes)
+
+
+def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        chain.append(cur)
+        seen.add(id(cur))
+        cur = cur.__cause__ or cur.__context__
+    return chain
+
+
+def _structured_rate_limit_match(exc: BaseException) -> bool:
+    global _RATE_LIMIT_ERROR_CLASSES
+    if not _RATE_LIMIT_ERROR_CLASSES:
+        _RATE_LIMIT_ERROR_CLASSES = _load_rate_limit_error_classes()
+
+    for item in _iter_exception_chain(exc):
+        if _RATE_LIMIT_ERROR_CLASSES and isinstance(item, _RATE_LIMIT_ERROR_CLASSES):
+            return True
+        status_code = getattr(item, "status_code", None)
+        if status_code == 429 or str(status_code) == "429":
+            return True
+        code = getattr(item, "code", None)
+        error_type = getattr(item, "type", None)
+        if any(
+            isinstance(value, str)
+            and any(marker.lower() in value.lower() for marker in RETRYABLE_RATE_LIMIT_MARKERS)
+            for value in (code, error_type)
+        ):
+            return True
+        body = getattr(item, "body", None)
+        if isinstance(body, dict):
+            values = [body.get("code"), body.get("type"), body.get("message")]
+            if isinstance(body.get("error"), dict):
+                error = body["error"]
+                values.extend([error.get("code"), error.get("type"), error.get("message")])
+            if any(
+                isinstance(value, str)
+                and any(marker.lower() in value.lower() for marker in RETRYABLE_RATE_LIMIT_MARKERS)
+                for value in values
+            ):
+                return True
+    return False
+
+
+def is_retryable_rate_limit_error(exc: BaseException) -> bool:
+    """Return True for SDK/text-shaped LLM rate-limit errors.
+
+    This intentionally lives in a lightweight OpenViking utility module so both
+    VikingBot provider adapters and benchmark integrations can share the same
+    classifier without importing each other's heavier runtime dependencies.
+    """
+    if _structured_rate_limit_match(exc):
+        return True
+    text = str(exc or "")
+    if not text:
+        return False
+    lower_text = text.lower()
+    return any(marker.lower() in lower_text for marker in RETRYABLE_RATE_LIMIT_MARKERS) or bool(
+        _RATE_LIMIT_STATUS_RE.search(text)
+    )
+
+
+def rate_limit_retry_delay(attempt: int) -> float:
+    """Exponential backoff delay with jitter for LLM rate-limit retries."""
+    delay = min(
+        RATE_LIMIT_RETRY_MAX_DELAY_SECONDS,
+        RATE_LIMIT_RETRY_BASE_DELAY_SECONDS * (2 ** max(0, attempt - 1)),
+    )
+    return delay * random.uniform(0.8, 1.2)
 
 
 def _compute_delay(

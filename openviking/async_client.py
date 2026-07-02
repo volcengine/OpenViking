@@ -606,6 +606,14 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.read(uri, offset=offset, limit=limit)
 
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read raw file content, including hidden MEMORY_FIELDS metadata."""
+        await self._ensure_initialized()
+        read_raw = getattr(self._client, "read_raw", None)
+        if read_raw is not None:
+            return await read_raw(uri, offset=offset, limit=limit)
+        return await self._client.read(uri, offset=offset, limit=limit)
+
     async def write(
         self,
         uri: str,

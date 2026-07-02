@@ -547,6 +547,7 @@ class SessionCompressorV2:
             strict_extract_errors=strict_extract_errors,
             phase_label="trajectory",
             allowed_memory_types=allowed_execution_types,
+            thinking=True,
         )
         if traj_result is None:
             return empty_result
@@ -622,6 +623,7 @@ class SessionCompressorV2:
                 phase_label=f"experience({traj_uri})",
                 post_apply=_append_sources_before_unlock,
                 allowed_memory_types=allowed_execution_types,
+                thinking=True,
             )
             if exp_result is None:
                 fallback_uris = await self._single_existing_experience_uris(
@@ -719,6 +721,7 @@ class SessionCompressorV2:
         phase_label: str,
         post_apply: Optional[ExtractPostApply] = None,
         allowed_memory_types: Optional[set[str]] = None,
+        thinking: bool = False,
     ):
         """Run one ExtractLoop phase with its own lock scope, then apply operations.
 
@@ -758,6 +761,7 @@ class SessionCompressorV2:
             ctx=ctx,
             context_provider=provider,
             isolation_handler=isolation_handler,
+            thinking=thinking,
         )
 
         lock_manager = None
@@ -1216,6 +1220,7 @@ class SessionCompressorV2:
 
         return {
             "archive_uri": archive_uri,
+            "trace_id": tracer.get_trace_id() or None,
             "extracted_at": datetime.utcnow().isoformat() + "Z",
             "operations": {
                 "adds": adds,

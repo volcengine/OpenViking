@@ -258,6 +258,9 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+markers = [
+    "integration: tests that require external services or real model configuration",
+]
 addopts = "-v --cov=openviking --cov-report=term-missing"
 
 [tool.ruff]

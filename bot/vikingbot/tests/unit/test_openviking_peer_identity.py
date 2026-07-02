@@ -258,3 +258,34 @@ async def test_commit_session_defaults_to_peer_only_memory(monkeypatch):
         "session_id": "session-1",
         "keep_recent_count": 2,
     }
+
+
+@pytest.mark.asyncio
+async def test_search_with_peer_id_uses_peer_target_uri_without_forwarding_peer_id():
+    client = _client(api_key_type="user")
+    calls = []
+
+    class FakeResult:
+        memories = []
+        resources = []
+        skills = []
+        total = 0
+
+    class FakeHTTPClient:
+        async def search(self, query, target_uri=None, limit=10):
+            calls.append({"query": query, "target_uri": target_uri, "limit": limit})
+            return FakeResult()
+
+    client.client = FakeHTTPClient()
+
+    result = await client.search("hello", peer_id="telegram:alice", limit=3)
+
+    assert result["memories"] == []
+    assert calls == [
+        {
+            "query": "hello",
+            "target_uri": f"viking://user/peers/{TELEGRAM_ALICE_PEER_ID}/memories/",
+            "limit": 3,
+        }
+    ]
+

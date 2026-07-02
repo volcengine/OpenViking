@@ -81,14 +81,33 @@ class TestSchemaModelGenerator:
     @pytest.fixture
     def real_registry(self):
         """Create a registry with real schemas."""
-        schemas_dir = (
-            Path(__file__).parent.parent.parent.parent
-            / "openviking"
-            / "prompts"
-            / "templates"
-            / "memory"
+        return create_default_registry()
+
+
+    def test_peer_enabled_false_omits_peer_id_field(self):
+        memory_type = MemoryTypeSchema(
+            memory_type="cases",
+            description="Case memory",
+            fields=[
+                MemoryField(
+                    name="case_name",
+                    field_type=FieldType.STRING,
+                    description="Case name",
+                    merge_op=MergeOp.IMMUTABLE,
+                )
+            ],
+            filename_template="{{ case_name }}.md",
+            directory="viking://user/{{ user_space }}/memories/cases",
+            peer_enabled=False,
         )
-        return create_default_registry(str(schemas_dir))
+        role_scope = type("RoleScope", (), {"peer_ids": ["web-visitor-alice"]})()
+
+        model = SchemaModelGenerator([memory_type]).create_flat_data_model(
+            memory_type,
+            role_scope=role_scope,
+        )
+
+        assert "peer_id" not in model.model_fields
 
     def test_render_description_template_with_language(self):
         memory_type = MemoryTypeSchema(
@@ -159,23 +178,13 @@ class TestSchemaModelGenerator:
         # Check model name
         assert model.__name__ == "TestTypeData"
 
-        # Check model has the memory_type field
-        assert "memory_type" in model.model_fields
-        # memory_type is a required field with literal type
+        # memory_type is represented by the top-level structured output field.
+        assert "memory_type" not in model.model_fields
 
         # Check business fields
         assert "field1" in model.model_fields
         assert "field2" in model.model_fields
 
-        # Check metadata fields are present
-        assert "uri" in model.model_fields
-        assert "name" in model.model_fields
-        assert "abstract" in model.model_fields
-        assert "overview" in model.model_fields
-        assert "content" in model.model_fields
-        assert "tags" in model.model_fields
-        assert "created_at" in model.model_fields
-        assert "updated_at" in model.model_fields
 
     def test_page_id_field_is_emitted_before_mutable_content(self, registry_with_sample):
         """page_id should appear before mutable fields so the model anchors target page first."""
@@ -325,14 +334,14 @@ class TestSchemaModelGenerator:
         assert "$defs" in json_schema or "definitions" in json_schema
         assert "properties" in json_schema
 
-        # Check it includes operations
-        assert "write_uris" in json_schema["properties"]
-        assert "edit_uris" in json_schema["properties"]
-        assert "delete_uris" in json_schema["properties"]
+        # Check it includes delete operations and per-memory-type operation fields
+        assert "delete_ids" in json_schema["properties"]
+        assert "profile" in json_schema["properties"]
 
-        # Check delete_uris is an array of strings
-        delete_props = json_schema["properties"]["delete_uris"]
-        assert delete_props.get("items", {}).get("type") == "string"
+        # Check delete_ids is an array of objects
+        delete_props = json_schema["properties"]["delete_ids"]
+        delete_items = delete_props.get("items", {})
+        assert delete_items.get("$ref") or delete_items.get("type") == "object"
 
     def test_get_memory_data_json_schema(self, real_registry):
         """Test getting just the MemoryData JSON schema."""
@@ -393,8 +402,7 @@ class TestSchemaModelGenerator:
 
             # Verify the model has the custom field
             assert "custom_field" in model.model_fields
-            assert "memory_type" in model.model_fields
-            assert "uri" in model.model_fields
+            assert "memory_type" not in model.model_fields
 
 
 class TestWikiLink:
@@ -424,14 +432,7 @@ class TestIntegration:
 
     def test_end_to_end_model_generation_and_validation(self):
         """Test end-to-end: load schemas, generate models, validate data."""
-        schemas_dir = (
-            Path(__file__).parent.parent.parent.parent
-            / "openviking"
-            / "prompts"
-            / "templates"
-            / "memory"
-        )
-        registry = create_default_registry(str(schemas_dir))
+        registry = create_default_registry()
 
         # Create generator
         generator = SchemaModelGenerator(registry)

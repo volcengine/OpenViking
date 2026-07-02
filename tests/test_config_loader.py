@@ -186,7 +186,7 @@ def test_openviking_config_rejects_unknown_memory_field(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_rejects_memory_v1(monkeypatch):
+def test_openviking_config_ignores_deprecated_memory_version(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
     from openviking_cli.utils.config.open_viking_config import (
@@ -194,8 +194,12 @@ def test_openviking_config_rejects_memory_v1(monkeypatch):
         OpenVikingConfigSingleton,
     )
 
-    with pytest.raises(ValueError, match="legacy memory v1 has been removed"):
-        OpenVikingConfig.from_dict({"memory": {"version": "v1"}})
+    config = OpenVikingConfig.from_dict({})
+    assert config.memory.version == "v3"
+
+    for configured_version in ("v1", "v2", "v3", "unsupported"):
+        config = OpenVikingConfig.from_dict({"memory": {"version": configured_version}})
+        assert config.memory.version == "v3"
 
     OpenVikingConfigSingleton.reset_instance()
 
@@ -209,11 +213,15 @@ def test_openviking_config_ignores_deprecated_agent_memory_enabled(monkeypatch):
     )
 
     legacy_config = OpenVikingConfig.from_dict({"memory": {"agent_memory_enabled": False}})
+    working_memory_config = OpenVikingConfig.from_dict(
+        {"memory": {"working_memory_enabled": False}}
+    )
     experimental_config = OpenVikingConfig.from_dict(
         {"memory": {"experimental_memory_switch": True}}
     )
 
     assert not hasattr(legacy_config.memory, "agent_memory_enabled")
+    assert not hasattr(working_memory_config.memory, "working_memory_enabled")
     assert experimental_config.memory.experimental_memory_switch is True
 
     OpenVikingConfigSingleton.reset_instance()

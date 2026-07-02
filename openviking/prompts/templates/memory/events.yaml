@@ -97,8 +97,9 @@ content_template: |
   {% if resource_event_content %}
   {{ resource_event_content }}
   {% else %}
-  Summary: {{ summary }}
-  {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog:
+  # Summary
+  {{ summary }}
+  # {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}} ChatLog:
   {{ extract_context.get_event_content(ranges, summary, 0) }}
   {% endif %}
 embedding_template: |-

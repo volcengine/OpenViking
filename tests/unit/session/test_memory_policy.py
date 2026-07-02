@@ -16,6 +16,7 @@ def test_memory_policy_defaults_to_self_and_peer():
     assert policy.self_enabled is True
     assert policy.peer_enabled is True
     assert policy.memory_types is None
+    assert policy.working_memory_enabled is True
 
 
 def test_memory_policy_can_disable_peer_memory():
@@ -42,6 +43,27 @@ def test_memory_policy_uses_top_level_memory_types():
         "peer": {"enabled": True},
         "memory_types": ["events", "profile"],
     }
+
+
+def test_memory_policy_can_disable_working_memory():
+    policy = MemoryPolicy.from_dict({"working_memory": {"enabled": False}})
+
+    assert policy.self_enabled is True
+    assert policy.peer_enabled is True
+    assert policy.working_memory_enabled is False
+    assert policy.to_dict() == {
+        "self": {"enabled": True},
+        "peer": {"enabled": True},
+        "working_memory": {"enabled": False},
+    }
+
+
+def test_memory_policy_rejects_invalid_working_memory_shape():
+    with pytest.raises(InvalidArgumentError, match="working_memory must be an object"):
+        MemoryPolicy.from_dict({"working_memory": False})
+
+    with pytest.raises(InvalidArgumentError, match="working_memory supports only: enabled"):
+        MemoryPolicy.from_dict({"working_memory": {"enabled": True, "mode": "summary"}})
 
 
 def test_memory_policy_rejects_invalid_memory_types():

@@ -13,7 +13,7 @@ from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 from pydantic import BaseModel, Field, WithJsonSchema, create_model
 from pydantic.config import ConfigDict
 
-from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema, WikiLink
+from openviking.session.memory.dataclass import DeleteId, FaultTolerantBaseModel, MemoryTypeSchema, WikiLink
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
@@ -45,6 +45,8 @@ class SchemaModelGenerator:
         schemas: List[MemoryTypeSchema],
         template_context: Optional[Dict[str, Any]] = None,
     ):
+        if hasattr(schemas, "list_all"):
+            schemas = schemas.list_all()
         self.schemas = schemas
         self._template_context = dict(template_context or {})
         self._model_cache: Dict[str, Type[BaseModel]] = {}
@@ -101,7 +103,7 @@ class SchemaModelGenerator:
         # Skip if schema has "ranges" field (like events) - these are message-based and
         # their self/peer targets are derived from message ranges instead of explicit routing fields.
         has_ranges = any(field.name == "ranges" for field in memory_type.fields)
-        if has_peer_scope and not has_ranges:
+        if has_peer_scope and memory_type.peer_enabled and not has_ranges:
             peer_values = ", ".join(role_scope.peer_ids)
             field_definitions["peer_id"] = (
                 Optional[str],
@@ -218,7 +220,7 @@ class SchemaModelGenerator:
         self._union_model = MemoryDataWrapper
         return self._union_model
 
-    def create_structured_operations_model(self, role_scope: RoleScope) -> Type[BaseModel]:
+    def create_structured_operations_model(self, role_scope: Optional[RoleScope] = None) -> Type[BaseModel]:
         """
         Create a structured MemoryOperations model with type-safe write operations.
 
@@ -261,14 +263,21 @@ class SchemaModelGenerator:
                 ),
             )
 
-        # Only expose delete_uris when at least one schema supports it.
+        # Only expose delete_ids when at least one schema supports deletion.
         # add_only schemas (e.g. trajectories) never delete existing records,
-        # so excluding this field prevents the LLM from hallucinating fake URIs.
+        # so excluding this field prevents the LLM from hallucinating fake deletes.
         has_deletable_schema = any(mt.operation_mode != "add_only" for mt in enabled_memory_types)
         if has_deletable_schema:
-            field_definitions["delete_uris"] = (
-                List[str],
-                Field(default_factory=list, description="Delete operations as URI strings"),
+            field_definitions["delete_ids"] = (
+                List[DeleteId],
+                Field(
+                    default_factory=list,
+                    description=(
+                        "Delete operations by page_id. Each item has delete_page_id and "
+                        "replacement_page_id; set replacement_page_id to null for a pure delete, "
+                        "or to the canonical replacement page_id so existing links/backlinks are inherited."
+                    ),
+                ),
             )
 
         # Add links field for link extraction (only when enabled globally)
@@ -308,7 +317,7 @@ class SchemaModelGenerator:
                     else:
                         # Single value (not None)
                         return False
-            return len(self.delete_uris) == 0
+            return len(getattr(self, "delete_ids", [])) == 0
 
         def to_legacy_operations(self) -> Dict[str, Any]:
             """Convert new per-type structure to legacy write_uris/edit_uris format."""
@@ -334,7 +343,7 @@ class SchemaModelGenerator:
             return {
                 "write_uris": write_uris,
                 "edit_uris": edit_uris,
-                "delete_uris": self.delete_uris,
+                "delete_ids": self.delete_ids,
             }
 
         # Attach methods
@@ -347,6 +356,10 @@ class SchemaModelGenerator:
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
+
+    def get_llm_json_schema(self, role_scope: Optional[RoleScope] = None) -> Dict[str, Any]:
+        """Get the JSON schema for the structured LLM operations model."""
+        return self.create_structured_operations_model(role_scope).model_json_schema()
 
     def get_memory_data_json_schema(self) -> Dict[str, Any]:
         """
@@ -372,6 +385,8 @@ class SchemaPromptGenerator:
         schemas: List[MemoryTypeSchema],
         template_context: Optional[Dict[str, Any]] = None,
     ):
+        if hasattr(schemas, "list_all"):
+            schemas = schemas.list_all()
         self.schemas = schemas
         self._template_context = dict(template_context or {})
 
