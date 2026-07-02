@@ -129,33 +129,44 @@ def load_config() -> Config:
 
 def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
     """
-    Merge vlm model config into bot config.
+    Merge vlm provider config into bot agent config.
 
-    Only sets model parameters - provider config is read directly from OpenVikingConfig.
+    Bot-specific agent settings win. Fields absent from bot.agents inherit from
+    the top-level vlm config so bot can reuse the same provider implementation
+    and request options by default.
     """
-    if vlm_data:
-        if "agents" not in bot_data:
-            bot_data["agents"] = {}
+    if not vlm_data:
+        return
 
+    if "agents" not in bot_data:
+        bot_data["agents"] = {}
     agents = bot_data.get("agents", {})
-    if vlm_data and "timeout" not in agents:
-        agents["timeout"] = vlm_data["timeout"] if "timeout" in vlm_data else 60.0
+    inherit_fields = (
+        "model",
+        "provider",
+        "api_key",
+        "forward_api_key",
+        "api_base",
+        "temperature",
+        "thinking",
+        "timeout",
+        "max_tokens",
+        "max_retries",
+        "extra_headers",
+        "extra_request_body",
+        "api_version",
+        "stream",
+    )
 
-    # Set default model from vlm.model
-    if "agents" in bot_data:
-        if "model" in agents and agents["model"]:
-            return
-    if vlm_data.get("model"):
-        model = vlm_data["model"]
-        provider = vlm_data.get("provider")
-        agents["model"] = model
-        agents["provider"] = provider if provider else ""
-        agents["api_base"] = vlm_data.get("api_base", "")
-        agents["api_key"] = vlm_data.get("api_key", "")
-        if "temperature" in vlm_data and "temperature" not in agents:
-            agents["temperature"] = vlm_data["temperature"]
-        if "extra_headers" in vlm_data and vlm_data["extra_headers"] is not None:
-            agents["extra_headers"] = vlm_data["extra_headers"]
+    for field in inherit_fields:
+        if field in agents:
+            continue
+        value = vlm_data.get(field)
+        if value is not None:
+            agents[field] = value
+
+    if "timeout" not in agents:
+        agents["timeout"] = 60.0
 
 
 def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> str:

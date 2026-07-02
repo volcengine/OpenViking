@@ -56,16 +56,29 @@ def test_make_provider_passes_default_thinking_to_vlm_adapter(monkeypatch):
                 model="ep-test",
                 temperature=0.0,
                 thinking=True,
+                max_tokens=12345,
+                max_retries=2,
                 api_key="ak-test",
+                forward_api_key=True,
                 api_base="https://example.invalid",
                 provider="volcengine",
-                extra_headers={},
+                extra_headers={"X-Test": "1"},
+                extra_request_body={"seed": 7},
+                api_version="2026-01-01",
+                stream=True,
                 timeout=None,
             )
         )
     )
 
     assert captured["thinking"] is True
+    assert captured["max_tokens"] == 12345
+    assert captured["max_retries"] == 2
+    assert captured["forward_api_key"] is True
+    assert captured["extra_headers"] == {"X-Test": "1"}
+    assert captured["extra_request_body"] == {"seed": 7}
+    assert captured["api_version"] == "2026-01-01"
+    assert captured["stream"] is True
     assert provider._vlm.thinking is True
 
 

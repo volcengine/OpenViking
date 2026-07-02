@@ -272,10 +272,16 @@ def _make_provider(config, langfuse_client: None = None):
     model = p.model if p else None
     temperature = p.temperature if p else 0.7
     thinking = p.thinking if p else True
+    max_tokens = p.max_tokens if p else None
+    max_retries = p.max_retries if p else None
     api_key = p.api_key if p else None
+    forward_api_key = p.forward_api_key if p else None
     api_base = p.api_base if p else None
     provider_name = p.provider if p else None
     extra_headers = p.extra_headers if p else {}
+    extra_request_body = p.extra_request_body if p else None
+    api_version = p.api_version if p else None
+    stream = p.stream if p else None
     timeout = p.timeout if p else None
 
     if not model:
@@ -295,14 +301,26 @@ def _make_provider(config, langfuse_client: None = None):
             "temperature": temperature,
             "thinking": thinking,
         }
+        if max_tokens is not None:
+            vlm_config["max_tokens"] = max_tokens
+        if max_retries is not None:
+            vlm_config["max_retries"] = max_retries
         if timeout is not None:
             vlm_config["timeout"] = timeout
         if api_key:
             vlm_config["api_key"] = api_key
+        if forward_api_key is not None:
+            vlm_config["forward_api_key"] = forward_api_key
         if api_base:
             vlm_config["api_base"] = api_base
         if extra_headers:
             vlm_config["extra_headers"] = extra_headers
+        if extra_request_body:
+            vlm_config["extra_request_body"] = extra_request_body
+        if api_version:
+            vlm_config["api_version"] = api_version
+        if stream is not None:
+            vlm_config["stream"] = stream
 
         vlm_instance = VLMFactory.create(vlm_config)
         return VLMProviderAdapter(
@@ -324,6 +342,7 @@ def _make_provider(config, langfuse_client: None = None):
         provider_name=provider_name,
         timeout=timeout,
         thinking=thinking,
+        extra_request_body=extra_request_body,
         langfuse_client=langfuse_client,
     )
 
@@ -453,6 +472,7 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
         workspace=config.workspace_path,
         model=config.agents.model,
         temperature=config.agents.temperature,
+        max_tokens=config.agents.max_tokens,
         max_iterations=config.agents.max_tool_iterations,
         memory_window=config.agents.memory_window,
         brave_api_key=config.tools.web.search.api_key or None,

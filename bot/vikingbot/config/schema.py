@@ -454,6 +454,19 @@ class AgentsConfig(BaseModel):
             "inherits vlm.timeout from ov.conf if present."
         ),
     )
+    max_tokens: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Maximum tokens for bot LLM responses. When omitted, vikingbot inherits "
+            "vlm.max_tokens from ov.conf if present; provider defaults are used otherwise."
+        ),
+    )
+    max_retries: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Maximum retry attempts inherited by VLM-backed providers.",
+    )
     max_tool_iterations: int = 50
     memory_window: int = 50
     session_context_enabled: bool = False
@@ -463,8 +476,12 @@ class AgentsConfig(BaseModel):
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
     provider: str = ""
     api_key: str = ""
+    forward_api_key: Optional[bool] = None
     api_base: str = ""
     extra_headers: Optional[dict[str, str]] = Field(default_factory=dict)
+    extra_request_body: Optional[dict[str, Any]] = None
+    api_version: Optional[str] = None
+    stream: Optional[bool] = None
 
 
 class ProviderConfig(BaseModel):

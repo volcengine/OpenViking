@@ -48,6 +48,7 @@ class LiteLLMProvider(LLMProvider):
         provider_name: str | None = None,
         timeout: float | None = None,
         thinking: bool = True,
+        extra_request_body: dict[str, Any] | None = None,
         langfuse_client: LangfuseClient | None = None,
     ):
         super().__init__(api_key, api_base)
@@ -55,6 +56,7 @@ class LiteLLMProvider(LLMProvider):
         self.extra_headers = extra_headers or {}
         self.timeout = timeout
         self.thinking = thinking
+        self.extra_request_body = dict(extra_request_body or {})
         self.langfuse = langfuse_client or LangfuseClient.get_instance()
 
         # Detect gateway / local deployment.
@@ -244,6 +246,8 @@ class LiteLLMProvider(LLMProvider):
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
 
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
@@ -410,6 +414,8 @@ class LiteLLMProvider(LLMProvider):
             "temperature": temperature,
             "stream": True,
         }
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
         self._apply_model_overrides(model, kwargs)
         self._apply_thinking_overrides(model, kwargs)
 

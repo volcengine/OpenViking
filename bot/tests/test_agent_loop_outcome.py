@@ -127,6 +127,38 @@ async def test_agent_loop_passes_configured_temperature_to_provider(temp_dir: Pa
 
 
 @pytest.mark.asyncio
+async def test_agent_loop_passes_configured_max_tokens_to_provider(temp_dir: Path, monkeypatch):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    bus = MessageBus()
+    provider = _RecordingProvider()
+    config = Config(storage_workspace=str(temp_dir), agents={"max_tokens": 8192})
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        model=config.agents.model,
+        temperature=config.agents.temperature,
+        max_tokens=config.agents.max_tokens,
+        config=config,
+    )
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
+    response, _, _ = await loop._chat_with_stream_events(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[],
+        session_key=session_key,
+        publish_events=False,
+    )
+
+    assert response.content == "ok"
+    assert provider.calls[0][1]["max_tokens"] == 8192
+    assert loop.subagents.kwargs["max_tokens"] == 8192
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
     temp_dir: Path, monkeypatch
 ):

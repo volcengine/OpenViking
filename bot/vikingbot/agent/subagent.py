@@ -34,6 +34,7 @@ class SubagentManager:
         config: "Config",
         model: str | None = None,
         temperature: float = 0.7,
+        max_tokens: int | None = None,
         sandbox_manager: "SandboxManager | None" = None,
     ):
         from vikingbot.config.schema import ExecToolConfig
@@ -44,6 +45,7 @@ class SubagentManager:
         self.config = config
         self.model = model or provider.get_default_model()
         self.temperature = temperature
+        self.max_tokens = max_tokens
         self.sandbox_manager = sandbox_manager
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
 
@@ -132,6 +134,7 @@ class SubagentManager:
                     tools=tools.get_definitions(),
                     model=self.model,
                     temperature=self.temperature,
+                    max_tokens=self.max_tokens or 4096,
                 )
 
                 if response.has_tool_calls:
