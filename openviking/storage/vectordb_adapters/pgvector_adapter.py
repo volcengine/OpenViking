@@ -23,13 +23,14 @@ SQL ``ICollection`` and live connection seam are filled in over B3-B4.
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
 from openviking.storage.vectordb_adapters.opengauss_adapter import (
     OpenGaussCollection,
     _normalize_distance,
+    _quote_ident,
     _safe_identifier,
 )
 
@@ -60,8 +61,55 @@ class PgVectorCollection(OpenGaussCollection):
     in their respective build-loop slices (B3.3/B3.6/B3.8).
     """
 
+    def update_data(self, data_list: List[Dict[str, Any]]) -> Any:
+        """Update rows by primary key.
+
+        For a SQL backend an update-by-id is exactly the ``INSERT ... ON CONFLICT
+        (id) DO UPDATE`` upsert path, so ``update_data`` delegates to
+        ``upsert_data``. (``ICollection.update_data`` is abstract; the inherited
+        openGauss collection never implemented it, which is why pgvector must.)
+        """
+        return self.upsert_data(data_list)
+
     def _meta_table_ref(self, table_name: str) -> str:
         return super()._meta_table_ref(_OPENGAUSS_META_REMAP.get(table_name, table_name))
+
+    def _build_create_ddl(self, meta_data: Dict[str, Any]) -> list[str]:
+        """Return the ordered DDL for a collection: ``CREATE EXTENSION`` (when
+        enabled) *before* the ``CREATE TABLE`` carrying the ``vector(N)`` column.
+
+        Pure string builder (no connection) so the ordering and extension gate
+        are unit-testable. Stock PostgreSQL needs the extension created before any
+        ``vector(N)`` DDL; openGauss ships it natively so it never ran this.
+        """
+        columns = ["id TEXT PRIMARY KEY"]
+        seen = {"id"}
+        for field in meta_data.get("Fields", []) or []:
+            ddl = self._field_to_column_ddl(field)
+            field_name = field.get("FieldName")
+            if ddl and field_name not in seen:
+                columns.append(ddl)
+                seen.add(str(field_name))
+        for field_name, sql_type in self.INTERNAL_PATH_FIELDS.items():
+            if field_name not in seen:
+                columns.append(f"{_quote_ident(field_name)} {sql_type}")
+                seen.add(field_name)
+
+        statements: list[str] = []
+        if getattr(self, "_create_extension", True):
+            statements.append("CREATE EXTENSION IF NOT EXISTS vector")
+        statements.append(f"CREATE TABLE IF NOT EXISTS {self._table_ref()} ({', '.join(columns)})")
+        return statements
+
+    def create_remote_collection(self, meta_data: Dict[str, Any]) -> None:
+        self._meta = dict(meta_data)
+        self._vector_dim = self._extract_vector_dim(self._meta)
+        self._field_types = self._build_field_type_map(self._meta)
+        if self._vector_dim <= 0:
+            raise ValueError("pgvector collection requires a positive dense vector dimension")
+        for statement in self._build_create_ddl(meta_data):
+            self._execute(statement)
+        self._save_collection_meta(meta_data)
 
 
 class PgVectorCollectionAdapter(CollectionAdapter):

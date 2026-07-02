@@ -87,6 +87,37 @@ def test_pgvector_distance_validation(metric, valid):
             _normalize_distance(metric)
 
 
+@pytest.mark.parametrize(
+    ("create_extension", "expect_ext"),
+    [(True, True), (False, False)],
+    ids=["create-extension", "pre-provisioned"],
+)
+def test_create_extension_emitted_before_vector_ddl(create_extension, expect_ext):
+    collection = object.__new__(PgVectorCollection)
+    collection._schema_name = "public"
+    collection._table_name = "ov_test"
+    collection._dense_vector_name = "vector"
+    collection._vector_dim = 3
+    collection._create_extension = create_extension
+
+    meta = {
+        "Fields": [
+            {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+            {"FieldName": "vector", "FieldType": "vector", "Dim": 3},
+        ]
+    }
+    statements = collection._build_create_ddl(meta)
+
+    assert any("vector(3)" in s for s in statements)
+    if expect_ext:
+        assert statements[0] == "CREATE EXTENSION IF NOT EXISTS vector"
+        ext_idx = next(i for i, s in enumerate(statements) if "CREATE EXTENSION" in s)
+        vec_idx = next(i for i, s in enumerate(statements) if "vector(3)" in s)
+        assert ext_idx < vec_idx
+    else:
+        assert all("CREATE EXTENSION" not in s for s in statements)
+
+
 def test_factory_creates_pgvector_adapter_without_connecting():
     adapter = create_collection_adapter(_build_config())
 
