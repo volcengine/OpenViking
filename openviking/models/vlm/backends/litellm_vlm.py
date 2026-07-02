@@ -271,8 +271,8 @@ class LiteLLMVLMProvider(VLMBase):
             "temperature": self.temperature,
             "timeout": self.timeout,
         }
-        max_tokens = self.max_tokens or 32768
-        kwargs["max_tokens"] = max_tokens
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
 
         if self._should_forward_api_key(model):
             kwargs["api_key"] = self.api_key
