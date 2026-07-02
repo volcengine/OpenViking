@@ -32,6 +32,7 @@ class _FakeWatchManager:
     def __init__(self):
         self.plan_calls = []
         self.move_calls = []
+        self.sync_calls = []
         self.deactivate_calls = []
         self.plan_error = None
 
@@ -43,6 +44,19 @@ class _FakeWatchManager:
 
     async def move_tasks_under_uri_internal(self, from_uri, to_uri):
         self.move_calls.append({"from_uri": from_uri, "to_uri": to_uri})
+        return [SimpleNamespace(task_id="watch-1")]
+
+    async def sync_tasks_with_resource_move_internal(
+        self,
+        from_uri,
+        to_uri,
+        move_resource,
+        rollback_resource=None,
+    ):
+        self.sync_calls.append({"from_uri": from_uri, "to_uri": to_uri})
+        if self.plan_error:
+            raise self.plan_error
+        await move_resource()
         return [SimpleNamespace(task_id="watch-1")]
 
     async def deactivate_tasks_under_uri_internal(self, uri):
@@ -238,7 +252,7 @@ async def test_resource_mv_plans_then_moves_then_rewrites_watch_tasks(request_co
         ctx=request_context,
     )
 
-    assert watch_manager.plan_calls == [
+    assert watch_manager.sync_calls == [
         {
             "from_uri": "viking://resources/codeask/wiki",
             "to_uri": "viking://resources/codeask/wiki-renamed",
@@ -251,12 +265,8 @@ async def test_resource_mv_plans_then_moves_then_rewrites_watch_tasks(request_co
             "ctx": request_context,
         }
     ]
-    assert watch_manager.move_calls == [
-        {
-            "from_uri": "viking://resources/codeask/wiki",
-            "to_uri": "viking://resources/codeask/wiki-renamed",
-        }
-    ]
+    assert watch_manager.plan_calls == []
+    assert watch_manager.move_calls == []
 
 
 @pytest.mark.asyncio
@@ -278,6 +288,26 @@ async def test_resource_mv_conflict_fails_before_resource_move(request_context):
 
     assert viking_fs.mv_calls == []
     assert watch_manager.move_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_without_watch_scheduler_moves_resource_directly(request_context):
+    viking_fs = _FakeVikingFS()
+    service = FSService(viking_fs=viking_fs)
+
+    await service.mv(
+        "viking://resources/codeask/wiki",
+        "viking://resources/codeask/wiki-renamed",
+        ctx=request_context,
+    )
+
+    assert viking_fs.mv_calls == [
+        {
+            "from_uri": "viking://resources/codeask/wiki",
+            "to_uri": "viking://resources/codeask/wiki-renamed",
+            "ctx": request_context,
+        }
+    ]
 
 
 @pytest.mark.asyncio

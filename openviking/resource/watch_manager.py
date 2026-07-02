@@ -7,10 +7,11 @@ Provides task creation, update, deletion, query, and persistence storage.
 """
 
 import asyncio
+import inspect
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -631,7 +632,7 @@ class WatchManager:
                 task = self._tasks[task_id]
                 old_parent = _parent_uri(task.to_uri or "")
                 task.to_uri = target_uri
-                if task.parent_uri is None or task.parent_uri == old_parent:
+                if task.parent_uri is not None and task.parent_uri == old_parent:
                     task.parent_uri = _parent_uri(target_uri)
                 self._uri_to_task[target_uri] = task_id
                 updated.append(task)
@@ -642,6 +643,63 @@ class WatchManager:
                 f"under {old_uri} to {new_uri}"
             )
             return updated
+
+    async def sync_tasks_with_resource_move_internal(
+        self,
+        old_uri: str,
+        new_uri: str,
+        move_resource: Callable[[], Awaitable[None]],
+        rollback_resource: Optional[Callable[[], Awaitable[None]]] = None,
+    ) -> List[WatchTask]:
+        """Move a resource and keep watch-task target URIs in sync under one lock."""
+        async with self._lock:
+            plan = self._plan_move_tasks_under_uri_unlocked(old_uri, new_uri)
+            move_result = move_resource()
+            if inspect.isawaitable(move_result):
+                await move_result
+            if not plan:
+                return []
+
+            original_targets = {
+                task_id: (task.to_uri, task.parent_uri)
+                for task_id, task in self._tasks.items()
+                if task_id in plan
+            }
+            original_uri_to_task = dict(self._uri_to_task)
+
+            try:
+                for task_id in plan:
+                    task = self._tasks[task_id]
+                    if task.to_uri:
+                        self._uri_to_task.pop(task.to_uri, None)
+
+                updated: List[WatchTask] = []
+                for task_id, target_uri in plan.items():
+                    task = self._tasks[task_id]
+                    old_parent = _parent_uri(task.to_uri or "")
+                    task.to_uri = target_uri
+                    if task.parent_uri is not None and task.parent_uri == old_parent:
+                        task.parent_uri = _parent_uri(target_uri)
+                    self._uri_to_task[target_uri] = task_id
+                    updated.append(task)
+
+                await self._save_tasks()
+                logger.info(
+                    f"[WatchManager] Rewrote {len(updated)} watch task target URI(s) "
+                    f"under {old_uri} to {new_uri}"
+                )
+                return updated
+            except Exception:
+                for task_id, (original_to_uri, original_parent_uri) in original_targets.items():
+                    task = self._tasks[task_id]
+                    task.to_uri = original_to_uri
+                    task.parent_uri = original_parent_uri
+                self._uri_to_task = original_uri_to_task
+                if rollback_resource is not None:
+                    rollback_result = rollback_resource()
+                    if inspect.isawaitable(rollback_result):
+                        await rollback_result
+                raise
 
     async def deactivate_tasks_under_uri_internal(self, uri: str) -> List[WatchTask]:
         """Deactivate watch tasks whose target URI is deleted."""

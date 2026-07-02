@@ -385,9 +385,23 @@ class FSService:
         from_uri = validate_viking_uri(from_uri, field_name="from_uri")
         to_uri = validate_viking_uri(to_uri, field_name="to_uri")
         viking_fs = self._ensure_initialized()
-        await self._plan_watch_before_mv(from_uri, to_uri)
-        await viking_fs.mv(from_uri, to_uri, ctx=ctx)
-        await self._sync_watch_after_mv(from_uri, to_uri)
+        watch_manager = self._get_watch_manager()
+        if not watch_manager or context_type_for_uri(from_uri) != "resource":
+            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            return
+        if context_type_for_uri(to_uri) != "resource":
+            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            return
+        if is_watch_task_control_uri(from_uri) or is_watch_task_control_uri(to_uri):
+            await viking_fs.mv(from_uri, to_uri, ctx=ctx)
+            return
+
+        await watch_manager.sync_tasks_with_resource_move_internal(
+            from_uri,
+            to_uri,
+            move_resource=lambda: viking_fs.mv(from_uri, to_uri, ctx=ctx),
+            rollback_resource=lambda: viking_fs.mv(to_uri, from_uri, ctx=ctx),
+        )
 
     async def _plan_watch_before_mv(self, from_uri: str, to_uri: str) -> None:
         if context_type_for_uri(from_uri) != "resource":
@@ -700,4 +714,3 @@ class FSService:
         .ovgitignore; missing is success."""
         viking_fs = self._ensure_initialized()
         await viking_fs.delete_gitignore(ctx=ctx)
-
