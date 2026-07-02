@@ -206,6 +206,7 @@ root_client = SyncHTTPClient(
 result = root_client.admin_create_account(
     account_id="demo-account",
     admin_user_id="demo-admin",
+    seed="demo-admin-seed",
 )
 print(result)
 
@@ -213,6 +214,7 @@ root_client.admin_register_user(
     account_id="demo-account",
     user_id="alice",
     role="user",
+    seed="alice-seed",
     user_config={
         "add_targets": {
             "resource_uri": "viking://user/resources/project-a",
@@ -220,11 +222,19 @@ root_client.admin_register_user(
         }
     },
 )
+
+root_client.admin_regenerate_key(
+    account_id="demo-account",
+    user_id="alice",
+    seed="alice-new-seed",
+)
 ```
 
 `admin_create_account` also accepts `user_config` with the same shape.
 These fields initialize server-side user config; ordinary add calls still just
 omit `to` / `parent` / `target_uri` and let the server resolve defaults.
+When `seed` is set, the returned API key is derived from
+`sha256(user_id + "\0" + seed)`; omit it for random key generation.
 
 ## Error Handling
 

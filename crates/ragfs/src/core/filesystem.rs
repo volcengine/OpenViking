@@ -203,6 +203,19 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `Error::AlreadyExists` - If new_path already exists
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()>;
 
+    /// Replace a file by moving `src_path` onto `dst_path`, consuming the source.
+    ///
+    /// Unlike `rename`, this operation allows `dst_path` to already exist.
+    /// Backends that cannot provide replace semantics should override this
+    /// method only when support is available; the default returns
+    /// `Error::InvalidOperation`.
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        Err(Error::invalid_operation(format!(
+            "replace is not supported: {} -> {}",
+            src_path, dst_path
+        )))
+    }
+
     /// Change file permissions
     ///
     /// # Arguments

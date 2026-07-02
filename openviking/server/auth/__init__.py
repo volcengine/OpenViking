@@ -4,7 +4,7 @@
 
 from typing import Optional
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, HTTPException, Query, Request
 
 from openviking.core.peer_id import normalize_peer_id
 from openviking.server.identity import (
@@ -13,6 +13,7 @@ from openviking.server.identity import (
     ResolvedIdentity,
     Role,
 )
+from openviking.server.upload_token_store import UploadTokenError, upload_token_store
 from openviking.telemetry.span_models import update_root_span_identity
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -163,6 +164,58 @@ async def get_request_context(
     )
 
     return ctx
+
+
+async def get_upload_request_context(
+    request: Request,
+    token: Optional[str] = Query(None),
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+    x_openviking_account: Optional[str] = Header(None, alias="X-OpenViking-Account"),
+    x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
+    x_openviking_actor_peer: Optional[str] = Header(None, alias="X-OpenViking-Actor-Peer"),
+    x_openviking_agent: Optional[str] = Header(None, alias="X-OpenViking-Agent"),
+) -> RequestContext:
+    """Two-layer auth for the ``temp_upload`` route: API key first, else a signed token.
+
+    When an API key (``X-API-Key`` / ``Authorization: Bearer``) is present, resolve identity
+    normally — an authenticated caller is never downgraded to the token path. Otherwise, if a
+    ``?token=`` is present, consume it (single-use) and rebuild the bound identity/business
+    params; the token itself is the authorization, so no auth-plugin identity checks run and
+    any spoofed ``X-OpenViking-Account/User`` headers are ignored. The consumed token is
+    stashed on ``request.state.signed_upload`` so the handler can finish ingestion.
+    """
+    api_key = _extract_api_key(x_api_key, authorization)
+    if token and not api_key:
+        try:
+            consumed = upload_token_store.consume(token)
+        except UploadTokenError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        request.state.signed_upload = consumed
+        try:
+            ctx = RequestContext(
+                user=UserIdentifier(consumed.account_id, consumed.user_id),
+                role=Role.USER,
+                # Actor peer comes from the token (bound at mint time from the trusted MCP
+                # context), never from this upload request's headers, so server-side
+                # auto-ingest keeps the caller's peer scope for reason-memory routing.
+                actor_peer_id=consumed.actor_peer_id or None,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"invalid identity in token: {exc}"
+            ) from exc
+        update_root_span_identity(
+            request_state=request.state,
+            account_id=consumed.account_id,
+            user_id=consumed.user_id,
+        )
+        return ctx
+
+    identity = await resolve_identity(
+        request, x_api_key, authorization, x_openviking_account, x_openviking_user
+    )
+    return await get_request_context(request, identity, x_openviking_actor_peer, x_openviking_agent)
 
 
 def require_role(*allowed_roles: Role):

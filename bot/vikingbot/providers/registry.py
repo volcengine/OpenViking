@@ -51,6 +51,9 @@ class ProviderSpec:
     # per-model param overrides, e.g. (("kimi-k2.5", {"temperature": 1.0}),)
     model_overrides: tuple[tuple[str, dict[str, Any]], ...] = ()
 
+    # provider-specific way to request reasoning/thinking, if supported by the protocol
+    thinking_param: str = ""  # volcengine_thinking | dashscope_enable_thinking | openai_reasoning_effort
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -133,6 +136,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
+        thinking_param="openai_reasoning_effort",
     ),
     # DeepSeek: needs "deepseek/" prefix for LiteLLM routing.
     ProviderSpec(
@@ -167,6 +171,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://ark.cn-beijing.volces.com/api/v3",
         strip_model_prefix=False,
         model_overrides=(),
+        thinking_param="volcengine_thinking",
     ),
     # Gemini: needs "gemini/" prefix for LiteLLM.
     ProviderSpec(
@@ -220,6 +225,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
+        thinking_param="dashscope_enable_thinking",
     ),
     # Moonshot: Kimi models, needs "moonshot/" prefix.
     # LiteLLM requires MOONSHOT_API_BASE env var to find the endpoint.

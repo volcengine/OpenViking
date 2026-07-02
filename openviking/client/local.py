@@ -1161,6 +1161,18 @@ class LocalClient(BaseClient):
         """Walk back along parents[0] up to limit commits."""
         return await self._service.fs.log(branch=branch, limit=limit, ctx=self._ctx)
 
+    async def git_get_ignore(self) -> str:
+        """Return the account .ovgitignore content (empty string if absent)."""
+        return await self._service.fs.get_gitignore(ctx=self._ctx)
+
+    async def git_set_ignore(self, *, content: str) -> None:
+        """Write the account .ovgitignore control file."""
+        await self._service.fs.set_gitignore(content=content, ctx=self._ctx)
+
+    async def git_delete_ignore(self) -> None:
+        """Delete the account .ovgitignore control file (missing is success)."""
+        await self._service.fs.delete_gitignore(ctx=self._ctx)
+
     # ============= Debug =============
 
     async def check_consistency(self, uri: str) -> Dict[str, Any]:

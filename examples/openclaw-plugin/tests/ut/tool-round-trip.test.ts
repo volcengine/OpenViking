@@ -56,7 +56,7 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
     }
   });
 
-  it("maps toolResult to role=user", () => {
+  it("maps toolResult to role=assistant", () => {
     const messages = [
       {
         role: "toolResult",
@@ -67,7 +67,7 @@ describe("extractNewTurnMessages: toolCallId propagation", () => {
     ];
 
     const { messages: extracted } = extractNewTurnMessages(messages, 0);
-    expect(extracted[0]!.role).toBe("user");
+    expect(extracted[0]!.role).toBe("assistant");
   });
 });
 

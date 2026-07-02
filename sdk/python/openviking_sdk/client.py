@@ -781,6 +781,12 @@ class AsyncHTTPClient:
         response = await self._http.get("/api/v1/fs/stat", params={"uri": VikingURI.normalize(uri)})
         return self._handle_response(response)
 
+    async def attrs(self, uri: str) -> Dict[str, Any]:
+        response = await self._http.get(
+            "/api/v1/fs/attrs", params={"uri": VikingURI.normalize(uri)}
+        )
+        return self._handle_response(response)
+
     async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         payload = {"uri": VikingURI.normalize(uri)}
         if description is not None:
@@ -858,7 +864,7 @@ class AsyncHTTPClient:
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         response = await self._http.post(
-            "/api/v1/content/set_tags",
+            "/api/v1/fs/attrs/set_tags",
             json={
                 "uri": VikingURI.normalize(uri),
                 "tags": tags,
@@ -1228,8 +1234,11 @@ class AsyncHTTPClient:
         account_id: str,
         admin_user_id: str,
         user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"account_id": account_id, "admin_user_id": admin_user_id}
+        if seed is not None:
+            payload["seed"] = seed
         if user_config is not None:
             payload["user_config"] = user_config
         response = await self._http.post(
@@ -1252,8 +1261,11 @@ class AsyncHTTPClient:
         user_id: str,
         role: str = "user",
         user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {"user_id": user_id, "role": role}
+        if seed is not None:
+            payload["seed"] = seed
         if user_config is not None:
             payload["user_config"] = user_config
         response = await self._http.post(
@@ -1277,8 +1289,16 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def admin_regenerate_key(self, account_id: str, user_id: str) -> Dict[str, Any]:
-        response = await self._http.post(f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key")
+    async def admin_regenerate_key(
+        self, account_id: str, user_id: str, seed: Optional[str] = None
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        if seed is not None:
+            payload["seed"] = seed
+        response = await self._http.post(
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
+            json=payload,
+        )
         return self._handle_response(response)
 
     async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
@@ -1385,6 +1405,25 @@ class AsyncHTTPClient:
             params={"branch": branch, "limit": limit},
         )
         return self._handle_response(response)
+
+    async def git_get_ignore(self) -> str:
+        """Return the account ``.ovgitignore`` content (empty string if absent)."""
+        response = await self._http.get("/api/v1/snapshot/ignore")
+        result = self._handle_response(response)
+        return result if isinstance(result, str) else ""
+
+    async def git_set_ignore(self, *, content: str) -> None:
+        """Write the account ``.ovgitignore`` control file."""
+        response = await self._http.put(
+            "/api/v1/snapshot/ignore",
+            json={"content": content},
+        )
+        self._handle_response(response)
+
+    async def git_delete_ignore(self) -> None:
+        """Delete the account ``.ovgitignore`` control file (missing is success)."""
+        response = await self._http.delete("/api/v1/snapshot/ignore")
+        self._handle_response(response)
 
     @property
     def snapshot(self) -> "AsyncHTTPSnapshotNamespace":
@@ -1678,6 +1717,9 @@ class SyncHTTPClient:
 
     def stat(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.stat(uri))
+
+    def attrs(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.attrs(uri))
 
     def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         run_async(self._async_client.mkdir(uri, description=description))
@@ -1985,11 +2027,13 @@ class SyncHTTPClient:
         account_id: str,
         admin_user_id: str,
         user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.admin_create_account(
                 account_id,
                 admin_user_id,
+                seed=seed,
                 user_config=user_config,
             )
         )
@@ -2006,12 +2050,14 @@ class SyncHTTPClient:
         user_id: str,
         role: str = "user",
         user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.admin_register_user(
                 account_id,
                 user_id,
                 role,
+                seed=seed,
                 user_config=user_config,
             )
         )
@@ -2025,8 +2071,10 @@ class SyncHTTPClient:
     def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_set_role(account_id, user_id, role))
 
-    def admin_regenerate_key(self, account_id: str, user_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_regenerate_key(account_id, user_id))
+    def admin_regenerate_key(
+        self, account_id: str, user_id: str, seed: Optional[str] = None
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_regenerate_key(account_id, user_id, seed=seed))
 
     def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
         return run_async(self._async_client.admin_migrate(cleanup=cleanup))
@@ -2119,6 +2167,15 @@ class AsyncHTTPSnapshotNamespace:
     ) -> List[Dict[str, Any]]:
         return await self._client.git_log(branch=branch, limit=limit)
 
+    async def get_gitignore(self) -> str:
+        return await self._client.git_get_ignore()
+
+    async def set_gitignore(self, *, content: str) -> None:
+        await self._client.git_set_ignore(content=content)
+
+    async def delete_gitignore(self) -> None:
+        await self._client.git_delete_ignore()
+
 
 class SyncHTTPSnapshotNamespace:
     """Synchronous wrapper around the HTTP client's snapshot namespace."""
@@ -2186,3 +2243,12 @@ class SyncHTTPSnapshotNamespace:
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         return run_async(self._ns().log(branch=branch, limit=limit))
+
+    def get_gitignore(self) -> str:
+        return run_async(self._ns().get_gitignore())
+
+    def set_gitignore(self, *, content: str) -> None:
+        run_async(self._ns().set_gitignore(content=content))
+
+    def delete_gitignore(self) -> None:
+        run_async(self._ns().delete_gitignore())

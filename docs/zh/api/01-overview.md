@@ -427,6 +427,8 @@ JSON 输出 - 错误：
 | GET | `/api/v1/fs/ls` | 列出目录内容 |
 | GET | `/api/v1/fs/tree` | 获取目录树结构 |
 | GET | `/api/v1/fs/stat` | 获取资源状态 |
+| GET | `/api/v1/fs/attrs` | 获取逻辑扩展属性 |
+| POST | `/api/v1/fs/attrs/set_tags` | 设置检索标签 |
 | POST | `/api/v1/fs/mkdir` | 创建目录 |
 | DELETE | `/api/v1/fs` | 删除资源 |
 | POST | `/api/v1/fs/mv` | 移动/重命名资源 |

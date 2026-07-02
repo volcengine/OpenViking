@@ -155,6 +155,14 @@ class ResourceService:
             return None
         return self._watch_scheduler.watch_manager
 
+    def _get_parser_router(self):
+        if not hasattr(self, "_parser_router"):
+            from openviking.parse.parser_router import ParserRouter
+            from openviking.parse.registry import get_registry
+
+            self._parser_router = ParserRouter(get_registry())
+        return self._parser_router
+
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         sanitized: Dict[str, Any] = {}
         for key, value in processor_kwargs.items():
@@ -164,6 +172,70 @@ class ResourceService:
                 continue
             sanitized[key] = value
         return sanitized
+
+    async def _manage_watch_if_needed(
+        self,
+        *,
+        watch_manager: Optional["WatchManager"],
+        skip_watch_management: bool,
+        watch_interval: float,
+        target: ContentTargetSpec,
+        root_uri: str,
+        path: str,
+        reason: str,
+        instruction: str,
+        build_index: bool,
+        summarize: bool,
+        processor_kwargs: Dict[str, Any],
+        watch_auth_state: Optional[Dict[str, Any]],
+        ctx: RequestContext,
+    ) -> None:
+        if not watch_manager or skip_watch_management:
+            return
+        telemetry = get_current_telemetry()
+        with telemetry.measure("resource.watch"):
+            if watch_interval > 0:
+                watch_to = target.to
+                parent_uri = target.parent
+                if not watch_to:
+                    watch_to = validate_optional_content_target_uri(
+                        root_uri,
+                        ctx,
+                        kind="resource",
+                        field_name="root_uri",
+                    )
+                    parent_uri = None
+                if not watch_to:
+                    raise InvalidArgumentError(
+                        "watch_interval > 0 requires a stable target URI. "
+                        "Pass 'to' explicitly, or add a resource type that returns root_uri."
+                    )
+                try:
+                    sanitized = self._sanitize_watch_processor_kwargs(processor_kwargs)
+                    if watch_auth_state is not None:
+                        sanitized.pop(FEISHU_ACCESS_TOKEN_ARG, None)
+                    await self._handle_watch_task_creation(
+                        path=path,
+                        to_uri=watch_to,
+                        parent_uri=parent_uri,
+                        reason=reason,
+                        instruction=instruction,
+                        watch_interval=watch_interval,
+                        build_index=build_index,
+                        summarize=summarize,
+                        processor_kwargs=sanitized,
+                        auth_state=watch_auth_state,
+                        ctx=ctx,
+                    )
+                except ConflictError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"[ResourceService] Failed to create watch task for {watch_to}: {e}")
+            elif target.to:
+                try:
+                    await self._handle_watch_task_cancellation(to_uri=target.to, ctx=ctx)
+                except Exception as e:
+                    logger.warning(f"[ResourceService] Failed to cancel watch task for {target.to}: {e}")
 
     def _normalize_add_resource_args(
         self,
@@ -458,6 +530,9 @@ class ResourceService:
         )
         return root_uri, resource_lock
 
+    def _should_use_understanding_api(self, path: str) -> bool:
+        return self._get_parser_router().should_use_understanding_api(path)
+
     @staticmethod
     def _target_doc_name(
         path: str,
@@ -626,6 +701,163 @@ class ResourceService:
             if resource_lock is not None:
                 kwargs["resource_lock"] = resource_lock
 
+            if (
+                not wait
+                and not is_git_repo_url(path)
+                and self._should_use_understanding_api(path)
+                and not allow_local_path_resolution
+                and self._resource_processor is not None
+            ):
+                from openviking.service.task_tracker import get_task_tracker
+                from openviking.storage.queuefs import QueueManager, get_queue_manager
+                from openviking.storage.queuefs.understanding_parse_msg import (
+                    UnderstandingParseMsg,
+                )
+
+                source_name = kwargs.get("source_name")
+                source_info = _ResourceSourceInfo(
+                    source_name=source_name,
+                    source_path=path,
+                    source_format="file",
+                )
+                doc_name = self._target_doc_name(path, source_name, source_info)
+                source_path = source_info.source_path or source_name or path
+                root_uri, candidate_uri = await self._resource_processor.tree_builder.resolve_target_uri(
+                    ctx=ctx,
+                    doc_name=doc_name,
+                    scope="resources",
+                    to_uri=target.to,
+                    parent_uri=target.parent,
+                    source_path=source_path,
+                    source_format=source_info.source_format,
+                    create_parent=target.create_parent,
+                )
+                if self._viking_fs is None:
+                    raise NotInitializedError("VikingFS")
+                from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+                from openviking.storage.transaction import OwnedLockLease, get_lock_manager
+
+                lock_manager = get_lock_manager()
+                lock_lease: LockLease = NO_LOCK
+
+                async def _reserve_tree(uri: str) -> LockLease:
+                    dst_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+                    try:
+                        return await OwnedLockLease.acquire_tree(lock_manager, dst_path, timeout=0.0)
+                    except LockAcquisitionError as exc:
+                        raise ResourceBusyError(
+                            f"Resource is busy: {uri}",
+                            uri=uri,
+                            conflict_type="path_busy",
+                            retryable=True,
+                        ) from exc
+
+                if candidate_uri:
+                    max_attempts = 100
+                    reserved = False
+                    for attempt in range(max_attempts + 1):
+                        attempt_uri = candidate_uri if attempt == 0 else f"{candidate_uri}_{attempt}"
+                        if await self._viking_fs.exists(attempt_uri, ctx=ctx):
+                            continue
+                        try:
+                            lock_lease = await _reserve_tree(attempt_uri)
+                            root_uri = attempt_uri
+                            reserved = True
+                            break
+                        except ResourceBusyError:
+                            continue
+                    if not reserved:
+                        raise FileExistsError(
+                            f"Cannot resolve unique name for {candidate_uri} after {max_attempts} attempts"
+                        )
+                else:
+                    lock_lease = await _reserve_tree(root_uri)
+
+                task_tracker = get_task_tracker()
+                task = None
+                try:
+                    task = await task_tracker.create(
+                        "add_resource",
+                        resource_id=root_uri,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+                    await task_tracker.update_stage(
+                        task.task_id,
+                        "queued_external_parse",
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                    )
+
+                    lock_handoff = lock_lease.to_handoff()
+                    msg = UnderstandingParseMsg(
+                        task_id=task.task_id,
+                        telemetry_id=telemetry_id or None,
+                        path=path,
+                        root_uri=root_uri,
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        role=str(ctx.role),
+                        actor_peer_id=ctx.actor_peer_id,
+                        reason=reason,
+                        instruction=instruction,
+                        build_index=build_index,
+                        summarize=summarize,
+                        strict=bool(kwargs.get("strict", False)),
+                        ignore_dirs=kwargs.get("ignore_dirs"),
+                        include=kwargs.get("include"),
+                        exclude=kwargs.get("exclude"),
+                        directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
+                        allow_local_path_resolution=allow_local_path_resolution,
+                        enforce_public_remote_targets=enforce_public_remote_targets,
+                        args=normalized_args.processor_kwargs,
+                        source_name=source_name,
+                        lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
+                    )
+                    qm = get_queue_manager()
+                    await qm.enqueue(QueueManager.EXTERNAL_PARSE, msg.to_dict())
+                    await lock_lease.handoff()
+                    monitor_started = True
+                except Exception as exc:
+                    with contextlib.suppress(Exception):
+                        await lock_lease.close()
+
+                    if task is not None:
+                        with contextlib.suppress(Exception):
+                            await task_tracker.fail(
+                                task.task_id,
+                                str(exc),
+                                account_id=ctx.account_id,
+                                user_id=ctx.user.user_id,
+                            )
+
+                    raise
+                logger.info(
+                    "[ResourceService] Enqueued UnderstandingParseMsg task_id=%s root_uri=%s",
+                    task.task_id,
+                    root_uri,
+                )
+                await self._manage_watch_if_needed(
+                    watch_manager=watch_manager,
+                    skip_watch_management=skip_watch_management,
+                    watch_interval=watch_interval,
+                    target=target,
+                    root_uri=root_uri,
+                    path=path,
+                    reason=reason,
+                    instruction=instruction,
+                    build_index=build_index,
+                    summarize=summarize,
+                    processor_kwargs=kwargs,
+                    watch_auth_state=normalized_args.watch_auth_state,
+                    ctx=ctx,
+                )
+                return {
+                    "status": "success",
+                    "root_uri": root_uri,
+                    "task_id": task.task_id,
+                }
+
             result = await self._resource_processor.process_resource(
                 path=path,
                 ctx=ctx,
@@ -690,54 +922,21 @@ class ResourceService:
                     root_uri=result.get("root_uri"),
                 )
                 telemetry.set("queue.wait.duration_ms", queue_wait_duration_ms)
-            if watch_manager and not skip_watch_management:
-                with telemetry.measure("resource.watch"):
-                    if watch_interval > 0:
-                        watch_to = target.to
-                        parent_uri = target.parent
-                        if not watch_to:
-                            watch_to = validate_optional_content_target_uri(
-                                result.get("root_uri"),
-                                ctx,
-                                kind="resource",
-                                field_name="root_uri",
-                            )
-                            parent_uri = None
-                        if not watch_to:
-                            raise InvalidArgumentError(
-                                "watch_interval > 0 requires a stable target URI. "
-                                "Pass 'to' explicitly, or add a resource type that returns root_uri."
-                            )
-                        try:
-                            processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
-                            if normalized_args.watch_auth_state is not None:
-                                processor_kwargs.pop(FEISHU_ACCESS_TOKEN_ARG, None)
-                            await self._handle_watch_task_creation(
-                                path=path,
-                                to_uri=watch_to,
-                                parent_uri=parent_uri,
-                                reason=reason,
-                                instruction=instruction,
-                                watch_interval=watch_interval,
-                                build_index=build_index,
-                                summarize=summarize,
-                                processor_kwargs=processor_kwargs,
-                                auth_state=normalized_args.watch_auth_state,
-                                ctx=ctx,
-                            )
-                        except ConflictError:
-                            raise
-                        except Exception as e:
-                            logger.warning(
-                                f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
-                            )
-                    elif target.to:
-                        try:
-                            await self._handle_watch_task_cancellation(to_uri=target.to, ctx=ctx)
-                        except Exception as e:
-                            logger.warning(
-                                f"[ResourceService] Failed to cancel watch task for {target.to}: {e}"
-                            )
+            await self._manage_watch_if_needed(
+                watch_manager=watch_manager,
+                skip_watch_management=skip_watch_management,
+                watch_interval=watch_interval,
+                target=target,
+                root_uri=str(result.get("root_uri") or ""),
+                path=path,
+                reason=reason,
+                instruction=instruction,
+                build_index=build_index,
+                summarize=summarize,
+                processor_kwargs=kwargs,
+                watch_auth_state=normalized_args.watch_auth_state,
+                ctx=ctx,
+            )
             if wait:
                 await self._link_resource_reason_memory(
                     result=result,

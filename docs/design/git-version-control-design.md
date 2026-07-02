@@ -171,6 +171,8 @@ sequenceDiagram
 
 L0/L1 派生文件(`.abstract.md`、`.overview.md`、`.relations.json`)未命中任一剪枝规则,**会**纳入主线 commit。restore 时随源文件一起回滚,无需重新生成;Python 层在 `restore` 完成后按 `(written_paths, deleted_paths)` 精确触发 L0/L1/DETAIL 向量异步重建(`.relations.json` 不触发向量任务)。
 
+此外,版本管理支持账号级 `.ovgitignore` 控制文件,物理路径为 `/local/{account_id}/.ovgitignore`,Git tree path 为 `.ovgitignore`。该文件使用账号根相对的 glob 子集规则,在 `commit` 枚举当前 VFS 文件和扫描上一版 tree 时共同生效;匹配的文件不会进入新的 snapshot commit,即使它们曾存在于历史 commit 中。`.ovgitignore` 文件自身始终进入版本管理,规则无法把它排除。
+
 ## 4.3 单库多命名空间的优势
 
 1. **原子跨 scope 快照**：一次 commit 可同时覆盖 `resources/docs` 和 `agent/skills`,对应"Agent 一次任务的所有产出"这种逻辑事务
@@ -591,6 +593,8 @@ pub async fn commit(&self, req: CommitRequest) -> Result<CommitResponse> {
 
 restore 主流程:**解析目标 commit → 提取该 commit 中 project\_dir 子树 → 与当前 HEAD 中同路径子树 diff → 通过 MountableFS.write/rm 回写 → 删除回写后空目录 → 以当前 HEAD 为 parent 生成新 commit → CAS 更新 ref → 把受影响路径返回给调用方**。`dry_run` 模式只计算差异不写,用于预检。
 
+> **`.ovgitignore` 与 restore:** `.ovgitignore` 只影响 `commit`,不影响 `restore` / `show` / `log`。restore 的输入是 source commit 与当前 HEAD 的 Git tree diff,不能用当前工作区 `.ovgitignore` 过滤,否则会导致历史 commit 中已经被跟踪的文件无法恢复。全账号 restore 时 `.ovgitignore` 作为普通已跟踪文件随 source commit 恢复;子目录 restore 默认不触碰账号根 `.ovgitignore`。
+
 向量索引重建在 service 层**不直接触发**,而是通过把 `written_paths` / `deleted_paths` 放到 `RestoreResponse::Applied` 中返回,Python 层(`VikingFS.restore`)再调度 `ReindexExecutor`。
 
 关键差异:与 git checkout 不同,本接口**不移动分支指针到旧 commit**,而是把"旧内容"作为新 commit 的工作树内容,正向写入。新 commit 的 parent 是当前 HEAD,不是目标 commit,这保证了:(1) HEAD 单调前进;(2) 非 `project_dir` 路径自动保留 HEAD 的最新内容,无需特殊处理;(3) restore 本身可以被再次 restore (因为它就是一个普通 commit)。
@@ -858,6 +862,19 @@ class VikingFS:
             author_name=author_name or self._default_author_name(),
             author_email=author_email or self._default_author_email(),
         )
+
+    async def get_gitignore(self, ctx: RequestContext | None = None) -> str:
+        """读取账号级 .ovgitignore;不存在时返回空字符串。"""
+
+    async def set_gitignore(
+        self,
+        content: str,
+        ctx: RequestContext | None = None,
+    ) -> None:
+        """写入账号级 .ovgitignore,不触发语义索引。"""
+
+    async def delete_gitignore(self, ctx: RequestContext | None = None) -> None:
+        """删除账号级 .ovgitignore;不存在视为成功。"""
 
     async def restore(
         self,
@@ -1198,7 +1215,7 @@ current=commit_a]
 - **健康检查增强** —— 文档 §14.3。当前仅 `git_enabled` / `git_backend`,未接入 `writable` / `last_commit_age_sec` / 心跳。
 - **GC / pack file / branch & tag 管理 / diff API** —— 文档 §19。属后续 Phase。
 - **loom 并发模型测试 + proptest fuzz** —— 文档 §5.2。MVP 未引入。
-- 在版本管理中忽略某些特定文件 uri，类似 .gitignore 功能的实现。
+- **账号级 `.ovgitignore`** —— 已实现。支持账号根 `.ovgitignore` glob 子集规则，规则仅在 `commit` 时生效；`.ovgitignore` 自身进入版本管理，不进入向量索引；`restore` 不应用当前 ignore 过滤。
 
 ### Python 侧
 

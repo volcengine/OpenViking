@@ -587,6 +587,103 @@ openviking stat viking://resources/my-project/docs
 
 ---
 
+### attrs()
+
+获取文件或目录的逻辑扩展属性。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | str | 是 | - | Viking URI |
+
+**Python SDK (HTTP)**
+
+```python
+attrs = client.attrs("viking://resources/docs/api.md")
+print(attrs["attrs"]["tags"])
+```
+
+**Go SDK**
+
+```go
+attrs, err := client.Attrs(ctx, "viking://resources/docs/api.md")
+if err != nil {
+    return err
+}
+metadata := attrs["attrs"].(map[string]any)
+fmt.Println(metadata["tags"])
+```
+
+**HTTP API**
+
+```
+GET /api/v1/fs/attrs?uri={uri}
+POST /api/v1/fs/attrs/set_tags
+```
+
+```bash
+curl -X GET "http://localhost:1933/api/v1/fs/attrs?uri=viking://resources/docs/api.md" \
+  -H "X-API-Key: your-key"
+
+curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"uri":"viking://resources/docs","tags":["team=search"],"mode":"append","recursive":true}'
+```
+
+**CLI**
+
+```bash
+openviking attrs get viking://resources/docs/api.md
+openviking attrs get viking://resources/docs/api.md tags
+openviking attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
+openviking attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
+openviking attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+```
+
+目录目标会更新目录语义记录；`recursive=true` 还会更新已有子文件和子目录语义记录。
+
+**响应（Resource）**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/docs/api.md",
+    "context_type": "resource",
+    "attrs": {
+      "tags": ["team=search", "env=prod"]
+    }
+  }
+}
+```
+
+**响应（Memory）**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://user/alice/memories/experiences/foo.md",
+    "context_type": "memory",
+    "attrs": {
+      "memory": {
+        "memory_type": "experiences",
+        "name": "foo",
+        "tags": ["ui"],
+        "resource_refs": ["viking://resources/docs/api.md"]
+      },
+      "tags": ["team=search"]
+    }
+  }
+}
+```
+
+`attrs.memory` 来自 `MEMORY_FIELDS` 元信息，已去掉正文内容。`attrs.tags` 是 `attrs set-tags` 和搜索过滤使用的显式检索标签。
+
+---
+
 ### mkdir()
 
 创建目录。

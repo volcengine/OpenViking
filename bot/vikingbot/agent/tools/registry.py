@@ -144,6 +144,7 @@ class ToolRegistry:
         memory_owner_user_ids: list[str] | None = None,
         memory_user_ids: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        channel_metadata: dict[str, Any] | None = None,
     ) -> str:
         """
         Execute a tool by name with given parameters.
@@ -159,6 +160,7 @@ class ToolRegistry:
                 trusted-mode owner-user memory lookup.
             memory_user_ids: Deprecated alias for memory_owner_user_ids.
             openviking_connection: Request-scoped OpenViking identity.
+            channel_metadata: Channel-specific metadata from the inbound message.
 
         Returns:
             Tool execution result as string.
@@ -178,6 +180,7 @@ class ToolRegistry:
             memory_owner_user_ids=memory_owner_user_ids,
             memory_user_ids=memory_user_ids,
             openviking_connection=openviking_connection,
+            channel_metadata=dict(channel_metadata or {}),
         )
 
         # Langfuse tool call tracing - automatic for all tools

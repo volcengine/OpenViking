@@ -27,6 +27,7 @@ from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
+from openviking.storage.queuefs.understanding_parse_processor import UnderstandingParseProcessor
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils.agfs_utils import (
@@ -330,13 +331,9 @@ class OpenVikingService:
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
 
-        # Start queue workers now that VikingFS is ready.
-        # Doing it here (rather than in _init_storage) ensures that any tasks
-        # recovered from a previous crash are not processed before VikingFS is
-        # initialized, which would cause "VikingFS not initialized" errors.
-        if self._queue_manager:
-            self._queue_manager.start()
-            logger.info("QueueManager workers started")
+        self._resource_processor = ResourceProcessor(
+            vikingdb=self._vikingdb_manager,
+        )
 
         # Initialize directories
         directory_initializer = DirectoryInitializer(
@@ -356,9 +353,6 @@ class OpenVikingService:
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
 
         # Initialize processors
-        self._resource_processor = ResourceProcessor(
-            vikingdb=self._vikingdb_manager,
-        )
         self._skill_processor = SkillProcessor(
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
@@ -387,11 +381,6 @@ class OpenVikingService:
             privacy_config_service=self._privacy_config_service,
             resource_memory_link_service=self._resource_memory_link_service,
         )
-        self._resource_memory_link_service.set_dependencies(
-            vikingdb=self._vikingdb_manager,
-            viking_fs=self._viking_fs,
-            session_service=self._session_service,
-        )
         self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(
             viking_fs=self._viking_fs,
@@ -411,11 +400,29 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_compressor=self._session_compressor,
         )
+        self._resource_memory_link_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
+            session_service=self._session_service,
+        )
         self._debug_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             config=self._config,
             agfs_client=self._agfs_client,
         )
+
+        if self._queue_manager:
+            external_parse_processor = UnderstandingParseProcessor(
+                self._resource_processor,
+                resource_memory_link_service=self._resource_memory_link_service,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.EXTERNAL_PARSE,
+                dequeue_handler=external_parse_processor,
+                allow_create=True,
+            )
+            self._queue_manager.start()
+            logger.info("QueueManager workers started")
 
         # Register as the process-wide service so flows that resolve the
         # service via the dependency global (e.g. background reindex tasks
