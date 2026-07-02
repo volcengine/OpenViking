@@ -1,11 +1,9 @@
 memory_type: trajectories
 description: |
-  输出语言策略：生成性自然语言必须使用 {{ language }}，包括名称、检索锚点、摘要、要点和分析内容。若原始内容多语言，以当前用户任务的主语言作为 {{ language }}；不明确时使用最新用户消息的语言。固定 schema 标题、工具名、API/function 名、evaluation 字段名、enum 值、代码标识符、ID、金额、日期、路径和必要的用户原文关键字面量必须保留原文。更新已有 memory 时优先复用已有名称和语言风格，避免创建同义翻译副本。
+  A compact, reusable operation contract distilled from an agent task trajectory.
 
-  本模板用于从 agent 任务轨迹中提炼一个紧凑、可复用的操作契约。
-  当 agent 处理了包含决策、工具调用或多步骤动作的明确任务时才提取；纯闲聊或没有执行轨迹的简单问答不要提取。
-  
-  单任务边界：每个最新 rollout/task 最多创建一个 trajectory。只把最新 rollout 作为新 memory 的来源。系统 policy 和通用领域规则不能单独作为抽取来源；但当当前用户请求、工具观察、action/evaluation delta 或终态决策依赖某个 policy eligibility gate 时，必须把对应 policy 作为判断当前轨迹的上下文证据。忽略 retrieved memory_context、Experience Reminder、candidate/source memories 和历史 archive overview，不要从这些内容中抽取新 trajectory。不要把每条 policy、每次工具调用、召回 memory 或假设任务拆成单独 trajectory。
+  Extract when the agent worked through identifiable tasks involving decisions, tool calls, or multi-step actions.
+  Skip pure chitchat or simple Q&A with no execution trace.
 
 embedding_template: |-
   {{ trajectory_name }}
@@ -16,314 +14,91 @@ directory: "viking://user/{{ user_space }}/memories/trajectories"
 filename_template: "{{ trajectory_name }}_{{ extract_context.get_session_timestamp() }}.md"
 enabled: true
 operation_mode: "add_only"
-stage: agent
-peer_enabled: false
-fields:
-  - name: reasoning
-    type: string
-    description: |
-      纯字符串字段。生成 content 前，先写一段较长的可审计错误反思摘要，帮助模型把根因想清楚。
-      自然语言必须使用 {{ language }}；固定 tool/API/evaluation 字段名和必要 literal 保留原文。
-      失败场景写 6-12 句，成功场景写 3-6 句；不要使用 YAML/JSON/Markdown 表格。
-      重点分析：直接影响 reward 的失败要求、真实执行路径中的最早偏离点、运行时可见信号、
-      experience 是否真的导致错误、需要排除的误归因、以及应该修 experience 还是跳过更新。
-      如果 DB/action checks 已通过但 communicate check 失败，必须明确排除业务数据库流程错误作为主因，
-      并把隐藏 literal 翻译成 runtime-visible semantic obligation。
-      不要输出隐藏 chain-of-thought 或“我先想/然后我想到”的逐字内心过程；输出基于证据的反思结论。
-    merge_op: immutable
+agent_only: true
 
+fields:
   - name: trajectory_name
     type: string
     description: |
-      直接、稳定地命名任务。
-      新生成名称必须使用 {{ language }}。
-      {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}使用简洁自然的 {{ language }} 名词短语，最多 15 个字符。{% endif %}
-      不要为同一任务创建近似重复名称。
-      好例子："重复请求处理"、"异步任务挂起修复"、"补偿对象错绑"。
-      优先表达可复用的操作或决策边界，而不是照抄用户开场请求。
+      Name the task directly and stably.
+      Must be written in {{ language }}.
+      {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
+      Do not create near-duplicate names for the same task.
+      Good: "duplicate_request_resolution", "async_task_hang_fix", "重复请求处理".
+      Prefer the reusable operation or decision boundary over raw instance wording from the opening request.
     merge_op: immutable
 
   - name: outcome
     type: string
     description: |
-      只能使用以下值之一：success, failure, partial, unfinished, unknown。
+      Use exactly one of: success, failure, partial, unfinished, unknown.
     merge_op: immutable
 
   - name: retrieval_anchor
     type: string
     description: |
-      为该 rollout 分析生成正向语义检索文本；它面向 embedding，而不是展示。
-      自然语言部分使用 {{ language }}；固定 enum 值、工具名和 evaluation 字段名保留原文。
-      建议格式："意图: <booking|modification|cancellation|baggage|upgrade|refund_compensation|lookup|transfer|multi_intent|other>; 阶段: <opening|after_read|before_write|after_write|terminal_handoff|final_response|evaluation_failure|evaluation_success>; 终态动作: <required final tool family or none>; 禁止替代: <tool/action that must not replace the terminal action or none>; Policy gates: <eligibility/confirmation/object-binding checks>; 失败模式: <none, missing expected action, wrong target, wrong args, premature handoff/done, policy mismatch, or other>; 目标: <primary object or write/read boundary>."
+      Positive semantic retrieval text for this record, written for embedding rather than display.
+      Format: "Stage: <opening|after_read|before_write|after_write|terminal_handoff|final_response>; Boundary: <verified reusable condition>; Capability: <operation, check, handoff, or response this record can guide>; Target: <primary object or sub-object>."
 
-      规则：
-      - 比 content 更短、更聚焦检索。
-      - 若当前 trace 中存在 runtime 可见的 policy/object gate，retrieval_anchor 必须写这些 gate，不得出现 `训练oracle`、`ground_truth`、`oracle`、`预期动作列表`、`结构化评测`、`evaluation says query-only` 等 hidden-evaluation 词。
-      - 结构化评测场景中，anchor 必须匹配当前 case 的主 intent 和终态动作族；不得锚定只出现在 retrieved memories、Experience Reminder、candidate_source_trajectory、policy 文本或历史样例里的 intent/tool family。
-      - 使用正向适用条件描述该分析应在何时被检索。
-      - 包含决定性的用户意图、终态工具族、policy gate、失败/成功模式和目标边界，不要包含原始 case id。
-      - 用“禁止替代”标明有害近似流程，例如用取消+重建替代原地 update、用 handoff 替代可处理工具流，或用 communicate/done 替代必需的状态变更动作。
-      - 当可复用 lesson 只有在读取、核验、失败或终态边界后才成立时，不要照抄开场请求；应锚定实际建立的条件。
-      - 泛化 identifiers、姓名、精确数字、日期、地点、金额和原始 tool payload；稳定 policy 常量或必要工具名除外。
+      Rules:
+      - Keep it shorter and more retrieval-focused than content.
+      - Describe when the record should be retrieved using positive applies-when language only.
+      - Do not write negative examples, nearby intents, unrelated alternative requests, or broad exclusions here; keep those in Negative Applicability inside content.
+      - Do not copy the opening request when the reusable lesson only becomes valid after reads, verification, failure, or a terminal boundary; anchor on the condition that was actually established.
+      - Generalize identifiers, names, numbers, dates, places, amounts, and raw tool payloads as strictly as content.
     merge_op: immutable
-
-
 
   - name: content
     type: string
     description: |
-      生成 trajectory reflection，用于让后续训练理解：真实 rollout 走了什么路径、最早哪里偏离、
-      错误为什么发生、以及是否应该修改已读取的 experience。
+      Procedure-like operation contract in EXACTLY this format:
 
-      这个字段不再输出 `diagnose(...)` 或 `causal_audit([...])`。不要为了程序解析牺牲反思深度；
-      重点是把错误内容反思清楚，尤其要避免把“做对的业务步骤”误修成负面经验。
+      # <trajectory_name>
+      - Domain: <task domain, execution area, or system area>
+      - Trigger: <the reusable user intent or task situation — one sentence>
+      - Operation Intent:
+        - Family: <exactly one of read_verify_only, create_new_object, update_existing_object, close_or_deactivate_object, replace_existing_object, attribute_append_remove, corrective_adjustment, handoff_after_verification, final_response_only>
+        - Primary object: <the narrowest object or sub-object whose state, membership, or lifecycle this record changes, verifies, creates, closes/deactivates, replaces, hands off, or reports>
+        - Target object/lifecycle: <the single intended final state, lifecycle transition, handoff target, or read result for that primary object>
+      - Preconditions:
+        1. <state, identity, policy, tool-observation, or confirmation prerequisite>
+        2. <...>
+      - Immutable Object Boundary:
+        - <object fields, lifecycle state, policy facts, permissions, or ownership facts that must be read/verified and not inferred or overwritten>
+      - Procedure:
+        1. <future-agent instruction for the first decision/action step; include key tool names when useful>
+        2. <future-agent instruction for the next decision/action step>
+        3. <continue until the write/confirmation/final-response boundary is clear>
+      - Write Field Provenance:
+        - <write-relevant field family>: <allowed source such as latest user request, explicit confirmation, fresh tool observation, computed policy result, stable policy, or current object state>
+      - Anti-patterns:
+        - <mistake, missing check, wrong ordering, over-broad action, or failed attempt to avoid>
+      - Applicability Boundary:
+        - <when this memory applies>
+        - <when this memory should not be used>
+      - Negative Applicability:
+        - <nearby intent, object lifecycle, policy state, permission state, or target object where this memory must not be applied>
+      - Result: <final outcome and important side effects — one sentence>
+      - Evidence: <brief generalized source note from this session, including success/failure/partial status, without digits, raw identifiers, personal names, contact values, exact amounts, exact counts, exact dates, locations, paths, or other instance-local values>
 
-      输出语言策略：
-      - 生成性自然语言必须使用 {{ language }}。
-      - 固定标题、DSL 关键字、enum 值、工具名、API/function 名、evaluation 字段名、代码标识符、
-        ID、金额、日期、路径和必要的用户原文 literal 必须保留原文。
-      - 不要输出隐藏 chain-of-thought 或逐字内心独白；要输出可审计的、基于 trace/tool/evaluation
-        证据的长反思。可以写“因为/导致/因此/应修复”，不要写“我先想/然后我想到”。
-
-      必须严格输出以下 3 个一级标题，顺序不可变，不要增加额外一级标题：
-
-      # Execution Trace
-      ```python
-      # Loaded experiences
-      # Actual path
-      # Experience alignment
-      first_divergence(...)
-      ```
-
-      # Error Reflection
-      - Outcome: <success|failure|partial|unfinished|unknown>.
-      - Reward: <可见 reward/score/pass status；若不可见则写 evaluation not visible>.
-      - First failed requirement: <第一个直接影响 reward 的失败要求；success 时写 none>.
-      - Deep reflection: <足够长的错误反思，失败场景写 6-12 句；成功场景写 3-6 句。必须说明 evidence、expected vs actual、最早偏离点、runtime-visible cause、排除掉的错误归因、以及为什么不应误修其他做对的部分。>
-      - Experience impact: <说明每个已读取 experience 的影响：missing、irrelevant、over_broad、misleading、ignored、too_weak、only_solved_secondary_issue、necessary、helpful_but_not_necessary 或 irrelevant，并解释是否真的导致本次错误>.
-      - Repair decision: <create_new_exp|update_exp|clarify_exp|narrow_exp|add_reflect_guardrail|skip_exp_update|no_update，并说明目标 exp 或 None>.
-
-      # Generalizable Lesson
-      - Core lesson: <一句话，说明未来 agent 应复用或避免什么>.
-      - Correct behavior: <2-5 条 runtime-visible 的正确做法；不要依赖未来 agent 看见 evaluation/oracle>.
-      - Experience update policy: <说明本 trajectory 支持的经验更新边界；若不应更新某 exp，明确写 skip_exp_update/no_update>.
-
-      ## Execution Trace DSL 规范
-
-      DSL 必须放在 `# Execution Trace` 下的单个 ```python 代码块中。
-      DSL 只保留真实执行路径、experience 对齐和最早偏离点；不要输出 `diagnose(...)`、
-      `causal_audit([...])` 或其他函数。
-
-      ### 1) Loaded experiences
-      - 只列实际读取的 experience memory，并给短别名。
-      - 如果没有读取 experience，写 `loaded_experiences = none`。
-      - 只读取 case/trajectory 不算 Loaded experiences。
-      - 不要把 case 名、case memory 或 trajectory memory 写成 loaded experience。
-
-      格式：
-      ```python
-      # Loaded experiences
-      loaded_experiences = [
-        E1("经验文件名.md"),
-        E2("另一个经验.md"),
-      ]
-      ```
-
-      ### 2) Actual path
-      - 使用 `A1:`、`A2:`... 记录完整但紧凑的业务 tool、关键用户确认、最终沟通/完成步骤。
-      - 不记录闲聊、重复 retry、search_experience/read_experience/read_file 等 memory loading plumbing。
-      - 每行只保留关键 tool 名、泛化参数和决定性 output facts。
-      - 路径只能来自真实 trace/tool calls；不要根据 experience 内容或 agent 自称补写不存在的工具调用。
-      - 如果失败是最终沟通或答复范围错误，必须保留相关的用户问题、待回答项、最终沟通步骤和决定性数值/事实。
-
-      格式：
-      ```python
-      # Actual path
-      A1: tool_name(arg="<generalized>") -> fact=value, fact2=value2
-      A2: user_confirmed = observe_user_confirmation(...) -> true
-      A3: communicate_with_user(...) -> key_info_status=missing
-      A4: return DONE
-      ```
-
-      ### 3) Experience alignment
-      - 只对实际读取且与本次决策可能相关的 experience 做对齐。
-      - 无关 experience 可以只列 `status: skipped_not_applicable` 和一行 note。
-      - 只能用实际读取的 experience 做 `E1.Lx` 对齐。
-      - 业务工具调用如果能对应到 experience 的 Python Approach 行，用 `Lx -> Ay <verdict>`。
-      - 找不到对应行，写 `[trace].no_exp_line -> Ay extra_uncovered_action`，或在 `first_divergence(source=[trace].no_exp_line, ...)` 中标出。
-      - 不允许 `L1-L3 -> A1-A3` 这种范围对齐；必须逐行或选择关键单行。
-      - 不要输出无法被简单正则解析的长段落；深度分析放到 `# Error Reflection`。
-
-      常用 verdict：
-      - `matched`
-      - `missing_expected_call`
-      - `matched_but_wrong_policy`
-      - `wrong_args`
-      - `wrong_target`
-      - `ambiguous_match`
-      - `extra_uncovered_action`
-      - `skipped_not_applicable`
-      - `not_covered_by_exp`
-
-      格式：
-      ```python
-      # Experience alignment
-      E1 "经验文件名.md":
-        status: matched|first_divergence_source|skipped_not_applicable|misleading|over_broad|ignored|only_solved_secondary_issue|helpful_but_incomplete
-        L1 -> A1 matched
-        L2 -> ∅ missing_expected_call
-              expected: exact_tool_name(...)
-              actual: A3 communicate_with_user(...)
-        [trace].no_exp_line -> A4 not_covered_by_exp
-              note: communication obligation was not covered by E1 Approach
-      ```
-
-      ### 4) first_divergence(...)
-
-      最后必须输出且只输出一次全局 first_divergence。`expected`、`actual`、`root_cause`
-      是自然语言字符串，必须使用 {{ language }}，但保留 exact tool/API names、line refs、
-      enum values 和必要 source literals：
-      ```python
-      first_divergence(
-        error="MissingExpectedCall|WrongArguments|WrongTargetObject|ForbiddenSubstituteCall|PrematureCompletion|BranchConditionError|MissingCommunication|MissingWrongCommunication|NoApplicableExperience|None",
-        source=E1.Lx|E2.Lx|[trace].no_exp_line|None,
-        expected="... in {{ language }}",
-        actual="... in {{ language }}",
-        root_cause="short evidence-based root cause in {{ language }}",
-        repair_target=E1|E2|None
-      )
-      ```
-
-      规则：
-      - 选择时间顺序上第一个 materially changes reward 的偏离点。
-      - 如果 outcome 是 success 且没有 material delta，使用 `error="None"`、`source=None`、`root_cause="no material divergence"`、`repair_target=None`。
-      - `root_cause` 只写短结论；完整分析必须写在 `# Error Reflection` 的 `Deep reflection`。
-      - `root_cause` 不要只写“忽略 evaluation”；要翻译成未来 agent 运行时可见的错误类型，例如 skipped terminal write、wrong policy gate evaluation、ambiguous experience line、wrong target binding、missing pending answer tracking、wrong aggregate scope。
-      - 如果失败是沟通/聚合值问题，不要把业务操作 exp 作为 repair_target，除非该 exp 的 scope 明确覆盖该沟通义务。
-      - 如果所有 DB/action checks 已通过但 communicate check 失败，必须在 root_cause 和 Deep reflection 中排除“业务数据库流程错误”作为主因。
-
-      ## 反思深度要求
-
-      - `Deep reflection` 是本模板最重要的输出。失败场景不得少于 6 句；复杂多意图、多对象、多 tool 场景建议 8-12 句。
-      - 必须明确回答：
-        1. 失败的直接 reward trigger 是什么？
-        2. 真实执行路径中哪个步骤最早让结果不可恢复或 materially changed reward？
-        3. 运行时 agent 本来能看见什么信号？例如用户问题、tool fact、policy gate、对象绑定、确认状态、待回答项或最终沟通义务。
-        4. 这次错误是否来自 experience？如果是，是 exp wrong/underspecified/over_broad/misleading；如果不是，要说明 exp 为什么不该改。
-        5. 哪些看起来像原因但其实不是主因？例如 DB writes 已成功时，不要把正确的取消/升级流程当成 root cause。
-        6. 未来应修哪里：新建通信经验、澄清现有 exp、收窄适用边界、加执行 guardrail，还是跳过 exp 更新。
-      - Communication deltas：如果只有 communicate failed，主 delta 是 missing/wrong communication，不是 missing write、forbidden write 或 missing done。必须把 hidden/evaluation literal 翻译成 runtime-visible semantic obligation，例如“回答用户中途提出的总价问题并保持 query-time scope”，而不是只写“缺少 1628”。
-      - Fix only the failed part：做对的业务步骤不要反着学；若只是最终沟通失败，不要把正确业务流程改成 forbidden 或替换路径。
-      - Agent-facing lesson must be runtime-visible：`Correct behavior` 和 `Generalizable Lesson` 不要依赖隐藏 evaluation/oracle；把 evaluation 暴露的问题翻译成用户问题、tool facts、policy gate、对象绑定或确认边界。
-      - Memory loading boundary：memory loading 是证据，不是业务动作；不得写入 Actual path。
-      - Policy-gated decisions：对 policy-gated write，必须从 tool outputs 重建 gate；用户或客服口头说法不能覆盖 policy + tool facts。
-      - Generalization discipline：泛化人名、reservation/order id、路线、精确日期、金额、路径和 raw payload；稳定 policy 常量或必要工具名除外。
-      - Consistency check：`first_divergence`、`Error Reflection`、`Generalizable Lesson` 必须一致。
-      - Output discipline：严格保留 3 个 required headings 及顺序；不要加额外一级标题或结尾语。
-
-      ## Few-shot examples
-
-      ### DB 流程正确，但最终通信漏答中途问题
-      ```md
-      # Execution Trace
-      ```python
-      # Loaded experiences
-      loaded_experiences = [E1("多预订取消与舱位升级.md")]
-
-      # Actual path
-      A1: reservations = list_user_reservations(user_id="<user_id>") -> found_multiple=true
-      A2: reservation_a = get_reservation_details(reservation_id="<reservation_a>") -> cabin=basic_economy, cancel_requires_upgrade=true
-      A3: reservation_b = get_reservation_details(reservation_id="<reservation_b>") -> cancel_allowed=true
-      A4: user_asked("total cost for the changes?") -> pending_answer_scope=query_time_total
-      A5: update_reservation_cabin(reservation_id="<reservation_a>", cabin="business") -> success=true, cost_delta="<amount>"
-      A6: cancel_reservation(reservation_id="<reservation_a>") -> success=true
-      A7: cancel_reservation(reservation_id="<reservation_b>") -> success=true
-      A8: communicate_with_user("completed cancellations and remaining total is <different_amount>") -> missing_query_time_total=true
-      A9: return DONE
-
-      # Experience alignment
-      E1 "多预订取消与舱位升级.md":
-        status: matched
-        L1 -> A1 matched
-        L2 -> A2 matched
-        L3 -> A5 matched
-        L4 -> A6 matched
-        L5 -> A7 matched
-        [trace].no_exp_line -> A4 not_covered_by_exp
-              note: mid-task total-cost question became a pending communication obligation
-        [trace].no_exp_line -> A8 not_covered_by_exp
-              note: final answer did not preserve query-time scope
-
-      first_divergence(
-        error="MissingWrongCommunication",
-        source=[trace].no_exp_line,
-        expected="回答用户中途提出的总价问题，并保持提问当时的 total-cost scope",
-        actual="完成了正确 DB 操作，但最终沟通给了另一个后续状态口径的金额，漏掉 query-time total",
-        root_cause="DB/action path succeeded; failure came from losing the pending answer scope for the user's mid-task total-cost question, so repair should target communication obligation tracking rather than E1's database workflow.",
-        repair_target=None
-      )
-      ```
-
-      # Error Reflection
-      - Outcome: failure.
-      - Reward: db_check/action_checks passed, communicate check failed.
-      - First failed requirement: final communication did not answer the user's pending total-cost question with the correct query-time scope.
-      - Deep reflection: 本次失败的直接 trigger 不是取消或升级工具调用错误，而是最终沟通没有满足用户中途提出的价格问题。真实路径中，agent 已经读取多个 reservation，识别了 basic_economy 需要先升级再取消，也完成了两个取消动作；这些 DB/action 证据说明核心业务流程是成功的。最早的可见风险点出现在 A4：用户问 total cost 时，这个问题应该被登记为 pending_answer，并且它的 scope 是“提问当时这组变更的总成本”，不能在后续取消完成后被改写成“剩余航班/最终状态”的另一个口径。A8 的沟通虽然说明了任务完成，但把最终状态金额当成了用户要的答案，因此 reward 在通信维度失败。这个错误不应归因于 E1 的取消/升级步骤，因为 E1 覆盖的 DB workflow 被正确执行，修改 E1 反而可能污染一个有用的业务经验。也不应把隐藏 literal 当成未来 agent 可见规则；未来 agent 能看见的是用户提出了一个价格问题、后续 tool 返回了相关金额、最终答复必须保留该问题的原始语义范围。真正需要修复的是通信义务追踪：多步骤写操作期间出现用户信息请求时，agent 必须把它作为待回答项保留到最终回复，并区分 query-time aggregate 与 post-operation state。经验更新上应跳过 E1，或者单独创建/强化一个“pending user question + final communication scope”的 communication experience。
-      - Experience impact: E1 was helpful_but_not_necessary for the DB workflow and did not cause the communication failure; its scope did not cover the mid-task total-cost answer.
-      - Repair decision: skip_exp_update for E1; create_new_exp or add_reflect_guardrail for pending-answer scope tracking if positive communication experiences are allowed.
-
-      # Generalizable Lesson
-      - Core lesson: 多步骤业务写操作成功后，仍然必须回答过程中出现的用户信息请求，并保留用户提问时的语义范围。
-      - Correct behavior: 记录 mid-task 用户问题为 pending_answer；区分 query-time total、post-operation remaining total 和最终状态摘要；最终回复同时说明业务动作结果和待回答金额。
-      - Experience update policy: 不更新正确的 DB workflow experience；只为通信义务追踪创建或强化单独经验。
-      ```
-
-      ### Exp 正确但 agent 未执行 terminal write
-      ```md
-      # Execution Trace
-      ```python
-      # Loaded experiences
-      loaded_experiences = [E1("航班改签确认.md")]
-
-      # Actual path
-      A1: reservation = get_reservation_details(reservation_id="<reservation_id>") -> status=active, owner_verified=true
-      A2: quote = quote_flight_change(reservation=reservation, new_flights="<new_flights>") -> price_delta_accepted=true
-      A3: user_confirmed = observe_user_confirmation(quote) -> true
-      A4: communicate_with_user("change is ready")
-      A5: return DONE
-
-      # Experience alignment
-      E1 "航班改签确认.md":
-        status: first_divergence_source
-        L1 -> A1 matched
-        L3 -> A2 matched
-        L4 -> A3 matched
-        L5 -> ∅ missing_expected_call
-              expected: update_reservation_flights(...)
-              actual: A4 communicate_with_user(...) + A5 DONE
-
-      first_divergence(
-        error="MissingExpectedCall",
-        source=E1.L5,
-        expected="update_reservation_flights(...) before final response",
-        actual="A4 communicate_with_user(...) then A5 DONE",
-        root_cause="Quote and confirmation gates were satisfied, but the agent treated progress communication as completion and skipped the terminal write required by E1.L5.",
-        repair_target=E1
-      )
-      ```
-
-      # Error Reflection
-      - Outcome: failure.
-      - Reward: DB failed because terminal write was missing.
-      - First failed requirement: update_reservation_flights(...) was never called after quote and explicit confirmation.
-      - Deep reflection: 这次失败的直接原因是 terminal write 缺失，而不是报价、用户确认或对象读取错误。A1 和 A2 说明 agent 已经拿到了 reservation 和 quote，A3 又说明用户确认 gate 已满足，因此运行时已经具备执行 update_reservation_flights(...) 的条件。E1.L5 明确要求在这些 gate 满足后执行写操作，所以 experience 本身不是错误来源。最早的 material divergence 是 A4：agent 提前向用户沟通“change is ready”，随后 A5 DONE，把进度沟通误当成任务完成。这个错误应被理解为执行阶段没有遵循已读取经验，而不是经验 Approach 需要重写。如果去修改 E1，可能会破坏一个原本正确的流程；更合理的修复是让 agent 在最终沟通前检查是否还有已满足 gate 的 terminal write 未执行。未来相似任务中，只要 quote 和 explicit confirmation 都成立，就必须先执行状态变更工具，再做最终回复。
-      - Experience impact: E1 was correct and ignored at the terminal-write line; it should not be rewritten.
-      - Repair decision: no_update for E1; optionally add_reflect_guardrail for “do not DONE before required write”.
-
-      # Generalizable Lesson
-      - Core lesson: 正确读取 experience 不等于完成任务，满足 gate 后必须实际执行 terminal write。
-      - Correct behavior: 在最终沟通前检查 required write 是否已调用；不要用 communicate_with_user 或 DONE 替代状态变更工具。
-      - Experience update policy: 不更新已经正确写出 terminal write 的 experience；只增加执行 guardrail。
-      ```
-
+      Rules:
+      - Write for future agent execution. Capture the reusable contract: trigger -> prerequisites -> read/verify -> confirm if needed -> one primary write, handoff, or final response -> verify/communicate result.
+      - Extract one record per reusable operation boundary: one primary user intent, one primary tool-effect target, and one lifecycle or reporting boundary. The boundary is narrower than the Family enum: two actions with the same Family still need separate records when they affect different sub-objects, collections, lifecycle states, write-field provenance, or continuation policies.
+      - Split separable intents, pivots, follow-ups, prerequisite-only reads, state-changing actions, and final user-visible responses when they are independently reusable; omit low-value side work. The split rule is structural: separate by target, effect, provenance, lifecycle, and continuation boundary, not by any domain-specific workflow name.
+      - Do not create an additional umbrella record that summarizes multiple separately reusable operations from the same session. If a session contains several independent tool-effect targets, output the separate target-level records and omit the broad whole-session summary.
+      - Do not combine multiple state-changing tool effects in one record when they affect different primary targets, sub-objects, collections, lifecycle transitions, write-field provenance scopes, or continuation policies. Mention cross-boundary ordering only as prerequisite, boundary, or negative applicability.
+      - A coordinated multi-target request is not one reusable procedure record. Output target-level records and put shared confirmation, dependency, or ordering constraints only in Preconditions, Applicability Boundary, Anti-patterns, or Negative Applicability.
+      - Use replace_existing_object only for an atomic replacement operation on one primary object boundary. If the session implements replacement through separate tool effects that close/deactivate one object and create another object, emit separate close/deactivate and create records; do not set Primary object to a joined source-and-target phrase.
+      - Family must be exactly one listed enum value. Do not invent compound labels. Use handoff_after_verification when the reusable path ends in handoff after verification.
+      - Procedure must describe only the primary operation in this record. Mention other operations only as prerequisites, consequences, boundaries, or negative applicability.
+      - Stop each record at its family boundary: update_existing_object stops after update verification, close_or_deactivate_object after closure/deactivation verification, create_new_object after creation verification, replace_existing_object after replacement verification, handoff_after_verification after handoff verification.
+      - Do not include a second lifecycle-changing write in the Procedure, Target, Result, or Evidence of the same record, even when that later write happened immediately after the first one.
+      - Do not let a later operation in the same session rename, narrow, or extend this record's Trigger, Target, Procedure, Result, or Evidence. Put the later operation in a separate record.
+      - Put immutable facts and write/user-visible field sources in their dedicated sections. Do not copy fields from a previous/source object into a new/replacement object without current user request or explicit confirmation.
+      - Keep blocked actions and failed lessons in Anti-patterns / Negative Applicability / Evidence, not as positive procedure steps. Do not invent a corrected path when the session did not demonstrate one.
+      - Keep retrieval-specific wording out of content. Use retrieval_anchor for positive indexed text, and keep nearby non-applicable intents only in Negative Applicability.
+      - Generalize the session: remove raw identifiers, names, contact values, exact dates, case-specific amounts/counts, exact locations/paths, product names, and raw tool payloads. Use semantic placeholders such as requested quantity, selected object, calculated amount, source object, target object, or applicable policy instead of copying concrete values. Keep tool names only when they are part of the reusable path. Evidence must also stay generalized and should not contain digits; do not use it to preserve instance-local ids, names, counts, amounts, locations, or dates.
+      - Use exactly the title, Domain line, and 11 labels above in this exact order.
+      - Trigger, Result, and Evidence are ONE sentence each.
+      - No extra headings, free paragraphs, or closing remarks.
     merge_op: patch
