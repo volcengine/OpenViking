@@ -230,6 +230,27 @@ async def list_sessions(
     return Response(status="ok", result=result)
 
 
+async def _count_on_disk_archives(session) -> int:
+    """Count archive_NNN/ directories on disk for a session.
+
+    Returns 0 on any error (missing history dir, transient FS issue) so the
+    fallback never makes the read path fail; the persisted counter remains
+    the response in that case.
+    """
+    viking_fs = getattr(session, "_viking_fs", None)
+    if viking_fs is None:
+        return 0
+    try:
+        items = await viking_fs.ls(f"{session.uri}/history", ctx=session.ctx)
+    except Exception:
+        return 0
+    return sum(
+        1
+        for item in items
+        if isinstance(item, dict) and str(item.get("name", "")).startswith("archive_")
+    )
+
+
 @router.get("/{session_id}")
 async def get_session(
     session_id: str = Path(..., description="Session ID"),
@@ -248,6 +269,19 @@ async def get_session(
     result["uri"] = session.uri
     result["user"] = session.user.to_dict()
     result["pending_tokens"] = int(session.meta.pending_tokens or 0)
+
+    # Observability fallback for sessions written through async / out-of-band
+    # paths (e.g. the Hermes provider) that materialize archives on disk but
+    # leave the persisted counter at zero. The persisted value remains
+    # authoritative for the synchronous write path; we only override when it
+    # is stale relative to disk.
+    archive_count = await _count_on_disk_archives(session)
+    result["archive_count"] = archive_count
+    if archive_count > 0:
+        if int(result.get("commit_count") or 0) == 0:
+            result["commit_count"] = archive_count
+        if int(result.get("message_count") or 0) == 0:
+            result["message_count"] = archive_count
     return Response(status="ok", result=result)
 
 
