@@ -183,6 +183,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 飞书/Lark 用户 token watch 需要 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此传入的用户 token 必须来自 OpenViking 当前配置的同一个飞书应用。
 - Watch task 的 token 状态保存在内部控制文件 `viking://resources/.watch_tasks.json` 中，不会出现在 watch API/MCP/CLI 返回里。若启用了 VikingFS 文件加密，该控制文件会静态加密；否则服务端控制文件中会包含明文 token 状态。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
+- 当 Markdown 图片目标能解析到本次导入的目录树内时，系统会保留图片引用：`![alt](./img/a.png)` 和 HTML `<img src="./img/a.png">` 会把图片复制到解析后的 Markdown 分段旁边，并在持久化后改写为 `viking://...` URI。远端 URL、已有 `viking://` URI、data URI、代码行/代码块内引用，以及越界或不存在的本地文件会保持原样。
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
 #### 3. 使用示例

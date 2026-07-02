@@ -191,6 +191,7 @@ This endpoint is the core entry point for resource management, supporting adding
 - Feishu/Lark user-token watches require `FEISHU_APP_ID` and `FEISHU_APP_SECRET` (or `feishu.app_id` and `feishu.app_secret` in `ov.conf`) because Feishu refresh tokens are bound to the app that issued them. The supplied user token must come from the same Feishu app configured in OpenViking.
 - Watch task token state is stored in the internal `viking://resources/.watch_tasks.json` control file and is hidden from watch API/MCP/CLI responses. If VikingFS file encryption is enabled, this control file is encrypted at rest; otherwise the server-side control file contains plaintext token state.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
+- Markdown image embeds are preserved when their targets resolve inside the imported tree: `![alt](./img/a.png)` references and HTML `<img src="./img/a.png">` tags are copied next to the parsed Markdown section and rewritten to `viking://...` URIs after persistence. Remote URLs, existing `viking://` URIs, data URIs, code spans/blocks, and out-of-scope or missing local files are left unchanged.
 - To create or update plain text directly, use [content/write](03-filesystem.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
