@@ -78,6 +78,10 @@ class ChatRequest(BaseModel):
     channel_id: Optional[str] = Field(
         default=None, description="Channel ID for multi-channel routing (optional)"
     )
+    current_dir: Optional[str] = Field(
+        default=None,
+        description="Directory URI the user selected in the Studio resource tree; forwarded via metadata to the agent context builder",
+    )
     disabled_tools: List[str] = Field(
         default_factory=list,
         description="Tool names to hide for this request",
