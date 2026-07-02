@@ -8,6 +8,8 @@ import threading
 import time
 from typing import Awaitable, Callable, TypeVar
 
+from openviking.utils.exceptions import AllCredentialsFailedError
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -115,6 +117,27 @@ def _pattern_matches(text_lower: str, text_compact: str, pattern: str) -> bool:
     return pattern in text_lower or pattern in text_compact
 
 
+def _aggregate_failover_error_class(error: AllCredentialsFailedError) -> str:
+    """Classify an aggregated multi-credential failure from its per-credential
+    classes rather than its concatenated message.
+
+    FailoverEmbedder/VLM only wraps NON-fail-fast failures (auth / transient /
+    quota). If any credential failed transiently the request may still succeed on
+    retry, so the aggregate must stay retryable; string scanning would let
+    ``auth`` win and drop a mixed auth+transient failure as terminal (#2916 review).
+    """
+    classes = [ec for (_cid, ec, _exc, _idx) in getattr(error, "errors", []) if ec]
+    if not classes:
+        return ERROR_CLASS_UNKNOWN
+    if ERROR_CLASS_TRANSIENT in classes:
+        return ERROR_CLASS_TRANSIENT
+    if ERROR_CLASS_QUOTA_EXCEEDED in classes:
+        return ERROR_CLASS_QUOTA_EXCEEDED
+    if ERROR_CLASS_AUTH in classes:
+        return ERROR_CLASS_AUTH
+    return classes[0]
+
+
 def classify_api_error(error: Exception) -> str:
     """Classify an API error into one of the ERROR_CLASS_* categories.
 
@@ -128,7 +151,14 @@ def classify_api_error(error: Exception) -> str:
     - ``quota_exceeded`` is checked before ``transient`` because quota errors
       typically include "429" / "TooManyRequests" which would otherwise match
       the transient category.
+    - an aggregated ``AllCredentialsFailedError`` is classified from its
+      per-credential classes, not its concatenated message: if any credential
+      failed transiently the request may still succeed on retry, so scanning the
+      message (where ``auth`` wins) would wrongly drop it as terminal.
     """
+    if isinstance(error, AllCredentialsFailedError):
+        return _aggregate_failover_error_class(error)
+
     for exc in (error, getattr(error, "__cause__", None)):
         if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
             return ERROR_CLASS_PERMANENT

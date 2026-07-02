@@ -4,6 +4,7 @@
 
 import pytest
 
+from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
     ERROR_CLASS_CONTENT_SAFETY,
@@ -11,6 +12,7 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
+    ERROR_CLASS_UNKNOWN,
     classify_api_error,
     retry_async,
     retry_sync,
@@ -19,6 +21,32 @@ from openviking.utils.model_retry import (
 
 def test_classify_api_error_recognizes_request_burst_too_fast():
     assert classify_api_error(RuntimeError("RequestBurstTooFast")) == ERROR_CLASS_TRANSIENT
+
+
+def test_classify_all_credentials_failed_prefers_transient_over_auth():
+    # A mixed multi-credential failure (one 401, one 500) must stay retryable:
+    # scanning the concatenated message would let auth win and drop it. #2916 review.
+    err = AllCredentialsFailedError(
+        [
+            ("cred-a", ERROR_CLASS_AUTH, RuntimeError("401 Unauthorized"), 0),
+            ("cred-b", ERROR_CLASS_TRANSIENT, RuntimeError("500 server error"), 1),
+        ]
+    )
+    assert classify_api_error(err) == ERROR_CLASS_TRANSIENT
+
+
+def test_classify_all_credentials_failed_all_auth_is_terminal_auth():
+    err = AllCredentialsFailedError(
+        [
+            ("cred-a", ERROR_CLASS_AUTH, RuntimeError("401 Unauthorized"), 0),
+            ("cred-b", ERROR_CLASS_AUTH, RuntimeError("403 Forbidden"), 1),
+        ]
+    )
+    assert classify_api_error(err) == ERROR_CLASS_AUTH
+
+
+def test_classify_all_credentials_failed_empty_is_unknown():
+    assert classify_api_error(AllCredentialsFailedError([])) == ERROR_CLASS_UNKNOWN
 
 
 def test_retry_sync_retries_transient_error_until_success():
