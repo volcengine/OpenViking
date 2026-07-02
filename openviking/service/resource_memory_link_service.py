@@ -46,6 +46,7 @@ logger = get_logger(__name__)
 _RESOURCE_REASON_SESSION_ID = "__openviking_resource_reason__"
 _RESOURCE_REASON_MEMORY_TYPES = ["entities", "events", "preferences"]
 _RESOURCE_DELETION_MEMORY_TYPES = ["entities", "preferences"]
+_STRUCTURED_ENTITY_MEMORY_FORMATS = {"one_page", "structured_overview"}
 _RESOURCE_REASON_COMMIT_TIMEOUT_SECONDS = 1800.0
 _RESOURCE_ABSTRACT_MAX_CHARS = 200
 _ABSTRACT_NOT_READY_MARKERS = (
@@ -72,6 +73,46 @@ def _resource_reason_memory_policy(target_peer_id: Optional[str] = None) -> Dict
         memory_types=_RESOURCE_REASON_MEMORY_TYPES,
         target_peer_id=target_peer_id,
     )
+
+
+def _parse_memory_directives(reason: str) -> Dict[str, str]:
+    """Parse leading MEMORY_* directives from an add-resource reason.
+
+    Directives are plain `KEY: value` lines. Only MEMORY_* keys are returned;
+    everything else remains natural language instruction for the extractor.
+    """
+    directives: Dict[str, str] = {}
+    for line in (reason or "").splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if not key.startswith("MEMORY_"):
+            continue
+        directives[key] = value.strip()
+    return directives
+
+
+def _is_structured_entity_reason(reason: str) -> bool:
+    directives = _parse_memory_directives(reason)
+    memory_format = directives.get("MEMORY_FORMAT", "").strip().lower()
+    return (
+        memory_format in _STRUCTURED_ENTITY_MEMORY_FORMATS
+        and bool(directives.get("MEMORY_CATEGORY"))
+        and bool(directives.get("MEMORY_ENTITY_NAME"))
+    )
+
+
+def _resource_reason_memory_policy_for_reason(
+    reason: str,
+    target_peer_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if _is_structured_entity_reason(reason):
+        return _resource_memory_policy(
+            memory_types=["entities"],
+            target_peer_id=target_peer_id,
+        )
+    return _resource_reason_memory_policy(target_peer_id)
 
 
 def _resource_deletion_memory_policy(target_peer_id: Optional[str] = None) -> Dict[str, Any]:
@@ -175,7 +216,10 @@ class ResourceMemoryLinkService:
                 ctx,
                 auto_create=True,
             )
-            session.meta.memory_policy = _resource_reason_memory_policy(target_peer_id)
+            session.meta.memory_policy = _resource_reason_memory_policy_for_reason(
+                reason,
+                target_peer_id,
+            )
             message_spec: Dict[str, Any] = {
                 "role": "user",
                 "parts": [
@@ -318,7 +362,8 @@ class ResourceMemoryLinkService:
             f"Recursive delete: {recursive_text}\n"
             "Affected memory URIs:\n"
             f"{affected}\n\n"
-            "Update existing mutable memories that mention or depend on this resource."
+            "Update existing mutable memories that mention or depend on this resource. "
+            "Do not create a new event."
         )
 
     async def _wait_for_commit_task(

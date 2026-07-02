@@ -290,6 +290,64 @@ async def test_on_resource_added_reuses_same_reason_session(request_context):
 
 
 @pytest.mark.asyncio
+async def test_on_resource_added_structured_overview_reason_uses_entities_only_policy(
+    request_context,
+):
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS({}),
+        session_service=session_service,
+    )
+
+    await service.on_resource_added(
+        ctx=request_context,
+        resource_uri="viking://resources/viking_docs/video_kb_prd",
+        reason=(
+            "MEMORY_FORMAT: one_page\n"
+            "MEMORY_CATEGORY: viking_one_page\n"
+            "MEMORY_ENTITY_NAME: ONE_PAGE_viking_team\n"
+            "MEMORY_SECTION: 视频知识库\n\n"
+            "请把当前资源合并到 Viking 团队 One Page。"
+        ),
+        source_name="视频知识库 PRD",
+    )
+
+    assert session_service.session.meta.memory_policy == {
+        "self": {"enabled": True},
+        "peer": {"enabled": False},
+        "memory_types": ["entities"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_on_resource_added_structured_overview_requires_target_directives(
+    request_context,
+):
+    session_service = _FakeSessionService()
+    service = ResourceMemoryLinkService(
+        viking_fs=_FakeVikingFS({}),
+        session_service=session_service,
+    )
+
+    await service.on_resource_added(
+        ctx=request_context,
+        resource_uri="viking://resources/viking_docs/video_kb_prd",
+        reason=(
+            "MEMORY_FORMAT: one_page\n"
+            "MEMORY_SECTION: 视频知识库\n\n"
+            "缺少 MEMORY_CATEGORY / MEMORY_ENTITY_NAME 时应保持默认策略。"
+        ),
+        source_name="视频知识库 PRD",
+    )
+
+    assert session_service.session.meta.memory_policy == {
+        "self": {"enabled": True},
+        "peer": {"enabled": False},
+        "memory_types": ["entities", "events", "preferences"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_on_resource_added_routes_reason_to_actor_peer(request_context):
     peer_ctx = RequestContext(
         user=request_context.user,
