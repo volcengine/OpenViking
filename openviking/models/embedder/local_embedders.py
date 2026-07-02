@@ -42,7 +42,17 @@ LOCAL_DENSE_MODEL_SPECS: Dict[str, LocalModelSpec] = {
             "bge-small-zh-v1.5-f16.gguf?download=true"
         ),
         query_instruction=DEFAULT_BGE_ZH_QUERY_INSTRUCTION,
-    )
+    ),
+    "bge-small-en-v1.5-f16": LocalModelSpec(
+        model_name="bge-small-en-v1.5-f16",
+        dimension=384,
+        filename="bge-small-en-v1.5-f16.gguf",
+        download_url=(
+            "https://huggingface.co/ChristianAzinn/bge-small-en-v1.5-gguf/resolve/main/"
+            "bge-small-en-v1.5_fp16.gguf?download=true"
+        ),
+        query_instruction=None,
+    ),
 }
 
 
