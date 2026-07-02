@@ -141,6 +141,26 @@ async def test_update_stage(tracker: TaskTracker):
     assert retrieved.stage == "parsing"
 
 
+async def test_update_result_preserves_task_status(tracker: TaskTracker):
+    task = await tracker.create(
+        "add_resource", resource_id="viking://resources/a", **_owner_kwargs()
+    )
+
+    await tracker.update_result(
+        task.task_id,
+        {"root_uri": "viking://resources/a", "source_fingerprint": "abc"},
+        **_owner_kwargs(),
+    )
+
+    retrieved = await tracker.get(task.task_id, **_owner_kwargs())
+    assert retrieved is not None
+    assert retrieved.status == TaskStatus.PENDING
+    assert retrieved.result == {
+        "root_uri": "viking://resources/a",
+        "source_fingerprint": "abc",
+    }
+
+
 async def test_complete_task(tracker: TaskTracker):
     task = await tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
     await tracker.start(task.task_id)
