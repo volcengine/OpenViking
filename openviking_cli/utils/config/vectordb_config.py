@@ -197,7 +197,7 @@ class VectorDBBackendConfig(BaseModel):
         description=(
             "VectorDB backend type: 'local', 'http', "
             "'volcengine' (AK/SK signed or API key data-plane only), "
-            "'vikingdb' (private deployment), 'qdrant', or 'opengauss'"
+            "'vikingdb' (private deployment), 'qdrant', 'opengauss', or 'pgvector'"
         ),
     )
 
@@ -353,5 +353,15 @@ class VectorDBBackendConfig(BaseModel):
             if not self.opengauss.host:
                 raise ValueError("VectorDB opengauss backend requires 'opengauss.host' to be set")
             self.opengauss.host = self.opengauss.host.strip()
+
+        elif self.backend == "pgvector":
+            if self.pgvector is None:
+                self.pgvector = PgVectorConfig()
+            if not (self.pgvector.url or self.pgvector.host):
+                raise ValueError("VectorDB pgvector backend requires 'url' or 'host' to be set")
+            if self.pgvector.url:
+                self.pgvector.url = self.pgvector.url.strip()
+            if self.pgvector.host:
+                self.pgvector.host = self.pgvector.host.strip()
 
         return self

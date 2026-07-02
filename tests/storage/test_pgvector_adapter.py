@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from openviking_cli.utils.config.vectordb_config import (
     PgVectorConfig,
     VectorDBBackendConfig,
@@ -52,3 +55,26 @@ def test_pgvector_config_new_field_defaults():
     assert pg.index_params == {}
     assert pg.pool_size == 1
     assert pg.create_extension is True
+
+
+def test_pgvector_backend_requires_url_or_host():
+    # A url-only config validates (discrete host cleared).
+    url_only = VectorDBBackendConfig.model_validate(
+        {
+            "backend": "pgvector",
+            "pgvector": {"url": "postgresql://u:p@db.example:5432/app", "host": None},
+        }
+    )
+    assert url_only.pgvector.url == "postgresql://u:p@db.example:5432/app"
+
+    # A discrete-field config (host, no url) also validates.
+    discrete = VectorDBBackendConfig.model_validate(
+        {"backend": "pgvector", "pgvector": {"host": "10.0.0.1"}}
+    )
+    assert discrete.pgvector.host == "10.0.0.1"
+
+    # Neither url nor host is a hard error.
+    with pytest.raises(ValidationError, match="requires 'url' or 'host'"):
+        VectorDBBackendConfig.model_validate(
+            {"backend": "pgvector", "pgvector": {"url": None, "host": None}}
+        )
