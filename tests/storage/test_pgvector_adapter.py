@@ -78,3 +78,21 @@ def test_pgvector_backend_requires_url_or_host():
         VectorDBBackendConfig.model_validate(
             {"backend": "pgvector", "pgvector": {"url": None, "host": None}}
         )
+
+
+def test_pgvector_backend_url_priority_and_whitespace_normalization():
+    # url wins when both are set; both are stripped.
+    both = VectorDBBackendConfig.model_validate(
+        {
+            "backend": "pgvector",
+            "pgvector": {"url": "  postgresql://h/db  ", "host": "  10.0.0.2  "},
+        }
+    )
+    assert both.pgvector.url == "postgresql://h/db"
+    assert both.pgvector.host == "10.0.0.2"
+
+    # Whitespace-only url + empty host normalizes to empty -> clear error.
+    with pytest.raises(ValidationError, match="requires 'url' or 'host'"):
+        VectorDBBackendConfig.model_validate(
+            {"backend": "pgvector", "pgvector": {"url": "   ", "host": ""}}
+        )

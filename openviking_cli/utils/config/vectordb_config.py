@@ -357,11 +357,11 @@ class VectorDBBackendConfig(BaseModel):
         elif self.backend == "pgvector":
             if self.pgvector is None:
                 self.pgvector = PgVectorConfig()
+            # Priority chain (mem0-style): url wins over discrete host/port fields.
+            # Normalize whitespace to None first so a blank value never masks a real one.
+            self.pgvector.url = (self.pgvector.url or "").strip() or None
+            self.pgvector.host = (self.pgvector.host or "").strip() or None
             if not (self.pgvector.url or self.pgvector.host):
                 raise ValueError("VectorDB pgvector backend requires 'url' or 'host' to be set")
-            if self.pgvector.url:
-                self.pgvector.url = self.pgvector.url.strip()
-            if self.pgvector.host:
-                self.pgvector.host = self.pgvector.host.strip()
 
         return self
