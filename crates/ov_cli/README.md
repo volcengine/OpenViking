@@ -104,6 +104,11 @@ ov read viking://resources/...
 - `config show` - Show configuration
 - `config validate` - Validate config
 
+### Admin
+- `admin create-account` - Create an account and first admin user
+- `admin register-user` - Register a user
+- `admin regenerate-key` - Rotate a user's API key
+
 ### Display
 - `language` (`lang`) - Choose CLI display language (`en` / `zh-CN`)
 
@@ -136,6 +141,11 @@ ov ls viking://resources --recursive
 # Temporarily override identity from CLI flags
 ov --account acme --user alice ls viking://
 
+# Create predictable API keys from a seed
+ov --sudo admin create-account acme --admin alice --seed alice-seed
+ov admin register-user acme bob --role user --seed bob-seed
+ov admin regenerate-key acme bob --seed bob-new-seed
+
 # Glob search
 ov glob "**/*.md" --uri viking://resources
 
@@ -151,9 +161,16 @@ ov session commit --session-id $SESSION
 # Build
 cargo build --release
 
+# Smoke the exact binary that was built
+target/release/ov --version
+target/release/ov -o json system health
+
 # Run tests
 cargo test
 
 # Install locally
 cargo install --path .
 ```
+
+When driving external e2e harnesses, point them at `target/release/ov` explicitly
+instead of relying on an older `ov` that may already be installed on `PATH`.

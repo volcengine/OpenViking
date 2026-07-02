@@ -32,8 +32,6 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	if len(opts.Level) > 0 {
 		payload["level"] = opts.Level
 	}
-	setString(payload, "agent_id", opts.AgentID)
-	setString(payload, "agent_uri", opts.AgentURI)
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/find", nil, payload, &result)
@@ -68,8 +66,6 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	if len(opts.Level) > 0 {
 		payload["level"] = opts.Level
 	}
-	setString(payload, "agent_id", opts.AgentID)
-	setString(payload, "agent_uri", opts.AgentURI)
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)
@@ -88,6 +84,9 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 	}
 	if opts.NodeLimit != nil {
 		payload["node_limit"] = *opts.NodeLimit
+	}
+	if opts.LevelLimit != nil {
+		payload["level_limit"] = *opts.LevelLimit
 	}
 	if opts.ExcludeURI != "" {
 		payload["exclude_uri"] = NormalizeURI(opts.ExcludeURI)

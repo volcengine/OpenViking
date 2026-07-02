@@ -1,0 +1,21 @@
+{
+  "name": "openviking",
+  "description": "OpenViking plugins for OpenAI Codex.",
+  "interface": {
+    "displayName": "OpenViking"
+  },
+  "plugins": [
+    {
+      "name": "openviking-memory",
+      "source": {
+        "source": "local",
+        "path": "./examples/codex-memory-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

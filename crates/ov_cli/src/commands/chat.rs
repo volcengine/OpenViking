@@ -103,6 +103,18 @@ struct ChatStreamEvent {
     data: serde_json::Value,
 }
 
+#[derive(Debug, Deserialize)]
+struct OpenVikingHealth {
+    #[serde(default)]
+    auth_mode: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    account_id: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+}
+
 struct ChatAuth {
     api_key: Option<String>,
     account: Option<String>,
@@ -112,11 +124,15 @@ struct ChatAuth {
 impl ChatCommand {
     /// Execute the chat command
     pub async fn execute(&self) -> Result<()> {
-        let auth = self.resolve_auth()?;
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()
             .map_err(|e| Error::Network(format!("Failed to create HTTP client: {}", e)))?;
+
+        let health = self.fetch_openviking_health(&client, None).await;
+        let auth = self.resolve_auth(health.as_ref().map(health_auth_mode))?;
+        self.warn_openviking_chat_auth(&client, health.as_ref(), &auth)
+            .await;
 
         if let Some(message) = &self.message {
             // Single message mode
@@ -127,19 +143,39 @@ impl ChatCommand {
         }
     }
 
-    fn resolve_auth(&self) -> Result<ChatAuth> {
+    fn resolve_auth(&self, server_auth_mode: Option<&str>) -> Result<ChatAuth> {
         let config = Config::load()?;
+        Ok(self.resolve_auth_from_config(config, server_auth_mode))
+    }
+
+    fn resolve_auth_from_config(&self, config: Config, server_auth_mode: Option<&str>) -> ChatAuth {
+        if server_auth_mode
+            .map(|mode| mode.trim().eq_ignore_ascii_case("trusted"))
+            .unwrap_or(false)
+        {
+            return ChatAuth {
+                api_key: non_empty_string(self.api_key.clone())
+                    .or_else(|| non_empty_string(config.root_api_key.clone()))
+                    .or_else(|| non_empty_string(config.api_key.clone())),
+                account: non_empty_string(self.account.clone())
+                    .or_else(|| non_empty_string(config.account.clone())),
+                user: non_empty_string(self.user.clone())
+                    .or_else(|| non_empty_string(config.user.clone())),
+            };
+        }
+
         let auth = config.effective_auth_with_overrides(
             self.api_key.clone(),
             self.account.clone(),
             self.user.clone(),
             false,
         );
-        Ok(ChatAuth {
+
+        ChatAuth {
             api_key: auth.api_key,
             account: auth.account,
             user: auth.user,
-        })
+        }
     }
 
     fn apply_auth_headers(
@@ -157,6 +193,85 @@ impl ChatCommand {
             req_builder = req_builder.header("X-OpenViking-User", user);
         }
         req_builder
+    }
+
+    fn openviking_health_url(&self) -> Option<String> {
+        let endpoint = self.endpoint.trim_end_matches('/');
+        endpoint
+            .strip_suffix("/bot/v1")
+            .map(|server_url| format!("{}/health", server_url.trim_end_matches('/')))
+    }
+
+    async fn fetch_openviking_health(
+        &self,
+        client: &Client,
+        auth: Option<&ChatAuth>,
+    ) -> Option<OpenVikingHealth> {
+        let health_url = self.openviking_health_url()?;
+        let mut req_builder = client.get(health_url).timeout(Duration::from_secs(5));
+        if let Some(auth) = auth {
+            req_builder = self.apply_auth_headers(req_builder, auth);
+        }
+        let response = req_builder.send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        response.json::<OpenVikingHealth>().await.ok()
+    }
+
+    async fn warn_openviking_chat_auth(
+        &self,
+        client: &Client,
+        health: Option<&OpenVikingHealth>,
+        auth: &ChatAuth,
+    ) {
+        let Some(health) = health else {
+            return;
+        };
+        if health_auth_mode(health) != "api_key" {
+            return;
+        }
+
+        if auth
+            .api_key
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            eprintln!(
+                "Warning: OpenViking server is in api_key mode, but ov chat is not configured \
+with a User API key. OpenViking-backed VikingBot memory and file tools may not work correctly. \
+Configure api_key in ovcli.conf with a User/Admin API key, or pass --api-key."
+            );
+            return;
+        }
+
+        let Some(authenticated_health) = self.fetch_openviking_health(client, Some(auth)).await
+        else {
+            eprintln!(
+                "Warning: OpenViking server is in api_key mode, but ov chat could not validate \
+the configured API key. OpenViking-backed VikingBot memory and file tools may not work correctly."
+            );
+            return;
+        };
+
+        if health_has_user_identity(&authenticated_health) {
+            return;
+        }
+
+        if health_role(&authenticated_health) == "root" {
+            eprintln!(
+                "Warning: ov chat is using a ROOT API key, but OpenViking api_key mode requires \
+a User/Admin API key for VikingBot memory and file tools. Configure api_key in ovcli.conf with \
+a User/Admin API key, or pass --api-key."
+            );
+        } else {
+            eprintln!(
+                "Warning: ov chat could not validate the configured API key as an OpenViking \
+User/Admin API key. OpenViking-backed VikingBot memory and file tools may not work correctly."
+            );
+        }
     }
 
     /// Send a single message and get response
@@ -681,4 +796,180 @@ impl ChatCommand {
 fn render_markdown(text: &str) {
     let skin = MadSkin::default();
     skin.print_text(text);
+}
+
+fn health_auth_mode(health: &OpenVikingHealth) -> &str {
+    health.auth_mode.as_deref().unwrap_or_default().trim()
+}
+
+fn health_role(health: &OpenVikingHealth) -> &str {
+    health.role.as_deref().unwrap_or_default().trim()
+}
+
+fn health_has_user_identity(health: &OpenVikingHealth) -> bool {
+    let role = health_role(health);
+    let account_id = health.account_id.as_deref().unwrap_or_default().trim();
+    let user_id = health.user_id.as_deref().unwrap_or_default().trim();
+    matches!(role, "user" | "admin") && !account_id.is_empty() && !user_id.is_empty()
+}
+
+fn non_empty_string(value: Option<String>) -> Option<String> {
+    value.and_then(|text| {
+        if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command_with_api_key(api_key: Option<&str>) -> ChatCommand {
+        ChatCommand {
+            endpoint: DEFAULT_ENDPOINT.to_string(),
+            api_key: api_key.map(ToString::to_string),
+            account: None,
+            user: None,
+            session: None,
+            sender: "user".to_string(),
+            message: None,
+            stream: true,
+            no_format: false,
+            no_history: false,
+        }
+    }
+
+    #[test]
+    fn auth_uses_configured_api_key() {
+        let command = command_with_api_key(None);
+        let config = Config {
+            api_key: Some("user-key".to_string()),
+            ..Config::default()
+        };
+
+        let auth = command.resolve_auth_from_config(config, None);
+
+        assert_eq!(auth.api_key.as_deref(), Some("user-key"));
+    }
+
+    #[test]
+    fn auth_uses_api_key_override() {
+        let command = command_with_api_key(Some("override-key"));
+        let config = Config {
+            api_key: Some("config-key".to_string()),
+            ..Config::default()
+        };
+
+        let auth = command.resolve_auth_from_config(config, None);
+
+        assert_eq!(auth.api_key.as_deref(), Some("override-key"));
+    }
+
+    #[test]
+    fn trusted_auth_uses_root_api_key_and_identity() {
+        let command = command_with_api_key(None);
+        let config = Config {
+            api_key: Some("stale-user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        let auth = command.resolve_auth_from_config(config, Some("trusted"));
+
+        assert_eq!(auth.api_key.as_deref(), Some("root-key"));
+        assert_eq!(auth.account.as_deref(), Some("acme"));
+        assert_eq!(auth.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn trusted_auth_honors_explicit_api_key_override_as_root_key() {
+        let command = command_with_api_key(Some("override-root-key"));
+        let config = Config {
+            api_key: Some("stale-user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        let auth = command.resolve_auth_from_config(config, Some("trusted"));
+
+        assert_eq!(auth.api_key.as_deref(), Some("override-root-key"));
+        assert_eq!(auth.account.as_deref(), Some("acme"));
+        assert_eq!(auth.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn api_key_auth_still_uses_user_key_and_omits_stale_identity() {
+        let command = command_with_api_key(None);
+        let config = Config {
+            api_key: Some("user-key".to_string()),
+            root_api_key: Some("root-key".to_string()),
+            account: Some("stale-account".to_string()),
+            user: Some("stale-user".to_string()),
+            ..Config::default()
+        };
+
+        let auth = command.resolve_auth_from_config(config, Some("api_key"));
+
+        assert_eq!(auth.api_key.as_deref(), Some("user-key"));
+        assert!(auth.account.is_none());
+        assert!(auth.user.is_none());
+    }
+
+    #[test]
+    fn openviking_health_url_is_derived_from_bot_proxy_endpoint() {
+        let command = command_with_api_key(None);
+
+        assert_eq!(
+            command.openviking_health_url().as_deref(),
+            Some("http://localhost:1933/health")
+        );
+    }
+
+    #[test]
+    fn openviking_health_url_ignores_non_bot_proxy_endpoint() {
+        let mut command = command_with_api_key(None);
+        command.endpoint = "http://localhost:18790".to_string();
+
+        assert_eq!(command.openviking_health_url(), None);
+    }
+
+    #[test]
+    fn health_identity_accepts_user_or_admin_only() {
+        let user_health = OpenVikingHealth {
+            auth_mode: Some("api_key".to_string()),
+            role: Some("user".to_string()),
+            account_id: Some("default".to_string()),
+            user_id: Some("alice".to_string()),
+        };
+        let admin_health = OpenVikingHealth {
+            auth_mode: Some("api_key".to_string()),
+            role: Some("admin".to_string()),
+            account_id: Some("default".to_string()),
+            user_id: Some("alice".to_string()),
+        };
+        let root_health = OpenVikingHealth {
+            auth_mode: Some("api_key".to_string()),
+            role: Some("root".to_string()),
+            account_id: Some("default".to_string()),
+            user_id: Some("root".to_string()),
+        };
+        let missing_identity = OpenVikingHealth {
+            auth_mode: Some("api_key".to_string()),
+            role: Some("user".to_string()),
+            account_id: None,
+            user_id: Some("alice".to_string()),
+        };
+
+        assert!(health_has_user_identity(&user_health));
+        assert!(health_has_user_identity(&admin_health));
+        assert!(!health_has_user_identity(&root_health));
+        assert!(!health_has_user_identity(&missing_identity));
+    }
 }

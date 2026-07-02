@@ -60,14 +60,12 @@ def default_target_directories(
         return []
 
     user_root = canonical_user_root(ctx)
-    legacy_agent_targets = _legacy_agent_targets(ctx.legacy_agent_id, context_type=context_type)
     if context_type == ContextType.MEMORY:
         if ctx.actor_peer_id:
             return _dedupe(
                 [
                     f"{user_root}/memories",
                     f"{user_root}/peers/{ctx.actor_peer_id}/memories",
-                    *legacy_agent_targets,
                 ]
             )
         return [user_root]
@@ -78,12 +76,11 @@ def default_target_directories(
                     "viking://resources",
                     f"{user_root}/resources",
                     f"{user_root}/peers/{ctx.actor_peer_id}/resources",
-                    *legacy_agent_targets,
                 ]
             )
         return ["viking://resources", user_root]
     if context_type == ContextType.SKILL:
-        return _dedupe([*_default_skill_targets(ctx), *legacy_agent_targets])
+        return _dedupe([*_default_skill_targets(ctx), *_default_agent_skill_targets()])
     if ctx.actor_peer_id:
         return _dedupe(["viking://resources", *_default_user_root_targets(ctx)])
     return [user_root, "viking://resources"]
@@ -115,9 +112,9 @@ def _target_directories_for_uri(
     if _is_current_user_root(target_uri, ctx):
         return _default_user_root_targets(ctx)
 
-    legacy_agent_target = _resolve_legacy_agent_target(target_uri, ctx=ctx)
-    if legacy_agent_target is not None:
-        return legacy_agent_target
+    # New agent scope: direct access for agent/skills/, agent/endpoints/, etc.
+    if _is_agent_scope_uri(target_uri):
+        return [target_uri]
 
     peer_target = _resolve_peer_target(target_uri, ctx=ctx)
     if peer_target is not None:
@@ -130,6 +127,10 @@ def _target_directories_for_uri(
     return [target_uri]
 
 
+def _default_agent_skill_targets() -> List[str]:
+    return ["viking://agent/skills"]
+
+
 def _default_user_root_targets(ctx: RequestContext) -> List[str]:
     user_root = canonical_user_root(ctx)
     if not ctx.actor_peer_id:
@@ -140,7 +141,6 @@ def _default_user_root_targets(ctx: RequestContext) -> List[str]:
             f"{user_root}/resources",
             *_default_skill_targets(ctx),
             *_actor_peer_targets(ctx),
-            *_legacy_agent_targets(ctx.legacy_agent_id),
         ]
     )
 
@@ -157,83 +157,9 @@ def _actor_peer_targets(ctx: RequestContext) -> List[str]:
         f"{peer_root}/memories",
         f"{peer_root}/resources",
     ]
-
-
-def _legacy_agent_targets(
-    agent_id: Optional[str],
-    *,
-    context_type: Optional[ContextType] = None,
-) -> List[str]:
-    if not agent_id:
-        return []
-    agent_root = f"viking://agent/{agent_id}"
-    if context_type == ContextType.MEMORY:
-        return [f"{agent_root}/memories"]
-    if context_type == ContextType.RESOURCE:
-        return [f"{agent_root}/resources"]
-    if context_type == ContextType.SKILL:
-        return [f"{agent_root}/skills"]
-    return [
-        f"{agent_root}/memories",
-        f"{agent_root}/resources",
-        f"{agent_root}/skills",
-    ]
-
-
-def _resolve_legacy_agent_target(
-    target_uri: str,
-    *,
-    ctx: RequestContext,
-) -> Optional[List[str]]:
-    parts = uri_parts(target_uri)
-    if not parts or parts[0] != "agent":
-        return None
-    if len(parts) == 1:
-        agent_id = ctx.legacy_agent_id or ctx.actor_peer_id
-        if not agent_id:
-            return [target_uri]
-        return _legacy_agent_and_migrated_targets(agent_id, ctx)
-
-    agent_id = _normalize_peer_id(parts[1])
-    if ctx.actor_peer_id and agent_id != ctx.actor_peer_id:
-        raise PermissionDeniedError("Actor peer cannot access another legacy agent context.")
-
-    suffix = parts[2:]
-    if not suffix:
-        return _legacy_agent_and_migrated_targets(agent_id, ctx)
-    if suffix[0] == "memories":
-        return _dedupe(
-            [
-                target_uri,
-                _with_suffix(f"{canonical_user_root(ctx)}/peers/{agent_id}/memories", suffix[1:]),
-            ]
-        )
-    if suffix[0] == "resources":
-        return _dedupe(
-            [
-                target_uri,
-                _with_suffix(f"{canonical_user_root(ctx)}/peers/{agent_id}/resources", suffix[1:]),
-            ]
-        )
-    if suffix[0] == "skills":
-        return _dedupe(
-            [
-                target_uri,
-                _with_suffix(f"{canonical_user_root(ctx)}/skills", suffix[1:]),
-            ]
-        )
-    return [target_uri]
-
-
-def _legacy_agent_and_migrated_targets(agent_id: str, ctx: RequestContext) -> List[str]:
-    return _dedupe(
-        [
-            *_legacy_agent_targets(agent_id),
-            f"{canonical_user_root(ctx)}/peers/{agent_id}/memories",
-            f"{canonical_user_root(ctx)}/peers/{agent_id}/resources",
-            *_default_skill_targets(ctx),
-        ]
-    )
+def _is_agent_scope_uri(target_uri: str) -> bool:
+    parts = target_uri[len("viking://"):].strip("/").split("/")
+    return parts and parts[0] == "agent" and len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}
 
 
 def _with_suffix(root: str, suffix: List[str]) -> str:

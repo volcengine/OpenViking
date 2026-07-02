@@ -27,6 +27,7 @@ from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
+from openviking.storage.queuefs.understanding_parse_processor import UnderstandingParseProcessor
 from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils.agfs_utils import (
@@ -39,6 +40,7 @@ from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
+from openviking_cli.utils.config.git_config import GitConfig
 from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
 from openviking_cli.utils.config.storage_config import StorageConfig
 
@@ -118,6 +120,7 @@ class OpenVikingService:
             config.embedding.max_concurrent,
             config.vlm.max_concurrent,
             binding_config=binding_config,
+            git_config=config.git,
         )
 
         # Initialize embedder
@@ -132,13 +135,15 @@ class OpenVikingService:
         max_concurrent_embedding: int = 10,
         max_concurrent_semantic: int = 64,
         binding_config: Any = None,
+        *,
+        git_config: Optional[GitConfig] = None,
     ) -> None:
         """Initialize storage resources."""
         from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 
         # Create RAGFS client using utility
         runtime_binding_config = binding_config or RagfsBindingConfig(agfs=config.agfs)
-        self._agfs_client = create_agfs_client(runtime_binding_config)
+        self._agfs_client = create_agfs_client(runtime_binding_config, git_config=git_config)
 
         # Initialize QueueManager with agfs_client
         if self._agfs_client:
@@ -287,6 +292,7 @@ class OpenVikingService:
                 self._config.embedding.max_concurrent,
                 self._config.vlm.max_concurrent,
                 binding_config=self._build_ragfs_binding_config(),
+                git_config=self._config.git,
             )
 
         if self._embedder is None:
@@ -318,19 +324,16 @@ class OpenVikingService:
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
             retrieval_config=config.retrieval,
+            grep_config=config.grep,
             enable_recorder=enable_recorder,
             encryptor=self._encryptor,
         )
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
 
-        # Start queue workers now that VikingFS is ready.
-        # Doing it here (rather than in _init_storage) ensures that any tasks
-        # recovered from a previous crash are not processed before VikingFS is
-        # initialized, which would cause "VikingFS not initialized" errors.
-        if self._queue_manager:
-            self._queue_manager.start()
-            logger.info("QueueManager workers started")
+        self._resource_processor = ResourceProcessor(
+            vikingdb=self._vikingdb_manager,
+        )
 
         # Initialize directories
         directory_initializer = DirectoryInitializer(
@@ -350,9 +353,6 @@ class OpenVikingService:
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
 
         # Initialize processors
-        self._resource_processor = ResourceProcessor(
-            vikingdb=self._vikingdb_manager,
-        )
         self._skill_processor = SkillProcessor(
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
@@ -381,11 +381,6 @@ class OpenVikingService:
             privacy_config_service=self._privacy_config_service,
             resource_memory_link_service=self._resource_memory_link_service,
         )
-        self._resource_memory_link_service.set_dependencies(
-            vikingdb=self._vikingdb_manager,
-            viking_fs=self._viking_fs,
-            session_service=self._session_service,
-        )
         self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(
             viking_fs=self._viking_fs,
@@ -405,11 +400,37 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_compressor=self._session_compressor,
         )
+        self._resource_memory_link_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            viking_fs=self._viking_fs,
+            session_service=self._session_service,
+        )
         self._debug_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             config=self._config,
             agfs_client=self._agfs_client,
         )
+
+        if self._queue_manager:
+            external_parse_processor = UnderstandingParseProcessor(
+                self._resource_processor,
+                resource_memory_link_service=self._resource_memory_link_service,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.EXTERNAL_PARSE,
+                dequeue_handler=external_parse_processor,
+                allow_create=True,
+            )
+            self._queue_manager.start()
+            logger.info("QueueManager workers started")
+
+        # Register as the process-wide service so flows that resolve the
+        # service via the dependency global (e.g. background reindex tasks
+        # triggered by git restore) work in embedded mode, not just under the
+        # HTTP server which calls set_service() during bootstrap.
+        from openviking.server.dependencies import set_service
+
+        set_service(self)
 
         self._initialized = True
         logger.info("OpenVikingService initialized")
@@ -446,6 +467,13 @@ class OpenVikingService:
         self._directory_initializer = None
         self._privacy_config_service = None
         self._initialized = False
+
+        # Clear the process-wide registration if it still points at us, so a
+        # closed service is never resolved via the dependency global.
+        from openviking.server.dependencies import get_service_or_none, set_service
+
+        if get_service_or_none() is self:
+            set_service(None)
 
         logger.info("OpenVikingService closed")
 

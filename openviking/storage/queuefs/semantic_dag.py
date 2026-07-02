@@ -4,9 +4,9 @@
 
 import asyncio
 import threading
-from weakref import WeakKeyDictionary
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Optional, Set
+from weakref import WeakKeyDictionary
 
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
@@ -812,8 +812,7 @@ class SemanticDagExecutor:
                     overview = await self._processor._generate_overview(
                         dir_uri, file_summaries, children_abstracts
                     )
-                abstract = self._processor._extract_abstract_from_overview(overview)
-                overview, abstract = self._processor._enforce_size_limits(overview, abstract)
+                overview, abstract = self._processor._normalize_overview_generation(overview)
 
             # Write directly, protected by the outer semantic lock.
             try:

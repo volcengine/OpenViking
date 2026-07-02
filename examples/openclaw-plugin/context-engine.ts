@@ -370,12 +370,14 @@ export function createMemoryOpenVikingContextEngine(params: {
     },
 
     async afterTurn(afterTurnParams): Promise<void> {
+      const tokenBudget = validTokenBudget(afterTurnParams.tokenBudget) ?? 128_000;
       await afterTurnOpenVikingSession({
         sessionId: afterTurnParams.sessionId,
         sessionKey: resolveSessionKey(afterTurnParams),
         messages: afterTurnParams.messages,
         prePromptMessageCount: afterTurnParams.prePromptMessageCount,
         isHeartbeat: afterTurnParams.isHeartbeat,
+        tokenBudget,
         runtimeContext: afterTurnParams.runtimeContext,
         cfg,
         getClient,

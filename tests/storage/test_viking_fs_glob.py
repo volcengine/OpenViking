@@ -259,6 +259,7 @@ async def test_glob_keeps_directory_matches(monkeypatch, fs):
 
 @pytest.mark.asyncio
 async def test_glob_preserves_legacy_session_alias(monkeypatch, fs):
+    """中文注释：legacy session URI 仍应保持旧别名返回。"""
     monkeypatch.setattr(
         fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/test_account/user/alice/sessions/sess_1"
     )
@@ -286,3 +287,48 @@ async def test_glob_preserves_legacy_session_alias(monkeypatch, fs):
     result = await fs.glob("*.jsonl", uri="viking://session/alice/sess_1", ctx=_default_ctx())
 
     assert result == {"matches": ["viking://session/alice/sess_1/messages.jsonl"], "count": 1}
+
+
+@pytest.mark.asyncio
+async def test_glob_uses_path_to_uri_for_non_legacy_namespace(monkeypatch, fs):
+    """中文注释：非 legacy 命名空间必须回落到 _path_to_uri，避免错误沿用请求别名。"""
+    monkeypatch.setattr(
+        fs,
+        "_uri_to_path",
+        lambda _uri, **_kwargs: "/local/test_account/resources/actual-root",
+    )
+    monkeypatch.setattr(
+        fs,
+        "_read_paths",
+        lambda _uri, **_kwargs: ["/local/test_account/resources/actual-root"],
+    )
+    monkeypatch.setattr(
+        fs,
+        "_path_to_uri",
+        lambda path, **_kwargs: path.replace(
+            "/local/test_account/resources/", "viking://resources/"
+        ),
+    )
+
+    async def fake_glob_directory(path, pattern, **kwargs):
+        return {
+            "entries": [
+                {
+                    "path": "/local/test_account/resources/actual-root/demo.md",
+                    "rel_path": "demo.md",
+                    "name": "demo.md",
+                    "is_dir": False,
+                }
+            ],
+            "next_token": None,
+        }
+
+    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
+
+    result = await fs.glob(
+        "*.md",
+        uri="viking://resources/alias-root",
+        ctx=_default_ctx(),
+    )
+
+    assert result == {"matches": ["viking://resources/actual-root/demo.md"], "count": 1}

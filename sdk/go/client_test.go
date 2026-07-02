@@ -123,12 +123,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
-		if got := body["agent_id"]; got != "agent-7" {
-			t.Fatalf("agent_id = %#v", got)
-		}
-		if got := body["agent_uri"]; got != "viking://peers/agent-7" {
-			t.Fatalf("agent_uri = %#v", got)
-		}
+		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{
 			"resources": []map[string]any{
 				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9},
@@ -145,8 +140,6 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		Until:       "2026-06-18",
 		TimeField:   "created_at",
 		Level:       []int{0, 2},
-		AgentID:     "agent-7",
-		AgentURI:    "viking://peers/agent-7",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -169,6 +162,124 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 
 	if _, err := client.Find(context.Background(), "auth", &FindOptions{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAdminCreatePathsAcceptInitialUserConfig(t *testing.T) {
+	var seen []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/accounts" && r.URL.Path != "/api/v1/admin/accounts/acct/users" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		seen = append(seen, body)
+		writeOK(t, w, body)
+	}))
+	defer closeServer()
+
+	userConfig := map[string]any{
+		"add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
+	}
+	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
+		UserConfig: userConfig,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AdminRegisterUserWithOptions(context.Background(), "acct", "alice", "admin", &AdminRegisterUserOptions{
+		UserConfig: userConfig,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := seen[0]["user_config"].(map[string]any)["add_targets"].(map[string]any)["resource_uri"]; got != "viking://user/resources/project-a" {
+		t.Fatalf("user_config resource_uri = %#v", got)
+	}
+	if got := seen[1]["user_config"].(map[string]any)["add_targets"].(map[string]any)["resource_uri"]; got != "viking://user/resources/project-a" {
+		t.Fatalf("user_config resource_uri = %#v", got)
+	}
+}
+
+func TestAdminSeedPayloads(t *testing.T) {
+	var seen []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/admin/accounts",
+			"/api/v1/admin/accounts/acct/users",
+			"/api/v1/admin/accounts/acct/users/alice/key":
+		default:
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		seen = append(seen, body)
+		writeOK(t, w, body)
+	}))
+	defer closeServer()
+
+	adminSeed := "admin-seed"
+	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
+		Seed: &adminSeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	aliceSeed := "alice-seed"
+	if _, err := client.AdminRegisterUserWithOptions(context.Background(), "acct", "alice", "admin", &AdminRegisterUserOptions{
+		Seed: &aliceSeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	newSeed := "new-seed"
+	if _, err := client.AdminRegenerateKeyWithOptions(context.Background(), "acct", "alice", &AdminRegenerateKeyOptions{
+		Seed: &newSeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := seen[0]["seed"]; got != "admin-seed" {
+		t.Fatalf("create seed = %#v", got)
+	}
+	if got := seen[1]["seed"]; got != "alice-seed" {
+		t.Fatalf("register seed = %#v", got)
+	}
+	if got := seen[2]["seed"]; got != "new-seed" {
+		t.Fatalf("regenerate seed = %#v", got)
+	}
+}
+
+func TestAdminEmptySeedPayloadsAreSent(t *testing.T) {
+	var seen []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		seen = append(seen, body)
+		writeOK(t, w, body)
+	}))
+	defer closeServer()
+
+	emptySeed := ""
+	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
+		Seed: &emptySeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AdminRegisterUserWithOptions(context.Background(), "acct", "alice", "admin", &AdminRegisterUserOptions{
+		Seed: &emptySeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AdminRegenerateKeyWithOptions(context.Background(), "acct", "alice", &AdminRegenerateKeyOptions{
+		Seed: &emptySeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, body := range seen {
+		if got, ok := body["seed"]; !ok || got != "" {
+			t.Fatalf("request %d seed = %#v, present = %v", i, got, ok)
+		}
 	}
 }
 
@@ -203,12 +314,7 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		if !ok || len(levels) != 1 || levels[0] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
-		if got := body["agent_id"]; got != "agent-7" {
-			t.Fatalf("agent_id = %#v", got)
-		}
-		if got := body["agent_uri"]; got != "viking://peers/agent-7" {
-			t.Fatalf("agent_uri = %#v", got)
-		}
+		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{"resources": []any{}})
 	}))
 	defer closeServer()
@@ -220,8 +326,6 @@ func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 		Until:     "2026-06-18",
 		TimeField: "updated_at",
 		Level:     []int{2},
-		AgentID:   "agent-7",
-		AgentURI:  "viking://peers/agent-7",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -473,6 +577,140 @@ func TestSkillManagementRequests(t *testing.T) {
 	}
 }
 
+func TestSkillRequestsScopeTargetURI(t *testing.T) {
+	const target = "viking://agent/skills"
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/skills":
+			body := readJSONBody(t, r)
+			if body["target_uri"] != target {
+				t.Fatalf("add target_uri = %#v", body["target_uri"])
+			}
+			writeOK(t, w, map[string]any{"added": true})
+		case "GET /api/v1/skills":
+			if got := r.URL.Query().Get("target_uri"); got != target {
+				t.Fatalf("list target_uri = %q", got)
+			}
+			writeOK(t, w, map[string]any{"total": 0})
+		case "POST /api/v1/skills/find":
+			body := readJSONBody(t, r)
+			if body["target_uri"] != target {
+				t.Fatalf("find target_uri = %#v", body["target_uri"])
+			}
+			writeOK(t, w, map[string]any{"skills": []any{}})
+		case "POST /api/v1/skills/validate":
+			body := readJSONBody(t, r)
+			if body["target_uri"] != target {
+				t.Fatalf("validate target_uri = %#v", body["target_uri"])
+			}
+			writeOK(t, w, map[string]any{"valid": true})
+		case "GET /api/v1/skills/demo":
+			if got := r.URL.Query().Get("target_uri"); got != target {
+				t.Fatalf("get target_uri = %q", got)
+			}
+			writeOK(t, w, map[string]any{"name": "demo"})
+		case "PUT /api/v1/skills/demo":
+			body := readJSONBody(t, r)
+			if body["target_uri"] != target {
+				t.Fatalf("update target_uri = %#v", body["target_uri"])
+			}
+			writeOK(t, w, map[string]any{"updated": true})
+		case "DELETE /api/v1/skills/demo":
+			if got := r.URL.Query().Get("target_uri"); got != target {
+				t.Fatalf("delete target_uri = %q", got)
+			}
+			writeOK(t, w, map[string]any{"deleted": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer closeServer()
+
+	ctx := context.Background()
+	if _, err := client.AddSkill(ctx, map[string]any{"name": "demo"}, &AddSkillOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListSkills(ctx, &ListSkillsOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.FindSkills(ctx, "demo", &FindSkillsOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ValidateSkill(ctx, map[string]any{"name": "demo"}, &ValidateSkillOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetSkill(ctx, "demo", &GetSkillOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateSkill(ctx, "demo", map[string]any{"name": "demo"}, &UpdateSkillOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DeleteSkill(ctx, "demo", &DeleteSkillOptions{TargetURI: target}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSkillRequestsOmitTargetURIWhenUnset(t *testing.T) {
+	assertNoTargetURIQuery := func(t *testing.T, r *http.Request) {
+		if r.URL.Query().Has("target_uri") {
+			t.Fatalf("unexpected target_uri query on %s %s: %s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+	}
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/skills":
+			requireBodyKeysAbsent(t, readJSONBody(t, r), "target_uri")
+			writeOK(t, w, map[string]any{"added": true})
+		case "POST /api/v1/skills/find":
+			requireBodyKeysAbsent(t, readJSONBody(t, r), "target_uri")
+			writeOK(t, w, map[string]any{"skills": []any{}})
+		case "POST /api/v1/skills/validate":
+			requireBodyKeysAbsent(t, readJSONBody(t, r), "target_uri")
+			writeOK(t, w, map[string]any{"valid": true})
+		case "PUT /api/v1/skills/demo":
+			requireBodyKeysAbsent(t, readJSONBody(t, r), "target_uri")
+			writeOK(t, w, map[string]any{"updated": true})
+		case "GET /api/v1/skills":
+			assertNoTargetURIQuery(t, r)
+			writeOK(t, w, map[string]any{"total": 0})
+		case "GET /api/v1/skills/demo":
+			assertNoTargetURIQuery(t, r)
+			writeOK(t, w, map[string]any{"name": "demo"})
+		case "DELETE /api/v1/skills/demo":
+			assertNoTargetURIQuery(t, r)
+			writeOK(t, w, map[string]any{"deleted": true})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer closeServer()
+
+	ctx := context.Background()
+	if _, err := client.AddSkill(ctx, map[string]any{"name": "demo"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.FindSkills(ctx, "demo", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ValidateSkill(ctx, map[string]any{"name": "demo"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateSkill(ctx, "demo", map[string]any{"name": "demo"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListSkills(ctx, &ListSkillsOptions{NodeLimit: 5}); err != nil {
+		t.Fatal(err)
+	}
+	// Non-nil opts with a nil TargetURI: exercises GetSkill's opts != nil branch
+	// so setQueryAny is actually reached and must still omit target_uri.
+	if _, err := client.GetSkill(ctx, "demo", &GetSkillOptions{IncludeSource: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DeleteSkill(ctx, "demo"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWatchManagementRequests(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
@@ -659,5 +897,109 @@ func TestHealth(t *testing.T) {
 	}
 	if !ok {
 		t.Fatal("expected healthy")
+	}
+}
+
+func TestSetTagsSendsBody(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/fs/attrs/set_tags" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		if got := body["uri"]; got != "viking://resources/docs" {
+			t.Fatalf("uri = %#v", got)
+		}
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 2 || tags[0] != "team=infra" || tags[1] != "tier=gold" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if got := body["mode"]; got != "append" {
+			t.Fatalf("mode = %#v", got)
+		}
+		if got := body["recursive"]; got != true {
+			t.Fatalf("recursive = %#v", got)
+		}
+		if got := body["telemetry"]; got != true {
+			t.Fatalf("telemetry = %#v", got)
+		}
+		writeOK(t, w, map[string]any{"updated": 3})
+	}))
+	defer closeServer()
+
+	result, err := client.SetTags(context.Background(), "resources/docs", []string{"team=infra", "tier=gold"}, &SetTagsOptions{
+		Mode:      "append",
+		Recursive: true,
+		Telemetry: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result["updated"]; got != float64(3) {
+		t.Fatalf("updated = %#v", got)
+	}
+}
+
+func TestSetTagsDefaultsModeAndOmitsTelemetry(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/fs/attrs/set_tags" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		if got := body["mode"]; got != "replace" {
+			t.Fatalf("default mode = %#v", got)
+		}
+		if got := body["recursive"]; got != false {
+			t.Fatalf("recursive = %#v", got)
+		}
+		// nil tags must serialize as an empty JSON array, not null, to satisfy
+		// the server's tags:list[str] contract.
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 0 {
+			t.Fatalf("tags = %#v (want empty array)", body["tags"])
+		}
+		requireBodyKeysAbsent(t, body, "telemetry")
+		writeOK(t, w, map[string]any{"updated": 1})
+	}))
+	defer closeServer()
+
+	if _, err := client.SetTags(context.Background(), "resources/docs/readme.md", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGrepForwardsLevelLimit(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method+" "+r.URL.Path != "POST /api/v1/search/grep" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		if got, ok := body["level_limit"]; !ok || got != float64(3) {
+			t.Fatalf("level_limit = %#v (ok=%v)", body["level_limit"], ok)
+		}
+		writeOK(t, w, map[string]any{"matches": []any{}})
+	}))
+	defer closeServer()
+
+	level := 3
+	if _, err := client.Grep(context.Background(), "viking://user", "pat", &GrepOptions{LevelLimit: &level}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGrepOmitsLevelLimitWhenUnset(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["level_limit"]; ok {
+			t.Fatalf("level_limit should be omitted when unset, got %#v", body["level_limit"])
+		}
+		writeOK(t, w, map[string]any{"matches": []any{}})
+	}))
+	defer closeServer()
+
+	if _, err := client.Grep(context.Background(), "viking://user", "pat", nil); err != nil {
+		t.Fatal(err)
 	}
 }

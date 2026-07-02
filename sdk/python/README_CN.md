@@ -206,9 +206,32 @@ root_client = SyncHTTPClient(
 result = root_client.admin_create_account(
     account_id="demo-account",
     admin_user_id="demo-admin",
+    seed="demo-admin-seed",
 )
 print(result)
+
+root_client.admin_register_user(
+    account_id="demo-account",
+    user_id="alice",
+    role="user",
+    seed="alice-seed",
+    user_config={
+        "add_targets": {
+            "resource_uri": "viking://user/resources/project-a",
+            "skill_uri": "viking://user/skills",
+        }
+    },
+)
+
+root_client.admin_regenerate_key(
+    account_id="demo-account",
+    user_id="alice",
+    seed="alice-new-seed",
+)
 ```
+
+`admin_create_account` 也接受同样结构的 `user_config`。这些字段用于初始化服务端用户配置；普通添加调用仍然只需省略 `to` / `parent` / `target_uri`，由服务端解析默认值。
+传入 `seed` 时，返回的 API Key 会基于 `sha256(user_id + "\0" + seed)` 生成；省略时仍使用随机生成逻辑。
 
 ## 错误处理
 
@@ -259,7 +282,7 @@ python -m build
 SDK 版本号来自以下格式的 git tag：
 
 ```text
-python-sdk/v0.1.3
+python-sdk@0.1.3
 ```
 
 这个 tag 命名空间独立于主包的发布 tag，例如：
@@ -275,6 +298,6 @@ v0.3.26
 典型流程：
 
 1. 合并 SDK 相关改动
-2. 创建并推送类似 `python-sdk/v0.1.3` 的 tag
+2. 创建并推送类似 `python-sdk@0.1.3` 的 tag
 3. GitHub Actions 构建 `sdk/python`
 4. GitHub Actions 将 `openviking-sdk` 发布到 PyPI

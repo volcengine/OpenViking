@@ -14,7 +14,7 @@ function makeLogger() {
 
 function makeEngine(opts?: {
   autoCapture?: boolean;
-  commitTokenThreshold?: number;
+  commitTokenThresholdRatio?: number;
   getSession?: Record<string, unknown>;
   addSessionMessageError?: Error;
   cfgOverrides?: Record<string, unknown>;
@@ -24,7 +24,7 @@ function makeEngine(opts?: {
     baseUrl: "http://127.0.0.1:1933",
     autoCapture: opts?.autoCapture ?? true,
     autoRecall: false,
-    commitTokenThreshold: opts?.commitTokenThreshold ?? 20000,
+    commitTokenThresholdRatio: opts?.commitTokenThresholdRatio ?? 0.5,
     emitStandardDiagnostics: true,
     ...(opts?.cfgOverrides ?? {}),
   });
@@ -201,7 +201,7 @@ describe("context-engine afterTurn()", () => {
 
   it("records senderId from runtimeContext in afterTurn diagnostics", async () => {
     const { engine, logger } = makeEngine({
-      commitTokenThreshold: 50,
+      commitTokenThresholdRatio: 0.01,
       getSession: { pending_tokens: 5000 },
     });
 
@@ -263,7 +263,7 @@ describe("context-engine afterTurn()", () => {
 
   it("does not commit when pendingTokens < threshold", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 20000,
+      commitTokenThresholdRatio: 0.8,
       getSession: { pending_tokens: 100 },
     });
 
@@ -284,7 +284,7 @@ describe("context-engine afterTurn()", () => {
 
   it("commits when pendingTokens >= threshold", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 20000,
+      commitTokenThresholdRatio: 0.1,
       getSession: { pending_tokens: 25000 },
     });
 
@@ -307,7 +307,7 @@ describe("context-engine afterTurn()", () => {
 
   it("keeps afterTurn write and commit enabled when recall target types default to resources only", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 20000,
+      commitTokenThresholdRatio: 0.1,
       getSession: { pending_tokens: 25000 },
       cfgOverrides: {
         recallTargetTypes: [],
@@ -355,7 +355,7 @@ describe("context-engine afterTurn()", () => {
 
   it("commit uses OV session ID derived from sessionId", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 100,
+      commitTokenThresholdRatio: 0.01,
       getSession: { pending_tokens: 5000 },
     });
 
@@ -377,7 +377,7 @@ describe("context-engine afterTurn()", () => {
 
   it("commit passes wait=false for afterTurn (async Phase 2)", async () => {
     const { engine, client } = makeEngine({
-      commitTokenThreshold: 100,
+      commitTokenThresholdRatio: 0.01,
       getSession: { pending_tokens: 5000 },
     });
 
@@ -467,7 +467,7 @@ describe("context-engine afterTurn()", () => {
     expect(client.getSession).toHaveBeenCalled();
   });
 
-  it("maps toolResult to user role", async () => {
+  it("maps toolResult to assistant role", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -487,9 +487,9 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
-    // assistant → user(toolResult) → assistant
+    // assistant → assistant(toolResult) → assistant
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
     expect(client.addSessionMessage.mock.calls[1][2][0].tool_output).toContain("file1.txt");
     expect(client.addSessionMessage.mock.calls[1][2][0].tool_output).toContain("file2.txt");
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
@@ -521,7 +521,7 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 
-  it("coalesces adjacent toolResults into one user group for turn-level budgets", async () => {
+  it("coalesces adjacent toolResults into one assistant group for turn-level budgets", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -543,7 +543,7 @@ describe("context-engine afterTurn()", () => {
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
     const toolParts = client.addSessionMessage.mock.calls[1][2] as Array<{ tool_output?: string }>;
     expect(toolParts).toHaveLength(2);
     expect(toolParts[0]?.tool_output).toContain("content of a");

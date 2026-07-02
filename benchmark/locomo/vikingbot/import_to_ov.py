@@ -89,6 +89,28 @@ def load_locomo_data(
     return data
 
 
+def build_message_text(msg: Dict[str, Any]) -> str:
+    """Preserve LoCoMo image metadata as labelled text for memory extraction."""
+    text = (msg.get("text") or "").strip()
+
+    blip_caption_value = msg.get("blip_caption")
+    blip_caption = str(blip_caption_value or "").strip()
+
+    query = str(msg.get("query") or "").strip()
+
+    image_parts = []
+    if blip_caption:
+        image_parts.append(f"image description: {blip_caption}")
+    if query:
+        image_parts.append(f"image search/query text: {query}")
+
+    if not image_parts:
+        return text
+
+    image_note = f"(attached image; {'; '.join(image_parts)})"
+    return f"{text}\n{image_note}" if text else image_note
+
+
 def build_session_messages(
     item: Dict[str, Any],
     session_range: Optional[Tuple[int, int]] = None,
@@ -126,7 +148,7 @@ def build_session_messages(
         messages = []
         for idx, msg in enumerate(conv[sk]):
             speaker = msg.get("speaker", "unknown")
-            text = msg.get("text", "")
+            text = build_message_text(msg)
             if group_chat:
                 messages.append(
                     {

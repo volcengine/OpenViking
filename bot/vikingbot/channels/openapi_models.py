@@ -54,6 +54,7 @@ class OpenVikingConnection(BaseModel):
     user_id: Optional[str] = Field(default=None, description="Effective user ID")
     agent_id: Optional[str] = Field(default=None, description="Effective agent ID")
     role: Optional[str] = Field(default=None, description="Effective OpenViking role")
+    api_key_type: Optional[str] = Field(default=None, description="OpenViking API key type")
     namespace_policy: Optional[Dict[str, bool]] = Field(
         default=None,
         description="Effective account namespace policy",

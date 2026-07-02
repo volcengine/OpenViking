@@ -248,7 +248,8 @@ mod tests {
             "tags_updated": true
         });
 
-        let rendered = super::render_set_tags_result_for_table(&result).map(|value| strip_ansi(&value));
+        let rendered =
+            super::render_set_tags_result_for_table(&result).map(|value| strip_ansi(&value));
 
         assert_eq!(
             rendered,

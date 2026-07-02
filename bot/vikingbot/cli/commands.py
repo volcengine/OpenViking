@@ -77,7 +77,7 @@ def _warn_deprecated_memory_user(memory_user: list[str] | None) -> None:
     if not memory_user:
         return
     typer.secho(
-        "Warning: --memory-user is deprecated and only kept for legacy root-key fanout. "
+        "Warning: --memory-user is deprecated and only kept for explicit owner-user lookup. "
         "Use --memory-peer for the current OpenViking User/Peer model.",
         fg=typer.colors.YELLOW,
         err=True,
@@ -270,10 +270,12 @@ def _make_provider(config, langfuse_client: None = None):
 
     p = config.agents
     model = p.model if p else None
+    temperature = p.temperature if p else 0.7
     api_key = p.api_key if p else None
     api_base = p.api_base if p else None
     provider_name = p.provider if p else None
     extra_headers = p.extra_headers if p else {}
+    timeout = p.timeout if p else None
 
     if not model:
         raise RuntimeError("No LLM model configured. Please set it in ~/.openviking/ov.conf")
@@ -289,7 +291,10 @@ def _make_provider(config, langfuse_client: None = None):
         vlm_config: dict[str, Any] = {
             "provider": provider_name,
             "model": model,
+            "temperature": temperature,
         }
+        if timeout is not None:
+            vlm_config["timeout"] = timeout
         if api_key:
             vlm_config["api_key"] = api_key
         if api_base:
@@ -315,6 +320,7 @@ def _make_provider(config, langfuse_client: None = None):
         default_model=model,
         extra_headers=extra_headers,
         provider_name=provider_name,
+        timeout=timeout,
         langfuse_client=langfuse_client,
     )
 
@@ -443,6 +449,7 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
         provider=provider,
         workspace=config.workspace_path,
         model=config.agents.model,
+        temperature=config.agents.temperature,
         max_iterations=config.agents.max_tool_iterations,
         memory_window=config.agents.memory_window,
         brave_api_key=config.tools.web.search.api_key or None,
@@ -475,6 +482,7 @@ def prepare_cron(bus, quiet: bool = False) -> CronService:
         """Execute a cron job through the agent."""
         session_key = SessionKey(**json.loads(job.payload.session_key_str))
         message = job.payload.message
+        channel_metadata = dict(job.payload.channel_metadata or {})
 
         if agent_holder["agent"] is None:
             raise RuntimeError("Agent not initialized yet")
@@ -497,6 +505,7 @@ Reminder message to deliver:
         response = await agent_holder["agent"].process_direct(
             cron_instruction,
             session_key=session_key,
+            metadata=channel_metadata,
         )
         if job.payload.deliver:
             from vikingbot.bus.events import OutboundMessage
@@ -505,6 +514,7 @@ Reminder message to deliver:
                 OutboundMessage(
                     session_key=session_key,
                     content=response or "",
+                    metadata=channel_metadata,
                 )
             )
         return response

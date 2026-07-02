@@ -80,9 +80,7 @@ async def test_word_parser_offloads_docx_conversion(monkeypatch, tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_word_parser_forwards_original_name_to_markdown(
-    monkeypatch, tmp_path: Path
-):
+async def test_word_parser_forwards_original_name_to_markdown(monkeypatch, tmp_path: Path):
     # On single-file upload the on-disk path is a temp name (upload_<uuid>.docx)
     # and the user's original filename arrives via source_name. WordParser must
     # forward that name to MarkdownParser explicitly; otherwise parse_content can
@@ -91,9 +89,7 @@ async def test_word_parser_forwards_original_name_to_markdown(
     seen = _stub_markdown_parse(parser)
     _patch_to_thread(monkeypatch, word)
     monkeypatch.setitem(sys.modules, "docx", SimpleNamespace())
-    monkeypatch.setattr(
-        parser, "_convert_to_markdown", lambda *args, **kwargs: "# converted docx"
-    )
+    monkeypatch.setattr(parser, "_convert_to_markdown", lambda *args, **kwargs: "# converted docx")
 
     upload = tmp_path / "upload_abc123.docx"
     upload.write_bytes(b"placeholder")

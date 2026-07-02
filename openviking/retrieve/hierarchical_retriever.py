@@ -22,6 +22,7 @@ from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
+from openviking.storage.expr import FilterExpr
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.retrieve.types import (
@@ -94,26 +95,27 @@ class HierarchicalRetriever:
         query: TypedQuery,
         ctx: RequestContext,
         limit: int = 5,
-        mode: str = RetrieverMode.THINKING,
+        mode: Optional[RetrieverMode] = None,
         score_threshold: Optional[float] = None,
         score_gte: bool = False,
-        scope_dsl: Optional[Dict[str, Any]] = None,
+        scope_dsl: Optional[FilterExpr | Dict[str, Any]] = None,
         level: Optional[List[int]] = None,
     ) -> QueryResult:
         """
         Execute hierarchical retrieval.
 
         Args:
-            user: User ID (for permission filtering)
+            ctx: Request context used for tenant and permission filtering
             score_threshold: Custom score threshold (overrides config)
             score_gte: True uses >=, False uses >
-            grep_patterns: Keyword match pattern list
             scope_dsl: Additional scope constraints passed from public find/search filter
+            level: Optional result level filter (0=L0, 1=L1, 2=L2)
         """
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
-        # Use custom threshold or default threshold
-        effective_threshold = score_threshold if score_threshold is not None else self.threshold
+        effective_threshold = self._resolve_threshold(score_threshold)
+        if mode is None:
+            mode = RetrieverMode.QUICK if not self._rerank_client else RetrieverMode.THINKING
 
         # 创建 proxy 包装器，绑定当前 ctx
         vector_proxy = VikingDBManagerProxy(self.vector_store, ctx)
@@ -146,90 +148,150 @@ class HierarchicalRetriever:
         else:
             root_uris = default_target_directories(ctx, context_type=query.context_type)
 
-        # Step 2: Global vector search to supplement starting points
-        with telemetry.measure("search.vector_retrieval"):
-            global_results = await self._global_vector_search(
-                vector_proxy=vector_proxy,
-                query_vector=query_vector,
-                sparse_query_vector=sparse_query_vector,
-                context_type=query.context_type.value if query.context_type else None,
-                target_dirs=target_dirs,
-                scope_dsl=scope_dsl,
-                limit=max(limit, self.GLOBAL_SEARCH_TOPK),
-            )
+        context_type = query.context_type.value if query.context_type else None
 
-        # Debug: Print all URIs in global_results
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"[retrieve] target_dirs: {target_dirs}")
-            logger.debug(f"[retrieve] root_uris: {root_uris}")
-            logger.debug(f"[retrieve] scope_dsl: {scope_dsl}")
-            logger.debug(
-                f"[retrieve] Step 2 completed, global_results contains {len(global_results)} items:"
+        if mode == RetrieverMode.QUICK:
+            with telemetry.measure("search.vector_retrieval"):
+                quick_results = await vector_proxy.search_in_tenant(
+                    query_vector=query_vector,
+                    sparse_query_vector=sparse_query_vector,
+                    context_type=context_type,
+                    target_directories=target_dirs,
+                    extra_filter=scope_dsl,
+                    level=level,
+                    limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+                )
+            telemetry.count("vector.searches", 1)
+            telemetry.count("vector.scored", len(quick_results))
+            telemetry.count("vector.scanned", len(quick_results))
+
+            collected_by_uri: Dict[str, Dict[str, Any]] = {}
+            for result in quick_results:
+                uri = result.get("uri", "")
+                if not uri:
+                    continue
+
+                score = self._finite_score(result.get("_score", 0.0))
+                if not self._passes_threshold(score, effective_threshold, score_gte):
+                    continue
+
+                candidate = dict(result)
+                candidate["_score"] = score
+                candidate["_final_score"] = score
+
+                previous = collected_by_uri.get(uri)
+                if previous is None or score > previous.get("_final_score", 0.0):
+                    collected_by_uri[uri] = candidate
+
+            candidates = sorted(
+                collected_by_uri.values(),
+                key=lambda x: x.get("_final_score", 0.0),
+                reverse=True,
             )
-            for i, r in enumerate(global_results):
-                uri = r.get("uri", "UNKNOWN_URI")
-                score = r.get("_score", 0.0)
-                result_level = r.get("level", "UNKNOWN_LEVEL")
-                account_id = r.get("account_id", "UNKNOWN_ACCOUNT_ID")
+            apply_hotness = False
+            rerank_used = False
+        else:
+            # Step 2: Global vector search to supplement starting points
+            with telemetry.measure("search.vector_retrieval"):
+                global_results = await vector_proxy.search_in_tenant(
+                    query_vector=query_vector,
+                    sparse_query_vector=sparse_query_vector,
+                    context_type=context_type,
+                    target_directories=target_dirs,
+                    extra_filter=scope_dsl,
+                    level=[0, 1],
+                    limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+                )
+            telemetry.count("vector.searches", 1)
+            telemetry.count("vector.scored", len(global_results))
+            telemetry.count("vector.scanned", len(global_results))
+
+            # Debug: Print all URIs in global_results
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"[retrieve] target_dirs: {target_dirs}")
+                logger.debug(f"[retrieve] root_uris: {root_uris}")
+                logger.debug(f"[retrieve] scope_dsl: {scope_dsl}")
                 logger.debug(
-                    f"  [{i}] URI: {uri}, score: {score:.4f}, level: {result_level}, account_id: {account_id}"
+                    f"[retrieve] Step 2 completed, global_results contains {len(global_results)} items:"
+                )
+                for i, r in enumerate(global_results):
+                    uri = r.get("uri", "UNKNOWN_URI")
+                    score = r.get("_score", 0.0)
+                    result_level = r.get("level", "UNKNOWN_LEVEL")
+                    account_id = r.get("account_id", "UNKNOWN_ACCOUNT_ID")
+                    logger.debug(
+                        f"  [{i}] URI: {uri}, score: {score:.4f}, level: {result_level}, account_id: {account_id}"
+                    )
+
+            # Step 3: Pick recursive entry points from directory hits and explicit roots.
+            directory_scores = [self._finite_score(r.get("_score", 0.0)) for r in global_results]
+            if self._rerank_client and mode == RetrieverMode.THINKING:
+                directory_scores = self._rerank_scores(
+                    query.query,
+                    [str(r.get("abstract", "")) for r in global_results],
+                    directory_scores,
                 )
 
-        # Step 3: Merge starting points
-        starting_points = self._merge_starting_points(
-            query.query,
-            root_uris,
-            global_results,
-            mode=mode,
-        )
+            starting_points = []
+            seen_starting_uris = set()
+            for result, score in zip(global_results, directory_scores, strict=True):
+                uri = result.get("uri", "")
+                if not uri or uri in seen_starting_uris:
+                    continue
+                starting_points.append((uri, score))
+                seen_starting_uris.add(uri)
 
-        # Add global hits to the result pool only when they match the requested level.
-        if level is not None:
-            initial_candidates = [r for r in global_results if r.get("level", 2) in level]
-        else:
-            initial_candidates = [r for r in global_results if r.get("level", 2) == 2]
+            for uri in root_uris:
+                if uri not in seen_starting_uris:
+                    starting_points.append((uri, 0.0))
+                    seen_starting_uris.add(uri)
 
-        initial_candidates = self._prepare_initial_candidates(
-            query.query,
-            initial_candidates,
-            mode=mode,
-        )
+            # Add directory hits to the result pool only when explicitly requested.
+            initial_candidates = []
+            if level is not None:
+                for result, score in zip(global_results, directory_scores, strict=True):
+                    if result.get("level", 2) not in level:
+                        continue
+                    candidate = dict(result)
+                    candidate["_score"] = score
+                    initial_candidates.append(candidate)
 
-        # Step 4: Recursive search
-        with telemetry.measure("search.vector_retrieval"):
-            candidates = await self._recursive_search(
-                vector_proxy=vector_proxy,
-                query=query.query,
-                query_vector=query_vector,
-                sparse_query_vector=sparse_query_vector,
-                starting_points=starting_points,
-                limit=limit,
-                mode=mode,
-                threshold=effective_threshold,
-                score_gte=score_gte,
-                context_type=query.context_type.value if query.context_type else None,
-                target_dirs=target_dirs,
-                scope_dsl=scope_dsl,
-                initial_candidates=initial_candidates,
-                level=level,
-            )
+            # Step 4: Recursive search
+            with telemetry.measure("search.vector_retrieval"):
+                candidates = await self._recursive_search(
+                    vector_proxy=vector_proxy,
+                    query=query.query,
+                    query_vector=query_vector,
+                    sparse_query_vector=sparse_query_vector,
+                    starting_points=starting_points,
+                    limit=limit,
+                    mode=mode,
+                    threshold=effective_threshold,
+                    score_gte=score_gte,
+                    context_type=context_type,
+                    target_dirs=target_dirs,
+                    scope_dsl=scope_dsl,
+                    initial_candidates=initial_candidates,
+                    level=level,
+                )
+            apply_hotness = True
+            rerank_used = self._rerank_client is not None and mode == RetrieverMode.THINKING
 
         # Step 6: Convert results
         matched = await self._convert_to_matched_contexts(
             candidates,
             ctx=ctx,
+            apply_hotness=apply_hotness,
         )
-
         final = matched[:limit]
 
-        # Record retrieval stats for the observer.
         elapsed_ms = (time.monotonic() - t0) * 1000
         get_stats_collector().record_query(
-            context_type=query.context_type.value if query.context_type else "unknown",
+            context_type=context_type or "unknown",
             result_count=len(final),
             scores=[m.score for m in final],
             latency_ms=elapsed_ms,
-            rerank_used=self._rerank_client is not None and mode == RetrieverMode.THINKING,
+            rerank_used=rerank_used,
         )
 
         return QueryResult(
@@ -238,30 +300,23 @@ class HierarchicalRetriever:
             searched_directories=root_uris,
         )
 
-    async def _global_vector_search(
-        self,
-        vector_proxy: VikingDBManagerProxy,
-        query_vector: Optional[List[float]],
-        sparse_query_vector: Optional[Dict[str, float]],
-        context_type: Optional[str],
-        target_dirs: List[str],
-        scope_dsl: Optional[Dict[str, Any]],
-        limit: int,
-    ) -> List[Dict[str, Any]]:
-        """Global vector search to locate initial directories."""
-        results = await vector_proxy.search_global_roots_in_tenant(
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            context_type=context_type,
-            target_directories=target_dirs,
-            extra_filter=scope_dsl,
-            limit=limit,
-        )
-        telemetry = get_current_telemetry()
-        telemetry.count("vector.searches", 1)
-        telemetry.count("vector.scored", len(results))
-        telemetry.count("vector.scanned", len(results))
-        return results
+    def _resolve_threshold(self, threshold: Optional[float]) -> float:
+        resolved = threshold if threshold is not None else self.threshold
+        return resolved if resolved is not None else 0.0
+
+    @staticmethod
+    def _finite_score(value: Any, default: float = 0.0) -> float:
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            return default
+        return score if math.isfinite(score) else default
+
+    @staticmethod
+    def _passes_threshold(score: float, threshold: float, score_gte: bool) -> bool:
+        if score_gte:
+            return score >= threshold
+        return score > threshold
 
     def _rerank_scores(
         self,
@@ -289,80 +344,8 @@ class HierarchicalRetriever:
 
         normalized_scores: List[float] = []
         for score, fallback in zip(scores, fallback_scores, strict=True):
-            if isinstance(score, (int, float)):
-                normalized_scores.append(float(score))
-            else:
-                normalized_scores.append(fallback)
+            normalized_scores.append(self._finite_score(score, fallback))
         return normalized_scores
-
-    def _merge_starting_points(
-        self,
-        query: str,
-        root_uris: List[str],
-        global_results: List[Dict[str, Any]],
-        mode: str = "thinking",
-    ) -> List[Tuple[str, float]]:
-        """Merge starting points.
-        Returns:
-            List of (uri, parent_score) tuples
-        """
-        points = []
-        seen = set()
-
-        global_results = [r for r in global_results if r.get("level", 2) != 2]
-
-        # Results from global search
-        default_scores = [
-            s if math.isfinite(s) else 0.0 for s in (r.get("_score", 0.0) for r in global_results)
-        ]
-        if self._rerank_client and mode == RetrieverMode.THINKING:
-            docs = [str(r.get("abstract", "")) for r in global_results]
-            query_scores = self._rerank_scores(query, docs, default_scores)
-            for i, r in enumerate(global_results):
-                # 只添加非 level 2 的项目到起始点
-                if r.get("level", 2) != 2:
-                    points.append((r["uri"], query_scores[i]))
-                    seen.add(r["uri"])
-        else:
-            for r in global_results:
-                # 只添加非 level 2 的项目到起始点
-                if r.get("level", 2) != 2:
-                    points.append((r["uri"], r["_score"]))
-                    seen.add(r["uri"])
-
-        # Root directories as starting points
-        for uri in root_uris:
-            if uri not in seen:
-                points.append((uri, 0.0))
-                seen.add(uri)
-
-        return points
-
-    def _prepare_initial_candidates(
-        self,
-        query: str,
-        global_results: List[Dict[str, Any]],
-        mode: str = RetrieverMode.THINKING,
-    ) -> List[Dict[str, Any]]:
-        """Preserve rerank scores for global hits added to the result pool."""
-        initial_candidates = [dict(r) for r in global_results]
-        if not initial_candidates:
-            return []
-
-        default_scores = [
-            s if math.isfinite(s) else 0.0
-            for s in (r.get("_score", 0.0) for r in initial_candidates)
-        ]
-        if self._rerank_client and mode == RetrieverMode.THINKING:
-            docs = [str(r.get("abstract", "")) for r in initial_candidates]
-            query_scores = self._rerank_scores(query, docs, default_scores)
-        else:
-            query_scores = default_scores
-
-        for candidate, score in zip(initial_candidates, query_scores, strict=True):
-            candidate["_score"] = score
-
-        return initial_candidates
 
     async def _recursive_search(
         self,
@@ -377,7 +360,7 @@ class HierarchicalRetriever:
         score_gte: bool = False,
         context_type: Optional[str] = None,
         target_dirs: Optional[List[str]] = None,
-        scope_dsl: Optional[Dict[str, Any]] = None,
+        scope_dsl: Optional[FilterExpr | Dict[str, Any]] = None,
         initial_candidates: Optional[List[Dict[str, Any]]] = None,
         level: Optional[List[int]] = None,
     ) -> List[Dict[str, Any]]:
@@ -390,14 +373,7 @@ class HierarchicalRetriever:
             grep_patterns: Keyword match patterns
             scope_dsl: Additional scope constraints from public find/search filter
         """
-        # Use passed threshold or default threshold
-        effective_threshold = threshold if threshold is not None else self.threshold
-
-        def passes_threshold(score: float) -> bool:
-            """Check if score passes threshold."""
-            if score_gte:
-                return score >= effective_threshold
-            return score > effective_threshold
+        effective_threshold = self._resolve_threshold(threshold)
 
         sparse_query_vector = sparse_query_vector or None
 
@@ -416,8 +392,8 @@ class HierarchicalRetriever:
                 if not uri:
                     continue
                 if level is None or r.get("level", 2) in level:
-                    score = r.get("_score", 0.0)
-                    if not passes_threshold(score):
+                    score = self._finite_score(r.get("_score", 0.0))
+                    if not self._passes_threshold(score, effective_threshold, score_gte):
                         logger.debug(
                             f"[RecursiveSearch] Initial candidate URI {uri} score {score:.4f} did not pass threshold {effective_threshold}"
                         )
@@ -474,9 +450,7 @@ class HierarchicalRetriever:
                 if not results:
                     continue
 
-                query_scores = [
-                    s if math.isfinite(s) else 0.0 for s in (r.get("_score", 0.0) for r in results)
-                ]
+                query_scores = [self._finite_score(r.get("_score", 0.0)) for r in results]
                 if self._rerank_client and mode == RetrieverMode.THINKING:
                     documents = [str(r.get("abstract", "")) for r in results]
                     query_scores = self._rerank_scores(query, documents, query_scores)
@@ -487,7 +461,7 @@ class HierarchicalRetriever:
                         alpha * score + (1 - alpha) * current_score if current_score else score
                     )
 
-                    if not passes_threshold(final_score):
+                    if not self._passes_threshold(final_score, effective_threshold, score_gte):
                         logger.debug(
                             f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}"
                         )
@@ -546,6 +520,7 @@ class HierarchicalRetriever:
         self,
         candidates: List[Dict[str, Any]],
         ctx: RequestContext,
+        apply_hotness: bool = True,
     ) -> List[MatchedContext]:
         """Convert candidate results to MatchedContext list.
 
@@ -557,13 +532,11 @@ class HierarchicalRetriever:
         for c in candidates:
             relations = []
 
-            semantic_score = c.get("_final_score", c.get("_score", 0.0))
             # Fix: clamp inf/nan scores from vector search (#inf-score)
-            if not math.isfinite(semantic_score):
-                semantic_score = 0.0
+            semantic_score = self._finite_score(c.get("_final_score", c.get("_score", 0.0)))
 
             alpha = self.hotness_alpha
-            if alpha > 0:
+            if apply_hotness and alpha > 0:
                 updated_at_raw = c.get("updated_at")
                 if isinstance(updated_at_raw, str):
                     try:

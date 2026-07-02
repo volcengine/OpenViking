@@ -1,11 +1,15 @@
 import * as React from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import {
   CircleAlertIcon,
   CircleDashedIcon,
   CopyIcon,
-  DatabaseIcon,
   KeyRoundIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -35,7 +39,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/components/ui/dialog'
-import { Field, FieldContent, FieldLabel } from '#/components/ui/field'
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+} from '#/components/ui/field'
 import { Input } from '#/components/ui/input'
 import {
   Select,
@@ -67,7 +76,7 @@ import { copyTextToClipboard } from '#/lib/clipboard'
 import { cn } from '#/lib/utils'
 import type { ConnectionDraft } from '#/hooks/use-app-connection'
 
-import { AccountSelect, UserSelect } from '#/components/identity-select'
+import { AccountSelect } from '#/components/identity-select'
 import {
   DEFAULT_ACCOUNT_ID,
   DEFAULT_USER_ID,
@@ -100,6 +109,17 @@ const USER_ROLES = ['user', 'admin'] as const
 
 type AddAccountDraft = CreateAccountInput
 type AddUserDraft = CreateUserInput
+
+// Server URLs, API keys, and account/user ids are case-sensitive freeform
+// values. Browsers (and mobile keyboards) otherwise auto-capitalize the first
+// letter — turning "http://" into "Http://" — and run autocorrect/spellcheck.
+// Disable all of it on these inputs.
+const PLAIN_INPUT_PROPS = {
+  autoCapitalize: 'none',
+  autoComplete: 'off',
+  autoCorrect: 'off',
+  spellCheck: false,
+} as const
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -147,11 +167,11 @@ function StatCard({
 
 function KeyResultCard({
   onClear,
-  onUseForData,
+  onUseAsUserKey,
   result,
 }: {
   onClear: () => void
-  onUseForData: () => void
+  onUseAsUserKey: () => void
   result: KeyResult
 }) {
   const { t } = useTranslation('settings')
@@ -195,9 +215,9 @@ function KeyResultCard({
             type="button"
             variant="default"
             size="sm"
-            onClick={onUseForData}
+            onClick={onUseAsUserKey}
           >
-            <DatabaseIcon />
+            <KeyRoundIcon />
             {t('actions.useForData')}
           </Button>
         </div>
@@ -360,6 +380,7 @@ function UserApiKeyInput({
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+        {...PLAIN_INPUT_PROPS}
       />
     </div>
   )
@@ -420,6 +441,7 @@ function AddAccountDialog({
                 }
                 placeholder={t('placeholders.account')}
                 required
+                {...PLAIN_INPUT_PROPS}
               />
             </FieldContent>
           </Field>
@@ -439,6 +461,7 @@ function AddAccountDialog({
                 }
                 placeholder={DEFAULT_USER_ID}
                 required
+                {...PLAIN_INPUT_PROPS}
               />
             </FieldContent>
           </Field>
@@ -538,6 +561,7 @@ function AddUserDialog({
                 }
                 placeholder={t('placeholders.user')}
                 required
+                {...PLAIN_INPUT_PROPS}
               />
             </FieldContent>
           </Field>
@@ -590,7 +614,8 @@ function AddUserDialog({
 function SettingsRoute() {
   const { t } = useTranslation('settings')
   const queryClient = useQueryClient()
-  const { connection, saveConnection, serverMode } = useAppConnection()
+  const { connection, connectionRole, saveConnection, serverMode } =
+    useAppConnection()
   const [draft, setDraft] = React.useState<ConnectionDraft>(connection)
   const [managedAccountIds, setManagedAccountIds] = React.useState<string[]>([
     connection.accountId || DEFAULT_ACCOUNT_ID,
@@ -601,52 +626,121 @@ function SettingsRoute() {
   const [pendingRegenerateUser, setPendingRegenerateUser] =
     React.useState<AdminUser | null>(null)
 
+  // Debounced persistence. `draft` is the live, editable buffer behind the
+  // inputs; `connection` is the committed value everything else keys off (the
+  // probe, the admin queries, applyConnection, server-mode detection). Typing
+  // only updates draft and schedules a commit, so we don't re-probe / re-detect
+  // / refetch on every keystroke. Programmatic changes (adopting or rotating a
+  // key) commit immediately.
+  const saveConnectionRef = React.useRef(saveConnection)
   React.useEffect(() => {
+    saveConnectionRef.current = saveConnection
+  }, [saveConnection])
+  const pendingDraftRef = React.useRef<ConnectionDraft | null>(null)
+  const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const commitConnection = React.useCallback((next: ConnectionDraft) => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    pendingDraftRef.current = null
+    saveConnectionRef.current(next)
+  }, [])
+
+  const commitConnectionDebounced = React.useCallback(
+    (next: ConnectionDraft) => {
+      pendingDraftRef.current = next
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+      }
+      saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null
+        const pending = pendingDraftRef.current
+        pendingDraftRef.current = null
+        if (pending) {
+          saveConnectionRef.current(pending)
+        }
+      }, 350)
+    },
+    [],
+  )
+
+  // Flush a still-pending edit when leaving the page so the last keystrokes are
+  // not lost. Empty deps -> the cleanup runs only on unmount.
+  React.useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      const pending = pendingDraftRef.current
+      pendingDraftRef.current = null
+      if (pending) {
+        saveConnectionRef.current(pending)
+      }
+    }
+  }, [])
+
+  // Mirror committed connection changes back into the buffer, but never while an
+  // edit is still pending (that would clobber what the user is typing).
+  React.useEffect(() => {
+    if (pendingDraftRef.current) {
+      return
+    }
     setDraft(connection)
   }, [connection])
 
-  const controlApiKey = draft.adminApiKey.trim() || draft.apiKey.trim()
+  const isDevMode = serverMode === 'dev'
+  // The Root API key is the only control-plane credential and drives every
+  // admin call below. The User API key powers tenant data APIs (Playground,
+  // retrieval, ...). Keeping the two keys cleanly separated is the whole point
+  // of this screen. These derive from the committed connection (not the live
+  // draft) so the heavy work waits until typing settles.
+  const rootApiKey = connection.adminApiKey.trim()
   const adminConnection = React.useMemo<AdminConnection>(
     () => ({
-      accountId: draft.accountId || DEFAULT_ACCOUNT_ID,
-      apiKey: controlApiKey,
-      baseUrl: draft.baseUrl,
-      userId: draft.userId || DEFAULT_USER_ID,
+      accountId: connection.accountId || DEFAULT_ACCOUNT_ID,
+      apiKey: rootApiKey,
+      baseUrl: connection.baseUrl,
+      userId: connection.userId || DEFAULT_USER_ID,
     }),
-    [controlApiKey, draft.accountId, draft.baseUrl, draft.userId],
+    [rootApiKey, connection.accountId, connection.baseUrl, connection.userId],
   )
 
   const probeQuery = useQuery({
-    enabled: Boolean(draft.baseUrl) && serverMode !== 'checking',
+    enabled: Boolean(connection.baseUrl) && serverMode !== 'checking',
     queryFn: () =>
       probeStudioConnection({
-        accountId: draft.accountId || DEFAULT_ACCOUNT_ID,
-        adminApiKey: draft.adminApiKey,
-        apiKey: draft.apiKey,
-        baseUrl: draft.baseUrl,
+        accountId: connection.accountId || DEFAULT_ACCOUNT_ID,
+        adminApiKey: connection.adminApiKey,
+        apiKey: connection.apiKey,
+        baseUrl: connection.baseUrl,
         serverMode,
-        userId: draft.userId || DEFAULT_USER_ID,
+        userId: connection.userId || DEFAULT_USER_ID,
       }),
     queryKey: [
       'studio-connection-probe',
-      draft.baseUrl,
-      draft.adminApiKey,
-      draft.apiKey,
-      draft.accountId,
-      draft.userId,
+      connection.baseUrl,
+      connection.adminApiKey,
+      connection.apiKey,
+      connection.accountId,
+      connection.userId,
       serverMode,
     ],
+    // Keep showing the last probe result while a new identity/key is being
+    // checked, so adopting a user key (or editing a key) does not blank out the
+    // Admin/Data status and the whole User Management panel mid-refetch.
+    placeholderData: keepPreviousData,
     retry: false,
     staleTime: 15_000,
   })
 
-  const hasAdminAccess =
-    serverMode !== 'dev' && probeQuery.data?.admin.state === 'ok'
-  const hasSavedAdminApiKey = Boolean(draft.adminApiKey.trim())
-  const showAdminCredentialFields =
-    serverMode !== 'dev' && (hasAdminAccess || hasSavedAdminApiKey)
-  const canQueryAdmin = Boolean(controlApiKey) && hasAdminAccess
-  const showDevApiKeyPlaceholder = serverMode === 'dev'
+  const adminProbe = probeQuery.data?.admin
+  const hasAdminAccess = !isDevMode && adminProbe?.state === 'ok'
+  const showAdminDescription =
+    hasAdminAccess || connectionRole === 'admin' || connectionRole === 'root'
+  const canQueryAdmin = Boolean(rootApiKey) && hasAdminAccess
 
   const accountsQuery = useQuery({
     enabled: canQueryAdmin,
@@ -661,27 +755,13 @@ function SettingsRoute() {
     retry: false,
   })
 
-  const selectedAccountId = draft.accountId || DEFAULT_ACCOUNT_ID
+  const selectedAccountId = connection.accountId || DEFAULT_ACCOUNT_ID
   const selectedManagedAccountIds = React.useMemo(() => {
     const selected = sortedAccountIds(managedAccountIds, '')
     return selected.length > 0
       ? selected
       : sortedAccountIds([selectedAccountId], '')
   }, [managedAccountIds, selectedAccountId])
-
-  const usersQuery = useQuery({
-    enabled: canQueryAdmin && Boolean(selectedAccountId),
-    queryFn: () => fetchAdminUsers(adminConnection, selectedAccountId),
-    queryKey: [
-      'admin-users',
-      adminConnection.baseUrl,
-      adminConnection.apiKey,
-      adminConnection.accountId,
-      adminConnection.userId,
-      selectedAccountId,
-    ],
-    retry: false,
-  })
 
   const managedUsersQuery = useQuery({
     enabled: canQueryAdmin && selectedManagedAccountIds.length > 0,
@@ -720,83 +800,72 @@ function SettingsRoute() {
     )
   }, [accountsQuery.data, managedUsersQuery.data, selectedManagedAccountIds])
 
+  // Keep the management account filter pointed at an account that still exists.
+  // This never mutates the active identity — that only changes when the user
+  // explicitly adopts a key via "Use as User API Key".
   React.useEffect(() => {
     if (!accountOptions.length) {
       return
     }
-
     const accountIds = accountOptions.map((account) => account.accountId)
     const preferred = accountIds.includes(DEFAULT_ACCOUNT_ID)
       ? DEFAULT_ACCOUNT_ID
       : accountIds[0]
-
-    setDraft((current) => {
-      if (current.accountId && accountIds.includes(current.accountId)) {
-        return current
-      }
-
-      const next = { ...current, accountId: preferred }
-      saveConnection(next)
-      return next
-    })
     setManagedAccountIds((current) => {
       const next = current.filter((accountId) => accountIds.includes(accountId))
-      return next.length > 0 ? next : [preferred]
+      const resolved = next.length > 0 ? next : [preferred]
+      // Return the SAME reference when nothing actually changed. filter() always
+      // builds a fresh array, and handing a new reference back would re-key the
+      // selectedManagedAccountIds -> accountOptions memos and re-fire this
+      // effect on every render — an unbounded loop.
+      const unchanged =
+        resolved.length === current.length &&
+        resolved.every((accountId, index) => accountId === current[index])
+      return unchanged ? current : resolved
     })
-  }, [accountOptions, saveConnection])
+  }, [accountOptions])
 
-  React.useEffect(() => {
-    const users = usersQuery.data
-    if (!users?.length) {
+  function buildUserKeyConnection(
+    current: ConnectionDraft,
+    result: KeyResult,
+  ): ConnectionDraft {
+    return {
+      ...current,
+      accountId: result.accountId || current.accountId || DEFAULT_ACCOUNT_ID,
+      apiKey: result.apiKey || current.apiKey,
+      userId: result.userId || current.userId || DEFAULT_USER_ID,
+    }
+  }
+
+  // Field edits debounce the commit (no probe/refetch per keystroke).
+  function updateDraft(next: Partial<ConnectionDraft>): void {
+    const updated = { ...draft, ...next }
+    setDraft(updated)
+    commitConnectionDebounced(updated)
+  }
+
+  function useUserKey(result: KeyResult): void {
+    if (!result.apiKey) {
       return
     }
-
-    const userIds = users.map((user) => user.userId)
-    const preferred = userIds.includes(DEFAULT_USER_ID)
-      ? DEFAULT_USER_ID
-      : userIds[0]
-    setDraft((current) => {
-      const hasCurrentUser =
-        Boolean(current.userId) && userIds.includes(current.userId)
-      const userId = hasCurrentUser ? current.userId : preferred
-      const selectedUser = users.find((user) => user.userId === userId)
-      const apiKey = selectedUser?.apiKey || ''
-      const next = { ...current, apiKey, userId }
-
-      if (next.apiKey !== current.apiKey || next.userId !== current.userId) {
-        saveConnection(next)
-        return next
-      }
-
-      return current
-    })
-  }, [saveConnection, usersQuery.data])
+    // Adopting a key is an explicit action — commit it right away.
+    const next = buildUserKeyConnection(draft, result)
+    setDraft(next)
+    commitConnection(next)
+    toast.success(t('toast.dataKeySelected'))
+  }
 
   const createAccountMutation = useMutation({
     mutationFn: (input: CreateAccountInput) =>
       createAdminAccount(adminConnection, input),
     onError: (error) => toast.error(getErrorMessage(error)),
     onSuccess: async (result, variables) => {
-      const keyResultWithIdentity = {
+      setKeyResult({
         ...result,
         accountId: result.accountId || variables.accountId,
         userId: result.userId || variables.adminUserId,
-      }
-      setKeyResult(keyResultWithIdentity)
+      })
       setManagedAccountIds([variables.accountId])
-      if (keyResultWithIdentity.apiKey) {
-        const next = buildDataKeyConnection(draft, keyResultWithIdentity)
-        setDraft(next)
-        saveConnection(next)
-      } else {
-        const next = {
-          ...draft,
-          accountId: variables.accountId,
-          userId: variables.adminUserId,
-        }
-        setDraft(next)
-        saveConnection(next)
-      }
       setAddAccountOpen(false)
       toast.success(t('toast.accountCreated'))
       await queryClient.invalidateQueries({ queryKey: ['admin-accounts'] })
@@ -809,28 +878,14 @@ function SettingsRoute() {
       createAdminUser(adminConnection, input),
     onError: (error) => toast.error(getErrorMessage(error)),
     onSuccess: async (result, variables) => {
-      const keyResultWithIdentity = {
+      setKeyResult({
         ...result,
         accountId: result.accountId || variables.accountId,
         userId: result.userId || variables.userId,
-      }
-      setKeyResult(keyResultWithIdentity)
+      })
       setManagedAccountIds((current) =>
         sortedAccountIds([...current, variables.accountId], ''),
       )
-      if (keyResultWithIdentity.apiKey) {
-        const next = buildDataKeyConnection(draft, keyResultWithIdentity)
-        setDraft(next)
-        saveConnection(next)
-      } else {
-        const next = {
-          ...draft,
-          accountId: variables.accountId,
-          userId: variables.userId,
-        }
-        setDraft(next)
-        saveConnection(next)
-      }
       setAddUserOpen(false)
       toast.success(t('toast.userCreated'))
       await queryClient.invalidateQueries({ queryKey: ['admin-accounts'] })
@@ -844,14 +899,16 @@ function SettingsRoute() {
     onError: (error) => toast.error(getErrorMessage(error)),
     onSuccess: async (result, user) => {
       setKeyResult(result)
+      // If the rotated user is the one currently powering data APIs, keep the
+      // active User API key in sync so the session does not silently break.
       if (
         result.apiKey &&
         user.accountId === draft.accountId &&
         user.userId === draft.userId
       ) {
-        const next = buildDataKeyConnection(draft, result)
+        const next = buildUserKeyConnection(draft, result)
         setDraft(next)
-        saveConnection(next)
+        commitConnection(next)
       }
       setPendingRegenerateUser(null)
       toast.success(t('toast.keyRegenerated'))
@@ -859,7 +916,6 @@ function SettingsRoute() {
     },
   })
 
-  const users = usersQuery.data ?? []
   const managedUsers = managedUsersQuery.data ?? []
   const totalAccounts = accountOptions.length
   const totalUsers =
@@ -870,81 +926,9 @@ function SettingsRoute() {
   ).length
   const adminUnavailable = !canQueryAdmin || managedUsersQuery.isError
 
-  function findSelectedUser(
-    accountId: string,
-    preferredUserId: string,
-  ): AdminUser | undefined {
-    const normalizedAccountId = accountId || DEFAULT_ACCOUNT_ID
-    const candidates = [...users, ...managedUsers]
-      .filter((user) => user.accountId === normalizedAccountId)
-      .filter(
-        (user, index, list) =>
-          list.findIndex((item) => item.userId === user.userId) === index,
-      )
-
-    return (
-      candidates.find((user) => user.userId === preferredUserId) ||
-      candidates.find((user) => user.userId === DEFAULT_USER_ID) ||
-      candidates[0]
-    )
-  }
-
-  function updateDraft(next: Partial<ConnectionDraft>): void {
-    const updated = { ...draft, ...next }
-    setDraft(updated)
-    saveConnection(updated)
-  }
-
-  function updateConnectionAccount(accountId: string): void {
-    const selectedUser = findSelectedUser(accountId, draft.userId)
-    setManagedAccountIds((current) =>
-      sortedAccountIds([...current, accountId], ''),
-    )
-    updateDraft({
-      accountId,
-      apiKey: selectedUser?.apiKey || '',
-      userId: selectedUser?.userId || DEFAULT_USER_ID,
-    })
-  }
-
-  function updateConnectionUser(userId: string): void {
-    const selectedUser = findSelectedUser(draft.accountId, userId)
-    updateDraft({
-      apiKey: selectedUser?.apiKey || '',
-      userId,
-    })
-  }
-
-  function buildDataKeyConnection(
-    current: ConnectionDraft,
-    result: KeyResult,
-  ): ConnectionDraft {
-    const nextApiKey = result.apiKey || current.apiKey
-    return {
-      ...current,
-      accountId: result.accountId || current.accountId || DEFAULT_ACCOUNT_ID,
-      adminApiKey:
-        current.adminApiKey ||
-        (current.apiKey && current.apiKey !== nextApiKey ? current.apiKey : ''),
-      apiKey: nextApiKey,
-      userId: result.userId || current.userId || DEFAULT_USER_ID,
-    }
-  }
-
-  function useKeyForData(result: KeyResult): void {
-    if (!result.apiKey) {
-      return
-    }
-    const next = buildDataKeyConnection(draft, result)
-    setDraft(next)
-    saveConnection(next)
-    toast.success(t('toast.dataKeySelected'))
-  }
-
   async function refreshAdmin(): Promise<void> {
     await Promise.all([
       accountsQuery.refetch(),
-      usersQuery.refetch(),
       managedUsersQuery.refetch(),
       probeQuery.refetch(),
     ])
@@ -969,124 +953,70 @@ function SettingsRoute() {
           {t('page.title')}
         </h1>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          {t('page.description')}
+          {showAdminDescription
+            ? t('page.adminDescription')
+            : t('page.description')}
         </p>
       </header>
 
       <Card className="gap-0 overflow-hidden border-primary/25 bg-primary/[0.025] py-0 shadow-sm ring-1 ring-primary/10">
         <CardHeader className="gap-2 border-b border-primary/15 bg-primary/[0.07] px-5 py-3.5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-                  <KeyRoundIcon className="size-4" />
-                </div>
-                <CardTitle>{t('connection.title')}</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
+                <KeyRoundIcon className="size-4" />
               </div>
+              <CardTitle>{t('connection.title')}</CardTitle>
             </div>
+            <Badge variant="outline" className="shrink-0 font-normal">
+              {t(`serverMode.${serverMode}`)}
+            </Badge>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-3 px-5 py-4">
-          <div
-            className={cn(
-              'grid gap-3',
-              hasAdminAccess
-                ? 'xl:grid-cols-[minmax(16rem,1.2fr)_minmax(12rem,0.8fr)_minmax(12rem,0.8fr)]'
-                : 'xl:grid-cols-[minmax(16rem,1.2fr)_minmax(16rem,1fr)]',
-            )}
-          >
-            <Field>
-              <FieldLabel htmlFor="settings-base-url">
-                {t('fields.baseUrl')}
-              </FieldLabel>
-              <FieldContent>
-                <Input
-                  id="settings-base-url"
-                  value={draft.baseUrl}
-                  onChange={(event) =>
-                    updateDraft({ baseUrl: event.target.value })
-                  }
-                  placeholder={t('placeholders.baseUrl')}
-                />
-              </FieldContent>
-            </Field>
-            {hasAdminAccess ? (
-              <>
-                <Field>
-                  <FieldLabel>{t('fields.account')}</FieldLabel>
-                  <FieldContent>
-                    <AccountSelect
-                      accounts={accountOptions}
-                      disabled={!canQueryAdmin || accountsQuery.isLoading}
-                      label={t('fields.account')}
-                      value={draft.accountId || DEFAULT_ACCOUNT_ID}
-                      onChange={updateConnectionAccount}
-                    />
-                  </FieldContent>
-                </Field>
-                <Field>
-                  <FieldLabel>{t('fields.user')}</FieldLabel>
-                  <FieldContent>
-                    <UserSelect
-                      disabled={!canQueryAdmin || usersQuery.isLoading}
-                      label={t('fields.user')}
-                      users={users}
-                      value={draft.userId || DEFAULT_USER_ID}
-                      onChange={updateConnectionUser}
-                    />
-                  </FieldContent>
-                </Field>
-              </>
-            ) : showDevApiKeyPlaceholder ? (
-              <Field>
-                <FieldLabel htmlFor="settings-api-key-dev">
-                  {t('fields.apiKey')}
-                </FieldLabel>
-                <FieldContent>
-                  <Input
-                    id="settings-api-key-dev"
-                    value={t('placeholders.devModeApiKey')}
-                    disabled
-                    readOnly
-                  />
-                </FieldContent>
-              </Field>
-            ) : showAdminCredentialFields ? null : (
-              <Field>
-                <FieldLabel htmlFor="settings-api-key">
-                  {t('fields.apiKey')}
-                </FieldLabel>
-                <FieldContent>
-                  <Input
-                    id="settings-api-key"
-                    type="password"
-                    value={draft.apiKey}
-                    onChange={(event) =>
-                      updateDraft({ apiKey: event.target.value })
-                    }
-                    placeholder={t('placeholders.apiKey')}
-                  />
-                </FieldContent>
-              </Field>
-            )}
-          </div>
-          {showAdminCredentialFields ? (
+        <CardContent className="grid gap-4 px-5 py-4">
+          <Field>
+            <FieldLabel htmlFor="settings-base-url">
+              {t('fields.baseUrl')}
+            </FieldLabel>
+            <FieldContent>
+              <Input
+                id="settings-base-url"
+                value={draft.baseUrl}
+                onChange={(event) =>
+                  updateDraft({ baseUrl: event.target.value })
+                }
+                placeholder={t('placeholders.baseUrl')}
+                inputMode="url"
+                {...PLAIN_INPUT_PROPS}
+              />
+            </FieldContent>
+          </Field>
+
+          {isDevMode ? (
+            <p className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              {t('connection.devMode')}
+            </p>
+          ) : (
             <>
-              <div className="grid gap-3">
+              <div className="grid gap-4 md:grid-cols-2">
                 <Field>
-                  <FieldLabel htmlFor="settings-admin-api-key">
-                    {t('fields.adminApiKey')}
+                  <FieldLabel htmlFor="settings-root-api-key">
+                    {t('fields.rootApiKey')}
                   </FieldLabel>
                   <FieldContent>
                     <Input
-                      id="settings-admin-api-key"
+                      id="settings-root-api-key"
                       type="password"
                       value={draft.adminApiKey}
                       onChange={(event) =>
                         updateDraft({ adminApiKey: event.target.value })
                       }
                       placeholder={t('placeholders.adminApiKey')}
+                      {...PLAIN_INPUT_PROPS}
                     />
+                    <FieldDescription>
+                      {t('connection.rootHint')}
+                    </FieldDescription>
                   </FieldContent>
                 </Field>
                 <Field>
@@ -1102,14 +1032,18 @@ function SettingsRoute() {
                       onChange={(apiKey) => updateDraft({ apiKey })}
                       placeholder={t('placeholders.userApiKey')}
                     />
+                    <FieldDescription>
+                      {t('connection.userHint')}
+                    </FieldDescription>
                   </FieldContent>
                 </Field>
               </div>
+
               <div className="grid gap-2 md:grid-cols-2">
                 <CapabilityStatus
                   isLoading={probeQuery.isFetching}
                   label={t('health.admin')}
-                  result={probeQuery.data?.admin}
+                  result={adminProbe}
                 />
                 <CapabilityStatus
                   isLoading={probeQuery.isFetching}
@@ -1117,19 +1051,22 @@ function SettingsRoute() {
                   result={probeQuery.data?.data}
                 />
               </div>
-              {accountsQuery.isError && managedUsersQuery.isError ? (
+
+              {!hasAdminAccess && !rootApiKey ? (
+                <p className="text-sm text-muted-foreground">
+                  {t('connection.noKey')}
+                </p>
+              ) : !hasAdminAccess &&
+                rootApiKey &&
+                adminProbe?.state === 'error' ? (
                 <p className="text-sm text-destructive">
                   {t('connection.adminError', {
-                    message: getErrorMessage(accountsQuery.error),
+                    message: adminProbe.detail || '',
                   })}
-                </p>
-              ) : accountsQuery.isError ? (
-                <p className="text-sm text-muted-foreground">
-                  {t('connection.accountListLimited')}
                 </p>
               ) : null}
             </>
-          ) : null}
+          )}
         </CardContent>
       </Card>
 
@@ -1157,7 +1094,7 @@ function SettingsRoute() {
         <KeyResultCard
           result={keyResult}
           onClear={() => setKeyResult(null)}
-          onUseForData={() => useKeyForData(keyResult)}
+          onUseAsUserKey={() => useUserKey(keyResult)}
         />
       ) : null}
 
@@ -1300,14 +1237,14 @@ function SettingsRoute() {
                                 variant="secondary"
                                 size="sm"
                                 onClick={() =>
-                                  useKeyForData({
+                                  useUserKey({
                                     accountId: user.accountId,
                                     apiKey: user.apiKey || '',
                                     userId: user.userId,
                                   })
                                 }
                               >
-                                <DatabaseIcon />
+                                <KeyRoundIcon />
                                 {t('actions.useForData')}
                               </Button>
                             ) : null}

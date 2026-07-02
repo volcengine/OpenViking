@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from openviking import AsyncOpenViking
-from openviking_cli.exceptions import InvalidArgumentError
 
 
 class TestClientInitialization:
@@ -75,13 +74,13 @@ class TestClientInitialization:
                 "legacy-agent",
             ]
 
-            with pytest.raises(InvalidArgumentError, match="peer_id cannot be used"):
-                await client.add_message(
-                    "legacy-session",
-                    "assistant",
-                    content="again",
-                    peer_id="legacy-agent",
-                )
+            await client.add_message(
+                "legacy-session",
+                "assistant",
+                content="again",
+                peer_id="explicit-peer",
+            )
+            assert session.messages[-1].peer_id == "explicit-peer"
         finally:
             await AsyncOpenViking.reset()
 

@@ -7,9 +7,9 @@ from vikingbot.agent import loop as loop_module
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
-from vikingbot.config.schema import Config, SessionKey
+from vikingbot.config.schema import AgentsConfig, Config, SessionKey
 from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY
-from vikingbot.providers.base import LLMProvider
+from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
 class _FakeProvider(LLMProvider):
@@ -23,6 +23,19 @@ class _FakeProvider(LLMProvider):
 class _FakeSubagentManager:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
+
+
+class _RecordingProvider(LLMProvider):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    async def chat(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return LLMResponse(content="ok")
+
+    def get_default_model(self) -> str:
+        return "fake-model"
 
 
 class _FakeLangfuseClient:
@@ -71,6 +84,154 @@ class _FakeOVClient:
     async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
         self.commit_calls.append((session_id, keep_recent_count, user_id))
         return {"session_id": session_id, "status": "accepted"}
+
+
+def test_agents_config_temperature_schema_caps_at_two():
+    schema = AgentsConfig.model_json_schema()
+    temperature = schema["properties"]["temperature"]
+
+    assert temperature["default"] == 0.7
+    assert temperature["minimum"] == 0.0
+    assert temperature["maximum"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_passes_configured_temperature_to_provider(temp_dir: Path, monkeypatch):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    bus = MessageBus()
+    provider = _RecordingProvider()
+    config = Config(storage_workspace=str(temp_dir), agents={"temperature": 0.2})
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        model=config.agents.model,
+        temperature=config.agents.temperature,
+        config=config,
+    )
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
+    response, _, _ = await loop._chat_with_stream_events(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[],
+        session_key=session_key,
+        publish_events=False,
+    )
+
+    assert response.content == "ok"
+    assert provider.calls[0][1]["temperature"] == 0.2
+    assert loop.subagents.kwargs["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    class _OVConfig:
+        exp_write_tools = []
+
+    class _LoadedConfig:
+        ov_server = _OVConfig()
+
+    monkeypatch.setattr(loop_module, "load_config", lambda: _LoadedConfig())
+
+    class _ToolLimitProvider(LLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def chat(self, messages, tools=None, **kwargs):
+            self.calls.append(
+                {
+                    "messages": [dict(message) for message in messages],
+                    "tools": list(tools or []),
+                    "kwargs": kwargs,
+                }
+            )
+            if len(self.calls) == 1:
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="call-1",
+                            name="lookup_fact",
+                            arguments={"query": "current facts"},
+                            tokens=3,
+                        )
+                    ],
+                    usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+                )
+            return LLMResponse(
+                content="final answer from gathered tool results",
+                usage={"prompt_tokens": 7, "completion_tokens": 5, "total_tokens": 12},
+            )
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+    class _ToolRegistry:
+        def __init__(self):
+            self.execute_calls = []
+
+        def get_definitions(self, **kwargs):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_fact",
+                        "description": "Lookup fact",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+
+        async def execute(self, tool_name, arguments, **kwargs):
+            self.execute_calls.append((tool_name, arguments, kwargs))
+            return "tool result: useful context"
+
+    provider = _ToolLimitProvider()
+    tools = _ToolRegistry()
+    bus = MessageBus()
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        config=config,
+        max_iterations=1,
+    )
+    loop.tools = tools
+
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-limit")
+    final_content, _reasoning, tools_used, token_usage, iteration = await loop._run_agent_loop(
+        messages=[{"role": "user", "content": "please answer with lookup"}],
+        session_key=session_key,
+        publish_events=False,
+    )
+
+    assert final_content == "final answer from gathered tool results"
+    assert iteration == 1
+    assert len(provider.calls) == 2
+    assert provider.calls[0]["tools"]
+    assert provider.calls[1]["tools"] == []
+    assert provider.calls[1]["messages"][-1]["content"].startswith(
+        "Tool-use iteration limit reached."
+    )
+    assert any(
+        message.get("content") == "tool result: useful context"
+        for message in provider.calls[1]["messages"]
+    )
+    assert len(tools.execute_calls) == 1
+    assert tools.execute_calls[0][:2] == ("lookup_fact", {"query": "current facts"})
+    assert [tool["tool_name"] for tool in tools_used] == ["lookup_fact"]
+    assert token_usage == {"prompt_tokens": 17, "completion_tokens": 7, "total_tokens": 24}
 
 
 @pytest.mark.asyncio
@@ -257,8 +418,10 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
         }
     )
 
-    async def fake_get_ov_client(self, session_key, openviking_connection=None):
-        del session_key, openviking_connection
+    async def fake_get_ov_client(
+        self, session_key, openviking_connection=None, actor_peer_id=None
+    ):
+        del session_key, openviking_connection, actor_peer_id
         return fake_ov_client
 
     monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
@@ -310,8 +473,10 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
         context_payload={"messages": [{"role": "user", "content": "OV user turn"}]}
     )
 
-    async def fake_get_ov_client(self, session_key, openviking_connection=None):
-        del self, session_key, openviking_connection
+    async def fake_get_ov_client(
+        self, session_key, openviking_connection=None, actor_peer_id=None
+    ):
+        del self, session_key, openviking_connection, actor_peer_id
         return fake_ov_client
 
     monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
@@ -415,13 +580,18 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
             state["last_synced_local_index"] = len(session.messages) - 1
         return kwargs
 
-    async def fake_get_ov_client(self, session_key, openviking_connection=None):
-        del self, session_key, openviking_connection
+    async def fake_get_ov_client(
+        self, session_key, openviking_connection=None, actor_peer_id=None
+    ):
+        del self, session_key, openviking_connection, actor_peer_id
 
         class _Client:
             async def get_session_context(self, session_id, token_budget):
                 events.append(("context", session_id, token_budget))
                 return {"messages": []}
+
+            async def close(self):
+                return None
 
         return _Client()
 
@@ -515,13 +685,18 @@ async def test_agent_loop_commits_openviking_before_model_when_memory_window_rea
         session.metadata["openviking"]["last_commit_performed"] = bool(kwargs["force_commit"])
         return kwargs
 
-    async def fake_get_ov_client(self, session_key, openviking_connection=None):
-        del self, session_key, openviking_connection
+    async def fake_get_ov_client(
+        self, session_key, openviking_connection=None, actor_peer_id=None
+    ):
+        del self, session_key, openviking_connection, actor_peer_id
 
         class _Client:
             async def get_session_context(self, session_id, token_budget):
                 events.append(("context", session_id, token_budget))
                 return {"messages": []}
+
+            async def close(self):
+                return None
 
         return _Client()
 

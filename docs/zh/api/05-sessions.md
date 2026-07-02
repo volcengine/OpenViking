@@ -970,7 +970,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 
 #### 1. API 实现介绍
 
-提交会话。归档消息（Phase 1）立即完成，摘要生成和记忆提取（Phase 2）在后台异步执行。返回 `task_id` 用于查询后台任务状态。
+提交会话。归档消息（Phase 1）立即完成；有消息被归档时，摘要生成和记忆提取（Phase 2）在后台异步执行。产生归档的 commit 返回 `status: "accepted"` 和 `task_id`；没有可归档内容的 no-op commit 返回 `status: "skipped"` 和 `task_id: null`。
 
 **两阶段提交流程**：
 - **Phase 1（同步）**: 快照当前消息，清空 live session，创建归档目录，写入原始消息
@@ -978,6 +978,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 
 **注意事项**：
 - 同一 session 的多次快速连续 commit 会被接受；每次请求都会拿到独立的 `task_id`
+- 空 session，或所有消息都仍在 `keep_recent_count` 保留窗口内时，会同步完成并返回 `archived: false`
 - 后台 Phase 2 会按 archive 顺序串行推进：`archive_N+1` 会等待 `archive_N` 写出 `.done` 后再继续
 - 如果更早的 archive 已失败且没有 `.done`，后续 commit 会直接返回错误，直到该失败被处理
 - 如果提交的消息中包含带 `viking://resources/...` 的长期事实、评价、偏好或事件，记忆抽取会把资源保留为 markdown 链接，并写入 `MEMORY_FIELDS.resource_refs`
@@ -1072,6 +1073,22 @@ ov session commit a1b2c3d4
     "task_id": "uuid-xxx",
     "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
     "archived": true
+  }
+}
+```
+
+**No-op 响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "status": "skipped",
+    "task_id": null,
+    "archive_uri": null,
+    "archived": false,
+    "reason": "no_messages"
   }
 }
 ```
@@ -1205,6 +1222,7 @@ if task != nil {
     "result": {
       "session_id": "a1b2c3d4",
       "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
+      "memory_diff_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001/memory_diff.json",
       "memories_extracted": {
         "profile": 1,
         "preferences": 2,
@@ -1351,7 +1369,7 @@ viking://user/{user_id}/sessions/{session_id}/
     │   ├── .abstract.md      # Phase 2 写入（后台）
     │   ├── .overview.md      # Phase 2 写入（后台）
     │   ├── .meta.json        # 归档元数据
-    │   ├── memory_diff.json  # Phase 2 写入（后台，记忆变更时）
+    │   ├── memory_diff.json  # 长记忆抽取完成时写入
     │   ├── .done             # Phase 2 完成标记
     │   └── .failed.json      # Phase 2 失败标记
     └── archive_002/
@@ -1359,7 +1377,7 @@ viking://user/{user_id}/sessions/{session_id}/
 
 ### memory_diff.json 数据结构
 
-每次提交会在归档目录写入 `memory_diff.json`，记录所有记忆变更，便于审计和回溯：
+长记忆抽取成功运行时，会在归档目录写入 `memory_diff.json`，记录所有记忆变更，便于审计和回溯：
 
 ```json
 {
@@ -1408,7 +1426,7 @@ viking://user/{user_id}/sessions/{session_id}/
 | `summary.total_updates` | int | 修改记忆数 |
 | `summary.total_deletes` | int | 删除记忆数 |
 
-即使没有记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
+如果长记忆抽取已运行但没有产生记忆操作，也会写入空结构的 `memory_diff.json`（所有计数为零）。
 
 ---
 

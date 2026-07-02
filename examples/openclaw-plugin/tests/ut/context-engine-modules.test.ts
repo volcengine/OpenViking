@@ -287,10 +287,11 @@ describe("context-engine lifecycle service seam", () => {
         timestamp: 1775037660000,
       }],
       prePromptMessageCount: 0,
+      tokenBudget: 100000,
       runtimeContext: { senderId: "telegram:123", agentId: "runtime-agent" },
       cfg: {
         autoCapture: true,
-        commitTokenThreshold: 20000,
+        commitTokenThresholdRatio: 0.2,
         commitKeepRecentCount: 7,
         logFindRequests: false,
       },

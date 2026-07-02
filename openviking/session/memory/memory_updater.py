@@ -44,6 +44,7 @@ from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
+_MEMORY_ABSTRACT_MAX_BYTES = 50_000
 _EXTRACTION_CHUNK_MIN_CHARS = 100
 _EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
 _RESOURCE_ADDITION_FIELD_RE = re.compile(
@@ -222,29 +223,38 @@ class ExtractContext:
         msg_range = self.read_message_ranges(ranges_str)
         return msg_range._first_message_time_with_weekday()
 
-    def get_year(self, ranges_str: str) -> str | None:
-        """根据 ranges 字符串获取第一条消息的年份"""
+    def get_year(self, ranges_str: str) -> str:
+        """根据 ranges 字符串获取第一条消息的年份，fallback 到当前年份"""
+        from datetime import datetime
         if not ranges_str:
-            return None
+            return str(datetime.now().year)
         msg_range = self.read_message_ranges(ranges_str)
         first_time = msg_range._first_message_time()
-        return first_time.split("-")[0] if first_time else None
+        if first_time:
+            return first_time.split("-")[0]
+        return str(datetime.now().year)
 
-    def get_month(self, ranges_str: str) -> str | None:
-        """根据 ranges 字符串获取第一条消息的月份"""
+    def get_month(self, ranges_str: str) -> str:
+        """根据 ranges 字符串获取第一条消息的月份，fallback 到当前月份"""
+        from datetime import datetime
         if not ranges_str:
-            return None
+            return f"{datetime.now().month:02d}"
         msg_range = self.read_message_ranges(ranges_str)
         first_time = msg_range._first_message_time()
-        return first_time.split("-")[1] if first_time else None
+        if first_time:
+            return first_time.split("-")[1]
+        return f"{datetime.now().month:02d}"
 
-    def get_day(self, ranges_str: str) -> str | None:
-        """根据 ranges 字符串获取第一条消息的日期"""
+    def get_day(self, ranges_str: str) -> str:
+        """根据 ranges 字符串获取第一条消息的日期，fallback 到当前日期"""
+        from datetime import datetime
         if not ranges_str:
-            return None
+            return f"{datetime.now().day:02d}"
         msg_range = self.read_message_ranges(ranges_str)
         first_time = msg_range._first_message_time()
-        return first_time.split("-")[2] if first_time else None
+        if first_time:
+            return first_time.split("-")[2]
+        return f"{datetime.now().day:02d}"
 
     def get_timestamp_from_ranges(self, ranges_str: str) -> str:
         """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSS），用于文件名去重。
@@ -282,12 +292,16 @@ class ExtractContext:
                     continue
         return datetime.now().strftime("%Y%m%d%H%M%S")
 
-    def get_event_content(self, ranges_str: str, summary: str, ratio_threshold: float = 0.2) -> str:
+    def get_event_content(
+        self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2
+    ) -> str:
         """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
-        if not ranges_str or not summary:
+        if not ranges_str:
             return summary or ""
         msg_range = self.read_message_ranges(ranges_str)
         original = msg_range.pretty_print()
+        if not summary or not summary.strip():
+            return original or ""
         if not original:
             return summary
         if len(summary) / len(original) >= ratio_threshold:
@@ -1070,6 +1084,7 @@ class MemoryUpdater:
                 from openviking.session.memory.utils.link_renderer import LinkRenderer
 
                 abstract = LinkRenderer.strip_all_links(mf.content or "")
+                abstract = self._truncate_memory_abstract(abstract)
                 embedding_text = abstract
 
                 memory_type = uri_memory_type_map.get(uri)
@@ -1148,6 +1163,14 @@ class MemoryUpdater:
             except Exception as e:
                 tracer.error(f"Failed to vectorize memory {uri}: {e}")
         return attempted_count
+
+    @staticmethod
+    def _truncate_memory_abstract(abstract: str) -> str:
+        """Cap memory vector-store abstract fields below backend byte limits."""
+        encoded = (abstract or "").encode("utf-8")
+        if len(encoded) <= _MEMORY_ABSTRACT_MAX_BYTES:
+            return abstract or ""
+        return encoded[:_MEMORY_ABSTRACT_MAX_BYTES].decode("utf-8", errors="ignore")
 
     async def generate_overview(
         self,

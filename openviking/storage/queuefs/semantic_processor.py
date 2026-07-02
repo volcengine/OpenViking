@@ -3,6 +3,7 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+import re
 import threading
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -652,11 +653,10 @@ class SemanticProcessor(DequeueHandlerBase):
                 for file_path, summary in zip(file_paths, file_summaries, strict=False)
                 if file_path in paths_to_vectorize and summary is not None
             ]
-            overview = await self._generate_overview(
+            generated_content = await self._generate_overview(
                 dir_uri, completed_summaries, [], llm_sem=llm_sem
             )
-            abstract = self._extract_abstract_from_overview(overview)
-            overview, abstract = self._enforce_size_limits(overview, abstract)
+            overview, abstract = self._normalize_overview_generation(generated_content)
 
             try:
                 wrote_semantics = await self._write_memory_directory_semantics(
@@ -988,9 +988,15 @@ class SemanticProcessor(DequeueHandlerBase):
                     d = d.rsplit("/", 1)[0]
 
             for rel in candidate_rels:
-                src_mapping = f"{root_prefix}/{rel}/{mapping_name}" if rel else f"{root_prefix}/{mapping_name}"
+                src_mapping = (
+                    f"{root_prefix}/{rel}/{mapping_name}"
+                    if rel
+                    else f"{root_prefix}/{mapping_name}"
+                )
                 target_mapping = (
-                    f"{target_prefix}/{rel}/{mapping_name}" if rel else f"{target_prefix}/{mapping_name}"
+                    f"{target_prefix}/{rel}/{mapping_name}"
+                    if rel
+                    else f"{target_prefix}/{mapping_name}"
                 )
                 try:
                     await viking_fs.stat(target_mapping, ctx=ctx)
@@ -1031,7 +1037,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_name: str,
         llm_sem: asyncio.Semaphore,
         ctx: Optional[RequestContext] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
         vlm = get_openviking_config().vlm
@@ -1039,12 +1045,14 @@ class SemanticProcessor(DequeueHandlerBase):
 
         content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
-            # Try to decode with error handling for text files
-            try:
-                content = content.decode("utf-8")
-            except UnicodeDecodeError:
-                logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
-                return {"name": file_name, "summary": ""}
+            from openviking.utils.embedding_utils import _decode_text_bytes
+
+            content = _decode_text_bytes(content)
+
+        full_content = content or ""
+
+        def result(summary: str) -> Dict[str, Any]:
+            return {"name": file_name, "summary": summary, "content": full_content}
 
         # Limit content length
         max_chars = get_openviking_config().semantic.max_file_content_chars
@@ -1054,7 +1062,7 @@ class SemanticProcessor(DequeueHandlerBase):
         # Generate summary
         if not vlm.is_available():
             logger.warning("VLM not available, using empty summary")
-            return {"name": file_name, "summary": ""}
+            return result("")
 
         from openviking.session.memory.utils.language import resolve_output_language
 
@@ -1076,7 +1084,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     if len(skeleton_text) > max_skeleton_chars:
                         skeleton_text = skeleton_text[:max_skeleton_chars]
                     if code_mode == "ast":
-                        return {"name": file_name, "summary": skeleton_text}
+                        return result(skeleton_text)
                     else:  # ast_llm
                         prompt = render_prompt(
                             "semantic.code_ast_summary",
@@ -1089,7 +1097,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         async with llm_sem:
                             with bind_telemetry_stage("resource_summarize"):
                                 summary = await vlm.get_completion_async(prompt)
-                        return {"name": file_name, "summary": summary.strip()}
+                        return result(summary.strip())
                 if skeleton_text is None:
                     logger.info("AST unsupported language, fallback to LLM: %s", file_path)
                 else:
@@ -1103,7 +1111,7 @@ class SemanticProcessor(DequeueHandlerBase):
             async with llm_sem:
                 with bind_telemetry_stage("resource_summarize"):
                     summary = await vlm.get_completion_async(prompt)
-            return {"name": file_name, "summary": summary.strip()}
+            return result(summary.strip())
 
         elif file_type == FILE_TYPE_DOCUMENTATION:
             prompt_id = "semantic.document_summary"
@@ -1118,21 +1126,22 @@ class SemanticProcessor(DequeueHandlerBase):
         async with llm_sem:
             with bind_telemetry_stage("resource_summarize"):
                 summary = await vlm.get_completion_async(prompt)
-        return {"name": file_name, "summary": summary.strip()}
+        return result(summary.strip())
 
     async def _generate_single_file_summary(
         self,
         file_path: str,
         llm_sem: Optional[asyncio.Semaphore] = None,
         ctx: Optional[RequestContext] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """Generate summary for a single file.
 
         Args:
             file_path: File path
 
         Returns:
-            {"name": file_name, "summary": summary_content}
+            {"name": file_name, "summary": summary_content}; text files also carry
+            decoded "content" so vectorization can avoid re-reading the same file.
         """
         file_name = file_path.split("/")[-1]
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
@@ -1146,8 +1155,49 @@ class SemanticProcessor(DequeueHandlerBase):
         else:
             return await self._generate_text_summary(file_path, file_name, llm_sem, ctx=ctx)
 
+    def _replace_index_references(
+        self, generated_content: str, file_index_map: Dict[int, str]
+    ) -> str:
+        def replace_index(match):
+            idx = int(match.group(1))
+            return file_index_map.get(idx, match.group(0))
+
+        return re.sub(r"\[(\d+)\]", replace_index, generated_content)
+
+    def _truncate_generated_text(self, text: str, max_chars: int) -> str:
+        if max_chars <= 0 or len(text) <= max_chars:
+            return text
+
+        if max_chars <= 3:
+            return text[:max_chars]
+
+        first_sentence_end = None
+        last_sentence_end_within_limit = None
+        for sentence_end_match in re.finditer(
+            r"\.(?!\d)(?=\s|$)|[!?](?=\s|$)|[。？！]", text
+        ):
+            sentence_end = sentence_end_match.end()
+            if first_sentence_end is None:
+                first_sentence_end = sentence_end
+            if sentence_end <= max_chars:
+                last_sentence_end_within_limit = sentence_end
+            elif last_sentence_end_within_limit is not None:
+                break
+
+        if last_sentence_end_within_limit is not None:
+            return text[:last_sentence_end_within_limit].strip()
+        if first_sentence_end is not None:
+            return text[:first_sentence_end].strip()
+
+        candidate = text[: max_chars - 3].rstrip()
+        word_boundary = candidate.rfind(" ")
+        if word_boundary > 0:
+            return candidate[:word_boundary].rstrip() + "..."
+
+        return candidate + "..."
+
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
-        """Extract abstract from overview.md."""
+        """Extract an abstract from the Markdown overview brief description."""
         lines = overview_content.split("\n")
 
         # Skip header lines (starting with #)
@@ -1169,13 +1219,19 @@ class SemanticProcessor(DequeueHandlerBase):
 
         return "\n".join(content_lines).strip()
 
+    def _normalize_overview_generation(self, generated_content: str) -> Tuple[str, str]:
+        """Convert raw Markdown overview output into final L1 overview and L0 abstract."""
+        overview = generated_content
+        abstract = self._extract_abstract_from_overview(generated_content)
+        return self._enforce_size_limits(overview, abstract)
+
     def _enforce_size_limits(self, overview: str, abstract: str) -> Tuple[str, str]:
         """Enforce max size limits on overview and abstract."""
         semantic = get_openviking_config().semantic
         if len(overview) > semantic.overview_max_chars:
-            overview = overview[: semantic.overview_max_chars]
+            overview = self._truncate_generated_text(overview, semantic.overview_max_chars)
         if len(abstract) > semantic.abstract_max_chars:
-            abstract = abstract[: semantic.abstract_max_chars - 3] + "..."
+            abstract = self._truncate_generated_text(abstract, semantic.abstract_max_chars)
         return overview, abstract
 
     def _parse_overview_md(self, overview_content: str) -> Dict[str, str]:
@@ -1238,7 +1294,7 @@ class SemanticProcessor(DequeueHandlerBase):
         children_abstracts: List[Dict[str, str]],
         llm_sem: Optional[asyncio.Semaphore] = None,
     ) -> str:
-        """Generate directory's .overview.md (L1).
+        """Generate raw directory overview model output.
 
         For small directories, generates a single overview from all file summaries.
         For large directories that would exceed the prompt budget, splits file
@@ -1251,7 +1307,7 @@ class SemanticProcessor(DequeueHandlerBase):
             children_abstracts: Subdirectory summary list
 
         Returns:
-            Overview content
+            Markdown overview content generated by the model.
         """
 
         config = get_openviking_config()
@@ -1350,9 +1406,8 @@ class SemanticProcessor(DequeueHandlerBase):
         output_language: str = "en",
     ) -> str:
         """Generate overview from a single prompt (small directories)."""
-        import re
-
-        vlm = get_openviking_config().vlm
+        config = get_openviking_config()
+        vlm = config.vlm
 
         try:
             prompt = render_prompt(
@@ -1368,12 +1423,7 @@ class SemanticProcessor(DequeueHandlerBase):
             with bind_telemetry_stage("resource_summarize"):
                 overview = await vlm.get_completion_async(prompt)
 
-            # Post-process: replace [number] with actual file name
-            def replace_index(match):
-                idx = int(match.group(1))
-                return file_index_map.get(idx, match.group(0))
-
-            overview = re.sub(r"\[(\d+)\]", replace_index, overview)
+            overview = self._replace_index_references(overview, file_index_map)
 
             return overview.strip()
 
@@ -1398,10 +1448,9 @@ class SemanticProcessor(DequeueHandlerBase):
         Splits file summaries into batches, generates a partial overview per
         batch, then merges all partials into a final overview.
         """
-        import re
-
-        vlm = get_openviking_config().vlm
-        semantic = get_openviking_config().semantic
+        config = get_openviking_config()
+        vlm = config.vlm
+        semantic = config.semantic
         batch_size = semantic.overview_batch_size
         dir_name = dir_uri.split("/")[-1]
 
@@ -1450,19 +1499,12 @@ class SemanticProcessor(DequeueHandlerBase):
             )
             batch_prompts.append((batch_idx, prompt, batch_index_map))
 
-        def make_replacer(idx_map):
-            def replacer(match):
-                idx = int(match.group(1))
-                return idx_map.get(idx, match.group(0))
-
-            return replacer
-
         async def _run_batch(batch_idx: int, prompt: str, batch_index_map: Dict[int, str]) -> None:
             try:
                 async with llm_sem:
                     with bind_telemetry_stage("resource_summarize"):
                         partial = await vlm.get_completion_async(prompt)
-                partial = re.sub(r"\[(\d+)\]", make_replacer(batch_index_map), partial)
+                partial = self._replace_index_references(partial, batch_index_map)
                 partial_overviews[batch_idx] = partial.strip()
             except Exception as e:
                 logger.warning(
@@ -1494,6 +1536,7 @@ class SemanticProcessor(DequeueHandlerBase):
             )
             with bind_telemetry_stage("resource_summarize"):
                 overview = await vlm.get_completion_async(prompt)
+            overview = self._replace_index_references(overview, file_index_map)
             return overview.strip()
         except Exception as e:
             logger.error(

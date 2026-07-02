@@ -121,24 +121,16 @@ class ApiKeyAuthPlugin(AuthPlugin):
 
         record = await provider.load_access_token(api_key)
         if record is None:
-            raise UnauthenticatedError(
-                "OAuth access token is invalid, expired, or revoked"
-            )
+            raise UnauthenticatedError("OAuth access token is invalid, expired, or revoked")
 
         import hmac
 
         api_key_manager = getattr(request.app.state, "api_key_manager", None)
         recorded_fp = record.authorizing_key_fp
         current_fp: Optional[str] = None
-        if api_key_manager is not None and hasattr(
-            api_key_manager, "get_user_key_fingerprint"
-        ):
-            current_fp = api_key_manager.get_user_key_fingerprint(
-                record.account_id, record.user_id
-            )
-        if not recorded_fp or not current_fp or not hmac.compare_digest(
-            recorded_fp, current_fp
-        ):
+        if api_key_manager is not None and hasattr(api_key_manager, "get_user_key_fingerprint"):
+            current_fp = api_key_manager.get_user_key_fingerprint(record.account_id, record.user_id)
+        if not recorded_fp or not current_fp or not hmac.compare_digest(recorded_fp, current_fp):
             raise UnauthenticatedError(
                 "OAuth token's authorizing API key has been rotated or revoked; "
                 "please re-authorize the client."
@@ -149,9 +141,9 @@ class ApiKeyAuthPlugin(AuthPlugin):
         # Role downgrade protection
         if api_key_manager is not None and hasattr(api_key_manager, "get_user_role"):
             try:
-                current_role = Role(api_key_manager.get_user_role(
-                    record.account_id, record.user_id
-                ))
+                current_role = Role(
+                    api_key_manager.get_user_role(record.account_id, record.user_id)
+                )
             except Exception:
                 raise UnauthenticatedError(
                     "OAuth token validation failed: unable to verify user's current role; "

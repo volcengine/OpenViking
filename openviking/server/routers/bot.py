@@ -11,7 +11,8 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from openviking.server.auth import get_request_context
+from openviking.server.auth import _auth_mode, get_request_context
+from openviking.server.config import get_server_url_from_server_data
 from openviking.server.identity import RequestContext
 from openviking_cli.utils.logger import get_logger
 
@@ -71,6 +72,27 @@ def _extract_forward_api_key(request: Request) -> str:
     return ""
 
 
+def _build_openviking_connection(
+    *,
+    api_key: str,
+    ctx: RequestContext,
+    effective_auth_mode: str,
+    server_url: str,
+) -> dict:
+    connection = {
+        "account_id": ctx.user.account_id,
+        "user_id": ctx.user.user_id,
+        "agent_id": DEFAULT_BOT_AGENT_ID,
+        "role": getattr(ctx.role, "value", str(ctx.role)),
+        "api_key_type": "root" if effective_auth_mode == "trusted" else "user",
+        "server_url": server_url,
+        "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
+    }
+    if api_key:
+        connection["api_key"] = api_key
+    return connection
+
+
 def _attach_openviking_connection(
     body: dict,
     request: Request,
@@ -84,24 +106,31 @@ def _attach_openviking_connection(
     """
     enriched = dict(body)
     api_key = _extract_forward_api_key(request)
-    config = getattr(request.app.state, "config", None)
     plugin = getattr(request.app.state, "auth_plugin", None)
+    effective_auth_mode = _auth_mode(request)
+    server_url = get_server_url_from_server_data(getattr(request.app.state, "config", None))
     if not api_key:
         if plugin is not None and plugin.can_skip_api_key_for_bot_proxy():
+            if effective_auth_mode == "trusted":
+                enriched["openviking_connection"] = _build_openviking_connection(
+                    api_key="",
+                    ctx=ctx,
+                    effective_auth_mode=effective_auth_mode,
+                    server_url=server_url,
+                )
+                return enriched
             enriched.setdefault("user_id", ctx.user.user_id)
             return enriched
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Bot proxy requires a forwardable OpenViking API key.",
         )
-    enriched["openviking_connection"] = {
-        "api_key": api_key,
-        "account_id": ctx.user.account_id,
-        "user_id": ctx.user.user_id,
-        "agent_id": DEFAULT_BOT_AGENT_ID,
-        "role": getattr(ctx.role, "value", str(ctx.role)),
-        "namespace_policy": dict(DEFAULT_NAMESPACE_POLICY),
-    }
+    enriched["openviking_connection"] = _build_openviking_connection(
+        api_key=api_key,
+        ctx=ctx,
+        effective_auth_mode=effective_auth_mode,
+        server_url=server_url,
+    )
     return enriched
 
 

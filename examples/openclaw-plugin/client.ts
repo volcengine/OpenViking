@@ -48,7 +48,7 @@ export type OpenVikingClientOptions = {
 
 export type CommitSessionResult = {
   session_id: string;
-  /** "accepted" (async), "completed", "failed", or "timeout" (wait mode). */
+  /** "accepted" (async), "skipped" (no archive), "completed", "failed", or "timeout" (wait mode). */
   status: string;
   task_id?: string;
   archive_uri?: string;

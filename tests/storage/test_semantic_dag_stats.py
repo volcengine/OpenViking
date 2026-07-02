@@ -16,7 +16,8 @@ class _FakeVikingFS:
         self._tree = tree
         self.writes = []
 
-    async def ls(self, uri, ctx=None):
+    async def ls(self, uri, node_limit=None, ctx=None):
+        del node_limit
         return self._tree.get(uri, [])
 
     async def write_file(self, path, content, ctx=None):
@@ -37,11 +38,8 @@ class _FakeProcessor:
     async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
         return "overview"
 
-    def _extract_abstract_from_overview(self, overview):
-        return "abstract"
-
-    def _enforce_size_limits(self, overview, abstract):
-        return overview, abstract
+    def _normalize_overview_generation(self, overview):
+        return overview, "abstract"
 
     async def _vectorize_directory(
         self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None

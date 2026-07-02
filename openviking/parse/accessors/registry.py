@@ -6,14 +6,29 @@ Registry for Data Accessors.
 Manages DataAccessor registration and provides automatic source routing.
 """
 
+import inspect
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 from openviking_cli.utils import get_logger
 
 from .base import DataAccessor, LocalResource
 
 logger = get_logger(__name__)
+
+
+def _accepts_var_keyword(func: Callable) -> bool:
+    """Whether ``func`` accepts arbitrary keyword arguments (**kwargs).
+
+    Lets the registry forward accessor-selection hints to modern accessors
+    (e.g. WebFeedAccessor's ``site=True`` override) while staying compatible
+    with accessors whose ``can_handle`` only takes ``source``.
+    """
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return True
+    return any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values())
 
 
 class AccessorRegistry:
@@ -44,6 +59,14 @@ class AccessorRegistry:
             self.register(GitAccessor())
         except Exception as e:
             logger.debug(f"[AccessorRegistry] Failed to register GitAccessor: {e}")
+
+        # WebFeedAccessor - handles sitemap / RSS / Atom URLs (whole-site ingest)
+        try:
+            from .web_feed_accessor import WebFeedAccessor
+
+            self.register(WebFeedAccessor())
+        except Exception as e:
+            logger.debug(f"[AccessorRegistry] Failed to register WebFeedAccessor: {e}")
 
         # HTTPAccessor - handles HTTP/HTTPS URLs
         try:
@@ -109,18 +132,24 @@ class AccessorRegistry:
                 return True
         return False
 
-    def get_accessor(self, source: Union[str, Path]) -> Optional[DataAccessor]:
+    def get_accessor(self, source: Union[str, Path], **kwargs) -> Optional[DataAccessor]:
         """
         Get the highest priority accessor that can handle the source.
 
         Args:
             source: Source string or Path to check
+            **kwargs: Optional accessor-selection hints forwarded to
+                ``can_handle`` (e.g. an explicit ``site=True`` override).
 
         Returns:
             DataAccessor instance or None if no accessor can handle the source
         """
         for accessor in self._accessors:
-            if accessor.can_handle(source):
+            if kwargs and _accepts_var_keyword(accessor.can_handle):
+                handled = accessor.can_handle(source, **kwargs)
+            else:
+                handled = accessor.can_handle(source)
+            if handled:
                 return accessor
         return None
 
@@ -151,8 +180,10 @@ class AccessorRegistry:
         """
         source_str = str(source)
 
-        # Find an accessor - LocalAccessor should always be registered as fallback
-        accessor = self.get_accessor(source)
+        # Find an accessor - LocalAccessor should always be registered as fallback.
+        # Forward kwargs so accessors can honor explicit selection hints (e.g.
+        # args={"site": True}) that aren't inferable from the URL alone.
+        accessor = self.get_accessor(source, **kwargs)
         if accessor:
             logger.debug(
                 f"[AccessorRegistry] Using accessor {accessor.__class__.__name__} for source: {source_str}"

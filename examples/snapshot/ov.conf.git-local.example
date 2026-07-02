@@ -1,0 +1,37 @@
+{
+    "storage": {
+        "workspace": "./data"
+    },
+    "embedding": {
+        "dense": {
+            "model": "doubao-embedding-vision-251215",
+            "api_key": "{your-api-key}",
+            "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+            "dimension": 1024,
+            "provider": "volcengine",
+            "input": "multimodal"
+        }
+    },
+    "vlm": {
+        "model": "doubao-seed-2-0-pro-260215",
+        "api_key": "{your-api-key}",
+        "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+        "temperature": 0.0,
+        "max_retries": 2,
+        "provider": "volcengine",
+        "thinking": false
+    },
+    "server": {
+        "host": "127.0.0.1"
+    },
+    "git": {                                                                                                                                 
+        "enabled": true,                                                                                                                     
+        "backend": "local",                               
+        "default_branch": "main",
+        "author_name": "viking-bot",                                                                                                         
+        "author_email": "bot@viking.local",                                                                                                  
+        "local": {                                                                                                                           
+            "base_dir": ""                                                                                                                  
+        }                                                 
+    }
+}

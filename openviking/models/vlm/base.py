@@ -339,6 +339,27 @@ class VLMFactory:
         return get_all_provider_names()
 
 
+def _annotate_vlm_error(exc: Exception, vlm_instance: "VLMBase") -> None:
+    """Attach model and api_base info to an exception for better error diagnostics.
+
+    The info is attached as attributes on the exception object so that upstream
+    error mapping (e.g. error_mapping.py) can include them in the user-facing
+    message, making it clear which model endpoint triggered the failure.
+    """
+    try:
+        if not hasattr(exc, "_vlm_model"):
+            model = getattr(vlm_instance, "model", None)
+            if model:
+                exc._vlm_model = model
+        if not hasattr(exc, "_vlm_api_base"):
+            api_base = getattr(vlm_instance, "api_base", None)
+            if api_base:
+                exc._vlm_api_base = api_base
+    except Exception:
+        # Never let annotation break the original error path
+        pass
+
+
 class FailoverVLM(VLMBase):
     """VLM wrapper that provides failover to a backup VLM instance.
 
@@ -401,6 +422,7 @@ class FailoverVLM(VLMBase):
                 self._switcher.record_primary_success()
                 return result
             except Exception as e:
+                _annotate_vlm_error(e, self.primary)
                 last_error = e
                 if self._switcher.record_primary_failure(e):
                     # Switched to backup, continue to try backup
@@ -415,6 +437,7 @@ class FailoverVLM(VLMBase):
             method = getattr(self.backup, method_name)
             return method(*args, **kwargs)
         except Exception as e:
+            _annotate_vlm_error(e, self.backup)
             last_error = e
             self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
@@ -443,6 +466,7 @@ class FailoverVLM(VLMBase):
                 self._switcher.record_primary_success()
                 return result
             except Exception as e:
+                _annotate_vlm_error(e, self.primary)
                 last_error = e
                 if self._switcher.record_primary_failure(e):
                     # Switched to backup, continue to try backup
@@ -457,6 +481,7 @@ class FailoverVLM(VLMBase):
             method = getattr(self.backup, method_name)
             return await method(*args, **kwargs)
         except Exception as e:
+            _annotate_vlm_error(e, self.backup)
             last_error = e
             self._logger.error(f"Backup VLM also failed with error: {e}")
             raise last_error
@@ -662,6 +687,7 @@ class MultiCredentialVLM(VLMBase):
                 self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
+                _annotate_vlm_error(exc, vlm_instance)
                 error_class = classify_api_error(exc)
                 aggregated_errors.append((credential_id, error_class, exc, idx))
 
@@ -708,6 +734,7 @@ class MultiCredentialVLM(VLMBase):
                 self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
+                _annotate_vlm_error(exc, vlm_instance)
                 error_class = classify_api_error(exc)
                 aggregated_errors.append((credential_id, error_class, exc, idx))
 

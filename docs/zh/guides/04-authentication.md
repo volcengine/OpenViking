@@ -11,7 +11,9 @@ OpenViking 使用两层 API Key 体系：
 | Root Key | 服务端配置（`root_api_key`） | ROOT | 账户管理 + 少量 system/monitoring 操作 |
 | User Key | Admin API | ADMIN 或 USER | 租户内数据访问；ADMIN 还可管理本 account 下的用户 |
 
-所有 API Key 均为纯随机 token，不携带身份信息。服务端通过先比对 root key、再查 user key 索引的方式确定身份。
+User key 由 Admin API 生成。默认使用随机 secret；Admin API 调用方也可以传入
+`seed`，用 `sha256(user_id + "\0" + seed)` 生成可预测的 key secret。服务端仍然
+会用存储的 key 或 key hash 校验最终 API Key。
 
 ## 认证模式
 
@@ -99,7 +101,7 @@ Role.register("operator", rank=1)  # 权限介于 USER (0) 与 ADMIN (1) 之间
 
 ## 管理账户和用户
 
-普通读写、检索、会话等数据请求在 `api_key` 和 `trusted` 两种模式下都不依赖 Admin API 预注册。Admin API 仍然负责创建 account、注册用户、修改角色以及签发 user key。
+普通读写、检索、会话等数据请求在 `api_key` 和 `trusted` 两种模式下都不依赖 Admin API 预注册。Admin API 仍然负责创建 account、注册用户、修改角色以及签发或重新生成 user key。
 
 使用 root key 通过 Admin API 创建工作区和用户：
 

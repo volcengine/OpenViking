@@ -97,9 +97,8 @@ class RequestContext:
     # Request-level view filter for the current user's peers collection. This does
     # not change tenant/user identity or session ownership.
     actor_peer_id: Optional[str] = None
-    # Set only when the request came through the legacy agent_id compatibility
-    # path. Search/find use it to include unmigrated viking://agent data without
-    # making pure actor_peer_id requests read legacy agent scopes by default.
+    # Set only when the actor peer scope came from the historical
+    # X-OpenViking-Agent header.
     legacy_agent_id: Optional[str] = None
     # Mirrors ResolvedIdentity.from_oauth. Routes that mint OAuth state
     # (OTP issuance, oauth-verify) reject callers with from_oauth=True to

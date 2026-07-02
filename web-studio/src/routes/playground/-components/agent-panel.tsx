@@ -182,7 +182,7 @@ export function AgentPanel({
     )
 
     return playgroundSessionIds
-      .map((sessionId) => sessionById.get(sessionId))
+      .map((playgroundSessionId) => sessionById.get(playgroundSessionId))
       .filter((session): session is NonNullable<typeof session> =>
         Boolean(session),
       )
@@ -394,7 +394,7 @@ export function BotModePrompt({
           </div>
         </div>
         <code className="rounded-lg border bg-background px-3 py-2 font-mono text-xs text-foreground">
-          openviking-server --with-bot
+          {t('agent.botPrompt.command')}
         </code>
         {detail ? (
           <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs leading-5 text-muted-foreground">

@@ -3,8 +3,14 @@
 
 """Focused tests for HTTP server exception-to-error mapping."""
 
-from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSIsADirectoryError
+from openviking.pyagfs.exceptions import (
+    AGFSClientError,
+    AGFSHTTPError,
+    AGFSIsADirectoryError,
+    GitConcurrentCommitError,
+)
 from openviking.server.error_mapping import map_exception
+from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -198,3 +204,11 @@ def test_lock_acquisition_maps_to_structured_conflict():
         "conflict_type": "path_busy",
         "retryable": True,
     }
+
+
+def test_git_concurrent_commit_maps_to_conflict():
+    err = GitConcurrentCommitError("ref moved")
+    mapped = map_exception(err)
+    assert mapped is not None
+    assert mapped.code == "CONFLICT"
+    assert ERROR_CODE_TO_HTTP_STATUS.get(mapped.code) == 409

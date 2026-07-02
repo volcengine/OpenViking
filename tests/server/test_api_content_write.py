@@ -23,7 +23,7 @@ async def test_write_endpoint_registered(client):
 
 
 async def test_set_tags_endpoint_registered(client):
-    resp = await client.get("/api/v1/content/set_tags")
+    resp = await client.get("/api/v1/fs/attrs/set_tags")
     assert resp.status_code == 405
 
 
@@ -262,7 +262,7 @@ async def test_api_create_mode_regression_replace_unchanged(client_with_resource
 async def test_set_tags_requires_tags_field(client_with_resource):
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
-    resp = await client.post("/api/v1/content/set_tags", json={"uri": file_uri})
+    resp = await client.post("/api/v1/fs/attrs/set_tags", json={"uri": file_uri})
     assert resp.status_code == 400
 
 
@@ -287,7 +287,7 @@ async def test_set_tags_passes_tags_to_service(client, service, monkeypatch):
     monkeypatch.setattr(service.fs, "set_tags", fake_set_tags)
 
     resp = await client.post(
-        "/api/v1/content/set_tags",
+        "/api/v1/fs/attrs/set_tags",
         json={
             "uri": "viking://resources/demo/file.md",
             "tags": ["a", "b"],
@@ -310,7 +310,7 @@ async def test_set_tags_rejects_wait_and_timeout_fields(client_with_resource):
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
     resp = await client.post(
-        "/api/v1/content/set_tags",
+        "/api/v1/fs/attrs/set_tags",
         json={
             "uri": file_uri,
             "tags": ["team=search"],
@@ -327,7 +327,7 @@ async def test_set_tags_rejects_invalid_kv_tag(client_with_resource):
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
     resp = await client.post(
-        "/api/v1/content/set_tags",
+        "/api/v1/fs/attrs/set_tags",
         json={"uri": file_uri, "tags": ["project-a"]},
     )
     assert resp.status_code == 400

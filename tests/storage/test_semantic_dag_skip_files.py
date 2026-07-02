@@ -54,11 +54,8 @@ class _FakeProcessor:
     async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
         return "overview"
 
-    def _extract_abstract_from_overview(self, overview):
-        return "abstract"
-
-    def _enforce_size_limits(self, overview, abstract):
-        return overview, abstract
+    def _normalize_overview_generation(self, overview):
+        return overview, "abstract"
 
     async def _vectorize_directory(
         self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None

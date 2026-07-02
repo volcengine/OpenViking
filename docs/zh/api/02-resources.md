@@ -44,6 +44,15 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 |------|------|
 | 飞书/Lark | URL 方式，支持 docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token` |
 
+网站类（sitemap / RSS / Atom 整站导入）
+| 类型 | 资源名 | 说明 |
+|------|--------|------|
+| 站点地图 Sitemap | `https://host/sitemap.xml`、`https://host/sitemap-index.xml` | 解析 sitemap，将站点所有页面抓取为**一棵资源树**（每页一个子节点），支持嵌套 `<sitemapindex>` 递归。整站只生成一个资源，落在 `viking://resources/<host>`。 |
+| RSS / Atom 订阅源 | `https://host/rss.xml`、`https://host/atom.xml`、`https://host/feed` | 解析 RSS 2.0 / Atom，逐条把文章正文抓成树节点（feed 内含全文则直接使用，省一次抓取）。 |
+| 整站自动发现 | `https://host` + `args.site=true` | 对裸域名/普通页面强制整站导入：自动通过 robots.txt、HTML `<link rel="alternate">` autodiscovery、常见路径发现 sitemap/RSS，再整站抓取。 |
+
+抓取**有界、非递归**（不会超出所列页面继续爬），受 `parsers.webfeed` 配置约束（`max_pages`、`max_concurrency`、`politeness_delay`、`same_host_only`、`respect_robots`、`max_depth`），并遵守 robots.txt。对 sitemap/feed URL 设置 `watch_interval` 即可让**整站**周期刷新：每次运行自动纳入新增页面、移除已删除页面。添加单个首页（未带 `args.site`）时，返回信息可能附带一行"整站导入"提示——**只提示，绝不自动爬全站**。
+
 ### 资源处理流程
 
 资源添加经过以下处理阶段：
@@ -90,6 +99,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 #### 监控任务创建
 - 调用 `add_resource` 时设置 `watch_interval > 0` （单位：分钟）创建监控任务
 - 可指定 `to` 参数确定目标 URI；未指定时，系统会使用本次导入返回的 `root_uri` 作为监控目标
+- 把监控对象设为 sitemap/RSS/Atom URL，即可让**整站**保持同步：每次刷新重新读取 feed 并重建资源树，新发布的页面自动入库、已删除的页面自动移除
 - `WatchManager` 负责任务持久化存储
 - 支持多租户权限控制（ROOT/ADMIN/USER 权限分级）
 
@@ -152,12 +162,13 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | exclude | string | 否 | None | 排除的文件模式（glob） |
 | directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
-| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
+| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置，飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 创建任务；≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：
 - `to` 和 `parent` 不能同时使用；如果使用 `parent` 且希望父目录不存在时自动创建，请传 `create_parent=true`。指定 `to` 且目标已存在时，触发增量更新。
+- 如果同时省略 `to` 和 `parent`，服务端会先尝试使用当前用户的 `add_targets.resource_uri` 覆盖配置，再使用 `server.user_config_defaults.add_targets.resource_uri`。两者都没有配置时，保持旧的目标解析行为。
 - 资源目标可以使用公共 `viking://resources/...`、当前用户短写 `viking://user/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。当前用户短写会按请求身份 canonicalize。
 - `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
 - `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
@@ -606,13 +617,16 @@ cancel_watch(to_uri="viking://resources/guide.md")        # 按 URI 幂等删除
 |------|------|------|--------|------|
 | data | Any | 否 | - | 内联技能内容或结构化数据。与 `temp_file_id` 二选一 |
 | temp_file_id | string | 否 | - | 临时上传文件 ID（通过 [temp_upload](#temp_upload) 获取）。与 `data` 二选一 |
+| target_uri | string | 否 | - | 技能添加根目录覆盖值。显式值优先于用户默认值和部署默认值 |
 | wait | bool | 否 | False | 是否等待技能处理完成 |
 | timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
-技能始终安装到当前用户的 skills 根。公共短写 `viking://user/skills` 可用于文件系统和检索操作，
-会解析为 `viking://user/{user_id}/skills`；`add_skill` 不接受 `to`、`parent`、`root_uri`
-或 peer-scoped skill 目标。
+未传 `target_uri` 时，服务端会先尝试使用当前用户的 `add_targets.skill_uri` 覆盖配置，
+再使用 `server.user_config_defaults.add_targets.skill_uri`。两者都没有配置时，保持旧行为，
+安装到当前用户的 skills 根。公共短写 `viking://user/skills` 会解析为
+`viking://user/{user_id}/skills`。v1 API 只允许 `viking://user/skills` 和
+`viking://agent/skills` 作为技能添加根目录。
 
 #### 3. 使用示例
 

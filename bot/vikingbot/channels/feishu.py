@@ -555,6 +555,11 @@ class FeishuChannel(BaseChannel):
             # Determine receive_id_type based on chat_id format
             # open_id starts with "ou_", chat_id starts with "oc_"
             reply_to = msg.metadata.get("reply_to")
+            if not isinstance(reply_to, str) or not reply_to:
+                logger.warning(
+                    f"Skipping Feishu message without reply_to metadata: session={msg.session_key}"
+                )
+                return
             if reply_to.startswith("oc_"):
                 receive_id_type = "chat_id"
             else:
@@ -566,13 +571,10 @@ class FeishuChannel(BaseChannel):
             content_with_mentions = cleaned_content
 
             # --- Build interactive card with markdown rendering ---
-            reply_to_message_id = None
             original_sender_id = None
             chat_type = "group"
+            reply_to_message_id = self._reply_to_message_id_from_metadata(msg.metadata)
             if msg.metadata:
-                reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get(
-                    "message_id"
-                )
                 original_sender_id = msg.metadata.get("sender_id")
                 chat_type = msg.metadata.get("chat_type", "group")
 
@@ -616,14 +618,9 @@ class FeishuChannel(BaseChannel):
 
             if reply_to_message_id:
                 # Reply to existing message (quotes the original)
-                # Only reply in thread if the original message is in a topic (has root_id and is a thread)
-                should_reply_in_thread = False
-                if msg.metadata:
-                    root_id = msg.metadata.get("root_id")
-                    # Only use reply_in_thread=True if this is an actual topic group thread
-                    # In Feishu, topic groups have root_id set for messages in threads
-                    # root_id will be set if the message is already part of a thread
-                    should_reply_in_thread = root_id is not None and root_id != reply_to_message_id
+                should_reply_in_thread = self._should_reply_in_thread(
+                    msg.metadata, reply_to_message_id, msg.session_key.chat_id
+                )
 
                 request = (
                     ReplyMessageRequest.builder()
@@ -669,6 +666,47 @@ class FeishuChannel(BaseChannel):
 
         except Exception as e:
             logger.exception(f"Error sending Feishu message: {e}")
+
+    @staticmethod
+    def _reply_to_message_id_from_metadata(metadata: dict[str, Any] | None) -> str | None:
+        """Resolve the Feishu message id to reply to, including scheduled thread delivery."""
+        if not metadata:
+            return None
+
+        for key in ("reply_to_message_id", "message_id"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value:
+                return value
+
+        root_id = metadata.get("root_id")
+        if metadata.get("chat_mode") == "thread" and isinstance(root_id, str) and root_id:
+            return root_id
+
+        return None
+
+    @staticmethod
+    def _should_reply_in_thread(
+        metadata: dict[str, Any] | None,
+        reply_to_message_id: str,
+        session_chat_id: str | None = None,
+    ) -> bool:
+        """Return whether Feishu reply API should create a topic-thread reply."""
+        if not metadata:
+            return False
+
+        if metadata.get("chat_type") != "group":
+            return False
+
+        # Normal group quoted replies can also carry root_id/parent_id. Only topic groups
+        # should use reply_in_thread, otherwise Feishu turns a normal quoted reply into a thread.
+        is_thread_chat = metadata.get("chat_mode") == "thread" or (
+            bool(session_chat_id) and "#" in session_chat_id
+        )
+        if not is_thread_chat:
+            return False
+
+        root_id = metadata.get("root_id")
+        return bool(root_id and root_id != reply_to_message_id)
 
     def _on_message_sync(self, data: "P2ImMessageReceiveV1") -> None:
         """
@@ -759,7 +797,7 @@ class FeishuChannel(BaseChannel):
 
             except Exception as e:
                 logger.warning(f"Failed to process {msg_type} message: {e}")
-        elif msg_type =="interactive":
+        elif msg_type == "interactive":
             content = message.content
         else:
             content = MSG_TYPE_MAP.get(msg_type, f"[{msg_type}]")
@@ -1102,6 +1140,7 @@ class FeishuChannel(BaseChannel):
             # 9. 构建会话ID（处理话题群）
             reply_to = chat_id if chat_type == "group" else sender_id
             final_chat_id = chat_id
+            chat_mode = None
 
             if chat_type == "group":
                 chat_mode = await self._get_chat_mode(chat_id)
@@ -1126,6 +1165,7 @@ class FeishuChannel(BaseChannel):
                     "reply_to": reply_to,
                     "msg_type": msg_type,
                     "root_id": message.root_id,
+                    "chat_mode": chat_mode,
                     "sender_id": sender_id,
                 },
             )

@@ -33,3 +33,53 @@ async def test_rm_preserves_memory_cleanup(monkeypatch):
     assert response.result["uri"] == "viking://resources/id_card.pdf"
     assert response.result["estimated_deleted_count"] == 1
     assert response.result["memory_cleanup"] == cleanup
+
+
+@pytest.mark.asyncio
+async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
+    raw_memory = (
+        "Original preference\n\n"
+        "<!-- MEMORY_FIELDS\n"
+        '{"memory_type": "preferences", "tags": ["ui"], "fields": {"topic": "theme"}, '
+        '"resource_refs": ["viking://resources/docs/api.md"]}\n'
+        "-->"
+    )
+
+    async def fake_stat(uri, ctx=None):
+        return {"isDir": False}
+
+    async def fake_read(uri, ctx=None):
+        return raw_memory
+
+    class FakeVectorManager:
+        async def filter(self, **kwargs):
+            return [
+                {
+                    "uri": kwargs["filter"]["conds"][0],
+                    "level": 2,
+                    "search_tags": ["team=search"],
+                }
+            ]
+
+    monkeypatch.setattr(
+        filesystem,
+        "get_service",
+        lambda: SimpleNamespace(
+            fs=SimpleNamespace(stat=fake_stat, read=fake_read),
+            vikingdb_manager=FakeVectorManager(),
+        ),
+    )
+
+    response = await filesystem.attrs(
+        uri="viking://user/alice/memories/preferences/theme.md",
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    attrs = response.result["attrs"]
+    assert attrs["memory"] == {
+        "tags": ["ui"],
+        "fields": {"topic": "theme"},
+        "resource_refs": ["viking://resources/docs/api.md"],
+        "memory_type": "preferences",
+    }
+    assert attrs["tags"] == ["team=search"]

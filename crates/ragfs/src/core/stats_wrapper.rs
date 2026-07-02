@@ -127,6 +127,13 @@ impl FileSystem for StatsWrappedFS {
         result
     }
 
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let timer = OperationTimer::start(FsOperation::Rename, Arc::clone(&self.stats));
+        let result = self.inner.replace(src_path, dst_path).await;
+        timer.finish().await;
+        result
+    }
+
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Chmod, Arc::clone(&self.stats));
         let result = self.inner.chmod(path, mode).await;

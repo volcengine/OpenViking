@@ -8,7 +8,9 @@ publish = false
 
 [lib]
 name = "ragfs_python"
-crate-type = ["cdylib"]
+# rlib is needed so `cargo test` can build a test binary that links against
+# this crate's symbols. cdylib is what maturin packages as the Python .so.
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["extension-module", "s3", "cache-redis"]
@@ -22,6 +24,10 @@ ragfs-cache-redis = { path = "../ragfs-cache-redis", optional = true }
 pyo3 = { version = "0.27", features = ["abi3", "abi3-py310"] }
 tokio = { version = "1", features = ["full"] }
 serde_json = "1.0"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+gix-hash = "0.14"
+bytes = "1.5"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("yuanrong-native", "mooncake-native"))'] }

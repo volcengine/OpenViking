@@ -298,7 +298,11 @@ class ImageGenerationTool(Tool):
             if send_to_user and self._send_callback:
                 try:
                     msg_content = "\n".join([f"send://{f}" for f in saved_filenames])
-                    msg = OutboundMessage(session_key=tool_context.session_key, content=msg_content)
+                    msg = OutboundMessage(
+                        session_key=tool_context.session_key,
+                        content=msg_content,
+                        metadata=dict(getattr(tool_context, "channel_metadata", None) or {}),
+                    )
                     await self._send_callback(msg)
                     sent_to_user = True
                 except Exception as e:
