@@ -372,6 +372,15 @@ This strategy finds semantically matching fragments while understanding the comp
 3. **Use local storage**: Use `local` backend during development to reduce network latency
 4. **Async operations**: Fully utilize `AsyncOpenViking` / `AsyncHTTPClient`'s async capabilities
 
+### I can't upgrade my Docker container — what do I do?
+
+Two specific failures cause most upgrade reports:
+
+- `ModuleNotFoundError: No module named 'openviking.console.bootstrap'` — Web Studio is bundled into `openviking-server` starting in v0.3.19, so a `command:` line that still launches the standalone bootstrap module will exit immediately. Drop that line.
+- `EmbeddingRebuildRequiredError` — the embedding model, provider, or dimension in `ov.conf` no longer matches the existing `vectordb/context` collection. You can either roll the embedding config back, or back up and rebuild only `vectordb/context/` and re-run `ov reindex` per namespace.
+
+The full step-by-step recovery, including a `docker-compose.yml` before/after example and the exact `ov reindex` invocations, is in [Upgrades and Migrations](../guides/14-upgrades-and-migrations.md).
+
 ## Deployment
 
 ### What's the difference between embedded mode and service mode?
@@ -400,3 +409,4 @@ Yes, OpenViking main project is open source under the AGPL-3.0 license, and exam
 - [Architecture Overview](../concepts/01-architecture.md) - Deep dive into system design
 - [Retrieval Mechanism](../concepts/07-retrieval.md) - Detailed retrieval process
 - [Configuration Guide](../guides/01-configuration.md) - Complete configuration reference
+- [Upgrades and Migrations](../guides/14-upgrades-and-migrations.md) - Recover from upgrade-time startup failures

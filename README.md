@@ -786,6 +786,8 @@ This allows the Agent to get "smarter with use" through interactions with the wo
 
 For more details, please visit our [Full Documentation](./docs/en/).
 
+If a Docker upgrade leaves your container failing to start (for example with `ModuleNotFoundError: No module named 'openviking.console.bootstrap'` or `EmbeddingRebuildRequiredError`), see the [Upgrades and Migrations guide](./docs/en/guides/14-upgrades-and-migrations.md).
+
 ### Community & Team
 
 For more details, please see: **[About Us](./docs/en/about/01-about-us.md)**
