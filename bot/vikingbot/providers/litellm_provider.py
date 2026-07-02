@@ -23,6 +23,13 @@ from vikingbot.utils.helpers import cal_str_tokens
 from vikingbot.utils.tracing import get_current_response_id
 
 
+_OPENAI_REASONING_MODEL_PREFIXES = ("gpt-5", "openai/gpt-5", "o1", "o3", "o4")
+
+
+def _is_openai_reasoning_model(model: str) -> bool:
+    return model.lower().startswith(_OPENAI_REASONING_MODEL_PREFIXES)
+
+
 class LiteLLMProvider(LLMProvider):
     """
     LLM provider using LiteLLM for multi-provider support.
@@ -40,12 +47,14 @@ class LiteLLMProvider(LLMProvider):
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
         timeout: float | None = None,
+        thinking: bool = True,
         langfuse_client: LangfuseClient | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         self.timeout = timeout
+        self.thinking = thinking
         self.langfuse = langfuse_client or LangfuseClient.get_instance()
 
         # Detect gateway / local deployment.
@@ -114,6 +123,34 @@ class LiteLLMProvider(LLMProvider):
                 if pattern in model_lower:
                     kwargs.update(overrides)
                     return
+
+    def _apply_thinking_overrides(self, model: str, kwargs: dict[str, Any]) -> None:
+        """Attach explicit thinking params only for providers that support them."""
+        if not self.thinking:
+            return
+
+        spec = self._gateway or find_by_model(model)
+        thinking_param = spec.thinking_param if spec else ""
+        model_lower = model.lower()
+
+        if thinking_param == "volcengine_thinking" or model_lower.startswith("volcengine/"):
+            kwargs["thinking"] = {"type": "enabled"}
+            return
+
+        if thinking_param == "dashscope_enable_thinking" or model_lower.startswith(
+            "dashscope/"
+        ):
+            extra_body = dict(kwargs.get("extra_body") or {})
+            extra_body["enable_thinking"] = True
+            kwargs["extra_body"] = extra_body
+            return
+
+        if (
+            (thinking_param == "openai_reasoning_effort" or not spec)
+            and _is_openai_reasoning_model(model)
+            and "reasoning_effort" not in kwargs
+        ):
+            kwargs["reasoning_effort"] = "low"
 
     def _handle_system_message(
         self, model: str, messages: list[dict[str, Any]]
@@ -210,6 +247,7 @@ class LiteLLMProvider(LLMProvider):
 
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
+        self._apply_thinking_overrides(model, kwargs)
 
         # Pass api_key directly — more reliable than env vars alone
         if self.api_key:
@@ -373,6 +411,7 @@ class LiteLLMProvider(LLMProvider):
             "stream": True,
         }
         self._apply_model_overrides(model, kwargs)
+        self._apply_thinking_overrides(model, kwargs)
 
         if self.api_key:
             kwargs["api_key"] = self.api_key
@@ -419,8 +458,14 @@ class LiteLLMProvider(LLMProvider):
                     content_parts.append(content_delta)
                     yield LLMStreamEvent(type="content_delta", content=content_delta)
 
-                for delta_tool_call in getattr(delta, "tool_calls", None) or []:
-                    merge_stream_tool_call_delta(tool_calls, delta_tool_call)
+                for fallback_index, delta_tool_call in enumerate(
+                    getattr(delta, "tool_calls", None) or []
+                ):
+                    merge_stream_tool_call_delta(
+                        tool_calls,
+                        delta_tool_call,
+                        fallback_index=fallback_index,
+                    )
 
             response_obj = build_stream_response(
                 content="".join(content_parts),
