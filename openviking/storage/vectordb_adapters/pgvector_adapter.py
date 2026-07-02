@@ -36,8 +36,24 @@ from openviking.storage.vectordb_adapters.opengauss_adapter import (
     _safe_identifier,
     _vector_literal,
 )
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 _DEFAULT_SCHEMA = "public"
+
+
+def _import_psycopg2():
+    try:
+        import psycopg2  # noqa: PLC0415
+
+        return psycopg2
+    except ImportError as exc:  # pragma: no cover - exercised only without optional driver
+        raise ImportError(
+            "The pgvector backend requires a psycopg2-compatible driver. "
+            'Install it with `pip install "openviking[pgvector]"`.'
+        ) from exc
+
 
 # pgvector keeps its collection/index metadata in its own sidecar tables so a
 # pgvector deployment never collides with an openGauss one in the same schema.
@@ -322,6 +338,38 @@ class PgVectorCollectionAdapter(CollectionAdapter):
     @property
     def physical_table_name(self) -> str:
         return _safe_identifier(self._project_name, self._collection_name, prefix="ov")
+
+    def _connect(self):
+        """Open (or reuse) a psycopg2 connection.
+
+        Priority chain: a DSN ``url`` wins over discrete host/port/user/password
+        (mem0's shape). ``sslmode`` is injected as a keyword either way so it
+        applies to both URI and discrete conninfo forms. The ``_import_psycopg2``
+        seam is module-level so tests can mock the driver without a live server.
+        """
+        if self._conn is not None and not getattr(self._conn, "closed", 0):
+            return self._conn
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                logger.debug("Failed to close stale pgvector connection", exc_info=True)
+        psycopg2 = _import_psycopg2()
+        if self._url:
+            self._conn = psycopg2.connect(
+                self._url, sslmode=self._sslmode, connect_timeout=self._connect_timeout
+            )
+        else:
+            self._conn = psycopg2.connect(
+                host=self._host,
+                port=self._port,
+                user=self._user,
+                password=self._password,
+                dbname=self._db_name,
+                sslmode=self._sslmode,
+                connect_timeout=self._connect_timeout,
+            )
+        return self._conn
 
     def _load_existing_collection_if_needed(self) -> None:
         raise NotImplementedError

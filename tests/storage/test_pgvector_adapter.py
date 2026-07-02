@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import types
+
 import pytest
 from pydantic import ValidationError
 
 from openviking.storage.vectordb.collection.collection import ICollection
+from openviking.storage.vectordb_adapters import pgvector_adapter as pgvector_module
 from openviking.storage.vectordb_adapters.factory import create_collection_adapter
 from openviking.storage.vectordb_adapters.opengauss_adapter import (
     _safe_identifier,
@@ -330,6 +333,43 @@ def test_iterative_scan_set_when_filtered(supported, expect_guc):
     assert captured["params"] == ["[0.1,0.2]", "%\n/a\n%", "[0.1,0.2]", 3, 0]
     # Full LIMIT returned under a selective filter.
     assert len(result.data) == 3
+
+
+@pytest.mark.parametrize(
+    ("pgvector_cfg", "sslmode", "expect_url"),
+    [
+        ({"host": "10.0.0.5", "sslmode": "require"}, "require", False),
+        ({"url": "postgresql://u:p@h:5432/db", "sslmode": "prefer"}, "prefer", True),
+    ],
+    ids=["discrete-require", "url-prefer"],
+)
+def test_sslmode_passed_to_connect(monkeypatch, pgvector_cfg, sslmode, expect_url):
+    captured = {}
+
+    class FakeConn:
+        closed = 0
+
+    def fake_connect(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeConn()
+
+    monkeypatch.setattr(
+        pgvector_module,
+        "_import_psycopg2",
+        lambda: types.SimpleNamespace(connect=fake_connect),
+        raising=False,
+    )
+
+    config = VectorDBBackendConfig.model_validate({"backend": "pgvector", "pgvector": pgvector_cfg})
+    adapter = create_collection_adapter(config)
+    adapter._connect()
+
+    assert captured["kwargs"]["sslmode"] == sslmode
+    if expect_url:
+        assert captured["args"][0] == "postgresql://u:p@h:5432/db"
+    else:
+        assert captured["kwargs"]["host"] == "10.0.0.5"
 
 
 def test_factory_creates_pgvector_adapter_without_connecting():
