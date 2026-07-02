@@ -44,7 +44,7 @@ def _maybe_offer_init() -> None:
     print("No OpenViking configuration found.")
     try:
         answer = input("Run interactive setup now? [Y/n]: ").strip().lower()
-    except EOFError:
+    except (EOFError, OSError):
         return
     if answer not in ("", "y", "yes"):
         return

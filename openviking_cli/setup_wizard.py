@@ -1268,9 +1268,16 @@ def _prompt_cloud_vlm(
         vlm_provider = "glm"
     else:
         print(f"\n  {_bold('Custom OpenAI-compatible VLM configuration')}")
-        vlm_api_base = _prompt_required_input("API Base URL")
-        vlm_api_key = _prompt_api_key("API Key")
-        vlm_model = _prompt_required_input("Model")
+        same_openai = current.get("provider") == "openai"
+        vlm_api_base = _prompt_required_input(
+            "API Base URL",
+            default=str(current["api_base"]) if same_openai and current.get("api_base") else None,
+        )
+        vlm_api_key = _prompt_vlm_api_key("openai", reuse_key, reuse_prompt)
+        vlm_model = _prompt_required_input(
+            "Model",
+            default=str(current["model"]) if same_openai and current.get("model") else None,
+        )
         vlm_provider = "openai"
 
     vlm_config: dict[str, Any] = {
@@ -1365,7 +1372,11 @@ def _prompt_cloud_embedding(
         "provider": provider.provider,
         "model": embedding_model,
         "api_key": embedding_api_key,
-        "api_base": provider.default_api_base,
+        "api_base": (
+            str(current["api_base"])
+            if same_provider and current.get("api_base")
+            else provider.default_api_base
+        ),
         "dimension": embedding_dim,
     }
 
