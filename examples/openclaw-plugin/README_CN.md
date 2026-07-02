@@ -387,11 +387,15 @@ OpenViking 服务侧日志：
 cat ~/.openviking/data/log/openviking.log
 ```
 
-### Web Console
+### Web Studio
 
-```bash
-python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
+Web Studio 由 `openviking-server` 内置提供，直接用浏览器打开即可，无需单独启动进程：
+
+```text
+http://127.0.0.1:1933/studio
 ```
+
+> 独立的 `python -m openviking.console.bootstrap` 控制台（端口 8020）已在 v0.3.18 移除，请改用 `/studio`。
 
 ### `ov tui`
 

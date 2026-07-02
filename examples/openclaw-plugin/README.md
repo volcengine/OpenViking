@@ -335,11 +335,15 @@ OpenViking service logs:
 cat ~/.openviking/data/log/openviking.log
 ```
 
-### Web Console
+### Web Studio
 
-```bash
-python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
+Web Studio is served by `openviking-server` itself — just open it in a browser, no separate process is needed:
+
+```text
+http://127.0.0.1:1933/studio
 ```
+
+> The standalone `python -m openviking.console.bootstrap` console (port 8020) was removed in v0.3.18; use Web Studio at `/studio` instead.
 
 ### `ov tui`
 

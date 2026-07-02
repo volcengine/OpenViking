@@ -79,6 +79,32 @@ OpenViking 通过 Rust 绑定（`ragfs_python` / `RAGFSBindingClient`）在 Pyth
 pip install openviking --upgrade --force-reinstall
 ```
 
+### 升级后服务无法启动，报 `EmbeddingRebuildRequiredError`
+
+当 embedding 配置（provider、model 或 dimension）与现有向量集合中记录的 embedding 元数据不一致时，`openviking-server` 会拒绝启动——通常发生在升级后默认 embedding 模型发生变化的场景。这是有意的安全保护：避免把来自不同 embedding 空间的向量混在一起，从而悄悄污染检索结果。
+
+你的业务数据（resources、memories、skills）与向量索引分开存储，**不会**被删除——无需清空 workspace。
+
+**情况 1 —— 仅 provider/model 变化、embedding dimension 不变**（常见的升级场景）：
+
+1. 在 `ov.conf` 的 `embedding` 段加上 `allow_metadata_override`：
+   ```json
+   {
+     "embedding": {
+       "allow_metadata_override": true
+     }
+   }
+   ```
+2. 重启 `openviking-server`，服务会正常启动并保留现有向量。
+3. 服务起来后，针对新模型刷新 embedding：
+   ```bash
+   ov reindex viking:// --mode vectors_only --sudo --wait true
+   ```
+
+**情况 2 —— embedding dimension 发生了变化：**
+
+现有向量无法复用，且 `allow_metadata_override` **不会**绕过维度变化——必须从头重建向量集合。请先备份 workspace，再重建 `context` 向量集合（不会动你的源内容，重建过程会重新生成 embedding）。如果不确定在你的存储后端下如何安全重建，删除任何数据前请先到 [issue tracker](https://github.com/volcengine/OpenViking/issues) 咨询。
+
 ### 如何配置 OpenViking？
 
 在项目目录创建 `~/.openviking/ov.conf` 配置文件：
