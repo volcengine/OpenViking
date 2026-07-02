@@ -129,6 +129,11 @@ class OpenGaussConfig(BaseModel):
 class PgVectorConfig(BaseModel):
     """Configuration for PostgreSQL + pgvector native vector backend."""
 
+    url: Optional[str] = Field(
+        default=None,
+        description="PostgreSQL DSN (e.g. 'postgresql://user:pass@host:5432/db'). "
+        "Takes priority over discrete host/port/user/password fields when set.",
+    )
     host: Optional[str] = Field(
         default="127.0.0.1",
         description="PostgreSQL host address.",
@@ -142,7 +147,26 @@ class PgVectorConfig(BaseModel):
         alias="schema",
         description="Database schema for OpenViking tables",
     )
+    sslmode: str = Field(
+        default="prefer",
+        description="libpq sslmode ('prefer', 'require', 'disable', ...).",
+    )
     connect_timeout: int = Field(default=10, description="Database connection timeout in seconds")
+    pool_size: int = Field(
+        default=1,
+        description="Connection pool size. 1 uses a single lock-serialized connection; "
+        ">1 uses a ThreadedConnectionPool.",
+    )
+    create_extension: bool = Field(
+        default=True,
+        description="Run 'CREATE EXTENSION IF NOT EXISTS vector' on connect. "
+        "Set false for pre-provisioned managed PostgreSQL (RDS/Cloud SQL).",
+    )
+    index_type: str = Field(default="hnsw", description="Vector index type ('hnsw').")
+    index_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extra index build parameters (e.g. {'m': 16, 'ef_construction': 64}).",
+    )
     dense_vector_name: str = Field(default="vector", description="Dense vector column name")
     sparse_vector_name: str = Field(
         default="sparse_vector", description="Sparse vector JSON column name"

@@ -41,3 +41,14 @@ def test_pgvector_backend_config_validation():
     assert config.pgvector.port == 5432
     assert config.pgvector.db_name == "postgres"
     assert config.pgvector.schema_name == "public"
+
+
+def test_pgvector_config_new_field_defaults():
+    pg = _build_config().pgvector
+
+    assert pg.url is None
+    assert pg.sslmode == "prefer"
+    assert pg.index_type == "hnsw"
+    assert pg.index_params == {}
+    assert pg.pool_size == 1
+    assert pg.create_extension is True
