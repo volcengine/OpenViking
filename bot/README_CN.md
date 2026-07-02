@@ -349,7 +349,7 @@ Provider 配置从 OpenViking 配置（`ov.conf` 的 `vlm` 部分）读取。
 > - **Groq** 通过 Whisper 提供免费的语音转录。如果已配置，Telegram 语音消息将自动转录。
 > - **智谱编码计划**：如果您使用智谱的编码计划，请在您的 zhipu 提供商配置中设置 `"apiBase": "https://open.bigmodel.cn/api/coding/paas/v4"`。
 > - **MiniMax（中国大陆）**：如果您的 API 密钥来自 MiniMax 的中国大陆平台（minimaxi.com），请在您的 minimax 提供商配置中设置 `"apiBase": "https://api.minimaxi.com/v1"`。
-> - **MiniMax 推荐模型**：`MiniMax-M2.7`（性能更强）和 `MiniMax-M2.7-highspeed`（速度更快、更灵活）。可在 agent 配置中通过 `"model": "MiniMax-M2.7"` 使用。
+> - **MiniMax 推荐模型**：`MiniMax-M3`（旗舰，默认）、`MiniMax-M2.7`（性能更强）和 `MiniMax-M2.7-highspeed`（速度更快、更灵活）。可在 agent 配置中通过 `"model": "MiniMax-M3"` 使用。
 
 | 提供商 | 用途 | 获取 API 密钥 |
 |----------|---------|-------------|
