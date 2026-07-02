@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
 from openviking.core.namespace import canonicalize_uri, visible_roots
+from openviking.models.embedder.local_bm25_embedder import LocalBM25Embedder
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
@@ -66,6 +68,7 @@ URI_REWRITE_OUTPUT_FIELDS = [
     "account_id",
 ]
 
+LOCAL_BM25_REBUILD_BATCH_SIZE = 512
 VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
 
 
@@ -384,6 +387,46 @@ class _SingleAccountBackend:
             logger.error("Error deleting by filter: %s", e)
             return 0
 
+    async def rebuild_local_bm25_sparse_vectors(
+        self,
+        sparse_embedder: LocalBM25Embedder,
+        *,
+        text_field: str = "abstract",
+    ) -> int:
+        """Recompute local BM25 sparse vectors for the full visible corpus."""
+        records = await self._async_adapter.call("scan_all")
+        if self._bound_account_id:
+            records = [
+                record for record in records if record.get("account_id") == self._bound_account_id
+            ]
+        if not records:
+            await self._async_adapter.run(sparse_embedder.rebuild, [])
+            return 0
+
+        texts = [str(record.get(text_field) or "") for record in records]
+        await self._async_adapter.run(sparse_embedder.rebuild, texts)
+
+        rebuilt = 0
+        for start in range(0, len(records), LOCAL_BM25_REBUILD_BATCH_SIZE):
+            record_batch = records[start : start + LOCAL_BM25_REBUILD_BATCH_SIZE]
+            text_batch = texts[start : start + LOCAL_BM25_REBUILD_BATCH_SIZE]
+            sparse_results = await self._async_adapter.run(
+                sparse_embedder.embed_documents_with_current_stats, text_batch
+            )
+
+            payloads: List[Dict[str, Any]] = []
+            for record, sparse_result in zip(record_batch, sparse_results, strict=True):
+                payload = dict(record)
+                payload["sparse_vector"] = sparse_result.sparse_vector or {}
+                payloads.append(
+                    await self._async_adapter.run(self._prepare_upsert_payload, payload)
+                )
+
+            if payloads:
+                await self._async_adapter.call("upsert", payloads)
+                rebuilt += len(payloads)
+        return rebuilt
+
     async def exists(self, id: str) -> bool:
         try:
             return len(await self.get([id])) > 0
@@ -666,6 +709,11 @@ class VikingVectorIndexBackend:
         # across all account backends to avoid LOCK contention.
         self._shared_adapter = create_collection_adapter(config)
 
+        # Per-account local BM25 rebuild state. Both insert (TextEmbeddingHandler)
+        # and rm (VikingFS) paths converge here so the amortizing trigger sees the
+        # full picture of corpus growth and shrinkage.
+        self._local_bm25_rebuilds: Dict[str, Any] = {}
+
         logger.info(
             "VikingVectorIndexBackend facade initialized",
         )
@@ -800,6 +848,119 @@ class VikingVectorIndexBackend:
     async def delete(self, ids: List[str], *, ctx: RequestContext) -> int:
         backend = self._get_backend_for_context(ctx)
         return await backend.delete(ids)
+
+    async def rebuild_local_bm25_sparse_vectors(
+        self,
+        sparse_embedder: LocalBM25Embedder,
+        *,
+        ctx: RequestContext,
+    ) -> int:
+        backend = self._get_backend_for_context(ctx)
+        return await backend.rebuild_local_bm25_sparse_vectors(sparse_embedder)
+
+    def schedule_local_bm25_rebuild(
+        self,
+        sparse_embedder: LocalBM25Embedder,
+        *,
+        ctx: RequestContext,
+        delta_docs: int = 1,
+    ) -> None:
+        """Amortizing scheduler for local BM25 corpus rebuilds.
+
+        Tracks pending inserts and deletes per account; fires a single async
+        rebuild when growth or shrinkage crosses the configured factor (or
+        warm-up / time-staleness bounds). Both the insert path
+        (TextEmbeddingHandler after upsert) and the rm path (VikingFS after
+        delete) call this with a signed delta_docs so the trigger sees the
+        full corpus change picture.
+        """
+        if delta_docs == 0:
+            return
+
+        from openviking.storage.collection_schemas import (
+            _LocalBM25RebuildState,
+            should_rebuild_local_bm25,
+        )
+
+        state = self._local_bm25_rebuilds.get(ctx.account_id)
+        if state is None:
+            state = _LocalBM25RebuildState()
+            self._local_bm25_rebuilds[ctx.account_id] = state
+
+        if delta_docs > 0:
+            state.pending_inserts += delta_docs
+        else:
+            state.pending_deletes += -delta_docs
+
+        if not should_rebuild_local_bm25(sparse_embedder, state):
+            return
+
+        state.pending = True
+        if state.task is not None and not state.task.done():
+            return
+
+        self._start_local_bm25_rebuild(ctx, sparse_embedder, state)
+
+    def _start_local_bm25_rebuild(
+        self,
+        ctx: RequestContext,
+        sparse_embedder: LocalBM25Embedder,
+        state: Any,
+    ) -> None:
+        task = asyncio.create_task(
+            self._drain_local_bm25_rebuilds(ctx, sparse_embedder, state)
+        )
+        state.task = task
+        task.add_done_callback(
+            lambda done_task: self._finish_local_bm25_rebuild(
+                done_task, ctx, sparse_embedder, state
+            )
+        )
+
+    def _finish_local_bm25_rebuild(
+        self,
+        task: asyncio.Task,
+        ctx: RequestContext,
+        sparse_embedder: LocalBM25Embedder,
+        state: Any,
+    ) -> None:
+        if state.task is not task:
+            return
+        if state.pending:
+            self._start_local_bm25_rebuild(ctx, sparse_embedder, state)
+            return
+        state.task = None
+
+    async def _drain_local_bm25_rebuilds(
+        self,
+        ctx: RequestContext,
+        sparse_embedder: LocalBM25Embedder,
+        state: Any,
+    ) -> None:
+        while state.pending:
+            async with state.lock:
+                state.pending = False
+                inserts_consumed = state.pending_inserts
+                deletes_consumed = state.pending_deletes
+                try:
+                    rebuilt = await self.rebuild_local_bm25_sparse_vectors(
+                        sparse_embedder, ctx=ctx
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to rebuild local BM25 sparse vectors: %s", exc)
+                    return
+                state.last_rebuild_size = rebuilt
+                state.last_rebuild_at = time.monotonic()
+                # Subtract the pre-rebuild snapshot rather than zeroing: any
+                # below-threshold schedule() calls that landed during the await
+                # are preserved as residue in pending_inserts / pending_deletes,
+                # so the next schedule() evaluates against the accumulated total
+                # instead of dropping those deltas on the floor.
+                state.pending_inserts = max(0, state.pending_inserts - inserts_consumed)
+                state.pending_deletes = max(0, state.pending_deletes - deletes_consumed)
+                logger.debug(
+                    "Rebuilt local BM25 sparse vectors for %d corpus records", rebuilt
+                )
 
     async def exists(self, id: str, *, ctx: RequestContext) -> bool:
         backend = self._get_backend_for_context(ctx)

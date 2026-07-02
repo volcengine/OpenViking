@@ -197,6 +197,9 @@ langgraph = [
 local-embed = [
     "llama-cpp-python>=0.3.0",
 ]
+local-bm25 = [
+    "jieba>=0.42.1",
+]
 
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"

@@ -469,6 +469,18 @@ class CollectionAdapter(ABC):
                 records.append(self._normalize_record_for_read(record))
         return records
 
+    def scan_all(self) -> list[Dict[str, Any]]:
+        """Return every record in the collection.
+
+        Backends without a native scan use the existing query path. Local
+        storage overrides this to avoid approximate/random search during
+        corpus-wide maintenance work.
+        """
+        total = self.count()
+        if total <= 0:
+            return []
+        return self.query(limit=total, output_fields=None)
+
     def query(
         self,
         *,
