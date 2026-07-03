@@ -34,7 +34,7 @@ async def write_semantic_sidecars(
 
         lock_manager = get_lock_manager()
     except Exception:
-        await _write_sidecars(viking_fs, dir_uri, overview, abstract, ctx)
+        await _write_sidecars(viking_fs, dir_uri, overview, abstract, ctx, lock.handle)
         return True
 
     lock_paths = [
@@ -45,7 +45,7 @@ async def write_semantic_sidecars(
         if is_stale():
             logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
             return False
-        await _write_sidecars(viking_fs, dir_uri, overview, abstract, ctx)
+        await _write_sidecars(viking_fs, dir_uri, overview, abstract, ctx, lock.handle)
         return True
 
 
@@ -55,6 +55,18 @@ async def _write_sidecars(
     overview: str,
     abstract: str,
     ctx: Optional[RequestContext],
+    lock_handle: Any = None,
 ) -> None:
-    await viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=ctx)
-    await viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=ctx)
+    # TODO: This must be optimized once pathlock is pushed down into ragfs.
+    await viking_fs.write_file(
+        f"{dir_uri}/.overview.md",
+        overview,
+        ctx=ctx,
+        lock_handle=lock_handle,
+    )
+    await viking_fs.write_file(
+        f"{dir_uri}/.abstract.md",
+        abstract,
+        ctx=ctx,
+        lock_handle=lock_handle,
+    )

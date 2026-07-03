@@ -275,7 +275,13 @@ async def rewrite_image_uris(
 
         if rewrite_count > 0:
             try:
-                await viking_fs.write_file(md_uri, new_content, ctx=ctx)
+                # TODO: This must be optimized once pathlock is pushed down into ragfs.
+                await viking_fs.write_file(
+                    md_uri,
+                    new_content,
+                    ctx=ctx,
+                    lock_handle=lock_handle,
+                )
                 files_processed += 1
                 references_rewritten += rewrite_count
                 logger.debug(f"[image_rewrite] Rewrote {rewrite_count} image ref(s) in {md_uri}")

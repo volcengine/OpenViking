@@ -14,7 +14,7 @@ import httpx
 from loguru import logger
 
 from vikingbot.config import load_config
-from vikingbot.utils import get_data_path
+from vikingbot.utils import detect_image_format, get_data_path
 
 # Optional HTML processing libraries
 try:
@@ -153,23 +153,85 @@ class FeishuChannel(BaseChannel):
         Upload image to Feishu media library and get image_key.
         """
 
+        if not image_data:
+            raise ValueError("Feishu image upload requires a non-empty image")
+
         token = await self._get_tenant_access_token()
         url = "https://open.feishu.cn/open-apis/im/v1/images"
 
         headers = {"Authorization": f"Bearer {token}"}
-
-        # Use io.BytesIO properly
-        files = {"image": ("image.png", io.BytesIO(image_data), "image/png")}
         data = {"image_type": "message"}
 
+        async def post_image(client: httpx.AsyncClient, upload_data: bytes) -> httpx.Response:
+            image_format = detect_image_format(upload_data)
+            files = {
+                "image": (
+                    f"image.{image_format.extension}",
+                    io.BytesIO(upload_data),
+                    image_format.mime_type,
+                )
+            }
+            return await client.post(url, headers=headers, data=data, files=files)
+
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers=headers, data=data, files=files)
-            # logger.debug(f"Upload response status: {resp.status_code}")
-            resp.raise_for_status()
+            upload_data = image_data
+            resp = await post_image(client, upload_data)
+
+            if resp.status_code == 400:
+                normalized = self._normalize_image_for_feishu(image_data)
+                if normalized != image_data:
+                    logger.warning(
+                        "Retrying Feishu image upload after re-encoding image "
+                        f"({len(image_data)} -> {len(normalized)} bytes)"
+                    )
+                    upload_data = normalized
+                    resp = await post_image(client, upload_data)
+
+            if resp.is_error:
+                raise Exception(
+                    "Failed to upload image to Feishu: "
+                    f"status={resp.status_code}, body={resp.text}, "
+                    f"image_size={len(upload_data)}"
+                )
+
             result = resp.json()
             if result.get("code") != 0:
-                raise Exception(f"Failed to upload image: {result}")
+                raise Exception(
+                    f"Failed to upload image to Feishu: response={result}, "
+                    f"image_size={len(upload_data)}"
+                )
             return result["data"]["image_key"]
+
+    @staticmethod
+    def _normalize_image_for_feishu(image_data: bytes) -> bytes:
+        """Re-encode an image to strip metadata that Feishu may reject."""
+        try:
+            from PIL import Image, ImageOps
+        except ImportError:
+            logger.warning("Pillow is not installed; cannot normalize image for Feishu upload")
+            return image_data
+
+        try:
+            with Image.open(io.BytesIO(image_data)) as source:
+                image = ImageOps.exif_transpose(source)
+                if image.mode in ("RGBA", "LA") or (
+                    image.mode == "P" and "transparency" in image.info
+                ):
+                    rgba = image.convert("RGBA")
+                    background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                    image = Image.alpha_composite(background, rgba).convert("RGB")
+                elif image.mode not in ("RGB", "L"):
+                    image = image.convert("RGB")
+                else:
+                    image = image.copy()
+
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=92, optimize=True)
+            normalized = output.getvalue()
+            return normalized if normalized else image_data
+        except Exception as exc:
+            logger.warning(f"Failed to normalize image for Feishu upload: {exc}")
+            return image_data
 
     async def _download_feishu_image(self, image_key: str, message_id: str | None = None) -> bytes:
         """

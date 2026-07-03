@@ -21,6 +21,7 @@ use tracing::warn;
 
 use crate::core::filesystem::FileSystem;
 use crate::core::types::FileInfo;
+use crate::core::{FsContextInner, FS_CTX};
 use crate::git::{
     error::{GitError, ObjectStoreError, RefStoreError},
     ignore::{should_track_path, IgnoreMatcher, OVGITIGNORE_PATH},
@@ -123,6 +124,18 @@ impl GitService {
     /// error silently falls back to the slow path; a stale or corrupt
     /// index can never produce an incorrect commit.
     pub async fn commit(&self, req: CommitRequest) -> Result<CommitResponse, GitError> {
+        validate_account_id(&req.account)?;
+        if let Some(paths) = &req.paths {
+            for path in paths {
+                validate_relative_path(path)?;
+            }
+        }
+
+        let ctx = Arc::new(FsContextInner::new(req.account.clone()));
+        FS_CTX.scope(ctx, self.commit_impl(req)).await
+    }
+
+    async fn commit_impl(&self, req: CommitRequest) -> Result<CommitResponse, GitError> {
         let CommitRequest {
             account,
             branch,
@@ -131,12 +144,6 @@ impl GitService {
             author_name,
             author_email,
         } = req;
-        validate_account_id(&account)?;
-        if let Some(ps) = &paths {
-            for p in ps {
-                validate_relative_path(p)?;
-            }
-        }
         let ref_name = format!("refs/heads/{branch}");
 
         // Load ignore matcher and initialize counters.
@@ -829,6 +836,16 @@ impl GitService {
     /// - `GitError::ConcurrentCommit` — branch ref changed between our read
     ///   and the CAS swap.
     pub async fn restore(&self, req: RestoreRequest) -> Result<RestoreResponse, GitError> {
+        validate_account_id(&req.account)?;
+        if let Some(project_dir) = &req.project_dir {
+            validate_project_dir(project_dir)?;
+        }
+
+        let ctx = Arc::new(FsContextInner::new(req.account.clone()));
+        FS_CTX.scope(ctx, self.restore_impl(req)).await
+    }
+
+    async fn restore_impl(&self, req: RestoreRequest) -> Result<RestoreResponse, GitError> {
         let RestoreRequest {
             account,
             branch,
@@ -839,12 +856,6 @@ impl GitService {
             author_name: _,
             author_email: _,
         } = &req;
-
-        validate_account_id(account)?;
-
-        if let Some(project_dir) = project_dir {
-            validate_project_dir(project_dir)?;
-        }
         let ref_name = format!("refs/heads/{branch}");
 
         // 1. Resolve both commits.
@@ -5972,6 +5983,75 @@ mod fast_path1_tests {
         assert!(
             loaded.entries.contains_key("other/c.md"),
             "files outside the partial scope must be preserved verbatim"
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_directory_path_sets_fs_context_for_mountable_multiwrite() {
+        use crate::core::builder::{build_default_stack, RagfsConfig};
+        use crate::core::{BackendItemConfig, BackendsConfig, ConfigValue, PluginConfig};
+
+        let store_dir = tempfile::tempdir().unwrap();
+        let primary_dir = tempfile::tempdir().unwrap();
+        let backup_dir = tempfile::tempdir().unwrap();
+
+        std::fs::create_dir_all(primary_dir.path().join("acct").join("docs")).unwrap();
+        std::fs::write(
+            primary_dir.path().join("acct").join("docs").join("a.md"),
+            b"AA",
+        )
+        .unwrap();
+
+        let stack = build_default_stack(RagfsConfig::default()).await;
+        let mut params = HashMap::new();
+        params.insert(
+            "local_dir".to_string(),
+            ConfigValue::String(primary_dir.path().to_str().unwrap().to_string()),
+        );
+        stack
+            .mountable
+            .mount(PluginConfig {
+                name: "localfs".to_string(),
+                mount_path: "/local".to_string(),
+                params,
+                backups: Some(BackendsConfig {
+                    sync_type: "async".to_string(),
+                    write_ack_count: None,
+                    write_ack_timeout_ms: None,
+                    write_concurrency: None,
+                    retry_interval_ms: None,
+                    retry_backoff_base_ms: None,
+                    retry_max_retries_per_round: None,
+                    retry_quarantine_after_failures: None,
+                    read_probe_cache_ttl_ms: None,
+                    items: vec![BackendItemConfig {
+                        name: "backup1".to_string(),
+                        backend: "localfs".to_string(),
+                        params: serde_json::json!({
+                            "local_dir": backup_dir.path().to_str().unwrap(),
+                        }),
+                        timeout: None,
+                        encryption: None,
+                        operations: None,
+                        excludes: None,
+                    }],
+                }),
+                ..PluginConfig::default()
+            })
+            .await
+            .unwrap();
+
+        let object_store = Arc::new(LocalObjectStore::new(store_dir.path()));
+        let ref_store = Arc::new(LocalRefStore::new(store_dir.path()));
+        let svc = GitService::new(stack.top.clone(), object_store, ref_store);
+
+        let resp = svc
+            .commit(req("acct", "main", Some(vec!["docs".into()])))
+            .await
+            .expect("commit should provide FS_CTX to mountable multi-write VFS");
+        assert!(
+            matches!(resp, CommitResponse::Created { changed: 1, .. }),
+            "directory commit should succeed through mountable multi-write stack"
         );
     }
 }

@@ -297,6 +297,11 @@ class ResourceProcessor:
                                 ctx=ctx,
                             )
                             result["root_uri"] = root_uri
+                            if root_uri != candidate_uri:
+                                result.setdefault("warnings", []).append(
+                                    f"'{candidate_uri}' already exists. Creating '{root_uri}'. "
+                                    f"Tip: Use --to <path> to specify exact target."
+                                )
                     else:
                         target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
                         if target_preexisting:

@@ -81,6 +81,7 @@ class VLMProviderAdapter(LLMProvider):
             # --- Call VLM backend ---
             result = await self._vlm.get_completion_async(
                 messages=messages,
+                thinking=getattr(self._vlm, "thinking", None),
                 tools=tools,
                 tool_choice="auto" if tools else None,
             )
@@ -192,8 +193,14 @@ class VLMProviderAdapter(LLMProvider):
                     content_parts.append(content_delta)
                     yield LLMStreamEvent(type="content_delta", content=content_delta)
 
-                for delta_tool_call in getattr(delta, "tool_calls", None) or []:
-                    merge_stream_tool_call_delta(tool_calls, delta_tool_call)
+                for fallback_index, delta_tool_call in enumerate(
+                    getattr(delta, "tool_calls", None) or []
+                ):
+                    merge_stream_tool_call_delta(
+                        tool_calls,
+                        delta_tool_call,
+                        fallback_index=fallback_index,
+                    )
 
             if usage:
                 self._record_vlm_usage(usage, time.perf_counter() - start_time)

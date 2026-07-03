@@ -9,7 +9,7 @@
 
 [English](README.md) / 中文 / [日本語](README_JA.md)
 
-<a href="https://www.openviking.ai">官网</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://www.openviking.ai/docs">文档</a>
+<a href="https://www.openviking.ai">官网</a> · <a href="https://openviking.net/studio">在线体验</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://www.openviking.ai/docs">文档</a>
 
 [![][release-shield]][release-link]
 [![][github-stars-shield]][github-stars-link]
@@ -58,6 +58,8 @@
 ---
 
 ## 快速开始
+
+> 💡 **想先看看实际效果？** 试试 [OpenViking Studio](https://openviking.net/studio)——在线托管实例，提供上下文实验场、语义检索和多智能体 Hub，无需安装。
 
 ### 本地部署
 

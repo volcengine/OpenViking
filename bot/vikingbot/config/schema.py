@@ -439,6 +439,13 @@ class AgentsConfig(BaseModel):
         le=2.0,
         description="Sampling temperature for LLM requests.",
     )
+    thinking: bool = Field(
+        default=True,
+        description=(
+            "Enable provider reasoning/thinking mode for bot LLM requests when the "
+            "selected provider protocol supports an explicit thinking parameter."
+        ),
+    )
     timeout: Optional[float] = Field(
         default=None,
         gt=0.0,

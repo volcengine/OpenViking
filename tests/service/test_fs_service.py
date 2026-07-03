@@ -15,6 +15,7 @@ from openviking_cli.session.user_id import UserIdentifier
 class _FakeVikingFS:
     def __init__(self, *, rm_error=None):
         self.rm_calls = []
+        self.mv_calls = []
         self.rm_error = rm_error
 
     async def rm(self, uri, recursive=False, ctx=None):
@@ -22,6 +23,45 @@ class _FakeVikingFS:
         if self.rm_error:
             raise self.rm_error
         return {"estimated_deleted_count": 3}
+
+    async def mv(self, from_uri, to_uri, ctx=None):
+        self.mv_calls.append({"from_uri": from_uri, "to_uri": to_uri, "ctx": ctx})
+
+
+class _FakeWatchManager:
+    def __init__(self):
+        self.plan_calls = []
+        self.move_calls = []
+        self.sync_calls = []
+        self.deactivate_calls = []
+        self.plan_error = None
+
+    async def plan_move_tasks_under_uri_internal(self, from_uri, to_uri):
+        self.plan_calls.append({"from_uri": from_uri, "to_uri": to_uri})
+        if self.plan_error:
+            raise self.plan_error
+        return {}
+
+    async def move_tasks_under_uri_internal(self, from_uri, to_uri):
+        self.move_calls.append({"from_uri": from_uri, "to_uri": to_uri})
+        return [SimpleNamespace(task_id="watch-1")]
+
+    async def sync_tasks_with_resource_move_internal(
+        self,
+        from_uri,
+        to_uri,
+        move_resource,
+        rollback_resource=None,
+    ):
+        self.sync_calls.append({"from_uri": from_uri, "to_uri": to_uri})
+        if self.plan_error:
+            raise self.plan_error
+        await move_resource()
+        return [SimpleNamespace(task_id="watch-1")]
+
+    async def deactivate_tasks_under_uri_internal(self, uri):
+        self.deactivate_calls.append(uri)
+        return [SimpleNamespace(task_id="watch-1")]
 
 
 class _FakeResourceMemoryLinkService:
@@ -32,6 +72,11 @@ class _FakeResourceMemoryLinkService:
     async def before_resource_delete(self, *, ctx, resource_uri, recursive=False):
         self.calls.append({"ctx": ctx, "resource_uri": resource_uri, "recursive": recursive})
         return self.result
+
+
+class _FakeWatchScheduler:
+    def __init__(self, watch_manager):
+        self.watch_manager = watch_manager
 
 
 class _FakeWaitTracker:
@@ -161,6 +206,108 @@ async def test_resource_rm_without_wait_only_queues_refresh(request_context):
     service._enqueue_delete_refresh.assert_awaited_once()
     service._wait_for_refresh.assert_not_awaited()
     assert result["semantic_status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_resource_rm_deactivates_watch_tasks(request_context):
+    viking_fs = _FakeVikingFS()
+    watch_manager = _FakeWatchManager()
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+    )
+    service._enqueue_delete_refresh = AsyncMock()
+
+    await service.rm("viking://resources/codeask/wiki", ctx=request_context, recursive=True)
+
+    assert watch_manager.deactivate_calls == ["viking://resources/codeask/wiki"]
+
+
+@pytest.mark.asyncio
+async def test_resource_rm_does_not_deactivate_watch_task_control_uri(request_context):
+    viking_fs = _FakeVikingFS()
+    watch_manager = _FakeWatchManager()
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+    )
+
+    await service.rm("viking://resources/.watch_tasks.json", ctx=request_context)
+
+    assert watch_manager.deactivate_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_plans_then_moves_then_rewrites_watch_tasks(request_context):
+    viking_fs = _FakeVikingFS()
+    watch_manager = _FakeWatchManager()
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+    )
+
+    await service.mv(
+        "viking://resources/codeask/wiki",
+        "viking://resources/codeask/wiki-renamed",
+        ctx=request_context,
+    )
+
+    assert watch_manager.sync_calls == [
+        {
+            "from_uri": "viking://resources/codeask/wiki",
+            "to_uri": "viking://resources/codeask/wiki-renamed",
+        }
+    ]
+    assert viking_fs.mv_calls == [
+        {
+            "from_uri": "viking://resources/codeask/wiki",
+            "to_uri": "viking://resources/codeask/wiki-renamed",
+            "ctx": request_context,
+        }
+    ]
+    assert watch_manager.plan_calls == []
+    assert watch_manager.move_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_conflict_fails_before_resource_move(request_context):
+    viking_fs = _FakeVikingFS()
+    watch_manager = _FakeWatchManager()
+    watch_manager.plan_error = RuntimeError("watch conflict")
+    service = FSService(
+        viking_fs=viking_fs,
+        watch_scheduler=_FakeWatchScheduler(watch_manager),
+    )
+
+    with pytest.raises(RuntimeError, match="watch conflict"):
+        await service.mv(
+            "viking://resources/codeask/wiki",
+            "viking://resources/codeask/wiki-renamed",
+            ctx=request_context,
+        )
+
+    assert viking_fs.mv_calls == []
+    assert watch_manager.move_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resource_mv_without_watch_scheduler_moves_resource_directly(request_context):
+    viking_fs = _FakeVikingFS()
+    service = FSService(viking_fs=viking_fs)
+
+    await service.mv(
+        "viking://resources/codeask/wiki",
+        "viking://resources/codeask/wiki-renamed",
+        ctx=request_context,
+    )
+
+    assert viking_fs.mv_calls == [
+        {
+            "from_uri": "viking://resources/codeask/wiki",
+            "to_uri": "viking://resources/codeask/wiki-renamed",
+            "ctx": request_context,
+        }
+    ]
 
 
 @pytest.mark.asyncio

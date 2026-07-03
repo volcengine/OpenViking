@@ -380,6 +380,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
             resource_memory_link_service=self._resource_memory_link_service,
+            watch_scheduler=self._watch_scheduler,
         )
         self._relation_service.set_viking_fs(self._viking_fs)
         self._pack_service.set_dependencies(

@@ -21,7 +21,6 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 		"strict":                opts.Strict,
 		"directly_upload_media": boolValue(opts.DirectlyUploadMedia, true),
 		"watch_interval":        opts.WatchInterval,
-		"args":                  map[string]any{},
 	}
 	setString(payload, "to", opts.To)
 	setString(payload, "parent", opts.Parent)
@@ -33,7 +32,12 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 		payload["preserve_structure"] = *opts.PreserveStructure
 	}
 	setAny(payload, "telemetry", opts.Telemetry)
-	if opts.Args != nil {
+	// Only attach args when arguments were actually provided. Instances that
+	// predate #2549 (which added the args field to the resources route under
+	// model_config=ConfigDict(extra="forbid")) reject an empty args object with
+	// "body.args: Extra inputs are not permitted". Mirrors the Python SDK
+	// _compact_request_body (#2834) and the Rust CLI compact_request_body (#2799).
+	if len(opts.Args) > 0 {
 		payload["args"] = opts.Args
 	}
 	if err := c.addLocalUpload(ctx, payload, path, true); err != nil {
