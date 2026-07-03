@@ -221,6 +221,18 @@ curl -X POST http://localhost:1933/api/v1/resources \
     "wait": true
   }'
 
+# Recursively crawl a site: expand along same-host links; depth bounds
+# how many levels, max_pages bounds how many pages are collected
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://docs.openviking.ai/getting-started/01-introduction",
+    "wait": true,
+    "timeout": 60,
+    "args": { "depth": 1, "max_pages": 10 }
+  }'
+
 # Add from local file (requires temp_upload first)
 TEMP_FILE_ID=$(
   curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
@@ -301,6 +313,26 @@ result = client.add_resource(
     reason="External API documentation"
 )
 
+# Recursively crawl a site (same-host BFS; depth levels, max_pages cap)
+result = client.add_resource(
+    "https://docs.openviking.ai/getting-started/01-introduction",
+    wait=True,
+    timeout=180,
+    args={"depth": 1, "max_pages": 10},
+)
+
+# Recursive crawl with path-prefix filters, also downloading file links
+result = client.add_resource(
+    "https://docs.openviking.ai/",
+    args={
+        "depth": 2,
+        "max_pages": 50,
+        "include_paths": ["/docs/"],
+        "exclude_paths": ["/changelog"],
+        "skip_download_links": False,
+    },
+)
+
 # Add to the current user's private resource root
 result = client.add_resource(
     "./documents/guide.md",
@@ -357,6 +389,18 @@ ov add-resource ./documents/guide.md --reason "User guide"
 
 # Add from URL
 ov add-resource https://example.com/guide.md --to viking://resources/guide.md
+
+# Recursively crawl a site: only the entry page is fetched unless depth>0
+ov add-resource "https://docs.openviking.ai/getting-started/01-introduction" \
+  --args="depth:1,max_pages:10"
+
+# Recursive crawl with path-prefix filters (only /docs/, exclude changelog)
+ov add-resource "https://docs.openviking.ai/" \
+  --args='{"depth":2,"max_pages":50,"include_paths":["/docs/"],"exclude_paths":["/changelog"]}'
+
+# Download links on pages are skipped by default; opt in to fetch PDF/TXT/MD etc.
+ov add-resource "https://example.com/docs" \
+  --args="depth:1,max_pages:20,skip_download_links:false"
 
 # Wait for processing to complete
 ov add-resource ./documents/guide.md --wait

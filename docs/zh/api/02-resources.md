@@ -212,6 +212,17 @@ curl -X POST http://localhost:1933/api/v1/resources \
     "wait": true
   }'
 
+# 递归抓取网页：从入口页沿同域链接展开，depth 控制层数，max_pages 限制页数
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://docs.openviking.ai/zh/getting-started/01-introduction",
+    "wait": true,
+    "timeout": 60,
+    "args": { "depth": 1, "max_pages": 10 }
+  }'
+
 # 从本地文件添加（需先使用 temp_upload 上传）
 TEMP_FILE_ID=$(
   curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
@@ -292,6 +303,26 @@ result = client.add_resource(
     reason="External API docs"
 )
 
+## 递归抓取网页（同域 BFS，depth 层数、max_pages 页数上限）
+result = client.add_resource(
+    "https://docs.openviking.ai/zh/getting-started/01-introduction",
+    wait=True,
+    timeout=180,
+    args={"depth": 1, "max_pages": 10},
+)
+
+## 递归抓取并按路径前缀过滤，同时下载页面中的文件链接
+result = client.add_resource(
+    "https://docs.openviking.ai/",
+    args={
+        "depth": 2,
+        "max_pages": 50,
+        "include_paths": ["/zh/"],
+        "exclude_paths": ["/changelog"],
+        "skip_download_links": False,
+    },
+)
+
 ## 添加到当前用户私有资源根
 result = client.add_resource(
     "./documents/guide.md",
@@ -348,6 +379,18 @@ ov add-resource ./documents/guide.md --reason "User guide"
 
 # 从 URL 添加
 ov add-resource https://example.com/guide.md --to viking://resources/guide.md
+
+# 递归抓取网页：默认只抓入口页，depth>0 才沿同域链接展开
+ov add-resource "https://docs.openviking.ai/zh/getting-started/01-introduction" \
+  --args="depth:1,max_pages:10"
+
+# 递归抓取并按路径前缀过滤（只抓 /zh/，排除 changelog）
+ov add-resource "https://docs.openviking.ai/" \
+  --args='{"depth":2,"max_pages":50,"include_paths":["/zh/"],"exclude_paths":["/changelog"]}'
+
+# 默认跳过页面里的下载链接；如需一并下载 PDF/TXT/MD 等，显式关闭跳过
+ov add-resource "https://example.com/docs" \
+  --args="depth:1,max_pages:20,skip_download_links:false"
 
 # 等待处理完成
 ov add-resource ./documents/guide.md --wait
