@@ -43,6 +43,7 @@ dependencies = [
     "openai>=1.0.0",
     "requests>=2.31.0",
     "charset-normalizer>=3.4,<4",
+    "concurrent-log-handler>=0.9.25",
     "python-docx>=1.0.0",
     "olefile>=0.47",
     "xlrd>=2.0.1",
