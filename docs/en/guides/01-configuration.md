@@ -1209,7 +1209,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'cuvs' (local storage + GPU dense search), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'qdrant', or 'opengauss' | "local" |
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'cuvs' (local storage + GPU dense search), 'qdrant', or 'opengauss' | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1218,8 +1218,8 @@ Vector database storage configuration
 | `sparse_weight` | float | Sparse weight for hybrid vector search, only effective when using hybrid index | 0.0 |
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
-| `qdrant` | object | 'qdrant' type Qdrant configuration | - |
 | `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend; see the [cuVS guide](./16-cuvs.md) | - |
+| `qdrant` | object | 'qdrant' type Qdrant configuration | - |
 | `opengauss` | object | 'opengauss' native vector backend configuration | - |
 
 Default local mode
