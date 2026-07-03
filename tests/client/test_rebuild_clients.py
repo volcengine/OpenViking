@@ -3,7 +3,7 @@ import threading
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -20,7 +20,7 @@ from openviking_cli.utils.config import OPENVIKING_CLI_CONFIG_ENV
 @pytest.fixture(autouse=True)
 def clear_ovcli_config(monkeypatch):
     monkeypatch.delenv(OPENVIKING_CLI_CONFIG_ENV, raising=False)
-    monkeypatch.setattr(http_module, "load_ovcli_config", lambda: None)
+    monkeypatch.setattr(http_module, "load_ovcli_config", lambda: None, raising=False)
 
 
 def test_async_http_client_zip_directory_skips_symlinked_entries(tmp_path):
@@ -86,16 +86,18 @@ async def test_async_openviking_reindex_forwards_to_local_client(tmp_path):
 
             result = await client.reindex(
                 "viking://resources/demo",
-                mode="vectors_only",
+                mode="prune_orphans",
                 wait=False,
+                dry_run=True,
             )
 
     assert result == {"status": "completed"}
     mock_init.assert_awaited_once()
     mock_reindex.assert_awaited_once_with(
         uri="viking://resources/demo",
-        mode="vectors_only",
+        mode="prune_orphans",
         wait=False,
+        dry_run=True,
     )
 
 
@@ -104,6 +106,7 @@ def test_sync_openviking_reindex_forwards_to_async_client():
     with patch.object(
         client._async_client,
         "reindex",
+        new_callable=Mock,
         return_value={"status": "completed"},
     ) as mock_reindex:
         with patch(
@@ -111,13 +114,19 @@ def test_sync_openviking_reindex_forwards_to_async_client():
         ) as mock_run:
             result = client.reindex(
                 "viking://resources/demo",
-                mode="semantic_and_vectors",
+                mode="prune_orphans",
                 wait=True,
+                dry_run=True,
             )
 
     assert result == {"status": "completed"}
     assert mock_run.called
-    assert mock_reindex.called
+    mock_reindex.assert_called_once_with(
+        uri="viking://resources/demo",
+        mode="prune_orphans",
+        wait=True,
+        dry_run=True,
+    )
 
 
 async def test_local_client_reindex_forwards_to_service():
@@ -127,12 +136,18 @@ async def test_local_client_reindex_forwards_to_service():
     result = await LocalClient.reindex(
         client,
         uri="viking://resources/demo",
-        mode="vectors_only",
+        mode="prune_orphans",
         wait=False,
+        dry_run=True,
     )
 
     assert result == {"status": "completed"}
-    client._service.reindex.assert_awaited_once()
+    client._service.reindex.assert_awaited_once_with(
+        uri="viking://resources/demo",
+        mode="prune_orphans",
+        wait=False,
+        dry_run=True,
+    )
 
 
 async def test_local_client_batch_add_messages_forwards_to_session():
@@ -287,8 +302,9 @@ async def test_async_http_client_reindex_posts_content_reindex():
     ) as mock_handle:
         result = await client.reindex(
             "viking://resources/demo",
-            mode="vectors_only",
+            mode="prune_orphans",
             wait=False,
+            dry_run=True,
         )
 
     assert result == {"status": "completed"}
@@ -296,8 +312,9 @@ async def test_async_http_client_reindex_posts_content_reindex():
         "/api/v1/content/reindex",
         json={
             "uri": "viking://resources/demo",
-            "mode": "vectors_only",
+            "mode": "prune_orphans",
             "wait": False,
+            "dry_run": True,
         },
     )
     assert mock_handle.called
@@ -308,21 +325,27 @@ def test_sync_http_client_reindex_forwards_to_async_client():
     with patch.object(
         client._async_client,
         "reindex",
+        new_callable=Mock,
         return_value={"status": "accepted"},
     ) as mock_reindex:
         with patch(
-            "openviking_cli.client.sync_http.run_async",
-            return_value={"status": "accepted"},
+            "openviking_sdk.client.run_async", return_value={"status": "accepted"}
         ) as mock_run:
             result = client.reindex(
                 "viking://resources/demo",
-                mode="vectors_only",
+                mode="prune_orphans",
                 wait=False,
+                dry_run=True,
             )
 
     assert result == {"status": "accepted"}
     assert mock_run.called
-    assert mock_reindex.called
+    mock_reindex.assert_called_once_with(
+        uri="viking://resources/demo",
+        mode="prune_orphans",
+        wait=False,
+        dry_run=True,
+    )
 
 
 def test_sync_http_client_batch_add_messages_forwards_to_async_client():

@@ -53,6 +53,8 @@ OpenViking Server supports two multi-tenant related authentication modes:
 | `api_key` | `server.auth_mode = "api_key"` | Root key or user key | Standard deployment |
 | `trusted` | `server.auth_mode = "trusted"` | Upstream-injected `X-OpenViking-Account` / `X-OpenViking-User` | Behind a trusted gateway |
 
+In trusted mode, an upstream gateway may also assert `X-OpenViking-Role: user` or `X-OpenViking-Role: admin`. Role assertion requires a configured `root_api_key` and a matching API key on the request. `X-OpenViking-Role: root` is rejected; ROOT is reserved for the validated Admin API fallback.
+
 ### What `root_api_key` Does
 
 Once `server.root_api_key` is configured, OpenViking enters formal multi-tenant mode:

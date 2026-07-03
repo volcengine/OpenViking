@@ -271,9 +271,10 @@ Rules in trusted mode:
 
 - Normal data access does not require user registration or user-key provisioning first.
 - `X-OpenViking-Account` and `X-OpenViking-User` are required on tenant-scoped requests.
+- A trusted upstream may also send `X-OpenViking-Role: user` or `X-OpenViking-Role: admin` to assert the request role. This header is accepted only when `root_api_key` is configured and the request presents the matching API key. `root` is not an allowed asserted value; ROOT is reserved for validated Admin API fallback.
 - Use `peer_id` in session-message bodies for stable speaker attribution. Use `X-OpenViking-Actor-Peer` to filter the current user's peer collection for filesystem and retrieval operations.
 - `/api/v1/admin/*` is special: when a configured `root_api_key` is presented, trusted mode treats the request as ROOT. Explicit account/user headers are allowed only when they are complete and match the target URL.
-- For ordinary trusted data APIs, role is determined by looking up the account/user in APIKeyManager. If the user exists, their configured role is used; otherwise it defaults to `USER`.
+- For ordinary trusted data APIs, role is determined by `X-OpenViking-Role` when present and authorized; otherwise by looking up the account/user in APIKeyManager. If the user exists, their configured role is used; otherwise it defaults to `USER`.
 - Trusted identity comes from the headers, not from a user key. If `root_api_key` is configured, it acts as proof that the caller is an approved trusted upstream.
 - If `root_api_key` is also configured, every request must still provide a matching API key.
 - Only expose this mode behind a trusted network boundary or an identity-injecting gateway.
@@ -342,7 +343,7 @@ Or explicitly:
 | ADMIN | Own account | Regular operations + manage users in own account |
 | USER | Own account | Regular operations (ls, read, find, sessions, etc.) |
 
-In `trusted` mode, ordinary tenant requests default to `USER` unless the account/user is registered with a higher role. Admin routes also allow a trusted ROOT fallback when no explicit identity is provided.
+In `trusted` mode, ordinary tenant requests default to `USER` unless the account/user is registered with a higher role or the gateway asserts `X-OpenViking-Role: admin` with the configured root API key. `X-OpenViking-Role: root` is rejected. Admin routes also allow a trusted ROOT fallback when no explicit identity is provided.
 
 ## Unauthenticated Endpoints
 

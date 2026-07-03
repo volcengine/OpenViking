@@ -10,6 +10,7 @@ import os
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
+from openviking.core.namespace import canonicalize_uri
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
@@ -484,6 +485,7 @@ class OpenVikingService:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
+        dry_run: bool = False,
         ctx: RequestContext | None = None,
     ) -> dict[str, Any]:
         """Reindex semantic/vector artifacts for a URI."""
@@ -491,12 +493,14 @@ class OpenVikingService:
             await self.initialize()
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        canonical_uri = canonicalize_uri(uri, effective_ctx)
         from openviking.service.reindex_executor import get_reindex_executor
 
         return await get_reindex_executor().execute(
-            uri=uri,
+            uri=canonical_uri,
             mode=mode,
             wait=wait,
+            dry_run=dry_run,
             ctx=effective_ctx,
         )
 

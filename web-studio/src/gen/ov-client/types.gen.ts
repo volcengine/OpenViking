@@ -562,6 +562,10 @@ export type ReindexRequest = {
      * Wait
      */
     wait?: boolean;
+    /**
+     * Dry Run
+     */
+    dry_run?: boolean;
 };
 
 /**
