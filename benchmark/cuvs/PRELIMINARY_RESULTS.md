@@ -251,6 +251,91 @@ cuVS host overhead is dominated by the current per-vector Python tuple mirror.
 These RSS deltas are directional rather than an allocator-isolated memory
 benchmark because both backends run sequentially in each process.
 
+## Async service-facade concurrency
+
+This level calls `VikingVectorIndexBackend.query()` through OpenViking's normal
+`asyncio.to_thread` boundary. It includes tenant-filter injection and async
+request scheduling, but deliberately uses precomputed query vectors: HTTP,
+authentication, embedding, reranking, and LLM work are still excluded.
+
+- Harness revision: `e7af4e0c26c82eb58dbb47c07dcaa54b402fbaab`
+- Dataset: 100,000 normalized Gaussian vectors, 768D; K=10
+- Concurrency: 1, 4, 16, 32, and 64; default thread-pool limit 32
+- Cached scenarios: 200 requests per concurrency level
+- New-filter scenario: 32 requests per concurrency level, each with a distinct
+  100-record range in addition to the automatic tenant filter
+- Post-mutation scenario: one full-record upsert, followed by a simultaneous
+  read burst whose size equals the concurrency level
+
+Results aggregate five independent clean processes on H20. Values written with
+`+/-` include median absolute deviation; the compact paired-latency tables show
+process medians where dispersion is omitted. The native collection continues
+to use its default int8 vector quantization, while cuVS brute-force retains
+float32 vectors.
+
+### Cached tenant filter
+
+Every service-facade request is automatically scoped by `account_id`; this
+scenario warms and reuses that prepared filter.
+
+| Concurrency | Native p50 (ms) | Native QPS | cuVS p50 (ms) | cuVS p99 (ms) | cuVS QPS | cuVS/native QPS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 14.136 +/- 0.066 | 71.3 +/- 2.3 | 1.492 +/- 0.011 | 2.175 +/- 0.030 | 614.8 +/- 8.2 | 8.63x |
+| 4 | 16.311 +/- 0.177 | 238.0 +/- 1.7 | 6.094 +/- 0.027 | 9.912 +/- 0.176 | 632.6 +/- 5.1 | 2.66x |
+| 16 | 16.504 +/- 0.240 | 907.8 +/- 25.1 | 24.820 +/- 0.084 | 29.885 +/- 1.351 | 636.0 +/- 3.9 | 0.70x |
+| 32 | 30.050 +/- 1.618 | 982.7 +/- 21.8 | 47.998 +/- 0.585 | 54.204 +/- 0.330 | 651.8 +/- 6.8 | 0.66x |
+| 64 | 54.251 +/- 1.059 | 1,056.8 +/- 4.6 | 92.641 +/- 0.531 | 99.232 +/- 1.133 | 677.2 +/- 7.0 | 0.64x |
+
+cuVS keeps a strong low-concurrency advantage, but its throughput remains near
+615--677 QPS as concurrency increases. Native CPU search scales across the
+thread pool and crosses cuVS between concurrency 4 and 16. cuVS p50 rises from
+1.5 ms to 92.6 ms at concurrency 64 because requests queue behind the current
+index-wide lock; this integration does not yet use concurrent CUDA streams or
+micro-batching.
+
+### Cached 10% filter
+
+| Concurrency | Native p50 (ms) | Native QPS | cuVS p50 (ms) | cuVS QPS | cuVS/native QPS |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 2.452 +/- 0.011 | 385.5 +/- 3.5 | 1.564 +/- 0.006 | 582.7 +/- 10.5 | 1.51x |
+| 4 | 2.937 +/- 0.038 | 1,165.6 +/- 14.7 | 6.473 +/- 0.091 | 591.6 +/- 5.4 | 0.51x |
+| 16 | 12.860 +/- 0.227 | 1,151.7 +/- 7.0 | 27.400 +/- 0.257 | 576.0 +/- 5.7 | 0.50x |
+| 64 | 48.681 +/- 0.502 | 1,215.1 +/- 19.6 | 103.497 +/- 0.930 | 604.3 +/- 4.1 | 0.50x |
+
+The more selective native scalar path crosses cuVS between concurrency 1 and
+4. Prepared-mask reuse removes predicate construction from this scenario, so
+the remaining cuVS plateau is the search serialization and service overhead.
+
+### New filter per request
+
+| Concurrency | Native p50 / p99 (ms) | Native QPS | cuVS p50 / p99 (ms) | cuVS QPS |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.807 / 2.939 | 1,034.6 | 280.607 / 308.068 | 3.5 |
+| 4 | 3.088 / 5.848 | 1,132.7 | 1,104.427 / 1,159.414 | 3.6 |
+| 16 | 12.009 / 19.690 | 1,104.6 | 4,365.132 / 4,429.893 | 3.6 |
+| 32 | 20.632 / 27.288 | 1,133.0 | 4,581.936 / 8,734.404 | 3.6 |
+
+The native scalar index resolves each distinct 100-record range efficiently.
+cuVS still scans all host-side records for every LRU miss, and the index lock
+serializes those scans. At concurrency 32, half the requests complete around
+4.6 seconds while the tail approaches 8.7 seconds. The concurrency-64 case is
+not separately reported because this scenario has only 32 total requests.
+
+### Read burst after one mutation
+
+| Concurrency | Native p50 / p99 (ms) | cuVS p50 / p99 (ms) | cuVS burst wall time (s) |
+| ---: | ---: | ---: | ---: |
+| 1 | 21.467 / 21.467 | 1,827.384 / 1,827.384 | 1.828 +/- 0.170 |
+| 4 | 23.436 / 23.860 | 1,563.884 / 1,565.954 | 1.566 +/- 0.008 |
+| 16 | 24.621 / 28.031 | 1,701.266 / 1,711.689 | 1.712 +/- 0.118 |
+| 32 | 36.285 / 40.417 | 1,612.954 / 1,633.418 | 1.635 +/- 0.046 |
+| 64 | 49.734 / 69.858 | 1,849.853 / 1,894.171 | 1.896 +/- 0.022 |
+
+The cuVS write call itself takes only approximately 3.0--3.6 ms; the next
+reader rebuilds the full index while every concurrent reader waits on the same
+lock. Higher apparent burst QPS is therefore not steady-state capacity: it is
+the same rebuild delay amortized across more requests released together.
+
 ## Current conclusion and next checks
 
 1. Native CPU exact remains preferable for very small collections. On this
@@ -274,6 +359,12 @@ benchmark because both backends run sequentially in each process.
 7. Independent process results are stable for this hardware and dataset, but
    cross-node and cross-day variance are not yet measured.
 8. GloVe-100 and normalized Gaussian vectors are engineering datasets, not a
-   representative agent-memory corpus. The next matrix should cover server
-   concurrency and a real agent-memory embedding workload while separately
-   tracking new versus cached filters and post-mutation rebuilds.
+   representative agent-memory corpus.
+9. At the async service facade, cuVS wins cached tenant search through
+   concurrency 4, but native crosses it by concurrency 16. The current cuVS
+   lock holds throughput near 600--680 QPS and turns concurrency into queueing
+   latency rather than GPU parallelism.
+10. The next engineering step is to evaluate a read-safe immutable snapshot
+    with concurrent searches or micro-batching, plus background rebuild. A
+    later end-to-end matrix should then add HTTP, embedding, reranking, and a
+    real agent-memory workload.
