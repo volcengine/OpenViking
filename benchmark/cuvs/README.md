@@ -72,6 +72,62 @@ python benchmark/cuvs/run_index_benchmark.py \
   --cagra-search-params '{"itopk_size":128}'
 ```
 
+To scan the main CAGRA search-quality knob without rebuilding the graph for
+every value, use `--cagra-itopk-sizes`. Other search parameters are shared by
+all variants:
+
+```bash
+python benchmark/cuvs/run_index_benchmark.py \
+  --backends cuvs_brute_force,cuvs_cagra \
+  --cagra-search-params '{"search_width":1}' \
+  --cagra-itopk-sizes 32,64,128,256
+```
+
+If `itopk_size` alone does not reach the target recall, add a `search_width`
+sweep. The harness evaluates the Cartesian product while still building CAGRA
+only once:
+
+```bash
+python benchmark/cuvs/run_index_benchmark.py \
+  --backends cuvs_cagra \
+  --ann-benchmarks-hdf5 /data/glove-100-angular.hdf5 \
+  --metric cosine \
+  --cagra-itopk-sizes 64,128,256,512 \
+  --cagra-search-widths 1,2,4,8
+```
+
+## Public ANN datasets
+
+Random Gaussian vectors are useful for exact-search scaling, but CAGRA recall
+should be measured on a public dataset with ground truth. The harness accepts
+the HDF5 format published by
+[ann-benchmarks](https://github.com/erikbern/ann-benchmarks):
+
+```bash
+curl -fL \
+  https://ann-benchmarks.com/glove-100-angular.hdf5 \
+  -o /data/glove-100-angular.hdf5
+
+python benchmark/cuvs/run_index_benchmark.py \
+  --data-root /data/openviking-cuvs \
+  --ann-benchmarks-hdf5 /data/glove-100-angular.hdf5 \
+  --metric cosine \
+  --backends cuvs_brute_force,cuvs_cagra \
+  --query-batch-size 1 \
+  --search-repetitions 5 \
+  --cagra-itopk-sizes 32,64,128,256 \
+  --cagra-search-widths 1,2,4
+```
+
+The first run converts `train`, `test`, and `neighbors` into reusable NumPy
+memory maps. Angular datasets are normalized once so inner product has cosine
+ranking. The result records the source SHA-256 but not the local source path.
+
+`--ann-vector-limit` and `--ann-query-limit` can shorten exploratory runs. A
+vector limit disables the supplied ground truth because neighbor IDs may refer
+to omitted rows; include `native` or `cuvs_brute_force` in that case. A query
+limit retains the corresponding prefix of supplied ground truth.
+
 `query_batch_size=1` reflects the current OpenViking integration most closely.
 Larger batches measure the vector-index capacity: cuVS executes the batch on
 the GPU, while the current native wrapper processes each query sequentially.

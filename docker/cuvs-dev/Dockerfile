@@ -10,6 +10,7 @@ RUN apt-get update \
       build-essential \
       ca-certificates \
       cmake \
+      git \
  && rm -rf /var/lib/apt/lists/*
 
 # Keep Python and accelerator dependencies independent from the source layers.
@@ -22,12 +23,25 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       "${CUVS_PACKAGE}" \
       "${CUPY_PACKAGE}" \
       "apscheduler>=3.11,<4" \
+      "h5py>=3.12,<4" \
       "pydantic>=2,<3" \
       "pytest>=8,<9" \
       "pytest-asyncio>=0.24,<2" \
       "pyyaml>=6,<7" \
       "requests>=2.31,<3" \
       "xxhash>=3,<4"
+
+# Pyxis/Enroot does not run the NVIDIA container-toolkit hook that normally
+# discovers CUDA libraries installed by Python wheels. Register both the
+# nvidia/*/lib directories and RAPIDS lib64 directories with the dynamic
+# loader so cuVS works the same way under Docker and Pyxis.
+RUN find /usr/local/lib/python*/site-packages/nvidia \
+      -type d -name lib -print \
+      > /etc/ld.so.conf.d/python-nvidia-wheels.conf \
+ && find /usr/local/lib/python*/site-packages \
+      -maxdepth 2 -type d -name lib64 -print \
+      >> /etc/ld.so.conf.d/python-nvidia-wheels.conf \
+ && ldconfig
 
 WORKDIR /opt/openviking
 
@@ -61,7 +75,7 @@ COPY docker/cuvs-dev/entrypoint.sh /usr/local/bin/openviking-cuvs-dev
 RUN cp -a /opt/openviking-native-engine/. \
       /opt/openviking/openviking/storage/vectordb/engine/ \
  && chmod +x /usr/local/bin/openviking-cuvs-dev \
- && python -c "import cupy, cuvs; import openviking.storage.vectordb.engine; print('cuVS development image import check passed')"
+ && python -c "import cupy; from cuvs.neighbors import brute_force, cagra; import openviking.storage.vectordb.engine; print('cuVS development image import check passed')"
 
 ENV PYTHONPATH="/opt/openviking"
 

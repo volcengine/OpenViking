@@ -15,6 +15,18 @@ docker build \
   .
 ```
 
+The defaults track CUDA 13 packages. Build a CUDA 12 variant for systems whose
+driver/runtime policy requires it:
+
+```bash
+docker build \
+  --build-arg CUVS_PACKAGE=cuvs-cu12==26.6.0 \
+  --build-arg 'CUPY_PACKAGE=cupy-cuda12x[ctk]==14.1.1' \
+  -f docker/cuvs-dev/Dockerfile \
+  -t openviking-cuvs:dev-cu12 \
+  .
+```
+
 Run the baked smoke test:
 
 ```bash
@@ -54,5 +66,12 @@ docker/cuvs-dev/export-sqsh.sh \
   /shared/images/openviking-cuvs-dev.sqsh
 ```
 
-Set `NVIDIA_DRIVER_CAPABILITIES=compute,utility` before launching the SquashFS
-image so the container runtime injects `libcuda` as well as management tools.
+Set both `NVIDIA_VISIBLE_DEVICES` and `NVIDIA_DRIVER_CAPABILITIES` before
+launching the SquashFS image, and explicitly pass them through when the Pyxis
+configuration does not inherit host variables. This triggers the NVIDIA hook
+that injects `libcuda` and the allocated devices:
+
+```bash
+export NVIDIA_VISIBLE_DEVICES=all
+export NVIDIA_DRIVER_CAPABILITIES=compute,utility
+```
