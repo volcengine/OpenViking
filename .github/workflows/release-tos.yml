@@ -21,8 +21,9 @@ permissions:
 jobs:
   upload:
     name: Upload Release Artifacts to TOS
-    # Skip CLI releases (cli@* / cli-* tags); main releases use v* tags
-    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.release.tag_name, 'cli')
+    # Only GitHub Releases for main package tags should upload release artifacts.
+    # Component releases such as python-sdk@* and cli@* have dedicated workflows.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-24.04
     steps:
       - name: Resolve release tag
