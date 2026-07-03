@@ -33,6 +33,19 @@ For large query batches, use `--search-repetitions` so percentile and QPS
 statistics contain multiple timed batches without generating another base
 dataset. Neighbor/recall output is retained from the first repetition.
 
+Do not use within-process repetitions as a substitute for independent runs.
+After producing result files from separate processes, aggregate their medians
+and median absolute deviations with:
+
+```bash
+python benchmark/cuvs/summarize_index_runs.py \
+  /data/results/run-{1,2,3,4,5}.json \
+  --output /data/results/summary.json
+```
+
+The summarizer requires matching dataset metadata, parameters, and
+backend/search variants. It records input basenames rather than local paths.
+
 Large datasets are generated as NumPy memory maps. Put `--data-root` on a
 volume with enough capacity rather than in the Git worktree:
 
