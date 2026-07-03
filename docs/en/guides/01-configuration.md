@@ -68,7 +68,7 @@ For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is al
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-pro-260215"
+    "model"    : "doubao-seed-2-0-lite-260428"
   }
 }
 ```
@@ -569,7 +569,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 {
   "vlm": {
     "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-pro-260215",
+    "model": "doubao-seed-2-0-lite-260428",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "max_retries": 3
   }
@@ -599,7 +599,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 
 | Model | Notes |
 |-------|-------|
-| `doubao-seed-2-0-pro-260215` | Recommended for semantic extraction |
+| `doubao-seed-2-0-lite-260428` | Recommended for semantic extraction |
 | `doubao-pro-32k` | For longer context |
 
 When resources are added, VLM generates:
