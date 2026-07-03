@@ -142,6 +142,88 @@ delta:
 | 1024 | 100K | 6.165 +/- 0.030 | 0.210 +/- 0.001 | 0.38 |
 | 1024 | 1M | 60.990 +/- 0.281 | 1.697 +/- 0.011 | 3.82 |
 
+## Collection adapter, filter, and lifecycle
+
+This matrix moves one level above the index microbenchmark. It calls
+`CollectionAdapter.query()` and therefore includes OpenViking filter handling,
+label-to-record lookup, result normalization, persistence, and lazy index
+rebuild. It uses harness revision
+`84f79c5f52b553561299d42730949b612f3fe29c` and five independent processes on
+the same H20/software setup as the exact-scaling runs.
+
+- Dataset: 100,000 deterministic normalized Gaussian vectors, 768D float32
+- Queries: 50 per scenario; K=10; three warm-up queries
+- Filters: 10%, 1%, and 0.1% target selectivity, with both uniformly
+  distributed and contiguous matching records
+- Mutations: upsert 1, 100, 1,000, and 10,000 records; delete 100 records;
+  close and reopen the persistent collection
+
+This comparison deliberately uses the normal collection defaults. The native
+flat index uses its default int8 quantization, while cuVS brute-force retains
+float32 vectors. Consequently, the native path is not the float exact baseline
+from the index microbenchmark. Its Recall@10 against cuVS GPU brute-force was
+0.982 without a filter and 0.978--0.994 with filters. This is both a quality
+and memory semantic that the integration must make explicit.
+
+### Warm query performance
+
+| Scenario | Native p50 (ms) | cuVS p50 (ms) | Native Recall@10 | cuVS Recall@10 | Relative p50 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Unfiltered | 9.413 +/- 0.238 | 0.970 +/- 0.006 | 0.982 | 1.000 | cuVS 9.7x faster |
+| Uniform 10% | 1.871 +/- 0.041 | 106.306 +/- 2.204 | 0.988 | 1.000 | cuVS 56.8x slower |
+| Uniform 1% | 0.509 +/- 0.003 | 105.816 +/- 2.022 | 0.986 | 1.000 | cuVS 207.8x slower |
+| Uniform 0.1% | 0.319 +/- 0.002 | 105.292 +/- 2.721 | 0.994 | 1.000 | cuVS 330.2x slower |
+| Clustered 10% | 1.374 +/- 0.002 | 106.706 +/- 1.297 | 0.978 | 1.000 | cuVS 77.7x slower |
+| Clustered 1% | 0.468 +/- 0.001 | 104.634 +/- 1.308 | 0.982 | 1.000 | cuVS 223.3x slower |
+| Clustered 0.1% | 0.321 +/- 0.004 | 104.219 +/- 1.748 | 0.994 | 1.000 | cuVS 324.9x slower |
+
+Unfiltered collection lookup preserves a material GPU benefit: median QPS was
+967.3 +/- 2.5 for cuVS and 106.4 +/- 3.4 for native, a 9.1x throughput ratio.
+That is smaller than the index-only 100K x 768D result because collection
+lookup adds fixed host-side work and the native collection path uses int8
+quantization.
+
+The filtered result identifies a blocker, not an inherent cuVS limitation.
+The current integration evaluates the predicate against every Python record to
+build a GPU prefilter mask on every query. All six cuVS filter scenarios remain
+near 104--106 ms regardless of selectivity or record distribution. The next
+implementation step is to reuse OpenViking's scalar-index candidate labels or
+cache/update a device-compatible mask instead of scanning 100,000 Python
+records per query.
+
+### Ingestion, mutation, and restart
+
+| Operation | Native median | cuVS median |
+| --- | ---: | ---: |
+| Ingest 100K records | 29.102 s | 37.925 s |
+| First unfiltered query after ingest | 25.524 ms | 1,809.377 ms |
+| Upsert 1: next query | 12.130 ms | 1,685.224 ms |
+| Upsert 100: next query | 11.922 ms | 1,433.094 ms |
+| Upsert 1K: next query | 13.970 ms | 1,550.750 ms |
+| Upsert 10K: next query | 14.597 ms | 1,457.277 ms |
+| Delete 100: next query | 13.588 ms | 1,407.207 ms |
+| First query after close/reopen | 5.381 s | 15.253 s |
+| Warm query after reopen | 10.569 ms | 1.105 ms |
+
+Every cuVS mutation marks the index dirty, and the next query synchronously
+rebuilds the full 100K-vector GPU index. The rebuild cost is therefore almost
+independent of whether one or 10,000 records were updated. The write API itself
+remains comparatively cheap; the cost is shifted onto the next reader. A
+production integration should rebuild in the background, coalesce mutations,
+and atomically swap the completed index while the prior snapshot continues to
+serve queries.
+
+Persistent collection loading is lazy, so the reopen time appears in the
+first query rather than adapter construction. The cuVS first query includes
+store recovery, rebuilding Python-side records, and building the GPU index.
+After that work, the reopened cuVS collection returns to approximately 1.1 ms.
+
+Median host RSS increase during ingestion was 0.94 GiB for native and 2.70 GiB
+for cuVS; cuVS additionally used a 0.29 GiB GPU-memory delta after search. The
+cuVS host overhead is dominated by the current per-vector Python tuple mirror.
+These RSS deltas are directional rather than an allocator-isolated memory
+benchmark because both backends run sequentially in each process.
+
 ## Current conclusion and next checks
 
 1. Native CPU exact remains preferable for very small collections. On this
@@ -151,9 +233,19 @@ delta:
    imply better performance.
 3. CAGRA can improve batched capacity around Recall@10=0.96, but this benefit
    requires batching that the current OpenViking integration does not expose.
-4. Independent process results are now stable for this hardware and dataset,
-   but cross-node and cross-day variance are not yet measured.
-5. GloVe-100 and normalized Gaussian vectors are engineering datasets, not a
-   representative agent-memory corpus. The next matrix must measure
-   collection-level lookup, filters, lazy rebuild, and server-level latency on
-   real embeddings.
+4. Collection-level unfiltered lookup retains a 9.7x warm-p50 benefit at
+   100K x 768D, but native int8 versus cuVS float32 is not an equal-memory or
+   equal-quality comparison.
+5. The current Python full-record filter scan makes filtered cuVS search
+   57--330x slower than native. Filter candidate reuse or mask caching is a
+   prerequisite for meaningful server-level filtered benchmarks.
+6. Synchronous lazy rebuild shifts approximately 1.4--1.7 seconds onto the
+   first reader after any mutation at 100K x 768D. Background snapshot rebuild
+   and atomic swap should be evaluated before enabling cuVS for write-active
+   collections.
+7. Independent process results are stable for this hardware and dataset, but
+   cross-node and cross-day variance are not yet measured.
+8. GloVe-100 and normalized Gaussian vectors are engineering datasets, not a
+   representative agent-memory corpus. After the filter and rebuild blockers,
+   the next matrix should cover server concurrency and a real agent-memory
+   embedding workload.
