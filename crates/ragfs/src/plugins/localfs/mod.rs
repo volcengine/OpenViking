@@ -536,6 +536,15 @@ impl LocalFileSystem {
         }
     }
 
+    /// Build the plugin-root-relative path required by the `GlobEntry.path` contract.
+    fn local_glob_entry_path(virtual_root: &str, rel_path: &str) -> String {
+        if virtual_root == "/" {
+            format!("/{}", rel_path)
+        } else {
+            format!("{}/{}", virtual_root.trim_end_matches('/'), rel_path)
+        }
+    }
+
     /// Implement glob pagination with a local DFS walk instead of materializing the whole tree.
     ///
     /// Args:
@@ -586,6 +595,7 @@ impl LocalFileSystem {
 
         let _ = Self::walk_glob_page(
             &query_root,
+            virtual_path,
             &query_root,
             pattern,
             show_hidden,
@@ -616,6 +626,7 @@ impl LocalFileSystem {
     ///
     /// Args:
     /// - `query_root`: Local path to the query root directory.
+    /// - `virtual_root`: Plugin-relative query root path.
     /// - `current_dir`: Local path to the directory currently being traversed.
     /// - `pattern`: Glob pattern.
     /// - `show_hidden`: Whether hidden files should be included.
@@ -627,11 +638,11 @@ impl LocalFileSystem {
     /// - `found_more`: Whether there are more matches after the current page.
     ///
     /// Returns:
-    /// - `ControlFlow::Break(())` when the current page is full and a next page exists,
-    ///   so traversal can stop early.
+    /// - `ControlFlow::Break(())` is reserved for callers that add a safe early-stop path.
     /// - `ControlFlow::Continue(())` when traversal of the current subtree is complete.
     fn walk_glob_page(
         query_root: &Path,
+        virtual_root: &str,
         current_dir: &Path,
         pattern: &str,
         show_hidden: bool,
@@ -673,17 +684,17 @@ impl LocalFileSystem {
             let rel_path = Self::local_to_query_relative_path(query_root, &local_path)
                 .ok_or_else(|| Error::InvalidPath(local_path.display().to_string()))?;
             if purepath_match(&rel_path, pattern)? {
-                if entries.len() >= limit {
-                    *found_more = true;
-                    return Ok(ControlFlow::Break(()));
-                }
                 if *matched_seen >= start {
-                    entries.push(GlobEntry {
-                        path: local_path.to_string_lossy().to_string(),
-                        rel_path: rel_path.clone(),
-                        name: name.clone(),
-                        is_dir,
-                    });
+                    if entries.len() >= limit {
+                        *found_more = true;
+                    } else {
+                        entries.push(GlobEntry {
+                            path: Self::local_glob_entry_path(virtual_root, &rel_path),
+                            rel_path: rel_path.clone(),
+                            name: name.clone(),
+                            is_dir,
+                        });
+                    }
                 }
                 *matched_seen += 1;
             }
@@ -691,6 +702,7 @@ impl LocalFileSystem {
             if is_dir {
                 match Self::walk_glob_page(
                     query_root,
+                    virtual_root,
                     &local_path,
                     pattern,
                     show_hidden,
@@ -1455,6 +1467,7 @@ mod tests {
             vec!["a.md", "b.md"]
         );
         assert!(first.next_token.is_some());
+        assert_eq!(first.entries[0].path, "/a.md");
 
         let second = fs
             .glob_directory("/", "*.md", false, Some(2), None, first.next_token)
@@ -1549,6 +1562,7 @@ mod tests {
         let (dir, fs) = fallback_localfs();
         write_file(dir.path(), "a.md", "");
         write_file(dir.path(), "b.md", "");
+        write_file(dir.path(), "c.md", "");
         std::fs::create_dir_all(dir.path().join("z_blocked")).unwrap();
         write_file(dir.path(), "z_blocked/late.md", "");
 
