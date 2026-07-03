@@ -1209,7 +1209,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'qdrant', or 'opengauss' | "local" |
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'qdrant', 'opengauss', or 'pgvector' | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1220,6 +1220,7 @@ Vector database storage configuration
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
 | `qdrant` | object | 'qdrant' type Qdrant configuration | - |
 | `opengauss` | object | 'opengauss' native vector backend configuration | - |
+| `pgvector` | object | 'pgvector' PostgreSQL + pgvector backend configuration | - |
 
 Default local mode
 ```
@@ -1284,6 +1285,47 @@ In the official container, the initial `omm` user may be restricted for remote l
 ```
 
 Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id`.
+</details>
+
+<details>
+<summary><b>pgvector (PostgreSQL)</b></summary>
+
+Requires PostgreSQL with the [pgvector](https://github.com/pgvector/pgvector) extension (>= 0.5.0 for HNSW; >= 0.8.0 enables the iterative-scan recall fix under selective filters). Install the optional driver with `pip install "openviking[pgvector]"`. The quickest local server is `docker compose up -d pgvector` (see `docker-compose.yml`).
+
+Provide **either** a `url` DSN (which takes priority) **or** the discrete `host`/`port`/`user`/`password`/`db_name` fields.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "pgvector",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "pgvector": {
+        "url": "postgresql://user:password@127.0.0.1:5432/postgres",
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "postgres",
+        "password": "your-password",
+        "db_name": "postgres",
+        "schema": "public",
+        "sslmode": "prefer",
+        "index_type": "hnsw",
+        "index_params": {"m": 16, "ef_construction": 64},
+        "pool_size": 1,
+        "create_extension": true
+      }
+    }
+  }
+}
+```
+
+- `distance_metric` accepts `cosine`, `l2`, or `ip` (mapped to pgvector's `<=>` / `<->` / `<#>` operators).
+- `index_type` is `hnsw` (the v1 index); `index_params` tunes the build (`m`, `ef_construction`) and query (`ef_search`).
+- `create_extension` runs `CREATE EXTENSION IF NOT EXISTS vector` on connect under an advisory lock. Set it to `false` for pre-provisioned managed PostgreSQL (RDS / Cloud SQL) where a superuser has already installed the extension.
+- `sslmode` is passed through to libpq (`prefer`, `require`, `disable`, …). `pool_size > 1` uses a threaded connection pool.
 </details>
 
 
