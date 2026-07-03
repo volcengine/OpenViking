@@ -44,6 +44,8 @@ jobs:
       - name: Build blog
         run: npm run build
         working-directory: blog
+        env:
+          VITE_COUNTER_URL: ${{ vars.VITE_COUNTER_URL }}
 
       - name: Check TOS configuration
         id: tos_config
