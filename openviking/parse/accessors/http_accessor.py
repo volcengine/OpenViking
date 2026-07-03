@@ -29,6 +29,7 @@ from openviking.parse.parsers.media.constants import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
+from openviking.utils import is_code_hosting_blob_url
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
@@ -451,7 +452,14 @@ class HTTPAccessor(DataAccessor):
         # ``.html``/``.htm`` URL (DOWNLOAD_HTML) are webpages the user may want
         # to crawl: route both through WebImporter so ``depth``/``max_pages``
         # apply. A plain single-page import is just the ``depth=0`` case.
-        if url_type in (URLType.WEBPAGE, URLType.DOWNLOAD_HTML):
+        #
+        # Exception: a code-hosting single-file URL (GitHub/GitLab ``blob`` or
+        # GitHub ``raw``) is semantically one file, not a site. ``_download_url``
+        # already rewrote it to raw and fetched the file, so keep it on the
+        # single-file path instead of crawling the hosting UI shell.
+        if url_type in (URLType.WEBPAGE, URLType.DOWNLOAD_HTML) and not is_code_hosting_blob_url(
+            source_str
+        ):
             from openviking.parse.accessors.web_importer import (
                 WebImporter,
                 parse_web_import_options,

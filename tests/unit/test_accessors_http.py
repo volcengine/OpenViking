@@ -29,6 +29,14 @@ def _mock_config():
 class TestHTTPAccessor:
     """Tests for HTTPAccessor."""
 
+    @pytest.fixture(autouse=True)
+    def _patch_config(self):
+        with patch(
+            "openviking_cli.utils.config.open_viking_config.OpenVikingConfigSingleton.get_instance",
+            side_effect=_mock_config,
+        ):
+            yield
+
     @pytest.fixture
     def accessor(self) -> HTTPAccessor:
         """Create a HTTPAccessor instance."""
@@ -137,6 +145,47 @@ class TestHTTPAccessor:
 
         assert resource.path == downloaded
         assert resource.meta["url_type"] == "download_pdf"
+        assert called is False
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://github.com/org/repo/blob/main/x.html",
+            "https://raw.githubusercontent.com/org/repo/main/x.html",
+            "https://gitlab.com/org/repo/blob/main/x.html",
+        ],
+    )
+    async def test_code_hosting_single_file_does_not_use_web_importer(
+        self, accessor, tmp_path, monkeypatch, url
+    ):
+        """Code-hosting single-file URLs (blob/raw) stay on the single-file path.
+
+        Even though the download resolves to an ``.html`` file (DOWNLOAD_HTML),
+        these URLs are semantically one file, not a crawlable site, so they must
+        NOT be routed through WebImporter.
+        """
+        downloaded = tmp_path / "x.html"
+        downloaded.write_text("<html>file</html>", encoding="utf-8")
+        called = False
+
+        async def fake_download(u, request_validator=None):
+            return str(downloaded), URLType.DOWNLOAD_HTML, {"extension": ".html"}
+
+        class FakeImporter:
+            async def import_to_directory(self, **kwargs):
+                nonlocal called
+                called = True
+
+        monkeypatch.setattr(accessor, "_download_url", fake_download)
+        monkeypatch.setattr(
+            "openviking.parse.accessors.web_importer.WebImporter",
+            lambda: FakeImporter(),
+        )
+
+        resource = await accessor.access(url, depth=1)
+
+        assert resource.path == downloaded
+        assert resource.meta["url_type"] == "download_html"
         assert called is False
 
 
