@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Scrapy spider for recursive web resource import."""
 
+import asyncio
 import os
 from collections.abc import Iterator
 from urllib.parse import urljoin, urlparse
@@ -81,6 +82,7 @@ class OpenVikingWebSpider(scrapy.Spider):
         self.root_host = urlparse(root_url).netloc.lower()
         self._success_count = 0
         self._seen_download_urls: set[str] = set()
+        self._render_semaphore: asyncio.Semaphore | None = None
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
@@ -90,8 +92,6 @@ class OpenVikingWebSpider(scrapy.Spider):
 
     async def _on_spider_closed(self, spider, reason):
         try:
-            import asyncio
-
             await asyncio.wait_for(self.renderer.close(), timeout=5.0)
         except Exception:
             pass
@@ -134,7 +134,14 @@ class OpenVikingWebSpider(scrapy.Spider):
         )
         try:
             if needs_render:
-                rendered = await self.renderer.render(final_url, self.config.playwright_timeout)
+                if self._render_semaphore is None:
+                    self._render_semaphore = asyncio.Semaphore(self.config.concurrency)
+                async with self._render_semaphore:
+                    if self._success_at_limit():
+                        return
+                    rendered = await self.renderer.render(
+                        final_url, self.config.playwright_timeout
+                    )
                 if rendered.is_success and rendered.html:
                     final_url = rendered.final_url or final_url
                     page_html = rendered.html

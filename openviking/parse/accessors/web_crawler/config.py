@@ -16,7 +16,7 @@ class CrawlConfig:
     allow_external_links: bool = False
     skip_download_links: bool = True
 
-    concurrency: int = 5
+    concurrency: int = 10
     timeout: float = 10.0
     download_delay: float = 0.2
     retry_times: int = 2

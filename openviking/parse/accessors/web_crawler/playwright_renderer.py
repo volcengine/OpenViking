@@ -23,6 +23,12 @@ PLAYWRIGHT_CHROMIUM_INSTALL_HINT = (
     "launched. Run `python -m playwright install chromium` and retry."
 )
 
+# Cap the networkidle wait: pages with continuous background activity (e.g. the
+# GraphiQL playground, polling/websocket apps) never go idle and would otherwise
+# block until the full render timeout. Content is usually ready right after
+# domcontentloaded, and ``_wait_past_challenge`` handles late-arriving text.
+_NETWORKIDLE_TIMEOUT_MS = 8000
+
 
 @dataclass
 class RenderResult:
@@ -65,7 +71,7 @@ class PlaywrightRenderer:
                 timeout=timeout * 1000,
             )
             try:
-                await page.wait_for_load_state("networkidle", timeout=timeout * 1000)
+                await page.wait_for_load_state("networkidle", timeout=_NETWORKIDLE_TIMEOUT_MS)
             except Exception:
                 pass
             await self._wait_past_challenge(page, timeout * 1000)
