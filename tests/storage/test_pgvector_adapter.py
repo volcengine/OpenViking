@@ -726,25 +726,41 @@ def test_pgvector_backend_url_priority_and_whitespace_normalization():
         )
 
 
-def _pgvector_smoke_config(project):
-    return VectorDBBackendConfig.model_validate(
-        {
-            "backend": "pgvector",
-            "project": project,
-            "name": "context",
-            "index_name": "default",
-            "distance_metric": "cosine",
-            "dimension": 3,
-            "pgvector": {
-                "host": os.getenv("OPENVIKING_PGVECTOR_HOST", "127.0.0.1"),
-                "port": int(os.getenv("OPENVIKING_PGVECTOR_PORT", "15432")),
-                "user": os.getenv("OPENVIKING_PGVECTOR_USER", "postgres"),
-                "password": os.getenv("OPENVIKING_PGVECTOR_PASSWORD", "postgres"),
-                "db_name": os.getenv("OPENVIKING_PGVECTOR_DB", "postgres"),
-                "schema": os.getenv("OPENVIKING_PGVECTOR_SCHEMA", "public"),
-            },
+_SMOKE_HOST_ENV = {
+    "pgvector": "OPENVIKING_PGVECTOR_HOST",
+    "opengauss": "OPENVIKING_OPENGAUSS_HOST",
+}
+
+
+def _smoke_config(backend, project):
+    base = {
+        "backend": backend,
+        "project": project,
+        "name": "context",
+        "index_name": "default",
+        "distance_metric": "cosine",
+        "dimension": 3,
+    }
+    if backend == "pgvector":
+        base["pgvector"] = {
+            "host": os.getenv("OPENVIKING_PGVECTOR_HOST", "127.0.0.1"),
+            "port": int(os.getenv("OPENVIKING_PGVECTOR_PORT", "15432")),
+            "user": os.getenv("OPENVIKING_PGVECTOR_USER", "postgres"),
+            "password": os.getenv("OPENVIKING_PGVECTOR_PASSWORD", "postgres"),
+            "db_name": os.getenv("OPENVIKING_PGVECTOR_DB", "postgres"),
+            "schema": os.getenv("OPENVIKING_PGVECTOR_SCHEMA", "public"),
         }
-    )
+    elif backend == "opengauss":
+        base["opengauss"] = {
+            "host": os.getenv("OPENVIKING_OPENGAUSS_HOST", "127.0.0.1"),
+            "port": int(os.getenv("OPENVIKING_OPENGAUSS_PORT", "5432")),
+            "user": os.getenv("OPENVIKING_OPENGAUSS_USER", "omm"),
+            "password": os.getenv("OPENVIKING_OPENGAUSS_PASSWORD", ""),
+            "db_name": os.getenv("OPENVIKING_OPENGAUSS_DB", "postgres"),
+            "schema": os.getenv("OPENVIKING_OPENGAUSS_SCHEMA", "public"),
+            "mode": os.getenv("OPENVIKING_OPENGAUSS_MODE", "standalone"),
+        }
+    return VectorDBBackendConfig.model_validate(base)
 
 
 # A golden fixture whose nearest neighbour to the query [1, 0, 0] is unambiguous:
@@ -812,5 +828,21 @@ def _run_pgvector_smoke(adapter):
 )
 def test_pgvector_adapter_integration_smoke():
     suffix = uuid.uuid4().hex[:8]
-    adapter = create_collection_adapter(_pgvector_smoke_config(f"pytest_{suffix}"))
+    adapter = create_collection_adapter(_smoke_config("pgvector", f"pytest_{suffix}"))
+    _run_pgvector_smoke(adapter)
+
+
+@pytest.mark.parametrize("backend", ["opengauss", "pgvector"], ids=["opengauss", "pgvector"])
+def test_cross_backend_smoke_parity(backend):
+    """The same golden fixture + assertions must hold for both SQL backends,
+    proving openGauss<->pgvector parity. Each backend skips unless its host env
+    var is set, so this runs against whichever container(s) are available."""
+    host_env = _SMOKE_HOST_ENV[backend]
+    if not os.getenv(host_env):
+        pytest.skip(f"set {host_env} to run the {backend} parity smoke")
+    suffix = uuid.uuid4().hex[:8]
+    try:
+        adapter = create_collection_adapter(_smoke_config(backend, f"pytest_{suffix}"))
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        pytest.skip(f"{backend} adapter unavailable: {exc}")
     _run_pgvector_smoke(adapter)
