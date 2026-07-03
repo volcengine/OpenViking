@@ -147,9 +147,11 @@ delta:
 This matrix moves one level above the index microbenchmark. It calls
 `CollectionAdapter.query()` and therefore includes OpenViking filter handling,
 label-to-record lookup, result normalization, persistence, and lazy index
-rebuild. It uses harness revision
-`84f79c5f52b553561299d42730949b612f3fe29c` and five independent processes on
-the same H20/software setup as the exact-scaling runs.
+rebuild. The initial uncached-filter run uses revision
+`84f79c5f52b553561299d42730949b612f3fe29c`; the prepared-filter-cache follow-up
+uses revision `087f2a280dc06031665a0bbdb1ef26a9fa2735da`. Each result aggregates
+five independent processes on the same H20/software setup as the exact-scaling
+runs.
 
 - Dataset: 100,000 deterministic normalized Gaussian vectors, 768D float32
 - Queries: 50 per scenario; K=10; three warm-up queries
@@ -165,7 +167,7 @@ from the index microbenchmark. Its Recall@10 against cuVS GPU brute-force was
 0.982 without a filter and 0.978--0.994 with filters. This is both a quality
 and memory semantic that the integration must make explicit.
 
-### Warm query performance
+### Initial uncached-filter result
 
 | Scenario | Native p50 (ms) | cuVS p50 (ms) | Native Recall@10 | cuVS Recall@10 | Relative p50 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -183,27 +185,52 @@ That is smaller than the index-only 100K x 768D result because collection
 lookup adds fixed host-side work and the native collection path uses int8
 quantization.
 
-The filtered result identifies a blocker, not an inherent cuVS limitation.
-The current integration evaluates the predicate against every Python record to
-build a GPU prefilter mask on every query. All six cuVS filter scenarios remain
-near 104--106 ms regardless of selectivity or record distribution. The next
-implementation step is to reuse OpenViking's scalar-index candidate labels or
-cache/update a device-compatible mask instead of scanning 100,000 Python
-records per query.
+The initial filtered result identified an integration blocker, not an inherent
+cuVS limitation. That revision evaluated the predicate against every Python
+record and rebuilt the GPU prefilter mask on every query. All six cuVS filter
+scenarios remained near 104--106 ms regardless of selectivity or record
+distribution.
+
+### Prepared-filter-cache follow-up
+
+The follow-up adds a bounded LRU of prepared GPU bitsets and invalidates it on
+upsert or delete. The first query for each new filter still performs the host
+predicate scan; subsequent searches with the same filter reuse the device
+bitset.
+
+| Scenario | First cuVS query (ms) | Cached cuVS p50 (ms) | Native p50 (ms) | Cached relative p50 |
+| --- | ---: | ---: | ---: | ---: |
+| Uniform 10% | 141.022 +/- 1.248 | 1.077 +/- 0.014 | 1.832 +/- 0.066 | cuVS 1.70x faster |
+| Uniform 1% | 133.535 +/- 0.772 | 0.989 +/- 0.011 | 0.520 +/- 0.002 | cuVS 1.90x slower |
+| Uniform 0.1% | 123.198 +/- 0.699 | 0.948 +/- 0.002 | 0.330 +/- 0.003 | cuVS 2.88x slower |
+| Clustered 10% | 121.070 +/- 0.637 | 1.090 +/- 0.003 | 1.389 +/- 0.011 | cuVS 1.27x faster |
+| Clustered 1% | 119.758 +/- 1.763 | 0.987 +/- 0.004 | 0.470 +/- 0.003 | cuVS 2.10x slower |
+| Clustered 0.1% | 119.441 +/- 1.175 | 0.960 +/- 0.006 | 0.325 +/- 0.002 | cuVS 2.95x slower |
+
+Repeated-filter cuVS p50 improves by 97.9--111.0x over the uncached revision.
+The 10% scenarios now favor cuVS, while the native scalar index remains faster
+for 1% and 0.1% selectivity. Unfiltered p50 on the follow-up was 0.965 +/- 0.019
+ms for cuVS and 8.643 +/- 0.151 ms for native, an approximately 9.0x ratio.
+
+The cache addresses repeated filters but not first-use or high-cardinality
+filters: a new predicate still costs approximately 119--141 ms at 100K records.
+Reusing OpenViking's scalar-index candidate labels is still worth evaluating
+for those cases. The cache's configured size is 16 prepared filters, and data
+mutation clears it before rebuilding the dense index.
 
 ### Ingestion, mutation, and restart
 
 | Operation | Native median | cuVS median |
 | --- | ---: | ---: |
-| Ingest 100K records | 29.102 s | 37.925 s |
-| First unfiltered query after ingest | 25.524 ms | 1,809.377 ms |
-| Upsert 1: next query | 12.130 ms | 1,685.224 ms |
-| Upsert 100: next query | 11.922 ms | 1,433.094 ms |
-| Upsert 1K: next query | 13.970 ms | 1,550.750 ms |
-| Upsert 10K: next query | 14.597 ms | 1,457.277 ms |
-| Delete 100: next query | 13.588 ms | 1,407.207 ms |
-| First query after close/reopen | 5.381 s | 15.253 s |
-| Warm query after reopen | 10.569 ms | 1.105 ms |
+| Ingest 100K records | 29.849 s | 38.545 s |
+| First unfiltered query after ingest | 23.108 ms | 1,811.843 ms |
+| Upsert 1: next query | 12.167 ms | 1,410.397 ms |
+| Upsert 100: next query | 12.835 ms | 1,402.790 ms |
+| Upsert 1K: next query | 13.915 ms | 1,438.549 ms |
+| Upsert 10K: next query | 14.578 ms | 1,535.870 ms |
+| Delete 100: next query | 13.574 ms | 1,405.846 ms |
+| First query after close/reopen | 5.338 s | 15.315 s |
+| Warm query after reopen | 10.551 ms | 1.118 ms |
 
 Every cuVS mutation marks the index dirty, and the next query synchronously
 rebuilds the full 100K-vector GPU index. The rebuild cost is therefore almost
@@ -218,7 +245,7 @@ first query rather than adapter construction. The cuVS first query includes
 store recovery, rebuilding Python-side records, and building the GPU index.
 After that work, the reopened cuVS collection returns to approximately 1.1 ms.
 
-Median host RSS increase during ingestion was 0.94 GiB for native and 2.70 GiB
+Median host RSS increase during ingestion was 0.93 GiB for native and 2.71 GiB
 for cuVS; cuVS additionally used a 0.29 GiB GPU-memory delta after search. The
 cuVS host overhead is dominated by the current per-vector Python tuple mirror.
 These RSS deltas are directional rather than an allocator-isolated memory
@@ -233,12 +260,13 @@ benchmark because both backends run sequentially in each process.
    imply better performance.
 3. CAGRA can improve batched capacity around Recall@10=0.96, but this benefit
    requires batching that the current OpenViking integration does not expose.
-4. Collection-level unfiltered lookup retains a 9.7x warm-p50 benefit at
-   100K x 768D, but native int8 versus cuVS float32 is not an equal-memory or
-   equal-quality comparison.
-5. The current Python full-record filter scan makes filtered cuVS search
-   57--330x slower than native. Filter candidate reuse or mask caching is a
-   prerequisite for meaningful server-level filtered benchmarks.
+4. Collection-level unfiltered lookup retains an approximately 9.0x warm-p50
+   benefit at 100K x 768D, but native int8 versus cuVS float32 is not an
+   equal-memory or equal-quality comparison.
+5. Caching prepared filter bitsets improves repeated-filter cuVS p50 by
+   98--111x. Repeated 10% filters now favor cuVS, while native remains
+   1.9--3.0x faster at 1% and 0.1% selectivity. A new filter still pays a
+   119--141 ms host scan, so scalar-index candidate reuse remains relevant.
 6. Synchronous lazy rebuild shifts approximately 1.4--1.7 seconds onto the
    first reader after any mutation at 100K x 768D. Background snapshot rebuild
    and atomic swap should be evaluated before enabling cuVS for write-active
@@ -246,6 +274,6 @@ benchmark because both backends run sequentially in each process.
 7. Independent process results are stable for this hardware and dataset, but
    cross-node and cross-day variance are not yet measured.
 8. GloVe-100 and normalized Gaussian vectors are engineering datasets, not a
-   representative agent-memory corpus. After the filter and rebuild blockers,
-   the next matrix should cover server concurrency and a real agent-memory
-   embedding workload.
+   representative agent-memory corpus. The next matrix should cover server
+   concurrency and a real agent-memory embedding workload while separately
+   tracking new versus cached filters and post-mutation rebuilds.
