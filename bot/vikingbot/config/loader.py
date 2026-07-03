@@ -210,8 +210,20 @@ def _fill_user_api_key_from_ovcli(bot_data: dict) -> None:
     try:
         cli_config = load_ovcli_config()
     except ValueError as e:
-        print(str(e), file=sys.stderr)
-        raise
+        # A missing or invalid ovcli identity only affects OpenViking memory/file
+        # tools. It must NOT abort loading the rest of the bot config (LLM/vlm
+        # provider, agents, channels): load_config() would otherwise catch this
+        # ValueError, discard the whole config and silently fall back to defaults,
+        # so a user who only configured `vlm` ends up on the default
+        # `openai/*` model with no credentials ("Missing credentials ... set
+        # OPENAI_API_KEY") instead of their configured provider. Degraded
+        # OpenViking auth is surfaced separately by validate_openviking_auth().
+        print(
+            f"Warning: could not load OpenViking user API key from ovcli config: {e}\n"
+            "OpenViking memory and file tools may not work until this is fixed.",
+            file=sys.stderr,
+        )
+        return
     if cli_config and cli_config.api_key:
         bot_data["api_key"] = cli_config.api_key
 
