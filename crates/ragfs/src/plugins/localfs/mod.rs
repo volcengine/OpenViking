@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use std::fs;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use std::io::{BufRead, BufReader};
@@ -18,8 +19,9 @@ use serde::Deserialize;
 
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
+use crate::core::glob::{decode_offset_token, encode_offset_token, purepath_match, validate_pattern};
 use crate::core::plugin::ServicePlugin;
-use crate::core::types::{ConfigParameter, FileInfo, GrepResult, PluginConfig, WriteFlag};
+use crate::core::types::{ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepResult, PluginConfig, WriteFlag};
 
 /// LocalFS - Local file system implementation
 pub struct LocalFileSystem {
@@ -89,6 +91,23 @@ impl LocalFileSystem {
 
     /// Run blocking grep work on a dedicated thread and normalize join errors.
     async fn run_blocking_grep<T, F>(job: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T> + Send + 'static,
+    {
+        tokio::task::spawn_blocking(job)
+            .await
+            .map_err(|e| Error::Internal(format!("spawn_blocking failed: {}", e)))?
+    }
+
+    /// Run local glob traversal on a blocking thread to avoid stalling the async runtime.
+    ///
+    /// Args:
+    /// - `job`: The blocking task that performs the actual glob traversal and pagination.
+    ///
+    /// Returns:
+    /// - The blocking task result, or `Error::Internal` if the thread join fails.
+    async fn run_blocking_glob<T, F>(job: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce() -> Result<T> + Send + 'static,
@@ -515,6 +534,180 @@ impl LocalFileSystem {
         } else {
             Some(s.to_string())
         }
+    }
+
+    /// Implement glob pagination with a local DFS walk instead of materializing the whole tree.
+    ///
+    /// Args:
+    /// - `base_path`: Absolute local path to the mounted root directory.
+    /// - `virtual_path`: Query path inside the plugin mount.
+    /// - `pattern`: Glob pattern with semantics aligned to `PurePath.match()`.
+    /// - `show_hidden`: Whether hidden files should be included.
+    /// - `page_size`: Page size, or `None` to return all matches.
+    /// - `level_limit`: Maximum traversal depth.
+    /// - `continuation_token`: Continuation token returned by the previous page.
+    ///
+    /// Returns:
+    /// - The current `GlobPage`, or an error if the path is missing, not a directory,
+    ///   the token is invalid, or traversal fails.
+    fn glob_via_walk(
+        base_path: &Path,
+        virtual_path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        validate_pattern(pattern)?;
+        if matches!(page_size, Some(0)) {
+            return Err(Error::invalid_operation("page_size must be positive"));
+        }
+
+        let query_root = Self::resolve_virtual_path(base_path, virtual_path);
+        if !query_root.exists() {
+            return Err(Error::NotFound(virtual_path.to_string()));
+        }
+        if !query_root.is_dir() {
+            return Err(Error::NotADirectory(virtual_path.to_string()));
+        }
+
+        let start = decode_offset_token(
+            continuation_token.as_deref(),
+            virtual_path,
+            pattern,
+            show_hidden,
+            level_limit,
+        )?;
+        let limit = page_size.unwrap_or(usize::MAX);
+        let mut matched_seen = 0usize;
+        let mut entries = Vec::new();
+        let mut found_more = false;
+
+        let _ = Self::walk_glob_page(
+            &query_root,
+            &query_root,
+            pattern,
+            show_hidden,
+            level_limit,
+            start,
+            limit,
+            &mut matched_seen,
+            &mut entries,
+            &mut found_more,
+        )?;
+
+        let next_token = if found_more {
+            Some(encode_offset_token(
+                start.saturating_add(entries.len()),
+                virtual_path,
+                pattern,
+                show_hidden,
+                level_limit,
+            ))
+        } else {
+            None
+        };
+
+        Ok(GlobPage { entries, next_token })
+    }
+
+    /// Traverse directories in stable DFS order and build the current glob page inline.
+    ///
+    /// Args:
+    /// - `query_root`: Local path to the query root directory.
+    /// - `current_dir`: Local path to the directory currently being traversed.
+    /// - `pattern`: Glob pattern.
+    /// - `show_hidden`: Whether hidden files should be included.
+    /// - `level_limit`: Maximum traversal depth.
+    /// - `start`: Number of matched entries to skip for the current query.
+    /// - `limit`: Maximum number of matches to return in the current page.
+    /// - `matched_seen`: Counter of matches seen so far.
+    /// - `entries`: Collected entries for the current page.
+    /// - `found_more`: Whether there are more matches after the current page.
+    ///
+    /// Returns:
+    /// - `ControlFlow::Break(())` when the current page is full and a next page exists,
+    ///   so traversal can stop early.
+    /// - `ControlFlow::Continue(())` when traversal of the current subtree is complete.
+    fn walk_glob_page(
+        query_root: &Path,
+        current_dir: &Path,
+        pattern: &str,
+        show_hidden: bool,
+        level_limit: Option<usize>,
+        start: usize,
+        limit: usize,
+        matched_seen: &mut usize,
+        entries: &mut Vec<GlobEntry>,
+        found_more: &mut bool,
+    ) -> Result<ControlFlow<()>> {
+        let current_virtual = Self::local_to_query_relative_path(query_root, current_dir)
+            .ok_or_else(|| Error::InvalidPath(current_dir.display().to_string()))?;
+        let current_depth = Self::virtual_depth(&current_virtual);
+        if level_limit.is_some_and(|max_depth| current_depth >= max_depth) {
+            return Ok(ControlFlow::Continue(()));
+        }
+
+        let dir_entries = fs::read_dir(current_dir)
+            .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
+        let mut ordered_entries = Vec::new();
+        for entry in dir_entries {
+            let entry = entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| Error::plugin(format!("failed to get file type: {}", e)))?;
+            ordered_entries.push((
+                entry.file_name().to_string_lossy().to_string(),
+                entry.path(),
+                file_type.is_dir(),
+            ));
+        }
+        ordered_entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        for (name, local_path, is_dir) in ordered_entries {
+            if !is_dir && !show_hidden && name.starts_with('.') {
+                continue;
+            }
+
+            let rel_path = Self::local_to_query_relative_path(query_root, &local_path)
+                .ok_or_else(|| Error::InvalidPath(local_path.display().to_string()))?;
+            if purepath_match(&rel_path, pattern)? {
+                if entries.len() >= limit {
+                    *found_more = true;
+                    return Ok(ControlFlow::Break(()));
+                }
+                if *matched_seen >= start {
+                    entries.push(GlobEntry {
+                        path: local_path.to_string_lossy().to_string(),
+                        rel_path: rel_path.clone(),
+                        name: name.clone(),
+                        is_dir,
+                    });
+                }
+                *matched_seen += 1;
+            }
+
+            if is_dir {
+                match Self::walk_glob_page(
+                    query_root,
+                    &local_path,
+                    pattern,
+                    show_hidden,
+                    level_limit,
+                    start,
+                    limit,
+                    matched_seen,
+                    entries,
+                    found_more,
+                )? {
+                    ControlFlow::Break(()) => return Ok(ControlFlow::Break(())),
+                    ControlFlow::Continue(()) => {}
+                }
+            }
+        }
+
+        Ok(ControlFlow::Continue(()))
     }
 
     fn resolve_virtual_path(base_path: &Path, path: &str) -> PathBuf {
@@ -944,11 +1137,51 @@ impl FileSystem for LocalFileSystem {
         })
         .await
     }
+
+    /// Return one glob page in local stable DFS order without building the full directory tree first.
+    ///
+    /// Args:
+    /// - `path`: Query directory path inside the plugin mount.
+    /// - `pattern`: Glob pattern.
+    /// - `show_hidden`: Whether hidden files should be included.
+    /// - `page_size`: Page size, or `None` to return all matches.
+    /// - `level_limit`: Maximum traversal depth.
+    /// - `continuation_token`: Token returned by the previous page.
+    ///
+    /// Returns:
+    /// - The current `GlobPage`, or an error if arguments are invalid or traversal fails.
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let base_path = self.base_path.clone();
+        let path_owned = path.to_string();
+        let pattern_owned = pattern.to_string();
+
+        Self::run_blocking_glob(move || {
+            LocalFileSystem::glob_via_walk(
+                base_path.as_path(),
+                &path_owned,
+                &pattern_owned,
+                show_hidden,
+                page_size,
+                level_limit,
+                continuation_token,
+            )
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::FileSystem;
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -1200,6 +1433,138 @@ mod tests {
         assert_eq!(result.matches.len(), 1);
         assert_eq!(result.matches[0].file, "a.txt");
         assert_eq!(result.matches[0].content, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_paginates_with_opaque_offset_tokens() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.md", "");
+        write_file(dir.path(), "b.md", "");
+        write_file(dir.path(), "c.md", "");
+
+        let first = fs
+            .glob_directory("/", "*.md", false, Some(2), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            first
+                .entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["a.md", "b.md"]
+        );
+        assert!(first.next_token.is_some());
+
+        let second = fs
+            .glob_directory("/", "*.md", false, Some(2), None, first.next_token)
+            .await
+            .unwrap();
+        assert_eq!(
+            second
+                .entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["c.md"]
+        );
+        assert!(second.next_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_keeps_directory_matches() {
+        let (dir, fs) = fallback_localfs();
+        std::fs::create_dir_all(dir.path().join("folder")).unwrap();
+
+        let out = fs.glob_directory("/", "*", false, None, None, None).await.unwrap();
+        assert_eq!(
+            out.entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["folder"]
+        );
+        assert!(out.entries[0].is_dir);
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_respects_level_limit() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "top.md", "");
+        write_file(dir.path(), "sub/nested.md", "");
+        write_file(dir.path(), "sub/deeper/late.md", "");
+
+        let out = fs
+            .glob_directory("/", "*.md", false, None, Some(1), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            out.entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["top.md"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_rejects_token_from_different_query_scope() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.md", "");
+        write_file(dir.path(), "b.md", "");
+        write_file(dir.path(), "c.md", "");
+
+        let first = fs
+            .glob_directory("/", "*.md", false, Some(2), None, None)
+            .await
+            .unwrap();
+        let err = fs
+            .glob_directory("/", "*.txt", false, Some(2), None, first.next_token)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_skips_hidden_files_but_keeps_hidden_dirs() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), ".hidden.md", "");
+        write_file(dir.path(), ".hidden_dir/nested.md", "");
+
+        let out = fs.glob_directory("/", "*.md", false, None, None, None).await.unwrap();
+        assert_eq!(
+            out.entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec![".hidden_dir/nested.md"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_localfs_glob_keeps_exact_paging_semantics_for_unreadable_late_subtree() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.md", "");
+        write_file(dir.path(), "b.md", "");
+        std::fs::create_dir_all(dir.path().join("z_blocked")).unwrap();
+        write_file(dir.path(), "z_blocked/late.md", "");
+
+        let blocked_dir = dir.path().join("z_blocked");
+        let old_mode = std::fs::metadata(&blocked_dir).unwrap().permissions().mode();
+        let mut perms = std::fs::metadata(&blocked_dir).unwrap().permissions();
+        perms.set_mode(0);
+        std::fs::set_permissions(&blocked_dir, perms).unwrap();
+
+        let out = fs.glob_directory("/", "*.md", false, Some(2), None, None).await;
+
+        let mut restore = std::fs::metadata(&blocked_dir).unwrap().permissions();
+        restore.set_mode(old_mode);
+        std::fs::set_permissions(&blocked_dir, restore).unwrap();
+
+        assert!(out.is_err());
     }
 }
 
