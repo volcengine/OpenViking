@@ -813,6 +813,7 @@ class ResourceService:
                         args=normalized_args.processor_kwargs,
                         source_name=source_name,
                         lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
+                        provider_request_context=ctx.provider_request_context,
                     )
                     qm = get_queue_manager()
                     await qm.enqueue(QueueManager.EXTERNAL_PARSE, msg.to_dict())

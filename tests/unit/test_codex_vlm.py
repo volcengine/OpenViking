@@ -11,6 +11,10 @@ import pytest
 from openviking.models.vlm.backends import codex_auth
 from openviking.models.vlm.backends.codex_auth import resolve_codex_runtime_credentials
 from openviking.models.vlm.backends.codex_vlm import CodexVLM
+from openviking.server.provider_context import (
+    ProviderRequestContext,
+    bind_provider_request_context,
+)
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -480,6 +484,74 @@ def test_codex_sync_client_re_resolves_credentials_per_request(mock_resolve, moc
     assert second.choices[0].message.content == "second"
     assert mock_openai_class.call_args_list[0].kwargs["api_key"] == "oauth-token-a"
     assert mock_openai_class.call_args_list[1].kwargs["api_key"] == "oauth-token-b"
+
+
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_vlm_resolves_extra_header_templates(mock_resolve, mock_openai_class):
+    mock_resolve.return_value = {
+        "api_key": "static-placeholder",
+        "base_url": "http://saa.local/admin-service/v1",
+    }
+    mock_real_client = _build_fake_openai_client("ok")
+    mock_openai_class.return_value = mock_real_client
+    vlm = CodexVLM(
+        {
+            "provider": "openai-codex",
+            "model": "qwen3.7-max",
+            "api_base": "http://saa.local/admin-service/v1",
+            "api_key": "placeholder",
+            "extra_headers": {
+                "Authorization": "Bearer ${header:X-Provider-Service-JWT}",
+                "X-Caller-Service-Code": "${header:X-Caller-Service-Code}",
+                "X-Static": "static-value",
+            },
+        }
+    )
+
+    with bind_provider_request_context(
+        ProviderRequestContext(
+            {
+                "x-provider-service-jwt": "header.payload.signature",
+                "X-Caller-Service-Code": "talentana",
+            }
+        )
+    ):
+        assert vlm.get_completion("hello") == "ok"
+
+    default_headers = mock_openai_class.call_args.kwargs["default_headers"]
+    assert default_headers["Authorization"] == "Bearer header.payload.signature"
+    assert default_headers["X-Caller-Service-Code"] == "talentana"
+    assert default_headers["X-Static"] == "static-value"
+
+
+@patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")
+@patch("openviking.models.vlm.backends.codex_vlm.resolve_codex_runtime_credentials")
+def test_codex_vlm_omits_headers_with_missing_template_values(mock_resolve, mock_openai_class):
+    mock_resolve.return_value = {
+        "api_key": "static-placeholder",
+        "base_url": "http://saa.local/admin-service/v1",
+    }
+    mock_openai_class.return_value = _build_fake_openai_client("ok")
+    vlm = CodexVLM(
+        {
+            "provider": "openai-codex",
+            "model": "qwen3.7-max",
+            "api_base": "http://saa.local/admin-service/v1",
+            "api_key": "placeholder",
+            "extra_headers": {
+                "Authorization": "Bearer ${header:X-Provider-Service-JWT}",
+                "X-Static": "static-value",
+            },
+        }
+    )
+
+    with bind_provider_request_context(ProviderRequestContext({})):
+        assert vlm.get_completion("hello") == "ok"
+
+    default_headers = mock_openai_class.call_args.kwargs["default_headers"]
+    assert "Authorization" not in default_headers
+    assert default_headers["X-Static"] == "static-value"
 
 
 @patch("openviking.models.vlm.backends.codex_vlm.openai.OpenAI")

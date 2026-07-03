@@ -8,6 +8,7 @@ import time
 from typing import Any, Dict, List, Optional, Protocol
 
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
+from openviking.server.provider_context import get_provider_request_context
 from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import PathLockEngine
 from openviking.storage.transaction.redo_log import RedoLog
@@ -551,6 +552,8 @@ class LockManager:
             user_id=params.get("user_id", "default"),
             peer_id=params.get("peer_id", "default"),
             role=params.get("role", "root"),
+            provider_request_context=params.get("provider_request_context")
+            or get_provider_request_context(),
         )
         semantic_queue: SemanticQueue = queue_manager.get_queue(queue_manager.SEMANTIC)  # type: ignore[assignment]
         await semantic_queue.enqueue(msg)

@@ -32,6 +32,11 @@ from openviking.parse.parsers.media.utils import (
 )
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
+from openviking.server.provider_context import (
+    ProviderRequestContext,
+    reset_provider_request_context,
+    set_provider_request_context,
+)
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
@@ -175,6 +180,7 @@ class SemanticProcessor(DequeueHandlerBase):
         return RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=role,
+            provider_request_context=ProviderRequestContext.from_dict(msg.provider_request_context),
         )
 
     def _detect_file_type(self, file_name: str) -> str:
@@ -292,6 +298,7 @@ class SemanticProcessor(DequeueHandlerBase):
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
             changes={"modified": [uri]},
+            provider_request_context=msg.provider_request_context,
             coalesce_key=build_semantic_coalesce_key(
                 context_type=msg.context_type,
                 uri=parent_uri,
@@ -365,12 +372,16 @@ class SemanticProcessor(DequeueHandlerBase):
 
                     logger.info(f"Processing semantic generation for: {msg})")
 
-                    semantic_lock = await SemanticLockScope.resolve(
-                        msg.lock_handoff,
-                        caller_lock=lock,
+                    provider_context_token = set_provider_request_context(
+                        current_ctx.provider_request_context
                     )
                     lock_transferred = False
+                    semantic_lock = None
                     try:
+                        semantic_lock = await SemanticLockScope.resolve(
+                            msg.lock_handoff,
+                            caller_lock=lock,
+                        )
                         if msg.context_type == "memory":
                             lock_transferred = True
                             await self._process_memory_directory(
@@ -450,7 +461,8 @@ class SemanticProcessor(DequeueHandlerBase):
                             if not executor.stale:
                                 await self._enqueue_parent_refresh(msg, target_uri or msg.uri)
                     finally:
-                        if not lock_transferred:
+                        reset_provider_request_context(provider_context_token)
+                        if semantic_lock is not None and not lock_transferred:
                             await semantic_lock.close()
                     self._merge_request_stats(msg.telemetry_id, processed=1)
                     logger.info(f"Completed semantic generation for: {msg.uri}")

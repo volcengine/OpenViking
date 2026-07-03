@@ -45,6 +45,10 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
+from openviking.server.provider_context import (
+    reset_provider_request_context,
+    set_provider_request_context,
+)
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import (
     MULTIWRITE_PATH_LOCK_FILE,
@@ -300,9 +304,11 @@ class VikingFS:
     def bind_request_context(self, ctx: RequestContext):
         """Temporarily bind ctx for legacy internal call paths without explicit ctx param."""
         token = self._bound_ctx.set(ctx)
+        provider_context_token = set_provider_request_context(ctx.provider_request_context)
         try:
             yield
         finally:
+            reset_provider_request_context(provider_context_token)
             self._bound_ctx.reset(token)
 
     @staticmethod

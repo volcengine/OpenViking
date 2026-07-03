@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
+from openviking.server.provider_context import ProviderRequestContext
+
 
 @dataclass
 class UnderstandingParseMsg:
@@ -36,6 +38,7 @@ class UnderstandingParseMsg:
     enforce_public_remote_targets: bool = False
     args: Dict[str, Any] = field(default_factory=dict)
     source_name: Optional[str] = None
+    provider_request_context: Optional[Dict[str, Any]] = None
 
     def __init__(
         self,
@@ -62,6 +65,7 @@ class UnderstandingParseMsg:
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
         source_name: Optional[str] = None,
+        provider_request_context: Optional[Dict[str, Any] | ProviderRequestContext] = None,
     ):
         self.id = str(uuid4())
         self.task_id = task_id
@@ -86,6 +90,12 @@ class UnderstandingParseMsg:
         self.enforce_public_remote_targets = enforce_public_remote_targets
         self.args = args or {}
         self.source_name = source_name
+        if isinstance(provider_request_context, ProviderRequestContext):
+            self.provider_request_context = provider_request_context.to_dict()
+        elif isinstance(provider_request_context, dict):
+            self.provider_request_context = dict(provider_request_context)
+        else:
+            self.provider_request_context = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -137,6 +147,9 @@ class UnderstandingParseMsg:
             enforce_public_remote_targets=bool(data.get("enforce_public_remote_targets", False)),
             args=data.get("args") if isinstance(data.get("args"), dict) else {},
             source_name=data.get("source_name"),
+            provider_request_context=data.get("provider_request_context")
+            if isinstance(data.get("provider_request_context"), dict)
+            else None,
         )
         if data.get("id"):
             obj.id = str(data["id"])

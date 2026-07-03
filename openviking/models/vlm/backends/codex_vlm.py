@@ -35,6 +35,7 @@ from .codex_responses_adapter import (
     CodexCompletionsAdapter,
 )
 from .openai_vlm import OpenAIVLM, _build_openai_client_kwargs
+from openviking.server.provider_context import resolve_dynamic_extra_headers
 
 
 class CodexVLM(OpenAIVLM):
@@ -47,12 +48,13 @@ class CodexVLM(OpenAIVLM):
         self._async_client = None
 
     def _build_responses_client(self, api_key: str, api_base: str):
+        extra_headers = resolve_dynamic_extra_headers(self.extra_headers)
         kwargs = _build_openai_client_kwargs(
             "openai",
             api_key,
             api_base,
             self.api_version,
-            self.extra_headers,
+            extra_headers or None,
             self.timeout,
         )
         return openai.OpenAI(**kwargs)

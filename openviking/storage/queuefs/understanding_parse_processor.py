@@ -12,6 +12,10 @@ from openviking.observability.context import (
     bind_execution_context,
 )
 from openviking.server.identity import RequestContext, Role
+from openviking.server.provider_context import (
+    ProviderRequestContext,
+    bind_provider_request_context,
+)
 from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.understanding_parse_msg import UnderstandingParseMsg
@@ -121,6 +125,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
             actor_peer_id=msg.actor_peer_id,
+            provider_request_context=ProviderRequestContext.from_dict(msg.provider_request_context),
         )
 
         task_tracker = get_task_tracker()
@@ -176,6 +181,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                         enforce_public_remote_targets=msg.enforce_public_remote_targets,
                         args=new_args,
                         source_name=msg.source_name,
+                        provider_request_context=msg.provider_request_context,
                     )
                     await qm.enqueue(QueueManager.EXTERNAL_PARSE, retry_msg.to_dict())
                     self.report_requeue()
@@ -213,7 +219,11 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
             telemetry = OperationTelemetry(operation="noop", enabled=False)
             telemetry.telemetry_id = telemetry_id
 
-        with bind_execution_context(), (bind_telemetry(telemetry) if telemetry else suppress()):
+        with (
+            bind_execution_context(),
+            (bind_telemetry(telemetry) if telemetry else suppress()),
+            bind_provider_request_context(ctx.provider_request_context),
+        ):
             try:
                 await task_tracker.start(
                     msg.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
