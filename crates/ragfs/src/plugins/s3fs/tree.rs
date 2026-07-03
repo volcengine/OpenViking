@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::time::SystemTime;
 
 use super::client;
-use crate::core::filesystem::{relative_depth, relative_match_file};
+use crate::core::filesystem::{compare_listing_names, relative_depth, relative_match_file};
 use crate::core::{FileInfo, Result, TreeEntry};
 
 /// Extract the last path component (file/dir name) from a path.
@@ -21,8 +21,9 @@ fn s3_file_name(path: &str) -> String {
 ///
 /// Reconstructs synthetic directories (from directory markers and from file
 /// parent prefixes), filters hidden files and entries beyond `level_limit`,
-/// and orders entries by path-component lexicographic order so the output is
-/// stable and consistent with the default DFS implementation.
+/// and orders entries by DFS order with sibling directories first, then by
+/// case-insensitive name, so the output is stable and consistent with the
+/// default DFS implementation.
 ///
 /// `query_root` is the normalized query root path; `key_to_path` maps an S3
 /// object key to a filesystem path (allowing prefix stripping to be injected).
@@ -110,7 +111,19 @@ where
             .split('/')
             .filter(|p| !p.is_empty())
             .collect();
-        a_parts.cmp(&b_parts)
+        for i in 0..a_parts.len().min(b_parts.len()) {
+            if a_parts[i] == b_parts[i] {
+                continue;
+            }
+            let a_prefix = format!("/{}", a_parts[..=i].join("/"));
+            let b_prefix = format!("/{}", b_parts[..=i].join("/"));
+            let a_is_dir = seen_dirs.contains(&a_prefix);
+            let b_is_dir = seen_dirs.contains(&b_prefix);
+            return b_is_dir
+                .cmp(&a_is_dir)
+                .then_with(|| compare_listing_names(a_parts[i], b_parts[i]));
+        }
+        a_parts.len().cmp(&b_parts.len())
     });
 
     let mut result = Vec::new();
@@ -213,7 +226,7 @@ mod tests {
         let paths: Vec<&str> = result.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(
             paths,
-            vec!["/a", "/a/a.txt", "/a/b", "/a/b/c.txt", "/a/b.txt"]
+            vec!["/a", "/a/b", "/a/b/c.txt", "/a/a.txt", "/a/b.txt"]
         );
     }
 
@@ -221,8 +234,8 @@ mod tests {
     fn test_build_tree_entries_level_limit() {
         let objects = vec![
             make_meta("a.txt", 100, false),
-            make_meta("sub/b.txt", 200, false),
-            make_meta("sub/deep/c.txt", 300, false),
+            make_meta("CONTRIBUTING_CN/file.txt", 200, false),
+            make_meta("b/file.txt", 300, false),
         ];
         let result = build_tree_entries_from_flat_listing(
             "/",
@@ -233,7 +246,7 @@ mod tests {
         )
         .unwrap();
         let paths: Vec<&str> = result.iter().map(|e| e.path.as_str()).collect();
-        assert_eq!(paths, vec!["/a.txt", "/sub"]);
+        assert_eq!(paths, vec!["/b", "/CONTRIBUTING_CN", "/a.txt"]);
     }
 
     #[test]

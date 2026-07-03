@@ -27,7 +27,7 @@ use futures::stream::{self, StreamExt};
 use regex::Regex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::core::filesystem::{relative_depth, relative_match_file};
+use crate::core::filesystem::{relative_depth, relative_match_file, sort_directory_entries};
 use crate::core::{
     ConfigParameter, Error, FileInfo, FileSystem, GrepMatch, GrepResult, PluginConfig, Result,
     ServicePlugin, TreeEntry, WriteFlag,
@@ -546,8 +546,7 @@ impl FileSystem for S3FileSystem {
             });
         }
 
-        // Sort by name
-        files.sort_by(|a, b| a.name.cmp(&b.name));
+        sort_directory_entries(&mut files);
 
         // Cache
         self.dir_cache.put(normalized.clone(), files.clone()).await;
