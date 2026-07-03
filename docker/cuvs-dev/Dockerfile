@@ -56,6 +56,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       "loguru>=0.7,<1" \
       "volcengine>=1.0.216"
 COPY examples/cuvs_smoke.py /opt/openviking-cuvs/cuvs_smoke.py
+COPY benchmark/cuvs/ /opt/openviking-cuvs-benchmark/
 COPY docker/cuvs-dev/entrypoint.sh /usr/local/bin/openviking-cuvs-dev
 RUN cp -a /opt/openviking-native-engine/. \
       /opt/openviking/openviking/storage/vectordb/engine/ \
