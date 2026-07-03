@@ -51,7 +51,7 @@ class ProviderSpec:
     # per-model param overrides, e.g. (("kimi-k2.5", {"temperature": 1.0}),)
     model_overrides: tuple[tuple[str, dict[str, Any]], ...] = ()
 
-    # provider-specific way to request reasoning/thinking, if supported by the protocol
+    # Provider-specific way to request reasoning/thinking, if supported by the protocol.
     thinking_param: str = ""  # volcengine_thinking | dashscope_enable_thinking | openai_reasoning_effort
 
     @property

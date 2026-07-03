@@ -123,7 +123,7 @@ Volcengine supports both model names and endpoint IDs. Using model names is reco
 {
   "vlm": {
     "provider": "volcengine",
-    "model": "doubao-seed-2-0-pro-260215",
+    "model": "doubao-seed-2-0-lite-260428",
     "api_key": "your-api-key",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
@@ -335,13 +335,17 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_base" : "<api-endpoint>",     // API endpoint address
     "api_key"  : "<your-api-key>",     // Model service API Key (optional for openai-codex)
     "provider" : "<provider-type>",    // Provider type (volcengine, openai, openai-codex, kimi, glm, etc.)
-    "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
+    "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-lite-260428 or gpt-4-vision-preview)
     "max_concurrent": 64              // Max concurrent LLM calls for semantic processing (default: 64)
   }
 }
 ```
 
 > **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `azure`, `jina`, `ollama`, `voyage`, `dashscope`, `minimax`, `cohere`, `vikingdb`, `gemini` (requires `pip install "google-genai>=1.0.0"`), `litellm`, and `local`. For VLM models, common providers include `volcengine`, `openai`, `openai-codex`, `kimi`, and `glm`.
+
+> **Memory config**: OpenViking always uses the v3 memory extraction pipeline. The legacy `memory.version` setting is deprecated and ignored; existing configs that set it still load without changing behavior.
+
+> **Memory schema scope**: Memory schema YAML defaults to `stage: "user"` and `peer_enabled: true`. Use `stage: "agent"` for execution-derived schemas such as trajectories/experiences, and set `peer_enabled: false` when a schema must stay in the current user's memory directory instead of peer directories.
 
 ##### Server Configuration Examples
 
@@ -373,7 +377,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-pro-260215",
+    "model"    : "doubao-seed-2-0-lite-260428",
     "max_concurrent": 64
   }
 }

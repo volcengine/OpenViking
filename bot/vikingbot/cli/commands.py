@@ -84,6 +84,42 @@ def _warn_deprecated_memory_user(memory_user: list[str] | None) -> None:
     )
 
 
+def _redirect_openviking_logs_to_stderr() -> None:
+    """Redirect openviking/openviking_cli standard-library loggers to stderr.
+
+    This prevents log output (e.g. deprecation warnings from memory_config)
+    from polluting stdout when vikingbot chat is used in --eval mode or piped.
+    """
+    import logging
+
+    for root_name in ("openviking", "openviking_cli"):
+        root_logger = logging.getLogger(root_name)
+        # If the logger has no handlers yet, add a stderr handler now.
+        # If it already has handlers, swap any stdout StreamHandlers to stderr.
+        if not root_logger.handlers:
+            handler = logging.StreamHandler(sys.stderr)
+            formatter = logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            )
+            handler.setFormatter(formatter)
+            root_logger.addHandler(handler)
+            root_logger.propagate = False
+        else:
+            for handler in root_logger.handlers:
+                if isinstance(handler, logging.StreamHandler) and handler.stream is sys.stdout:
+                    handler.setStream(sys.stderr)
+
+    # Also redirect Python warnings to stderr
+    warnings.simplefilter("default")
+    if not any(
+        isinstance(h, logging.StreamHandler) and h.stream is sys.stderr
+        for h in logging.getLogger("py.warnings").handlers
+    ):
+        logging.captureWarnings(True)
+        py_warnings_logger = logging.getLogger("py.warnings")
+        py_warnings_logger.addHandler(logging.StreamHandler(sys.stderr))
+
+
 def get_or_create_machine_id() -> str:
     """Get a unique machine ID using py-machineid.
 
@@ -722,6 +758,11 @@ def chat(
 
     bus = MessageBus()
     config = ensure_config(path)
+
+    # Redirect openviking/openviking_cli standard-library logs to stderr so they
+    # don't pollute stdout JSON output (important for --eval mode and piping).
+    _redirect_openviking_logs_to_stderr()
+
     validate_openviking_auth(config)
     _warn_deprecated_memory_user(memory_user)
     _init_bot_data(config)

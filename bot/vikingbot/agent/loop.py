@@ -9,6 +9,7 @@ import time
 import uuid
 from contextlib import AsyncExitStack
 from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +52,41 @@ def _is_tool_result_success(result: Any) -> bool:
         return False
     text = str(result).lstrip()
     return bool(text) and not text.startswith("Error:")
+
+
+@dataclass(slots=True)
+class _PlainTextContext:
+    """Context passed to an `on_plain_text` callback when the model emits plain text."""
+
+    messages: list[dict]
+    session_key: SessionKey
+    text: str
+    reasoning_content: str | None
+    iteration: int
+    tools: ToolRegistry
+    sandbox_manager: SandboxManager | None
+    sender_id: str | None
+    memory_peer_ids: list[str] | None
+    memory_owner_user_ids: list[str] | None
+    openviking_connection: dict[str, Any] | None
+
+
+@dataclass(slots=True)
+class _PlainTextDelivered:
+    """Signal that the text was delivered externally; continue the loop with new state."""
+
+    messages: list[dict]
+    tools_used: list[dict]
+    user_terminates: bool = False
+
+
+@dataclass(slots=True)
+class _PlainTextFinal:
+    """Signal that the text should be treated as the final reply; exit the loop."""
+
+    content: str | None = None
+
+
 
 
 class AgentLoop:
@@ -657,6 +693,8 @@ class AgentLoop:
         memory_owner_user_ids: list[str] | None = None,
         disabled_tools: list[str] | None = None,
         openviking_connection: dict[str, Any] | None = None,
+        stop_tool_names: list[str] | None = None,
+        on_plain_text: Any | None = None,
         channel_metadata: dict[str, Any] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
@@ -672,6 +710,13 @@ class AgentLoop:
                 trusted-mode owner-user memory lookup
             disabled_tools: Tool names to hide from the model for this request
             openviking_connection: Request-scoped OpenViking identity for tools
+            stop_tool_names: Tool names that terminate the loop immediately after execution
+            on_plain_text: Optional async callback invoked when the model returns a non-empty
+                plain-text reply (no tool calls). It receives (messages, text, iteration) and
+                must return a PlainTextRouteResult to either deliver the text and continue the
+                loop (e.g. forward it to a user simulator) or treat it as the final reply. When
+                None, plain text is treated as the final assistant reply (default chatbot
+                semantics).
             channel_metadata: Channel-specific metadata for tools that publish outbound messages
 
         Returns:
@@ -687,6 +732,7 @@ class AgentLoop:
             "total_tokens": 0,
         }
         write_exp_injected = False
+        stop_tools = set(stop_tool_names or [])
 
         def accumulate_token_usage(response: Any) -> None:
             if not response.usage:
@@ -852,15 +898,69 @@ class AgentLoop:
                     }
                     tools_used.append(tool_used_dict)
 
+                if any(
+                    tool_call.name in stop_tools
+                    for _idx, tool_call, _result, _duration in results
+                ):
+                    final_content = ""
+                    break
+
                 messages.append(
                     {"role": "user", "content": "Reflect on the results and decide next steps."}
                 )
             else:
+                text = (response.content or "").strip()
+                routed = False
+                if text and on_plain_text is not None:
+                    try:
+                        route = await on_plain_text(
+                            _PlainTextContext(
+                                messages=messages,
+                                session_key=session_key,
+                                text=text,
+                                reasoning_content=response.reasoning_content,
+                                iteration=iteration,
+                                tools=self.tools,
+                                sandbox_manager=self.sandbox_manager,
+                                sender_id=sender_id,
+                                memory_peer_ids=memory_peer_ids,
+                                memory_owner_user_ids=memory_owner_user_ids,
+                                openviking_connection=openviking_connection,
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[PLAIN_TEXT_HOOK]: hook raised; treating as final answer: %s", exc
+                        )
+                        route = None
+                    if isinstance(route, _PlainTextDelivered):
+                        messages = route.messages
+                        tools_used.extend(route.tools_used)
+                        if route.user_terminates:
+                            final_content = ""
+                            break
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": "Reflect on the results and decide next steps.",
+                            }
+                        )
+                        routed = True
+                        continue
+                    if isinstance(route, _PlainTextFinal):
+                        final_content = route.content if route.content is not None else text
+                        final_reasoning_content = response.reasoning_content
+                        break
+                    # Unknown / None result: fall through to default final-answer handling.
                 final_content = response.content
                 final_reasoning_content = response.reasoning_content
+                if routed:
+                    continue
                 break
 
-        if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
+        if final_content == "" and tools_used and tools_used[-1].get("tool_name") in stop_tools:
+            pass
+        elif final_content is None or (isinstance(final_content, str) and not final_content.strip()):
             if iteration >= self.max_iterations:
                 messages.append(
                     {
@@ -1141,6 +1241,13 @@ class AgentLoop:
                 openviking_connection=openviking_connection,
                 actor_peer_id=msg.sender_id,
             )
+
+            # Experience recall deduplication: URIs already recalled in this session
+            # are stored in session.metadata and survive restarts (persisted to JSONL).
+            exp_exclude_uris = session.metadata.get("recalled_exp_uris", [])
+            if not isinstance(exp_exclude_uris, list):
+                exp_exclude_uris = []
+
             messages = await message_context.build_messages(
                 history=history,
                 current_message=msg.content,
@@ -1150,6 +1257,7 @@ class AgentLoop:
                 profile_user_list=profile_user_list,
                 memory_peer_ids=memory_peer_ids,
                 memory_owner_user_ids=memory_owner_user_ids,
+                exp_exclude_uris=exp_exclude_uris,
             )
             relevant_memories = message_context.latest_relevant_memories
             auto_memory_tool = None
@@ -1159,7 +1267,19 @@ class AgentLoop:
                     query=msg.content,
                     result=relevant_memories,
                 )
-            # logger.info(f"New messages: {json.dumps(messages, indent=4)}")
+
+            # Track newly recalled experience URIs for deduplication
+            newly_recalled_exp_uris = getattr(message_context, "latest_recalled_exp_uris", [])
+            newly_recalled_exp_content = getattr(
+                message_context, "latest_recalled_exp_content", ""
+            )
+            if newly_recalled_exp_uris:
+                existing_uris = set(exp_exclude_uris)
+                for uri in newly_recalled_exp_uris:
+                    if uri not in existing_uris:
+                        existing_uris.add(uri)
+                        exp_exclude_uris.append(uri)
+                session.metadata["recalled_exp_uris"] = exp_exclude_uris
 
             # Run agent loop within a stable response identity for tracing/tool spans.
             response_id = uuid.uuid4().hex
@@ -1203,6 +1323,15 @@ class AgentLoop:
 
             is_heartbeat = bool(msg.metadata.get(HEARTBEAT_METADATA_KEY))
             if not (is_heartbeat and is_heartbeat_noop_response(final_content)):
+                # Write experience reminder into session history so it persists
+                # across turns and survives bot restarts (in JSONL).
+                if newly_recalled_exp_content:
+                    session.add_message(
+                        "user",
+                        f"[Experience Reminder]\n## Relevant Agent Experience\n{newly_recalled_exp_content}",
+                        exp_uris=newly_recalled_exp_uris,
+                        experience_reminder=True,
+                    )
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 session.add_message(
                     "assistant",

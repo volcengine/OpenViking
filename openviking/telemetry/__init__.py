@@ -13,7 +13,7 @@ from .operation import OperationTelemetry, TelemetrySnapshot
 from .registry import register_telemetry, resolve_telemetry, unregister_telemetry
 from .request import TelemetryRequest, TelemetrySelection, normalize_telemetry_request
 from .runtime import get_telemetry_runtime, set_telemetry_runtime
-from .tracer import tracer
+from .tracer import start_current_span, tracer
 
 __all__ = [
     "OperationTelemetry",
@@ -29,6 +29,7 @@ __all__ = [
     "register_telemetry",
     "resolve_telemetry",
     "set_telemetry_runtime",
+    "start_current_span",
     "tracer",
     "tracer_module",
     "unregister_telemetry",

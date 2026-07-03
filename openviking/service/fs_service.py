@@ -341,6 +341,7 @@ class FSService:
         msg = SemanticMsg(
             uri=root_uri,
             context_type=context_type,
+            recursive=False,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             peer_id=ctx.user.user_id,

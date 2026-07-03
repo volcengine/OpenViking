@@ -83,9 +83,12 @@ function HomePage() {
   })
 
   const summary = dashboard.data
-  const metricsUnavailable =
-    (!isConnectionRoleLoading && connectionRole === 'unknown') ||
-    isDisabledPayload(summary)
+  const missingPrivilegedRole =
+    !isConnectionRoleLoading && connectionRole === 'unknown'
+  const metricsUnavailable = missingPrivilegedRole || isDisabledPayload(summary)
+  const unavailableMessage = missingPrivilegedRole
+    ? t('usageAccessRequired')
+    : t('usageDisabled')
   const isMetricsLoading = isConnectionRoleLoading || dashboard.isLoading
   const isSeriesLoading = isConnectionRoleLoading || tokenSeries.isLoading
   const isCommitsLoading = isConnectionRoleLoading || contextCommits.isLoading
@@ -96,6 +99,7 @@ function HomePage() {
         <ContextDataPanel
           data={summary?.context_counts}
           disabled={metricsUnavailable}
+          disabledMessage={unavailableMessage}
           isError={dashboard.isError}
           isLoading={isMetricsLoading}
           t={t}
@@ -103,6 +107,7 @@ function HomePage() {
         <TodayTokensPanel
           data={summary?.today_tokens}
           disabled={metricsUnavailable}
+          disabledMessage={unavailableMessage}
           isError={dashboard.isError}
           isLoading={isMetricsLoading}
           t={t}
@@ -110,6 +115,7 @@ function HomePage() {
         <TodayRetrievalsPanel
           data={summary?.today_retrievals}
           disabled={metricsUnavailable}
+          disabledMessage={unavailableMessage}
           isError={dashboard.isError}
           isLoading={isMetricsLoading}
           t={t}
@@ -119,6 +125,7 @@ function HomePage() {
       <TokenTrendPanel
         data={tokenSeries.data}
         disabled={metricsUnavailable}
+        disabledMessage={unavailableMessage}
         isError={tokenSeries.isError}
         isLoading={isSeriesLoading}
         t={t}
@@ -127,6 +134,7 @@ function HomePage() {
       <ContextCommitsPanel
         data={contextCommits.data}
         disabled={metricsUnavailable}
+        disabledMessage={unavailableMessage}
         isError={contextCommits.isError}
         isLoading={isCommitsLoading}
         t={t}

@@ -4,6 +4,7 @@ import { useData, withBase } from 'vitepress'
 
 import { searchCopyForLocale } from './openviking-search-i18n'
 import { localizeSearchResultTitles } from './openviking-search-results'
+import { trackEvent } from './track'
 import type { RemoteSearchFailureReason } from './openviking-search-i18n'
 import type {
   DocsIndexRecord,
@@ -201,6 +202,8 @@ async function runSearch() {
     isLoading.value = false
     return
   }
+
+  trackEvent('docs-search')
 
   isLoading.value = true
   const controller = new AbortController()

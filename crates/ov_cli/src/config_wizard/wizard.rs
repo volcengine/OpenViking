@@ -6576,7 +6576,7 @@ mod tests {
         };
         let runtime = StatusBoxRuntime::connected(
             true,
-            Some("doubao-seed-2-0-pro-260215".to_string()),
+            Some("doubao-seed-2-0-lite-260428".to_string()),
             Some("doubao-embedding-vision-251215".to_string()),
         );
         let lines = status_box_lines_with_runtime(
@@ -6593,7 +6593,7 @@ mod tests {
         let text = lines.join("\n");
 
         assert!(text.contains("Status: Connected (Healthy)"));
-        assert!(text.contains("VLM: doubao-seed-2-0-pro-260215"));
+        assert!(text.contains("VLM: doubao-seed-2-0-lite-260428"));
         assert!(text.contains("Embedding: doubao-embedding-vision-251215"));
     }
 
@@ -6605,7 +6605,7 @@ mod tests {
                 "models": {
                     "name": "models",
                     "is_healthy": true,
-                    "status": "\nVLM Models:\n+-------+\n| Model | Provider |\n+-------+\n| doubao-seed-2-0-pro-260215 | volcengine |\n+-------+\n\nEmbedding Models:\n+-------+\n| Model | Provider |\n+-------+\n| doubao-embedding-vision-251215 | volcengine |\n+-------+\n"
+                    "status": "\nVLM Models:\n+-------+\n| Model | Provider |\n+-------+\n| doubao-seed-2-0-lite-260428 | volcengine |\n+-------+\n\nEmbedding Models:\n+-------+\n| Model | Provider |\n+-------+\n| doubao-embedding-vision-251215 | volcengine |\n+-------+\n"
                 }
             }
         });
@@ -6613,7 +6613,7 @@ mod tests {
         assert_eq!(
             extract_models_from_status_payload(&payload),
             (
-                Some("doubao-seed-2-0-pro-260215".to_string()),
+                Some("doubao-seed-2-0-lite-260428".to_string()),
                 Some("doubao-embedding-vision-251215".to_string())
             )
         );

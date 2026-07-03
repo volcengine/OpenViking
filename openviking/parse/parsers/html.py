@@ -8,6 +8,7 @@ Parses local HTML files.
 For URL downloading, use HTTPAccessor in the new two-layer architecture.
 """
 
+import re
 import time
 from pathlib import Path
 from typing import List, Optional, Union
@@ -23,13 +24,13 @@ from openviking_cli.utils.config.parser_config import HTMLConfig
 
 logger = __import__("openviking_cli.utils.logger").utils.logger.get_logger(__name__)
 
-
-# Backward compatibility: Re-export URLType and URLTypeDetector from http_accessor
-try:
-    from openviking.parse.accessors.http_accessor import URLType, URLTypeDetector
-except ImportError:
-    URLType = None
-    URLTypeDetector = None
+_SPA_EMPTY_PATTERNS = (
+    "You need to enable JavaScript to run this app.",
+    "This app works best with JavaScript enabled.",
+    "Please enable JavaScript to continue.",
+    "JavaScript is required to use this application.",
+    "Enable JavaScript to view this page.",
+)
 
 
 class HTMLParser(BaseParser):
@@ -62,55 +63,6 @@ class HTMLParser(BaseParser):
         """
         self.config = config or HTMLConfig()
         self._markdown_parser = None
-
-    @staticmethod
-    def _extract_filename_from_url(url: str) -> str:
-        """
-        Extract and URL-decode the original filename from a URL.
-
-        Args:
-            url: URL to extract filename from
-
-        Returns:
-            Decoded filename (e.g., "schemas.py" from ".../schemas.py")
-            Falls back to "download" if no filename can be extracted.
-        """
-        from pathlib import Path
-        from urllib.parse import unquote, urlparse
-
-        parsed = urlparse(url)
-        # URL-decode path to handle encoded characters (e.g., %E7%99%BE -> Chinese chars)
-        decoded_path = unquote(parsed.path)
-        basename = Path(decoded_path).name
-        return basename if basename else "download"
-
-    def _get_readabilipy(self):
-        """Lazy import of readabilipy."""
-        if not hasattr(self, "_readabilipy") or self._readabilipy is None:
-            try:
-                from readabilipy import simple_json
-
-                self._readabilipy = simple_json
-            except ImportError:
-                raise ImportError(
-                    "readabilipy is required for HTML parsing. "
-                    "Install it with: pip install readabilipy"
-                )
-        return self._readabilipy
-
-    def _get_markdownify(self):
-        """Lazy import of markdownify."""
-        if not hasattr(self, "_markdownify") or self._markdownify is None:
-            try:
-                import markdownify
-
-                self._markdownify = markdownify
-            except ImportError:
-                raise ImportError(
-                    "markdownify is required for HTML parsing. "
-                    "Install it with: pip install markdownify"
-                )
-        return self._markdownify
 
     def _get_markdown_parser(self):
         """Lazy import and create MarkdownParser with the HTML parser config."""
@@ -176,26 +128,63 @@ class HTMLParser(BaseParser):
             )
 
     def _html_to_markdown(self, html: str, base_url: str = "") -> str:
-        """
-        Convert HTML to Markdown using readabilipy + markdownify (Anthropic approach).
-        """
-        markdownify = self._get_markdownify()
-
-        # Preprocess: extract hidden content areas (e.g., WeChat public account's js_content)
+        """Convert HTML to Markdown using trafilatura."""
         html = self._preprocess_html(html)
+        content = self._extract_markdown(html, base_url or "")
+        title = self._extract_title(html, base_url or "")
+        content = self._clean_markdown(content)
+        if title and title not in content:
+            content = f"# {title}\n\n{content}" if content else f"# {title}"
+        return content
 
-        # Use readabilipy to extract main content (based on Mozilla Readability)
-        readabilipy = self._get_readabilipy()
-        result = readabilipy.simple_json_from_html_string(html, use_readability=True)
-        content_html = result.get("content") or html
+    @staticmethod
+    def _extract_markdown(html: str, url: str) -> str:
+        """Extract clean Markdown body from HTML."""
+        try:
+            import trafilatura
 
-        # Convert to markdown using markdownify
-        markdown = markdownify.markdownify(
-            content_html,
-            heading_style=markdownify.ATX,
-            strip=["script", "style"],
+            return (
+                trafilatura.extract(
+                    html,
+                    url=url,
+                    output_format="markdown",
+                    include_links=True,
+                    include_tables=True,
+                )
+                or ""
+            )
+        except Exception as exc:
+            logger.debug("[HTMLParser] trafilatura extraction failed: %s", exc)
+            return ""
+
+    @staticmethod
+    def _extract_title(html: str, url: str) -> str:
+        """Extract page title from HTML metadata."""
+        try:
+            import trafilatura
+
+            metadata = trafilatura.extract_metadata(html, default_url=url)
+            if metadata and metadata.title:
+                return str(metadata.title).strip()
+        except Exception as exc:
+            logger.debug("[HTMLParser] trafilatura title extraction failed: %s", exc)
+        return ""
+
+    @staticmethod
+    def _clean_markdown(markdown: str) -> str:
+        """Remove noisy artifacts from extracted Markdown."""
+        markdown = markdown or ""
+        markdown = re.sub(r"!\[[^\]]*\]\(data:image/[^)]+\)", "", markdown)
+        markdown = re.sub(
+            r"<img[^>]*src\s*=\s*['\"]data:image/[^'\"]*['\"][^>]*/?>",
+            "",
+            markdown,
+            flags=re.IGNORECASE,
         )
-
+        markdown = re.sub(r"<(span|a)\s+(?:id|name)=['\"][^'\"]*['\"]\s*>\s*</\1>", "", markdown)
+        for pattern in _SPA_EMPTY_PATTERNS:
+            markdown = markdown.replace(pattern, "")
+        markdown = re.sub(r"\n{3,}", "\n\n", markdown)
         return markdown.strip()
 
     def _preprocess_html(self, html: str) -> str:

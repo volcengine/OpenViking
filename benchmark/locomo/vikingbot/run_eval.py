@@ -1,14 +1,22 @@
 import argparse
+import contextlib
 import csv
 import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+
+from progress_utils import (
+    ThreadSafeProgressTracker,
+    make_three_state_progress,
+    should_show_progress,
+)
 
 
 def get_evidence_text(evidence_list: list, sample: dict) -> list[str]:
@@ -301,7 +309,7 @@ def run_vikingbot_chat(
         time_cost = end_time - start_time
 
         output = result.stdout.strip()
-        # 解析返回的json结果，处理换行、多余前缀等特殊情况
+        # 解析返回的 JSON 结果
         try:
             resp_json = json.loads(output, strict=False)
             response = resp_json.get("text", "")
@@ -407,8 +415,8 @@ def main():
     )
     parser.add_argument(
         "--output",
-        default="./result/locomo_qa_result.csv",
-        help="Path to output csv file, default: ./result/locomo_qa_result.csv",
+        default="./result/locomo/locomo_qa_result.csv",
+        help="Path to output csv file, default: ./result/locomo/locomo_qa_result.csv",
     )
     parser.add_argument(
         "--errors",
@@ -436,7 +444,7 @@ def main():
         "--count", type=int, default=None, help="Number of QA questions to run, default all"
     )
     parser.add_argument(
-        "--threads", type=int, default=40, help="Number of concurrent threads, default: 40"
+        "--threads", type=int, default=100, help="Number of concurrent threads, default: 100"
     )
     parser.add_argument(
         "--update-mode",
@@ -458,6 +466,11 @@ def main():
         "--skip-done",
         action="store_true",
         help="Skip questions already present in the output file",
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the live progress bar (fall back to line-by-line logs). Auto-disabled when stderr is not a TTY.",
     )
     args = parser.parse_args()
 
@@ -562,115 +575,142 @@ def main():
     remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
     remaining_count = len(remaining_qa)
     print(
-        f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process"
+        f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process",
+        file=sys.stderr,
     )
+
+    show_progress = should_show_progress(args.no_progress)
+
+    if show_progress:
+        progress, task_id = make_three_state_progress(description="Eval")
+        progress_tracker = ThreadSafeProgressTracker(progress, task_id, total=remaining_count)
+    else:
+        progress = None
+        progress_tracker = None
 
     def process_qa(qa_item, idx, total_count):
         """单个QA处理函数，供多线程调用"""
-        question = qa_item["question"]
-        answer = qa_item["answer"]
-        question_time = qa_item.get("question_time")
-        # 使用 question_id 作为 session_id，实现完全独立并行
-        question_id = qa_item.get("question_id")
-        speakers = qa_item.get("speakers", [])
-        source_sample_id = qa_item.get("original_sample_id")
-        sender_peer_id = source_sample_id
-        memory_peer_ids = None
-        if args.group_chat:
-            sender_peer_id = speakers[0] if speakers else source_sample_id
-            memory_peer_ids = speakers[1:] if len(speakers) > 1 else None
-        print(f"Processing {idx}/{total_count}: {question[:60]}...")
-        if question_time:
-            print(f"  [time context: {question_time}]")
-        if source_sample_id:
-            print(f"  [sample peer: {source_sample_id}]")
-        if speakers:
-            print(f"  [speakers: {speakers}]")
-        if sender_peer_id:
-            print(f"  [sender peer: {sender_peer_id}]")
-        if memory_peer_ids:
-            print(f"  [memory peers: {memory_peer_ids}]")
+        if progress_tracker is not None:
+            progress_tracker.job_started()
 
-        response, token_usage, time_cost, iteration, tools_used_names, bot_log_file = (
-            run_vikingbot_chat(
-                question,
-                question_time,
-                sender_peer_id,
-                question_id,
-                args.config,
-                memory_peer_ids,
+        failed = False
+        try:
+            question = qa_item["question"]
+            answer = qa_item["answer"]
+            question_time = qa_item.get("question_time")
+            # 使用 question_id 作为 session_id，实现完全独立并行
+            question_id = qa_item.get("question_id")
+            speakers = qa_item.get("speakers", [])
+            source_sample_id = qa_item.get("original_sample_id")
+            sender_peer_id = source_sample_id
+            memory_peer_ids = None
+            if args.group_chat:
+                sender_peer_id = speakers[0] if speakers else source_sample_id
+                memory_peer_ids = speakers[1:] if len(speakers) > 1 else None
+
+            if not show_progress:
+                print(f"Processing {idx}/{total_count}: {question[:60]}...")
+                if question_time:
+                    print(f"  [time context: {question_time}]")
+                if source_sample_id:
+                    print(f"  [sample peer: {source_sample_id}]")
+                if speakers:
+                    print(f"  [speakers: {speakers}]")
+                if sender_peer_id:
+                    print(f"  [sender peer: {sender_peer_id}]")
+                if memory_peer_ids:
+                    print(f"  [memory peers: {memory_peer_ids}]")
+
+            response, token_usage, time_cost, iteration, tools_used_names, bot_log_file = (
+                run_vikingbot_chat(
+                    question,
+                    question_time,
+                    sender_peer_id,
+                    question_id,
+                    args.config,
+                    memory_peer_ids,
+                )
             )
-        )
 
-        row = {
-            "sample_id": qa_item["sample_id"],
-            "question_index": qa_item.get("question_index", ""),
-            "result": "",
-            "question": question,
-            "answer": answer,
-            "category": qa_item.get("category", ""),
-            "question_time": question_time or "",
-            "evidence": json.dumps(qa_item.get("evidence", [])),
-            "evidence_text": json.dumps(qa_item.get("evidence_text", [])),
-            "response": response,
-            "token_usage": json.dumps(token_usage, ensure_ascii=False),
-            "time_cost": round(time_cost, 2),
-            "iteration": iteration,
-            "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
-            "bot_log_file": bot_log_file,
-            "is_invalid": qa_item.get("is_invalid", False),
-        }
+            row = {
+                "sample_id": qa_item["sample_id"],
+                "question_index": qa_item.get("question_index", ""),
+                "result": "",
+                "question": question,
+                "answer": answer,
+                "category": qa_item.get("category", ""),
+                "question_time": question_time or "",
+                "evidence": json.dumps(qa_item.get("evidence", [])),
+                "evidence_text": json.dumps(qa_item.get("evidence_text", [])),
+                "response": response,
+                "token_usage": json.dumps(token_usage, ensure_ascii=False),
+                "time_cost": round(time_cost, 2),
+                "iteration": iteration,
+                "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
+                "bot_log_file": bot_log_file,
+                "is_invalid": qa_item.get("is_invalid", False),
+            }
 
-        # 线程安全的结果收集
-        with write_lock:
-            nonlocal processed_count
-            if args.update_mode:
-                if os.path.exists(args.output):
-                    with open(args.output, "r", encoding="utf-8", newline="") as f:
-                        reader = csv.DictReader(f)
-                        existing_rows = list(reader)
-                        existing_fieldnames = reader.fieldnames or fieldnames
-                    if "bot_log_file" not in existing_fieldnames:
-                        existing_fieldnames.append("bot_log_file")
+            # 线程安全的结果收集
+            with write_lock:
+                nonlocal processed_count
+                if args.update_mode:
+                    if os.path.exists(args.output):
+                        with open(args.output, "r", encoding="utf-8", newline="") as f:
+                            reader = csv.DictReader(f)
+                            existing_rows = list(reader)
+                            existing_fieldnames = reader.fieldnames or fieldnames
+                        if "bot_log_file" not in existing_fieldnames:
+                            existing_fieldnames.append("bot_log_file")
 
-                    q_idx = str(row.get("question_index", ""))
-                    found = False
-                    for existing_row in existing_rows:
-                        if str(existing_row.get("question_index", "")) == q_idx:
-                            existing_row.update(row)
-                            found = True
-                            break
-                    if not found:
-                        existing_rows.append(row)
+                        q_idx = str(row.get("question_index", ""))
+                        found = False
+                        for existing_row in existing_rows:
+                            if str(existing_row.get("question_index", "")) == q_idx:
+                                existing_row.update(row)
+                                found = True
+                                break
+                        if not found:
+                            existing_rows.append(row)
 
-                    with open(args.output, "w", encoding="utf-8", newline="") as f:
-                        writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
-                        writer.writeheader()
-                        writer.writerows(existing_rows)
+                        with open(args.output, "w", encoding="utf-8", newline="") as f:
+                            writer = csv.DictWriter(f, fieldnames=existing_fieldnames)
+                            writer.writeheader()
+                            writer.writerows(existing_rows)
+                    else:
+                        append_row_to_csv(args.output, fieldnames, row)
                 else:
                     append_row_to_csv(args.output, fieldnames, row)
-            else:
-                append_row_to_csv(args.output, fieldnames, row)
 
-            new_rows.append(row)
-            processed_questions.add(question)
-            processed_count += 1
-            print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
-        return True
+                new_rows.append(row)
+                processed_questions.add(question)
+                processed_count += 1
+                if not show_progress:
+                    print(f"Completed {processed_count}/{total_count}, time cost: {round(time_cost, 2)}s")
+
+            return True
+        except Exception:
+            failed = True
+            raise
+        finally:
+            if progress_tracker is not None:
+                progress_tracker.job_finished(failed=failed)
 
     # 使用线程池处理：全局并行，每个 question 独立 session
-    with ThreadPoolExecutor(max_workers=args.threads) as executor:
-        # 提交所有任务
-        futures = []
-        for idx, qa_item in enumerate(remaining_qa, 1):
-            futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
+    ctx = progress if show_progress else contextlib.nullcontext()
+    with ctx:
+        with ThreadPoolExecutor(max_workers=args.threads) as executor:
+            # 提交所有任务
+            futures = []
+            for idx, qa_item in enumerate(remaining_qa, 1):
+                futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
 
-        # 等待所有任务完成
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                print(f"Error processing QA item: {str(e)}")
+            # 等待所有任务完成
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Error processing QA item: {str(e)}", file=sys.stderr)
 
     print(f"Evaluation completed, results saved to {args.output}")
 

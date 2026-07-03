@@ -12,7 +12,6 @@ from loguru import logger
 
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
-from vikingbot.config.loader import load_config
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
@@ -130,11 +129,6 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
-        # Memory context
-        # memory = self.memory.get_memory_context()
-        # if memory:
-        #     parts.append(f"# Memory\n\n{memory}")
-
         # Skills - progressive loading
         # 1. Always-loaded skills: include full content
         always_skills = self.skills.get_always_skills()
@@ -146,11 +140,23 @@ class ContextBuilder:
         # 2. Available skills: only show summary (agent uses read_file to load)
         skills_summary = self.skills.build_skills_summary()
         if skills_summary:
+            required_skill_note = ""
+            required_skill_candidates = [
+                "skills/experience_loader/SKILL.md",
+                "skills/task_case_experience/SKILL.md",
+            ]
+            for skill_path in required_skill_candidates:
+                if (self.workspace / skill_path).exists():
+                    required_skill_note = (
+                        "\nRequired skill: before taking any task action, you MUST read "
+                        f"`{skill_path}` and apply its instructions.\n"
+                    )
+                    break
             parts.append(f"""# Skills
 
 The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
 Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
-
+{required_skill_note}
 {skills_summary}""")
 
         # Viking peer profile (only if ov tools are enabled). In the current
@@ -199,7 +205,7 @@ Skills with available="false" need dependencies installed first - you can try in
         memory_peer_ids: list[str] | None = None,
         memory_owner_user_ids: list[str] | None = None,
         ov_tools_enable: bool = True,
-        is_first_round: bool = True,
+        experience_recall_enable: bool | None = None,
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -229,9 +235,28 @@ Skills with available="false" need dependencies installed first - you can try in
 
         workspace_id = self._get_workspace_id(session_key)
 
-        # Viking agent memory (only if ov tools are enabled)
         if ov_tools_enable:
-            exp_first_round_only = load_config().ov_server.recall_exp_first_round_only
+            start = _time.time()
+            # Default recall runs under the configured/request OpenViking user.
+            # sender_id is passed separately as peer identity.
+            search_peer_ids = memory_peer_ids if memory_peer_ids else None
+            viking_memory = await self.memory.get_viking_memory_context(
+                current_message=current_message,
+                workspace_id=workspace_id,
+                sender_id=sender_id,
+                peer_ids=search_peer_ids,
+                user_ids=memory_owner_user_ids if memory_owner_user_ids else None,
+                openviking_connection=self._openviking_connection,
+            )
+            logger.info(f"viking_memory={viking_memory}")
+            cost = round(_time.time() - start, 2)
+            logger.info(
+                f"[READ_USER_MEMORY]: cost {cost}s, "
+                f"memory={viking_memory[:50] if viking_memory else 'None'}"
+            )
+            if viking_memory:
+                self.latest_relevant_memories = viking_memory
+                parts.append(f"## openviking_search(query=[user_query])\n{viking_memory}")
 
             parts.append(
                 "## OpenViking Memory Retrieval\n"
@@ -242,49 +267,7 @@ Skills with available="false" need dependencies installed first - you can try in
                 "- For relevant summary or uri entries, use openviking_multi_read on their URIs to fetch full details to help you to resolve the query. "
             )
 
-            if exp_first_round_only:
-                # Alt mode: skip per-turn recall; inject experience memory once per session.
-                exp_workspace_id = workspace_id
-                self.latest_relevant_memories = None
-                if is_first_round:
-                    start = _time.time()
-                    exp_memory = await self.memory.get_viking_experience_context(
-                        query=current_message,
-                        workspace_id=exp_workspace_id,
-                        openviking_connection=self._openviking_connection,
-                        actor_peer_id=sender_id,
-                    )
-                    cost = round(_time.time() - start, 2)
-                    logger.info(
-                        f"[READ_EXP_FIRST_ROUND]: cost {cost}s, "
-                        f"exp={exp_memory[:50] if exp_memory else 'None'}"
-                    )
-                    if exp_memory:
-                        self.latest_relevant_memories = exp_memory
-                        parts.append(f"## Relevant Agent Experience\n{exp_memory}")
-            else:
-                start = _time.time()
-                # Default recall runs under the configured/request OpenViking user.
-                # sender_id is passed separately as peer identity.
-                search_peer_ids = memory_peer_ids if memory_peer_ids else None
-                viking_memory = await self.memory.get_viking_memory_context(
-                    current_message=current_message,
-                    workspace_id=workspace_id,
-                    sender_id=sender_id,
-                    peer_ids=search_peer_ids,
-                    user_ids=memory_owner_user_ids if memory_owner_user_ids else None,
-                    openviking_connection=self._openviking_connection,
-                )
-                logger.info(f"viking_memory={viking_memory}")
-                cost = round(_time.time() - start, 2)
-                logger.info(
-                    f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}"
-                )
-                if viking_memory:
-                    self.latest_relevant_memories = viking_memory
-                    parts.append(f"## openviking_search(query=[user_query])\n{viking_memory}")
-                else:
-                    self.latest_relevant_memories = None
+
 
         parts.append(
             "Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:"
@@ -357,6 +340,9 @@ IMPORTANT:
         profile_user_list: list[str] | None = None,
         memory_peer_ids: list[str] | None = None,
         memory_owner_user_ids: list[str] | None = None,
+        experience_recall_enable: bool | None = None,
+        exp_exclude_uris: list[str] | None = None,
+        experience_case_lookup: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -369,7 +355,11 @@ IMPORTANT:
             ov_tools_enable: Whether to enable OpenViking tools and memory.
             profile_user_list: Deprecated list of additional peer IDs to fetch profiles for.
             memory_peer_ids: Optional list of peer IDs to fetch memory for.
-            memory_owner_user_ids: Deprecated owner-user IDs used for trusted-mode lookup.
+            memory_owner_user_ids: Deprecated legacy owner-user IDs used for root-key fanout.
+            experience_recall_enable: Whether automatic experience recall may run independently
+                from exposing OpenViking tools. Defaults to ov_tools_enable.
+            exp_exclude_uris: Optional list of experience URIs that have already been recalled
+                in this session and should be skipped (deduplication).
 
         Returns:
             List of messages including system prompt.
@@ -385,11 +375,41 @@ IMPORTANT:
             memory_owner_user_ids=memory_owner_user_ids,
         )
         messages.append({"role": "system", "content": system_prompt})
-        # logger.debug(f"system_prompt: {system_prompt}")
 
         # History
         if not self._eval:
             messages.extend(history)
+
+        # Experience recall (reminder message, deduplicated by URI)
+        self.latest_recalled_exp_content = ""
+        self.latest_recalled_exp_uris: list[str] = []
+        if experience_recall_enable is None:
+            experience_recall_enable = ov_tools_enable
+        if experience_recall_enable and session_key:
+            workspace_id = self._get_workspace_id(session_key)
+            start = _time.time()
+            exp_content, exp_uris = await self.memory.get_viking_experience_reminder(
+                query=current_message,
+                workspace_id=workspace_id,
+                exclude_uris=exp_exclude_uris,
+                openviking_connection=self._openviking_connection,
+                case_lookup=experience_case_lookup,
+            )
+            cost = round(_time.time() - start, 2)
+            logger.info(
+                f"[READ_EXP_AUTO]: cost {cost}s, "
+                f"new={len(exp_uris)} uris, "
+                f"exp={exp_content[:50] if exp_content else 'None'}"
+            )
+            if exp_content:
+                self.latest_recalled_exp_content = exp_content
+                self.latest_recalled_exp_uris = exp_uris
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": f"[Experience Reminder]\n## Relevant Agent Experience\n{exp_content}",
+                    }
+                )
 
         # User
         user_info = await self._build_user_memory(
@@ -399,7 +419,7 @@ IMPORTANT:
             memory_peer_ids,
             memory_owner_user_ids,
             ov_tools_enable=ov_tools_enable,
-            is_first_round=not history,
+            experience_recall_enable=experience_recall_enable,
         )
         messages.append({"role": "user", "content": user_info})
 

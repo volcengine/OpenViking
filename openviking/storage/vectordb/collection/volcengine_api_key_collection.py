@@ -238,12 +238,18 @@ class VolcengineApiKeyCollection(ICollection):
     def get_meta_data(self):
         from openviking.storage.collection_schemas import CollectionSchemas
 
+        schema = CollectionSchemas.context_collection(
+            self.collection_name,
+            int(self.meta_data.get("VectorDim") or self.meta_data.get("Dimension") or 0),
+        )
         return {
             "ProjectName": self.project_name,
             "CollectionName": self.collection_name,
             "IndexName": self.index_name,
             "Description": "data-plane only backend",
-            "Fields": CollectionSchemas.context_collection.get("Fields", []),
+            "Fields": schema.get("Fields", []),
+            "ScalarIndex": schema.get("ScalarIndex", []),
+            "FullText": schema.get("FullText", []),
         }
 
     def close(self):
@@ -297,6 +303,7 @@ class VolcengineApiKeyCollection(ICollection):
             **self._base_data_payload(),
             "data": data_list,
             "ttl": ttl,
+            "ignore_unknown_fields": True,
         }
         return self._data_post(path, data)
 
@@ -305,6 +312,7 @@ class VolcengineApiKeyCollection(ICollection):
         data = {
             **self._base_data_payload(),
             "data": data_list,
+            "ignore_unknown_fields": True,
         }
         return self._data_post(path, data)
 
@@ -313,6 +321,7 @@ class VolcengineApiKeyCollection(ICollection):
         data = {
             **self._base_data_payload(),
             "ids": primary_keys,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_fetch_result(resp_data)
@@ -354,6 +363,7 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         if sparse_vector:
             data["sparse_vector"] = sparse_vector
@@ -379,6 +389,7 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)
@@ -401,6 +412,7 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -426,6 +438,7 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -445,6 +458,7 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -468,6 +482,7 @@ class VolcengineApiKeyCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)

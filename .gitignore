@@ -205,3 +205,14 @@ specs/
 .codex/
 .ttadk/
 tests/integration/.tmp_*/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+
+# Beads issue tracker local state
+.beads/
+
+# LoopX local control-plane state
+.loopx/

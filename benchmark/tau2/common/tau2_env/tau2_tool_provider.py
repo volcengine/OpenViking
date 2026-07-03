@@ -65,9 +65,25 @@ def load_task_id(data_split: str, task_no: int) -> tuple[str, str]:
             "TAU2_DATA_ROOT is not set. Point it at your tau2-bench data dir, e.g. "
             "export TAU2_DATA_ROOT=<tau2-bench>/data/tau2 (see setup_env.sh)."
         )
-    split_path = os.path.join(data_root, "domains", domain, "split_tasks.json")
-    with open(split_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    task_ids = data[split]
+    domain_dir = os.path.join(data_root, "domains", domain)
+    split_path = os.path.join(domain_dir, "split_tasks.json")
+    if os.path.exists(split_path):
+        with open(split_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        task_ids = data[split]
+    else:
+        tasks_path = os.path.join(domain_dir, "tasks.json")
+        if not os.path.exists(tasks_path):
+            raise FileNotFoundError(
+                f"Neither split_tasks.json nor tasks.json found under: {domain_dir}"
+            )
+        with open(tasks_path, "r", encoding="utf-8") as f:
+            tasks = json.load(f)
+        task_ids = [str(task["id"]) for task in tasks]
+        split_at = max(1, len(task_ids) // 2)
+        if split == "train":
+            task_ids = task_ids[:split_at]
+        elif split == "test":
+            task_ids = task_ids[split_at:] if split_at < len(task_ids) else []
     task_id = task_ids[task_no]
     return domain, task_id

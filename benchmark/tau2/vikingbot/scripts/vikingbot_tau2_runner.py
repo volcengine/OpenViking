@@ -18,11 +18,16 @@ from pathlib import Path
 from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+TAU2_ROOT = SCRIPT_DIR.parents[1]
+OPENVIKING_ROOT = TAU2_ROOT.parents[1]
+for _path in (OPENVIKING_ROOT,):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
-from tau2_env.tau2_tool_provider import Tau2BenchToolProvider, load_task_id
+from benchmark.tau2.common.tau2_env.tau2_tool_provider import (
+    Tau2BenchToolProvider,
+    load_task_id,
+)
 
 try:
     from vikingbot.agent.loop import AgentLoop

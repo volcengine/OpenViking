@@ -773,7 +773,7 @@ mod tests {
         +----------------------------+------------+-------+\n\
         |           Model            |  Provider  | Calls |\n\
         +----------------------------+------------+-------+\n\
-        | doubao-seed-2-0-pro-260215 | volcengine | 1989  |\n\
+        | doubao-seed-2-0-lite-260428 | volcengine | 1989  |\n\
         +----------------------------+------------+-------+\n\
         \nEmbedding Models:\n\
         +--------------------------------+------------+-------+\n\
@@ -833,7 +833,7 @@ mod tests {
         assert!(rendered.contains("In progress   9"));
         assert!(rendered.contains("Errors        0"));
         assert!(rendered.contains("Models"));
-        assert!(rendered.contains("VLM           doubao-seed-2-0-pro-260215"));
+        assert!(rendered.contains("VLM           doubao-seed-2-0-lite-260428"));
         assert!(rendered.contains("Embedding     doubao-embedding-vision-251215"));
         assert!(rendered.contains("Components"));
         assert!(rendered.contains("queue          healthy    64 pending, 9 running, 0 errors"));

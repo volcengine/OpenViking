@@ -84,7 +84,7 @@ Create a configuration file `~/.openviking/ov.conf`:
   },
   "vlm": {
     "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-pro-260215",
+    "model": "doubao-seed-2-0-lite-260428",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }
