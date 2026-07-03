@@ -64,6 +64,7 @@ def _build_settings(config: CrawlConfig):
             "RETRY_TIMES": config.retry_times,
             "ROBOTSTXT_OBEY": True,
             "LOG_ENABLED": False,
+            "TELNETCONSOLE_ENABLED": False,
             "USER_AGENT": "OpenViking/0.4 (+recursive-web-crawler)",
             "DOWNLOADER_MIDDLEWARES": {
                 "openviking.parse.accessors.web_crawler.middlewares."

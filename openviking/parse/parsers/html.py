@@ -150,7 +150,6 @@ class HTMLParser(BaseParser):
                     output_format="markdown",
                     include_links=True,
                     include_tables=True,
-                    favor_precision=True,
                 )
                 or ""
             )

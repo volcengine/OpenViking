@@ -35,10 +35,13 @@ def should_render_with_playwright(html: str) -> bool:
     html_lower = html.lower()
     if any(pattern.lower() in html_lower for pattern in _SPA_EMPTY_PATTERNS):
         return True
-    if "__next_data__" in html_lower:
-        return True
     visible_len = visible_body_text_len(html)
     if visible_len < SHELL_VISIBLE_TEXT_CHARS:
+        return True
+    # __NEXT_DATA__ only signals a Next.js app; most such pages are SSR/SSG and
+    # already ship full body text in the static HTML. Only render when the
+    # static body is also too thin to be the real content.
+    if "__next_data__" in html_lower and visible_len < _MIN_VISIBLE_TEXT_CHARS:
         return True
     if re.search(r'id=["\'](?:root|app)["\']', html_lower) and visible_len < _MIN_VISIBLE_TEXT_CHARS:
         return True
