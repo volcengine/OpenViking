@@ -10,8 +10,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from vikingbot.agent.subagent import SubagentManager  # noqa: E402
 from vikingbot.agent.tools.cron import CronTool  # noqa: E402
 from vikingbot.agent.tools.message import MessageTool  # noqa: E402
+from vikingbot.agent.tools.spawn import SpawnTool  # noqa: E402
 from vikingbot.bus.events import OutboundMessage  # noqa: E402
 from vikingbot.bus.queue import MessageBus  # noqa: E402
 from vikingbot.channels.feishu import FeishuChannel  # noqa: E402
@@ -39,6 +41,55 @@ async def test_message_tool_preserves_channel_metadata():
     assert result.startswith("Message sent")
     assert sent[0].metadata == metadata
     assert sent[0].metadata is not metadata
+
+
+@pytest.mark.asyncio
+async def test_spawn_tool_preserves_channel_metadata():
+    metadata = {"reply_to": "oc_chat", "chat_type": "group", "message_id": "om_old"}
+    calls = []
+
+    class FakeSubagentManager:
+        async def spawn(self, **kwargs):
+            calls.append(kwargs)
+            return "started"
+
+    tool = SpawnTool(manager=FakeSubagentManager())
+    context = SimpleNamespace(
+        session_key=SessionKey(type="feishu", channel_id="cli_app", chat_id="oc_chat"),
+        channel_metadata=metadata,
+    )
+
+    result = await tool.execute(context, task="read files", label="read")
+
+    assert result == "started"
+    assert calls[0]["channel_metadata"] == metadata
+
+
+@pytest.mark.asyncio
+async def test_subagent_announcement_preserves_channel_metadata(tmp_path):
+    bus = MessageBus()
+    metadata = {"reply_to": "oc_chat", "chat_type": "group", "message_id": "om_old"}
+    session_key = SessionKey(type="feishu", channel_id="cli_app", chat_id="oc_chat")
+    manager = SubagentManager(
+        provider=SimpleNamespace(get_default_model=lambda: "fake-model"),
+        workspace=tmp_path,
+        bus=bus,
+        config=SimpleNamespace(),
+    )
+
+    await manager._announce_result(
+        "task-id",
+        "read",
+        "read files",
+        "done",
+        session_key,
+        "ok",
+        metadata,
+    )
+
+    inbound = await bus.consume_inbound()
+    assert inbound.metadata == metadata
+    assert inbound.metadata is not metadata
 
 
 @pytest.mark.asyncio
