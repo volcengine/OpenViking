@@ -5,7 +5,6 @@
 
 use async_trait::async_trait;
 use std::fs;
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use std::io::{BufRead, BufReader};
@@ -15,11 +14,11 @@ use grep_regex::RegexMatcher;
 use grep_searcher::sinks::UTF8;
 use grep_searcher::{BinaryDetection, SearcherBuilder};
 use ignore::WalkBuilder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
-use crate::core::glob::{decode_offset_token, encode_offset_token, purepath_match, validate_pattern};
+use crate::core::glob::{purepath_match, validate_pattern};
 use crate::core::plugin::ServicePlugin;
 use crate::core::types::{ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepResult, PluginConfig, WriteFlag};
 
@@ -29,6 +28,50 @@ pub struct LocalFileSystem {
     base_path: PathBuf,
     /// Whether external `rg` is available in current process PATH.
     has_rg: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LocalGlobCursor {
+    pattern: String,
+    walk: LocalWalkCursor,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LocalWalkCursor {
+    version: u8,
+    path: String,
+    show_hidden: bool,
+    level_limit: Option<usize>,
+    frames: Vec<LocalWalkCursorFrame>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LocalWalkCursorFrame {
+    rel_dir: String,
+    next_idx: usize,
+}
+
+#[derive(Clone, Debug)]
+struct LocalPagedWalker {
+    query_root: PathBuf,
+    virtual_root: String,
+    show_hidden: bool,
+    level_limit: Option<usize>,
+    stack: Vec<LocalWalkFrame>,
+}
+
+#[derive(Clone, Debug)]
+struct LocalWalkFrame {
+    rel_dir: String,
+    entries: Vec<(String, PathBuf, bool)>,
+    next_idx: usize,
+}
+
+#[derive(Clone, Debug)]
+struct LocalWalkEntry {
+    name: String,
+    rel_path: String,
+    is_dir: bool,
 }
 
 impl LocalFileSystem {
@@ -545,6 +588,176 @@ impl LocalFileSystem {
         }
     }
 
+    fn encode_local_glob_cursor(pattern: &str, walker: &LocalPagedWalker) -> Result<String> {
+        let cursor = LocalGlobCursor {
+            pattern: pattern.to_string(),
+            walk: LocalWalkCursor {
+                version: 1,
+                path: walker.virtual_root.clone(),
+                show_hidden: walker.show_hidden,
+                level_limit: walker.level_limit,
+                frames: walker
+                    .stack
+                    .iter()
+                    .map(|frame| LocalWalkCursorFrame {
+                        rel_dir: frame.rel_dir.clone(),
+                        next_idx: frame.next_idx,
+                    })
+                    .collect(),
+            },
+        };
+        serde_json::to_string(&cursor)
+            .map_err(|e| Error::invalid_operation(format!("invalid local glob cursor: {}", e)))
+    }
+
+    fn decode_local_glob_cursor(
+        continuation_token: Option<&str>,
+        virtual_path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        level_limit: Option<usize>,
+    ) -> Result<Option<LocalGlobCursor>> {
+        let Some(token) = continuation_token else {
+            return Ok(None);
+        };
+        let cursor: LocalGlobCursor = serde_json::from_str(token).map_err(|e| {
+            Error::invalid_operation(format!("invalid local glob continuation token: {}", e))
+        })?;
+        if cursor.walk.version != 1
+            || cursor.walk.path != virtual_path
+            || cursor.pattern != pattern
+            || cursor.walk.show_hidden != show_hidden
+            || cursor.walk.level_limit != level_limit
+        {
+            return Err(Error::invalid_operation(
+                "continuation token scope mismatch".to_string(),
+            ));
+        }
+        if cursor.walk.frames.is_empty() {
+            return Err(Error::invalid_operation(
+                "invalid local glob continuation token: empty cursor".to_string(),
+            ));
+        }
+        Ok(Some(cursor))
+    }
+
+    fn read_ordered_dir_entries(local_dir: &Path) -> Result<Vec<(String, PathBuf, bool)>> {
+        let dir_entries = fs::read_dir(local_dir)
+            .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
+        let mut ordered_entries = Vec::new();
+        for entry in dir_entries {
+            let entry = entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| Error::plugin(format!("failed to get file type: {}", e)))?;
+            ordered_entries.push((
+                entry.file_name().to_string_lossy().to_string(),
+                entry.path(),
+                file_type.is_dir(),
+            ));
+        }
+        ordered_entries.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(ordered_entries)
+    }
+
+    fn build_local_walk_frame(
+        query_root: &Path,
+        rel_dir: &str,
+        next_idx: usize,
+    ) -> Result<LocalWalkFrame> {
+        let local_dir = if rel_dir == "." {
+            query_root.to_path_buf()
+        } else {
+            query_root.join(rel_dir)
+        };
+        let entries = Self::read_ordered_dir_entries(&local_dir)?;
+        if next_idx > entries.len() {
+            return Err(Error::invalid_operation(
+                "invalid local glob continuation token: entry index out of range".to_string(),
+            ));
+        }
+        Ok(LocalWalkFrame {
+            rel_dir: rel_dir.to_string(),
+            entries,
+            next_idx,
+        })
+    }
+
+    fn build_local_paged_walker(
+        query_root: &Path,
+        virtual_path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        level_limit: Option<usize>,
+        continuation_token: Option<&str>,
+    ) -> Result<LocalPagedWalker> {
+        let cursor = Self::decode_local_glob_cursor(
+            continuation_token,
+            virtual_path,
+            pattern,
+            show_hidden,
+            level_limit,
+        )?;
+        let frames = match cursor {
+            Some(cursor) => cursor
+                .walk
+                .frames
+                .into_iter()
+                .map(|frame| Self::build_local_walk_frame(query_root, &frame.rel_dir, frame.next_idx))
+                .collect::<Result<Vec<_>>>()?,
+            None => vec![Self::build_local_walk_frame(query_root, ".", 0)?],
+        };
+        Ok(LocalPagedWalker {
+            query_root: query_root.to_path_buf(),
+            virtual_root: virtual_path.to_string(),
+            show_hidden,
+            level_limit,
+            stack: frames,
+        })
+    }
+
+    fn should_descend(rel_path: &str, level_limit: Option<usize>) -> bool {
+        match level_limit {
+            Some(max_depth) => Self::virtual_depth(rel_path) < max_depth,
+            None => true,
+        }
+    }
+
+    fn walker_next_entry(walker: &mut LocalPagedWalker) -> Result<Option<LocalWalkEntry>> {
+        while let Some(frame) = walker.stack.last_mut() {
+            if frame.next_idx >= frame.entries.len() {
+                walker.stack.pop();
+                continue;
+            }
+
+            let (name, _local_path, is_dir) = frame.entries[frame.next_idx].clone();
+            frame.next_idx += 1;
+
+            if !is_dir && !walker.show_hidden && name.starts_with('.') {
+                continue;
+            }
+
+            let rel_path = if frame.rel_dir == "." {
+                name.clone()
+            } else {
+                format!("{}/{}", frame.rel_dir, name)
+            };
+
+            if is_dir && Self::should_descend(&rel_path, walker.level_limit) {
+                let child_frame = Self::build_local_walk_frame(&walker.query_root, &rel_path, 0)?;
+                walker.stack.push(child_frame);
+            }
+
+            return Ok(Some(LocalWalkEntry {
+                name,
+                rel_path,
+                is_dir,
+            }));
+        }
+
+        Ok(None)
+    }
+
     /// Implement glob pagination with a local DFS walk instead of materializing the whole tree.
     ///
     /// Args:
@@ -581,145 +794,50 @@ impl LocalFileSystem {
             return Err(Error::NotADirectory(virtual_path.to_string()));
         }
 
-        let start = decode_offset_token(
-            continuation_token.as_deref(),
-            virtual_path,
-            pattern,
-            show_hidden,
-            level_limit,
-        )?;
         let limit = page_size.unwrap_or(usize::MAX);
-        let mut matched_seen = 0usize;
-        let mut entries = Vec::new();
-        let mut found_more = false;
-
-        let _ = Self::walk_glob_page(
+        let mut walker = Self::build_local_paged_walker(
             &query_root,
             virtual_path,
-            &query_root,
             pattern,
             show_hidden,
             level_limit,
-            start,
-            limit,
-            &mut matched_seen,
-            &mut entries,
-            &mut found_more,
+            continuation_token.as_deref(),
         )?;
+        let mut entries = Vec::new();
 
-        let next_token = if found_more {
-            Some(encode_offset_token(
-                start.saturating_add(entries.len()),
-                virtual_path,
-                pattern,
-                show_hidden,
-                level_limit,
-            ))
+        while entries.len() < limit {
+            match Self::walker_next_entry(&mut walker)? {
+                Some(entry) => {
+                    if purepath_match(&entry.rel_path, pattern)? {
+                        entries.push(GlobEntry {
+                            path: Self::local_glob_entry_path(&walker.virtual_root, &entry.rel_path),
+                            rel_path: entry.rel_path,
+                            name: entry.name,
+                            is_dir: entry.is_dir,
+                        });
+                    }
+                }
+                None => break,
+            }
+        }
+
+        let next_token = if page_size.is_some() {
+            let mut probe = walker.clone();
+            loop {
+                match Self::walker_next_entry(&mut probe)? {
+                    Some(entry) => {
+                        if purepath_match(&entry.rel_path, pattern)? {
+                            break Some(Self::encode_local_glob_cursor(pattern, &walker)?);
+                        }
+                    }
+                    None => break None,
+                }
+            }
         } else {
             None
         };
 
         Ok(GlobPage { entries, next_token })
-    }
-
-    /// Traverse directories in stable DFS order and build the current glob page inline.
-    ///
-    /// Args:
-    /// - `query_root`: Local path to the query root directory.
-    /// - `virtual_root`: Plugin-relative query root path.
-    /// - `current_dir`: Local path to the directory currently being traversed.
-    /// - `pattern`: Glob pattern.
-    /// - `show_hidden`: Whether hidden files should be included.
-    /// - `level_limit`: Maximum traversal depth.
-    /// - `start`: Number of matched entries to skip for the current query.
-    /// - `limit`: Maximum number of matches to return in the current page.
-    /// - `matched_seen`: Counter of matches seen so far.
-    /// - `entries`: Collected entries for the current page.
-    /// - `found_more`: Whether there are more matches after the current page.
-    ///
-    /// Returns:
-    /// - `ControlFlow::Break(())` is reserved for callers that add a safe early-stop path.
-    /// - `ControlFlow::Continue(())` when traversal of the current subtree is complete.
-    fn walk_glob_page(
-        query_root: &Path,
-        virtual_root: &str,
-        current_dir: &Path,
-        pattern: &str,
-        show_hidden: bool,
-        level_limit: Option<usize>,
-        start: usize,
-        limit: usize,
-        matched_seen: &mut usize,
-        entries: &mut Vec<GlobEntry>,
-        found_more: &mut bool,
-    ) -> Result<ControlFlow<()>> {
-        let current_virtual = Self::local_to_query_relative_path(query_root, current_dir)
-            .ok_or_else(|| Error::InvalidPath(current_dir.display().to_string()))?;
-        let current_depth = Self::virtual_depth(&current_virtual);
-        if level_limit.is_some_and(|max_depth| current_depth >= max_depth) {
-            return Ok(ControlFlow::Continue(()));
-        }
-
-        let dir_entries = fs::read_dir(current_dir)
-            .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
-        let mut ordered_entries = Vec::new();
-        for entry in dir_entries {
-            let entry = entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
-            let file_type = entry
-                .file_type()
-                .map_err(|e| Error::plugin(format!("failed to get file type: {}", e)))?;
-            ordered_entries.push((
-                entry.file_name().to_string_lossy().to_string(),
-                entry.path(),
-                file_type.is_dir(),
-            ));
-        }
-        ordered_entries.sort_by(|left, right| left.0.cmp(&right.0));
-
-        for (name, local_path, is_dir) in ordered_entries {
-            if !is_dir && !show_hidden && name.starts_with('.') {
-                continue;
-            }
-
-            let rel_path = Self::local_to_query_relative_path(query_root, &local_path)
-                .ok_or_else(|| Error::InvalidPath(local_path.display().to_string()))?;
-            if purepath_match(&rel_path, pattern)? {
-                if *matched_seen >= start {
-                    if entries.len() >= limit {
-                        *found_more = true;
-                    } else {
-                        entries.push(GlobEntry {
-                            path: Self::local_glob_entry_path(virtual_root, &rel_path),
-                            rel_path: rel_path.clone(),
-                            name: name.clone(),
-                            is_dir,
-                        });
-                    }
-                }
-                *matched_seen += 1;
-            }
-
-            if is_dir {
-                match Self::walk_glob_page(
-                    query_root,
-                    virtual_root,
-                    &local_path,
-                    pattern,
-                    show_hidden,
-                    level_limit,
-                    start,
-                    limit,
-                    matched_seen,
-                    entries,
-                    found_more,
-                )? {
-                    ControlFlow::Break(()) => return Ok(ControlFlow::Break(())),
-                    ControlFlow::Continue(()) => {}
-                }
-            }
-        }
-
-        Ok(ControlFlow::Continue(()))
     }
 
     fn resolve_virtual_path(base_path: &Path, path: &str) -> PathBuf {
@@ -1448,7 +1566,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_localfs_glob_paginates_with_opaque_offset_tokens() {
+    async fn test_localfs_glob_paginates_with_local_cursor_tokens() {
         let (dir, fs) = fallback_localfs();
         write_file(dir.path(), "a.md", "");
         write_file(dir.path(), "b.md", "");
@@ -1556,7 +1674,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn test_localfs_glob_keeps_exact_paging_semantics_for_unreadable_late_subtree() {
+    async fn test_localfs_glob_defers_late_subtree_errors_to_later_pages() {
         use std::os::unix::fs::PermissionsExt;
 
         let (dir, fs) = fallback_localfs();
@@ -1572,7 +1690,22 @@ mod tests {
         perms.set_mode(0);
         std::fs::set_permissions(&blocked_dir, perms).unwrap();
 
-        let out = fs.glob_directory("/", "*.md", false, Some(2), None, None).await;
+        let first = fs.glob_directory("/", "*.md", false, Some(2), None, None).await;
+        assert!(first.is_ok());
+        let first = first.unwrap();
+        assert_eq!(
+            first
+                .entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["a.md", "b.md"]
+        );
+        assert!(first.next_token.is_some());
+
+        let out = fs
+            .glob_directory("/", "*.md", false, Some(2), None, first.next_token)
+            .await;
 
         let mut restore = std::fs::metadata(&blocked_dir).unwrap().permissions();
         restore.set_mode(old_mode);
