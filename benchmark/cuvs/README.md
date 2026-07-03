@@ -12,6 +12,9 @@ The output contains:
 - current process RSS and GPU-memory deltas;
 - raw per-batch latency samples and runtime metadata.
 
+See [PRELIMINARY_RESULTS.md](PRELIMINARY_RESULTS.md) for the first public-data
+engineering checkpoint and its limitations.
+
 ## Quick smoke test
 
 Run from the repository root in the cuVS development image:
