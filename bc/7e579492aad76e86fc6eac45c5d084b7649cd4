@@ -1,0 +1,29 @@
+crates/ragfs/src/core/filesystem.rs
+  s_702b6d0a31d94b::t_4108a124704418 26-34
+  s_702b6d0a31d94b::t_05781a7fe68189 499-500,872-873,876,878-881,890,892,894
+crates/ragfs/src/core/mountable.rs
+  s_702b6d0a31d94b::t_6df901f269aa40 24
+  s_702b6d0a31d94b::t_546b181b8ede11 766,1024-1028,1725-1749
+crates/ragfs/src/plugins/s3fs/tree.rs
+  s_702b6d0a31d94b::t_eac5e87c0f79a6 24-26,114-126,229,249
+crates/ragfs/src/plugins/s3fs/mod.rs
+  s_702b6d0a31d94b::t_43bf58d014d0bf 30,549
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "bc7e579492aad76e86fc6eac45c5d084b7649cd4",
+  "prompts": {},
+  "sessions": {
+    "s_702b6d0a31d94b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f27ad-c0c7-7cc3-a42e-7b882a20fa92",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
