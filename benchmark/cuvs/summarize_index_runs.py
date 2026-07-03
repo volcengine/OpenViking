@@ -38,6 +38,8 @@ METRIC_PATHS = {
     "gpu_used_delta_bytes": ("gpu_used_delta_bytes",),
 }
 
+BACKEND_ORDER = {"native": 0, "cuvs_brute_force": 1, "cuvs_cagra": 2}
+
 
 def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -77,6 +79,18 @@ def variant_key(result: dict[str, Any]) -> tuple[str, str]:
         raise ValueError("Every result requires a non-empty backend")
     search_params = result.get("cagra_search_params")
     return backend, canonical(search_params)
+
+
+def variant_sort_key(key: tuple[str, str]) -> tuple[Any, ...]:
+    backend, encoded_search_params = key
+    search_params = json.loads(encoded_search_params) or {}
+    return (
+        BACKEND_ORDER.get(backend, len(BACKEND_ORDER)),
+        backend,
+        search_params.get("itopk_size", 0),
+        search_params.get("search_width", 0),
+        encoded_search_params,
+    )
 
 
 def dataset_signature(document: dict[str, Any]) -> dict[str, Any]:
@@ -153,7 +167,9 @@ def summarize_files(paths: Sequence[Path]) -> dict[str, Any]:
         )
 
     results = []
-    for (backend, encoded_search_params), variants in sorted(grouped_results.items()):
+    for (backend, encoded_search_params), variants in sorted(
+        grouped_results.items(), key=lambda item: variant_sort_key(item[0])
+    ):
         results.append(
             {
                 "backend": backend,

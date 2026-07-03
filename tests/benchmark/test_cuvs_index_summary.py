@@ -79,6 +79,22 @@ def test_summarize_files_reports_process_median_and_mad(tmp_path):
     assert result["metrics"]["warm_p50_ms"]["mad"] == pytest.approx(0.1)
 
 
+def test_variant_sort_key_orders_backends_and_numeric_itopk():
+    keys = [
+        ("cuvs_cagra", summary_module.canonical({"itopk_size": 2048})),
+        ("cuvs_brute_force", summary_module.canonical(None)),
+        ("cuvs_cagra", summary_module.canonical({"itopk_size": 512})),
+        ("native", summary_module.canonical(None)),
+    ]
+
+    assert sorted(keys, key=summary_module.variant_sort_key) == [
+        ("native", "null"),
+        ("cuvs_brute_force", "null"),
+        ("cuvs_cagra", '{"itopk_size":512}'),
+        ("cuvs_cagra", '{"itopk_size":2048}'),
+    ]
+
+
 def test_summarize_files_rejects_mismatched_dataset(tmp_path):
     paths = [
         write_result(tmp_path / "run-1.json", result_document(qps=100, p50=1.0, build=3.0)),
