@@ -100,14 +100,17 @@ async def test_register_and_get_client(store):
     record = await store.register_client(
         redirect_uris=["https://claude.ai/api/mcp/auth_callback"],
         client_name="Claude.ai",
+        scope="mcp",
     )
     assert record["client_id"]
     assert record["redirect_uris"] == ["https://claude.ai/api/mcp/auth_callback"]
     assert record["token_endpoint_auth_method"] == "none"
+    assert record["scope"] == "mcp"
     fetched = await store.get_client(record["client_id"])
     assert fetched is not None
     assert fetched["redirect_uris"] == ["https://claude.ai/api/mcp/auth_callback"]
     assert fetched["client_name"] == "Claude.ai"
+    assert fetched["scope"] == "mcp"
     assert "authorization_code" in fetched["grant_types"]
 
 

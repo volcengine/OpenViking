@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import PurePath
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -40,6 +40,7 @@ from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
+    AGFSInvalidOperationError,
     AGFSNotSupportedError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
@@ -78,6 +79,7 @@ logger = get_logger(__name__)
 # materializes its first 1000 subdirectories. Pass this explicitly at those
 # call sites.
 LS_ALL_NODES = 2**31 - 1
+_T = TypeVar("_T")
 
 
 def _ensure_non_empty_search_query(query: str) -> None:
@@ -336,6 +338,54 @@ class VikingFS:
 
         return normalized, parts
 
+    # TODO: Once pathlock moves down into ragfs, stop reconstructing the
+    # encrypted mount-relative path in Python and derive the lock target from
+    # the same backend-side source of truth.
+    def _encrypted_mount_relative_path(self, path: str) -> tuple[str, str]:
+        """Return the mount prefix and mount-relative path used by Rust encrypted writes."""
+        normalized = path if path.startswith("/") else f"/{path}"
+        parts = [part for part in normalized.split("/") if part]
+        if len(parts) < 2:
+            return "", normalized
+        return f"/{parts[0]}", f"/{'/'.join(parts[1:])}"
+
+    def _encrypted_temp_path(self, path: str) -> str:
+        """Build the deterministic internal `.encrypt` temp-file path for a final file path."""
+        mount_prefix, relative_path = self._encrypted_mount_relative_path(path)
+        relative_parts = [part for part in relative_path.split("/") if part]
+        if len(relative_parts) >= 2 and relative_parts[0] == "local":
+            temp_root = f"/local/{relative_parts[1]}/temp/.encrypt_stage"
+        elif len(relative_parts) >= 2:
+            temp_root = f"/{relative_parts[0]}/temp/.encrypt_stage"
+        else:
+            temp_root = "/temp/.encrypt_stage"
+        digest = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()
+        return f"{mount_prefix}{temp_root}/{digest}.encrypt"
+
+    def _encrypted_write_lock_paths(self, path: str) -> List[str]:
+        """Return the final and temp paths protected by the encrypted write protocol."""
+        return [path, self._encrypted_temp_path(path)]
+
+    async def _run_with_encrypted_write_lock(
+        self,
+        path: str,
+        operation: Callable[[], Awaitable[_T]],
+        lock_handle: Optional["LockHandle"] = None,
+    ) -> _T:
+        """Run a write operation under a dual-path exact lock when encryption is enabled."""
+        if self._encryptor is None:
+            return await operation()
+
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        async with LockContext(
+            get_lock_manager(),
+            self._encrypted_write_lock_paths(path),
+            lock_mode="exact",
+            handle=lock_handle,
+        ):
+            return await operation()
+
     def _ensure_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
@@ -354,6 +404,45 @@ class VikingFS:
         if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
             raise PermissionDeniedError(
                 "Temp root is read-only for non-root users",
+                resource=normalized_uri,
+            )
+
+    def _ensure_delete_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
+        self._ensure_access(uri, ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        normalized_uri, _ = self._normalized_uri_parts(uri)
+        if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
+            normalized_uri, real_ctx
+        ):
+            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
+        self._ensure_supported_delete_namespace(normalized_uri)
+        if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
+            raise PermissionDeniedError(
+                "Temp root is read-only for non-root users",
+                resource=normalized_uri,
+            )
+
+    def _ensure_supported_delete_namespace(self, normalized_uri: str) -> None:
+        parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]
+        if not parts:
+            raise PermissionDeniedError(
+                "Deleting viking:// is not supported; use a concrete scope instead.",
+                resource=normalized_uri,
+            )
+        if parts == ["user"]:
+            raise PermissionDeniedError(
+                "Deleting viking://user is not supported; use an explicit user namespace "
+                "or current-user content path instead.",
+                resource=normalized_uri,
+            )
+        if parts == ["agent"]:
+            # Parity with _ensure_supported_write_namespace, which forbids the
+            # account-shared viking://agent root: deleting it would recursively
+            # wipe every account's agent skills/endpoints/tools/payments. Concrete
+            # sub-paths (viking://agent/skills/...) remain deletable.
+            raise PermissionDeniedError(
+                "Deleting viking://agent root is not supported; use a concrete "
+                "agent sub-path (e.g. viking://agent/skills/...) instead.",
                 resource=normalized_uri,
             )
 
@@ -480,7 +569,7 @@ class VikingFS:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_mutable_access(uri, ctx)
+        self._ensure_delete_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
@@ -579,6 +668,12 @@ class VikingFS:
         from openviking.storage.transaction import LockContext, get_lock_manager
 
         self._ensure_mutable_access(old_uri, ctx)
+        # mv is implemented as copy + recursive rm of the source (see the
+        # ``rm(old_path, recursive=is_dir)`` below), so the source must also clear
+        # the delete guard. Without this, a protected account root such as
+        # ``viking://`` — which rm() rejects up front (#2873) — could still be
+        # destroyed via mv, since the write guard alone permits the bare root.
+        self._ensure_delete_access(old_uri, ctx)
         self._ensure_mutable_access(new_uri, ctx)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
@@ -2938,6 +3033,7 @@ class VikingFS:
         uri: str,
         content: Union[str, bytes],
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Write file directly."""
         self._ensure_mutable_access(uri, ctx)
@@ -2947,7 +3043,11 @@ class VikingFS:
         if isinstance(content, str):
             content = content.encode("utf-8")
 
-        await self._async_agfs.write(path, content)
+        await self._run_with_encrypted_write_lock(
+            path,
+            lambda: self._async_agfs.write(path, content),
+            lock_handle=lock_handle,
+        )
 
     async def read_file(
         self,
@@ -3048,40 +3148,55 @@ class VikingFS:
         uri: str,
         content: bytes,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Write single binary file."""
         self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx)
 
-        await self._async_agfs.write(path, content)
+        await self._run_with_encrypted_write_lock(
+            path,
+            lambda: self._async_agfs.write(path, content),
+            lock_handle=lock_handle,
+        )
 
     async def append_file(
         self,
         uri: str,
         content: str,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Append content to file."""
         self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
-            existing = ""
-            try:
-                existing_bytes = self._handle_agfs_read(await self._async_agfs.read(path))
-                existing = self._decode_bytes(existing_bytes)
-            except FileNotFoundError:
-                pass
-            except AGFSHTTPError as e:
-                if e.status_code != 404:
-                    raise
-            except AGFSClientError:
-                raise
-
             await self._ensure_parent_dirs(path, ctx=ctx)
-            final_content = (existing + content).encode("utf-8")
-            await self._async_agfs.write(path, final_content)
+
+            async def _append_under_lock() -> None:
+                """Read old content and rewrite the whole file under lock to avoid lost updates."""
+                existing = ""
+                try:
+                    existing_bytes = self._handle_agfs_read(await self._async_agfs.read(path))
+                    existing = self._decode_bytes(existing_bytes)
+                except FileNotFoundError:
+                    pass
+                except AGFSHTTPError as e:
+                    if e.status_code != 404:
+                        raise
+                except AGFSClientError:
+                    raise
+
+                final_content = (existing + content).encode("utf-8")
+                await self._async_agfs.write(path, final_content)
+
+            await self._run_with_encrypted_write_lock(
+                path,
+                _append_under_lock,
+                lock_handle=lock_handle,
+            )
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
@@ -3352,11 +3467,29 @@ class VikingFS:
     # callers fail fast in Python with a clear error rather than passing a
     # path that the Rust side will silently drop.
     _GIT_INTERNAL_FIRST_SEGMENTS = frozenset(
-        {"_system", "tasks", "temp", "queue", "upload", ".path.ovlock"}
+        {
+            "_system",
+            "tasks",
+            "temp",
+            "queue",
+            "upload",
+            ".path.ovlock",
+        }
     )
 
     _DEFAULT_GIT_AUTHOR_NAME = "viking-bot"
     _DEFAULT_GIT_AUTHOR_EMAIL = "bot@viking.local"
+
+    _OVGITIGNORE_TREE_PATH = ".ovgitignore"
+
+    # Must stay in sync with `OVGITIGNORE_MAX_BYTES` in the Rust layer
+    # (`crates/ragfs/src/git/ignore.rs`); enforced here at write time so a bad
+    # file can never be persisted only to poison every later commit.
+    _OVGITIGNORE_MAX_BYTES = 64 * 1024
+
+    def _gitignore_agfs_path(self, ctx: Optional[RequestContext] = None) -> str:
+        real_ctx = self._ctx_or_default(ctx)
+        return f"/local/{real_ctx.account_id}/{self._OVGITIGNORE_TREE_PATH}"
 
     def _uri_to_tree_path(self, uri: str, ctx: Optional[RequestContext] = None) -> str:
         """Convert a viking:// URI to an account-relative git tree path.
@@ -3394,7 +3527,7 @@ class VikingFS:
         ".abstract.md": ContextLevel.ABSTRACT,
         ".overview.md": ContextLevel.OVERVIEW,
     }
-    _NO_VECTOR_DERIVED = frozenset({".relations.json"})
+    _NO_VECTOR_DERIVED = frozenset({".relations.json", ".ovgitignore"})
 
     def _classify_restore_path(self, tree_path: str, *, deleted: bool) -> Optional[tuple]:
         """Classify a restore-affected tree path into a vector maintenance task.
@@ -3428,6 +3561,72 @@ class VikingFS:
         op = "delete" if deleted else "reindex_file"
         return (op, file_uri, ContextLevel.DETAIL)
 
+    async def get_gitignore(self, ctx: Optional[RequestContext] = None) -> str:
+        """Return the account-level .ovgitignore content, or an empty string if absent.
+
+        Raises ``AGFSInvalidOperationError`` if the stored content is not valid
+        UTF-8, mirroring the Rust layer's reject-non-UTF-8 behavior at commit
+        time rather than leaking a raw ``UnicodeDecodeError``.
+        """
+        path = self._gitignore_agfs_path(ctx)
+        try:
+            raw = await self._async_agfs.read(path, 0, -1)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                return ""
+            mapped = map_exception(exc, resource=path)
+            if mapped is not None:
+                raise mapped from exc
+            raise
+        if isinstance(raw, bytes):
+            data = raw
+        elif raw is not None and hasattr(raw, "content"):
+            data = raw.content
+        else:
+            data = b""
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AGFSInvalidOperationError(
+                f"invalid ignore file {path}: must be UTF-8: {exc}"
+            ) from exc
+
+    async def set_gitignore(
+        self,
+        content: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Write the account-level .ovgitignore control file without semantic indexing.
+
+        Validates the size limit up front so a too-large file can never be
+        persisted only to make every later ``commit`` fail. Syntax (negation,
+        escaping) is still validated at commit time by the Rust layer.
+        """
+        if not isinstance(content, str):
+            raise TypeError("content must be a string")
+        path = self._gitignore_agfs_path(ctx)
+        data = content.encode("utf-8")
+        if len(data) > self._OVGITIGNORE_MAX_BYTES:
+            raise AGFSInvalidOperationError(
+                f"ignore file too large: {path} is {len(data)} bytes, "
+                f"limit {self._OVGITIGNORE_MAX_BYTES} bytes"
+            )
+        await self._ensure_parent_dirs(path, ctx=ctx)
+        await self._async_agfs.write(path, data)
+
+    async def delete_gitignore(self, ctx: Optional[RequestContext] = None) -> None:
+        """Delete the account-level .ovgitignore control file. Missing is success."""
+        path = self._gitignore_agfs_path(ctx)
+        try:
+            await self._async_agfs.rm(path, recursive=False)
+        except Exception as exc:
+            if is_not_found_error(exc):
+                return
+            mapped = map_exception(exc, resource=path)
+            if mapped is not None:
+                raise mapped from exc
+            raise
+
     async def commit(
         self,
         *,
@@ -3454,8 +3653,11 @@ class VikingFS:
             ctx: Request context (provides ``account_id``).
 
         Returns:
-            Dict with ``result`` (``"created"`` / ``"noop"``) and ``commit_oid``;
-            ``changed`` count when ``result == "created"``.
+            Dict with ``result`` (``"created"`` / ``"noop"``) and ``commit_oid``.
+            When ``result == "created"`` it also includes ``changed`` (paths
+            added/updated/removed). Both variants include ``ignored``: the
+            number of candidate paths skipped by the account ``.ovgitignore``
+            rules (system pruning is not counted). Noop omits ``changed``.
         """
         real_ctx = self._ctx_or_default(ctx)
         account = real_ctx.account_id

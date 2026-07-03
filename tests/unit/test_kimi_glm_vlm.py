@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 from openviking.models.vlm import VLMFactory
 from openviking.models.vlm.backends.glm_vlm import DEFAULT_GLM_API_BASE, GLMVLM
 from openviking.models.vlm.backends.kimi_vlm import (
-    DEFAULT_KIMI_MAX_TOKENS,
     DEFAULT_KIMI_USER_AGENT,
     KimiVLM,
 )
@@ -57,7 +56,6 @@ def test_kimi_backend_sets_openai_compatible_defaults():
     assert vlm.provider == "kimi"
     assert vlm.api_base == "https://api.kimi.com/coding/v1"
     assert vlm.model == "kimi-for-coding"
-    assert vlm.max_tokens == DEFAULT_KIMI_MAX_TOKENS
     assert vlm.extra_headers == {"User-Agent": DEFAULT_KIMI_USER_AGENT}
 
 

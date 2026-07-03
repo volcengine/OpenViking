@@ -535,7 +535,7 @@ class CollectionAdapter(ABC):
         coll = self.get_collection()
         delete_ids = list(ids or [])
         if not delete_ids and filter is not None:
-            matched = self.query(filter=filter, limit=limit)
+            matched = self.query(filter=filter, limit=limit, output_fields=["id"])
             delete_ids = [record["id"] for record in matched if record.get("id")]
 
         if not delete_ids:

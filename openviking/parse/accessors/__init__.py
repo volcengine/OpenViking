@@ -18,6 +18,7 @@ from .registry import (
     access,
     get_accessor_registry,
 )
+from .web_feed_accessor import WebFeedAccessor, discover_feed_hint
 
 __all__ = [
     # Base classes
@@ -32,4 +33,7 @@ __all__ = [
     "HTTPAccessor",
     "FeishuAccessor",
     "LocalAccessor",
+    "WebFeedAccessor",
+    # Helpers
+    "discover_feed_hint",
 ]

@@ -15,8 +15,15 @@ from vikingbot.utils.helpers import (
     get_mochat_path,
     get_mounts_path,
 )
+from vikingbot.utils.image_format import (
+    ImageFormat,
+    detect_image_format,
+    image_format_from_mime,
+)
 
 __all__ = [
+    "ImageFormat",
+    "detect_image_format",
     "ensure_dir",
     "get_workspace_path",
     "get_data_path",
@@ -30,4 +37,5 @@ __all__ = [
     "get_received_path",
     "get_mochat_path",
     "get_mounts_path",
+    "image_format_from_mime",
 ]

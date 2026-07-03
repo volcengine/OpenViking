@@ -269,7 +269,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.23.1
     with:
       source: ${{ needs.prepare-package-source.outputs.source_url }}
       dry_run: false

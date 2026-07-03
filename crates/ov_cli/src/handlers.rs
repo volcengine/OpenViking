@@ -505,11 +505,15 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::CreateAccount {
             account_id,
             admin_user_id,
+            seed,
+            user_config_json,
         } => {
             commands::admin::create_account(
                 &client,
                 &account_id,
                 &admin_user_id,
+                seed.as_deref(),
+                user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -529,12 +533,16 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             account_id,
             user_id,
             role,
+            seed,
+            user_config_json,
         } => {
             commands::admin::register_user(
                 &client,
                 &account_id,
                 &user_id,
                 &role,
+                seed.as_deref(),
+                user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -588,11 +596,13 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::RegenerateKey {
             account_id,
             user_id,
+            seed,
         } => {
             commands::admin::regenerate_key(
                 &client,
                 &account_id,
                 &user_id,
+                seed.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -1493,6 +1503,18 @@ pub async fn handle_mv(from_uri: String, to_uri: String, ctx: CliContext) -> Res
 pub async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::filesystem::attrs(
+        &client,
+        &uri,
+        key.as_deref(),
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 pub async fn handle_grep(

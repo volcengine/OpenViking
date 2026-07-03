@@ -48,6 +48,7 @@ from openviking.server.routers import (
     stats_router,
     system_router,
     tasks_router,
+    user_settings_router,
     watches_router,
     webdav_router,
 )
@@ -539,6 +540,7 @@ def create_app(
     app.include_router(observer_router)
     app.include_router(metrics_router)
     app.include_router(tasks_router)
+    app.include_router(user_settings_router)
     app.include_router(watches_router)
     app.include_router(webdav_router)
     app.include_router(bot_router, prefix="/bot/v1")

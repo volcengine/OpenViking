@@ -439,6 +439,21 @@ class AgentsConfig(BaseModel):
         le=2.0,
         description="Sampling temperature for LLM requests.",
     )
+    thinking: bool = Field(
+        default=True,
+        description=(
+            "Enable provider reasoning/thinking mode for bot LLM requests when the "
+            "selected provider protocol supports an explicit thinking parameter."
+        ),
+    )
+    timeout: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Per-request timeout in seconds for LLM requests. When omitted, vikingbot "
+            "inherits vlm.timeout from ov.conf if present."
+        ),
+    )
     max_tool_iterations: int = 50
     memory_window: int = 50
     session_context_enabled: bool = False
@@ -446,6 +461,10 @@ class AgentsConfig(BaseModel):
     commit_token_threshold: int = 200000
     commit_keep_recent_count: int = 5
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
+    thinking: bool = Field(
+        default=True,
+        description="Enable model thinking/reasoning mode for VikingBot agent calls.",
+    )
     provider: str = ""
     api_key: str = ""
     api_base: str = ""
@@ -550,9 +569,15 @@ class OpenVikingConfig(BaseModel):
     memory_recall_max_chars: int = 4000
     # How many experience memories to fetch per call to get_viking_experience_context.
     exp_recall_limit: int = 5
+    # Also search matching structured case memories. When enabled, VikingBot
+    # can follow deterministic case -> experience links before direct exp recall.
+    # Default off for normal user-facing deployments.
+    case_recall_limit: int = 0
+    # Deprecated/no-op: trajectory memories are not injected into VikingBot recall.
+    trajectory_recall_limit: int = 0
     # Total character budget for the injected experience block. Memories beyond this
     # budget are degraded to link-only (uri + score) instead of being dropped.
-    exp_recall_max_chars: int = 2000
+    exp_recall_max_chars: int = 10000
 
     @field_validator("api_key_type", mode="before")
     @classmethod

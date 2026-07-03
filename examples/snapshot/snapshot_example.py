@@ -59,8 +59,8 @@ def print_read(client: Any, uri: str) -> None:
     print(f"read {uri}: {len(content)} chars | {first_line}")
 
 
-def commit_snapshot(client: Any, message: str) -> dict[str, Any]:
-    result = client.snapshot.commit(message=message)
+def commit_snapshot(client: Any, message: str, paths: list[str] | None = None) -> dict[str, Any]:
+    result = client.snapshot.commit(message=message, paths=paths)
     print(f"commit {message!r}: result={result.get('result')} oid={short_oid(result.get('commit_oid'))}")
     return result
 
@@ -121,14 +121,14 @@ def main() -> None:
         print_section("v1 initial import")
         write_text(client, uris["guide"], f"# Guide\n\nInitial SDK content with {alpha}.\n", mode="create")
         write_text(client, uris["todo"], f"# Todo\n\nRemember {todo}.\n", mode="create")
-        v1 = commit_snapshot(client, "sdk v1 initial import")
+        v1 = commit_snapshot(client, "sdk v1 initial import", paths=[root_uri])
         print_find(client, alpha, root_uri)
 
         print_section("v2 modify delete add")
         write_text(client, uris["guide"], f"# Guide\n\nUpdated SDK content with {beta}.\n", mode="replace")
         remove_resource(client, uris["todo"])
         write_text(client, uris["changelog"], f"# Changelog\n\nCreated {changelog}.\n", mode="create")
-        v2 = commit_snapshot(client, "sdk v2 modify delete add")
+        v2 = commit_snapshot(client, "sdk v2 modify delete add", paths=[root_uri])
         print_find(client, beta, root_uri)
         print_find(client, todo, root_uri)
         print_find(client, changelog, root_uri)
@@ -138,7 +138,7 @@ def main() -> None:
         print(f"mkdir: {root_uri}/archive")
         write_text(client, uris["changelog"], f"# Changelog\n\nCreated {changelog}. Added {gamma}.\n", mode="replace")
         write_text(client, uris["archive"], f"# Archive\n\nArchived marker {archive}.\n", mode="create")
-        v3 = commit_snapshot(client, "sdk v3 second changes")
+        v3 = commit_snapshot(client, "sdk v3 second changes", paths=[root_uri])
         print_find(client, gamma, root_uri)
         print_find(client, archive, root_uri)
         log_before = client.snapshot.log(limit=10)
@@ -173,6 +173,33 @@ def main() -> None:
         print(f"snapshot log after restore: {len(log_after)} commit(s)")
         for commit in log_after:
             print(f"  {short_oid(commit.get('oid'))} {commit.get('message', '')}")
+
+        print_section("ovgitignore exclude")
+        # Set an account-level .ovgitignore rule. Files matching it are excluded
+        # from subsequent commits; the ignore file itself is always versioned.
+        client.snapshot.set_gitignore(content="*.txt\n")
+        print(f"get_gitignore: {client.snapshot.get_gitignore()!r}")
+        # Write two files: debug.txt matches *.txt (excluded), notes.md does not.
+        ignored_uri = f"{root_uri}/debug.txt"
+        kept_uri = f"{root_uri}/notes.md"
+        write_text(client, ignored_uri, f"# Scratch\n\ndebug noise {gamma}.\n", mode="create")
+        write_text(client, kept_uri, f"# Notes\n\nkept marker {archive}.\n", mode="create")
+        v4 = commit_snapshot(client, "sdk v4 with ovgitignore", paths=[root_uri])
+        print(f"ignored count: {v4.get('ignored')}")
+        # debug.txt was excluded -> reading it from the snapshot fails.
+        try:
+            client.snapshot.show(v4["commit_oid"], path=ignored_uri)
+            ignored_present = True
+        except Exception as exc:  # AGFSNotFoundError when excluded
+            ignored_present = False
+            print(f"debug.txt excluded from snapshot (show raised: {type(exc).__name__})")
+        # notes.md is not ignored -> readable from the snapshot.
+        kept_blob = client.snapshot.show(v4["commit_oid"], path=kept_uri)
+        print(f"debug.txt in v4 snapshot: {ignored_present}")
+        print(f"notes.md in v4 snapshot: {bool(kept_blob)}")
+        # Clean up the rule.
+        client.snapshot.delete_gitignore()
+        print(f"get_gitignore after delete: {client.snapshot.get_gitignore()!r}")
 
         print_section("done")
         print("Python SDK snapshot multi-version example finished")

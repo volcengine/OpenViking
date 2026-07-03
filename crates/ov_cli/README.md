@@ -104,6 +104,11 @@ ov read viking://resources/...
 - `config show` - Show configuration
 - `config validate` - Validate config
 
+### Admin
+- `admin create-account` - Create an account and first admin user
+- `admin register-user` - Register a user
+- `admin regenerate-key` - Rotate a user's API key
+
 ### Display
 - `language` (`lang`) - Choose CLI display language (`en` / `zh-CN`)
 
@@ -135,6 +140,11 @@ ov ls viking://resources --recursive
 
 # Temporarily override identity from CLI flags
 ov --account acme --user alice ls viking://
+
+# Create predictable API keys from a seed
+ov --sudo admin create-account acme --admin alice --seed alice-seed
+ov admin register-user acme bob --role user --seed bob-seed
+ov admin regenerate-key acme bob --seed bob-new-seed
 
 # Glob search
 ov glob "**/*.md" --uri viking://resources

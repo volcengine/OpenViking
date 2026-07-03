@@ -435,6 +435,40 @@ impl FileSystem for MemFileSystem {
         Ok(())
     }
 
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let src_normalized = Self::normalize_path(src_path);
+        let dst_normalized = Self::normalize_path(dst_path);
+        let mut entries = self.entries.write().await;
+
+        let src_entry = entries
+            .get(&src_normalized)
+            .ok_or_else(|| Error::not_found(&src_normalized))?
+            .clone();
+
+        if src_entry.is_dir {
+            return Err(Error::invalid_operation(
+                "replace only supports files in memfs",
+            ));
+        }
+
+        if let Some(parent) = Self::parent_path(&dst_normalized) {
+            match entries.get(&parent) {
+                Some(e) if e.is_dir => {}
+                Some(_) => return Err(Error::NotADirectory(parent)),
+                None => return Err(Error::not_found(&parent)),
+            }
+        }
+
+        if entries.get(&dst_normalized).is_some_and(|entry| entry.is_dir) {
+            return Err(Error::IsADirectory(dst_normalized));
+        }
+
+        entries.remove(&dst_normalized);
+        entries.remove(&src_normalized);
+        entries.insert(dst_normalized, src_entry);
+        Ok(())
+    }
+
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         let normalized = Self::normalize_path(path);
         let mut entries = self.entries.write().await;
@@ -603,6 +637,24 @@ mod tests {
         // New should exist with same data
         let data = fs.read("/new.txt", 0, 0).await.unwrap();
         assert_eq!(data, b"data");
+    }
+
+    #[tokio::test]
+    async fn test_replace_overwrites_existing_file() {
+        let fs = MemFileSystem::new();
+
+        fs.write("/src.txt", b"fresh", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        fs.write("/dst.txt", b"stale", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        fs.replace("/src.txt", "/dst.txt").await.unwrap();
+
+        assert!(fs.stat("/src.txt").await.is_err());
+        let data = fs.read("/dst.txt", 0, 0).await.unwrap();
+        assert_eq!(data, b"fresh");
     }
 
     #[tokio::test]

@@ -86,8 +86,8 @@ class TestProviderInstruction:
         )
 
 
-class TestSkillToolCallExposure:
-    def test_assemble_conversation_includes_skill_tool_call(self):
+class TestSessionConversationToolFiltering:
+    def test_session_conversation_omits_skill_tool_call(self):
         messages = [
             Message(
                 id="m1",
@@ -111,10 +111,11 @@ class TestSkillToolCallExposure:
 
         conversation = provider._assemble_conversation(messages)
 
-        assert "[ToolCall]" in conversation
-        assert '"skill_name": "create_presentation"' in conversation
+        assert "ToolCall:" not in conversation
+        assert "create_presentation" not in conversation
+        assert "Running a skill." in conversation
 
-    def test_assemble_conversation_without_skill_tool_call_has_no_skill_name(self):
+    def test_session_conversation_omits_regular_tool_call(self):
         messages = [
             Message(
                 id="m1",
@@ -137,9 +138,38 @@ class TestSkillToolCallExposure:
 
         conversation = provider._assemble_conversation(messages)
 
-        assert "[ToolCall]" in conversation
-        assert '"tool_name": "read"' in conversation
-        assert '"skill_name":' not in conversation
+        assert "ToolCall:" not in conversation
+        assert "tool_name=read" not in conversation
+        assert "Running a tool." in conversation
+
+    def test_agent_provider_conversation_includes_tool_call_evidence(self):
+        from openviking.session.memory.agent_trajectory_context_provider import (
+            AgentTrajectoryContextProvider,
+        )
+
+        messages = [
+            Message(
+                id="m1",
+                role="assistant",
+                parts=[
+                    TextPart("Checking the reservation."),
+                    ToolPart(
+                        tool_id="tool_1",
+                        tool_name="get_reservation_details",
+                        tool_input={"reservation_id": "EHGLP3"},
+                        tool_output="available",
+                        tool_status="completed",
+                    ),
+                ],
+            )
+        ]
+        provider = AgentTrajectoryContextProvider(messages=messages)
+
+        conversation = provider._assemble_conversation(messages)
+
+        assert "ToolCall: tool_name=get_reservation_details" in conversation
+        assert "input={'reservation_id': 'EHGLP3'}" in conversation
+        assert "output=available" in conversation
 
     def test_assemble_conversation_uses_peer_id_when_present(self):
         messages = [
@@ -201,6 +231,8 @@ class TestSkillToolCallExposure:
         provider = SessionExtractContextProvider(messages=messages)
 
         assert provider._detect_language() == "zh-CN"
+
+
 
     async def test_prepare_extraction_messages_replaces_image_part_with_vlm_description(self):
         class FakeVisionVLM:
@@ -308,3 +340,9 @@ class TestSkillToolCallExposure:
         assert len(messages) == 1
         assert any(isinstance(part, ImagePart) for part in messages[0].parts)
         assert provider.messages is not messages
+
+def test_session_provider_empty_messages_still_uses_environment_fallback(monkeypatch):
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    provider = SessionExtractContextProvider(messages=[])
+
+    assert provider.get_output_language() == "zh-CN"

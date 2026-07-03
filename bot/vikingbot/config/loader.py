@@ -133,24 +133,29 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
 
     Only sets model parameters - provider config is read directly from OpenVikingConfig.
     """
+    if vlm_data:
+        if "agents" not in bot_data:
+            bot_data["agents"] = {}
+
+    agents = bot_data.get("agents", {})
+    if vlm_data and "timeout" not in agents:
+        agents["timeout"] = vlm_data["timeout"] if "timeout" in vlm_data else 60.0
+
     # Set default model from vlm.model
     if "agents" in bot_data:
-        agents = bot_data["agents"]
         if "model" in agents and agents["model"]:
             return
     if vlm_data.get("model"):
-        if "agents" not in bot_data:
-            bot_data["agents"] = {}
         model = vlm_data["model"]
         provider = vlm_data.get("provider")
-        bot_data["agents"]["model"] = model
-        bot_data["agents"]["provider"] = provider if provider else ""
-        bot_data["agents"]["api_base"] = vlm_data.get("api_base", "")
-        bot_data["agents"]["api_key"] = vlm_data.get("api_key", "")
-        if "temperature" in vlm_data and "temperature" not in bot_data["agents"]:
-            bot_data["agents"]["temperature"] = vlm_data["temperature"]
+        agents["model"] = model
+        agents["provider"] = provider if provider else ""
+        agents["api_base"] = vlm_data.get("api_base", "")
+        agents["api_key"] = vlm_data.get("api_key", "")
+        if "temperature" in vlm_data and "temperature" not in agents:
+            agents["temperature"] = vlm_data["temperature"]
         if "extra_headers" in vlm_data and vlm_data["extra_headers"] is not None:
-            bot_data["agents"]["extra_headers"] = vlm_data["extra_headers"]
+            agents["extra_headers"] = vlm_data["extra_headers"]
 
 
 def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> str:

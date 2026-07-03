@@ -17,6 +17,10 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
     """Compute next run time in ms."""
     if schedule.kind == "at":
@@ -82,6 +86,9 @@ class CronService:
                                 message=j["payload"].get("message", ""),
                                 deliver=j["payload"].get("deliver", False),
                                 session_key_str=j["payload"].get("session_key_str"),
+                                channel_metadata=_dict_or_empty(
+                                    j["payload"].get("channel_metadata")
+                                ),
                             ),
                             state=CronJobState(
                                 next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -129,6 +136,7 @@ class CronService:
                         "message": j.payload.message,
                         "deliver": j.payload.deliver,
                         "session_key_str": j.payload.session_key_str,
+                        "channel_metadata": j.payload.channel_metadata,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -225,9 +233,8 @@ class CronService:
         logger.info(f"Cron: executing job '{job.name}' ({job.id})")
 
         try:
-            response = None
             if self.on_job:
-                response = await self.on_job(job)
+                await self.on_job(job)
 
             job.state.last_status = "ok"
             job.state.last_error = None
@@ -267,6 +274,7 @@ class CronService:
         message: str,
         session_key: SessionKey,
         deliver: bool = False,
+        channel_metadata: dict[str, Any] | None = None,
         delete_after_run: bool = False,
     ) -> CronJob:
         """Add a new job."""
@@ -283,6 +291,7 @@ class CronService:
                 message=message,
                 deliver=deliver,
                 session_key_str=session_key.model_dump_json(),
+                channel_metadata=dict(_dict_or_empty(channel_metadata)),
             ),
             state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
             created_at_ms=now,

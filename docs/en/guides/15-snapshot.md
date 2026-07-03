@@ -214,11 +214,88 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
 - HEAD always advances monotonically, and **history is never rewritten or lost** — going back to an older version is itself a new commit.
 - `restore` only affects files within `project_dir` (the whole account tree when omitted); files outside that scope are left untouched.
 
+## Excluding Files with `.ovgitignore`
+
+The `.ovgitignore` file at the account root is an account-level exclusion file, analogous to a root `.gitignore`: files matching its rules are excluded from `commit` snapshots. It composes with the built-in system pruning (`_system`, `tasks`, vector-index derived files, etc.).
+
+Key points:
+
+- The rules file itself is **never ignored by `.ovgitignore` rules** — even if a rule matches `.ovgitignore` it is still included in snapshots, so rule changes are auditable and restorable.
+- Rules affect **only `commit`**; `restore`, `show`, and `log` treat commit contents as authoritative and do not apply the current `.ovgitignore` as a filter. So restoring a historical snapshot still restores files that match the current rules.
+- If a file was tracked in an earlier commit and a later rule matches it, the next `commit` removes it from the new snapshot (the workspace file itself is untouched).
+- `.ovgitignore` never enters vector indexing/retrieval.
+
+### Rule syntax
+
+`.ovgitignore` is UTF-8 text supporting a common glob subset:
+
+- Blank lines are ignored.
+- A line whose first non-space character is `#` is a comment.
+- Leading/trailing whitespace is trimmed.
+- `!` negation is **unsupported** (its presence makes `commit` fail with an error).
+- Git-style backslash escaping is **unsupported**.
+- The file is capped at 64 KiB.
+
+Matching uses account-relative Git tree paths (`/`-separated), e.g. `resources/proj/a.log`. For example, `*.log` matches `.log` files at any depth, `build/` matches a directory named `build` and its contents, and `/cache/**` matches only `cache/` at the account root.
+
+### Python SDK
+
+```python
+# Write the rules
+client.snapshot.set_gitignore(content="*.log\n")
+
+# Read (returns an empty string when absent)
+print(client.snapshot.get_gitignore())
+
+# Delete (missing is success, idempotent)
+client.snapshot.delete_gitignore()
+```
+
+On subsequent commits, files matching the rules are excluded, and the response's `ignored` field reports how many candidate paths were skipped:
+
+```python
+v = client.snapshot.commit(message="with ignore")
+print(v["result"], v.get("ignored"))  # created, 1
+```
+
+### CLI
+
+```bash
+# Set (pass content inline with --content, or read from a file with --file)
+ov snapshot ignore-set --content "*.log" -o json
+ov snapshot ignore-set --file ./my-rules -o json
+
+# Get (-o json returns {"result": "<content>"}; without -o json it prints the content to stdout)
+ov snapshot ignore-get -o json
+
+# Delete (idempotent)
+ov snapshot ignore-delete -o json
+```
+
+### HTTP API
+
+```bash
+# Get
+curl -X GET "http://localhost:1933/api/v1/snapshot/ignore" \
+  -H "X-API-Key: your-key"
+
+# Set
+curl -X PUT "http://localhost:1933/api/v1/snapshot/ignore" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"content": "*.log\n"}'
+
+# Delete
+curl -X DELETE "http://localhost:1933/api/v1/snapshot/ignore" \
+  -H "X-API-Key: your-key"
+```
+
 ## Notes
 
 - After editing the `git` config, restart the service / re-initialize the client for it to take effect.
 - With the `s3` backend, `git.s3.bucket` and `git.s3.region` are required; missing them causes initialization to fail.
 - If a restore has vector side effects (files written/deleted), the response carries a `task_id` you can poll via `GET /api/v1/tasks/{task_id}` to track the background vector rebuild (see the [Observability guide](05-observability.md) and [API Overview](../api/01-overview.md)).
+- If `.ovgitignore` is too large (over 64 KiB) or contains unsupported syntax (`!` negation, backslash escaping), `commit` fails with an `invalid operation` error; `set_gitignore` validates the size up front.
 - Do not operate on the `.ovgit` directory with an external `git` tool; it is maintained by OpenViking.
 
 ## Related Documentation

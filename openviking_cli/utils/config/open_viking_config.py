@@ -21,8 +21,9 @@ from .consts import (
 )
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
-from .grep_config import GrepConfig
 from .git_config import GitConfig
+from .grep_config import GrepConfig
+from .ingest_config import IngestConfig
 from .log_config import LogConfig
 from .memory_config import MemoryConfig
 from .oauth_config import OAuthConfig
@@ -38,6 +39,7 @@ from .parser_config import (
     SemanticConfig,
     TextConfig,
     VideoConfig,
+    WebFeedConfig,
 )
 from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
@@ -185,6 +187,11 @@ class OpenVikingConfig(BaseModel):
         description="Feishu/Lark document parsing configuration",
     )
 
+    webfeed: WebFeedConfig = Field(
+        default_factory=WebFeedConfig,
+        description="Whole-site ingestion via sitemap / RSS / Atom feeds",
+    )
+
     semantic: SemanticConfig = Field(
         default_factory=SemanticConfig,
         description="Semantic processing configuration (overview/abstract limits)",
@@ -315,6 +322,11 @@ class OpenVikingConfig(BaseModel):
         description="Prompt template configuration",
     )
 
+    ingest: IngestConfig = Field(
+        default_factory=IngestConfig,
+        description="Conversation-log ingest (openviking-server ingest) configuration",
+    )
+
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
     @classmethod
@@ -335,6 +347,7 @@ class OpenVikingConfig(BaseModel):
                 "text",
                 "directory",
                 "feishu",
+                "webfeed",
             ]
             raise_unknown_config_fields(
                 data=config_copy,

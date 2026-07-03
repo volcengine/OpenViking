@@ -214,11 +214,88 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
 - HEAD 始终单调向前推进，**历史永远不会被改写或丢失**——回到旧版本本身也是一次新的提交。
 - `restore` 只影响 `project_dir`（省略时为整棵账号树）范围内的文件，范围之外的文件保持不变。
 
+## 使用 `.ovgitignore` 排除文件
+
+账号根目录下的 `.ovgitignore` 是一个账号级的排除规则文件，作用类似根 `.gitignore`：匹配该规则的文件在 `commit` 时被排除出快照。它与系统内置的剪枝规则（`_system`、`tasks`、向量索引派生文件等）叠加生效。
+
+要点：
+
+- 规则文件本身**不会被 `.ovgitignore` 规则忽略**，即使规则匹配 `.ovgitignore` 也会被正常纳入快照——这样规则的变更可追溯、可恢复。
+- 规则**只影响 `commit`**；`restore`、`show`、`log` 仍以提交内容为准，不把当前 `.ovgitignore` 当作过滤器。因此恢复一个历史快照时，即便其中某些文件匹配当前规则，仍会被正常恢复。
+- 若某个文件在更早的提交中已被跟踪、之后新增规则匹配到它，下一次 `commit` 会把它从新快照中移除（工作区的文件本身不受影响）。
+- `.ovgitignore` 不会进入向量索引/检索。
+
+### 规则语法
+
+`.ovgitignore` 为 UTF-8 文本，支持常见的 glob 子集：
+
+- 空行被忽略。
+- 首个非空白字符为 `#` 的行是注释。
+- 行首/行尾空白会被裁剪。
+- **不支持** `!` 取反（出现会让 `commit` 失败并报错）。
+- **不支持** Git 风格的反斜杠转义。
+- 文件大小上限 64 KiB。
+
+匹配路径使用账号相对的 Git 树路径（`/` 分隔），如 `resources/proj/a.log`。例如 `*.log` 匹配任意深度的 `.log` 文件，`build/` 匹配名为 `build` 的目录及其内容，`/cache/**` 仅匹配账号根下的 `cache/`。
+
+### Python SDK
+
+```python
+# 写入规则
+client.snapshot.set_gitignore(content="*.log\n")
+
+# 读取（不存在时返回空字符串）
+print(client.snapshot.get_gitignore())
+
+# 删除（不存在也视为成功，幂等）
+client.snapshot.delete_gitignore()
+```
+
+随后提交时，匹配规则的文件会被排除，响应里的 `ignored` 字段给出本次被排除的候选路径数：
+
+```python
+v = client.snapshot.commit(message="with ignore")
+print(v["result"], v.get("ignored"))  # created, 1
+```
+
+### CLI
+
+```bash
+# 设置（用 --content 直接传内容，或用 --file 从文件读取）
+ov snapshot ignore-set --content "*.log" -o json
+ov snapshot ignore-set --file ./my-rules -o json
+
+# 读取（-o json 返回 {"result": "<内容>"}；不加 -o json 时直接把内容打到 stdout）
+ov snapshot ignore-get -o json
+
+# 删除（幂等）
+ov snapshot ignore-delete -o json
+```
+
+### HTTP API
+
+```bash
+# 读取
+curl -X GET "http://localhost:1933/api/v1/snapshot/ignore" \
+  -H "X-API-Key: your-key"
+
+# 写入
+curl -X PUT "http://localhost:1933/api/v1/snapshot/ignore" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"content": "*.log\n"}'
+
+# 删除
+curl -X DELETE "http://localhost:1933/api/v1/snapshot/ignore" \
+  -H "X-API-Key: your-key"
+```
+
 ## 注意事项
 
 - 修改 `git` 配置后必须重启服务 / 重新初始化客户端才能生效。
 - 启用 `s3` 后端时，`git.s3.bucket` 与 `git.s3.region` 为必填项，缺失会导致初始化失败。
 - 恢复操作如涉及向量副作用（写入/删除文件），响应会返回一个 `task_id`，可通过 `GET /api/v1/tasks/{task_id}` 轮询后台向量重建进度（参见 [系统指南](05-observability.md) 与 [API 概览](../api/01-overview.md)）。
+- `.ovgitignore` 内容过大（超过 64 KiB）或包含 `!` 取反、反斜杠转义等不支持语法时，`commit` 会失败并报 `invalid operation` 错误；写入时（`set_gitignore`）会预先校验大小。
 - 不要手动用外部 `git` 工具去操作 `.ovgit` 目录，它由 OpenViking 维护。
 
 ## 相关文档

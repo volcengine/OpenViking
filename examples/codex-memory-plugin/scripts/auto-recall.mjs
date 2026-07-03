@@ -214,8 +214,6 @@ function postProcess(items, limit, threshold) {
 }
 
 async function searchScope(query, targetUri, limit, bucket = "memories", sessionId = null) {
-  // Keep current-user shorthand here; the server canonicalizes it using the
-  // authenticated/trusted request context.
   const body = { query, target_uri: targetUri, limit, score_threshold: 0 };
   if (sessionId) body.session_id = sessionId;
   const result = await fetchJSON("/api/v1/search/search", {
@@ -225,10 +223,46 @@ async function searchScope(query, targetUri, limit, bucket = "memories", session
   return result?.[bucket] || [];
 }
 
+// Candidate target URIs for a bucket, most-specific first. In trusted mode a
+// user's memories live under viking://user/<user>/<bucket>; in api_key mode the
+// server canonicalizes the generic viking://user/<bucket> to the authenticated
+// user. Trying the user-scoped path first with the generic path as a fallback
+// recalls correctly in both modes. De-duped so a missing/blank user never
+// doubles the request count.
+function userScopedTargets(kind) {
+  const suffix = kind.replace(/^\/+/, "");
+  const targets = [`viking://user/${suffix}`];
+  if (cfg.user) {
+    targets.unshift(`viking://user/${cfg.user}/${suffix}`);
+  }
+  return [...new Set(targets)];
+}
+
+// Two-phase, short-circuiting search over the candidate targets:
+//   1) a session-scoped pass (uses OpenViking's session-aware planner);
+//   2) only if the entire session pass is empty, a single session-independent
+//      pass (the planner can legitimately decide that no extra context is
+//      needed for this session, but auto-recall still needs a memory lookup).
+// Each phase stops at the first non-empty target, so a warm user costs one
+// request and the worst case is bounded by (targets x 2) — instead of running
+// a per-target session+fallback for every target.
+async function searchBucket(query, targetUris, limit, bucket, sessionId = null) {
+  for (const targetUri of targetUris) {
+    const items = await searchScope(query, targetUri, limit, bucket, sessionId);
+    if (items.length > 0) return items;
+  }
+  if (!sessionId) return [];
+  for (const targetUri of targetUris) {
+    const items = await searchScope(query, targetUri, limit, bucket, null);
+    if (items.length > 0) return items;
+  }
+  return [];
+}
+
 async function searchAll(query, limit, sessionId = null) {
   const [userMems, userSkills] = await Promise.all([
-    searchScope(query, "viking://user/memories", limit, "memories", sessionId),
-    searchScope(query, "viking://user/skills", limit, "skills", sessionId),
+    searchBucket(query, userScopedTargets("memories"), limit, "memories", sessionId),
+    searchBucket(query, userScopedTargets("skills"), limit, "skills", sessionId),
   ]);
   log("search_complete", { scope: "user", rawCount: userMems.length, topScores: userMems.slice(0, 3).map((m) => m.score) });
   log("search_complete", { scope: "skills", rawCount: userSkills.length, topScores: userSkills.slice(0, 3).map((m) => m.score) });

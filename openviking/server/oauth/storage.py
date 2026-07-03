@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     grant_types TEXT NOT NULL DEFAULT '["authorization_code","refresh_token"]',
     response_types TEXT NOT NULL DEFAULT '["code"]',
     client_name TEXT,
+    scope TEXT,
     created_at INTEGER NOT NULL
 );
 
@@ -168,6 +169,7 @@ class OAuthStore:
         ALTER TABLE ADD COLUMN guarded by a ``PRAGMA table_info`` check.
         """
         column_additions = (
+            ("oauth_clients", "scope", "TEXT"),
             ("oauth_codes", "authorizing_key_fp", "TEXT"),
             ("oauth_pending_authorizations", "verified_key_fp", "TEXT"),
             ("oauth_refresh_tokens", "authorizing_key_fp", "TEXT"),
@@ -199,6 +201,7 @@ class OAuthStore:
         grant_types: Optional[list[str]] = None,
         response_types: Optional[list[str]] = None,
         client_secret: Optional[str] = None,
+        scope: Optional[str] = None,
     ) -> dict[str, Any]:
         """Persist a freshly registered client and return the public record.
 
@@ -220,6 +223,7 @@ class OAuthStore:
             "grant_types": grant_types or ["authorization_code", "refresh_token"],
             "response_types": response_types or ["code"],
             "client_name": client_name,
+            "scope": scope,
             "created_at": now,
         }
 
@@ -229,7 +233,7 @@ class OAuthStore:
                 "INSERT INTO oauth_clients "
                 "(client_id, client_secret_hash, redirect_uris, "
                 "token_endpoint_auth_method, grant_types, response_types, "
-                "client_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "client_name, scope, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record["client_id"],
                     record["client_secret_hash"],
@@ -238,6 +242,7 @@ class OAuthStore:
                     json.dumps(record["grant_types"]),
                     json.dumps(record["response_types"]),
                     record["client_name"],
+                    record["scope"],
                     record["created_at"],
                 ),
             )

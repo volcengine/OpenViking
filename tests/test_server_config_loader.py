@@ -10,6 +10,7 @@ from openviking.server.config import (
     get_server_url_from_server_data,
     load_bot_gateway_token,
     load_server_config,
+    map_bind_host_to_loopback,
 )
 
 
@@ -126,6 +127,50 @@ def test_get_server_url_from_server_config_brackets_ipv6_literal():
     config = ServerConfig(host="::1", port=1944)
 
     assert get_server_url_from_server_data(config) == "http://[::1]:1944"
+
+
+@pytest.mark.parametrize(
+    "host, expected",
+    [
+        # IPv4 wildcard bind addresses are not connectable -> loopback.
+        ("0.0.0.0", "127.0.0.1"),
+        ("", "127.0.0.1"),
+        ("*", "127.0.0.1"),
+        # IPv6 wildcard bind addresses -> IPv6 loopback (bracketed for URLs).
+        ("::", "[::1]"),
+        ("::0", "[::1]"),
+        ("[::]", "[::1]"),
+        # Real IPv6 literals are bracketed but otherwise preserved.
+        ("::1", "[::1]"),
+        ("[::1]", "[::1]"),
+        # Concrete reachable hosts pass through untouched.
+        ("127.0.0.1", "127.0.0.1"),
+        ("192.168.1.10", "192.168.1.10"),
+        ("openviking.local", "openviking.local"),
+    ],
+)
+def test_map_bind_host_to_loopback(host, expected):
+    assert map_bind_host_to_loopback(host) == expected
+
+
+def test_get_server_url_from_server_data_maps_ipv4_wildcard_to_loopback():
+    # Regression for issue #2856: server.host "0.0.0.0" is a bind address, not a
+    # destination the bot/client can connect to.
+    server = {"host": "0.0.0.0", "port": 1933}
+
+    assert get_server_url_from_server_data(server) == "http://127.0.0.1:1933"
+
+
+def test_get_server_url_from_server_config_maps_ipv4_wildcard_to_loopback():
+    config = ServerConfig(host="0.0.0.0", port=1933)
+
+    assert get_server_url_from_server_data(config) == "http://127.0.0.1:1933"
+
+
+def test_get_server_url_from_server_data_maps_ipv6_wildcard_to_loopback():
+    server = {"host": "::", "port": 1933}
+
+    assert get_server_url_from_server_data(server) == "http://[::1]:1933"
 
 
 def test_load_server_config_preserves_metrics_account_dimension_fields(tmp_path):

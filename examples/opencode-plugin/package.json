@@ -1,10 +1,14 @@
 {
   "name": "@openviking/opencode-plugin",
-  "version": "0.1.5",
-  "author": "tanyouqing",
+  "version": "0.1.6",
+  "author": "@openviking",
   "description": "Unified OpenCode plugin for OpenViking repository retrieval and long-term memory",
   "type": "module",
   "main": "index.mjs",
+  "oc-plugin": [
+    "server",
+    "tui"
+  ],
   "exports": {
     ".": "./index.mjs"
   },

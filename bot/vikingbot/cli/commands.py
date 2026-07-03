@@ -84,6 +84,42 @@ def _warn_deprecated_memory_user(memory_user: list[str] | None) -> None:
     )
 
 
+def _redirect_openviking_logs_to_stderr() -> None:
+    """Redirect openviking/openviking_cli standard-library loggers to stderr.
+
+    This prevents log output (e.g. deprecation warnings from memory_config)
+    from polluting stdout when vikingbot chat is used in --eval mode or piped.
+    """
+    import logging
+
+    for root_name in ("openviking", "openviking_cli"):
+        root_logger = logging.getLogger(root_name)
+        # If the logger has no handlers yet, add a stderr handler now.
+        # If it already has handlers, swap any stdout StreamHandlers to stderr.
+        if not root_logger.handlers:
+            handler = logging.StreamHandler(sys.stderr)
+            formatter = logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            )
+            handler.setFormatter(formatter)
+            root_logger.addHandler(handler)
+            root_logger.propagate = False
+        else:
+            for handler in root_logger.handlers:
+                if isinstance(handler, logging.StreamHandler) and handler.stream is sys.stdout:
+                    handler.setStream(sys.stderr)
+
+    # Also redirect Python warnings to stderr
+    warnings.simplefilter("default")
+    if not any(
+        isinstance(h, logging.StreamHandler) and h.stream is sys.stderr
+        for h in logging.getLogger("py.warnings").handlers
+    ):
+        logging.captureWarnings(True)
+        py_warnings_logger = logging.getLogger("py.warnings")
+        py_warnings_logger.addHandler(logging.StreamHandler(sys.stderr))
+
+
 def get_or_create_machine_id() -> str:
     """Get a unique machine ID using py-machineid.
 
@@ -271,10 +307,12 @@ def _make_provider(config, langfuse_client: None = None):
     p = config.agents
     model = p.model if p else None
     temperature = p.temperature if p else 0.7
+    thinking = p.thinking if p else True
     api_key = p.api_key if p else None
     api_base = p.api_base if p else None
     provider_name = p.provider if p else None
     extra_headers = p.extra_headers if p else {}
+    timeout = p.timeout if p else None
 
     if not model:
         raise RuntimeError("No LLM model configured. Please set it in ~/.openviking/ov.conf")
@@ -291,7 +329,10 @@ def _make_provider(config, langfuse_client: None = None):
             "provider": provider_name,
             "model": model,
             "temperature": temperature,
+            "thinking": thinking,
         }
+        if timeout is not None:
+            vlm_config["timeout"] = timeout
         if api_key:
             vlm_config["api_key"] = api_key
         if api_base:
@@ -317,6 +358,8 @@ def _make_provider(config, langfuse_client: None = None):
         default_model=model,
         extra_headers=extra_headers,
         provider_name=provider_name,
+        timeout=timeout,
+        thinking=thinking,
         langfuse_client=langfuse_client,
     )
 
@@ -478,6 +521,7 @@ def prepare_cron(bus, quiet: bool = False) -> CronService:
         """Execute a cron job through the agent."""
         session_key = SessionKey(**json.loads(job.payload.session_key_str))
         message = job.payload.message
+        channel_metadata = dict(job.payload.channel_metadata or {})
 
         if agent_holder["agent"] is None:
             raise RuntimeError("Agent not initialized yet")
@@ -500,6 +544,7 @@ Reminder message to deliver:
         response = await agent_holder["agent"].process_direct(
             cron_instruction,
             session_key=session_key,
+            metadata=channel_metadata,
         )
         if job.payload.deliver:
             from vikingbot.bus.events import OutboundMessage
@@ -508,6 +553,7 @@ Reminder message to deliver:
                 OutboundMessage(
                     session_key=session_key,
                     content=response or "",
+                    metadata=channel_metadata,
                 )
             )
         return response
@@ -712,6 +758,11 @@ def chat(
 
     bus = MessageBus()
     config = ensure_config(path)
+
+    # Redirect openviking/openviking_cli standard-library logs to stderr so they
+    # don't pollute stdout JSON output (important for --eval mode and piping).
+    _redirect_openviking_logs_to_stderr()
+
     validate_openviking_auth(config)
     _warn_deprecated_memory_user(memory_user)
     _init_bot_data(config)

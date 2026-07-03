@@ -86,6 +86,15 @@ struct MountCacheConfig {
 }
 
 impl MountableFS {
+    /// Return whether one plugin may be wrapped by EncryptionWrappedFS.
+    ///
+    /// Encrypted whole-file publish now depends on overwrite-on-publish
+    /// semantics (`replace(temp, final)`). Keep this gate at the wrapper
+    /// creation entrypoint so unsupported backends fail fast before mounting.
+    fn supports_encrypted_publish(plugin_name: &str) -> bool {
+        matches!(plugin_name, "localfs" | "s3fs" | "memfs")
+    }
+
     /// Return the raw backend for one mounted path when raw access is supported.
     fn raw_backend_for_mount<'a>(
         mount_info: &'a MountInfo,
@@ -277,7 +286,8 @@ impl MountableFS {
             None => {
                 // Single backend: initialize plugin, optionally wrap raw storage with cache, then
                 // wrap with encryption. This keeps shared cache providers ciphertext-only.
-                // Control plugins (queuefs, serverinfofs) are never encrypted.
+                // Control plugins (queuefs, serverinfofs) are dynamic virtual filesystems; never
+                // cache or encrypt them.
                 let raw = plugin.initialize(config.clone()).await?;
                 let raw_arc: Arc<dyn FileSystem> = Arc::from(raw);
                 let is_control_plugin = matches!(config.name.as_str(), "queuefs" | "serverinfofs");
@@ -292,7 +302,11 @@ impl MountableFS {
                     .await?;
                 }
                 #[cfg(feature = "cache")]
-                let storage_fs = self.maybe_wrap_cache(raw_arc.clone(), &normalized_path);
+                let storage_fs = if is_control_plugin {
+                    raw_arc.clone()
+                } else {
+                    self.maybe_wrap_cache(raw_arc.clone(), &normalized_path)
+                };
                 #[cfg(not(feature = "cache"))]
                 let storage_fs = raw_arc.clone();
 
@@ -301,6 +315,12 @@ impl MountableFS {
                 } else {
                     match (enc_root_key, enc_provider_type) {
                         (Some(rk), Some(pt)) => {
+                            if !Self::supports_encrypted_publish(&config.name) {
+                                return Err(Error::config(format!(
+                                      "encrypted backend '{}' must support replace() semantics",
+                                      config.name
+                                  )));
+                            }
                             Arc::new(EncryptionWrappedFS::new(storage_fs, rk, pt))
                         }
                         _ => storage_fs,
@@ -669,6 +689,10 @@ impl FileSystem for ArcFileSystem {
         self.0.rename(old_path, new_path).await
     }
 
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        self.0.replace(src_path, dst_path).await
+    }
+
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         self.0.chmod(path, mode).await
     }
@@ -759,6 +783,19 @@ impl FileSystem for MountableFS {
         }
 
         mount_info_old.fs.rename(&rel_old, &rel_new).await
+    }
+
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let (mount_info_src, rel_src) = self.find_mount(src_path).await?;
+        let (mount_info_dst, rel_dst) = self.find_mount(dst_path).await?;
+
+        if mount_info_src.path != mount_info_dst.path {
+            return Err(Error::InvalidOperation(
+                "Cannot replace across different mount points".to_string(),
+            ));
+        }
+
+        mount_info_src.fs.replace(&rel_src, &rel_dst).await
     }
 
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
@@ -1250,6 +1287,52 @@ mod tests {
             b"backend:/file.txt"
         );
         assert_eq!(reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn queuefs_mount_bypasses_cache_even_when_cache_is_configured() {
+        use crate::cache::{CacheNamespace, CachePolicy, MemoryCacheProvider};
+        use crate::plugins::QueueFSPlugin;
+
+        let provider = Arc::new(MemoryCacheProvider::new());
+        let mfs = MountableFS::with_cache(
+            provider.clone(),
+            CacheNamespace::new("queue-cache-test"),
+            CachePolicy::default().with_bypass_prefix("/queue"),
+        );
+        mfs.register_plugin(QueueFSPlugin::new()).await;
+        mfs.mount(PluginConfig::single_backend(
+            "queuefs",
+            "/queue",
+            HashMap::new(),
+        ))
+        .await
+        .unwrap();
+        mfs.mkdir("/queue/Embedding", 0o755).await.unwrap();
+
+        assert_eq!(
+            mfs.read("/queue/Embedding/size", 0, 0).await.unwrap(),
+            b"0"
+        );
+        mfs.write(
+            "/queue/Embedding/enqueue",
+            br#"{"id":"one"}"#,
+            0,
+            WriteFlag::Create,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            mfs.read("/queue/Embedding/size", 0, 0).await.unwrap(),
+            b"1",
+            "queuefs size is dynamic and must not be served from cache"
+        );
+        assert!(
+            provider.keys().await.is_empty(),
+            "queuefs control filesystem should not populate shared cache"
+        );
     }
 
     #[cfg(feature = "cache")]

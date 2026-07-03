@@ -262,6 +262,10 @@ mod tests {
                 ("/local/acct/resources/x.faiss", false),
                 ("/local/acct/resources/x.index", false),
                 ("/local/acct/resources/embedding_cache/v.bin", false),
+                (
+                    "/local/acct/temp/.encrypt_stage/823e7fa1698ab91f00481e4960d38764c6d77fa9230a86a0cca178bf87becc93.encrypt",
+                    false,
+                ),
             ],
         );
         let fs: Arc<dyn FileSystem> = Arc::new(mock);

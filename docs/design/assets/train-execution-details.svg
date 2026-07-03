@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="900" viewBox="0 0 1480 900" role="img" aria-labelledby="title desc">
+  <title id="title">OpenViking session.train 训练执行细节图</title>
+  <desc id="desc">展示训练框架中的输入、并行 rollout、并行信号抽取、串行 policy update，以及 trajectories、experiences、remote service、session archive 等存储关系。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#334155"/></marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#16a34a"/></marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#ea580c"/></marker>
+    <style>
+      .bg{fill:#f8fafc}.title{font:700 25px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#0f172a}.subtitle{font:500 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#475569}.panel{fill:#fff;stroke:#cbd5e1;stroke-width:2;rx:18}.panelInput{stroke:#2563eb}.panelSignal{stroke:#16a34a}.panelUpdate{stroke:#ea580c}.panelStore{stroke:#64748b}.panelTitle{font:700 17px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#0f172a}.tag{font:700 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#fff}.tagBlue{fill:#2563eb}.tagGreen{fill:#16a34a}.tagOrange{fill:#ea580c}.box{fill:#f8fafc;stroke:#94a3b8;stroke-width:1.5;rx:10}.boxBlue{fill:#eff6ff;stroke:#60a5fa}.boxGreen{fill:#f0fdf4;stroke:#4ade80}.boxOrange{fill:#fff7ed;stroke:#fb923c}.boxLLM{fill:#fef2f2;stroke:#ef4444;stroke-width:2.5}.boxPurple{fill:#faf5ff;stroke:#c084fc}.data{fill:#fefce8;stroke:#eab308;stroke-width:1.5;rx:999}.store{fill:#f1f5f9;stroke:#64748b;stroke-width:1.8;rx:10}.text{font:700 14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#1e293b}.small{font:500 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#475569}.tiny{font:500 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#64748b}.edge{fill:none;stroke:#334155;stroke-width:2;marker-end:url(#arrow)}.edgeBlue{fill:none;stroke:#2563eb;stroke-width:2.5;marker-end:url(#arrowBlue)}.edgeGreen{fill:none;stroke:#16a34a;stroke-width:2.5;marker-end:url(#arrowGreen)}.edgeOrange{fill:none;stroke:#ea580c;stroke-width:2.5;marker-end:url(#arrowOrange)}.edgeDashed{fill:none;stroke:#64748b;stroke-width:2;stroke-dasharray:8 6;marker-end:url(#arrow)}.label{font:600 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#334155}.mono{font:600 11px ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;fill:#334155}.llm{fill:#fee2e2;stroke:#ef4444;stroke-width:1.5;rx:999}.llmText{font:800 11px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#991b1b}
+    </style>
+  </defs>
+
+  <rect class="bg" width="1480" height="900"/>
+  <text class="title" x="40" y="44">OpenViking session.train 训练执行细节</text>
+  <text class="subtitle" x="40" y="68">Domain model 作为流程中的数据产物出现；图中标明哪些阶段并行、哪些阶段被 ExperienceSet.lock() 串行化，以及每个阶段读写哪些存储。</text>
+
+  <!-- Input panel -->
+  <rect class="panel panelInput" x="40" y="105" width="330" height="430" rx="18"/>
+  <text class="panelTitle" x="65" y="138">1. Input / Rollout</text>
+  <rect class="tagBlue" x="250" y="116" width="88" height="24" rx="12"/><text class="tag" x="294" y="133" text-anchor="middle">parallel</text>
+
+  <rect class="box boxPurple" x="75" y="170" width="255" height="64" rx="10"/>
+  <text class="text" x="202" y="196" text-anchor="middle">CaseLoader</text>
+  <text class="small" x="202" y="215" text-anchor="middle">ListCaseLoader / RemoteCaseLoader</text>
+
+  <rect class="data" x="102" y="260" width="200" height="40" rx="20"/>
+  <text class="text" x="202" y="285" text-anchor="middle">Case[]</text>
+
+  <rect class="box boxBlue" x="75" y="326" width="255" height="64" rx="10"/>
+  <text class="text" x="202" y="352" text-anchor="middle">PolicySnapshotter</text>
+  <text class="small" x="202" y="371" text-anchor="middle">snapshot current ExperienceSet</text>
+
+  <rect class="box boxBlue" x="75" y="416" width="255" height="72" rx="10"/>
+  <text class="text" x="202" y="442" text-anchor="middle">RolloutExecutor.execute</text>
+  <text class="small" x="202" y="461" text-anchor="middle">case batch can run concurrently</text>
+  <text class="tiny" x="202" y="480" text-anchor="middle">Remote executor / agent loop / simulator</text>
+
+  <!-- Signal panel -->
+  <rect class="panel panelSignal" x="410" y="105" width="390" height="430" rx="18"/>
+  <text class="panelTitle" x="435" y="138">2. Learning Signal Extraction</text>
+  <rect class="tagGreen" x="665" y="116" width="88" height="24" rx="12"/><text class="tag" x="709" y="133" text-anchor="middle">parallel</text>
+
+  <rect class="data" x="505" y="170" width="200" height="40" rx="20"/>
+  <text class="text" x="605" y="195" text-anchor="middle">Rollout[]</text>
+
+  <rect class="box boxGreen boxLLM" x="455" y="235" width="300" height="72" rx="10"/>
+  <text class="text" x="605" y="261" text-anchor="middle">RolloutAnalyzer.analyze</text>
+  <text class="small" x="605" y="280" text-anchor="middle">parallel per rollout · LLM ExtractLoop</text>
+  <text class="tiny" x="605" y="299" text-anchor="middle">uses rollout.evaluation / evaluator feedback</text>
+
+  <rect class="llm" x="688" y="224" width="56" height="20" rx="10"/>
+  <text class="llmText" x="716" y="238" text-anchor="middle">LLM</text>
+
+  <rect class="data" x="485" y="335" width="240" height="44" rx="22"/>
+  <text class="text" x="605" y="362" text-anchor="middle">RolloutAnalysis[]</text>
+
+  <rect class="box boxGreen boxLLM" x="455" y="405" width="300" height="72" rx="10"/>
+  <text class="text" x="605" y="431" text-anchor="middle">GradientEstimator.estimate</text>
+  <text class="small" x="605" y="450" text-anchor="middle">parallel per analysis · LLM ExtractLoop</text>
+  <text class="tiny" x="605" y="469" text-anchor="middle">proposes experience operations</text>
+
+  <rect class="llm" x="688" y="394" width="56" height="20" rx="10"/>
+  <text class="llmText" x="716" y="408" text-anchor="middle">LLM</text>
+
+  <!-- Update panel -->
+  <rect class="panel panelUpdate" x="840" y="105" width="395" height="650" rx="18"/>
+  <text class="panelTitle" x="865" y="138">3. Policy Update Transaction</text>
+  <rect class="tagOrange" x="1110" y="116" width="96" height="24" rx="12"/><text class="tag" x="1158" y="133" text-anchor="middle">serialized</text>
+
+  <rect class="data" x="925" y="170" width="225" height="44" rx="22"/>
+  <text class="text" x="1037" y="197" text-anchor="middle">SemanticGradient[]</text>
+
+  <rect class="box boxOrange" x="895" y="242" width="285" height="58" rx="10"/>
+  <text class="text" x="1037" y="267" text-anchor="middle">ExperienceSet.lock()</text>
+  <text class="small" x="1037" y="286" text-anchor="middle">wait indefinitely; serialize writers</text>
+
+  <rect class="box boxOrange" x="895" y="322" width="285" height="58" rx="10"/>
+  <text class="text" x="1037" y="347" text-anchor="middle">ExperienceSet.reload()</text>
+  <text class="small" x="1037" y="366" text-anchor="middle">read latest experiences under lock</text>
+
+  <rect class="box boxOrange boxLLM" x="895" y="402" width="285" height="74" rx="10"/>
+  <text class="text" x="1037" y="429" text-anchor="middle">PatchMergePolicyOptimizer.plan</text>
+  <text class="small" x="1037" y="448" text-anchor="middle">serialized · LLM ExtractLoop</text>
+  <text class="tiny" x="1037" y="467" text-anchor="middle">merge / split / delete via PatchMergeContextProvider</text>
+
+  <rect class="llm" x="1108" y="382" width="56" height="20" rx="10"/>
+  <text class="llmText" x="1136" y="396" text-anchor="middle">LLM</text>
+
+  <rect class="data" x="925" y="505" width="225" height="44" rx="22"/>
+  <text class="text" x="1037" y="532" text-anchor="middle">PolicyUpdatePlan</text>
+
+  <rect class="box boxOrange" x="895" y="575" width="285" height="74" rx="10"/>
+  <text class="text" x="1037" y="602" text-anchor="middle">PolicyUpdater.apply</text>
+  <text class="small" x="1037" y="621" text-anchor="middle">MemoryFilePolicyUpdater</text>
+  <text class="tiny" x="1037" y="640" text-anchor="middle">upsert/delete with before_content guard</text>
+
+  <rect class="data" x="925" y="680" width="225" height="44" rx="22"/>
+  <text class="text" x="1037" y="707" text-anchor="middle">PolicyApplyResult</text>
+
+  <!-- Stores panel -->
+  <rect class="panel panelStore" x="1265" y="105" width="175" height="650" rx="18"/>
+  <text class="panelTitle" x="1290" y="138">Stores</text>
+
+  <rect class="store" x="1285" y="170" width="135" height="70" rx="10"/>
+  <text class="text" x="1352" y="196" text-anchor="middle">Case Source</text>
+  <text class="tiny" x="1352" y="216" text-anchor="middle">local list</text>
+  <text class="tiny" x="1352" y="232" text-anchor="middle">remote service</text>
+
+  <rect class="store" x="1285" y="282" width="135" height="76" rx="10"/>
+  <text class="text" x="1352" y="309" text-anchor="middle">Trajectory</text>
+  <text class="tiny" x="1352" y="329" text-anchor="middle">memories/</text>
+  <text class="tiny" x="1352" y="345" text-anchor="middle">trajectories</text>
+
+  <rect class="store" x="1285" y="405" width="135" height="88" rx="10"/>
+  <text class="text" x="1352" y="432" text-anchor="middle">Experience</text>
+  <text class="tiny" x="1352" y="452" text-anchor="middle">memories/</text>
+  <text class="tiny" x="1352" y="468" text-anchor="middle">experiences</text>
+  <text class="tiny" x="1352" y="484" text-anchor="middle">policy set</text>
+
+  <rect class="store" x="1285" y="540" width="135" height="88" rx="10"/>
+  <text class="text" x="1352" y="567" text-anchor="middle">Session</text>
+  <text class="tiny" x="1352" y="587" text-anchor="middle">archive</text>
+  <text class="tiny" x="1352" y="603" text-anchor="middle">memory_diff</text>
+  <text class="tiny" x="1352" y="619" text-anchor="middle">trace_id</text>
+
+  <!-- Streaming panel bottom -->
+  <rect class="panel" x="40" y="570" width="760" height="185" rx="18"/>
+  <text class="panelTitle" x="65" y="603">Realtime / Streaming path</text>
+  <rect class="box boxPurple" x="75" y="630" width="180" height="62" rx="10"/>
+  <text class="text" x="165" y="655" text-anchor="middle">submit_rollout</text>
+  <text class="small" x="165" y="674" text-anchor="middle">requires Rollout.case</text>
+
+  <rect class="box boxGreen boxLLM" x="300" y="630" width="185" height="62" rx="10"/>
+  <text class="text" x="392" y="655" text-anchor="middle">analyze + estimate</text>
+  <text class="small" x="392" y="674" text-anchor="middle">immediate per rollout</text>
+
+  <rect class="box boxPurple" x="530" y="630" width="220" height="62" rx="10"/>
+  <text class="text" x="640" y="655" text-anchor="middle">StreamingBatcher</text>
+  <text class="small" x="640" y="674" text-anchor="middle">max gradients / max wait</text>
+
+  <text class="small" x="65" y="724">submit_rollout 会等待当前 rollout 所在 batch 完成 flush + apply 后返回；flush 后进入同一个 serialized Policy Update Transaction。</text>
+
+  <!-- Flow arrows -->
+  <path class="edgeBlue" d="M202 234 L202 260"/>
+  <path class="edgeBlue" d="M202 300 L202 326"/>
+  <path class="edgeBlue" d="M202 390 L202 416"/>
+  <path class="edgeBlue" d="M330 452 C370 452 370 190 505 190"/>
+  <path class="edgeGreen" d="M605 210 L605 235"/>
+  <path class="edgeGreen" d="M605 307 L605 335"/>
+  <path class="edgeGreen" d="M605 379 L605 405"/>
+  <path class="edgeGreen" d="M755 441 C815 441 835 192 925 192"/>
+  <path class="edgeOrange" d="M1037 214 L1037 242"/>
+  <path class="edgeOrange" d="M1037 300 L1037 322"/>
+  <path class="edgeOrange" d="M1037 380 L1037 402"/>
+  <path class="edgeOrange" d="M1037 476 L1037 505"/>
+  <path class="edgeOrange" d="M1037 549 L1037 575"/>
+  <path class="edgeOrange" d="M1037 649 L1037 680"/>
+
+  <!-- Store arrows -->
+  <path class="edgeDashed" d="M330 202 L1285 205"/>
+  <text class="label" x="815" y="193" text-anchor="middle">case query/read</text>
+  <path class="edgeGreen" d="M755 271 C930 271 1100 320 1285 320"/>
+  <text class="label" x="990" y="296" text-anchor="middle">write trajectory memory</text>
+  <path class="edgeDashed" d="M1180 351 C1210 351 1240 449 1285 449"/>
+  <text class="label" x="1226" y="395" text-anchor="middle">reload latest</text>
+  <path class="edgeDashed" d="M1285 449 C1238 449 1226 439 1180 439"/>
+  <text class="label" x="1230" y="432" text-anchor="middle">read required + candidates</text>
+  <path class="edgeOrange" d="M1180 612 C1225 612 1235 449 1285 449"/>
+  <text class="label" x="1228" y="552" text-anchor="middle">write/delete</text>
+  <path class="edgeDashed" d="M1180 218 C1225 218 1238 584 1285 584"/>
+  <text class="label" x="1220" y="268" text-anchor="middle">via session.commit</text>
+
+  <!-- Streaming arrows -->
+  <path class="edgeGreen" d="M255 661 L300 661"/>
+  <path class="edgeGreen" d="M485 661 L530 661"/>
+  <path class="edgeOrange" d="M750 661 C835 661 840 271 895 271"/>
+  <text class="label" x="812" y="642" text-anchor="middle">flush batch</text>
+
+  <!-- Eval bypass -->
+  <path class="edgeBlue" d="M330 452 C380 520 585 545 760 527 C820 520 835 705 925 702"/>
+  <text class="label" x="570" y="552" text-anchor="middle">eval bypasses analyzer/trainer and uses Rollout.evaluation only</text>
+
+  <!-- Footer -->
+  <rect x="40" y="815" width="1400" height="48" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+  <text class="small" x="65" y="840">并行边界：case rollout、rollout analysis、gradient estimation。LLM 调用：trajectory ExtractLoop、experience gradient ExtractLoop、patch merge ExtractLoop。串行边界：ExperienceSet.lock() 内的 reload → optimizer.plan → updater.apply。</text>
+</svg>
