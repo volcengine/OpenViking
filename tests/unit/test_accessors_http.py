@@ -75,14 +75,17 @@ class TestHTTPAccessor:
         """Test filename extraction from URLs."""
         assert HTTPAccessor._extract_filename_from_url(url) == expected
 
-    async def test_webpage_uses_web_importer_directory(self, accessor, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("entry_url_type", [URLType.WEBPAGE, URLType.DOWNLOAD_HTML])
+    async def test_webpage_uses_web_importer_directory(
+        self, accessor, tmp_path, monkeypatch, entry_url_type
+    ):
         downloaded = tmp_path / "entry.html"
         downloaded.write_text("<html>entry</html>", encoding="utf-8")
         imported_dir = tmp_path / "web"
         imported_dir.mkdir()
 
         async def fake_download(url, request_validator=None):
-            return str(downloaded), URLType.WEBPAGE, {"extension": ".html"}
+            return str(downloaded), entry_url_type, {"extension": ".html"}
 
         class FakeImporter:
             async def import_to_directory(self, *, root_url, options, request_validator=None):

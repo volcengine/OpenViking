@@ -447,7 +447,11 @@ class HTTPAccessor(DataAccessor):
             request_validator=request_validator,
         )
 
-        if url_type == URLType.WEBPAGE:
+        # Both an extensionless text/html page (WEBPAGE) and an explicit
+        # ``.html``/``.htm`` URL (DOWNLOAD_HTML) are webpages the user may want
+        # to crawl: route both through WebImporter so ``depth``/``max_pages``
+        # apply. A plain single-page import is just the ``depth=0`` case.
+        if url_type in (URLType.WEBPAGE, URLType.DOWNLOAD_HTML):
             from openviking.parse.accessors.web_importer import (
                 WebImporter,
                 parse_web_import_options,
