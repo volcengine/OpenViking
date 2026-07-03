@@ -10,6 +10,7 @@ import {
   sharedThemeToBlogTheme, blogThemeToSharedTheme, writeCookiePreferences,
 } from './shell-core';
 import { ZoukInteractiveBlog } from './zouk-embed';
+import { trackPageView } from './track';
 
 /* ---------- topbar ---------- */
 
@@ -392,6 +393,8 @@ export default function App() {
   const onToggleTheme = () => setTheme(t => t === THEME_LIGHT ? THEME_DARK : THEME_LIGHT);
 
   useEffect(() => { window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' }); }, [router.route.name, router.route.slug]);
+
+  useEffect(() => { trackPageView(window.location.pathname); }, [router.route.name, router.route.slug]);
 
   const S = useShellStrings(lang);
   const formatDate = useMemo(() => makeFormatDate(lang), [lang]);
