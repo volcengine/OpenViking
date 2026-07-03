@@ -32,7 +32,7 @@ single-query integration. It includes Python dispatch, host-to-device query
 copy, GPU execution, and result copy back to host. It excludes embedding,
 HTTP, record lookup, reranking, and LLM work.
 
-| Backend | Recall@10 | p50 (ms/query) | p95 (ms/query) | QPS |
+| Backend | Recall@10 | warm p50 (ms/query) | warm p95 (ms/query) | warm QPS |
 | --- | ---: | ---: | ---: | ---: |
 | OpenViking native exact | 1.0000 | 40.022 | 40.607 | 24.8 |
 | cuVS GPU brute-force exact | 1.0000 | 0.797 | 0.816 | 1,252.1 |
@@ -44,6 +44,11 @@ p50 latency and about 50x higher QPS than the current native CPU exact call
 path. CAGRA is slower than GPU brute-force exact even before requiring 0.99
 recall, so CAGRA should not be selected for this dataset and query shape solely
 because it is approximate.
+
+The cuVS GPU brute-force backend's first batch=1 search took 151.6 ms before
+the benchmark's ten warm-up batches. Cold-start latency therefore remains a
+separate integration concern; the warm latency comparison above must not be
+read as startup latency.
 
 ## Batch size 128
 
