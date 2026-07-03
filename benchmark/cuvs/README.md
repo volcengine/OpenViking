@@ -200,3 +200,29 @@ python benchmark/cuvs/summarize_collection_runs.py \
   results/collection-run-{1,2,3,4,5}.json \
   --output results/collection-summary.json
 ```
+
+## Async service concurrency benchmark
+
+`run_service_concurrency_benchmark.py` uses OpenViking's
+`VikingVectorIndexBackend` and its `asyncio.to_thread` scheduling boundary. It
+keeps query vectors precomputed, so this is a service-facade benchmark rather
+than an embedding or HTTP benchmark. It covers repeated tenant filters, a
+repeated 10% filter, a new filter per request, and concurrent readers after a
+single-record mutation:
+
+```bash
+python benchmark/cuvs/run_service_concurrency_benchmark.py \
+  --vector-count 100000 \
+  --dimension 768 \
+  --query-count 64 \
+  --concurrency 1,4,16,32,64 \
+  --cached-request-count 200 \
+  --unique-request-count 32 \
+  --data-root /data/openviking-cuvs
+```
+
+The normal tenant scope means every public service-facade query includes an
+`account_id` filter. The benchmark reports p50/p95/p99, QPS, errors, and the
+post-mutation burst separately. A later end-to-end server benchmark should add
+HTTP, authentication, embedding, and reranking rather than folding those costs
+into this vector scheduling result.
