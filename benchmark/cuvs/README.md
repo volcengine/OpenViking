@@ -164,3 +164,33 @@ Add 5M only after the harness and memory measurements are stable.
 Random high-dimensional Gaussian vectors are useful for exact-search scaling,
 but are not representative enough for CAGRA quality claims. Use a public ANN
 dataset or real embedding corpus before reporting a CAGRA recall/QPS frontier.
+
+## Collection, filter, and lifecycle benchmark
+
+`run_collection_benchmark.py` exercises the OpenViking collection adapter
+rather than calling cuVS directly. It includes scalar-filter evaluation,
+label-to-record lookup, result normalization, and lazy rebuild after mutation
+or restart:
+
+```bash
+python benchmark/cuvs/run_collection_benchmark.py \
+  --vector-count 100000 \
+  --dimension 768 \
+  --query-count 50 \
+  --backends native,cuvs_brute_force \
+  --mutation-sizes 1,100,1000,10000 \
+  --data-root /data/openviking-cuvs
+```
+
+The filter matrix covers unfiltered, 10%, 1%, and 0.1% selectivity with both
+uniform and clustered matching labels. Lifecycle output keeps write latency,
+the write-after first query, warm query, and restart first query separate so a
+lazy rebuild is not hidden in steady-state search latency.
+
+Aggregate independent process runs with median and median absolute deviation:
+
+```bash
+python benchmark/cuvs/summarize_collection_runs.py \
+  results/collection-run-{1,2,3,4,5}.json \
+  --output results/collection-summary.json
+```
