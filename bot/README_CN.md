@@ -178,6 +178,7 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
   - `extra_headers`：可选，透传给模型 provider 的额外 HTTP 请求头。
   - `max_tool_iterations`：单轮对话任务最大循环次数，超过则直接返回结果。
   - `memory_window`：自动提交 session 到 OpenViking 的对话轮次上限。
+  - `subagent_enabled`：是否启用 `spawn` 工具，让主 Agent 可以启动后台子 Agent。默认 `true`；设为 `false` 可禁用子 Agent。
   - `gen_image_model`：生成图片使用的模型。
 - `gateway`：Gateway 配置
   - host：Gateway 监听地址，默认值为 `0.0.0.0`
@@ -217,7 +218,8 @@ bot 将连接到远程 OpenViking Server，使用前请先启动 OpenViking Serv
       "thinking": true,
       "timeout": 60.0,
       "max_tool_iterations": 50,
-      "memory_window": 50
+      "memory_window": 50,
+      "subagent_enabled": true
     },
     "gateway": {
       "host": "0.0.0.0",

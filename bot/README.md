@@ -176,6 +176,7 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
   - `extra_headers`: Optional extra HTTP headers passed to the model provider.
   - `max_tool_iterations`: Maximum number of cycles for a single round of conversation tasks, returns results directly if exceeded
   - `memory_window`: Upper limit of conversation rounds for automatically submitting sessions to OpenViking
+  - `subagent_enabled`: Enable the `spawn` tool so the main agent can start background subagents. Defaults to `true`; set to `false` to disable subagents.
   - `gen_image_model`: Model for generating images
 - `gateway`: Gateway configuration
   - `host`: Gateway listening address, default value is `0.0.0.0`
@@ -215,7 +216,8 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
       "thinking": true,
       "timeout": 60.0,
       "max_tool_iterations": 50,
-      "memory_window": 50
+      "memory_window": 50,
+      "subagent_enabled": true
     },
     "gateway": {
       "host": "0.0.0.0",

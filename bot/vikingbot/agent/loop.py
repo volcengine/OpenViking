@@ -171,7 +171,11 @@ class AgentLoop:
         self.sandbox_manager = sandbox_manager
         self.config = config
 
-        self.context = ContextBuilder(workspace, sandbox_manager=sandbox_manager)
+        self.context = ContextBuilder(
+            workspace,
+            sandbox_manager=sandbox_manager,
+            enable_subagents=self._subagents_enabled(),
+        )
 
         self._register_builtin_hooks()
         self.sessions = session_manager or SessionManager(
@@ -371,7 +375,12 @@ class AgentLoop:
             send_callback=self.bus.publish_outbound,
             subagent_manager=self.subagents,
             cron_service=self.cron_service,
+            include_spawn_tool=self._subagents_enabled(),
         )
+
+    def _subagents_enabled(self) -> bool:
+        agents_config = getattr(self.config, "agents", None)
+        return bool(getattr(agents_config, "subagent_enabled", True))
 
     def _ov_session_context_enabled(self) -> bool:
         agents_config = getattr(self.config, "agents", None)
@@ -1231,6 +1240,7 @@ class AgentLoop:
                 is_group_chat=is_group_chat,
                 eval=self._eval,
                 openviking_connection=openviking_connection,
+                enable_subagents=self._subagents_enabled(),
             )
 
             # Build initial messages (use OpenViking session context when enabled)
