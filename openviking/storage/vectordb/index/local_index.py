@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import openviking.storage.vectordb.engine as engine
+from openviking.storage.vectordb.index.cuvs_index import (
+    CuVSDenseIndex,
+    UnsupportedCuVSFilterError,
+)
 from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.utils.constants import IndexFileMarkers
@@ -204,7 +208,13 @@ class LocalIndex(IIndex):
         meta: Index metadata including configuration and schema
     """
 
-    def __init__(self, index_path_or_json: str, meta: Any):
+    def __init__(
+        self,
+        index_path_or_json: str,
+        meta: Any,
+        dense_search_config: Optional[Dict[str, Any]] = None,
+        initial_candidates: Optional[List[CandidateData]] = None,
+    ):
         """Initialize a local index instance.
 
         Args:
@@ -218,6 +228,22 @@ class LocalIndex(IIndex):
         )
         self.meta = meta
         self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
+        self.dense_search: Optional[CuVSDenseIndex] = None
+        dense_search_config = dict(dense_search_config or {})
+        if dense_search_config.get("backend") == "cuvs":
+            vector_meta = meta.inner_meta.get("VectorIndex", {})
+            field_types = {
+                name: DataProcessor.normalize_field_type(field_meta.get("FieldType", ""))
+                for name, field_meta in meta.collection_meta.fields_dict.items()
+            }
+            self.dense_search = CuVSDenseIndex(
+                dimension=vector_meta.get("Dimension", meta.collection_meta.vector_dim),
+                distance=vector_meta.get("Distance", "ip"),
+                normalize_vectors=vector_meta.get("NormalizeVector", False),
+                field_types=field_types,
+                config=dense_search_config,
+            )
+            self.dense_search.add_candidates(initial_candidates or [])
 
     def update(
         self,
@@ -239,10 +265,14 @@ class LocalIndex(IIndex):
     def upsert_data(self, delta_list: List[DeltaRecord]):
         if self.engine_proxy:
             self.engine_proxy.upsert_data(self._convert_delta_list_for_index(delta_list))
+        if self.dense_search:
+            self.dense_search.upsert(delta_list)
 
     def delete_data(self, delta_list: List[DeltaRecord]):
         if self.engine_proxy:
             self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
+        if self.dense_search:
+            self.dense_search.delete(delta_list)
 
     def search(
         self,
@@ -260,6 +290,19 @@ class LocalIndex(IIndex):
                 sparse_raw_terms = []
             if sparse_values is None:
                 sparse_values = []
+
+            if self.dense_search and query_vector:
+                if not sparse_raw_terms and not sparse_values:
+                    try:
+                        return self.dense_search.search(query_vector, limit, filters)
+                    except UnsupportedCuVSFilterError as exc:
+                        if not self.dense_search.fallback_to_native:
+                            raise
+                        logger.debug("Falling back to native dense search: %s", exc)
+                elif not self.dense_search.fallback_to_native:
+                    raise ValueError(
+                        "cuVS dense search does not support OpenViking sparse/hybrid queries"
+                    )
 
             if self.field_type_converter and filters is not None:
                 filters = self.field_type_converter.convert_filter_for_index(filters)
@@ -310,9 +353,15 @@ class LocalIndex(IIndex):
         return agg_data
 
     def close(self):
+        if self.dense_search:
+            self.dense_search.close()
+            self.dense_search = None
         return None
 
     def drop(self):
+        if self.dense_search:
+            self.dense_search.close()
+            self.dense_search = None
         if self.engine_proxy:
             self.engine_proxy.drop()
         self.meta = None
@@ -402,7 +451,13 @@ class VolatileIndex(LocalIndex):
         meta: Index metadata and configuration
     """
 
-    def __init__(self, name: str, meta: Any, cands_list: Optional[List[CandidateData]] = None):
+    def __init__(
+        self,
+        name: str,
+        meta: Any,
+        cands_list: Optional[List[CandidateData]] = None,
+        dense_search_config: Optional[Dict[str, Any]] = None,
+    ):
         """Initialize a volatile (in-memory) index.
 
         Creates a new in-memory index and populates it with the initial dataset.
@@ -427,7 +482,12 @@ class VolatileIndex(LocalIndex):
         index_config_dict["UpdateTimeStamp"] = version_int
         index_config_json = json.dumps(index_config_dict)
 
-        super().__init__(index_config_json, meta)
+        super().__init__(
+            index_config_json,
+            meta,
+            dense_search_config=dense_search_config,
+            initial_candidates=cands_list,
+        )
         self.engine_proxy.add_data(self._convert_candidate_list_for_index(cands_list))
 
     def need_rebuild(self) -> bool:
@@ -493,6 +553,7 @@ class PersistentIndex(LocalIndex):
         cands_list: Optional[List[CandidateData]] = None,
         force_rebuild: bool = False,
         initial_timestamp: Optional[int] = None,
+        dense_search_config: Optional[Dict[str, Any]] = None,
     ):
         """Initialize a persistent index with versioning support.
 
@@ -537,7 +598,12 @@ class PersistentIndex(LocalIndex):
             self.now_version = str(newest_version)
 
         index_path = str(safe_join(self.version_dir, self.now_version))
-        super().__init__(index_path, meta)
+        super().__init__(
+            index_path,
+            meta,
+            dense_search_config=dense_search_config,
+            initial_candidates=cands_list,
+        )
         # Remove scheduling logic, unified scheduling by collection layer
 
     def _create_new_index(
