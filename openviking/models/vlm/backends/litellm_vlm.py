@@ -98,6 +98,17 @@ PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# Ollama defaults to a 4096-token context window and silently truncates any
+# longer prompt to fit. OV prompts (memory extraction is ~5k+ tokens) overflow
+# it, so the model never sees the real input and returns empty/garbage with no
+# error. Default to a larger window for Ollama models; callers can override via
+# ``extra_request_body["num_ctx"]``.
+OLLAMA_DEFAULT_NUM_CTX = 16384
+
+# LiteLLM routes that address a local Ollama server.
+OLLAMA_LITELLM_PREFIXES: tuple[str, ...] = ("ollama/", "ollama_chat/")
+
+
 # Prefixes that are already complete LiteLLM routes. Keep them authoritative
 # so keyword-based auto-detection does not rewrite cross-provider model names.
 EXPLICIT_LITELLM_PREFIXES: tuple[str, ...] = (
@@ -287,6 +298,16 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs["tool_choice"] = tool_choice or "auto"
         if self.extra_request_body:
             kwargs["extra_body"] = dict(self.extra_request_body)
+
+        # Ollama-specific request options. Without an explicit num_ctx the server
+        # truncates long prompts to its 4096-token default; thinking models left
+        # in thinking mode emit only reasoning and stall on CPU. Set safe
+        # defaults, but let extra_request_body override either.
+        if _has_litellm_prefix(model, OLLAMA_LITELLM_PREFIXES):
+            extra = kwargs.get("extra_body", {})
+            extra.setdefault("num_ctx", OLLAMA_DEFAULT_NUM_CTX)
+            extra.setdefault("think", self._effective_thinking(thinking))
+            kwargs["extra_body"] = extra
 
         # Only send enable_thinking to DashScope-compatible providers
         provider = self._detected_provider or detect_provider_by_model(model)
