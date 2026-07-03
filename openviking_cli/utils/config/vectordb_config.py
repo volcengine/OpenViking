@@ -179,8 +179,27 @@ class PgVectorConfig(BaseModel):
         self.schema_name = (self.schema_name or "public").strip()
         if not self.schema_name:
             raise ValueError("pgvector schema must not be empty")
+        # Normalize then re-check: a whitespace-only name is truthy so the
+        # `or "vector"` fallback never fires, yet strips to "" — an empty SQL
+        # identifier. Reject it here with a clear error instead of failing later
+        # with an opaque SQL error.
         self.dense_vector_name = (self.dense_vector_name or "vector").strip()
+        if not self.dense_vector_name:
+            raise ValueError("pgvector dense_vector_name must not be empty")
         self.sparse_vector_name = (self.sparse_vector_name or "sparse_vector").strip()
+        if not self.sparse_vector_name:
+            raise ValueError("pgvector sparse_vector_name must not be empty")
+        # Fail fast on non-integer numeric index params so misconfiguration
+        # surfaces at config load, not deep in collection creation.
+        for key in ("m", "ef_construction", "ef_search", "max_scan_tuples"):
+            if key in self.index_params and self.index_params[key] is not None:
+                try:
+                    self.index_params[key] = int(self.index_params[key])
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        f"pgvector index_params[{key!r}] must be an integer, "
+                        f"got {self.index_params[key]!r}"
+                    )
         return self
 
 

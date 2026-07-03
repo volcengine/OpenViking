@@ -102,6 +102,7 @@ test = [
     "pandas>=2.0.0",
     "diff-match-patch>=20200713",
     "hvac>=2.0.0",
+    "testcontainers[postgres]>=4.0.0",
 ]
 opengauss = [
     "psycopg2-binary>=2.9",
@@ -109,6 +110,7 @@ opengauss = [
 pgvector = [
     "psycopg2-binary>=2.9",
     "pgvector>=0.2",
+    "packaging>=20.0",
 ]
 dev = [
     "mypy>=1.0.0",

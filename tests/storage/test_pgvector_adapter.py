@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import types
 import uuid
 
@@ -674,6 +675,265 @@ def test_from_config_reads_top_level_index_distance_dimension():
     assert adapter.physical_table_name == "ov_acme_docs"
 
 
+# --- review-feedback regression tests (PR #18) ---------------------------------
+
+
+class _PoolConn:
+    def __init__(self, closed=0):
+        self.closed = closed
+        self.close_called = False
+
+    def close(self):
+        self.close_called = True
+        self.closed = 1
+
+
+class _RecordingPool:
+    def __init__(self):
+        self.putconn_calls = []
+        self.closeall_called = False
+        self.served = []
+
+    def getconn(self):
+        conn = _PoolConn()
+        self.served.append(conn)
+        return conn
+
+    def putconn(self, conn, close=False):
+        self.putconn_calls.append((conn, close))
+
+    def closeall(self):
+        self.closeall_called = True
+
+
+def _pooled_adapter(monkeypatch, pool):
+    fake_psycopg2 = types.SimpleNamespace(
+        connect=lambda *a, **k: _PoolConn(),
+        pool=types.SimpleNamespace(ThreadedConnectionPool=lambda *a, **k: pool),
+    )
+    monkeypatch.setattr(pgvector_module, "_import_psycopg2", lambda: fake_psycopg2, raising=False)
+    config = VectorDBBackendConfig.model_validate(
+        {"backend": "pgvector", "pgvector": {"host": "127.0.0.1", "pool_size": 3}}
+    )
+    return create_collection_adapter(config)
+
+
+def test_import_psycopg2_exposes_pool_submodule():
+    # `import psycopg2` does NOT auto-import psycopg2.pool; the helper must, or
+    # ThreadedConnectionPool access AttributeErrors when pool_size > 1.
+    pytest.importorskip("psycopg2")
+    psycopg2 = pgvector_module._import_psycopg2()
+    assert hasattr(psycopg2, "pool")
+    assert hasattr(psycopg2.pool, "ThreadedConnectionPool")
+
+
+def test_stale_pooled_connection_returned_via_putconn(monkeypatch):
+    pool = _RecordingPool()
+    adapter = _pooled_adapter(monkeypatch, pool)
+
+    first = adapter._connect()
+    assert adapter._pool is pool
+    first.closed = 1  # simulate a dropped connection
+    second = adapter._connect()
+
+    assert (first, True) in pool.putconn_calls  # returned to pool, not just .close()'d
+    assert first.close_called is False
+    assert second is not first
+
+
+def test_close_returns_pooled_conn_and_closes_pool(monkeypatch):
+    pool = _RecordingPool()
+    adapter = _pooled_adapter(monkeypatch, pool)
+    conn = adapter._connect()
+
+    adapter.close()
+
+    assert (conn, True) in pool.putconn_calls
+    assert pool.closeall_called is True
+    assert adapter._conn is None
+    assert adapter._pool is None
+    assert adapter._ready is False
+
+
+def test_close_single_connection_path(monkeypatch):
+    monkeypatch.setattr(
+        pgvector_module,
+        "_import_psycopg2",
+        lambda: types.SimpleNamespace(connect=lambda *a, **k: _PoolConn(), pool=None),
+        raising=False,
+    )
+    adapter = create_collection_adapter(_build_config())  # pool_size default 1
+    conn = adapter._connect()
+
+    adapter.close()
+
+    assert conn.close_called is True
+    assert adapter._conn is None
+
+
+def test_ensure_ready_bootstraps_once(monkeypatch):
+    log: list[str] = []
+    monkeypatch.setattr(
+        pgvector_module, "_import_psycopg2", lambda: _fake_psycopg2(log), raising=False
+    )
+    adapter = create_collection_adapter(_build_config())
+
+    adapter._ensure_ready()
+    adapter._ensure_ready()
+
+    assert adapter._ready is True
+    # extension/version/meta bootstrap ran exactly once despite two calls.
+    assert sum("CREATE EXTENSION" in s for s in log) == 1
+
+
+def test_detect_version_raises_when_extension_absent():
+    adapter = create_collection_adapter(_build_config())
+    adapter._conn = _FakeConn(None)  # no pg_extension row -> extension missing
+
+    with pytest.raises(RuntimeError, match="not installed"):
+        adapter._detect_version()
+
+
+def _meta_collection():
+    collection = object.__new__(PgVectorCollection)
+    collection._schema_name = "public"
+    collection._table_name = "ov_default_context"
+    collection._logical_collection_name = "context"
+    collection._project_name = "default"
+    return collection
+
+
+def test_save_collection_meta_uses_on_conflict_not_merge():
+    collection = _meta_collection()
+    captured = {}
+    collection._execute = lambda sql, params=None, fetch=False: captured.update(
+        sql=sql, params=params
+    )
+
+    collection._save_collection_meta({"CollectionName": "context"})
+
+    sql = captured["sql"]
+    assert "MERGE INTO" not in sql
+    assert "INSERT INTO" in sql
+    assert "ON CONFLICT (table_name) DO UPDATE SET" in sql
+    assert captured["params"][0] == "ov_default_context"
+
+
+def test_save_index_meta_uses_on_conflict_not_merge():
+    collection = _meta_collection()
+    captured = {}
+    collection._execute = lambda sql, params=None, fetch=False: captured.update(
+        sql=sql, params=params
+    )
+
+    collection._save_index_meta("default", {"IndexName": "default"})
+
+    sql = captured["sql"]
+    assert "MERGE INTO" not in sql
+    assert "ON CONFLICT (table_name, index_name) DO UPDATE SET" in sql
+    assert captured["params"][:2] == ["ov_default_context", "default"]
+
+
+def test_update_data_rejects_missing_ids():
+    collection = object.__new__(PgVectorCollection)
+    collection.fetch_data = lambda ids: types.SimpleNamespace(ids_not_exist=["missing-1"])
+    collection.upsert_data = lambda data_list: pytest.fail("must not upsert when ids are missing")
+
+    with pytest.raises(ValueError, match="record not found"):
+        collection.update_data([{"id": "missing-1", "content": "x"}])
+
+
+def test_update_data_upserts_when_all_present():
+    collection = object.__new__(PgVectorCollection)
+    seen = {}
+
+    def _fake_upsert(data_list):
+        seen["data"] = data_list
+        return "OK"
+
+    collection.fetch_data = lambda ids: types.SimpleNamespace(ids_not_exist=[])
+    collection.upsert_data = _fake_upsert
+
+    result = collection.update_data([{"id": "a", "content": "x"}])
+
+    assert result == "OK"
+    assert seen["data"] == [{"id": "a", "content": "x"}]
+
+
+def test_update_data_requires_primary_key():
+    collection = object.__new__(PgVectorCollection)
+    collection.fetch_data = lambda ids: types.SimpleNamespace(ids_not_exist=[])
+
+    with pytest.raises(ValueError, match="primary key 'id' is required"):
+        collection.update_data([{"content": "x"}])
+
+
+@pytest.mark.parametrize(
+    ("params", "expect_m", "expect_ef"),
+    [
+        ({"m": 24, "ef_construction": 128}, 24, 128),
+        ({"M": 32, "EfConstruction": 200}, 32, 200),
+    ],
+    ids=["lowercase", "camelcase"],
+)
+def test_index_params_reach_default_index_meta(params, expect_m, expect_ef):
+    config = VectorDBBackendConfig.model_validate(
+        {"backend": "pgvector", "pgvector": {"host": "127.0.0.1", "index_params": params}}
+    )
+    adapter = create_collection_adapter(config)
+
+    meta = adapter._build_default_index_meta(
+        index_name="default",
+        distance="cosine",
+        use_sparse=False,
+        sparse_weight=0.0,
+        scalar_index_fields=[],
+    )
+
+    assert meta["VectorIndex"]["M"] == expect_m
+    assert meta["VectorIndex"]["EfConstruction"] == expect_ef
+
+
+def test_default_index_meta_omits_build_params_without_config():
+    adapter = create_collection_adapter(_build_config())
+
+    meta = adapter._build_default_index_meta(
+        index_name="default",
+        distance="cosine",
+        use_sparse=False,
+        sparse_weight=0.0,
+        scalar_index_fields=[],
+    )
+
+    assert "M" not in meta["VectorIndex"]
+    assert "EfConstruction" not in meta["VectorIndex"]
+
+
+def test_coerce_int_actionable_error():
+    assert pgvector_module._coerce_int(None, "m", 16) == 16
+    assert pgvector_module._coerce_int("24", "m", 16) == 24
+    with pytest.raises(ValueError, match=r"index_params\['m'\]"):
+        pgvector_module._coerce_int("big", "m", 16)
+
+
+@pytest.mark.parametrize("field", ["dense_vector_name", "sparse_vector_name"])
+def test_pgvector_config_rejects_blank_vector_name(field):
+    with pytest.raises(ValidationError, match="must not be empty"):
+        VectorDBBackendConfig.model_validate(
+            {"backend": "pgvector", "pgvector": {"host": "127.0.0.1", field: "   "}}
+        )
+
+
+def test_pgvector_config_rejects_non_int_index_params():
+    with pytest.raises(ValidationError, match="must be an integer"):
+        VectorDBBackendConfig.model_validate(
+            {
+                "backend": "pgvector",
+                "pgvector": {"host": "127.0.0.1", "index_params": {"m": "big"}},
+            }
+        )
+
+
 def test_pgvector_config_new_field_defaults():
     pg = _build_config().pgvector
 
@@ -830,6 +1090,62 @@ def test_pgvector_adapter_integration_smoke():
     suffix = uuid.uuid4().hex[:8]
     adapter = create_collection_adapter(_smoke_config("pgvector", f"pytest_{suffix}"))
     _run_pgvector_smoke(adapter)
+
+
+@pytest.fixture(scope="module")
+def pgvector_container():
+    """A self-contained pgvector server started by testcontainers.
+
+    Unlike the ``OPENVIKING_PGVECTOR_HOST`` tests (which target an externally-run
+    container), this spins up ``pgvector/pgvector:pg16`` itself and tears it down
+    after the module. Opt-in via ``OPENVIKING_PGVECTOR_TESTCONTAINERS`` so the
+    default ``pytest tests/storage`` run never pulls an image; skips gracefully
+    if Docker or testcontainers is unavailable. The adapter creates the ``vector``
+    extension on connect (``create_extension=true``), so no init SQL is needed.
+    """
+    if not os.getenv("OPENVIKING_PGVECTOR_TESTCONTAINERS"):
+        pytest.skip("set OPENVIKING_PGVECTOR_TESTCONTAINERS=1 to run the testcontainers smoke")
+    if shutil.which("docker") is None:
+        pytest.skip("docker is not available for the testcontainers pgvector run")
+    try:
+        from testcontainers.postgres import PostgresContainer
+    except ImportError:
+        pytest.skip("testcontainers not installed (pip install 'openviking[test]')")
+
+    try:
+        container = PostgresContainer(
+            "pgvector/pgvector:pg16", username="postgres", password="postgres", dbname="postgres"
+        )
+        container.start()
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        pytest.skip(f"could not start pgvector testcontainer: {exc}")
+
+    try:
+        yield container
+    finally:
+        container.stop()
+
+
+def test_pgvector_integration_smoke_testcontainers(pgvector_container):
+    config = VectorDBBackendConfig.model_validate(
+        {
+            "backend": "pgvector",
+            "project": f"pytest_tc_{uuid.uuid4().hex[:8]}",
+            "name": "context",
+            "index_name": "default",
+            "distance_metric": "cosine",
+            "dimension": 3,
+            "pgvector": {
+                "host": pgvector_container.get_container_host_ip(),
+                "port": int(pgvector_container.get_exposed_port(5432)),
+                "user": "postgres",
+                "password": "postgres",
+                "db_name": "postgres",
+                "schema": "public",
+            },
+        }
+    )
+    _run_pgvector_smoke(create_collection_adapter(config))
 
 
 @pytest.mark.parametrize("backend", ["opengauss", "pgvector"], ids=["opengauss", "pgvector"])

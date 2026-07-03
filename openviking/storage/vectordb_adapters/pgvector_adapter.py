@@ -35,6 +35,7 @@ from openviking.storage.vectordb_adapters.opengauss_adapter import (
     _VECTOR_OPS,
     OpenGaussCollection,
     OpenGaussCollectionAdapter,
+    _json_dumps,
     _normalize_distance,
     _qualify,
     _quote_ident,
@@ -47,6 +48,21 @@ logger = get_logger(__name__)
 
 _DEFAULT_SCHEMA = "public"
 
+
+def _coerce_int(value: Any, key: str, default: int) -> int:
+    """Coerce a user-supplied ``index_params`` value to ``int`` with an actionable
+    error, instead of letting a bare ``int(...)`` raise an opaque ``ValueError``
+    deep inside collection construction."""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"pgvector index_params[{key!r}] must be an integer, got {value!r}"
+        ) from exc
+
+
 # Stable 64-bit advisory-lock key so concurrent workers serialize the one-time
 # ``CREATE EXTENSION`` instead of racing (onyx-dot-app/onyx: sha256(name) -> int64).
 _EXTENSION_ADVISORY_KEY = int.from_bytes(
@@ -57,6 +73,7 @@ _EXTENSION_ADVISORY_KEY = int.from_bytes(
 def _import_psycopg2():
     try:
         import psycopg2  # noqa: PLC0415
+        import psycopg2.pool  # noqa: PLC0415  # submodule is not auto-imported by `import psycopg2`
 
         return psycopg2
     except ImportError as exc:  # pragma: no cover - exercised only without optional driver
@@ -99,17 +116,72 @@ class PgVectorCollection(OpenGaussCollection):
     _max_scan_tuples: int = 20000
 
     def update_data(self, data_list: List[Dict[str, Any]]) -> Any:
-        """Update rows by primary key.
+        """Update existing rows by primary key (never insert new ones).
 
-        For a SQL backend an update-by-id is exactly the ``INSERT ... ON CONFLICT
-        (id) DO UPDATE`` upsert path, so ``update_data`` delegates to
-        ``upsert_data``. (``ICollection.update_data`` is abstract; the inherited
+        The ``/data/update`` endpoint is contractually "update existing data",
+        and other backends (e.g. ``LocalCollection.update_data``) reject unknown
+        ids rather than silently inserting. So pgvector first verifies every id
+        already exists, then delegates to the ``INSERT ... ON CONFLICT (id) DO
+        UPDATE`` upsert path — which, because it only sets the supplied columns,
+        gives the desired "update only the provided fields" semantics for rows
+        that are present. (``ICollection.update_data`` is abstract; the inherited
         openGauss collection never implemented it, which is why pgvector must.)
         """
+        if not data_list:
+            return self.upsert_data(data_list)
+        ids = []
+        for record in data_list:
+            if "id" not in record:
+                raise ValueError("primary key 'id' is required for update")
+            ids.append(record["id"])
+        missing = self.fetch_data(ids).ids_not_exist
+        if missing:
+            raise ValueError(f"record not found for primary key(s): {missing}")
         return self.upsert_data(data_list)
 
     def _meta_table_ref(self, table_name: str) -> str:
         return super()._meta_table_ref(_OPENGAUSS_META_REMAP.get(table_name, table_name))
+
+    def _save_collection_meta(self, meta: Dict[str, Any]) -> None:
+        """Persist collection metadata with portable ``INSERT ... ON CONFLICT``.
+
+        Overrides the inherited openGauss ``MERGE INTO`` upsert, which requires
+        PostgreSQL 15+. ``ON CONFLICT (table_name) DO UPDATE`` is supported on all
+        pgvector-capable PostgreSQL (>= 9.5), matching the ``_upsert_row`` idiom.
+        """
+        self._execute(
+            f"""
+            INSERT INTO {self._meta_table_ref(_COLLECTION_META_TABLE)}
+                (table_name, logical_collection_name, project_name, meta_json, updated_at)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (table_name) DO UPDATE SET
+                logical_collection_name = EXCLUDED.logical_collection_name,
+                project_name = EXCLUDED.project_name,
+                meta_json = EXCLUDED.meta_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            [
+                self.collection_key,
+                self._logical_collection_name,
+                self._project_name,
+                _json_dumps(meta),
+            ],
+        )
+
+    def _save_index_meta(self, index_name: str, meta: Dict[str, Any]) -> None:
+        """Portable ``INSERT ... ON CONFLICT`` index-meta upsert (see
+        ``_save_collection_meta`` — avoids the PG15-only ``MERGE INTO``)."""
+        self._execute(
+            f"""
+            INSERT INTO {self._meta_table_ref(_INDEX_META_TABLE)}
+                (table_name, index_name, meta_json, updated_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (table_name, index_name) DO UPDATE SET
+                meta_json = EXCLUDED.meta_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            [self.collection_key, index_name, _json_dumps(meta)],
+        )
 
     def _build_create_ddl(self, meta_data: Dict[str, Any]) -> list[str]:
         """Return the ordered DDL for a collection: ``CREATE EXTENSION`` (when
@@ -412,9 +484,15 @@ class PgVectorCollectionAdapter(OpenGaussCollectionAdapter):
             return self._conn
         if self._conn is not None:
             try:
-                self._conn.close()
+                # A pooled handle must be returned via putconn (close=True), not
+                # merely .close()'d, or its slot leaks and the pool exhausts.
+                if self._pool is not None:
+                    self._pool.putconn(self._conn, close=True)
+                else:
+                    self._conn.close()
             except Exception:
-                logger.debug("Failed to close stale pgvector connection", exc_info=True)
+                logger.debug("Failed to release stale pgvector connection", exc_info=True)
+            self._conn = None
         psycopg2 = _import_psycopg2()
         args, kwargs = self._conninfo()
         if self._pool_size > 1:
@@ -461,8 +539,16 @@ class PgVectorCollectionAdapter(OpenGaussCollectionAdapter):
             cur.close()
         extversion = row[0] if row else None
         if not extversion:
-            self._gate_features("0")
-            return
+            # No pg_extension row => the 'vector' extension is not installed. Fail
+            # fast with an actionable message instead of proceeding to opaque
+            # vector(N)/index DDL errors. (With create_extension=true the extension
+            # was just created above, so this only trips on pre-provisioned
+            # deployments where it is genuinely absent.)
+            raise RuntimeError(
+                "The pgvector 'vector' extension is not installed in this database. "
+                "Have a superuser run `CREATE EXTENSION vector;`, or set "
+                "`create_extension=true` so OpenViking installs it on connect."
+            )
         self._gate_features(str(extversion))
         if not self._supports_hnsw:
             raise RuntimeError(
@@ -556,14 +642,22 @@ class PgVectorCollectionAdapter(OpenGaussCollectionAdapter):
     def _ensure_ready(self) -> None:
         """Connect and run the one-time bootstrap (extension → version gate →
         meta tables). Idempotent: the bootstrap runs once per adapter lifetime,
-        but ``_connect`` still reconnects a dropped connection on every call."""
-        self._connect()
-        if self._ready:
-            return
-        self._ensure_extension()
-        self._detect_version()
-        self._ensure_meta_tables()
-        self._ready = True
+        but ``_connect`` still reconnects a dropped connection on every call.
+
+        The bootstrap runs DDL and metadata reads on the shared psycopg2
+        connection, which is not safe for overlapping cursor use across threads,
+        so the whole block is serialized under ``self._lock`` (an RLock shared
+        with collection ``_execute``; reentrant, so nested acquisition is safe).
+        ``_ready`` is re-checked inside the lock so only the first thread bootstraps.
+        """
+        with self._lock:
+            self._connect()
+            if self._ready:
+                return
+            self._ensure_extension()
+            self._detect_version()
+            self._ensure_meta_tables()
+            self._ready = True
 
     def _new_collection(self, meta: Optional[Dict[str, Any]] = None) -> PgVectorCollection:
         self._ensure_ready()
@@ -584,9 +678,73 @@ class PgVectorCollectionAdapter(OpenGaussCollectionAdapter):
         # CREATE EXTENSION (B3.3) and iterative-scan GUC (B3.8) overrides fire.
         collection._create_extension = self._create_extension
         collection._iterative_scan_supported = self._supports_iterative_scan
-        collection._ef_search = int(self._index_params.get("ef_search", 100))
-        collection._max_scan_tuples = int(self._index_params.get("max_scan_tuples", 20000))
+        collection._ef_search = _coerce_int(self._index_params.get("ef_search"), "ef_search", 100)
+        collection._max_scan_tuples = _coerce_int(
+            self._index_params.get("max_scan_tuples"), "max_scan_tuples", 20000
+        )
         return collection
+
+    def _build_default_index_meta(
+        self,
+        *,
+        index_name: str,
+        distance: str,
+        use_sparse: bool,
+        sparse_weight: float,
+        scalar_index_fields: list[str],
+    ) -> Dict[str, Any]:
+        """Carry the configured HNSW build parameters into the default index meta.
+
+        ``CollectionAdapter.create_collection`` builds a fresh index meta and the
+        inherited implementation ignores ``index_params``, so ``m``/``ef_construction``
+        from ``PgVectorConfig.index_params`` would otherwise never reach the HNSW
+        DDL (which reads ``VectorIndex.M`` / ``VectorIndex.EfConstruction``,
+        defaulting to 16/64). Merge them here, accepting either casing.
+        """
+        index_meta = super()._build_default_index_meta(
+            index_name=index_name,
+            distance=distance,
+            use_sparse=use_sparse,
+            sparse_weight=sparse_weight,
+            scalar_index_fields=scalar_index_fields,
+        )
+        vector_index = index_meta["VectorIndex"]
+        m = self._index_params.get("m", self._index_params.get("M"))
+        if m is not None:
+            vector_index["M"] = _coerce_int(m, "m", 16)
+        ef_construction = self._index_params.get(
+            "ef_construction", self._index_params.get("EfConstruction")
+        )
+        if ef_construction is not None:
+            vector_index["EfConstruction"] = _coerce_int(ef_construction, "ef_construction", 64)
+        return index_meta
+
+    def close(self) -> None:
+        """Release the wrapped collection *and* the pgvector connection/pool.
+
+        The inherited openGauss ``close()`` only ``.close()``'s ``self._conn`` —
+        wrong for a pooled handle (which must be returned via ``putconn``) and it
+        never closes the pool object, leaking server connections. This override
+        closes the collection like the base adapter, returns/borrowed pooled conn,
+        and tears the pool down.
+        """
+        with self._lock:
+            try:
+                CollectionAdapter.close(self)
+            finally:
+                try:
+                    if self._pool is not None:
+                        if self._conn is not None:
+                            self._pool.putconn(self._conn, close=True)
+                        self._pool.closeall()
+                    elif self._conn is not None:
+                        self._conn.close()
+                except Exception:
+                    logger.debug("Failed to close pgvector connection/pool", exc_info=True)
+                finally:
+                    self._conn = None
+                    self._pool = None
+                    self._ready = False
 
     def _load_existing_collection_if_needed(self) -> None:
         if self._collection is not None:
