@@ -226,3 +226,11 @@ The normal tenant scope means every public service-facade query includes an
 post-mutation burst separately. A later end-to-end server benchmark should add
 HTTP, authentication, embedding, and reranking rather than folding those costs
 into this vector scheduling result.
+
+Aggregate independent service processes with:
+
+```bash
+python benchmark/cuvs/summarize_service_runs.py \
+  results/service-run-{1,2,3,4,5}.json \
+  --output results/service-summary.json
+```
