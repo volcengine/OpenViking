@@ -101,6 +101,14 @@ class CuVSConfig(BaseModel):
             "operations that cannot be represented as a cuVS prefilter."
         ),
     )
+    filter_cache_size: int = Field(
+        default=16,
+        ge=0,
+        description=(
+            "Maximum number of repeated scalar-filter bitsets retained on the GPU. "
+            "Set to zero to disable caching."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 

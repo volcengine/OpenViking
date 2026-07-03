@@ -179,6 +179,7 @@ python benchmark/cuvs/run_collection_benchmark.py \
   --query-count 50 \
   --backends native,cuvs_brute_force \
   --mutation-sizes 1,100,1000,10000 \
+  --filter-cache-size 16 \
   --data-root /data/openviking-cuvs
 ```
 
@@ -186,6 +187,11 @@ The filter matrix covers unfiltered, 10%, 1%, and 0.1% selectivity with both
 uniform and clustered matching labels. Lifecycle output keeps write latency,
 the write-after first query, warm query, and restart first query separate so a
 lazy rebuild is not hidden in steady-state search latency.
+
+`--filter-cache-size` controls the cuVS LRU of prepared GPU bitsets. The
+per-scenario `first_query_ms` includes construction of a new filter mask;
+timed warm latency reuses the cached mask. Set it to zero to reproduce the
+uncached path.
 
 Aggregate independent process runs with median and median absolute deviation:
 

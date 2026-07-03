@@ -21,6 +21,7 @@ import logging
 import math
 import re
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -222,23 +223,32 @@ class _CuVSRuntime:
         return self.cagra.build(params, self.dataset)
 
     def _prefilter(self, mask: Sequence[bool]):
+        return self.filters.from_bitset(self.prepare_filter(mask))
+
+    def prepare_filter(self, mask: Sequence[bool]):
+        """Pack a host mask once and retain its device allocation for reuse."""
+
         word_count = (len(mask) + 31) // 32
         words = [0] * word_count
         for index, included in enumerate(mask):
             if included:
                 words[index // 32] |= 1 << (index % 32)
-        device_words = self.cp.asarray(words, dtype=self.cp.uint32)
-        return self.filters.from_bitset(device_words)
+        return self.cp.asarray(words, dtype=self.cp.uint32)
 
     def search(
         self,
         index: Any,
         query: Sequence[float],
         limit: int,
-        mask: Optional[Sequence[bool]],
+        mask: Optional[Any],
     ) -> Tuple[List[int], List[float]]:
         queries = self.cp.asarray([query], dtype=self.cp.float32)
-        prefilter = self._prefilter(mask) if mask is not None else None
+        if mask is None:
+            prefilter = None
+        elif isinstance(mask, self.cp.ndarray) and mask.dtype == self.cp.uint32:
+            prefilter = self.filters.from_bitset(mask)
+        else:
+            prefilter = self._prefilter(mask)
         if self.algorithm == "brute_force":
             distances, neighbors = self.brute_force.search(
                 index, queries, limit, prefilter=prefilter
@@ -264,6 +274,12 @@ class _CuVSRuntime:
 class _Record:
     vector: Tuple[float, ...]
     fields: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _CachedFilter:
+    prepared: Any
+    eligible_count: int
 
 
 class CuVSDenseIndex:
@@ -295,6 +311,9 @@ class CuVSDenseIndex:
             raise ValueError(f"Unsupported OpenViking distance for cuVS: {self.distance!r}")
 
         self.fallback_to_native = bool(config.get("fallback_to_native", True))
+        self.filter_cache_size = int(config.get("filter_cache_size", 16))
+        if self.filter_cache_size < 0:
+            raise ValueError("cuVS filter_cache_size cannot be negative")
         self._metric = "inner_product" if self.distance == "ip" else "sqeuclidean"
         build_params = dict(config.get("build_params", {}))
         search_params = dict(config.get("search_params", {}))
@@ -315,6 +334,7 @@ class CuVSDenseIndex:
         self._labels: List[int] = []
         self._index: Any = None
         self._dirty = True
+        self._filter_cache: OrderedDict[str, _CachedFilter] = OrderedDict()
         self._lock = threading.RLock()
         logger.info(
             "Initialized cuVS dense index: algorithm=%s metric=%s dimension=%d",
@@ -355,7 +375,7 @@ class CuVSDenseIndex:
                     vector=self._prepare_vector(candidate.vector),
                     fields=self._parse_fields(candidate.fields),
                 )
-            self._dirty = True
+            self._invalidate()
 
     def upsert(self, records: Iterable[DeltaRecord]) -> None:
         with self._lock:
@@ -369,7 +389,7 @@ class CuVSDenseIndex:
                 )
                 changed = True
             if changed:
-                self._dirty = True
+                self._invalidate()
 
     def delete(self, records: Iterable[DeltaRecord]) -> None:
         with self._lock:
@@ -378,7 +398,39 @@ class CuVSDenseIndex:
                 if self._records.pop(int(record.label), None) is not None:
                     changed = True
             if changed:
-                self._dirty = True
+                self._invalidate()
+
+    def _invalidate(self) -> None:
+        self._dirty = True
+        self._filter_cache.clear()
+
+    @staticmethod
+    def _filter_cache_key(filters: Mapping[str, Any]) -> Optional[str]:
+        try:
+            return json.dumps(filters, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError):
+            return None
+
+    def _prepare_filter(self, filters: Mapping[str, Any]) -> _CachedFilter:
+        cache_key = self._filter_cache_key(filters)
+        if cache_key is not None:
+            cached = self._filter_cache.pop(cache_key, None)
+            if cached is not None:
+                self._filter_cache[cache_key] = cached
+                return cached
+
+        mask = [
+            matches_filter(self._records[label].fields, filters, self.field_types)
+            for label in self._labels
+        ]
+        prepare_filter = getattr(self._runtime, "prepare_filter", None)
+        prepared = prepare_filter(mask) if prepare_filter is not None else tuple(mask)
+        cached = _CachedFilter(prepared=prepared, eligible_count=sum(mask))
+        if cache_key is not None and self.filter_cache_size > 0:
+            self._filter_cache[cache_key] = cached
+            while len(self._filter_cache) > self.filter_cache_size:
+                self._filter_cache.popitem(last=False)
+        return cached
 
     def _rebuild_if_needed(self) -> None:
         if not self._dirty:
@@ -408,13 +460,11 @@ class CuVSDenseIndex:
             if self._index is None:
                 return [], []
 
-            mask: Optional[List[bool]] = None
+            mask: Optional[Any] = None
             if filters:
-                mask = [
-                    matches_filter(self._records[label].fields, filters, self.field_types)
-                    for label in self._labels
-                ]
-                eligible_count = sum(mask)
+                cached_filter = self._prepare_filter(filters)
+                mask = cached_filter.prepared
+                eligible_count = cached_filter.eligible_count
                 if eligible_count == 0:
                     return [], []
                 result_limit = min(limit, eligible_count)
@@ -435,4 +485,5 @@ class CuVSDenseIndex:
         with self._lock:
             self._index = None
             self._labels = []
+            self._filter_cache.clear()
             self._runtime.close()

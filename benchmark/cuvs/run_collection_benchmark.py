@@ -105,7 +105,13 @@ def make_record(
     }
 
 
-def make_adapter(backend: str, project_path: Path, collection_name: str):
+def make_adapter(
+    backend: str,
+    project_path: Path,
+    collection_name: str,
+    *,
+    filter_cache_size: int,
+):
     if backend == "native":
         return LocalCollectionAdapter(
             collection_name=collection_name,
@@ -117,7 +123,11 @@ def make_adapter(backend: str, project_path: Path, collection_name: str):
             collection_name=collection_name,
             project_path=str(project_path),
             index_name="default",
-            cuvs_config={"algorithm": "brute_force", "fallback_to_native": False},
+            cuvs_config={
+                "algorithm": "brute_force",
+                "fallback_to_native": False,
+                "filter_cache_size": filter_cache_size,
+            },
         )
     raise ValueError(f"Unsupported backend: {backend}")
 
@@ -346,10 +356,16 @@ def run_backend(
     k: int,
     mutation_sizes: Sequence[int],
     delete_count: int,
+    filter_cache_size: int,
 ) -> dict[str, Any]:
     collection_name = f"collection_benchmark_{backend}"
     project_path = run_root / backend
-    adapter = make_adapter(backend, project_path, collection_name)
+    adapter = make_adapter(
+        backend,
+        project_path,
+        collection_name,
+        filter_cache_size=filter_cache_size,
+    )
     reopened = None
     rss_before = current_rss_bytes()
     gpu_before = gpu_memory_used_bytes()
@@ -402,7 +418,12 @@ def run_backend(
         adapter = None
 
         construct_started = time.perf_counter()
-        reopened = make_adapter(backend, project_path, collection_name)
+        reopened = make_adapter(
+            backend,
+            project_path,
+            collection_name,
+            filter_cache_size=filter_cache_size,
+        )
         construct_seconds = time.perf_counter() - construct_started
         reopen_query_ms, reopen_ids = time_query(reopened, queries[0], k)
         reopen_warm_query_ms, _ = time_query(reopened, queries[0], k)
@@ -503,6 +524,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=[1, 100, 1_000, 10_000],
     )
     parser.add_argument("--delete-count", type=int, default=100)
+    parser.add_argument("--filter-cache-size", type=int, default=16)
     parser.add_argument("--data-root", type=Path, default=Path("/tmp/openviking-cuvs-benchmark"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--keep-collections", action="store_true")
@@ -523,6 +545,8 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
             parser.error(f"--{name.replace('_', '-')} must be positive")
     if args.k > args.vector_count:
         parser.error("--k cannot exceed --vector-count")
+    if args.filter_cache_size < 0:
+        parser.error("--filter-cache-size cannot be negative")
     backends = [item.strip() for item in args.backends.split(",") if item.strip()]
     unknown = sorted(set(backends).difference(SUPPORTED_BACKENDS))
     if unknown:
@@ -569,6 +593,7 @@ def main() -> None:
                     k=args.k,
                     mutation_sizes=args.mutation_sizes,
                     delete_count=args.delete_count,
+                    filter_cache_size=args.filter_cache_size,
                 )
             )
         attach_recall(results, args.k)
@@ -593,6 +618,7 @@ def main() -> None:
                 "ingest_batch_size": args.ingest_batch_size,
                 "mutation_sizes": args.mutation_sizes,
                 "delete_count": args.delete_count,
+                "filter_cache_size": args.filter_cache_size,
                 "filter_scenarios": [scenario.name for scenario in filter_scenarios()],
             },
             "results": results,

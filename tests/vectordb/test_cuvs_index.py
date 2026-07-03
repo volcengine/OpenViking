@@ -19,6 +19,7 @@ class FakeCuVSRuntime:
         self.metric = metric
         self.dataset = []
         self.build_count = 0
+        self.prepare_filter_count = 0
         self.closed = False
 
     def build(self, dataset):
@@ -43,6 +44,10 @@ class FakeCuVSRuntime:
         rows.sort()
         selected = rows[:limit]
         return [row[1] for row in selected], [row[2] for row in selected]
+
+    def prepare_filter(self, mask):
+        self.prepare_filter_count += 1
+        return tuple(mask)
 
     def close(self):
         self.closed = True
@@ -119,6 +124,63 @@ def test_cuvs_l2_scores_match_openviking_score_convention():
     labels, scores = index.search([1.0, 0.0], 2, None)
     assert labels == [1, 2]
     assert scores == [0.0, 0.0]  # OpenViking exposes 1 - squared-L2.
+
+
+def test_filter_cache_reuses_prepared_mask_and_invalidates_on_mutation():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 2},
+        runtime=runtime,
+    )
+    index.add_candidates(
+        [
+            candidate(1, [1.0, 0.0], account_id="a"),
+            candidate(2, [0.0, 1.0], account_id="b"),
+        ]
+    )
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    assert index.search([1.0, 0.0], 1, filter_a)[0] == [1]
+    assert index.search([1.0, 0.0], 1, filter_a)[0] == [1]
+    assert runtime.prepare_filter_count == 1
+
+    index.upsert([delta(2, [0.0, 1.0], account_id="a")])
+    assert index.search([0.0, 1.0], 1, filter_a)[0] == [2]
+    assert runtime.prepare_filter_count == 2
+
+    index.delete([DeltaRecord(label=1)])
+    assert index.search([1.0, 0.0], 2, filter_a)[0] == [2]
+    assert runtime.prepare_filter_count == 3
+
+
+def test_filter_cache_uses_lru_bound():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 1},
+        runtime=runtime,
+    )
+    index.add_candidates(
+        [
+            candidate(1, [1.0, 0.0], account_id="a"),
+            candidate(2, [0.0, 1.0], account_id="b"),
+        ]
+    )
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
+
+    index.search([1.0, 0.0], 1, filter_a)
+    index.search([0.0, 1.0], 1, filter_b)
+    index.search([1.0, 0.0], 1, filter_a)
+
+    assert runtime.prepare_filter_count == 3
 
 
 def test_filter_evaluator_covers_lists_ranges_contains_and_path_depth():
