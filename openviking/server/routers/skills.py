@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Agent-scope skill management endpoints for OpenViking HTTP Server."""
 
+import asyncio
 import re
 import shutil
 import uuid
@@ -615,34 +616,37 @@ async def find_skills(
         user_root = f"{canonical_user_root(_ctx)}/skills"
         agent_root = "viking://agent/skills"
 
-        user_execution = await run_operation(
-            operation="skills.find",
-            telemetry=request.telemetry,
-            fn=lambda: service.search.find(
-                query=request.query,
-                ctx=_ctx,
-                target_uri=user_root,
-                limit=request.limit,
-                score_threshold=request.score_threshold,
-                level=request.level,
+        user_execution, agent_execution = await asyncio.gather(
+            run_operation(
+                operation="skills.find",
+                telemetry=request.telemetry,
+                fn=lambda: service.search.find(
+                    query=request.query,
+                    ctx=_ctx,
+                    target_uri=user_root,
+                    limit=request.limit,
+                    score_threshold=request.score_threshold,
+                    level=request.level,
+                ),
+            ),
+            run_operation(
+                operation="skills.find",
+                telemetry=request.telemetry,
+                fn=lambda: service.search.find(
+                    query=request.query,
+                    ctx=_ctx,
+                    target_uri=agent_root,
+                    limit=request.limit,
+                    score_threshold=request.score_threshold,
+                    level=request.level,
+                ),
             ),
         )
+
         user_result = user_execution.result
         user_result_dict = user_result.to_dict() if hasattr(user_result, "to_dict") else dict(user_result or {})
         user_hits = [_skill_summary_from_hit(hit) for hit in user_result_dict.get("skills", [])]
 
-        agent_execution = await run_operation(
-            operation="skills.find",
-            telemetry=request.telemetry,
-            fn=lambda: service.search.find(
-                query=request.query,
-                ctx=_ctx,
-                target_uri=agent_root,
-                limit=request.limit,
-                score_threshold=request.score_threshold,
-                level=request.level,
-            ),
-        )
         agent_result = agent_execution.result
         agent_result_dict = agent_result.to_dict() if hasattr(agent_result, "to_dict") else dict(agent_result or {})
         agent_hits = [_skill_summary_from_hit(hit) for hit in agent_result_dict.get("skills", [])]
