@@ -67,6 +67,20 @@ class RerankConfig(BaseModel):
         ),
     )
 
+    max_tokens_per_doc: int = Field(
+        default=0,
+        ge=0,
+        strict=True,
+        description=(
+            "Forward a per-document token-truncation limit to rerank providers whose APIs "
+            "accept it (Cohere v2, LiteLLM, and OpenAI-compatible Cohere-schema endpoints "
+            "receive 'max_tokens_per_doc'); 0 = do not send the field (parity). Token "
+            "truncation is provider-native and closes the CJK gap a character cap cannot: "
+            "N characters can be many more than N tokens. VikingDB/doubao has no truncation "
+            "field, so use max_chars_per_doc for that provider."
+        ),
+    )
+
     model_config = {"extra": "forbid"}
 
     def _effective_provider(self) -> Optional[str]:

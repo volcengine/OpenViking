@@ -27,11 +27,13 @@ class CohereRerankClient(RerankBase):
         api_key: str,
         model: str = "rerank-v3.5",
         api_base: str = "https://api.cohere.com",
+        max_tokens_per_doc: int = 0,
     ):
         super().__init__()
         self.api_key = api_key
         self.model = model
         self.api_base = api_base.rstrip("/")
+        self.max_tokens_per_doc = max_tokens_per_doc
         self.provider = "cohere"
         self._client = httpx.Client(
             base_url=self.api_base,
@@ -57,18 +59,20 @@ class CohereRerankClient(RerankBase):
         if not documents:
             return []
 
+        req_body = {
+            "model": self.model,
+            "query": query,
+            "documents": documents,
+            "top_n": len(documents),
+            "return_documents": False,
+        }
+        # Cohere v2 truncates each document to this many tokens (provider-native).
+        if self.max_tokens_per_doc > 0:
+            req_body["max_tokens_per_doc"] = self.max_tokens_per_doc
+
         try:
             started = time.monotonic()
-            resp = self._client.post(
-                "/v2/rerank",
-                json={
-                    "model": self.model,
-                    "query": query,
-                    "documents": documents,
-                    "top_n": len(documents),
-                    "return_documents": False,
-                },
-            )
+            resp = self._client.post("/v2/rerank", json=req_body)
             resp.raise_for_status()
             data = resp.json()
 
@@ -116,4 +120,5 @@ class CohereRerankClient(RerankBase):
         return cls(
             api_key=config.api_key,
             model=config.model_name if config.model_name != "doubao-seed-rerank" else "rerank-v3.5",
+            max_tokens_per_doc=config.max_tokens_per_doc,
         )

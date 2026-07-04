@@ -19,7 +19,13 @@ class LiteLLMRerankClient(RerankBase):
     LiteLLM rerank API client.
     """
 
-    def __init__(self, api_key: Optional[str], api_base: Optional[str], model_name: str):
+    def __init__(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        model_name: str,
+        max_tokens_per_doc: int = 0,
+    ):
         """
         Initialize LiteLLM rerank client.
 
@@ -27,11 +33,14 @@ class LiteLLMRerankClient(RerankBase):
             api_key: API key for LiteLLM providers (optional, can come from env)
             api_base: API base for LiteLLM providers (optional, can come from env)
             model_name: Model name to use for reranking
+            max_tokens_per_doc: Per-document token-truncation limit forwarded to litellm.rerank
+                when > 0; 0 means the parameter is omitted.
         """
         super().__init__()
         self.api_key = api_key
         self.api_base = api_base
         self.model_name = model_name
+        self.max_tokens_per_doc = max_tokens_per_doc
         self.provider = "litellm"
 
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
@@ -52,14 +61,19 @@ class LiteLLMRerankClient(RerankBase):
         try:
             import litellm
 
+            rerank_kwargs = {
+                "model": self.model_name,
+                "query": query,
+                "documents": [{"text": d} for d in documents],
+                "api_key": self.api_key,
+                "api_base": self.api_base,
+            }
+            # litellm forwards this to Cohere-v2-style backends (provider-native truncation).
+            if self.max_tokens_per_doc > 0:
+                rerank_kwargs["max_tokens_per_doc"] = self.max_tokens_per_doc
+
             started = time.monotonic()
-            response = litellm.rerank(
-                model=self.model_name,
-                query=query,
-                documents=[{"text": d} for d in documents],
-                api_key=self.api_key,
-                api_base=self.api_base,
-            )
+            response = litellm.rerank(**rerank_kwargs)
 
             # Update token usage tracking (estimate from response or input)
             response_dict = (
@@ -121,4 +135,5 @@ class LiteLLMRerankClient(RerankBase):
             api_key=config.api_key,
             api_base=config.api_base,
             model_name=config.model,
+            max_tokens_per_doc=config.max_tokens_per_doc,
         )

@@ -32,6 +32,7 @@ class OpenAIRerankClient(RerankBase):
         model_name: str,
         extra_headers: Optional[Dict[str, str]] = None,
         timeout: float = 30.0,
+        max_tokens_per_doc: int = 0,
     ) -> None:
         """
         Initialize OpenAI-compatible rerank client.
@@ -50,6 +51,7 @@ class OpenAIRerankClient(RerankBase):
         self.model_name = model_name
         self.extra_headers = extra_headers or {}
         self.timeout = timeout
+        self.max_tokens_per_doc = max_tokens_per_doc
         self.provider = "openai"
 
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
@@ -72,6 +74,10 @@ class OpenAIRerankClient(RerankBase):
             "query": query,
             "documents": documents,
         }
+        # Cohere-schema rerank endpoints (DashScope, vLLM, TEI, ...) accept a per-document
+        # token-truncation limit. Sent only when configured, so default requests are unchanged.
+        if self.max_tokens_per_doc > 0:
+            req_body["max_tokens_per_doc"] = self.max_tokens_per_doc
 
         try:
             headers = {
@@ -144,4 +150,5 @@ class OpenAIRerankClient(RerankBase):
             model_name=config.model or "qwen3-rerank",
             extra_headers=config.extra_headers,
             timeout=config.timeout,
+            max_tokens_per_doc=config.max_tokens_per_doc,
         )
