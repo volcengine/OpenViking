@@ -1068,14 +1068,26 @@ class Session:
             return {"tool_results": []}
         return await store.list(tool_name=tool_name, limit=limit)
 
-    def commit(self, keep_recent_count: int = 0) -> Dict[str, Any]:
+    def commit(
+        self,
+        keep_recent_count: int = 0,
+        *,
+        memory_policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Sync wrapper for commit_async()."""
-        return run_async(self.commit_async(keep_recent_count=keep_recent_count))
+        return run_async(
+            self.commit_async(
+                keep_recent_count=keep_recent_count,
+                memory_policy=memory_policy,
+            )
+        )
 
     @tracer("session.commit.phase1")
     async def commit_async(
         self,
         keep_recent_count: int = 0,
+        *,
+        memory_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Async commit session: archive immediately, extract memories in background.
 
@@ -1100,7 +1112,9 @@ class Session:
 
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
-        effective_policy = MemoryPolicy.from_dict(self._meta.memory_policy)
+        effective_policy = MemoryPolicy.from_dict(
+            memory_policy if memory_policy is not None else self._meta.memory_policy
+        )
         _validate_memory_policy_types(effective_policy)
         effective_memory_policy = effective_policy.to_dict()
         logger.info(
@@ -1308,12 +1322,25 @@ class Session:
                             },
                         )
 
-                    latest_archive_overview = await self._get_latest_completed_archive_overview(
-                        exclude_archive_uri=archive_uri
+                    ov_config = get_openviking_config()
+                    effective_policy = MemoryPolicy.from_dict(memory_policy)
+                    working_memory_enabled = effective_policy.working_memory_enabled
+                    latest_archive_overview = (
+                        await self._get_latest_completed_archive_overview(
+                            exclude_archive_uri=archive_uri
+                        )
+                        if working_memory_enabled
+                        else ""
                     )
                     extraction_messages = await self._hydrate_tool_outputs_for_extraction(messages)
 
                     async def _run_archive_summary() -> None:
+                        if not working_memory_enabled:
+                            logger.info(
+                                "Working Memory summary skipped "
+                                "(memory_policy.working_memory.enabled=false)"
+                            )
+                            return
                         summary = await self._generate_archive_summary_async(
                             extraction_messages,
                             latest_archive_overview=latest_archive_overview,
@@ -1361,12 +1388,10 @@ class Session:
                         )
 
                     # Summary, long-term memory, and execution-derived memory run concurrently.
-                    ov_config = get_openviking_config()
                     memory_extraction_enabled = ov_config.memory.extraction_enabled
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
-                    effective_policy = MemoryPolicy.from_dict(memory_policy)
                     extraction_scope = _resolve_memory_extraction_scope(
                         self.ctx,
                         effective_policy,
@@ -1407,10 +1432,13 @@ class Session:
                             self._session_compressor, "extract_execution_memories"
                         )
 
-                        extraction_tasks: List[Any] = [
-                            _run_retryable_phase2_step("archive_summary", _run_archive_summary)
-                        ]
-                        extraction_labels = ["archive_summary"]
+                        extraction_tasks: List[Any] = []
+                        extraction_labels: List[str] = []
+                        if working_memory_enabled:
+                            extraction_tasks.append(
+                                _run_retryable_phase2_step("archive_summary", _run_archive_summary)
+                            )
+                            extraction_labels.append("archive_summary")
 
                         if long_term_has_work:
 
@@ -1495,7 +1523,9 @@ class Session:
                                 memory_diff_uri = candidate_memory_diff_uri
 
                         total_extracted = 0
-                        for label, result in zip(extraction_labels[1:], _results[1:], strict=True):
+                        for label, result in zip(extraction_labels, _results, strict=True):
+                            if label == "archive_summary":
+                                continue
                             if isinstance(result, dict):
                                 target_contexts = list(result.get("contexts", []))
                                 target_skills = list(result.get("session_skills", []))
@@ -1528,7 +1558,12 @@ class Session:
                                 "Memory and session skill extraction skipped "
                                 "(disabled by config or memory_policy)"
                             )
-                        await _run_retryable_phase2_step("archive_summary", _run_archive_summary)
+                        if working_memory_enabled:
+                            await _run_retryable_phase2_step(
+                                "archive_summary", _run_archive_summary
+                            )
+                        else:
+                            await _run_archive_summary()
 
                     # Write relations (using snapshot, not self._usage_records)
                     if self._viking_fs:

@@ -15,8 +15,7 @@ What this test covers
 
 Prerequisites
 -------------
-- ~/.openviking/ov.conf has:
-    "memory": { "version": "v2" }
+- ~/.openviking/ov.conf has usable VLM/embedding configuration for memory extraction.
 
 Run
 ---
@@ -309,7 +308,7 @@ class TestAgentMemoryE2E:
 class TestAgentMemorySchemas:
     """Unit tests for agent memory schema filtering — no integration environment needed."""
 
-    def test_no_agent_only_schemas_in_user_memory(self):
+    def test_no_agent_stage_schemas_in_user_memory(self):
         """
         Verify that trajectory/experience schemas are filtered out from
         SessionExtractContextProvider (user memory path).

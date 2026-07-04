@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.pyagfs.exceptions import AGFSInvalidOperationError, AGFSNotSupportedError
-from openviking.server.auth import get_request_context, require_role, resolve_identity
+from openviking.server.auth import get_request_context, require_role
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import Response
@@ -74,29 +74,27 @@ async def health_check(request: Request):
 
     result = {"status": "ok", "healthy": True, "version": __version__}
 
-    # Try to get user identity
     try:
-        # Extract headers manually
-        x_api_key = request.headers.get("X-API-Key")
-        authorization = request.headers.get("Authorization")
-        x_openviking_account = request.headers.get("X-OpenViking-Account")
-        x_openviking_user = request.headers.get("X-OpenViking-User")
-
-        # Get effective auth mode from config
-        effective_auth_mode = AuthMode.API_KEY.value
         config = getattr(request.app.state, "config", None)
+        effective_auth_mode = AuthMode.API_KEY.value
         if config is not None and hasattr(config, "get_effective_auth_mode"):
             effective_auth_mode = config.get_effective_auth_mode()
         result["auth_mode"] = effective_auth_mode
 
+        # Resolve identity when API key is provided
+        x_api_key = request.headers.get("X-API-Key")
+        authorization = request.headers.get("Authorization")
+
         if x_api_key or authorization:
             try:
+                from openviking.server.auth import resolve_identity
+
                 identity = await resolve_identity(
                     request,
                     x_api_key=x_api_key,
                     authorization=authorization,
-                    x_openviking_account=x_openviking_account,
-                    x_openviking_user=x_openviking_user,
+                    x_openviking_account=request.headers.get("X-OpenViking-Account"),
+                    x_openviking_user=request.headers.get("X-OpenViking-User"),
                 )
                 result["account_id"] = str(identity.account_id)
                 result["user_id"] = str(identity.user_id)

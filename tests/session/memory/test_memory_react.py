@@ -184,21 +184,21 @@ class TestAllowedDirectoriesList:
 class TestExtractLoopFinalJsonRetry:
     def test_final_instruction_includes_schema_aware_empty_json(self):
         extract_loop = object.__new__(ExtractLoop)
-        extract_loop._expected_fields = ["delete_uris", "preferences", "tools"]
+        extract_loop._expected_fields = ["preferences", "tools"]
 
         instruction = extract_loop._build_final_operations_instruction()
 
         assert "ONLY a valid JSON object" in instruction
-        assert '"delete_uris": []' in instruction
+        assert '"delete_ids": []' in instruction
         assert '"preferences": []' in instruction
         assert '"tools": []' in instruction
 
-    def test_final_skeleton_always_includes_delete_uris(self):
+    def test_final_skeleton_always_includes_delete_ids(self):
         extract_loop = object.__new__(ExtractLoop)
         extract_loop._expected_fields = ["preferences"]
 
         assert extract_loop._build_final_operations_skeleton() == {
-            "delete_uris": [],
+            "delete_ids": [],
             "preferences": [],
         }
 
@@ -251,8 +251,9 @@ class TestExtractLoopFinalJsonRetry:
             max_iterations=1,
         )
 
-        with pytest.raises(RuntimeError, match="final response could not be parsed"):
-            await extract_loop.run()
+        result, _ = await extract_loop.run()
+        assert result.errors
+        assert "Final response could not be parsed" in result.errors[0]
 
         final_prompts = [
             message["content"]
@@ -262,5 +263,5 @@ class TestExtractLoopFinalJsonRetry:
             and "maximum number of tool call iterations" in message.get("content", "")
         ]
         assert final_prompts
-        assert '"delete_uris": []' in final_prompts[-1]
+        assert '"delete_ids": []' in final_prompts[-1]
         assert '"preferences": []' in final_prompts[-1]

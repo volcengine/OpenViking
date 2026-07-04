@@ -19,6 +19,7 @@ from openviking.session.memory.utils.language import (
     detect_language_from_conversation,
     resolve_output_language,
     resolve_output_language_from_conversation,
+    resolve_output_language_from_text,
     resolve_with_override,
     strip_language_detection_noise,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "detect_language_from_conversation",
     "resolve_output_language",
     "resolve_output_language_from_conversation",
+    "resolve_output_language_from_text",
     "resolve_with_override",
     "strip_language_detection_noise",
     "add_line_numbers",

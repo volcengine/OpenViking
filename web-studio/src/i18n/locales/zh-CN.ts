@@ -303,6 +303,8 @@ const zhCN = {
       title: 'tokens 总消耗统计',
     },
     usageDisabled: 'Usage/Audit 未初始化，暂无实时统计。',
+    usageAccessRequired:
+      '当前连接未获取到 admin/root 权限，无法显示 Usage/Audit 数据。请在连接与身份中配置具备 Console Usage/Audit 权限的 API Key。',
   },
   operations: {
     page: {
@@ -310,6 +312,11 @@ const zhCN = {
     },
   },
   requestLogs: {
+    accessRequired: {
+      description:
+        '当前连接未获取到 admin/root 权限，无法显示请求日志。请在连接与身份中配置具备 Console Usage/Audit 权限的 API Key。',
+      title: '需要 admin 权限',
+    },
     clear: '清空',
     description:
       '查看当前身份下服务端审计到的 API 请求，包括状态、耗时和请求标识。',

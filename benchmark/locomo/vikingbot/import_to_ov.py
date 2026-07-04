@@ -13,16 +13,158 @@ Usage:
 
 import argparse
 import asyncio
+import contextlib
 import csv
 import json
+import re
 import sys
 import time
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
+
+import httpx
+from progress_utils import (
+    AsyncProgressTracker,
+    make_three_state_progress,
+    should_show_progress,
+)
 
 import openviking as ov
+
+TRACE_ID_RE = re.compile(r"\btrace_?id[=:\s]+([^,\s:)\]]+)")
+
+_RetryResult = TypeVar("_RetryResult")
+_TRANSIENT_HTTP_ERRORS = (
+    httpx.ReadError,
+    httpx.ConnectError,
+    httpx.RemoteProtocolError,
+    httpx.TimeoutException,
+)
+
+
+def _retry_delay(attempt: int, *, base: float = 0.5, cap: float = 8.0) -> float:
+    """Deterministic exponential backoff capped for benchmark imports."""
+    return min(cap, base * (2 ** max(0, attempt - 1)))
+
+
+def _transport_error_message(exc: BaseException) -> str:
+    text = str(exc)
+    return f"{type(exc).__name__}: {text}" if text else repr(exc)
+
+
+async def _retry_transient_http(
+    label: str,
+    operation: Callable[[], Awaitable[_RetryResult]],
+    *,
+    attempts: int = 5,
+) -> _RetryResult:
+    """Retry transient HTTP transport failures with exponential backoff.
+
+    Used only around operations where retrying is safe enough for import:
+    create_session has no user-visible payload yet, commit is protected by
+    session archive semantics, and task polling is read-only. Message writes
+    are intentionally not wrapped here because the API is append-only and a
+    lost response could otherwise duplicate messages.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            return await operation()
+        except _TRANSIENT_HTTP_ERRORS as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                break
+            await asyncio.sleep(_retry_delay(attempt))
+    assert last_exc is not None
+    print(
+        f"    -> [RETRY] {label} failed after {attempts} attempts "
+        f"with {_transport_error_message(last_exc)}",
+        file=sys.stderr,
+    )
+    raise last_exc
+
+
+async def _list_session_commit_tasks(
+    client: Any,
+    *,
+    session_id: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Best-effort raw task listing for recovering from a lost commit response."""
+    http = getattr(client, "_http", None)
+    if http is None:
+        return []
+    response = await http.get(
+        "/api/v1/tasks",
+        params={
+            "task_type": "session_commit",
+            "resource_id": session_id,
+            "limit": limit,
+        },
+    )
+    data = client._handle_response(response)
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
+
+
+def _latest_active_commit_task(tasks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for task in tasks:
+        if task.get("status") in {"pending", "running", "completed"}:
+            return task
+    return tasks[0] if tasks else None
+
+
+async def _recover_commit_after_transport_error(
+    client: Any,
+    *,
+    session_id: str,
+    previous_commit_count: int,
+    attempts: int = 6,
+) -> dict[str, Any] | None:
+    """Recover a commit result when the POST succeeded but response read failed.
+
+    Commit phase 1 clears/archives live messages and creates a session_commit
+    task. If a ReadError happens while reading the response, retrying POST can
+    race with that state transition. Prefer detecting the already-created task
+    and return an equivalent accepted result.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            session = await _retry_transient_http(
+                f"get_session_after_commit_read_error session={session_id}",
+                lambda: client.get_session(session_id),
+                attempts=2,
+            )
+            commit_count = int(session.get("commit_count") or 0)
+            if commit_count > previous_commit_count:
+                tasks = await _retry_transient_http(
+                    f"list_commit_tasks session={session_id}",
+                    lambda: _list_session_commit_tasks(client, session_id=session_id),
+                    attempts=2,
+                )
+                task = _latest_active_commit_task(tasks)
+                if task is not None:
+                    return {
+                        "status": "accepted",
+                        "session_id": session_id,
+                        "task_id": task.get("task_id"),
+                        "trace_id": "",
+                        "recovered_after_read_error": True,
+                    }
+                return {
+                    "status": "accepted",
+                    "session_id": session_id,
+                    "task_id": None,
+                    "trace_id": "",
+                    "recovered_after_read_error": True,
+                }
+        except _TRANSIENT_HTTP_ERRORS:
+            pass
+        await asyncio.sleep(_retry_delay(attempt, base=0.5, cap=5.0))
+    return None
 
 
 def _get_session_number(session_key: str) -> int:
@@ -30,7 +172,7 @@ def _get_session_number(session_key: str) -> int:
     return int(session_key.split("_")[1])
 
 
-def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
+def build_memory_policy(group_chat: bool) -> Dict[str, Any]:
     """Build session/commit memory policy for benchmark ingest.
 
     LoCoMo eval isolates samples through peer memory. In non-group mode the
@@ -38,11 +180,16 @@ def build_memory_policy(group_chat: bool) -> Dict[str, Dict[str, bool]]:
     speaker. Do not write benchmark memories into the current User self memory,
     otherwise all samples imported by the same User API key become visible to
     every question.
+
+    Import only user-facing LoCoMo memories; skip cases/train/runtime memory
+    types so benchmark ingest does not create training cases.
     """
     del group_chat
     return {
         "self": {"enabled": False},
         "peer": {"enabled": True},
+        "working_memory": {"enabled": False},
+        "memory_types": ["entities", "events", "preferences", "profile"],
     }
 
 
@@ -192,7 +339,7 @@ def build_session_messages(
 # ---------------------------------------------------------------------------
 
 
-def load_success_csv(csv_path: str = "./result/import_success.csv") -> set:
+def load_success_csv(csv_path: str = "./result/locomo/import_success.csv") -> set:
     """加载成功导入的CSV记录，返回已成功的键集合"""
     success_keys = set()
     if Path(csv_path).exists():
@@ -205,7 +352,7 @@ def load_success_csv(csv_path: str = "./result/import_success.csv") -> set:
 
 
 def write_success_record(
-    record: Dict[str, Any], csv_path: str = "./result/import_success.csv"
+    record: Dict[str, Any], csv_path: str = "./result/locomo/import_success.csv"
 ) -> None:
     """写入成功记录到CSV文件"""
     file_exists = Path(csv_path).exists()
@@ -250,7 +397,7 @@ def write_success_record(
 
 
 def write_error_record(
-    record: Dict[str, Any], error_path: str = "./result/import_errors.log"
+    record: Dict[str, Any], error_path: str = "./result/locomo/import_errors.log"
 ) -> None:
     """写入错误记录到日志文件"""
     with open(error_path, "a", encoding="utf-8") as f:
@@ -261,7 +408,38 @@ def write_error_record(
         f.write(f"[{timestamp}] ERROR [{sample_id}/{session}]: {error}\n")
 
 
-def load_ingest_record(record_path: str = "./result/.ingest_record.json") -> Dict[str, Any]:
+def extract_trace_id_from_error(error: str) -> str:
+    match = TRACE_ID_RE.search(error or "")
+    return match.group(1) if match else ""
+
+
+def record_failed_session(
+    result: Dict[str, Any],
+    failed_sessions: list[Dict[str, str]],
+) -> None:
+    trace_id = result.get("trace_id") or extract_trace_id_from_error(result.get("error", ""))
+    session = result.get("session") or result.get("session_key") or ""
+    sample_id = result.get("sample_id") or ""
+    display_id = result.get("display_id") or ""
+    error_msg = str(result.get("error", ""))[:120]
+    failed_sessions.append(
+        {
+            "session": str(session),
+            "sample_id": str(sample_id),
+            "display_id": str(display_id),
+            "trace_id": str(trace_id) if trace_id else "",
+            "error": error_msg,
+        }
+    )
+
+
+def record_success_trace_id(result: Dict[str, Any], success_trace_ids: list[str]) -> None:
+    trace_id = result.get("trace_id")
+    if trace_id:
+        success_trace_ids.append(str(trace_id))
+
+
+def load_ingest_record(record_path: str = "./result/locomo/.ingest_record.json") -> Dict[str, Any]:
     """Load existing ingest record file, return empty dict if not exists."""
     try:
         with open(record_path, "r", encoding="utf-8") as f:
@@ -271,7 +449,7 @@ def load_ingest_record(record_path: str = "./result/.ingest_record.json") -> Dic
 
 
 def save_ingest_record(
-    record: Dict[str, Any], record_path: str = "./result/.ingest_record.json"
+    record: Dict[str, Any], record_path: str = "./result/locomo/.ingest_record.json"
 ) -> None:
     """Save ingest record to file."""
     with open(record_path, "w", encoding="utf-8") as f:
@@ -391,11 +569,15 @@ async def viking_ingest(
     memory_policy = build_memory_policy(group_chat)
 
     try:
-        # Create session
-        create_res = await client.create_session(memory_policy=memory_policy)
+        # Create session. Safe to retry: no messages have been written yet.
+        create_res = await _retry_transient_http(
+            "create_session",
+            lambda: client.create_session(memory_policy=memory_policy),
+        )
         session_id = create_res["session_id"]
 
-        # Add messages one by one with created_at
+        # Add messages one by one with created_at. Do not retry append-only
+        # message writes after a lost response; that can duplicate messages.
         for idx, msg in enumerate(messages):
             msg_created_at = None
             if base_datetime:
@@ -411,8 +593,30 @@ async def viking_ingest(
                 peer_id=msg.get("peer_id"),
             )
 
-        # Commit
-        result = await client.commit_session(session_id, telemetry=True)
+        before_commit = await _retry_transient_http(
+            f"get_session_before_commit session={session_id}",
+            lambda: client.get_session(session_id),
+        )
+        previous_commit_count = int(before_commit.get("commit_count") or 0)
+
+        # Commit. If the response read fails after the server accepted the
+        # commit, recover by checking session commit_count and commit tasks
+        # before retrying the POST. This avoids a blind duplicate commit.
+        try:
+            result = await _retry_transient_http(
+                f"commit_session session={session_id}",
+                lambda: client.commit_session(session_id, telemetry=True),
+                attempts=2,
+            )
+        except _TRANSIENT_HTTP_ERRORS as exc:
+            recovered = await _recover_commit_after_transport_error(
+                client,
+                session_id=session_id,
+                previous_commit_count=previous_commit_count,
+            )
+            if recovered is None:
+                raise exc
+            result = recovered
 
         # Accept both "committed" and "accepted" as success - accepted means the session was archived
         if result.get("status") not in ("committed", "accepted"):
@@ -425,7 +629,10 @@ async def viking_ingest(
             # 轮询任务状态直到完成
             max_attempts = 2400  # 最多等待40分钟
             for _attempt in range(max_attempts):
-                task = await client.get_task(task_id)
+                task = await _retry_transient_http(
+                    f"get_task task={task_id}",
+                    lambda: client.get_task(task_id),
+                )
                 status = task.get("status") if task else "unknown"
                 if status == "completed":
                     token_usage = _parse_token_usage(task)
@@ -467,19 +674,20 @@ async def process_single_session(
 ) -> Dict[str, Any]:
     """处理单个会话的导入任务"""
     meta = meta or {}
-    ingest_record = ingest_record or {}
+    if ingest_record is None:
+        ingest_record = {}
     csv_id = display_id or str(sample_id)
     source_sample_id = str(sample_id)
     try:
         started_at = time.perf_counter()
-        if args.api_key:
+        if args.api_key and args.auth_mode == "api_key":
             # User API keys already pin account/user on the server side. Passing
             # account/user headers would be rejected in api_key auth mode.
             user_id = ""
             account = ""
         else:
-            user_id = str(sample_id) if args.separate_user_by_sample else ""
-            account = args.account if args.separate_user_by_sample else ""
+            user_id = args.user or ""
+            account = args.account if args.auth_mode == "trusted" else ""
         result = await viking_ingest(
             messages,
             args.openviking_url,
@@ -498,10 +706,11 @@ async def process_single_session(
         cache_tokens = token_usage.get("cache", 0)
         reasoning_tokens = token_usage.get("reasoning", 0)
         llm_output_tokens = token_usage.get("llm_output", 0)
-        print(
-            f"    -> [COMPLETED] [{csv_id}/{session_key}] duration={duration_seconds}s, embed={embedding_tokens}, vlm={vlm_tokens}, cache={cache_tokens}, reasoning={reasoning_tokens}, completion={llm_output_tokens}, task_id={task_id}, trace_id={trace_id}",
-            file=sys.stderr,
-        )
+        if not getattr(args, "_show_progress", False):
+            print(
+                f"    -> [COMPLETED] [{csv_id}/{session_key}] duration={duration_seconds}s, embed={embedding_tokens}, vlm={vlm_tokens}, cache={cache_tokens}, reasoning={reasoning_tokens}, completion={llm_output_tokens}, task_id={task_id}, trace_id={trace_id}",
+                file=sys.stderr,
+            )
 
         # Write success record
         result = {
@@ -525,15 +734,19 @@ async def process_single_session(
         # 写入成功CSV
         write_success_record(result, args.success_csv)
 
-        # Mark as successfully ingested
-        mark_ingested(csv_id, session_key, ingest_record, meta)
+        # Mark as successfully ingested with the canonical source sample id.
+        # display_id/csv_id is only a human-friendly label (for example, sample_0);
+        # skip checks and success CSV keys use the real sample_id (for example, conv-26).
+        mark_ingested(source_sample_id, session_key, ingest_record, meta)
         save_ingest_record(ingest_record)  # Save immediately after success
 
         return result
 
     except Exception as e:
-        print(f"    -> [ERROR] [{csv_id}/{session_key}] {e}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        error_message = f"{type(e).__name__}: {e}" if str(e) else repr(e)
+        if not getattr(args, "_show_progress", False):
+            print(f"    -> [ERROR] [{csv_id}/{session_key}] {error_message}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
         # Write error record
         result = {
@@ -542,7 +755,8 @@ async def process_single_session(
             "display_id": csv_id,
             "session": session_key,
             "status": "error",
-            "error": str(e),
+            "error": error_message,
+            "trace_id": extract_trace_id_from_error(error_message),
         }
 
         # 写入错误日志
@@ -667,7 +881,36 @@ async def run_import(args: argparse.Namespace) -> None:
     total_cache_tokens = 0
     total_reasoning_tokens = 0
     total_llm_output_tokens = 0
+    failed_sessions: list[dict[str, str]] = []
+    success_trace_ids: list[str] = []
     tasks = []
+    progress_tracker: AsyncProgressTracker | None = None
+    progress = None
+    show_progress = should_show_progress(args.no_progress)
+    args._show_progress = show_progress
+    session_semaphore = (
+        asyncio.Semaphore(args.parallel_sessions) if args.parallel_sessions else None
+    )
+    if args.parallel_sessions:
+        print(
+            f"[parallel-sessions] global concurrency={args.parallel_sessions}",
+            file=sys.stderr,
+        )
+
+    async def process_single_session_with_progress(**kwargs) -> Dict[str, Any]:
+        if progress_tracker is not None:
+            progress_tracker.job_started()
+        failed = False
+        try:
+            result = await process_single_session(**kwargs)
+            failed = result.get("status") == "error"
+            return result
+        except Exception:
+            failed = True
+            raise
+        finally:
+            if progress_tracker is not None:
+                progress_tracker.job_finished(failed=failed)
 
     if args.input.endswith(".json"):
         # LoCoMo JSON format
@@ -697,16 +940,9 @@ async def run_import(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
-        # 为每个 sample 创建独立的处理协程
-        async def process_sample(item, sample_index):
-            nonlocal \
-                success_count, \
-                error_count, \
-                total_embedding_tokens, \
-                total_vlm_tokens, \
-                total_cache_tokens, \
-                total_reasoning_tokens, \
-                total_llm_output_tokens
+        # 预先为每个 sample 构建 session 列表（两条调度路径共用）
+        sample_info_list: list[tuple[str, str, list[dict[str, any]]]] = []
+        for sample_index, item in enumerate(samples):
             sample_id = item["sample_id"]
             display_id = f"sample_{sample_index}"
 
@@ -724,82 +960,259 @@ async def run_import(args: argparse.Namespace) -> None:
             print(f"\n=== Sample {display_id} ({sample_id}) ===", file=sys.stderr)
             print(f"    {len(sessions)} session(s) to import", file=sys.stderr)
 
-            # 同一 sample 内串行处理所有 sessions
-            for sess in sessions:
+            sample_info_list.append((sample_id, display_id, sessions))
+
+        import_task_count = sum(
+            1
+            for sample_id, _display_id, sessions in sample_info_list
+            for sess in sessions
+            if args.force_ingest
+            or not is_already_ingested(
+                sample_id,
+                sess["meta"]["session_key"],
+                ingest_record,
+                success_keys,
+            )
+        )
+        if show_progress:
+            progress, task_id = make_three_state_progress(description="Import")
+            progress_tracker = AsyncProgressTracker(progress, task_id, total=import_task_count)
+
+        if session_semaphore is not None:
+            # --- Round-robin 扁平调度：跨 sample 均衡分配并发槽位 ---
+            # 每轮从每个 sample 各取一个 session，保证所有 sample 齐头并进
+            all_sessions_rr: list[tuple[str, str, dict[str, any]]] = []
+            max_sessions = max((len(info[2]) for info in sample_info_list), default=0)
+            for round_i in range(max_sessions):
+                for sample_id, display_id, sessions in sample_info_list:
+                    if round_i < len(sessions):
+                        all_sessions_rr.append((sample_id, display_id, sessions[round_i]))
+
+            print(
+                f"[parallel-sessions] global concurrency={args.parallel_sessions} "
+                f"(round-robin across {len(sample_info_list)} samples)",
+                file=sys.stderr,
+            )
+
+            async def _import_session_rr(
+                sample_id: str,
+                display_id: str,
+                sess: dict[str, any],
+            ) -> dict[str, any]:
+                nonlocal \
+                    success_count, \
+                    error_count, \
+                    total_embedding_tokens, \
+                    total_vlm_tokens, \
+                    total_cache_tokens, \
+                    total_reasoning_tokens, \
+                    total_llm_output_tokens, \
+                    skipped_count
+
                 meta = sess["meta"]
                 messages = sess["messages"]
                 session_key = meta["session_key"]
-                label = f"{session_key} ({meta['date_time']})"
+                label = f"{display_id}/{session_key} ({meta['date_time']})"
 
-                # Skip already ingested sessions unless force-ingest is enabled
+                # Skip already ingested sessions
                 if not args.force_ingest and is_already_ingested(
                     sample_id, session_key, ingest_record, success_keys
                 ):
-                    print(
-                        f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
-                        file=sys.stderr,
-                    )
-                    continue
+                    if not show_progress:
+                        print(
+                            f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
+                            file=sys.stderr,
+                        )
+                    return {"status": "skipped"}
 
                 # Preview messages
                 preview = " | ".join(
                     [f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]]
                 )
-                print(f"  [{label}] {preview}", file=sys.stderr)
+                if not show_progress:
+                    print(f"  [{label}] {preview}", file=sys.stderr)
+                if progress_tracker is not None:
+                    progress_tracker.job_started()
 
-                # 串行执行（等待完成后再处理下一个 session）
-                res = await process_single_session(
-                    messages=messages,
-                    sample_id=sample_id,
-                    display_id=display_id,
-                    session_key=session_key,
-                    meta=meta,
-                    run_time=run_time,
-                    ingest_record=ingest_record,
-                    args=args,
-                )
-                if res.get("status") == "success":
+                failed = False
+                try:
+                    result = await process_single_session(
+                        messages=messages,
+                        sample_id=sample_id,
+                        display_id=display_id,
+                        session_key=session_key,
+                        meta=meta,
+                        run_time=run_time,
+                        ingest_record=ingest_record,
+                        args=args,
+                    )
+                    failed = result.get("status") == "error"
+                except Exception:
+                    failed = True
+                    raise
+                finally:
+                    if progress_tracker is not None:
+                        progress_tracker.job_finished(failed=failed)
+
+                if result.get("status") == "success":
                     success_count += 1
-                    total_embedding_tokens += res.get("embedding_tokens", 0)
-                    total_vlm_tokens += res.get("vlm_tokens", 0)
-                    total_cache_tokens += res.get("cache_tokens", 0)
-                    total_reasoning_tokens += res.get("reasoning_tokens", 0)
-                    total_llm_output_tokens += res.get("llm_output_tokens", 0)
-                elif res.get("status") == "error":
+                    record_success_trace_id(result, success_trace_ids)
+                    total_embedding_tokens += result.get("embedding_tokens", 0)
+                    total_vlm_tokens += result.get("vlm_tokens", 0)
+                    total_cache_tokens += result.get("cache_tokens", 0)
+                    total_reasoning_tokens += result.get("reasoning_tokens", 0)
+                    total_llm_output_tokens += result.get("llm_output_tokens", 0)
+                elif result.get("status") == "error":
                     error_count += 1
+                    record_failed_session(result, failed_sessions)
+                elif result.get("status") == "skipped":
+                    skipped_count += 1
 
-        if args.parallel_samples:
-            semaphore = asyncio.Semaphore(args.parallel_samples)
+                return result
 
-            async def process_sample_with_limit(item, sample_index):
-                async with semaphore:
-                    await process_sample(item, sample_index)
+            async def _import_session_limited(
+                sample_id: str, display_id: str, sess: dict[str, any]
+            ) -> dict[str, any]:
+                async with session_semaphore:
+                    return await _import_session_rr(sample_id, display_id, sess)
 
+            # 按 round-robin 顺序创建所有 task；semaphore 的 FIFO 队列保证执行顺序
+            # 也基本是 round-robin 的，从而实现跨 sample 均衡
             tasks = [
-                asyncio.create_task(process_sample_with_limit(item, idx))
-                for idx, item in enumerate(samples)
+                asyncio.create_task(_import_session_limited(sid, did, sess))
+                for sid, did, sess in all_sessions_rr
             ]
+
         else:
-            tasks = [
-                asyncio.create_task(process_sample(item, idx)) for idx, item in enumerate(samples)
-            ]
+            # --- Per-sample 串行调度：每个 sample 内 session 顺序执行 ---
+            # sample 间并发由 --parallel-samples 控制（默认无限制）
+            async def process_sample(sample_id, display_id, sessions):
+                nonlocal \
+                    success_count, \
+                    error_count, \
+                    total_embedding_tokens, \
+                    total_vlm_tokens, \
+                    total_cache_tokens, \
+                    total_reasoning_tokens, \
+                    total_llm_output_tokens, \
+                    skipped_count
+
+                async def import_one_session(sess):
+                    meta = sess["meta"]
+                    messages = sess["messages"]
+                    session_key = meta["session_key"]
+                    label = f"{session_key} ({meta['date_time']})"
+
+                    # Skip already ingested sessions
+                    if not args.force_ingest and is_already_ingested(
+                        sample_id, session_key, ingest_record, success_keys
+                    ):
+                        if not show_progress:
+                            print(
+                                f"  [{label}] [SKIP] already imported (use --force-ingest to reprocess)",
+                                file=sys.stderr,
+                            )
+                        return {"status": "skipped"}
+
+                    # Preview messages
+                    preview = " | ".join(
+                        [f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]]
+                    )
+                    if not show_progress:
+                        print(f"  [{label}] {preview}", file=sys.stderr)
+                    if progress_tracker is not None:
+                        progress_tracker.job_started()
+
+                    failed = False
+                    try:
+                        result = await process_single_session(
+                            messages=messages,
+                            sample_id=sample_id,
+                            display_id=display_id,
+                            session_key=session_key,
+                            meta=meta,
+                            run_time=run_time,
+                            ingest_record=ingest_record,
+                            args=args,
+                        )
+                        failed = result.get("status") == "error"
+                        return result
+                    except Exception:
+                        failed = True
+                        raise
+                    finally:
+                        if progress_tracker is not None:
+                            progress_tracker.job_finished(failed=failed)
+
+                session_results = []
+                for sess in sessions:
+                    session_results.append(await import_one_session(sess))
+
+                for res in session_results:
+                    if isinstance(res, Exception):
+                        error_count += 1
+                        print(f"  [ERROR] session task failed: {res}", file=sys.stderr)
+                        continue
+                    if res.get("status") == "success":
+                        success_count += 1
+                        record_success_trace_id(res, success_trace_ids)
+                        total_embedding_tokens += res.get("embedding_tokens", 0)
+                        total_vlm_tokens += res.get("vlm_tokens", 0)
+                        total_cache_tokens += res.get("cache_tokens", 0)
+                        total_reasoning_tokens += res.get("reasoning_tokens", 0)
+                        total_llm_output_tokens += res.get("llm_output_tokens", 0)
+                    elif res.get("status") == "error":
+                        error_count += 1
+                        record_failed_session(res, failed_sessions)
+                    elif res.get("status") == "skipped":
+                        skipped_count += 1
+
+            if args.parallel_samples:
+                semaphore = asyncio.Semaphore(args.parallel_samples)
+
+                async def process_sample_with_limit(sample_id, display_id, sessions):
+                    async with semaphore:
+                        await process_sample(sample_id, display_id, sessions)
+
+                tasks = [
+                    asyncio.create_task(process_sample_with_limit(sid, did, sessions))
+                    for sid, did, sessions in sample_info_list
+                ]
+            else:
+                tasks = [
+                    asyncio.create_task(process_sample(sid, did, sessions))
+                    for sid, did, sessions in sample_info_list
+                ]
 
     else:
         # Plain text format
         sessions = parse_test_file(args.input)
         print(f"Found {len(sessions)} session(s) in text file", file=sys.stderr)
+        text_session_keys = [f"txt-session-{idx}" for idx in range(1, len(sessions) + 1)]
+        import_task_count = sum(
+            1
+            for session_key in text_session_keys
+            if args.force_ingest
+            or not is_already_ingested("txt", session_key, ingest_record, success_keys)
+        )
+        if show_progress:
+            progress, task_id = make_three_state_progress(description="Import")
+            progress_tracker = AsyncProgressTracker(progress, task_id, total=import_task_count)
 
         for idx, session in enumerate(sessions, start=1):
-            session_key = f"txt-session-{idx}"
-            print(f"\n=== Text Session {idx} ===", file=sys.stderr)
+            session_key = text_session_keys[idx - 1]
+            if not show_progress:
+                print(f"\n=== Text Session {idx} ===", file=sys.stderr)
 
             # Skip already ingested sessions unless force-ingest is enabled
             if not args.force_ingest and is_already_ingested(
                 "txt", session_key, ingest_record, success_keys
             ):
-                print(
-                    "  [SKIP] already imported (use --force-ingest to reprocess)", file=sys.stderr
-                )
+                if not show_progress:
+                    print(
+                        "  [SKIP] already imported (use --force-ingest to reprocess)",
+                        file=sys.stderr,
+                    )
                 skipped_count += 1
                 continue
 
@@ -817,11 +1230,12 @@ async def run_import(args: argparse.Namespace) -> None:
                 )
 
             preview = " | ".join([f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]])
-            print(f"  {preview}", file=sys.stderr)
+            if not show_progress:
+                print(f"  {preview}", file=sys.stderr)
 
             # 创建异步任务
             task = asyncio.create_task(
-                process_single_session(
+                process_single_session_with_progress(
                     messages=messages,
                     sample_id="txt",
                     display_id=f"txt_{idx}",
@@ -839,7 +1253,9 @@ async def run_import(args: argparse.Namespace) -> None:
         f"\n[INFO] Starting import with {len(tasks)} tasks to process",
         file=sys.stderr,
     )
-    task_results = await asyncio.gather(*tasks, return_exceptions=True)
+    ctx = progress if show_progress and progress is not None else contextlib.nullcontext()
+    with ctx:
+        task_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # 统计纯文本路径的结果（JSON 路径已在 process_sample 内统计）
     if not args.input.endswith(".json"):
@@ -850,11 +1266,13 @@ async def run_import(args: argparse.Namespace) -> None:
             if isinstance(r, dict):
                 if r.get("status") == "success":
                     success_count += 1
+                    record_success_trace_id(r, success_trace_ids)
                     total_embedding_tokens += r.get("embedding_tokens", 0)
                     total_vlm_tokens += r.get("vlm_tokens", 0)
                     total_llm_output_tokens += r.get("llm_output_tokens", 0)
                 elif r.get("status") == "error":
                     error_count += 1
+                    record_failed_session(r, failed_sessions)
 
     # Final summary
     total_processed = success_count + error_count + skipped_count
@@ -863,6 +1281,23 @@ async def run_import(args: argparse.Namespace) -> None:
     print(f"Successfully imported: {success_count}", file=sys.stderr)
     print(f"Failed: {error_count}", file=sys.stderr)
     print(f"Skipped (already imported): {skipped_count}", file=sys.stderr)
+    if success_trace_ids:
+        preview = success_trace_ids[:10]
+        suffix = " ..." if len(success_trace_ids) > 10 else ""
+        print(
+            f"Success trace IDs ({len(success_trace_ids)}): {' '.join(preview)}{suffix}",
+            file=sys.stderr,
+        )
+    if failed_sessions:
+        print(f"\nFailed sessions ({len(failed_sessions)}):", file=sys.stderr)
+        for idx, s in enumerate(failed_sessions, 1):
+            display_id = s.get("display_id") or s.get("sample_id") or "unknown"
+            session = s.get("session") or "unknown"
+            session_label = f"{display_id}/{session}"
+            trace = s.get("trace_id", "")
+            trace_part = f", trace_id={trace}" if trace else ", trace_id=(none)"
+            error_part = s.get("error", "")
+            print(f"  [{idx}] {session_label}{trace_part} — {error_part}", file=sys.stderr)
     print("\n=== Token usage summary ===", file=sys.stderr)
     print(f"Total Embedding tokens: {total_embedding_tokens}", file=sys.stderr)
     print(f"Total VLM tokens: {total_vlm_tokens}", file=sys.stderr)
@@ -909,13 +1344,13 @@ def main():
     )
     parser.add_argument(
         "--success-csv",
-        default="./result/import_success.csv",
-        help="Path to success records CSV file (default: import_success.csv)",
+        default="./result/locomo/import_success.csv",
+        help="Path to success records CSV file (default: ./result/locomo/import_success.csv)",
     )
     parser.add_argument(
         "--error-log",
-        default="./result/import_errors.log",
-        help="Path to error log file (default: import_errors.log)",
+        default="./result/locomo/import_errors.log",
+        help="Path to error log file (default: ./result/locomo/import_errors.log)",
     )
     parser.add_argument(
         "--openviking-url",
@@ -931,6 +1366,17 @@ def main():
         "--account",
         default="default",
         help="OpenViking account identifier (default: default)",
+    )
+    parser.add_argument(
+        "--user",
+        default="default",
+        help="OpenViking user identifier for trusted mode when --no-separate-user-by-sample is used (default: default)",
+    )
+    parser.add_argument(
+        "--auth-mode",
+        choices=["api_key", "trusted"],
+        default="api_key",
+        help="OpenViking server auth mode for request identity wiring (default: api_key)",
     )
     parser.add_argument(
         "--sample",
@@ -962,6 +1408,15 @@ def main():
         help="Max number of samples to import concurrently. Default: no limit; create one task per sample.",
     )
     parser.add_argument(
+        "--parallel-sessions",
+        type=int,
+        default=0,
+        help=(
+            "Max number of sessions to import concurrently inside each sample. "
+            "Default 0 means serial per sample."
+        ),
+    )
+    parser.add_argument(
         "--force-ingest",
         action="store_true",
         default=False,
@@ -983,6 +1438,11 @@ def main():
         "--retry-wrong",
         default=None,
         help="Path to a judged result CSV. Only import sessions needed by valid wrong questions.",
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable the live progress bar (fall back to line-by-line logs). Auto-disabled when stderr is not a TTY.",
     )
     args = parser.parse_args()
 

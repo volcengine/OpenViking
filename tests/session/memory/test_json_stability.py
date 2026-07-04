@@ -287,7 +287,7 @@ class TestMemoryOperationsIntegration:
         write_uris: List["TestMemoryOperationsIntegration.SimpleWriteOperation"] = Field(
             default_factory=list
         )
-        delete_uris: List[str] = Field(default_factory=list)
+        delete_ids: List[str] = Field(default_factory=list)
 
     def test_parses_nested_write_operations(self):
         """Test nested write operations parse correctly."""
@@ -305,16 +305,16 @@ class TestMemoryOperationsIntegration:
         assert data.write_uris[0].topic == "theme"
 
     def test_handles_string_instead_of_list_for_delete(self):
-        """Test single string for delete_uris wraps to list via tolerance."""
+        """Test single string for delete_ids wraps to list via tolerance."""
         # Note: This would need field-level tolerance applied
         content = """{
             "reasonning": "Removed old memory",
-            "delete_uris": "viking://user/default/memories/old.md"
+            "delete_ids": "viking://user/default/memories/old.md"
         }"""
         # First parse as raw dict
         data, error = parse_json_with_stability(content)
         assert error is None
-        assert data["delete_uris"] == "viking://user/default/memories/old.md"
+        assert data["delete_ids"] == "viking://user/default/memories/old.md"
 
     def test_recoverable_invalid_list_item_logs_below_error(self):
         """Test recoverable invalid list items do not emit error-level logs."""

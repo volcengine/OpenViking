@@ -180,7 +180,6 @@ class TestPageIdInstruction:
             context_provider=context_provider,
             isolation_handler=isolation_handler,
         )
-        loop._mark_cache_breakpoint = AsyncMock()
         loop._call_llm = AsyncMock(
             return_value=(
                 [],
@@ -259,7 +258,6 @@ class TestPageIdInstruction:
             context_provider=context_provider,
             isolation_handler=isolation_handler,
         )
-        loop._mark_cache_breakpoint = AsyncMock()
         loop._call_llm = AsyncMock(
             return_value=(
                 [],
@@ -332,7 +330,6 @@ class TestFinalOperationsHydration:
             context_provider=context_provider,
             isolation_handler=isolation_handler,
         )
-        loop._mark_cache_breakpoint = AsyncMock()
         loop._call_llm = AsyncMock(
             return_value=(
                 [],

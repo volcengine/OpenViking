@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="780" viewBox="0 0 1280 780" role="img" aria-labelledby="title desc">
+  <title id="title">OpenViking session.train 框架模块关系图</title>
+  <desc id="desc">展示 CaseLoader、RolloutExecutor、PolicyTrainer、RolloutAnalyzer、GradientEstimator、PolicyOptimizer、PolicyUpdater、ExperienceSet 和 StreamingPolicyTrainer 等模块之间的关系。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ea580c"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 18; }
+      .panelTitle { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .box { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.5; rx: 10; }
+      .boxCore { fill: #eef2ff; stroke: #818cf8; }
+      .boxData { fill: #fefce8; stroke: #eab308; }
+      .boxTrain { fill: #f0fdf4; stroke: #4ade80; }
+      .boxComp { fill: #eff6ff; stroke: #60a5fa; }
+      .boxWrite { fill: #fff7ed; stroke: #fb923c; }
+      .boxRemote { fill: #faf5ff; stroke: #c084fc; }
+      .text { font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1e293b; }
+      .small { font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .edge { fill: none; stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+      .edgeGreen { fill: none; stroke: #16a34a; stroke-width: 2.5; marker-end: url(#arrowGreen); }
+      .edgeBlue { fill: none; stroke: #2563eb; stroke-width: 2.5; marker-end: url(#arrowBlue); }
+      .edgeOrange { fill: none; stroke: #ea580c; stroke-width: 2.5; marker-end: url(#arrowOrange); }
+      .edgeDashed { fill: none; stroke: #64748b; stroke-width: 2; stroke-dasharray: 8 6; marker-end: url(#arrow); }
+      .label { font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="780"/>
+  <text class="title" x="40" y="44">OpenViking session.train 框架模块关系</text>
+  <text class="subtitle" x="40" y="68">离线 batch、实时 streaming、远程 session.commit 三种训练入口共享同一套 rollout → trajectory → semantic gradient → policy update 语义。</text>
+
+  <!-- Domain panel -->
+  <rect class="panel" x="40" y="100" width="220" height="610" rx="18"/>
+  <text class="panelTitle" x="65" y="132">Domain Model</text>
+
+  <rect class="box boxData" x="70" y="165" width="160" height="54" rx="10"/>
+  <text class="text" x="150" y="188" text-anchor="middle">Case</text>
+  <text class="small" x="150" y="207" text-anchor="middle">task + input + rubric</text>
+
+  <rect class="box boxData" x="70" y="245" width="160" height="54" rx="10"/>
+  <text class="text" x="150" y="268" text-anchor="middle">Rubric</text>
+  <text class="small" x="150" y="287" text-anchor="middle">what good means</text>
+
+  <rect class="box boxData" x="70" y="325" width="160" height="54" rx="10"/>
+  <text class="text" x="150" y="348" text-anchor="middle">Rollout</text>
+  <text class="small" x="150" y="367" text-anchor="middle">case + messages + eval</text>
+
+  <rect class="box boxData" x="70" y="405" width="160" height="54" rx="10"/>
+  <text class="text" x="150" y="428" text-anchor="middle">Trajectory</text>
+  <text class="small" x="150" y="447" text-anchor="middle">trainable trace</text>
+
+  <rect class="box boxData" x="70" y="485" width="160" height="54" rx="10"/>
+  <text class="text" x="150" y="508" text-anchor="middle">SemanticGradient</text>
+  <text class="small" x="150" y="527" text-anchor="middle">before/after MemoryFile</text>
+
+  <rect class="box boxData" x="70" y="565" width="160" height="70" rx="10"/>
+  <text class="text" x="150" y="592" text-anchor="middle">ExperienceSet</text>
+  <text class="small" x="150" y="611" text-anchor="middle">experiences directory</text>
+  <text class="small" x="150" y="629" text-anchor="middle">lock() + reload()</text>
+
+  <!-- Pipeline panel -->
+  <rect class="panel" x="300" y="100" width="650" height="610" rx="18"/>
+  <text class="panelTitle" x="325" y="132">OfflinePolicyOptimizationPipeline</text>
+
+  <rect class="box boxCore" x="340" y="165" width="220" height="58" rx="10"/>
+  <text class="text" x="450" y="190" text-anchor="middle">CaseLoader</text>
+  <text class="small" x="450" y="209" text-anchor="middle">ListCaseLoader / RemoteCaseLoader</text>
+
+  <rect class="box boxCore" x="650" y="165" width="220" height="58" rx="10"/>
+  <text class="text" x="760" y="190" text-anchor="middle">PolicySnapshotter</text>
+  <text class="small" x="760" y="209" text-anchor="middle">ContentHashPolicySnapshotter</text>
+
+  <rect class="box boxCore" x="340" y="265" width="220" height="58" rx="10"/>
+  <text class="text" x="450" y="290" text-anchor="middle">RolloutExecutor</text>
+  <text class="small" x="450" y="309" text-anchor="middle">execute cases under snapshot</text>
+
+  <rect class="box boxTrain" x="340" y="365" width="220" height="74" rx="10"/>
+  <text class="text" x="450" y="392" text-anchor="middle">PolicyTrainer</text>
+  <text class="small" x="450" y="411" text-anchor="middle">Batch / Streaming / SessionCommit</text>
+  <text class="small" x="450" y="429" text-anchor="middle">train_rollouts(...)</text>
+
+  <rect class="box boxComp" x="650" y="345" width="220" height="54" rx="10"/>
+  <text class="text" x="760" y="368" text-anchor="middle">RolloutAnalyzer</text>
+  <text class="small" x="760" y="387" text-anchor="middle">extract trajectory</text>
+
+  <rect class="box boxComp" x="650" y="425" width="220" height="54" rx="10"/>
+  <text class="text" x="760" y="448" text-anchor="middle">GradientEstimator</text>
+  <text class="small" x="760" y="467" text-anchor="middle">trajectory → gradient</text>
+
+  <rect class="box boxComp" x="650" y="505" width="220" height="54" rx="10"/>
+  <text class="text" x="760" y="528" text-anchor="middle">PolicyOptimizer</text>
+  <text class="small" x="760" y="547" text-anchor="middle">patch merge plan</text>
+
+  <rect class="box boxWrite" x="650" y="585" width="220" height="54" rx="10"/>
+  <text class="text" x="760" y="608" text-anchor="middle">PolicyUpdater</text>
+  <text class="small" x="760" y="627" text-anchor="middle">write/delete experiences</text>
+
+  <rect class="box boxTrain" x="340" y="585" width="220" height="54" rx="10"/>
+  <text class="text" x="450" y="608" text-anchor="middle">PipelineResult</text>
+  <text class="small" x="450" y="627" text-anchor="middle">accuracy / score / plan / apply</text>
+
+  <!-- Remote / realtime panel -->
+  <rect class="panel" x="990" y="100" width="250" height="610" rx="18"/>
+  <text class="panelTitle" x="1015" y="132">Integration Paths</text>
+
+  <rect class="box boxRemote" x="1020" y="165" width="190" height="68" rx="10"/>
+  <text class="text" x="1115" y="191" text-anchor="middle">Batch train/eval</text>
+  <text class="small" x="1115" y="210" text-anchor="middle">CaseLoader → executor</text>
+  <text class="small" x="1115" y="228" text-anchor="middle">baseline/train/final eval</text>
+
+  <rect class="box boxRemote" x="1020" y="270" width="190" height="74" rx="10"/>
+  <text class="text" x="1115" y="297" text-anchor="middle">Realtime rollout</text>
+  <text class="small" x="1115" y="316" text-anchor="middle">train_from_rollouts</text>
+  <text class="small" x="1115" y="334" text-anchor="middle">StreamingPolicyTrainer</text>
+
+  <rect class="box boxRemote" x="1020" y="385" width="190" height="74" rx="10"/>
+  <text class="text" x="1115" y="412" text-anchor="middle">session.commit</text>
+  <text class="small" x="1115" y="431" text-anchor="middle">CaseSpec + rollout</text>
+  <text class="small" x="1115" y="449" text-anchor="middle">OutcomeEvaluation</text>
+
+  <rect class="box boxRemote" x="1020" y="500" width="190" height="74" rx="10"/>
+  <text class="text" x="1115" y="527" text-anchor="middle">Remote benchmark</text>
+  <text class="small" x="1115" y="546" text-anchor="middle">HTTP cases / rollouts</text>
+  <text class="small" x="1115" y="564" text-anchor="middle">tau2 service</text>
+
+  <rect class="box boxRemote" x="1020" y="615" width="190" height="54" rx="10"/>
+  <text class="text" x="1115" y="638" text-anchor="middle">Report</text>
+  <text class="small" x="1115" y="657" text-anchor="middle">accuracy + avg_reward</text>
+
+  <!-- Main pipeline arrows -->
+  <path class="edgeBlue" d="M560 194 L650 194"/>
+  <text class="label" x="604" y="184" text-anchor="middle">snapshot</text>
+
+  <path class="edgeBlue" d="M450 223 L450 265"/>
+  <text class="label" x="497" y="248" text-anchor="middle">Case[]</text>
+
+  <path class="edgeBlue" d="M760 223 C760 250 610 250 560 294"/>
+  <text class="label" x="682" y="256" text-anchor="middle">policy_snapshot_id</text>
+
+  <path class="edgeGreen" d="M450 323 L450 365"/>
+  <text class="label" x="497" y="348" text-anchor="middle">Rollout[]</text>
+
+  <path class="edgeGreen" d="M560 402 L650 372"/>
+  <path class="edgeGreen" d="M760 399 L760 425"/>
+  <path class="edgeGreen" d="M760 479 L760 505"/>
+  <path class="edgeOrange" d="M760 559 L760 585"/>
+  <path class="edgeOrange" d="M650 612 L560 612"/>
+
+  <!-- ExperienceSet relation -->
+  <path class="edgeOrange" d="M230 600 C330 685 580 690 650 612"/>
+  <text class="label" x="438" y="690" text-anchor="middle">lock + reload before plan/apply</text>
+  <path class="edgeDashed" d="M230 600 C390 530 500 300 340 294"/>
+  <text class="label" x="294" y="452" text-anchor="middle">current policy set</text>
+
+  <!-- Domain hints -->
+  <path class="edgeDashed" d="M230 192 L340 194"/>
+  <path class="edgeDashed" d="M230 352 C285 352 300 294 340 294"/>
+  <path class="edgeDashed" d="M650 372 C565 438 320 432 230 432"/>
+  <path class="edgeDashed" d="M650 452 C560 512 330 512 230 512"/>
+
+  <!-- Integration arrows -->
+  <path class="edgeDashed" d="M1020 199 C960 199 930 294 870 294"/>
+  <path class="edgeDashed" d="M1020 307 C930 307 650 402 560 402"/>
+  <path class="edgeDashed" d="M1020 422 C930 422 870 402 560 402"/>
+  <path class="edgeDashed" d="M1020 537 C965 537 930 404 870 404"/>
+  <path class="edgeDashed" d="M1020 642 C900 662 640 662 560 612"/>
+
+  <!-- Eval path -->
+  <path class="edgeBlue" d="M450 323 C450 540 500 565 640 594"/>
+  <text class="label" x="535" y="552" text-anchor="middle">eval uses rollout.evaluation only</text>
+
+  <!-- Legend -->
+  <rect x="40" y="730" width="1200" height="34" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+  <text class="small" x="65" y="752">蓝色：rollout 执行 / eval；绿色：训练信号生成；橙色：policy plan/apply 写入；虚线：数据依赖或可选集成路径。</text>
+</svg>

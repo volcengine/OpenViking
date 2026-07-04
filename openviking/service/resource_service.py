@@ -630,7 +630,7 @@ class ResourceService:
                 avoid recursive watch task creation during scheduled execution)
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
-            args: Parser-specific options forwarded to the parser chain.
+            args: Parser/accessor-specific options forwarded to the processing chain.
             **kwargs: Extra options forwarded to the parser chain
 
         Returns:
@@ -875,7 +875,7 @@ class ResourceService:
 
             if result.get("status") == "error":
                 return result
-            elif wait:
+            if wait:
                 if stage_callback is not None:
                     stage_result = stage_callback("processing_queue")
                     if inspect.isawaitable(stage_result):

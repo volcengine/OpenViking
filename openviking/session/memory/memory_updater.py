@@ -28,7 +28,11 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.session.memory.page_id_map import PageIdMap
-from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.memory_file_utils import (
+    MemoryFileUtils,
+    bump_memory_version,
+    next_memory_version,
+)
 from openviking.session.memory.utils.resource_refs import (
     RESOURCE_REF_SOURCE_SESSION_COMMIT,
     sync_memory_resource_refs,
@@ -38,6 +42,7 @@ from openviking.session.memory.utils.uri import render_template
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.telemetry.tracer import get_trace_id
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import VikingURI, get_logger
@@ -71,12 +76,15 @@ async def write_stored_links(
     ctx: RequestContext,
     viking_fs: Any,
     skip_uris: Optional[set] = None,
-) -> None:
+) -> List[str]:
     """Write StoredLinks to their endpoint files' links/backlinks fields.
 
     For each link: from_uri's ``links`` receives the forward link;
     to_uri's ``backlinks`` receives the reverse reference.
     Files listed in skip_uris are skipped (caller handles them in the same write).
+    Returns the endpoint URIs that were successfully rewritten.  Callers can
+    use this to avoid reporting link-only edits for files that failed the
+    read/modify/write step.
     """
     from openviking.session.memory.merge_op.link_merge import merge_links
 
@@ -90,6 +98,7 @@ async def write_stored_links(
             file_links.setdefault(link.to_uri, {"links": [], "backlinks": []})
             file_links[link.to_uri]["backlinks"].append(link)
 
+    updated_uris: List[str] = []
     for uri, link_groups in file_links.items():
         try:
             content = await viking_fs.read_file(uri, ctx=ctx)
@@ -102,17 +111,67 @@ async def write_stored_links(
                 mf.backlinks = merge_links(
                     mf.backlinks, [l.model_dump() for l in link_groups["backlinks"]]
                 )
+            current_trace_id = get_trace_id()
+            if current_trace_id:
+                mf.extra_fields["last_update_trace_id"] = current_trace_id
+            bump_memory_version(mf)
             await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+            updated_uris.append(uri)
         except Exception as e:
             tracer.error(f"Failed to apply links to {uri}: {e}")
+    return updated_uris
+
+
+
+def _remap_link_dict(link: Dict[str, Any], uri_remap: Dict[str, str]) -> Dict[str, Any]:
+    remapped = dict(link or {})
+    if remapped.get("from_uri") in uri_remap:
+        remapped["from_uri"] = uri_remap[remapped["from_uri"]]
+    if remapped.get("to_uri") in uri_remap:
+        remapped["to_uri"] = uri_remap[remapped["to_uri"]]
+    return remapped
+
+
+def remap_stored_links(links: List[StoredLink], uri_remap: Dict[str, str]) -> List[StoredLink]:
+    if not links or not uri_remap:
+        return list(links or [])
+    remapped_links: List[StoredLink] = []
+    for link in links:
+        from_uri = uri_remap.get(link.from_uri, link.from_uri)
+        to_uri = uri_remap.get(link.to_uri, link.to_uri)
+        if from_uri == to_uri:
+            continue
+        remapped_links.append(link.model_copy(update={"from_uri": from_uri, "to_uri": to_uri}))
+    return remapped_links
+
+def _operation_trace_id(op: ResolvedOperation) -> str | None:
+    source = getattr(op, "source", None)
+    trace_id = getattr(source, "trace_id", None) if source else None
+    if trace_id:
+        return str(trace_id)
+    fields = dict(getattr(op, "memory_fields", {}) or {})
+    field_value = fields.get("last_update_trace_id") or fields.get("trace_id")
+    if field_value:
+        return str(field_value)
+    current_trace_id = get_trace_id()
+    return current_trace_id or None
 
 
 class ExtractContext:
     """Extract context for template rendering."""
 
-    def __init__(self, messages: List[Message], chunk_meta: Optional[Dict[int, ChunkMeta]] = None):
+    def __init__(
+        self,
+        messages: List[Message],
+        chunk_meta: Optional[Dict[int, ChunkMeta]] = None,
+        *,
+        split_long_text_messages: bool = True,
+    ):
         if chunk_meta is None:
-            self.messages, self.chunk_meta = self._build_extraction_messages(messages)
+            if split_long_text_messages:
+                self.messages, self.chunk_meta = self._build_extraction_messages(messages)
+            else:
+                self.messages, self.chunk_meta = list(messages or []), {}
         else:
             self.messages = messages
             self.chunk_meta = chunk_meta
@@ -539,7 +598,7 @@ class MessageRange:
         )
 
     def _format_merged_content(self, messages: List[Message]) -> str:
-        content = "".join((msg.content or "") for msg in messages)
+        content = "".join((self._message_content(msg) or "") for msg in messages)
         if not messages or not self._contains_chunk_message(messages):
             return content
 
@@ -550,6 +609,15 @@ class MessageRange:
         if last_chunk is not None and last_chunk.chunk_index < last_chunk.chunk_count - 1:
             content = content.rstrip() + "..."
         return content
+
+    def _message_content(self, message: Message) -> str:
+        texts: List[str] = []
+        for part in getattr(message, "parts", []) or []:
+            if isinstance(part, TextPart):
+                texts.append(part.text or "")
+        if texts:
+            return "".join(texts)
+        return getattr(message, "content", "") or ""
 
     def _contains_chunk_message(self, messages: List[Message]) -> bool:
         return any(self._chunk_meta_for(msg) is not None for msg in messages)
@@ -617,6 +685,17 @@ class MemoryUpdateResult:
             f"Deleted: {len(self.deleted_uris)}, "
             f"Errors: {len(self.errors)}"
         )
+
+
+def _same_batch_delete_conflict_key(uri: str) -> str:
+    """Return a conservative key for detecting same-batch upsert/delete URI conflicts.
+
+    Some local filesystems are case-insensitive.  Treat case-only URI variants as
+    conflicting inside one apply batch so a loser delete cannot remove a winner
+    upsert before vectorization.
+    """
+
+    return str(uri or "").rstrip("/").casefold()
 
 
 class MemoryUpdater:
@@ -775,24 +854,38 @@ class MemoryUpdater:
                 for uri in resolved_op.uris:
                     result.add_error(uri, e)
 
+        operations.resolved_links = remap_stored_links(
+            list(getattr(operations, "resolved_links", []) or []),
+            dict(getattr(operations, "delete_replacements", {}) or {}),
+        )
+        await self._inherit_deleted_link_relations(operations, result, ctx)
+
         # Apply delete operations (delete_file_contents is List[MemoryFile])
         # Skip deletes whose URI was just written in the same batch — this happens when the
         # LLM issues a Replace with the same experience_name (delete old + create same-name new),
         # which is semantically an Update. Executing the delete would remove the just-written file.
         upserted_uris = set(result.written_uris + result.edited_uris)
+        upserted_uri_keys = {_same_batch_delete_conflict_key(uri) for uri in upserted_uris}
         for file_content in operations.delete_file_contents:
-            if file_content.uri in upserted_uris:
+            delete_uri = file_content.uri
+            if delete_uri in upserted_uris:
                 tracer.info(
-                    f"[apply_operations] skipping delete for {file_content.uri}: "
+                    f"[apply_operations] skipping delete for {delete_uri}: "
                     "URI was upserted in the same batch (Replace-with-same-name treated as Update)"
                 )
                 continue
+            if _same_batch_delete_conflict_key(delete_uri) in upserted_uri_keys:
+                tracer.info(
+                    f"[apply_operations] skipping delete for {delete_uri}: "
+                    "URI case-conflicts with an upserted URI in the same batch"
+                )
+                continue
             try:
-                await self._apply_delete(file_content.uri, ctx)
-                result.add_deleted(file_content.uri)
+                await self._apply_delete(delete_uri, ctx)
+                result.add_deleted(delete_uri)
             except Exception as e:
-                tracer.error(f"Failed to delete memory {file_content.uri}", e)
-                result.add_error(file_content.uri, e)
+                tracer.error(f"Failed to delete memory {delete_uri}", e)
+                result.add_error(delete_uri, e)
 
         await self._sync_resource_refs_for_result(result, ctx)
 
@@ -891,6 +984,13 @@ class MemoryUpdater:
                 old_content = resolved_op.old_memory_file_content
 
             metadata: Dict[str, Any] = dict(resolved_op.memory_fields)
+            source = getattr(resolved_op, "source", None)
+            source_extraction_id = getattr(source, "extraction_id", None) if source else None
+            if source_extraction_id:
+                metadata["source_extraction_id"] = str(source_extraction_id)
+            source_trace_id = _operation_trace_id(resolved_op)
+            if source_trace_id:
+                metadata["last_update_trace_id"] = source_trace_id
             # Process fields defined in schema (apply merge_op)
             for field in schema.fields:
                 if field.name in resolved_op.memory_fields:
@@ -927,6 +1027,8 @@ class MemoryUpdater:
                 for key, val in old_content.extra_fields.items():
                     if key not in schema_field_names and key not in metadata and val is not None:
                         metadata[key] = val
+
+            metadata["version"] = next_memory_version(old_content)
 
             # Handle links/backlinks fields: merge with existing
             incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
@@ -1022,6 +1124,87 @@ class MemoryUpdater:
         }
         skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
         await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
+
+
+    async def _inherit_deleted_link_relations(
+        self,
+        operations: ResolvedOperations,
+        result: MemoryUpdateResult,
+        ctx: RequestContext,
+    ) -> None:
+        uri_remap = dict(getattr(operations, "delete_replacements", {}) or {})
+        if not uri_remap:
+            return
+        viking_fs = self._get_viking_fs()
+        if not viking_fs:
+            return
+
+        from openviking.session.memory.merge_op.link_merge import merge_links
+
+        inherited_by_uri: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        for deleted_uri, replacement_uri in uri_remap.items():
+            if not deleted_uri or not replacement_uri or deleted_uri == replacement_uri:
+                continue
+            try:
+                content = await viking_fs.read_file(deleted_uri, ctx=ctx)
+            except Exception as e:
+                tracer.error(f"Failed to read deleted memory links for replacement {deleted_uri}: {e}")
+                continue
+            if not content:
+                continue
+            deleted_file = MemoryFileUtils.read(content, uri=deleted_uri)
+            for link in list(deleted_file.links or []):
+                remapped = _remap_link_dict(link, uri_remap)
+                if remapped.get("from_uri") == remapped.get("to_uri"):
+                    continue
+                target_uri = remapped.get("from_uri")
+                if target_uri:
+                    inherited_by_uri.setdefault(target_uri, {"links": [], "backlinks": []})[
+                        "links"
+                    ].append(remapped)
+                neighbor_uri = remapped.get("to_uri")
+                if neighbor_uri and neighbor_uri not in uri_remap:
+                    inherited_by_uri.setdefault(neighbor_uri, {"links": [], "backlinks": []})[
+                        "backlinks"
+                    ].append(remapped)
+            for link in list(deleted_file.backlinks or []):
+                remapped = _remap_link_dict(link, uri_remap)
+                if remapped.get("from_uri") == remapped.get("to_uri"):
+                    continue
+                target_uri = remapped.get("to_uri")
+                if target_uri:
+                    inherited_by_uri.setdefault(target_uri, {"links": [], "backlinks": []})[
+                        "backlinks"
+                    ].append(remapped)
+                neighbor_uri = remapped.get("from_uri")
+                if neighbor_uri and neighbor_uri not in uri_remap:
+                    inherited_by_uri.setdefault(neighbor_uri, {"links": [], "backlinks": []})[
+                        "links"
+                    ].append(remapped)
+
+        written_or_edited = set(result.written_uris + result.edited_uris)
+        for uri, link_groups in inherited_by_uri.items():
+            if uri in uri_remap:
+                continue
+            if uri in written_or_edited:
+                continue
+            try:
+                content = await viking_fs.read_file(uri, ctx=ctx)
+                if not content:
+                    continue
+                mf = MemoryFileUtils.read(content, uri=uri)
+                if link_groups["links"]:
+                    mf.links = merge_links(mf.links, link_groups["links"])
+                if link_groups["backlinks"]:
+                    mf.backlinks = merge_links(mf.backlinks, link_groups["backlinks"])
+                current_trace_id = get_trace_id()
+                if current_trace_id:
+                    mf.extra_fields["last_update_trace_id"] = current_trace_id
+                bump_memory_version(mf)
+                await viking_fs.write_file(uri, MemoryFileUtils.write(mf), ctx=ctx)
+                result.add_edited(uri)
+            except Exception as e:
+                tracer.error(f"Failed to inherit deleted memory links for {uri}: {e}")
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
         """Apply delete operation (uri is already a string)."""

@@ -392,6 +392,7 @@ class VolcengineCollection(ICollection):
             "collection_name": self.collection_name,
             "data": data_list,
             "ttl": ttl,
+            "ignore_unknown_fields": True,
         }
         return self._data_post(path, data)
 
@@ -401,6 +402,7 @@ class VolcengineCollection(ICollection):
             "project": self.project_name,
             "collection_name": self.collection_name,
             "data": data_list,
+            "ignore_unknown_fields": True,
         }
         return self._data_post(path, data)
 
@@ -410,6 +412,7 @@ class VolcengineCollection(ICollection):
             "project": self.project_name,
             "collection_name": self.collection_name,
             "ids": primary_keys,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         # print(resp_data)
@@ -483,6 +486,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         if sparse_vector:
             data["sparse_vector"] = sparse_vector
@@ -508,6 +512,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -535,6 +540,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -556,6 +562,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
@@ -581,6 +588,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)
@@ -607,6 +615,7 @@ class VolcengineCollection(ICollection):
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
+            "ignore_unknown_fields": True,
         }
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)

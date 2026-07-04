@@ -184,6 +184,14 @@ async function detectConnectionIdentity(
   if (apiKey) {
     headers['X-API-Key'] = apiKey
   }
+  // Identity headers are required for trusted-mode identity resolution.
+  // In api_key mode the server strips them, so they are always safe to send.
+  if (connection.accountId) {
+    headers['X-OpenViking-Account'] = connection.accountId
+  }
+  if (connection.userId) {
+    headers['X-OpenViking-User'] = connection.userId
+  }
 
   const response = await fetch(
     `${normalizeBaseUrl(connection.baseUrl)}/health`,

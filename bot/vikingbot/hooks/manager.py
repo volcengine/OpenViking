@@ -55,7 +55,7 @@ class HookManager:
                     logger.error(f"Hook '{async_hooks[i].name}' failed: {result}")
 
         if sync_hooks:
-            logger.debug(f"Executing {len(sync_hooks)} sync hooks for event '{context.event_type}'")
+            logger.info(f"Executing {len(sync_hooks)} sync hooks for event '{context.event_type}'")
             for hook in sync_hooks:
                 kwargs = await hook.execute(context, **kwargs)
         return kwargs

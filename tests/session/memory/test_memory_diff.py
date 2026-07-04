@@ -474,6 +474,8 @@ class TestMemoryDiffArchive:
         assert diff["summary"]["total_updates"] == 0
         assert diff["summary"]["total_deletes"] == 0
         assert "extracted_at" in diff
+        assert "trace_id" in diff
+        assert diff["trace_id"] is None
         assert diff["archive_uri"] == ""
 
     @pytest.mark.asyncio
@@ -496,13 +498,14 @@ class TestMemoryDiffStructure:
     def test_memory_diff_structure(self):
         """Verify memory_diff.json structure."""
         # This test validates the expected structure
-        expected_keys = ["archive_uri", "extracted_at", "operations", "summary"]
+        expected_keys = ["archive_uri", "trace_id", "extracted_at", "operations", "summary"]
 
         # We verify this through the actual implementation tests above
         # This is a placeholder for documentation
         assert set(expected_keys).issubset(
             {
                 "archive_uri",
+                "trace_id",
                 "extracted_at",
                 "operations",
                 "summary",

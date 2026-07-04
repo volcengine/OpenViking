@@ -19,11 +19,12 @@ import {
   DialogTitle,
 } from '#/components/ui/dialog'
 import { cn } from '#/lib/utils'
+import { createRandomUuid } from '#/lib/browser-crypto'
 import { useChat } from '#/lib/sessions/use-chat'
 import {
   useBotHealth,
   useCreateSession,
-  useSessionList,
+  useSessionListByRecency,
   useSessionMessages,
 } from '#/lib/sessions/use-sessions'
 import {
@@ -51,52 +52,29 @@ export function AgentPanel({
   onSessionChange: (sessionId: string) => void
 }) {
   const { t } = useTranslation('playground')
-  const [sessionId, setSessionId] = useState(initialSessionId ?? '')
+  const [sessionId, setSessionId] = useState(
+    initialSessionId ?? createRandomUuid(),
+  )
   const [historyOpen, setHistoryOpen] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
   const creationStartedRef = useRef(false)
   const botHealth = useBotHealth()
   const createSession = useCreateSession()
-  const { data: sessions, isLoading: isLoadingSessions } = useSessionList()
+  const { data: sessions, isLoading: isLoadingSessions } =
+    useSessionListByRecency()
   const { getTitle } = useSessionTitles()
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
     () => readPlaygroundAgentSessionIds(),
   )
-  const { data: historyMessages } = useSessionMessages(sessionId || undefined)
+  const { data: historyMessages } = useSessionMessages(sessionId)
   const chat = useChat({
     initialMessages: historyMessages,
-    persistMessages: Boolean(sessionId),
-    sessionId: sessionId || 'playground-preview',
+    persistMessages: true,
+    sessionId,
   })
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
-
-  const startSession = useCallback(async () => {
-    if (sessionId || creationStartedRef.current) return
-
-    creationStartedRef.current = true
-    setIsCreatingSession(true)
-    setSessionError(null)
-
-    try {
-      const result = await withTimeout(
-        createSession.mutateAsync(undefined),
-        12_000,
-        t('agent.createTimeout'),
-      )
-      setPlaygroundSessionIds(
-        registerPlaygroundAgentSessionId(result.session_id),
-      )
-      setSessionId(result.session_id)
-      onSessionChange(result.session_id)
-    } catch (error) {
-      creationStartedRef.current = false
-      setSessionError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setIsCreatingSession(false)
-    }
-  }, [createSession, onSessionChange, sessionId, t])
 
   const handleNewSession = useCallback(async () => {
     if (isCreatingSession) return
@@ -142,14 +120,13 @@ export function AgentPanel({
     [chat, onSessionChange],
   )
 
+  // Notify parent of the initial sessionId so the URL stays in sync.
+  // The session is lazily created on the backend by the first addMessage call.
   useEffect(() => {
-    // Only create a session once bot mode is confirmed available, otherwise we
-    // leave orphan sessions behind and flash "creating" before the bot-mode
-    // prompt.
-    if (!sessionId && !sessionError && botHealth.isSuccess) {
-      void startSession()
+    if (sessionId) {
+      onSessionChange(sessionId)
     }
-  }, [botHealth.isSuccess, sessionError, sessionId, startSession])
+  }, [])
 
   useEffect(() => {
     if (sessionId) {
@@ -175,8 +152,9 @@ export function AgentPanel({
 
   const isStreaming = chat.status === 'streaming'
   const botModeError = botHealth.isError ? getErrorMessage(botHealth.error) : ''
-  const isCreating = !sessionId && isCreatingSession
   const reversedSessions = useMemo(() => {
+    // `sessions` is already sorted by recency (newest first). Filter to
+    // sessions that were opened in this playground, preserving recency order.
     const sessionById = new Map(
       (sessions ?? []).map((session) => [session.session_id, session]),
     )
@@ -229,12 +207,7 @@ export function AgentPanel({
           ref={scrollRef}
           className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
         >
-          {isCreating ? (
-            <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Loader2Icon className="size-4 animate-spin" />
-              {t('agent.creating')}
-            </div>
-          ) : botHealth.isLoading ? (
+          {botHealth.isLoading ? (
             <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2Icon className="size-4 animate-spin" />
               {t('agent.detectingBot')}
@@ -254,7 +227,7 @@ export function AgentPanel({
                 className="w-fit"
                 onClick={() => {
                   setSessionError(null)
-                  void startSession()
+                  void handleNewSession()
                 }}
               >
                 {t('agent.retry')}

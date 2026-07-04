@@ -11,6 +11,7 @@
 #   ./run_full_eval.sh 0 2 --group-chat                  # 单题群聊模式
 #   ./run_full_eval.sh --skip-import --auto-commit  # 评测全部，跳过导入，自动提交
 #   ./run_full_eval.sh --retry-wrong result/locomo_result_xxx.csv  # 只重跑错题
+#   ./run_full_eval.sh --parallel-import-sessions 20 0 1  # 覆盖默认 session 导入并发数
 
 set -e
 
@@ -30,6 +31,7 @@ for arg in "$@"; do
         echo "  --no-group-chat   非群聊模式（默认），使用 sample_id 作为 Peer"
         echo "  --auto-commit     自动提交未提交的代码变更，结果文件名带 commit id 和时间戳"
         echo "  --retry-wrong CSV 只重跑指定结果文件中的有效错题（导入相关对话+重新问答）"
+        echo "  --parallel-import-sessions N  单 sample 内并发导入 sessions（默认 200）"
         exit 0
     fi
 done
@@ -39,6 +41,7 @@ SKIP_IMPORT=false
 GROUP_CHAT=false
 AUTO_COMMIT=false
 RETRY_WRONG=""
+PARALLEL_IMPORT_SESSIONS="200"
 
 if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
@@ -113,6 +116,11 @@ for arg in "$@"; do
         PREV_ARG=""
         continue
     fi
+    if [ "$PREV_ARG" = "--parallel-import-sessions" ]; then
+        PARALLEL_IMPORT_SESSIONS="$arg"
+        PREV_ARG=""
+        continue
+    fi
     if [ "$arg" = "--skip-import" ]; then
         SKIP_IMPORT=true
     elif [ "$arg" = "--group-chat" ]; then
@@ -124,9 +132,16 @@ for arg in "$@"; do
     elif [ "$arg" = "--retry-wrong" ]; then
         PREV_ARG="$arg"
         continue
+    elif [ "$arg" = "--parallel-import-sessions" ]; then
+        PREV_ARG="$arg"
+        continue
     fi
     PREV_ARG=""
 done
+if [ -n "$PREV_ARG" ]; then
+    echo "Error: $PREV_ARG requires a value" >&2
+    exit 1
+fi
 
 # 过滤掉开关参数和 --retry-wrong 的值，获取位置参数
 ARGS=()
@@ -136,7 +151,7 @@ for arg in "$@"; do
         SKIP_NEXT=false
         continue
     fi
-    if [ "$arg" = "--retry-wrong" ]; then
+    if [ "$arg" = "--retry-wrong" ] || [ "$arg" = "--parallel-import-sessions" ]; then
         SKIP_NEXT=true
         continue
     fi
@@ -154,7 +169,19 @@ else
 fi
 IMPORT_OPTS=()
 if [ -n "${OPENVIKING_API_KEY:-}" ]; then
-    IMPORT_OPTS+=("--api-key" "$OPENVIKING_API_KEY" "--no-separate-user-by-sample")
+    IMPORT_OPTS+=("--api-key" "$OPENVIKING_API_KEY" "--auth-mode" "${OPENVIKING_AUTH_MODE:-api_key}")
+    if [ "${OPENVIKING_AUTH_MODE:-api_key}" = "trusted" ]; then
+        IMPORT_OPTS+=("--user" "${OPENVIKING_USER:-default}")
+    fi
+    IMPORT_OPTS+=("--no-separate-user-by-sample")
+fi
+if [ -n "${PARALLEL_IMPORT_SESSIONS:-}" ]; then
+    if ! [[ "$PARALLEL_IMPORT_SESSIONS" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: --parallel-import-sessions requires a positive integer" >&2
+        exit 1
+    fi
+    IMPORT_OPTS+=("--parallel-sessions" "$PARALLEL_IMPORT_SESSIONS")
+    echo "[import] 单 sample 内 session 并发已开启: $PARALLEL_IMPORT_SESSIONS"
 fi
 
 SAMPLE=${ARGS[0]}
@@ -162,7 +189,7 @@ QUESTION_INDEX=${ARGS[1]}
 INPUT_FILE="$SCRIPT_DIR/../data/locomo10.json"
 
 # Export for inline Python usage
-export SCRIPT_DIR INPUT_FILE RETRY_WRONG ACCOUNT OPENVIKING_URL OPENVIKING_API_KEY GROUP_CHAT
+export SCRIPT_DIR INPUT_FILE RETRY_WRONG PARALLEL_IMPORT_SESSIONS ACCOUNT OPENVIKING_URL OPENVIKING_API_KEY OPENVIKING_USER OPENVIKING_AUTH_MODE GROUP_CHAT
 
 # auto-commit 逻辑
 if [ "$AUTO_COMMIT" = "true" ]; then
@@ -176,7 +203,7 @@ if [ "$AUTO_COMMIT" = "true" ]; then
 fi
 GIT_COMMIT_ID=$(git rev-parse --short HEAD)
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
-IMPORT_SUCCESS_CSV="./result/import_success.csv"
+IMPORT_SUCCESS_CSV="./result/locomo/import_success.csv"
 IMPORT_ROW_START=0
 IMPORT_PERFORMED=false
 
@@ -316,9 +343,9 @@ if [ -n "$RETRY_WRONG" ]; then
     echo "源文件: $RETRY_WRONG"
 
     if [ "$AUTO_COMMIT" = "true" ]; then
-        RESULT_FILE="./result/locomo_retry_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
+        RESULT_FILE="./result/locomo/locomo_retry_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
     else
-        RESULT_FILE="./result/locomo_retry_${TIMESTAMP}.csv"
+        RESULT_FILE="./result/locomo/locomo_retry_${TIMESTAMP}.csv"
     fi
 
     # 从错题 CSV 中提取需要导入的对话（复用 import_to_ov.py 的并行逻辑）
@@ -344,13 +371,13 @@ if [ -n "$RETRY_WRONG" ]; then
         "$INPUT_FILE" \
         --output "$RESULT_FILE" \
         --retry-wrong "$RETRY_WRONG" \
-        --threads 20 \
+        --threads 100 \
         --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 
     # 裁判打分
     echo "[3/3] 裁判打分..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 20
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 100
 
     # 统计结果
     "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
@@ -367,9 +394,9 @@ if [ -z "$SAMPLE" ]; then
     echo "=== 全量评测模式 ==="
 
     if [ "$AUTO_COMMIT" = "true" ]; then
-        RESULT_FILE="./result/locomo_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
+        RESULT_FILE="./result/locomo/locomo_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
     else
-        RESULT_FILE="./result/locomo_result_${TIMESTAMP}.csv"
+        RESULT_FILE="./result/locomo/locomo_result_${TIMESTAMP}.csv"
     fi
 
     # 导入数据
@@ -391,7 +418,7 @@ if [ -z "$SAMPLE" ]; then
 
     # 裁判打分
     echo "[3/4] 裁判打分..."
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 40
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" --parallel 100
 
     # 计算结果
     echo "[4/4] 计算结果..."
@@ -470,9 +497,9 @@ if [ -n "$QUESTION_INDEX" ]; then
         echo "[2/3] Running evaluation..."
     fi
     if [ "$AUTO_COMMIT" = "true" ]; then
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
+        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
     else
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}.csv
+        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}.csv
     fi
     prepare_bot_log_dir "$OUTPUT_FILE"
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
@@ -490,7 +517,7 @@ if [ -n "$QUESTION_INDEX" ]; then
     else
         echo "[3/3] Running judge..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 1
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 100
 
     # 输出结果
     echo ""
@@ -576,16 +603,16 @@ PY
         echo "[2/4] Running evaluation for all questions..."
     fi
     if [ "$AUTO_COMMIT" = "true" ]; then
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
+        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
     else
-        OUTPUT_FILE=./result/locomo_${SAMPLE}_result_${TIMESTAMP}.csv
+        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_result_${TIMESTAMP}.csv
     fi
     prepare_bot_log_dir "$OUTPUT_FILE"
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
         --output "$OUTPUT_FILE" \
-        --threads 10 \
+        --threads 100 \
         --config "$OPENVIKING_CONFIG_FILE" \
         "${COMMON_OPTS[@]}"
 
@@ -595,7 +622,7 @@ PY
     else
         echo "[3/4] Running judge..."
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 40
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" --parallel 100
 
     # 输出统计结果
     if [ "$SKIP_IMPORT" = "true" ]; then

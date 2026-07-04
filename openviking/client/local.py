@@ -606,6 +606,10 @@ class LocalClient(BaseClient):
         """
         return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
 
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read raw file content, including hidden MEMORY_FIELDS metadata."""
+        return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
+
     async def abstract(self, uri: str) -> str:
         """Read L0 abstract."""
         return await self._service.fs.abstract(uri, ctx=self._ctx)

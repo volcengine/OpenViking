@@ -102,7 +102,7 @@ openviking:
     vlm:
       api_key: "your-api-key-here"
       api_base: "https://ark.cn-beijing.volces.com/api/v3"
-      model: "doubao-seed-2-0-pro-260215"
+      model: "doubao-seed-2-0-lite-260428"
 ```
 
 ## Storage
