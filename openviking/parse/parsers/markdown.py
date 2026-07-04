@@ -567,7 +567,7 @@ class MarkdownParser(BaseParser):
         viking_fs = self._get_viking_fs()
 
         # Find all processed markdown files under the root directory
-        glob_result = await viking_fs.glob("*.md", uri=root_dir)
+        glob_result = await viking_fs.glob("**/*.md", uri=root_dir)
         md_uris = glob_result.get("matches", [])
         if not md_uris:
             return

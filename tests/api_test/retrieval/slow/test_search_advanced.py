@@ -98,14 +98,14 @@ class TestSearchAdvanced:
                 assert data.get("status") == "ok"
 
     def test_glob_with_extension_pattern(self, api_client):
-        glob_resp = api_client.glob(pattern="*.md", uri="viking://resources/")
+        glob_resp = api_client.glob(pattern="**/*.md", uri="viking://resources/")
         assert glob_resp.status_code == 200, (
-            f"glob *.md should return 200, got {glob_resp.status_code}"
+            f"glob **/*.md should return 200, got {glob_resp.status_code}"
         )
         matches = glob_resp.json().get("result", {}).get("matches", [])
         for match in matches:
             uri = match if isinstance(match, str) else match.get("uri", "")
-            assert ".md" in uri, f"glob *.md should only match .md files, got {uri}"
+            assert ".md" in uri, f"glob **/*.md should only match .md files, got {uri}"
 
     def test_glob_with_double_star_pattern(self, api_client):
         glob_resp = api_client.glob(pattern="**/*.md", uri="viking://resources/")

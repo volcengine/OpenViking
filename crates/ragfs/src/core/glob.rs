@@ -8,73 +8,34 @@ use sha2::{Digest, Sha256};
 
 use crate::core::{Error, Result};
 
-/// Return whether the relative path matches the same glob semantics currently
-/// used by `pathlib.PurePath.match()`.
-///
-/// The current Python implementation matches path *suffix* segments rather
-/// than anchoring the pattern at the query root. For example:
-///
-/// - `PurePath("foo/bar.rs").match("*.rs") == True`
-/// - `PurePath("a/b/c.md").match("a/**/*.md") == True`
-/// - `PurePath("foo").match("**/foo") == False`
-///
-/// We preserve that contract here by:
-///
-/// 1. Splitting both pattern and path into non-empty `/`-separated segments.
-/// 2. When the pattern contains no `/`, matching it against the basename only.
-/// 3. Otherwise, matching the pattern segments against the path's trailing
-///    segments of equal length.
-/// 4. Using `globset` only for *single-segment* matching, so `/` semantics stay
-///    under our control.
+/// Precompiled standard glob matcher for query-root-relative paths.
 pub struct PreparedGlob {
-    segments: Vec<Option<GlobMatcher>>,
+    matcher: Option<GlobMatcher>,
 }
 
 impl PreparedGlob {
-    /// Compile a glob pattern once for repeated `PurePath.match()` checks.
+    /// Compile a glob pattern once for repeated full relative-path checks.
     pub fn new(pattern: &str) -> Result<Self> {
         validate_pattern(pattern)?;
-        let segments = split_segments(pattern)
-            .into_iter()
-            .map(|segment| {
-                GlobBuilder::new(&segment)
-                    .literal_separator(true)
-                    .build()
-                    .ok()
-                    .map(|glob| glob.compile_matcher())
-            })
-            .collect();
-        Ok(Self { segments })
+        let normalized = normalize_rel_path(pattern);
+        let matcher = GlobBuilder::new(&normalized)
+            .literal_separator(true)
+            .build()
+            .ok()
+            .map(|glob| glob.compile_matcher());
+        Ok(Self { matcher })
     }
 
-    /// Match one relative path using the current `PurePath.match()` contract.
+    /// Match one path relative to the query root using standard glob semantics.
     pub fn is_match(&self, rel_path: &str) -> bool {
-        let path_segments = split_segments(rel_path);
-
-        if self.segments.is_empty() {
-            return false;
-        }
-
-        if self.segments.len() == 1 {
-            let name = path_segments.last().map(String::as_str).unwrap_or("");
-            return segment_matches_prepared(name, &self.segments[0]);
-        }
-
-        if self.segments.len() > path_segments.len() {
-            return false;
-        }
-
-        let offset = path_segments.len() - self.segments.len();
-        for (path_segment, matcher) in path_segments[offset..].iter().zip(self.segments.iter()) {
-            if !segment_matches_prepared(path_segment, matcher) {
-                return false;
-            }
-        }
-        true
+        self.matcher
+            .as_ref()
+            .is_some_and(|matcher| matcher.is_match(normalize_rel_path(rel_path)))
     }
 }
 
-pub fn purepath_match(rel_path: &str, pattern: &str) -> Result<bool> {
+#[allow(dead_code)]
+pub fn standard_glob_match(rel_path: &str, pattern: &str) -> Result<bool> {
     Ok(PreparedGlob::new(pattern)?.is_match(rel_path))
 }
 
@@ -160,8 +121,8 @@ fn split_segments(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn segment_matches_prepared(value: &str, matcher: &Option<GlobMatcher>) -> bool {
-    matcher.as_ref().is_some_and(|matcher| matcher.is_match(value))
+fn normalize_rel_path(value: &str) -> String {
+    split_segments(value).join("/")
 }
 
 fn token_scope(path: &str, pattern: &str, show_hidden: bool, level_limit: Option<usize>) -> String {
@@ -179,65 +140,67 @@ mod tests {
     use std::cmp::Ordering;
 
     use super::{
-        compare_rel_paths, decode_offset_token, encode_offset_token, purepath_match,
+        compare_rel_paths, decode_offset_token, encode_offset_token, standard_glob_match,
         validate_pattern, PreparedGlob,
     };
 
     #[test]
-    fn test_purepath_match_basename_behavior() {
-        assert!(purepath_match("foo/bar.rs", "*.rs").unwrap());
-        assert!(purepath_match("sub/resource_a", "resource_*").unwrap());
-        assert!(!purepath_match("foo/bar.rs", "*.md").unwrap());
+    fn test_globset_match_uses_full_relative_path() {
+        assert!(!standard_glob_match("foo/bar.rs", "*.rs").unwrap());
+        assert!(!standard_glob_match("sub/resource_a", "resource_*").unwrap());
+        assert!(standard_glob_match("foo/bar.rs", "**/*.rs").unwrap());
+        assert!(!standard_glob_match("foo/bar.rs", "*.md").unwrap());
     }
 
     #[test]
-    fn test_purepath_match_suffix_segments_behavior() {
-        assert!(purepath_match("a/b/c.md", "a/**/*.md").unwrap());
-        assert!(purepath_match("a/b/c.md", "*/c.md").unwrap());
-        assert!(purepath_match("foo/bar", "foo/**").unwrap());
-        assert!(!purepath_match("foo/bar/baz", "foo/**").unwrap());
-        assert!(!purepath_match("foo", "**/foo").unwrap());
-        assert!(!purepath_match("a.md", "**/*.md").unwrap());
-        assert!(purepath_match("x/a.md", "**/*.md").unwrap());
+    fn test_globset_match_uses_standard_recursive_semantics() {
+        assert!(standard_glob_match("a/b/c.md", "a/**/*.md").unwrap());
+        assert!(!standard_glob_match("a/b/c.md", "*/c.md").unwrap());
+        assert!(standard_glob_match("a/c.md", "*/c.md").unwrap());
+        assert!(standard_glob_match("foo/bar", "foo/**").unwrap());
+        assert!(standard_glob_match("foo/bar/baz", "foo/**").unwrap());
+        assert!(standard_glob_match("foo", "**/foo").unwrap());
+        assert!(standard_glob_match("a.md", "**/*.md").unwrap());
+        assert!(standard_glob_match("x/a.md", "**/*.md").unwrap());
     }
 
     #[test]
-    fn test_purepath_match_empty_pattern_rejected() {
-        assert!(purepath_match("a", "").is_err());
+    fn test_standard_glob_match_empty_pattern_rejected() {
+        assert!(standard_glob_match("a", "").is_err());
     }
 
     #[test]
-    fn test_purepath_match_root_only_pattern_returns_false() {
-        assert!(!purepath_match("a", "/").unwrap());
-        assert!(!purepath_match("a", "///").unwrap());
+    fn test_standard_glob_match_root_only_pattern_returns_false() {
+        assert!(!standard_glob_match("a", "/").unwrap());
+        assert!(!standard_glob_match("a", "///").unwrap());
     }
 
     #[test]
-    fn test_purepath_match_dot_only_pattern_still_rejected() {
-        assert!(purepath_match("a", ".").is_err());
-        assert!(purepath_match("a", "./").is_err());
-        assert!(purepath_match("a", "././").is_err());
+    fn test_standard_glob_match_dot_only_pattern_still_rejected() {
+        assert!(standard_glob_match("a", ".").is_err());
+        assert!(standard_glob_match("a", "./").is_err());
+        assert!(standard_glob_match("a", "././").is_err());
     }
 
     #[test]
-    fn test_purepath_match_invalid_segment_returns_false() {
-        assert!(!purepath_match("foo", "[").unwrap());
-        assert!(!purepath_match("foo", "foo[bar").unwrap());
-        assert!(!purepath_match("foo", "[]").unwrap());
+    fn test_standard_glob_match_invalid_segment_returns_false() {
+        assert!(!standard_glob_match("foo", "[").unwrap());
+        assert!(!standard_glob_match("foo", "foo[bar").unwrap());
+        assert!(!standard_glob_match("foo", "[]").unwrap());
     }
 
     #[test]
-    fn test_purepath_match_normalizes_dot_segments() {
-        assert!(purepath_match("a/./b.md", "a/b.md").unwrap());
-        assert!(purepath_match("a/b.md", "./b.md").unwrap());
-        assert!(purepath_match("./a/b.md", "a/b.md").unwrap());
+    fn test_standard_glob_match_normalizes_dot_segments() {
+        assert!(standard_glob_match("a/./b.md", "a/b.md").unwrap());
+        assert!(!standard_glob_match("a/b.md", "./b.md").unwrap());
+        assert!(standard_glob_match("./a/b.md", "a/b.md").unwrap());
     }
 
     #[test]
-    fn test_prepared_glob_preserves_purepath_match_behavior() {
+    fn test_prepared_glob_matches_globset_behavior() {
         let cases = [
-            ("foo/bar.rs", "*.rs"),
-            ("a/b/c.md", "a/**/*.md"),
+            ("foo/bar.rs", "**/*.rs"),
+            ("a/b/c.md", "**/*.md"),
             ("foo", "**/foo"),
             ("foo/bar/baz", "foo/**"),
             ("a", "/"),
@@ -246,7 +209,7 @@ mod tests {
 
         for (path, pattern) in cases {
             let prepared = PreparedGlob::new(pattern).unwrap();
-            assert_eq!(prepared.is_match(path), purepath_match(path, pattern).unwrap());
+            assert_eq!(prepared.is_match(path), standard_glob_match(path, pattern).unwrap());
         }
     }
 

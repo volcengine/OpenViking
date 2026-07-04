@@ -1164,7 +1164,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_glob_directory_matches_basename_suffix_semantics() {
+    async fn test_glob_directory_matches_full_relative_path_semantics() {
         let fs = TreeFS::default()
             .with_dir_entries("/root", vec![("sub", true), ("top.md", false)])
             .with_dir_entries(
@@ -1172,14 +1172,14 @@ mod tests {
                 vec![("nested.md", false), ("nested.txt", false)],
             );
 
-        let page = root_glob(&fs, "*.md", None, None).await;
+        let page = root_glob(&fs, "**/*.md", None, None).await;
 
         assert_eq!(glob_rel_paths(&page), vec!["sub/nested.md", "top.md"]);
         assert!(page.next_token.is_none());
     }
 
     #[tokio::test]
-    async fn test_glob_directory_matches_path_suffix_segments() {
+    async fn test_glob_directory_anchors_multi_segment_patterns_at_root() {
         let fs = TreeFS::default()
             .with_dir_entries("/root", vec![("a", true), ("x", true)])
             .with_dir_entries("/root/a", vec![("b", true)])
@@ -1190,7 +1190,7 @@ mod tests {
 
         let page = root_glob(&fs, "a/**/*.md", None, None).await;
 
-        assert_eq!(glob_rel_paths(&page), vec!["a/b/c.md", "x/a/b/c.md"]);
+        assert_eq!(glob_rel_paths(&page), vec!["a/b/c.md"]);
     }
 
     #[tokio::test]

@@ -83,7 +83,7 @@ async def test_glob_delegates_to_agfs_with_paging_and_visibility(monkeypatch, fs
 
     monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
 
-    result = await fs.glob("*.md", uri="viking://resources", node_limit=2, ctx=_default_ctx())
+    result = await fs.glob("**/*.md", uri="viking://resources", node_limit=2, ctx=_default_ctx())
 
     assert result == {
         "matches": [
@@ -122,7 +122,7 @@ async def test_glob_stops_after_reaching_limit_at_page_end(monkeypatch, fs):
 
     monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
 
-    result = await fs.glob("*.md", uri="viking://resources", node_limit=2, ctx=_default_ctx())
+    result = await fs.glob("**/*.md", uri="viking://resources", node_limit=2, ctx=_default_ctx())
 
     assert result == {
         "matches": [
@@ -135,7 +135,7 @@ async def test_glob_stops_after_reaching_limit_at_page_end(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
-async def test_glob_uses_python_match_as_final_oracle(monkeypatch, fs):
+async def test_glob_trusts_backend_glob_matches(monkeypatch, fs):
     async def fake_glob_directory(path, pattern, **kwargs):
         return {
             "entries": [
@@ -153,7 +153,7 @@ async def test_glob_uses_python_match_as_final_oracle(monkeypatch, fs):
 
     result = await fs.glob("**/*.md", uri="viking://resources", ctx=_default_ctx())
 
-    assert result == {"matches": [], "count": 0}
+    assert result == {"matches": ["viking://resources/a.md"], "count": 1}
 
 
 @pytest.mark.asyncio
@@ -174,7 +174,7 @@ async def test_glob_checks_access_before_listing(monkeypatch, fs):
     monkeypatch.setattr(fs, "_ensure_access", fake_ensure_access)
 
     with pytest.raises(PermissionError):
-        await fs.glob("*.md", uri="viking://resources", ctx=_default_ctx())
+        await fs.glob("**/*.md", uri="viking://resources", ctx=_default_ctx())
 
     assert called is True
 
@@ -202,7 +202,7 @@ async def test_glob_preserves_request_uri_alias(monkeypatch, fs):
 
     monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
 
-    result = await fs.glob("*.md", uri="viking://user", ctx=_default_ctx())
+    result = await fs.glob("**/*.md", uri="viking://user", ctx=_default_ctx())
 
     assert result == {"matches": ["viking://user/demo.md"], "count": 1}
 
@@ -230,7 +230,7 @@ async def test_glob_preserves_root_uri(monkeypatch, fs):
 
     monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
 
-    result = await fs.glob("*.md", uri="viking://", ctx=_default_ctx())
+    result = await fs.glob("**/*.md", uri="viking://", ctx=_default_ctx())
 
     assert result == {"matches": ["viking://resources/demo.md"], "count": 1}
 
@@ -252,7 +252,7 @@ async def test_glob_keeps_directory_matches(monkeypatch, fs):
 
     monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
 
-    result = await fs.glob("*", uri="viking://resources", ctx=_default_ctx())
+    result = await fs.glob("**/*", uri="viking://resources", ctx=_default_ctx())
 
     assert result == {"matches": ["viking://resources/folder"], "count": 1}
 
@@ -284,7 +284,7 @@ async def test_glob_preserves_legacy_session_alias(monkeypatch, fs):
 
     monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
 
-    result = await fs.glob("*.jsonl", uri="viking://session/alice/sess_1", ctx=_default_ctx())
+    result = await fs.glob("**/*.jsonl", uri="viking://session/alice/sess_1", ctx=_default_ctx())
 
     assert result == {"matches": ["viking://session/alice/sess_1/messages.jsonl"], "count": 1}
 
@@ -326,7 +326,7 @@ async def test_glob_uses_path_to_uri_for_non_legacy_namespace(monkeypatch, fs):
     monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
 
     result = await fs.glob(
-        "*.md",
+        "**/*.md",
         uri="viking://resources/alias-root",
         ctx=_default_ctx(),
     )

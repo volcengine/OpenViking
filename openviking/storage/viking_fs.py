@@ -22,7 +22,6 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
 from openviking.core.context import ContextLevel
@@ -1067,15 +1066,19 @@ class VikingFS:
         if exclude_uri:
             excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
             self._ensure_access(excluded_prefix, ctx)
-            filter_expr = And([
-                filter_expr,
-                RawDSL({
-                    "op": "must_not",
-                    "field": "uri",
-                    "conds": [excluded_prefix],
-                    "para": "-d=-1",
-                }),
-            ])
+            filter_expr = And(
+                [
+                    filter_expr,
+                    RawDSL(
+                        {
+                            "op": "must_not",
+                            "field": "uri",
+                            "conds": [excluded_prefix],
+                            "para": "-d=-1",
+                        }
+                    ),
+                ]
+            )
 
         # Auto-adapt bm25 recall limit: recall up to 5x requested matches
         # while capping at VikingDB's max limit. If node_limit is unset,
@@ -1245,11 +1248,13 @@ class VikingFS:
 
             files_scanned_set.add(file_uri)
 
-            results.append({
-                "line": match.get("line", match.get("line_number", 0)),
-                "uri": file_uri,
-                "content": match.get("content", ""),
-            })
+            results.append(
+                {
+                    "line": match.get("line", match.get("line_number", 0)),
+                    "uri": file_uri,
+                    "content": match.get("content", ""),
+                }
+            )
 
             if node_limit and len(results) >= node_limit:
                 break
@@ -1419,11 +1424,13 @@ class VikingFS:
             lines = content.split("\n")
             for line_num, line in enumerate(lines, 1):
                 if compiled_pattern.search(line):
-                    matches.append({
-                        "line": line_num,
-                        "uri": entry_uri,
-                        "content": line,
-                    })
+                    matches.append(
+                        {
+                            "line": line_num,
+                            "uri": entry_uri,
+                            "content": line,
+                        }
+                    )
             return matches, 1
         except Exception as e:
             logger.debug(f"Failed to grep {entry_uri}: {e}")
@@ -1588,10 +1595,6 @@ class VikingFS:
                     continue
                 if not await self._read_path_visible(uri, entry["path"], primary_path, real_ctx):
                     continue
-                rel_path = entry.get("rel_path", "")
-                # Re-check with Python to keep the existing PurePath semantics as the final oracle.
-                if not PurePath(rel_path).match(pattern):
-                    continue
                 entry_uri = self._alias_uri_for_path(
                     request_uri=uri,
                     base_path=path,
@@ -1718,15 +1721,17 @@ class VikingFS:
         ):
             info = entry["info"]
             new_entry = dict(entry.get("extra", {}))
-            new_entry.update({
-                "name": info["name"],
-                "size": info["size"],
-                "mode": info["mode"],
-                "modTime": info["modTime"],
-                "isDir": info["isDir"],
-                "rel_path": entry["rel_path"],
-                "uri": entry_uri,
-            })
+            new_entry.update(
+                {
+                    "name": info["name"],
+                    "size": info["size"],
+                    "mode": info["mode"],
+                    "modTime": info["modTime"],
+                    "isDir": info["isDir"],
+                    "rel_path": entry["rel_path"],
+                    "uri": entry_uri,
+                }
+            )
             result.append(new_entry)
         return result
 
@@ -1751,13 +1756,15 @@ class VikingFS:
         ):
             info = entry["info"]
             is_dir = info["isDir"]
-            result.append({
-                "uri": entry_uri,
-                "size": 0 if is_dir else info["size"],
-                "isDir": is_dir,
-                "modTime": format_iso8601(parse_iso_datetime(info["modTime"])),
-                "rel_path": entry["rel_path"],
-            })
+            result.append(
+                {
+                    "uri": entry_uri,
+                    "size": 0 if is_dir else info["size"],
+                    "isDir": is_dir,
+                    "modTime": format_iso8601(parse_iso_datetime(info["modTime"])),
+                    "rel_path": entry["rel_path"],
+                }
+            )
 
         await self._batch_fetch_abstracts(result, abs_limit, ctx=ctx)
 
@@ -3520,14 +3527,16 @@ class VikingFS:
     # crates/ragfs/src/git/enumerate.rs and VikingFS._INTERNAL_NAMES so that
     # callers fail fast in Python with a clear error rather than passing a
     # path that the Rust side will silently drop.
-    _GIT_INTERNAL_FIRST_SEGMENTS = frozenset({
-        "_system",
-        "tasks",
-        "temp",
-        "queue",
-        "upload",
-        ".path.ovlock",
-    })
+    _GIT_INTERNAL_FIRST_SEGMENTS = frozenset(
+        {
+            "_system",
+            "tasks",
+            "temp",
+            "queue",
+            "upload",
+            ".path.ovlock",
+        }
+    )
 
     _DEFAULT_GIT_AUTHOR_NAME = "viking-bot"
     _DEFAULT_GIT_AUTHOR_EMAIL = "bot@viking.local"
@@ -4107,10 +4116,12 @@ class VikingFS:
             from openviking.service.reindex_executor import get_reindex_executor
 
             executor = get_reindex_executor()
-            await asyncio.gather(*[
-                self._run_vector_rebuild(executor, op, uri, level, ctx)
-                for (op, uri, level) in tasks
-            ])
+            await asyncio.gather(
+                *[
+                    self._run_vector_rebuild(executor, op, uri, level, ctx)
+                    for (op, uri, level) in tasks
+                ]
+            )
             await tracker.complete(
                 task_id,
                 {"status": "completed", "task_count": len(tasks)},
