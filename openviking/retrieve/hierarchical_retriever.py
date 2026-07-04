@@ -328,8 +328,15 @@ class HierarchicalRetriever:
         if not self._rerank_client or not documents:
             return fallback_scores
 
+        # Bound reranker input width so one oversized abstract cannot overflow the
+        # model and fail the whole batch open. 0 = OFF (not "truncate to 0 chars").
+        # Model input only: scores scatter back onto the full result dict, so stored
+        # and returned abstracts are untouched. cap=0 is byte-identical parity.
+        cap = self.rerank_config.max_chars_per_doc if self.rerank_config else 0
+        model_inputs = [doc[:cap] for doc in documents] if cap > 0 else documents
+
         try:
-            scores = self._rerank_client.rerank_batch(query, documents)
+            scores = self._rerank_client.rerank_batch(query, model_inputs)
         except Exception as e:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e

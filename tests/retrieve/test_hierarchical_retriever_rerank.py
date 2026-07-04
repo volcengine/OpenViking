@@ -4,6 +4,7 @@
 """Hierarchical retriever rerank behavior tests."""
 
 import pytest
+from pydantic import ValidationError
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
@@ -515,3 +516,222 @@ async def test_convert_to_matched_contexts_returns_empty_relations():
     )
 
     assert result[0].relations == []
+
+
+# ---------------------------------------------------------------------------
+# max_chars_per_doc — #2880 configurable rerank input truncation
+# ---------------------------------------------------------------------------
+
+
+def _cap_config(cap: int) -> RerankConfig:
+    return RerankConfig(ak="ak", sk="sk", threshold=0.1, max_chars_per_doc=cap)
+
+
+def _capped_retriever(monkeypatch, fake_client, cap: int) -> HierarchicalRetriever:
+    """A retriever whose rerank client is the fake, with max_chars_per_doc=cap."""
+    # Tiny caps in these truncation tests are intentionally below the stability
+    # floor; silence the sub-floor soft-warn so it does not spam CI logs (some CI
+    # treats warning logs as failures). The dedicated warn tests do not use this
+    # helper, so they still assert the warning fires.
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.rerank_config.logger.warning",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+    return HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=_cap_config(cap),
+    )
+
+
+def test_rerank_cap_zero_is_byte_identical_parity(monkeypatch):
+    fake = FakeRerankClient([0.9, 0.1])
+    retriever = _capped_retriever(monkeypatch, fake, 0)
+
+    docs = ["abcdefgh", "xy"]
+    retriever._rerank_scores("hello", docs, [0.0, 0.0])
+
+    # cap=0: docs reach rerank_batch untouched (byte-identical, no truncation).
+    assert fake.calls[0][1] == ["abcdefgh", "xy"]
+
+
+def test_rerank_cap_truncates_each_doc(monkeypatch):
+    fake = FakeRerankClient([0.9, 0.1])
+    retriever = _capped_retriever(monkeypatch, fake, 4)
+
+    retriever._rerank_scores("hello", ["abcdefgh", "xyz"], [0.0, 0.0])
+
+    # Each doc sliced to [:cap]; a doc shorter than cap is unchanged.
+    assert fake.calls[0][1] == ["abcd", "xyz"]
+
+
+def test_rerank_cap_does_not_truncate_the_query(monkeypatch):
+    fake = FakeRerankClient([0.9])
+    retriever = _capped_retriever(monkeypatch, fake, 4)
+
+    retriever._rerank_scores("hello world", ["abcdefgh"], [0.0])
+
+    assert fake.calls[0][0] == "hello world"  # query is never truncated
+    assert fake.calls[0][1] == ["abcd"]
+
+
+@pytest.mark.parametrize(
+    "cap,doc,expected",
+    [
+        (0, "abcdef", "abcdef"),  # 0 = OFF, not "truncate to 0 chars"
+        (10, "abcdef", "abcdef"),  # cap > len: unchanged
+        (7, "abcdef", "abcdef"),  # cap == len + 1: unchanged
+        (6, "abcdef", "abcdef"),  # cap == len: unchanged
+        (1, "abcdef", "a"),  # cap == 1: one codepoint
+    ],
+)
+def test_rerank_cap_boundaries(monkeypatch, cap, doc, expected):
+    fake = FakeRerankClient([0.5])
+    retriever = _capped_retriever(monkeypatch, fake, cap)
+
+    retriever._rerank_scores("q", [doc], [0.0])
+
+    assert fake.calls[0][1] == [expected]
+
+
+@pytest.mark.parametrize(
+    "cap,doc,expected",
+    [
+        (2, "你好世界", "你好"),  # CJK: codepoint-safe
+        (2, "🧑‍🚀X", "🧑‍"),  # ZWJ emoji: codepoint-safe, NOT grapheme-safe
+        (4, "", ""),  # empty abstract stays empty
+    ],
+)
+def test_rerank_cap_multibyte_and_empty(monkeypatch, cap, doc, expected):
+    fake = FakeRerankClient([0.5])
+    retriever = _capped_retriever(monkeypatch, fake, cap)
+
+    retriever._rerank_scores("q", [doc], [0.0])
+
+    assert fake.calls[0][1] == [expected]
+
+
+def test_rerank_cap_fail_open_when_rerank_raises(monkeypatch):
+    class Raiser(FakeRerankClient):
+        def rerank_batch(self, query, documents):
+            self.calls.append((query, list(documents)))
+            raise RuntimeError("model input overflow")
+
+    fake = Raiser([])
+    retriever = _capped_retriever(monkeypatch, fake, 4)
+
+    out = retriever._rerank_scores("q", ["abcdefgh", "xyz"], [0.11, 0.22])
+
+    assert out == [0.11, 0.22]  # falls back to vector scores, len invariant intact
+    assert fake.calls[0][1] == ["abcd", "xyz"]  # truncation happened before the call
+
+
+def test_rerank_cap_fail_open_on_wrong_length(monkeypatch):
+    fake = FakeRerankClient([0.9])  # one score returned for two documents
+    retriever = _capped_retriever(monkeypatch, fake, 4)
+
+    out = retriever._rerank_scores("q", ["abcdefgh", "xyz"], [0.11, 0.22])
+
+    assert out == [0.11, 0.22]
+
+
+@pytest.mark.asyncio
+async def test_thinking_mode_truncates_docs_at_both_sites(monkeypatch):
+    fake = FakeRerankClient([0.95, 0.05, 0.11, 0.95])
+    retriever = _capped_retriever(monkeypatch, fake, 4)
+
+    await retriever.retrieve(_query(), ctx=_ctx(), limit=2, mode=RetrieverMode.THINKING)
+
+    # cap=4: DummyStorage abstracts collapse under [:4] at both rerank sites.
+    # Site A (global) and Site B (child recursion) both funnel through _rerank_scores.
+    assert fake.calls[0] == ("hello", ["root", "root"])  # "root A"[:4]/"root B"[:4] -> "root"
+    assert fake.calls[1] == ("hello", ["chil", "chil"])  # "child A"[:4]/"child B"[:4] -> "chil"
+
+
+@pytest.mark.asyncio
+async def test_truncation_does_not_alter_returned_abstract(monkeypatch):
+    fake = FakeRerankClient([0.95, 0.05, 0.11, 0.95])
+    retriever = _capped_retriever(monkeypatch, fake, 4)
+
+    result = await retriever.retrieve(_query(), ctx=_ctx(), limit=2, mode=RetrieverMode.THINKING)
+
+    abstracts = {ctx.uri: ctx.abstract for ctx in result.matched_contexts}
+    # Truncation is model-input-only; the returned abstract is the full original.
+    assert abstracts["viking://resources/file-b"] == "child B"
+    assert abstracts["viking://resources/file-a"] == "child A"
+
+
+@pytest.mark.asyncio
+async def test_quick_mode_never_reranks_even_with_cap_set(monkeypatch):
+    fake = FakeRerankClient([0.5, 0.5, 0.5])
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.rerank_config.logger.warning",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake,
+    )
+    storage = QuickSearchStorage(
+        [
+            _result("viking://resources/root", 0.95, level=0, abstract="root abstract"),
+            _result("viking://resources/file", 0.9, abstract="file abstract"),
+        ]
+    )
+    retriever = HierarchicalRetriever(
+        storage=storage,
+        embedder=DummyEmbedder(),
+        rerank_config=_cap_config(4),
+    )
+
+    await retriever.retrieve(_query(), ctx=_ctx(), limit=2, mode=RetrieverMode.QUICK)
+
+    assert fake.calls == []
+
+
+def test_rerank_config_default_cap_is_zero():
+    assert RerankConfig(ak="ak", sk="sk").max_chars_per_doc == 0
+
+
+def test_rerank_config_rejects_negative_cap():
+    with pytest.raises(ValidationError):
+        RerankConfig(ak="ak", sk="sk", max_chars_per_doc=-1)
+
+
+def test_rerank_config_rejects_non_int_cap_under_strict():
+    with pytest.raises(ValidationError):
+        RerankConfig(ak="ak", sk="sk", max_chars_per_doc="5")
+
+
+def test_rerank_config_rejects_unknown_field():
+    with pytest.raises(ValidationError):
+        RerankConfig(ak="ak", sk="sk", max_chars_pr_doc=4)  # typo, extra=forbid
+
+
+def test_rerank_config_warns_on_sub_floor_cap(monkeypatch):
+    from openviking_cli.utils.config import rerank_config as rc_mod
+
+    warnings: list = []
+    monkeypatch.setattr(rc_mod.logger, "warning", lambda *a, **k: warnings.append((a, k)))
+
+    RerankConfig(ak="ak", sk="sk", max_chars_per_doc=50)
+
+    assert warnings, "expected a soft-warn for a non-zero cap below the stability floor"
+    # The configured cap value is surfaced in the warning so the misconfig is actionable.
+    assert 50 in warnings[0][0]
+
+
+def test_rerank_config_does_not_warn_when_cap_disabled(monkeypatch):
+    from openviking_cli.utils.config import rerank_config as rc_mod
+
+    warnings: list = []
+    monkeypatch.setattr(rc_mod.logger, "warning", lambda *a, **k: warnings.append((a, k)))
+
+    RerankConfig(ak="ak", sk="sk", max_chars_per_doc=0)
+    RerankConfig(ak="ak", sk="sk", max_chars_per_doc=2000)
+
+    assert warnings == []

@@ -853,6 +853,7 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 | `model` | str | Model name (for `openai` providers) |
 | `timeout` | float | HTTP request timeout in seconds for OpenAI-compatible providers. Increase for slow or cold-starting local rerank servers. Default: `30.0` |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+| `max_chars_per_doc` | int | Truncate each document to at most N characters before reranking; `0` disables truncation (default). Bounds reranker input so one oversized abstract cannot overflow the model and fail the whole batch. Truncates the model input only — stored and returned abstracts are unchanged. Recommended when enabled: `2000` for 512-token rerankers (BGE/MiniLM/VikingDB). Note for CJK text: characters are not tokens, so a char cap can still overflow a token-limited reranker. Default: `0` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
 **Supported providers:**
