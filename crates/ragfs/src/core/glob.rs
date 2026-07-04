@@ -3,7 +3,7 @@
 
 use std::cmp::Ordering;
 
-use globset::GlobBuilder;
+use globset::{GlobBuilder, GlobMatcher};
 use sha2::{Digest, Sha256};
 
 use crate::core::{Error, Result};
@@ -26,34 +26,56 @@ use crate::core::{Error, Result};
 ///    segments of equal length.
 /// 4. Using `globset` only for *single-segment* matching, so `/` semantics stay
 ///    under our control.
-pub fn purepath_match(rel_path: &str, pattern: &str) -> Result<bool> {
-    validate_pattern(pattern)?;
+pub struct PreparedGlob {
+    segments: Vec<Option<GlobMatcher>>,
+}
 
-    let path_segments = split_segments(rel_path);
-    let pattern_segments = split_segments(pattern);
-
-    if pattern_segments.is_empty() {
-        return Ok(false);
+impl PreparedGlob {
+    /// Compile a glob pattern once for repeated `PurePath.match()` checks.
+    pub fn new(pattern: &str) -> Result<Self> {
+        validate_pattern(pattern)?;
+        let segments = split_segments(pattern)
+            .into_iter()
+            .map(|segment| {
+                GlobBuilder::new(&segment)
+                    .literal_separator(true)
+                    .build()
+                    .ok()
+                    .map(|glob| glob.compile_matcher())
+            })
+            .collect();
+        Ok(Self { segments })
     }
 
-    if pattern_segments.len() == 1 {
-        let name = path_segments.last().map(String::as_str).unwrap_or("");
-        return segment_matches(name, &pattern_segments[0]);
-    }
+    /// Match one relative path using the current `PurePath.match()` contract.
+    pub fn is_match(&self, rel_path: &str) -> bool {
+        let path_segments = split_segments(rel_path);
 
-    if pattern_segments.len() > path_segments.len() {
-        return Ok(false);
-    }
-
-    let offset = path_segments.len() - pattern_segments.len();
-    for (path_segment, pattern_segment) in
-        path_segments[offset..].iter().zip(pattern_segments.iter())
-    {
-        if !segment_matches(path_segment, pattern_segment)? {
-            return Ok(false);
+        if self.segments.is_empty() {
+            return false;
         }
+
+        if self.segments.len() == 1 {
+            let name = path_segments.last().map(String::as_str).unwrap_or("");
+            return segment_matches_prepared(name, &self.segments[0]);
+        }
+
+        if self.segments.len() > path_segments.len() {
+            return false;
+        }
+
+        let offset = path_segments.len() - self.segments.len();
+        for (path_segment, matcher) in path_segments[offset..].iter().zip(self.segments.iter()) {
+            if !segment_matches_prepared(path_segment, matcher) {
+                return false;
+            }
+        }
+        true
     }
-    Ok(true)
+}
+
+pub fn purepath_match(rel_path: &str, pattern: &str) -> Result<bool> {
+    Ok(PreparedGlob::new(pattern)?.is_match(rel_path))
 }
 
 /// Decode the opaque offset token used by the default implementations.
@@ -138,12 +160,8 @@ fn split_segments(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn segment_matches(value: &str, pattern: &str) -> Result<bool> {
-    let glob = match GlobBuilder::new(pattern).literal_separator(true).build() {
-        Ok(glob) => glob,
-        Err(_) => return Ok(false),
-    };
-    Ok(glob.compile_matcher().is_match(value))
+fn segment_matches_prepared(value: &str, matcher: &Option<GlobMatcher>) -> bool {
+    matcher.as_ref().is_some_and(|matcher| matcher.is_match(value))
 }
 
 fn token_scope(path: &str, pattern: &str, show_hidden: bool, level_limit: Option<usize>) -> String {
@@ -162,7 +180,7 @@ mod tests {
 
     use super::{
         compare_rel_paths, decode_offset_token, encode_offset_token, purepath_match,
-        validate_pattern,
+        validate_pattern, PreparedGlob,
     };
 
     #[test]
@@ -213,6 +231,23 @@ mod tests {
         assert!(purepath_match("a/./b.md", "a/b.md").unwrap());
         assert!(purepath_match("a/b.md", "./b.md").unwrap());
         assert!(purepath_match("./a/b.md", "a/b.md").unwrap());
+    }
+
+    #[test]
+    fn test_prepared_glob_preserves_purepath_match_behavior() {
+        let cases = [
+            ("foo/bar.rs", "*.rs"),
+            ("a/b/c.md", "a/**/*.md"),
+            ("foo", "**/foo"),
+            ("foo/bar/baz", "foo/**"),
+            ("a", "/"),
+            ("foo", "["),
+        ];
+
+        for (path, pattern) in cases {
+            let prepared = PreparedGlob::new(pattern).unwrap();
+            assert_eq!(prepared.is_match(path), purepath_match(path, pattern).unwrap());
+        }
     }
 
     #[test]

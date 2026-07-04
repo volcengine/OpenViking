@@ -29,7 +29,7 @@ use regex::Regex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::core::filesystem::{relative_depth, relative_match_file};
-use crate::core::glob::{purepath_match, validate_pattern};
+use crate::core::glob::{PreparedGlob, validate_pattern};
 use crate::core::{
     ConfigParameter, Error, FileInfo, FileSystem, GlobEntry, GlobPage, GrepMatch, GrepResult,
     PluginConfig, Result, ServicePlugin, TreeEntry, WriteFlag,
@@ -302,7 +302,7 @@ impl S3FileSystem {
         &self,
         query_root: &str,
         page: &ListTreePage,
-        pattern: &str,
+        matcher: &PreparedGlob,
         show_hidden: bool,
         level_limit: Option<usize>,
         last_rel_parts: &[String],
@@ -323,7 +323,7 @@ impl S3FileSystem {
             .unwrap_or_else(|| last_rel_parts.to_vec());
 
         for entry in ordered {
-            if purepath_match(&entry.rel_path, pattern)? {
+            if matcher.is_match(&entry.rel_path) {
                 matched.push(GlobEntry {
                     path: entry.path,
                     rel_path: entry.rel_path,
@@ -975,7 +975,7 @@ impl FileSystem for S3FileSystem {
         level_limit: Option<usize>,
         continuation_token: Option<String>,
     ) -> Result<GlobPage> {
-        validate_pattern(pattern)?;
+        let matcher = PreparedGlob::new(pattern)?;
         if matches!(page_size, Some(0)) {
             return Err(Error::invalid_operation("page_size must be positive"));
         }
@@ -1037,7 +1037,7 @@ impl FileSystem for S3FileSystem {
             let (entries, next_last_rel_parts) = self.glob_entries_from_listing_page(
                 &normalized,
                 &page,
-                pattern,
+                &matcher,
                 show_hidden,
                 level_limit,
                 &state.last_rel_parts,

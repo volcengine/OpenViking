@@ -27,7 +27,7 @@ use super::types::{
     WriteFlag,
 };
 use crate::core::glob::{
-    compare_rel_paths, decode_offset_token, encode_offset_token, purepath_match, validate_pattern,
+    compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob,
 };
 use crate::multibackend::meta::{
     current_required_ctx, file_name, parent_dir, DefaultFsContextResolver, FsContextResolver,
@@ -1630,7 +1630,7 @@ impl FileSystem for MultiWriteWrappedFS {
                 .await;
         }
 
-        validate_pattern(pattern)?;
+        let matcher = PreparedGlob::new(pattern)?;
         if matches!(page_size, Some(0)) {
             return Err(Error::invalid_operation("page_size must be positive"));
         }
@@ -1641,7 +1641,7 @@ impl FileSystem for MultiWriteWrappedFS {
 
         let mut matched = Vec::new();
         for entry in entries {
-            if purepath_match(&entry.rel_path, pattern)? {
+            if matcher.is_match(&entry.rel_path) {
                 matched.push(GlobEntry {
                     path: entry.path,
                     rel_path: entry.rel_path,

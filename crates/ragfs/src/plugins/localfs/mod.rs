@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
-use crate::core::glob::{purepath_match, validate_pattern};
+use crate::core::glob::{PreparedGlob, validate_pattern};
 use crate::core::plugin::ServicePlugin;
 use crate::core::types::{ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepResult, PluginConfig, WriteFlag};
 
@@ -758,6 +758,13 @@ impl LocalFileSystem {
         Ok(None)
     }
 
+    fn walker_has_remaining(walker: &LocalPagedWalker) -> bool {
+        walker
+            .stack
+            .iter()
+            .any(|frame| frame.next_idx < frame.entries.len())
+    }
+
     /// Implement glob pagination with a local DFS walk instead of materializing the whole tree.
     ///
     /// Args:
@@ -781,7 +788,7 @@ impl LocalFileSystem {
         level_limit: Option<usize>,
         continuation_token: Option<String>,
     ) -> Result<GlobPage> {
-        validate_pattern(pattern)?;
+        let matcher = PreparedGlob::new(pattern)?;
         if matches!(page_size, Some(0)) {
             return Err(Error::invalid_operation("page_size must be positive"));
         }
@@ -808,7 +815,7 @@ impl LocalFileSystem {
         while entries.len() < limit {
             match Self::walker_next_entry(&mut walker)? {
                 Some(entry) => {
-                    if purepath_match(&entry.rel_path, pattern)? {
+                    if matcher.is_match(&entry.rel_path) {
                         entries.push(GlobEntry {
                             path: Self::local_glob_entry_path(&walker.virtual_root, &entry.rel_path),
                             rel_path: entry.rel_path,
@@ -821,18 +828,8 @@ impl LocalFileSystem {
             }
         }
 
-        let next_token = if page_size.is_some() {
-            let mut probe = walker.clone();
-            loop {
-                match Self::walker_next_entry(&mut probe)? {
-                    Some(entry) => {
-                        if purepath_match(&entry.rel_path, pattern)? {
-                            break Some(Self::encode_local_glob_cursor(pattern, &walker)?);
-                        }
-                    }
-                    None => break None,
-                }
-            }
+        let next_token = if page_size.is_some() && Self::walker_has_remaining(&walker) {
+            Some(Self::encode_local_glob_cursor(pattern, &walker)?)
         } else {
             None
         };

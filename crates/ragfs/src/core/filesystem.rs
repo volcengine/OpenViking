@@ -10,7 +10,7 @@ use std::any::Any;
 
 use super::errors::{Error, Result};
 use super::glob::{
-    compare_rel_paths, decode_offset_token, encode_offset_token, purepath_match, validate_pattern,
+    compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob,
 };
 use super::types::{FileInfo, GlobEntry, GlobPage, GrepResult, TreeEntry, WriteFlag};
 
@@ -470,7 +470,7 @@ pub trait FileSystem: Send + Sync + Any {
         level_limit: Option<usize>,
         continuation_token: Option<String>,
     ) -> Result<GlobPage> {
-        validate_pattern(pattern)?;
+        let matcher = PreparedGlob::new(pattern)?;
         if matches!(page_size, Some(0)) {
             return Err(Error::invalid_operation("page_size must be positive"));
         }
@@ -481,7 +481,7 @@ pub trait FileSystem: Send + Sync + Any {
 
         let mut matched = Vec::new();
         for entry in entries {
-            if purepath_match(&entry.rel_path, pattern)? {
+            if matcher.is_match(&entry.rel_path) {
                 matched.push(GlobEntry {
                     path: entry.path,
                     rel_path: entry.rel_path,
