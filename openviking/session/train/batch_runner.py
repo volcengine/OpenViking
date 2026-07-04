@@ -6,6 +6,7 @@ import inspect
 import json
 import os
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
@@ -223,6 +224,7 @@ class BatchTrainEvalReport:
     baseline_force_recompute: bool = False
     skip_final_eval: bool = False
     final_eval_source: str | None = None
+    git: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -263,6 +265,7 @@ class BatchTrainEvalReport:
             "baseline_force_recompute": self.baseline_force_recompute,
             "skip_final_eval": self.skip_final_eval,
             "final_eval_source": self.final_eval_source,
+            "git": self.git,
         }
 
 
@@ -282,6 +285,8 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             metadata=_policy_set_metadata(config, client),
         )
         run_dir = _run_output_dir(config)
+        git_metadata = _git_metadata()
+        _write_run_metadata(run_dir, config, git_metadata)
         event_recorder = JsonlEventRecorder(
             path=_events_path(config),
             default_fields={
@@ -310,6 +315,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             skip_baseline_eval=config.skip_baseline_eval,
             eval_split=config.eval_split,
             skip_final_eval=config.skip_final_eval,
+            git=git_metadata,
             baseline_cache_path=(
                 None
                 if config.skip_baseline_eval or config.eval_split is None
@@ -506,6 +512,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             baseline_force_recompute=config.baseline_force_recompute,
             skip_final_eval=config.skip_final_eval,
             final_eval_source=final_eval_source,
+            git=git_metadata,
         )
         _write_report(report, config)
         await event_recorder.record(
@@ -519,6 +526,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
             accuracy_delta=report.accuracy_delta,
             baseline_cache_path=report.baseline_cache_path,
             baseline_cache_hit=report.baseline_cache_hit,
+            git=git_metadata,
         )
         await emit_run_summary(
             train_context,
@@ -537,6 +545,9 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 "eval_split": report.eval_split,
                 "skip_final_eval": report.skip_final_eval,
                 "final_eval_source": report.final_eval_source,
+                "git_commit": git_metadata.get("commit"),
+                "git_short_commit": git_metadata.get("short_commit"),
+                "git_dirty": git_metadata.get("dirty"),
             },
             baseline_eval=baseline_eval,
             final_eval=final_eval,
@@ -995,6 +1006,51 @@ def _write_report(report: BatchTrainEvalReport, config: BatchTrainEvalConfig) ->
         encoding="utf-8",
     )
     report.output_path = str(output_path)
+
+
+def _git_metadata() -> dict[str, Any]:
+    repo_root = _repo_root()
+
+    def run_git(*args: str) -> str:
+        try:
+            return subprocess.check_output(
+                ["git", "-C", str(repo_root), *args],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except Exception:
+            return ""
+
+    commit = run_git("rev-parse", "HEAD")
+    short_commit = run_git("rev-parse", "--short", "HEAD")
+    branch = run_git("rev-parse", "--abbrev-ref", "HEAD")
+    status = run_git("status", "--porcelain")
+    return {
+        "commit": commit or None,
+        "short_commit": short_commit or None,
+        "branch": branch or None,
+        "dirty": bool(status),
+        "status_porcelain": status,
+    }
+
+
+def _write_run_metadata(
+    run_dir: Path,
+    config: BatchTrainEvalConfig,
+    git_metadata: dict[str, Any],
+) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "dataset": config.dataset,
+        "domain": config.domain,
+        "run_timestamp": config.run_timestamp,
+        "result_dir_name": config.result_dir_name,
+        "git": git_metadata,
+    }
+    (run_dir / "run_metadata.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _events_path(config: BatchTrainEvalConfig) -> Path:
