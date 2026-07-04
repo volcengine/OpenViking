@@ -544,6 +544,29 @@ impl LocalFileSystem {
         }
     }
 
+    fn glob_static_max_depth(pattern: &str) -> Option<usize> {
+        let mut depth = 0usize;
+        for segment in pattern.split('/') {
+            if segment.is_empty() || segment == "." {
+                continue;
+            }
+            if segment == "**" {
+                return None;
+            }
+            depth += 1;
+        }
+        Some(depth)
+    }
+
+    fn effective_glob_max_depth(pattern: &str, level_limit: Option<usize>) -> Option<usize> {
+        match (Self::glob_static_max_depth(pattern), level_limit) {
+            (Some(pattern_depth), Some(level_depth)) => Some(pattern_depth.min(level_depth)),
+            (Some(pattern_depth), None) => Some(pattern_depth),
+            (None, Some(level_depth)) => Some(level_depth),
+            (None, None) => None,
+        }
+    }
+
     /// Implement glob pagination via `ignore::WalkBuilder` without materializing the whole tree.
     ///
     /// Args:
@@ -597,7 +620,7 @@ impl LocalFileSystem {
             .git_global(false)
             .git_exclude(false)
             .sort_by_file_path(|left, right| left.cmp(right));
-        if let Some(max_depth) = level_limit {
+        if let Some(max_depth) = Self::effective_glob_max_depth(pattern, level_limit) {
             builder.max_depth(Some(max_depth));
         }
 
