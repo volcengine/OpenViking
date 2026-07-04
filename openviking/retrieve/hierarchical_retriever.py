@@ -318,6 +318,18 @@ class HierarchicalRetriever:
             return score >= threshold
         return score > threshold
 
+    @staticmethod
+    def _sigmoid(value: float) -> float:
+        """Map a reranker score (possibly an unbounded logit) into [0, 1]. Overflow-safe.
+
+        The range is closed: extreme logits saturate to exactly 0.0 or 1.0 in float
+        (e.g. logits <= ~-745 underflow to 0.0), so both endpoints are reachable.
+        """
+        if value >= 0.0:
+            return 1.0 / (1.0 + math.exp(-value))
+        exp_value = math.exp(value)
+        return exp_value / (1.0 + exp_value)
+
     def _rerank_scores(
         self,
         query: str,
@@ -342,9 +354,20 @@ class HierarchicalRetriever:
             )
             return fallback_scores
 
+        # Optionally map raw reranker scores into [0, 1] so `threshold` is comparable
+        # across providers. A per-doc fallback substitution (invalid rerank score ->
+        # vector score) is already in score space, so it is left untransformed.
+        normalize = self.rerank_config.normalize_scores if self.rerank_config else False
+
         normalized_scores: List[float] = []
         for score, fallback in zip(scores, fallback_scores, strict=True):
-            normalized_scores.append(self._finite_score(score, fallback))
+            finite = self._finite_score(score, math.nan)
+            if math.isnan(finite):
+                normalized_scores.append(fallback)
+            elif normalize:
+                normalized_scores.append(self._sigmoid(finite))
+            else:
+                normalized_scores.append(finite)
         return normalized_scores
 
     async def _recursive_search(
