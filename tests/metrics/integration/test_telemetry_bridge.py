@@ -73,6 +73,35 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
         shutdown_metrics(app=None)
 
 
+def test_telemetry_bridge_records_rerank_truncation_metrics(registry, render_prometheus):
+    init_metrics_from_server_config(
+        ServerConfig(observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))),
+        app=None,
+        registry=registry,
+    )
+    try:
+        TelemetryBridgeEventDataSource.record_summary(
+            {
+                "operation": "context.retrieve",
+                "status": "ok",
+                "duration_ms": 5,
+                "tokens": {"total": 0, "llm": {"input": 0, "output": 0}},
+                "rerank": {"docs_truncated": 3, "chars_trimmed": 128},
+            }
+        )
+        text = render_prometheus(registry)
+        assert (
+            'openviking_rerank_docs_truncated_total{operation="context.retrieve"} 3' in text
+            or 'openviking_rerank_docs_truncated_total{operation="context.retrieve"} 3.0' in text
+        )
+        assert (
+            'openviking_rerank_chars_trimmed_total{operation="context.retrieve"} 128' in text
+            or 'openviking_rerank_chars_trimmed_total{operation="context.retrieve"} 128.0' in text
+        )
+    finally:
+        shutdown_metrics(app=None)
+
+
 def test_telemetry_bridge_semantic_nodes_total_is_cumulative(registry, render_prometheus):
     init_metrics_from_server_config(
         ServerConfig(observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))),

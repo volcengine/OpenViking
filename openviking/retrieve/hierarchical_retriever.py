@@ -318,6 +318,27 @@ class HierarchicalRetriever:
             return score >= threshold
         return score > threshold
 
+    @staticmethod
+    def _record_truncation(documents: List[str], cap: int) -> None:
+        """Emit two counters (docs_truncated + chars_trimmed) when the char cap actually trims documents.
+
+        A too-tight ``max_chars_per_doc`` silently reshapes rerank input; without
+        this signal the operator has no way to see it firing in production.
+        Only emitted when at least one document is longer than the cap.
+        """
+        docs_truncated = 0
+        chars_trimmed = 0
+        for doc in documents:
+            length = len(doc)
+            if length > cap:
+                docs_truncated += 1
+                chars_trimmed += length - cap
+        if not docs_truncated:
+            return
+        telemetry = get_current_telemetry()
+        telemetry.count("rerank.docs_truncated", docs_truncated)
+        telemetry.count("rerank.chars_trimmed", chars_trimmed)
+
     def _rerank_scores(
         self,
         query: str,
@@ -333,7 +354,11 @@ class HierarchicalRetriever:
         # Model input only: scores scatter back onto the full result dict, so stored
         # and returned abstracts are untouched. cap=0 is byte-identical parity.
         cap = self.rerank_config.max_chars_per_doc if self.rerank_config else 0
-        model_inputs = [doc[:cap] for doc in documents] if cap > 0 else documents
+        if cap > 0:
+            model_inputs = [doc[:cap] for doc in documents]
+            self._record_truncation(documents, cap)
+        else:
+            model_inputs = documents
 
         try:
             scores = self._rerank_client.rerank_batch(query, model_inputs)

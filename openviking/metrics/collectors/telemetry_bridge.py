@@ -40,6 +40,7 @@ class TelemetryBridgeCollector(EventMetricCollector):
 
     DOMAIN_OPERATION: ClassVar[str] = "operation"
     DOMAIN_VECTOR: ClassVar[str] = "vector"
+    DOMAIN_RERANK: ClassVar[str] = "rerank"
     DOMAIN_SEMANTIC: ClassVar[str] = "semantic"
     DOMAIN_MEMORY: ClassVar[str] = "memory"
     DOMAIN_RESOURCE: ClassVar[str] = "resource"
@@ -84,6 +85,17 @@ class TelemetryBridgeCollector(EventMetricCollector):
     # e.g.: openviking_vector_scanned_total
     VECTOR_SCANNED_TOTAL: ClassVar[str] = MetricCollector.metric_name(
         DOMAIN_VECTOR, "scanned", unit="total"
+    )
+
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_RERANK>_docs_truncated_total
+    # e.g.: openviking_rerank_docs_truncated_total
+    RERANK_DOCS_TRUNCATED_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_RERANK, "docs_truncated", unit="total"
+    )
+    # rule: <METRICS_NAMESPACE>_<DOMAIN_RERANK>_chars_trimmed_total
+    # e.g.: openviking_rerank_chars_trimmed_total
+    RERANK_CHARS_TRIMMED_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN_RERANK, "chars_trimmed", unit="total"
     )
 
     # rule: <METRICS_NAMESPACE>_<DOMAIN_SEMANTIC>_nodes_total
@@ -229,6 +241,21 @@ class TelemetryBridgeCollector(EventMetricCollector):
             (self.VECTOR_SCANNED_TOTAL, "scanned"),
         ):
             value = int(vector.get(key, 0) or 0)
+            if value <= 0:
+                continue
+            registry.inc_counter(
+                metric_name,
+                labels={"operation": operation},
+                label_names=("operation",),
+                amount=value,
+            )
+
+        rerank = summary.get("rerank") or {}
+        for metric_name, key in (
+            (self.RERANK_DOCS_TRUNCATED_TOTAL, "docs_truncated"),
+            (self.RERANK_CHARS_TRIMMED_TOTAL, "chars_trimmed"),
+        ):
+            value = int(rerank.get(key, 0) or 0)
             if value <= 0:
                 continue
             registry.inc_counter(

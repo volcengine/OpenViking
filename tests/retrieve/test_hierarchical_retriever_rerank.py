@@ -735,3 +735,63 @@ def test_rerank_config_does_not_warn_when_cap_disabled(monkeypatch):
     RerankConfig(ak="ak", sk="sk", max_chars_per_doc=2000)
 
     assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# rerank truncation counter — observability for a too-tight cap
+# ---------------------------------------------------------------------------
+
+
+def _truncation_counters(monkeypatch, cap: int, documents: list[str]) -> dict:
+    from openviking.telemetry import OperationTelemetry, bind_telemetry
+
+    fake = FakeRerankClient([0.5] * len(documents))
+    retriever = _capped_retriever(monkeypatch, fake, cap)
+    collector = OperationTelemetry(operation="test", enabled=True)
+    with bind_telemetry(collector):
+        retriever._rerank_scores("q", documents, [0.0] * len(documents))
+    return dict(collector._counters)
+
+
+def test_truncation_counter_emitted_when_cap_trims(monkeypatch):
+    counters = _truncation_counters(monkeypatch, 4, ["abcdefgh", "xyz"])  # 8 -> 4, 3 unchanged
+
+    assert counters.get("rerank.docs_truncated") == 1
+    assert counters.get("rerank.chars_trimmed") == 4
+
+
+def test_truncation_counter_sums_across_docs(monkeypatch):
+    # "abcde" (5->2 = 3 trimmed), "fg" (2, unchanged), "hijklm" (6->2 = 4 trimmed)
+    counters = _truncation_counters(monkeypatch, 2, ["abcde", "fg", "hijklm"])
+
+    assert counters.get("rerank.docs_truncated") == 2
+    assert counters.get("rerank.chars_trimmed") == 7
+
+
+def test_truncation_counter_silent_when_nothing_trimmed(monkeypatch):
+    counters = _truncation_counters(monkeypatch, 100, ["abc", "defg"])
+
+    assert "rerank.docs_truncated" not in counters
+    assert "rerank.chars_trimmed" not in counters
+
+
+def test_truncation_counter_silent_when_cap_disabled(monkeypatch):
+    counters = _truncation_counters(monkeypatch, 0, ["a very long document indeed"])
+
+    assert "rerank.docs_truncated" not in counters
+    assert "rerank.chars_trimmed" not in counters
+
+
+def test_truncation_counter_reaches_telemetry_summary(monkeypatch):
+    # Closes the loop: retriever counter -> build() summary -> the section the
+    # Prometheus bridge reads (openviking_rerank_*_total).
+    from openviking.telemetry import OperationTelemetry, bind_telemetry
+
+    fake = FakeRerankClient([0.5, 0.5])
+    retriever = _capped_retriever(monkeypatch, fake, 4)
+    collector = OperationTelemetry(operation="context.retrieve", enabled=True)
+    with bind_telemetry(collector):
+        retriever._rerank_scores("q", ["abcdefgh", "xyz"], [0.0, 0.0])  # 8 -> 4, 3 unchanged
+
+    snapshot = collector.finish()
+    assert snapshot.summary["rerank"] == {"docs_truncated": 1, "chars_trimmed": 4}

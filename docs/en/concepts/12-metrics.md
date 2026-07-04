@@ -186,8 +186,12 @@ Typical `stage` values include:
 | `openviking_vector_passed_total` | Counter | `operation` | total passed candidates |
 | `openviking_vector_returned_total` | Counter | `operation` | total returned candidates |
 | `openviking_vector_scanned_total` | Counter | `operation` | total scanned candidates |
+| `openviking_rerank_docs_truncated_total` | Counter | `operation` | documents shortened by the `rerank.max_chars_per_doc` cap before reranking; emitted only when truncation actually occurs, so the series is **absent** (not `0`) while the cap is disabled or nothing exceeds it |
+| `openviking_rerank_chars_trimmed_total` | Counter | `operation` | total characters trimmed by the `rerank.max_chars_per_doc` cap; a persistently high value signals a too-tight cap. Emitted only when truncation occurs, so the series is **absent** (not `0`) otherwise |
 | `openviking_memory_extracted_total` | Counter | `operation` | total extracted memory items |
 | `openviking_semantic_nodes_total` | Counter | `status` | total semantic nodes |
+
+> **Note:** The rerank-truncation counters (`openviking_rerank_docs_truncated_total`, `openviking_rerank_chars_trimmed_total`) are only created once truncation fires. Until then the series does not exist, so PromQL queries and alerts must coalesce absence to zero rather than assume a `0` sample, e.g. `sum(increase(openviking_rerank_docs_truncated_total[5m])) or vector(0)`.
 
 ### Model Calls and Tokens
 

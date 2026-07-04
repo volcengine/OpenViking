@@ -227,6 +227,12 @@ class TelemetrySummaryBuilder:
                 "scan_reason": gauges.get("vector.scan_reason", ""),
             }
 
+        if cls._has_metric_prefix("rerank", counters, gauges):
+            summary["rerank"] = {
+                "docs_truncated": cls._i(counters.get("rerank.docs_truncated"), 0),
+                "chars_trimmed": cls._i(counters.get("rerank.chars_trimmed"), 0),
+            }
+
         if cls._has_metric_prefix("semantic_nodes", counters, gauges):
             summary["semantic_nodes"] = {
                 "total": gauges.get("semantic_nodes.total"),
@@ -313,6 +319,7 @@ class TelemetrySummaryBuilder:
             "tokens",
             "queue",
             "vector",
+            "rerank",
             "semantic_nodes",
             "memory",
             "resource",
