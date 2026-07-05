@@ -434,8 +434,6 @@ def _evaluation_feedback_message(evaluation: RubricEvaluation) -> Message:
         f"passed: {evaluation.passed}",
         f"score: {evaluation.score}",
     ]
-    if evaluation.feedback:
-        lines.extend(["", "feedback:", *[f"- {item}" for item in evaluation.feedback]])
     criterion_lines: list[str] = []
     evidence_lines: list[str] = []
     for criterion in evaluation.criterion_results:

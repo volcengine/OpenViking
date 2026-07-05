@@ -181,15 +181,79 @@ class CriterionResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, init=False)
 class RubricEvaluation:
-    """Structured evaluation of a rollout against a rubric."""
+    """Structured evaluation of a rollout against a rubric.
+
+    CriterionResult.feedback is the single stored source of natural-language
+    feedback.  ``feedback`` remains a read-only compatibility property derived
+    from criterion feedback so serializers/prompts do not need to carry the
+    same text at both evaluation and criterion levels.
+    """
 
     passed: bool
     score: float
     criterion_results: list[CriterionResult]
-    feedback: list[str]
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        *,
+        passed: bool,
+        score: float,
+        criterion_results: list[CriterionResult] | None = None,
+        metadata: dict[str, Any] | None = None,
+        feedback: list[str] | None = None,
+    ) -> None:
+        self.passed = passed
+        self.score = score
+        self.criterion_results = list(criterion_results or [])
+        self.metadata = dict(metadata or {})
+        if feedback:
+            _merge_feedback_into_criteria(
+                self.criterion_results,
+                feedback,
+                passed=passed,
+                score=score,
+            )
+
+    @property
+    def feedback(self) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for criterion in self.criterion_results:
+            for item in criterion.feedback:
+                text = str(item)
+                if text and text not in seen:
+                    seen.add(text)
+                    result.append(text)
+        return result
+
+
+def _merge_feedback_into_criteria(
+    criterion_results: list[CriterionResult],
+    feedback: list[str],
+    *,
+    passed: bool,
+    score: float,
+) -> None:
+    items = [str(item) for item in feedback if str(item)]
+    if not items:
+        return
+    if not criterion_results:
+        criterion_results.append(
+            CriterionResult(
+                criterion_name="overall",
+                passed=passed,
+                score=score,
+                feedback=[],
+                evidence=[],
+                metadata={"source": "rubric_evaluation_feedback"},
+            )
+        )
+    target = criterion_results[0]
+    existing = set(target.feedback)
+    target.feedback.extend(item for item in items if item not in existing)
 
 
 @dataclass(slots=True)

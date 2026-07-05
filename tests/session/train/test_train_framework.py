@@ -1976,3 +1976,43 @@ def test_tau2_service_filter_parses_task_indices():
         _task_indices_from_filters({"task_indices": 2})
     with pytest.raises(ValueError, match="task index must be >= 0"):
         _task_indices_from_filters({"task_indices": [-1]})
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_filters_legacy_embedded_evaluation_message():
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[
+            Message(id="m1", role="user", parts=[TextPart(text="hello")]),
+            Message(
+                id="tau2-reward",
+                role="user",
+                parts=[
+                    TextPart(
+                        text='task_success: False\ntask_reward: 0.0\nevaluation report: {"reward": 0.0}'
+                    )
+                ],
+            ),
+        ],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=False, score=0.0, criterion_results=[], feedback=[]),
+        metadata={"data_split": "unit", "task_no": 7},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    committed_messages = client.messages[commit_result["session_id"]]
+    visible_text = "\n".join(
+        part.get("text", "") for message in committed_messages for part in message.get("parts", [])
+    )
+    assert "evaluation report:" not in visible_text
+    assert visible_text.count("# OpenViking OutcomeEvaluation") == 1

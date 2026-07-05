@@ -1125,3 +1125,31 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     assert any(link["from_uri"] == case_uri for link in traj_file.backlinks)
     exp_file = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri)
     assert any(link["from_uri"] == case_uri for link in exp_file.backlinks)
+
+
+def test_training_messages_after_case_spec_filters_legacy_embedded_evaluation_message():
+    from openviking.session.compressor_v3 import _training_messages_after_case_spec
+
+    case_spec = _case_spec_message()
+    rollout_messages = _messages()
+    legacy_eval = Message(
+        id="tau2-reward",
+        role="user",
+        parts=[
+            TextPart(
+                text='task_success: False\ntask_reward: 0.0\nevaluation report: {"reward": 0.0}'
+            )
+        ],
+    )
+    outcome_eval = Message(
+        id="outcome",
+        role="user",
+        parts=[TextPart(text="# OpenViking OutcomeEvaluation")],
+    )
+
+    assert _training_messages_after_case_spec(
+        [case_spec, *rollout_messages, legacy_eval, outcome_eval]
+    ) == [
+        *rollout_messages,
+        outcome_eval,
+    ]

@@ -84,8 +84,7 @@ class SessionCommitPolicyTrainer:
             label="train_start",
             enabled=self.show_progress,
             description=(
-                f"Processing {len(rollout_list)} rollouts, "
-                f"concurrency={self.commit_concurrency}"
+                f"Processing {len(rollout_list)} rollouts, concurrency={self.commit_concurrency}"
             ),
             concurrency=self.commit_concurrency,
         )
@@ -128,7 +127,11 @@ class SessionCommitPolicyTrainer:
         try:
             messages = (
                 [_case_spec_message_to_request(rollout)]
-                + [_message_to_request(message) for message in rollout.messages]
+                + [
+                    _message_to_request(message)
+                    for message in rollout.messages
+                    if not _is_embedded_rollout_evaluation_message(message)
+                ]
                 + [_evaluation_message_to_request(rollout)]
             )
             stage = "create_session"
@@ -231,7 +234,6 @@ class SessionCommitPolicyTrainer:
                 "score": _rollout_score(rollout),
                 "error": str(exc),
             }
-
 
     async def _record_event(
         self,
@@ -369,6 +371,7 @@ def _rollout_score(rollout: Rollout) -> float:
     if rollout.evaluation is None:
         return 0.0
     return float(rollout.evaluation.score)
+
 
 def _task_error(task: dict[str, Any] | None) -> str | None:
     if task is None:
@@ -522,7 +525,6 @@ def _evaluation_payload(evaluation: RubricEvaluation | None) -> dict[str, Any] |
     return {
         "passed": evaluation.passed,
         "score": evaluation.score,
-        "feedback": evaluation.feedback,
         "criterion_results": [
             {
                 "criterion_name": result.criterion_name,
@@ -536,6 +538,34 @@ def _evaluation_payload(evaluation: RubricEvaluation | None) -> dict[str, Any] |
         ],
         "metadata": evaluation.metadata,
     }
+
+
+def _is_embedded_rollout_evaluation_message(message: Any) -> bool:
+    """Return True for legacy rollout messages that duplicated OutcomeEvaluation.
+
+    Older tau2 rollout artifacts appended a user text message containing
+    task_success/task_reward plus a raw evaluation report.  Commit-time
+    OutcomeEvaluation is the canonical training signal, so these embedded
+    evaluation messages are filtered when replaying old cached rollouts.
+    """
+    text = _message_text(message)
+    return "task_success:" in text and "task_reward:" in text and "evaluation report:" in text
+
+
+def _message_text(message: Any) -> str:
+    content = getattr(message, "content", "")
+    if content:
+        return str(content)
+    texts: list[str] = []
+    for part in getattr(message, "parts", []) or []:
+        text = getattr(part, "text", None)
+        if text:
+            texts.append(str(text))
+        elif isinstance(part, dict):
+            raw_text = part.get("text")
+            if raw_text:
+                texts.append(str(raw_text))
+    return "\n".join(texts)
 
 
 def _message_to_request(message: Any) -> dict[str, Any]:

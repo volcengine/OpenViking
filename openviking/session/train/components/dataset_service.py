@@ -698,6 +698,5 @@ def evaluation_to_dict(evaluation: RubricEvaluation | None) -> dict[str, Any] | 
             }
             for result in evaluation.criterion_results
         ],
-        "feedback": evaluation.feedback,
         "metadata": jsonable(evaluation.metadata),
     }

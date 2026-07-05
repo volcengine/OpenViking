@@ -841,9 +841,7 @@ class SessionCompressorV3:
             deletes=deletes,
             gate_rejections=_gate_rejections_from_training_result(training_result),
             gate_summary=_gate_summary_from_training_result(training_result),
-            post_validation_retries=_post_validation_retries_from_training_result(
-                training_result
-            ),
+            post_validation_retries=_post_validation_retries_from_training_result(training_result),
         )
 
     async def _link_case_to_training_outputs(
@@ -963,8 +961,19 @@ def _message_text(message: Message) -> str:
 
 
 def _training_messages_after_case_spec(messages: list[Message]) -> list[Message]:
-    """Return commit messages after CaseSpec."""
-    return list(messages[1:])
+    """Return rollout/evaluation messages after CaseSpec.
+
+    Filter legacy tau2 embedded evaluation text messages so the fast path uses
+    the canonical OpenViking OutcomeEvaluation message only once.
+    """
+    return [
+        message for message in messages[1:] if not _is_embedded_rollout_evaluation_message(message)
+    ]
+
+
+def _is_embedded_rollout_evaluation_message(message: Message) -> bool:
+    text = _message_text(message)
+    return "task_success:" in text and "task_reward:" in text and "evaluation report:" in text
 
 
 def _parse_training_case_spec_payload(text: str) -> dict[str, Any]:
@@ -1710,11 +1719,7 @@ def _merge_memory_diffs(
             [item for item in diff.get("gate_rejections", []) if isinstance(item, dict)]
         )
         post_validation_retries.extend(
-            [
-                item
-                for item in diff.get("post_validation_retries", [])
-                if isinstance(item, dict)
-            ]
+            [item for item in diff.get("post_validation_retries", []) if isinstance(item, dict)]
         )
         _merge_gate_summary(gate_summary, diff.get("gate_summary"))
     merged = _make_memory_diff(
@@ -1728,7 +1733,6 @@ def _merge_memory_diffs(
     )
     merged["trace_id"] = trace_id
     return merged
-
 
 
 def _training_gate_reports(training_result: RolloutTrainingResult) -> list[dict[str, Any]]:
@@ -1798,6 +1802,7 @@ def _merge_gate_summary(target: dict[str, Any], source: Any) -> None:
         )
         for key in ("evaluated", "allowed", "rejected", "warnings"):
             bucket[key] += int(values.get(key) or 0)
+
 
 def _gate_rejections_from_training_result(
     training_result: RolloutTrainingResult,

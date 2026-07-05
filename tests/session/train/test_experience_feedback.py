@@ -94,20 +94,17 @@ async def test_record_experience_feedback_stats_updates_hidden_metadata():
     assert stats["positive_count"] == 0
     assert stats["weak_count"] == 0
     assert stats["neutral_count"] == 0
-    assert stats["negative_rate"] == 1.0
-    assert stats["recent_observations"] == [
-        {
-            "trajectory_uri": traj_uri,
-            "effect": "negative",
-            "outcome": "failure",
-            "observed_at": "2026-07-06T00:00:00+00:00",
-            "case_name": "case_1",
-            "alias_ids": ["E1"],
-        }
-    ]
+    assert set(stats) == {
+        "schema_version",
+        "injected_count",
+        "positive_count",
+        "negative_count",
+        "weak_count",
+        "neutral_count",
+    }
 
 
-async def test_record_experience_feedback_stats_is_idempotent_by_trajectory_uri():
+async def test_record_experience_feedback_stats_stores_aggregate_counts_only():
     exp_uri = "viking://user/u/memories/experiences/payment_guard.md"
     traj_uri = "viking://user/u/memories/trajectories/t1.md"
     fs = FakeVikingFS({exp_uri: _experience_file(exp_uri)})
@@ -128,17 +125,13 @@ async def test_record_experience_feedback_stats_is_idempotent_by_trajectory_uri(
         ctx=None,
         observed_at="2026-07-06T00:00:00+00:00",
     )
-    second = await record_experience_feedback_stats(
-        trajectories=[trajectory],
-        injected_reminders=[reminder],
-        viking_fs=fs,
-        ctx=None,
-        observed_at="2026-07-06T00:01:00+00:00",
-    )
-
     assert first.updated_uris == [exp_uri]
-    assert second.updated_uris == []
-    assert second.skipped_uris == [exp_uri]
     stats = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri).extra_fields["feedback_stats"]
-    assert stats["injected_count"] == 1
-    assert stats["positive_count"] == 1
+    assert stats == {
+        "schema_version": 1,
+        "injected_count": 1,
+        "positive_count": 1,
+        "negative_count": 0,
+        "weak_count": 0,
+        "neutral_count": 0,
+    }

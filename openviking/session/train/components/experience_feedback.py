@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any
 
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -17,7 +16,6 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 _FEEDBACK_STATS_SCHEMA_VERSION = 1
-_MAX_RECENT_OBSERVATIONS = 50
 _EFFECT_KEYS = ("positive", "negative", "weak", "neutral")
 _EFFECT_RANK = {"neutral": 0, "weak": 1, "positive": 2, "negative": 3}
 
@@ -51,11 +49,10 @@ async def record_experience_feedback_stats(
     if not trajectories or not injected_reminders or viking_fs is None:
         return result
 
-    observed_at = observed_at or datetime.now(timezone.utc).isoformat()
+    del observed_at  # Kept for API compatibility; stats store aggregate counts only.
     observations = _collect_observations(
         trajectories=trajectories,
         injected_reminders=injected_reminders,
-        observed_at=observed_at,
     )
     if not observations:
         return result
@@ -94,7 +91,6 @@ def _collect_observations(
     *,
     trajectories: list[Trajectory],
     injected_reminders: list[dict[str, str]],
-    observed_at: str,
 ) -> dict[str, list[dict[str, Any]]]:
     alias_to_reminder = {
         str(item.get("id") or "").strip(): item
@@ -104,7 +100,11 @@ def _collect_observations(
     if not alias_to_reminder:
         return {}
 
-    by_uri_and_trajectory: dict[tuple[str, str], dict[str, Any]] = {}
+    # Count at most once per (experience URI, trajectory URI). If the same
+    # experience appears under multiple aliases in one trajectory, keep the
+    # most safety-critical effect for that trajectory, but do not persist any
+    # per-trajectory details in feedback_stats.
+    by_uri_and_trajectory: dict[tuple[str, str], str] = {}
     for trajectory in trajectories or []:
         effects = parse_experience_effects(
             (getattr(trajectory, "metadata", {}) or {}).get("experience_effects")
@@ -112,37 +112,19 @@ def _collect_observations(
         if effects is None:
             continue
         trajectory_uri = str(getattr(trajectory, "uri", "") or "")
-        outcome = str(getattr(trajectory, "outcome", "") or "unknown")
-        metadata = dict(getattr(trajectory, "metadata", {}) or {})
-        case_name = str(metadata.get("case_name") or "")
         for alias, reminder in alias_to_reminder.items():
             uri = str(reminder.get("experience_uri") or "").strip()
             if not uri:
                 continue
             effect = _effect_for_alias(alias, effects)
             key = (uri, trajectory_uri)
-            candidate = {
-                "trajectory_uri": trajectory_uri,
-                "effect": effect,
-                "outcome": outcome,
-                "case_name": case_name,
-                "observed_at": observed_at,
-                "alias_ids": [alias],
-            }
             existing = by_uri_and_trajectory.get(key)
-            if existing is None:
-                by_uri_and_trajectory[key] = candidate
-                continue
-            existing_aliases = list(existing.get("alias_ids") or [])
-            if alias not in existing_aliases:
-                existing_aliases.append(alias)
-            existing["alias_ids"] = existing_aliases
-            if _EFFECT_RANK[effect] > _EFFECT_RANK[str(existing.get("effect") or "neutral")]:
-                existing["effect"] = effect
+            if existing is None or _EFFECT_RANK[effect] > _EFFECT_RANK[existing]:
+                by_uri_and_trajectory[key] = effect
 
     observations: dict[str, list[dict[str, Any]]] = {}
-    for (uri, _trajectory_uri), observation in by_uri_and_trajectory.items():
-        observations.setdefault(uri, []).append(observation)
+    for (uri, _trajectory_uri), effect in by_uri_and_trajectory.items():
+        observations.setdefault(uri, []).append({"effect": effect})
     return observations
 
 
@@ -190,72 +172,24 @@ def _merge_feedback_stats(
     observations: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], bool]:
     stats = _normalize_feedback_stats(existing)
-    recent = list(stats.get("recent_observations") or [])
-    seen_trajectory_uris = {
-        str(item.get("trajectory_uri") or "")
-        for item in recent
-        if isinstance(item, dict) and str(item.get("trajectory_uri") or "")
-    }
-
     changed = False
     for observation in observations:
-        trajectory_uri = str(observation.get("trajectory_uri") or "")
-        if trajectory_uri and trajectory_uri in seen_trajectory_uris:
-            continue
         effect = str(observation.get("effect") or "neutral")
         if effect not in _EFFECT_KEYS:
             effect = "neutral"
         stats["injected_count"] += 1
         stats[f"{effect}_count"] += 1
-        compact = _compact_observation(observation, effect=effect)
-        recent.append(compact)
-        if trajectory_uri:
-            seen_trajectory_uris.add(trajectory_uri)
-        stats["last_effect"] = effect
-        stats["last_trajectory_uri"] = trajectory_uri
-        stats["last_observed_at"] = compact.get("observed_at") or ""
         changed = True
 
-    if not changed:
-        return stats, False
-
-    stats["recent_observations"] = recent[-_MAX_RECENT_OBSERVATIONS:]
-    _refresh_rates(stats)
-    return stats, True
+    return stats, changed
 
 
 def _normalize_feedback_stats(existing: Any) -> dict[str, Any]:
-    stats = dict(existing) if isinstance(existing, dict) else {}
-    stats["schema_version"] = _FEEDBACK_STATS_SCHEMA_VERSION
+    source = existing if isinstance(existing, dict) else {}
+    stats = {"schema_version": _FEEDBACK_STATS_SCHEMA_VERSION}
     for key in ("injected_count", *[f"{effect}_count" for effect in _EFFECT_KEYS]):
-        stats[key] = _safe_nonnegative_int(stats.get(key))
-    recent = stats.get("recent_observations")
-    stats["recent_observations"] = recent if isinstance(recent, list) else []
-    _refresh_rates(stats)
+        stats[key] = _safe_nonnegative_int(source.get(key))
     return stats
-
-
-def _compact_observation(observation: dict[str, Any], *, effect: str) -> dict[str, Any]:
-    result = {
-        "trajectory_uri": str(observation.get("trajectory_uri") or ""),
-        "effect": effect,
-        "outcome": str(observation.get("outcome") or "unknown"),
-        "observed_at": str(observation.get("observed_at") or ""),
-    }
-    case_name = str(observation.get("case_name") or "")
-    if case_name:
-        result["case_name"] = case_name
-    alias_ids = [str(item) for item in observation.get("alias_ids") or [] if str(item)]
-    if alias_ids:
-        result["alias_ids"] = alias_ids
-    return result
-
-
-def _refresh_rates(stats: dict[str, Any]) -> None:
-    injected = max(0, _safe_nonnegative_int(stats.get("injected_count")))
-    for effect in ("positive", "negative", "weak"):
-        count = _safe_nonnegative_int(stats.get(f"{effect}_count"))
-        stats[f"{effect}_rate"] = round(count / injected, 4) if injected else 0.0
 
 
 def _safe_nonnegative_int(value: Any) -> int:

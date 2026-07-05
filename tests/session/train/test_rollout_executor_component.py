@@ -278,12 +278,18 @@ def test_tau2_rollout_messages_omit_empty_final_after_done():
                     }
                 ],
             },
-            {"role": "tool", "tool_call_id": "call-1", "name": "done", "content": "Task Terminated"},
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "name": "done",
+                "content": "Task Terminated",
+            },
         ],
     )
 
-    assert "tau2-final" not in {message.id for message in rollout_messages}
-    assert rollout_messages[-1].id == "tau2-reward"
+    ids = {message.id for message in rollout_messages}
+    assert "tau2-final" not in ids
+    assert "tau2-reward" not in ids
 
 
 def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
@@ -314,11 +320,10 @@ def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
     )
     evaluation = _tau2_evaluation(reward=1.0, evaluation_result=reward_info)
 
-    reward_message = rollout_messages[-1].content
-    assert "'reward': 1.0" not in reward_message
-    assert '"reward": 1.0' in reward_message
-    assert '"reward_basis": ["DB"]' in evaluation.feedback[0]
-    json.dumps(evaluation.metadata, sort_keys=True)
+    assert not any(message.id == "tau2-reward" for message in rollout_messages)
+    assert not any("evaluation report:" in message.content for message in rollout_messages)
+    assert evaluation.feedback == []
+    assert '"reward_basis": ["DB"]' in json.dumps(evaluation.metadata, sort_keys=True)
 
 
 def test_tau2_litellm_generate_rate_limit_retry_patch(monkeypatch):
@@ -755,7 +760,17 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(monkeypatc
     async def fake_run_agent(**kwargs):
         calls.append(("run_agent", threading.get_ident()))
         calls.append(("case_lookup", kwargs.get("case_lookup")))
-        return "final", None, [], {}, 1, None, None, None, [{"role": "user", "content": "user query"}, {"role": "assistant", "content": "final"}]
+        return (
+            "final",
+            None,
+            [],
+            {},
+            1,
+            None,
+            None,
+            None,
+            [{"role": "user", "content": "user query"}, {"role": "assistant", "content": "final"}],
+        )
 
     monkeypatch.setattr(module, "_tool_provider_cls", lambda: FakeTau2BenchToolProvider)
     monkeypatch.setattr(module, "_build_agent", lambda *args, **kwargs: FakeAgent())
@@ -1160,10 +1175,7 @@ def test_tau2_rollout_messages_preserve_runtime_user_constraint_reminder():
         for part in message.parts
     )
     tool_parts = [
-        part
-        for message in rollout_messages
-        for part in message.parts
-        if isinstance(part, ToolPart)
+        part for message in rollout_messages for part in message.parts if isinstance(part, ToolPart)
     ]
     assert tool_parts[0].tool_name == "get_reservation_details"
     assert tool_parts[0].tool_input == {"reservation_id": "XEHM4B"}

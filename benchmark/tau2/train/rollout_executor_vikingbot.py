@@ -794,7 +794,6 @@ def _tau2_case_lookup(case: Case) -> dict[str, Any]:
     }
 
 
-
 def _append_final_answer_for_tau2_evaluation(provider_env: Any, final_content: str | None) -> None:
     if not final_content or not str(final_content).strip():
         return
@@ -1533,7 +1532,9 @@ def _build_rollout_messages(
 ) -> list[Message]:
     del system_prompt, user_prompt, tools_used, experience_reminder
     if not runtime_messages:
-        raise ValueError("runtime_messages are required; tau2 artifacts must use AgentLoop messages")
+        raise ValueError(
+            "runtime_messages are required; tau2 artifacts must use AgentLoop messages"
+        )
     return _build_rollout_messages_from_runtime(
         runtime_messages,
         final_content=final_content,
@@ -1584,23 +1585,14 @@ def _build_rollout_messages_from_runtime(
 
     if final_content and str(final_content).strip():
         final_text = str(final_content)
-        if not any(message.role == "assistant" and message.content == final_text for message in messages):
+        if not any(
+            message.role == "assistant" and message.content == final_text for message in messages
+        ):
             messages.append(
                 _message("tau2-final", "assistant", final_text, created_at=artifact_created_at)
             )
 
-    reward_jsonable = _to_jsonable(reward)
-    evaluation_jsonable = _to_jsonable(evaluation_result)
-    success = reward_jsonable == 1 or reward_jsonable == 1.0
-    messages.append(
-        _message(
-            "tau2-reward",
-            "user",
-            f"task_success: {success}\ntask_reward: {reward_jsonable}\n"
-            f"evaluation report: {_stringify(evaluation_jsonable)}",
-            created_at=artifact_created_at,
-        )
-    )
+    del reward, evaluation_result
     return messages
 
 

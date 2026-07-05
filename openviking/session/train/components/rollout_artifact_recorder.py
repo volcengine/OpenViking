@@ -866,12 +866,14 @@ def _build_commit_messages(rollout: Rollout) -> list[dict[str, Any]]:
     from openviking.session.train.components.session_commit import (
         _case_spec_message_to_request,
         _evaluation_message_to_request,
+        _is_embedded_rollout_evaluation_message,
         _message_to_request,
     )
 
     messages: list[dict[str, Any]] = [_case_spec_message_to_request(rollout)]
     for msg in rollout.messages:
-        messages.append(_message_to_request(msg))
+        if not _is_embedded_rollout_evaluation_message(msg):
+            messages.append(_message_to_request(msg))
     messages.append(_evaluation_message_to_request(rollout))
     return messages
 

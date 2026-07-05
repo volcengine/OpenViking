@@ -16,7 +16,6 @@ from benchmark.tau2.train._rollout_helpers import (
     _is_communicate_with_user,
     _message,
     _metadata_message,
-    _stringify,
     _to_jsonable,
 )
 from benchmark.tau2.train._rollout_helpers import (
@@ -460,9 +459,7 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                     uri = getattr(match, "uri", "")
                     text, read_error = _read_memory_text(client, match)
                     clean_text = text.strip()
-                    block_text = (
-                        f"Memory {index} ({uri}):\n{clean_text}" if clean_text else ""
-                    )
+                    block_text = f"Memory {index} ({uri}):\n{clean_text}" if clean_text else ""
                     block_chars = len(block_text)
                     budget_used_before = injected_chars_used
                     budget_dropped = False
@@ -595,9 +592,7 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                     # so it becomes part of the conversation history (visible in messages.json)
                     reminder_prefix = (
                         "[Experience Reminder]\n"
-                        "## Relevant Agent Experience\n\n"
-                        + block
-                        + "\n\n---\n\n"
+                        "## Relevant Agent Experience\n\n" + block + "\n\n---\n\n"
                     )
                     message.content = reminder_prefix + str(message.content or "")
                     self._openviking_memory_contexts.append(block)
@@ -626,14 +621,11 @@ def _register_native_memory_agent(executor: NativeTau2RolloutExecutor) -> str:
                         self._openviking_memory_contexts.append(block)
                         reminder_content = (
                             "[Experience Reminder]\n"
-                            "## Relevant Agent Experience (before write action)\n\n"
-                            + block
+                            "## Relevant Agent Experience (before write action)\n\n" + block
                         )
                         # Inject as a user message so it's part of the conversation history
                         state.messages.append(UserMessage(role="user", content=reminder_content))
-                        assistant_message = self._generate(
-                            state.system_messages + state.messages
-                        )
+                        assistant_message = self._generate(state.system_messages + state.messages)
             contexts = list(getattr(self, "_openviking_memory_contexts", []) or [])
             if contexts:
                 raw_data = dict(getattr(assistant_message, "raw_data", None) or {})
@@ -783,17 +775,7 @@ def _build_rollout_messages_from_simulation(
                 ],
             )
         )
-    reward_jsonable = _to_jsonable(reward)
-    evaluation_jsonable = _to_jsonable(evaluation_result)
-    success = reward_jsonable == 1 or reward_jsonable == 1.0
-    messages.append(
-        _message(
-            "tau2-reward",
-            "user",
-            f"task_success: {success}\ntask_reward: {reward_jsonable}\n"
-            f"evaluation report: {_stringify(evaluation_jsonable)}",
-        )
-    )
+    del reward, evaluation_result
     return messages
 
 

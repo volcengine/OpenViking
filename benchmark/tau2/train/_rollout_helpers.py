@@ -61,8 +61,6 @@ def _tau2_evaluation(*, reward: Any, evaluation_result: Any, source: str = "tau2
     passed = score >= 1.0
     feedback = [] if passed else ["tau2 environment reward is below 1.0."]
     evaluation_jsonable = _to_jsonable(evaluation_result)
-    if evaluation_jsonable is not None:
-        feedback.append(_stringify(evaluation_jsonable))
     return RubricEvaluation(
         passed=passed,
         score=score,
@@ -72,11 +70,10 @@ def _tau2_evaluation(*, reward: Any, evaluation_result: Any, source: str = "tau2
                 passed=passed,
                 score=score,
                 feedback=feedback,
-                evidence=[_stringify(evaluation_jsonable)] if evaluation_jsonable is not None else [],
+                evidence=[],
                 metadata={"reward": score},
             )
         ],
-        feedback=feedback,
         metadata={
             "source": source,
             "reward": score,
