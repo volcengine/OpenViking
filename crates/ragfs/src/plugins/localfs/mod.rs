@@ -527,11 +527,14 @@ impl LocalFileSystem {
     }
     fn local_to_query_relative_path(query_root: &Path, local: &Path) -> Option<String> {
         let rel = local.strip_prefix(query_root).ok()?;
-        let s = rel.to_string_lossy();
-        if s.is_empty() {
+        let parts = rel
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>();
+        if parts.is_empty() {
             Some(".".to_string())
         } else {
-            Some(s.to_string())
+            Some(parts.join("/"))
         }
     }
 
@@ -1452,6 +1455,17 @@ mod tests {
             vec!["folder"]
         );
         assert!(out.entries[0].is_dir);
+    }
+
+    #[test]
+    fn test_localfs_relative_path_uses_forward_slashes() {
+        let root = Path::new("root");
+        let local = root.join("a").join("b.md");
+
+        assert_eq!(
+            LocalFileSystem::local_to_query_relative_path(root, &local).unwrap(),
+            "a/b.md"
+        );
     }
 
     #[tokio::test]

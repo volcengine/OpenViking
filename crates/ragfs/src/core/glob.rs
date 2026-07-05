@@ -18,11 +18,19 @@ impl PreparedGlob {
     pub fn new(pattern: &str) -> Result<Self> {
         validate_pattern(pattern)?;
         let normalized = normalize_rel_path(pattern);
-        let matcher = GlobBuilder::new(&normalized)
-            .literal_separator(true)
-            .build()
-            .ok()
-            .map(|glob| glob.compile_matcher());
+        let matcher = if normalized.is_empty() {
+            None
+        } else {
+            Some(
+                GlobBuilder::new(&normalized)
+                    .literal_separator(true)
+                    .build()
+                    .map_err(|err| {
+                        Error::invalid_operation(format!("invalid glob pattern: {err}"))
+                    })?
+                    .compile_matcher(),
+            )
+        };
         Ok(Self { matcher })
     }
 
@@ -183,10 +191,10 @@ mod tests {
     }
 
     #[test]
-    fn test_standard_glob_match_invalid_segment_returns_false() {
-        assert!(!standard_glob_match("foo", "[").unwrap());
-        assert!(!standard_glob_match("foo", "foo[bar").unwrap());
-        assert!(!standard_glob_match("foo", "[]").unwrap());
+    fn test_standard_glob_match_invalid_segment_is_rejected() {
+        assert!(standard_glob_match("foo", "[").is_err());
+        assert!(standard_glob_match("foo", "foo[bar").is_err());
+        assert!(standard_glob_match("foo", "[]").is_err());
     }
 
     #[test]
@@ -204,7 +212,6 @@ mod tests {
             ("foo", "**/foo"),
             ("foo/bar/baz", "foo/**"),
             ("a", "/"),
-            ("foo", "["),
         ];
 
         for (path, pattern) in cases {
