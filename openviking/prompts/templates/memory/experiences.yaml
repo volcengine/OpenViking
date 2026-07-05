@@ -32,6 +32,9 @@ fields:
   - name: content
     type: string
     description: |
+      Natural-language content must be written in {{ language }}. Keep fixed section headings,
+      tool names, schema fields, Python identifiers, and quoted runtime values unchanged.
+
       Natural-language failure-repair reminder in EXACTLY this 3-section format. This output may be injected directly into an autonomous agent's context immediately before a matching tool call, so it MUST be written as strict, executable machine instructions. It is NOT a full business workflow or a success-path SOP; it is only the minimal repair needed to prevent or recover from the observed failure.
 
       ## Failure Pattern
@@ -107,6 +110,14 @@ fields:
         covers search + update, cancel + communicate, or booking + baggage update.
       - ALWAYS start with candidate_tool filtering as the base gate. Return False immediately
         when the candidate tool is not one of the tools where this repair can matter.
+      - FAILURE-SPECIFIC CONDITION REQUIRED: Do not stop at tool binding, argument existence,
+        broad object type, or generic task shape. After the tool gate, require a condition that
+        describes the observed risky failure shape (wrong/missing field, inconsistent object,
+        impossible amount, unconfirmed target, missing required content, or disqualifying policy fact).
+      - BROAD TRIGGER FORMS ARE NOT ENOUGH: These are too broad when used as the final return
+        condition: `"reservation_id" in args`, `args.get("flight_type") == "round_trip"`,
+        `len(payment_methods) > 1`, `"payment_id" in args`, or keyword-only history scans. You may
+        use them as early filters only if a later condition checks the failure-specific risk.
       - CAUSAL BOUNDARY: Trigger only at the exact tool/communication boundary where this repair can
         prevent the first materially reward-changing mistake, normally the trajectory's
         `First Wrong Tool Call.Tool`. Do not trigger merely because the broader conversation
@@ -125,6 +136,21 @@ fields:
         shape from `First Wrong Tool Call`, not the broad business workflow. After the tool gate
         passes, require the candidate args/content to show the risky shape; use message history
         only as supporting evidence.
+      - FAILURE-KIND TEMPLATES:
+        - wrong_arguments: inspect the decisive candidate arg field and trigger only when it is
+          missing, malformed, inconsistent, out of range, uses the wrong schema field, or conflicts
+          with another candidate arg.
+        - wrong_object: inspect the candidate object id and require evidence that it differs from
+          the user-confirmed or runtime-selected object; if that evidence is unavailable, return False.
+        - wrong_policy_branch: inspect the candidate args/content for the risky branch and require
+          a visible disqualifying fact from messages/tool results; do not trigger on the whole policy
+          domain.
+        - missing_confirmation_before_tool: inspect the candidate write object/amount/shape and
+          require absence of matching user confirmation evidence; if confirmation state cannot be
+          checked, return False.
+        - missing_communication: inspect only the candidate message content and trigger when this
+          message is the risky/final/policy communication and lacks the required fact, amount, id,
+          denial, or next step.
       - Add negative gates for nearby non-applicable intents, already-confirmed alternate branches,
         incompatible object lifecycle/cardinality, or candidate tool args that would make this
         repair irrelevant. Return False for those cases.
@@ -148,6 +174,13 @@ fields:
       - Do NOT import modules, call external APIs, read files, mutate global state, or use
         eval/exec/open/print.
 
+      Bad too-broad trigger (do not output this):
+      def should_trigger(ctx):
+          if ctx.get("candidate_tool") != "cancel_reservation":
+              return False
+          args = ctx.get("candidate_tool_args", {})
+          return "reservation_id" in args
+
       Good candidate-args trigger:
       def should_trigger(ctx):
           if ctx.get("candidate_tool") != "book_reservation":
@@ -155,6 +188,15 @@ fields:
           args = ctx.get("candidate_tool_args", {})
           payment_methods = args.get("payment_methods", [])
           return any("id" in item and "payment_id" not in item for item in payment_methods)
+
+      Good consistency trigger:
+      def should_trigger(ctx):
+          if ctx.get("candidate_tool") != "book_reservation":
+              return False
+          args = ctx.get("candidate_tool_args", {})
+          methods = args.get("payment_methods", [])
+          amounts = [m.get("amount") for m in methods if isinstance(m, dict)]
+          return len(methods) > 1 and any(not isinstance(amount, (int, float)) or amount <= 0 for amount in amounts)
 
       Good communication trigger:
       def should_trigger(ctx):

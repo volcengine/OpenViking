@@ -63,6 +63,9 @@ fields:
   - name: content
     type: string
     description: |
+      Natural-language content must be written in {{ language }}. Keep fixed section labels,
+      tool names, schema fields, trace step IDs, Python/DSL identifiers, and quoted runtime values unchanged.
+
       Write an execution-audit record in EXACTLY this format and label order:
 
       # <trajectory_name>
