@@ -269,6 +269,46 @@ async def test_patch_merge_context_provider_hides_last_update_trace_id_from_patc
 
 
 @pytest.mark.asyncio
+async def test_patch_merge_context_provider_hides_feedback_stats_from_patch_diff():
+    provider = PatchMergeContextProvider(
+        memory_type="experiences",
+        required_file_uris=[],
+        patches=[
+            PatchMergePatch(
+                before_file=MemoryFile(
+                    uri="viking://user/u/memories/experiences/booking.md",
+                    content="same content",
+                    memory_type="experiences",
+                    extra_fields={
+                        "memory_type": "experiences",
+                        "experience_name": "booking",
+                        "feedback_stats": {"injected_count": 3, "negative_count": 1},
+                    },
+                ),
+                after_file=MemoryFile(
+                    uri="viking://user/u/memories/experiences/booking.md",
+                    content="same content",
+                    memory_type="experiences",
+                    extra_fields={
+                        "memory_type": "experiences",
+                        "experience_name": "booking",
+                        "feedback_stats": {"injected_count": 4, "negative_count": 2},
+                    },
+                ),
+            )
+        ],
+    )
+
+    messages = await provider.prefetch()
+    content = messages[0]["content"]
+
+    assert "feedback_stats" not in content
+    assert "injected_count" not in content
+    assert "negative_count" not in content
+    assert "(no changes)" in content
+
+
+@pytest.mark.asyncio
 async def test_patch_merge_context_provider_renders_create_patch_from_dev_null():
     provider = PatchMergeContextProvider(
         memory_type="experiences",

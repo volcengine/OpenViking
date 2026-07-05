@@ -9,6 +9,8 @@ co-extract reusable executable skills in the same ReAct pass.
 
 from __future__ import annotations
 
+import re
+from html import unescape
 from typing import Any, Dict, List
 
 from openviking.server.identity import RequestContext
@@ -24,6 +26,16 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 TRAJECTORY_MEMORY_TYPE = "trajectories"
+
+_EXPERIENCE_REMINDER_RE = re.compile(
+    r"<experience_reminder\b[^>]*>(?P<body>.*?)</experience_reminder>",
+    re.IGNORECASE | re.DOTALL,
+)
+_EXPERIENCE_FIELD_RE = re.compile(
+    r"<(?P<name>experience_name|experience_uri|triggered_before_tool)>\s*"
+    r"(?P<value>.*?)\s*</(?P=name)>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class AgentTrajectoryContextProvider(SessionExtractContextProvider):
@@ -55,6 +67,7 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
         self._include_trajectories = include_trajectories
         self._include_session_skills = include_session_skills
         self._skill_provider = SessionSkillContextProvider(*args, **kwargs)
+        self._injected_experience_reminders = extract_injected_experience_reminders(self.messages)
         self._sync_skill_provider_state()
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -107,6 +120,14 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
         self._sync_skill_provider_state()
         return await self._skill_provider.prefetch()
 
+    def _build_conversation_message(self) -> Dict[str, Any]:
+        message = super()._build_conversation_message()
+        injected_context = render_injected_experience_context(self._injected_experience_reminders)
+        if injected_context:
+            message = dict(message)
+            message["content"] = f"{injected_context}\n\n{message.get('content', '')}"
+        return message
+
     async def execute_tool(self, tool_call) -> Any:
         if not self._include_session_skills:
             return await super().execute_tool(tool_call)
@@ -127,3 +148,87 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
                     )
             self._registry = registry
         return self._registry
+
+
+def extract_injected_experience_reminders(messages: Any) -> List[Dict[str, str]]:
+    """Deterministically extract pre-tool experience reminders from rollout text."""
+
+    seen: set[tuple[str, str, str]] = set()
+    reminders: List[Dict[str, str]] = []
+    for text in _iter_message_text(messages):
+        for block in _EXPERIENCE_REMINDER_RE.finditer(text or ""):
+            fields: Dict[str, str] = {}
+            for match in _EXPERIENCE_FIELD_RE.finditer(block.group("body")):
+                fields[match.group("name").lower()] = _clean_experience_field(match.group("value"))
+            name = fields.get("experience_name", "")
+            uri = fields.get("experience_uri", "")
+            triggered_before = fields.get("triggered_before_tool", "")
+            if not name and not uri:
+                continue
+            key = (uri, name, triggered_before)
+            if key in seen:
+                continue
+            seen.add(key)
+            reminders.append(
+                {
+                    "id": f"E{len(reminders) + 1}",
+                    "experience_name": name,
+                    "experience_uri": uri,
+                    "triggered_before_tool": triggered_before or "unknown",
+                }
+            )
+    return reminders
+
+
+def render_injected_experience_context(reminders: List[Dict[str, str]]) -> str:
+    """Render a deterministic alias list for the trajectory extraction LLM."""
+
+    if not reminders:
+        return ""
+    lines = [
+        "## Deterministic Injected Experience Reminders",
+        "The following experience reminders were extracted deterministically from the rollout.",
+        "Use only these IDs in the trajectory `experience_effects` field's "
+        "`positive_ids`, `negative_ids`, and `weak_ids` arrays.",
+    ]
+    for item in reminders:
+        lines.append(
+            "- "
+            f"{item['id']}: {item.get('experience_name') or '<unknown>'}; "
+            f"uri={item.get('experience_uri') or '<unknown>'}; "
+            f"triggered_before={item.get('triggered_before_tool') or 'unknown'}"
+        )
+    lines.extend(
+        [
+            'If this list is present, output only these IDs (for example `"E1"`) in the '
+            "`experience_effects` ID lists; do not invent additional experience IDs.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _iter_message_text(messages: Any) -> List[str]:
+    texts: List[str] = []
+    for message in messages or []:
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content:
+            texts.append(content)
+        if isinstance(message, dict):
+            dict_content = message.get("content")
+            if isinstance(dict_content, str) and dict_content:
+                texts.append(dict_content)
+            parts = message.get("parts") or []
+        else:
+            parts = getattr(message, "parts", []) or []
+        for part in parts:
+            if isinstance(part, dict):
+                text = part.get("text") or part.get("content")
+            else:
+                text = getattr(part, "text", None)
+            if isinstance(text, str) and text:
+                texts.append(text)
+    return texts
+
+
+def _clean_experience_field(value: str) -> str:
+    return unescape(re.sub(r"\s+", " ", value or "").strip())

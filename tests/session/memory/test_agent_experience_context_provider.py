@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from openviking.message import Message
+from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
@@ -16,8 +18,6 @@ from openviking.session.memory.agent_trajectory_context_provider import (
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.message import Message
-from openviking.message.part import TextPart
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -148,11 +148,14 @@ async def test_agent_experience_prefetch_missing_experience_dir_returns_empty_ca
     provider._transaction_handle = None
     provider.search_files = AsyncMock(return_value=[])
 
-    with patch(
-        "openviking.session.memory.agent_experience_context_provider.tracer.error"
-    ) as tracer_error, patch(
-        "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
-    ) as add_tool_call_pair:
+    with (
+        patch(
+            "openviking.session.memory.agent_experience_context_provider.tracer.error"
+        ) as tracer_error,
+        patch(
+            "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
+        ) as add_tool_call_pair,
+    ):
         messages = await provider.prefetch()
 
     assert messages[-1]["role"] == "user"

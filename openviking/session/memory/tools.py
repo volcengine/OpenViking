@@ -26,6 +26,7 @@ _LLM_HIDDEN_MEMORY_FIELDS = {
     "source_extraction_id",
     "source_extraction_ids",
     "last_update_trace_id",
+    "feedback_stats",
 }
 
 

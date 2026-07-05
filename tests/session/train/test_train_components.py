@@ -658,11 +658,11 @@ async def test_patch_merge_policy_optimizer_recovers_source_link_by_unique_trigg
     policy_set = ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[])
     root = policy_set.root_uri
     flight_trigger = (
-        'def should_trigger(ctx):\n'
+        "def should_trigger(ctx):\n"
         '    return ctx.get("candidate_tool") == "update_reservation_flights"\n'
     )
     baggage_trigger = (
-        'def should_trigger(ctx):\n'
+        "def should_trigger(ctx):\n"
         '    return ctx.get("candidate_tool") == "update_reservation_baggages"\n'
     )
     gradients = [
@@ -747,12 +747,8 @@ async def test_patch_merge_policy_optimizer_recovers_source_link_by_unique_trigg
 
     links_by_name = {item.target_name: {link.to_uri for link in item.links} for item in plan.items}
     assert links_by_name == {
-        "update_flights支付方式验证": {
-            "viking://user/u/memories/trajectories/traj_flight.md"
-        },
-        "update_baggages支付方式验证": {
-            "viking://user/u/memories/trajectories/traj_baggage.md"
-        },
+        "update_flights支付方式验证": {"viking://user/u/memories/trajectories/traj_flight.md"},
+        "update_baggages支付方式验证": {"viking://user/u/memories/trajectories/traj_baggage.md"},
     }
 
 
@@ -1075,6 +1071,53 @@ async def test_memory_file_policy_updater_persists_valid_trigger_code_from_merge
     written = fs.files[policy_set.policies[0].uri]
     assert '"trigger_code":' in written
     assert "should_trigger" in written
+
+
+@pytest.mark.asyncio
+async def test_memory_file_policy_updater_preserves_hidden_feedback_stats_on_update():
+    policy_set = ExperienceSet(
+        root_uri="viking://user/u/memories/experiences",
+        policies=[
+            Experience(
+                name="booking_duplicate_handling",
+                uri="viking://user/u/memories/experiences/booking_duplicate_handling.md",
+                version=1,
+                status="production",
+                content="content",
+                metadata={
+                    "trigger_code": DEFAULT_TRIGGER_CODE,
+                    "feedback_stats": {
+                        "schema_version": 1,
+                        "injected_count": 3,
+                        "positive_count": 1,
+                        "negative_count": 1,
+                    },
+                },
+            )
+        ],
+    )
+    fs = FakeVikingFS({})
+    gradient = _patch_gradient(
+        uri=policy_set.policies[0].uri,
+        before="content",
+        after="new content",
+    )
+    plan = _plan_from_gradient(gradient)
+
+    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
+        plan,
+        policy_set,
+        fake_request_context(),
+    )
+
+    assert result.errors == []
+    written = MemoryFileUtils.read(fs.files[policy_set.policies[0].uri])
+    assert written.extra_fields["feedback_stats"] == {
+        "schema_version": 1,
+        "injected_count": 3,
+        "positive_count": 1,
+        "negative_count": 1,
+    }
 
 
 @pytest.mark.asyncio

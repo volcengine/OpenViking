@@ -60,6 +60,28 @@ fields:
       - Generalize identifiers, names, exact amounts, exact dates, paths, and raw payload values.
     merge_op: immutable
 
+  - name: experience_effects
+    type: string
+    description: |
+      Machine-readable JSON object for rule-based statistics about injected experience reminders.
+      Output ONLY a valid compact JSON object, not markdown and not a code block.
+
+      Required shape:
+      {
+        "positive_ids": ["E1"],
+        "negative_ids": [],
+        "weak_ids": []
+      }
+
+      Rules:
+      - If no experience reminder was injected, output exactly: {"positive_ids":[],"negative_ids":[],"weak_ids":[]}
+      - `positive_ids` may include only experiences that were necessary/helpful for a correct decision or recovery.
+      - `negative_ids` may include only experiences that were over-broad or misleading and plausibly changed execution toward a reward-changing mistake.
+      - `weak_ids` may include only experiences that were helpful-but-not-sufficient or too weak to prevent the First Wrong Tool Call.
+      - Any injected ID not listed in positive_ids, negative_ids, or weak_ids is treated as neutral/ignored by downstream statistics; do not output a separate neutral list.
+      - Use only IDs from the deterministic injected list. Do not invent IDs.
+    merge_op: immutable
+
   - name: content
     type: string
     description: |
@@ -121,7 +143,7 @@ fields:
 
       Rules:
       - AUDIT FIRST: The record must primarily explain actual execution vs expected requirements. Do not write a polished SOP that hides the mistake.
-      - ALWAYS INCLUDE ALL SECTIONS: Include every label above, even for success. For success, set First Wrong Tool Call Step/Tool to `none`, First Material Divergence Step to `none`, Kind to `none`, Experience Repair Signal Action to `skip`, and explain what preserved success.
+      - ALWAYS INCLUDE ALL SECTIONS: Include every label above, even for success. For success, set First Wrong Tool Call Step/Tool to `none`, First Material Divergence Step to `none`, Kind to `none`, Experience Repair Signal Action to `skip`, and explain what preserved success. If no experience reminder was injected, set Loaded Experiences to `none` and set the separate `experience_effects` field to the required empty JSON object.
       - COMPLETE BUT COMPACT ACTUAL PATH: Include all reward-relevant business reads, decisive tool outputs, confirmations, writes, policy branches, and final required communication. Omit memory loading, duplicated retries with no new state, and casual conversation.
       - EXPECTED PATH IS REWARD/POLICY GROUNDED: Build Expected Path from evaluation feedback, rubric requirements, explicit user confirmations, tool facts, and visible policy gates. Do not invent requirements not supported by runtime evidence.
       - FIRST WRONG TOOL CALL ONLY: Output exactly one First Wrong Tool Call. Choose the earliest actual candidate tool call whose tool name, args, target object, policy branch, missing precondition, or user-visible content materially caused the reward failure. If all database/action calls passed and only final communication failed, the First Wrong Tool Call is the final `communicate_with_user` call. If the failure is only a missing expected call with no wrong actual call, set Step to `none`, Tool to `none`, and put the expected missing tool in Expected at call and First Material Divergence.Step=`expected_missing_tool`.
@@ -139,7 +161,8 @@ fields:
       - PRESERVE OBJECT BOUNDARIES: Do not imply changing object cardinality, lifecycle shape, passenger/object membership, or target object unless the user explicitly requested and confirmed that exact change and tool/policy facts support it.
       - COMMUNICATION FAILURES ARE FIRST-CLASS: If the only failed check is missing required user-visible information, the audit and repair signal must target `communicate_with_user` or final response content, not unrelated tool workflows.
       - WRITE ARGUMENT FAILURES NEED PROVENANCE: If a write tool failed because arguments were wrong, identify in First Wrong Tool Call.Candidate shape the exact decisive field path and exact wrong source category: stale tool result, unconfirmed user statement, incorrect calculation, copied source object, wrong payment allocation, wrong date, wrong object id, or object-cardinality change. Do not write a generic "wrong_arguments" candidate shape without field provenance. Do not let repair implications spill into sibling schema fields that were correct.
-      - EXPERIENCE ALIGNMENT: Loaded Experiences must list only experience memories actually read/injected. Give each loaded experience a stable short alias (`E1`, `E2`, ...), include the tool boundary where it triggered when visible, and classify its effect as relevant, irrelevant, over-broad, misleading, ignored, too_weak, helpful, or necessary. Do not list case memory, trajectory memory, or the current case as loaded experiences. If none were loaded, write `none`.
+      - EXPERIENCE ALIGNMENT: Loaded Experiences must list only experience memories actually read/injected. Give each injected experience a stable short alias (`E1`, `E2`, ...), include the tool boundary where it triggered when visible, and use the same aliases as the separate `experience_effects` field. Do not list case memory, trajectory memory, or the current case as loaded experiences. If none were loaded, write `none`.
+      - EXPERIENCE EFFECTS FIELD: Judge experience effects in the separate `experience_effects` field only from visible execution evidence: injected reminder text, the candidate tool it preceded, actual tool args/content, user confirmations, policy/tool facts, evaluation feedback, and First Wrong Tool Call. Do not mark an experience negative merely because the rollout failed; mark it negative only when there is evidence that its trigger/content was over-broad or misleading for the actual wrong step.
       - GENERALIZE AGGRESSIVELY: Remove raw identifiers, personal names, contact values, exact dates, exact amounts, exact counts, exact locations/paths, and raw tool payloads. Use semantic placeholders such as selected reservation, requested amount, confirmed payment method, final required amount, source object, target object, or applicable policy.
       - MACHINE-PARSEABLE STYLE: Use exactly the labels and marker prefixes above (`A1.`, `R1.`, `R1 -> A1:`). Use concise markdown bullets. No extra headings, free paragraphs, code fences, or closing remarks.
     merge_op: patch

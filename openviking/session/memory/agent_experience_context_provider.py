@@ -21,7 +21,6 @@ from openviking.session.memory.session_extract_context_provider import (
 from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
-from openviking.session.train.gates import default_experience_gate_contract
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
@@ -58,6 +57,8 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         self.prefetched_uris: List[str] = []
 
     def instruction(self) -> str:
+        from openviking.session.train.gates import default_experience_gate_contract
+
         output_language = self._output_language
         return f"""You are a memory extraction agent. Your job is to distill experience memories from failed or partially failed agent execution trajectories.
 

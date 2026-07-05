@@ -276,6 +276,41 @@ def test_operation_to_patch_skips_failed_field_preview_update():
     assert isinstance(op.memory_fields["summary"], StrPatch)
 
 
+def test_operation_to_patch_preserves_hidden_feedback_stats_metadata():
+    schema = _registry().get("notes")
+    old_file = MemoryFile(
+        uri="viking://user/u/memories/notes/note.md",
+        content="old content",
+        memory_type="notes",
+        extra_fields={
+            "note_name": "note",
+            "feedback_stats": {
+                "injected_count": 3,
+                "positive_count": 1,
+                "negative_count": 1,
+            },
+        },
+    )
+    op = ResolvedOperation(
+        old_memory_file_content=old_file,
+        memory_type="notes",
+        uris=["viking://user/u/memories/notes/note.md"],
+        memory_fields={
+            "note_name": "note",
+            "content": "new content",
+        },
+    )
+
+    patch = operation_to_patch(op, schema=schema, extract_context=ExtractContext([]))
+
+    assert patch.after_file.content == "new content"
+    assert patch.after_file.extra_fields["feedback_stats"] == {
+        "injected_count": 3,
+        "positive_count": 1,
+        "negative_count": 1,
+    }
+
+
 @pytest.mark.asyncio
 async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
     fs = InMemoryVikingFS({})

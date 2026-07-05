@@ -13,6 +13,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.agent_trajectory_context_provider import (
     AgentTrajectoryContextProvider,
+    extract_injected_experience_reminders,
 )
 from openviking.session.memory.dataclass import (
     MemoryFile,
@@ -24,6 +25,9 @@ from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdat
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.skill.session_skill_context_provider import (
     SESSION_SKILL_MEMORY_TYPE,
+)
+from openviking.session.train.components.experience_feedback import (
+    record_experience_feedback_stats,
 )
 from openviking.session.train.domain import (
     CriterionResult,
@@ -106,6 +110,11 @@ class TrajectoryRolloutAnalyzer:
             trajectory_uris,
             ctx=context.request_context,
         )
+        experience_feedback_stats = await self._record_experience_feedback_stats(
+            trajectories=trajectories,
+            messages=extraction_messages,
+            ctx=context.request_context,
+        )
         evaluation = evaluation or _evaluation_from_trajectories(trajectories)
         return RolloutAnalysis(
             evaluation=evaluation,
@@ -116,6 +125,7 @@ class TrajectoryRolloutAnalyzer:
                 "policy_snapshot_id": rollout.policy_snapshot_id,
                 "rollout_messages": rollout.messages,
                 "extraction_message_count": len(extraction_messages),
+                "experience_feedback_stats": experience_feedback_stats,
             },
         )
 
@@ -327,6 +337,32 @@ class TrajectoryRolloutAnalyzer:
                 )
             )
         return trajectories
+
+    async def _record_experience_feedback_stats(
+        self,
+        *,
+        trajectories: list[Trajectory],
+        messages: list[Message],
+        ctx: RequestContext,
+    ) -> dict[str, Any]:
+        injected_reminders = extract_injected_experience_reminders(messages)
+        if not trajectories or not injected_reminders:
+            return {"updated_uris": [], "skipped_uris": [], "errors": []}
+        try:
+            result = await record_experience_feedback_stats(
+                trajectories=trajectories,
+                injected_reminders=injected_reminders,
+                viking_fs=self.viking_fs or get_viking_fs(),
+                ctx=ctx,
+            )
+        except Exception as exc:  # pragma: no cover - defensive; stats must not fail analysis
+            logger.warning("Failed to record experience feedback stats: %s", exc, exc_info=True)
+            return {"updated_uris": [], "skipped_uris": [], "errors": [str(exc)]}
+        return {
+            "updated_uris": list(result.updated_uris),
+            "skipped_uris": list(result.skipped_uris),
+            "errors": list(result.errors),
+        }
 
 
 def _log_operations(operations: ResolvedOperations) -> None:

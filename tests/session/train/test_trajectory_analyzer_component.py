@@ -194,3 +194,70 @@ async def test_trajectory_rollout_analyzer_evaluates_before_extracting_trajector
     assert "task failed" in feedback_message.content
     assert "missing confirmation" in feedback_message.content
     assert analysis.metadata["extraction_message_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_trajectory_rollout_analyzer_records_injected_experience_feedback(monkeypatch):
+    from openviking.session.train.components import trajectory_analyzer as module
+
+    class FeedbackExtractLoop(FakeExtractLoop):
+        async def run(self):
+            return (
+                ResolvedOperations(
+                    upsert_operations=[
+                        ResolvedOperation(
+                            old_memory_file_content=None,
+                            memory_fields={
+                                "trajectory_name": "task",
+                                "outcome": "failure",
+                                "retrieval_anchor": "Stage: final",
+                                "experience_effects": (
+                                    '{"positive_ids":[],"negative_ids":["E1"],"weak_ids":[]}'
+                                ),
+                                "content": "# task\nbody",
+                            },
+                            memory_type="trajectories",
+                            uris=["viking://user/u/memories/trajectories/task_20260607120000.md"],
+                            page_id=100,
+                        )
+                    ],
+                    delete_file_contents=[],
+                    errors=[],
+                    resolved_links=[],
+                ),
+                [],
+            )
+
+    FakeExtractLoop.created.clear()
+    fs = FakeVikingFS()
+    exp_uri = "viking://user/u/memories/experiences/payment_guard.md"
+    fs.files[exp_uri] = (
+        "experience\n\n"
+        "<!-- MEMORY_FIELDS\n"
+        '{"memory_type":"experiences","experience_name":"payment_guard",'
+        '"trigger_code":"def should_trigger(ctx):\\n    return True\\n"}\n'
+        "-->"
+    )
+    monkeypatch.setattr(module, "ExtractLoop", FeedbackExtractLoop)
+    monkeypatch.setattr(module, "get_viking_fs", lambda: fs)
+
+    analyzer = TrajectoryRolloutAnalyzer(viking_fs=fs, vlm=SimpleNamespace(model="fake"))
+    context = TrajectoryAnalyzerContext(
+        request_context=SimpleNamespace(
+            user=SimpleNamespace(account_id="default", user_id="u"),
+            account_id="default",
+        )
+    )
+    rollout = _rollout()
+    rollout.messages[0].parts[0].text = f"""<experience_reminder>
+<experience_name>payment_guard</experience_name>
+<experience_uri>{exp_uri}</experience_uri>
+<triggered_before_tool>book_reservation</triggered_before_tool>
+</experience_reminder>"""
+
+    analysis = await analyzer.analyze(rollout, context)
+
+    assert analysis.metadata["experience_feedback_stats"]["updated_uris"] == [exp_uri]
+    written = fs.files[exp_uri]
+    assert '"feedback_stats"' in written
+    assert '"negative_count": 1' in written

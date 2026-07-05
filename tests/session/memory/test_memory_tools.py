@@ -124,6 +124,44 @@ class TestMemoryTools:
         assert result["content"] == "1\tGina values emotional support with Jon."
 
     @pytest.mark.asyncio
+    async def test_read_tool_hides_system_feedback_stats_from_llm_output(self):
+        class MockPageIdMap:
+            def get_page_id(self, uri):
+                return None
+
+        class MockVikingFS:
+            async def read_file(self, uri, ctx=None, **kwargs):
+                return (
+                    "Experience content.\n\n"
+                    "<!-- MEMORY_FIELDS\n"
+                    "{\n"
+                    '  "memory_type": "experiences",\n'
+                    '  "experience_name": "payment_guard",\n'
+                    '  "feedback_stats": {"injected_count": 3, "negative_count": 1}\n'
+                    "}\n"
+                    "-->"
+                )
+
+        tool_ctx = ToolContext(
+            viking_fs=MockVikingFS(),
+            request_ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER),
+            default_search_uris=[],
+            read_file_contents={},
+            page_id_map=MockPageIdMap(),
+        )
+
+        result = await MemoryReadTool().execute(
+            tool_ctx,
+            uri="viking://user/default/memories/experiences/payment_guard.md",
+        )
+
+        assert result["experience_name"] == "payment_guard"
+        assert "feedback_stats" not in result
+        assert tool_ctx.read_file_contents[
+            "viking://user/default/memories/experiences/payment_guard.md"
+        ].extra_fields["feedback_stats"] == {"injected_count": 3, "negative_count": 1}
+
+    @pytest.mark.asyncio
     async def test_read_tool_uses_offset_and_limit_for_visible_content(self):
         class MockPageIdMap:
             def get_page_id(self, uri):
