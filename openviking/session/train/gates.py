@@ -23,6 +23,7 @@ from openviking.session.memory.constraints.trigger_sandbox import (
 )
 from openviking.session.train.domain import PolicyPlanItem, PolicySet, RolloutAnalysis, Trajectory
 from openviking.session.train.interfaces import SemanticGradient
+from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -255,7 +256,7 @@ Your experience output will be rejected unless every experience satisfies these 
 
 2. Content format
 - Use exactly these headings in this order: ## Failure Pattern, ## Repair Procedure, ## Guardrails.
-- Include exactly one # Experience Trigger section and exactly one trigger_code block.
+- Provide a valid trigger_code either in the rendered # Experience Trigger section or in schema metadata. The body may contain only the three required sections if trigger_code is stored separately.
 
 3. Tool boundary alignment
 - trigger_code must bind exactly one candidate_tool.
@@ -265,6 +266,7 @@ Your experience output will be rejected unless every experience satisfies these 
 4. Candidate-shape trigger
 - After the candidate_tool gate, write tools must inspect ctx["candidate_tool_args"].
 - communicate_with_user must inspect ctx["candidate_tool_args"]["content"].
+- Prefer inspecting stable object-binding fields such as reservation_id, flights, passengers, payment_methods, or the specific field that caused the failure, but do not invent unavailable fields.
 - Do not rely on ctx["messages"] alone. If decisive candidate args/content are absent, return False.
 - Add negative gates for nearby but non-applicable candidate shapes.
 
@@ -311,9 +313,9 @@ class ExperienceContentFormatGate:
         reasons: list[str] = []
         if missing:
             reasons.append("missing required headings: " + ", ".join(missing))
-        if trigger_section_count != 1:
+        if trigger_section_count > 1 or (trigger_section_count == 0 and not trigger_code):
             reasons.append(
-                f"expected exactly one Experience Trigger section, got {trigger_section_count}"
+                f"expected exactly one Experience Trigger section or trigger_code metadata, got section_count={trigger_section_count}"
             )
         if not trigger_code:
             reasons.append("missing trigger_code")
@@ -332,8 +334,8 @@ class ExperienceContentFormatGate:
             evidence={"target_name": target.target_name},
             retriable=True,
             repair_prompt=(
-                "Rewrite the experience content with exactly the required headings and one "
-                "Experience Trigger section containing valid trigger_code."
+                "Rewrite the experience content with exactly the required headings and provide "
+                "valid trigger_code either in the Experience Trigger section or schema metadata."
             ),
         )
 
@@ -435,23 +437,37 @@ class ExperienceTriggerShapeGate:
             reasons.append("trigger is history-only; it must inspect candidate args or content")
         if profile.direct_true_after_tool_gate:
             reasons.append("trigger returns True after only a tool gate")
+        advisories: list[str] = []
         if tool == "communicate_with_user":
             if not profile.uses_candidate_content:
                 reasons.append("communicate_with_user trigger must inspect candidate content")
         elif tool:
             if not profile.uses_candidate_tool_args:
                 reasons.append(f"{tool} trigger must inspect candidate_tool_args")
-            if target.stage == "post_plan":
-                missing = _missing_required_arg_checks(tool, profile.inspected_arg_keys)
-                if missing:
-                    reasons.append(missing)
-        if not reasons:
+            elif target.stage == "post_plan":
+                advisory = _recommended_arg_check_advisory(tool, profile.inspected_arg_keys)
+                if advisory:
+                    advisories.append(advisory)
+        if not reasons and not advisories:
             return None
+        evidence = {
+            "target_name": target.target_name,
+            "trigger_profile": profile.to_dict(),
+        }
+        if advisories:
+            evidence["advisories"] = advisories
+        if not reasons:
+            return GateDecision(
+                gate_name=self.name,
+                action="warn",
+                reason="; ".join(advisories),
+                evidence=evidence,
+            )
         return GateDecision(
             gate_name=self.name,
             action="reject",
             reason="; ".join(reasons),
-            evidence={"target_name": target.target_name, "trigger_profile": profile.to_dict()},
+            evidence=evidence,
             retriable=True,
             repair_prompt=(
                 "Rewrite trigger_code as a narrow candidate-shape gate: first filter the exact "
@@ -625,7 +641,21 @@ class _TriggerProfileVisitor(ast.NodeVisitor):
 
     def visit_Compare(self, node: ast.Compare) -> Any:  # noqa: ANN401, N802
         self.candidate_tools.update(_candidate_tools_from_expr(node))
+        self._record_candidate_arg_membership_check(node)
         self.generic_visit(node)
+
+    def _record_candidate_arg_membership_check(self, node: ast.Compare) -> None:
+        if not isinstance(node.left, ast.Constant) or not isinstance(node.left.value, str):
+            return
+        key = node.left.value
+        for op, comparator in zip(node.ops, node.comparators, strict=False):
+            if not isinstance(op, (ast.In, ast.NotIn)):
+                continue
+            if _is_candidate_args_expr(comparator, self._candidate_args_aliases):
+                self.inspected_arg_keys.add(key)
+                self.uses_candidate_tool_args = True
+                if key == "content":
+                    self.uses_candidate_content = True
 
     def visit_Call(self, node: ast.Call) -> Any:  # noqa: ANN401, N802
         key = _ctx_get_constant_key(node)
@@ -853,27 +883,32 @@ def _gradient_memory_type(gradient: SemanticGradient) -> str:
     )
 
 
-def _missing_required_arg_checks(tool: str, keys: set[str]) -> str:
+def _recommended_arg_check_advisory(tool: str, keys: set[str]) -> str:
+    """Return non-blocking trigger-shape advice for common tool object bindings.
+
+    These checks are intentionally advisory. A useful repair experience may be
+    about a specific bad field (for example payment_id), so requiring every
+    canonical object-binding field would incorrectly reject good experiences.
+    """
+
     requirements = {
         "book_reservation": {"one_of": {"passengers", "payment_methods", "flights"}},
-        "cancel_reservation": {"all_of": {"reservation_id"}},
-        "update_reservation_flights": {"all_of": {"reservation_id", "flights"}},
+        "cancel_reservation": {"one_of": {"reservation_id"}},
+        "update_reservation_flights": {"one_of": {"reservation_id", "flights", "payment_id"}},
         "update_reservation_baggages": {
-            "all_of": {"reservation_id"},
-            "one_of": {"total_baggages", "nonfree_baggages", "payment_id"},
+            "one_of": {"reservation_id", "total_baggages", "nonfree_baggages", "payment_id"},
         },
         "send_certificate": {"one_of": {"user_id", "amount"}},
     }
     spec = requirements.get(tool)
     if not spec:
         return ""
-    all_of = set(spec.get("all_of", set()))
     one_of = set(spec.get("one_of", set()))
-    missing_all = all_of - keys
-    if missing_all:
-        return f"{tool} trigger must inspect arg keys: {sorted(missing_all)}"
     if one_of and not (one_of & keys):
-        return f"{tool} trigger must inspect one of arg keys: {sorted(one_of)}"
+        return (
+            f"{tool} trigger should preferably inspect at least one stable candidate arg key "
+            f"from {sorted(one_of)}, unless the failure-specific decisive field is different"
+        )
     return ""
 
 
@@ -1019,9 +1054,16 @@ def _log_gate_rejection(target: GateTarget, decisions: list[GateDecision]) -> No
     rejected = [decision for decision in decisions if decision.action == "reject"]
     if not rejected:
         return
+    summary = "; ".join(f"{d.gate_name}: {d.reason}" for d in rejected)
     logger.info(
         "Policy gate rejected %s %s: %s",
         target.target_kind,
         target.target_name,
-        "; ".join(f"{d.gate_name}: {d.reason}" for d in rejected),
+        summary,
+    )
+    tracer.info(
+        "policy_gate.rejected "
+        f"stage={target.stage} target_kind={target.target_kind} "
+        f"memory_type={target.memory_type} target_name={target.target_name} "
+        f"rejections={summary}"
     )

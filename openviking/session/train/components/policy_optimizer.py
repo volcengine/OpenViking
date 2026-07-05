@@ -11,7 +11,7 @@ from typing import Any
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.extract_loop import ExtractLoop
+from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.memory.patch_merge_context_provider import (
@@ -23,7 +23,9 @@ from openviking.session.train.domain import (
     PolicyPlanItem,
     PolicySet,
     PolicyUpdatePlan,
+    RolloutAnalysis,
 )
+from openviking.session.train.gates import GateRunner, build_gate_retry_instruction
 from openviking.session.train.interfaces import SemanticGradient
 from openviking.session.train.utils import first_uri, safe_int
 from openviking.telemetry import tracer
@@ -39,6 +41,9 @@ class PatchMergePolicyOptimizerContext:
 
     request_context: RequestContext
     messages: list[Message] = field(default_factory=list)
+    analyses: list[RolloutAnalysis] = field(default_factory=list)
+    gate_runner: GateRunner | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -93,19 +98,22 @@ class PatchMergePolicyOptimizer:
             console=False,
         )
 
-        return PolicyUpdatePlan(
-            items=items,
-            metadata={
-                "optimizer": "patch_merge",
-                "memory_type": self.memory_type,
-                "gradient_count": len(gradients),
-                "patch_gradient_count": len(patch_gradients),
-                "gradients": [
-                    _gradient_to_dict(idx, gradient)
-                    for idx, gradient in enumerate(patch_gradients)
-                ],
-            },
-        )
+        metadata = {
+            "optimizer": "patch_merge",
+            "memory_type": self.memory_type,
+            "gradient_count": len(gradients),
+            "patch_gradient_count": len(patch_gradients),
+            "gradients": [
+                _gradient_to_dict(idx, gradient)
+                for idx, gradient in enumerate(patch_gradients)
+            ],
+        }
+        gate_retry_reports = list(context.metadata.get("gate_retry_reports", []) or [])
+        if gate_retry_reports:
+            metadata["gate_reports"] = gate_retry_reports
+            metadata["gate_retry_reports"] = gate_retry_reports
+
+        return PolicyUpdatePlan(items=items, metadata=metadata)
 
     @tracer(
         "train.policy_optimizer.patch_merge.extract_loop",
@@ -154,6 +162,28 @@ class PatchMergePolicyOptimizer:
             console=False,
         )
 
+        async def post_validation_hook(operations: Any, retry_count: int):
+            del retry_count
+            gate_runner = context.gate_runner
+            if gate_runner is None or self.memory_type != "experiences":
+                return None
+            items = _operations_to_plan_items(
+                operations=operations,
+                gradients=gradients,
+                policy_set=policy_set,
+                memory_type=self.memory_type,
+            )
+            _, report = await gate_runner.filter_plan(
+                items,
+                analyses=list(context.analyses or []),
+                policy_set=policy_set,
+            )
+            instruction = build_gate_retry_instruction(report)
+            if not instruction:
+                return None
+            context.metadata.setdefault("gate_retry_reports", []).append(report.to_dict())
+            return PostValidationRetryDecision(retry=True, instruction=instruction)
+
         orchestrator = ExtractLoop(
             vlm=vlm,
             viking_fs=viking_fs,
@@ -162,6 +192,8 @@ class PatchMergePolicyOptimizer:
             isolation_handler=isolation_handler,
             max_iterations=1,
             thinking=self.memory_type in {"trajectories", "experiences"},
+            post_validation_hook=post_validation_hook,
+            max_post_validation_retries=1,
         )
         operations, _ = await orchestrator.run()
         return operations

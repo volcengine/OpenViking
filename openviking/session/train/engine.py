@@ -98,6 +98,11 @@ class PolicyTrainingEngine:
     ) -> tuple[PolicyUpdatePlan, PolicyApplyResult]:
         async with policy_set.lock() as transaction_handle:
             latest_policy_set = await policy_set.reload()
+            _prepare_optimization_context_for_gates(
+                ctx.optimization_context,
+                analyses=list(analyses or []),
+                gate_runner=ctx.gate_runner or default_policy_gate_runner(),
+            )
             plan = await self.policy_optimizer.plan(
                 gradients,
                 latest_policy_set,
@@ -133,3 +138,23 @@ def _append_gate_report(ctx: PipelineContext, report: Any) -> None:
     if report is None:
         return
     ctx.execution_metadata.setdefault("gate_reports", []).append(report.to_dict())
+
+
+def _prepare_optimization_context_for_gates(
+    optimization_context: Any,
+    *,
+    analyses: list[RolloutAnalysis],
+    gate_runner: Any,
+) -> None:
+    if optimization_context is None:
+        return
+    if hasattr(optimization_context, "analyses"):
+        try:
+            optimization_context.analyses = list(analyses)
+        except Exception:
+            pass
+    if hasattr(optimization_context, "gate_runner"):
+        try:
+            optimization_context.gate_runner = gate_runner
+        except Exception:
+            pass
