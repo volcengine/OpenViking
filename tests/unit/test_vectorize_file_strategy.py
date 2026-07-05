@@ -1,9 +1,14 @@
+import builtins
+import logging
 import types
 
 import pytest
 
 from openviking.core.context import Context
-from openviking.utils import embedding_utils
+from openviking.storage.vectordb.vectorize.base import VectorizeResult
+from openviking.storage.vectordb.vectorize.vectorizer import VectorizerAdapter
+from openviking.utils import embedding_input, embedding_utils
+from openviking.utils.embedding_input import EMBEDDING_TRUNCATION_SUFFIX
 
 
 class DummyQueue:
@@ -62,6 +67,226 @@ class DummyReq:
     def __init__(self):
         self.user = DummyUser()
         self.account_id = "default"
+
+
+class DummyVectorizer:
+    config = {"max_input_tokens": 20}
+
+    def __init__(self):
+        self.config = type(self).config
+        self.data = None
+
+    def get_dense_vector_dim(self, _dense_model, _sparse_model):
+        return 1
+
+    def vectorize_document(self, data, _dense_model, _sparse_model):
+        self.data = data
+        return VectorizeResult(dense_vectors=[[1.0] for _ in data])
+
+
+class DummyVectorizerWithoutLimit(DummyVectorizer):
+    config = {}
+
+
+class DummyVectorizerDisabledLimit(DummyVectorizer):
+    config = {"max_input_tokens": 0}
+
+
+class DummyVectorizerMalformedConfig(DummyVectorizer):
+    config = []
+
+
+class DummyVectorizerMalformedLimit(DummyVectorizer):
+    config = {"max_input_tokens": object()}
+
+
+class DummyVectorizerStringLimit(DummyVectorizer):
+    config = {"max_input_tokens": "20"}
+
+
+class DummyVectorizerBoolLimit(DummyVectorizer):
+    config = {"max_input_tokens": True}
+
+
+class DummyVectorizerFloatLimit(DummyVectorizer):
+    config = {"max_input_tokens": 20.5}
+
+
+class DummyVectorizerRaisingConfig(DummyVectorizer):
+    @property
+    def config(self):
+        raise RuntimeError("config unavailable")
+
+    def __init__(self):
+        self.data = None
+
+
+def test_vectorizer_adapter_truncates_provider_text_without_mutating_raw_data():
+    vectorizer = DummyVectorizer()
+    adapter = VectorizerAdapter(
+        vectorizer,
+        {"Dense": {"TextField": "content", "ModelName": "dummy"}},
+    )
+    raw_text = "oversized memory content " * 80
+    raw_data = [{"content": raw_text, "uri": "viking://user/default/resources/big.md"}]
+
+    dense, sparse = adapter.vectorize_raw_data(raw_data)
+
+    assert dense == [[1.0]]
+    assert sparse == []
+    provider_text = vectorizer.data[0]["text"]
+    assert provider_text.endswith(EMBEDDING_TRUNCATION_SUFFIX)
+    assert len(provider_text) < len(raw_text)
+    assert raw_data[0]["content"] == raw_text
+
+
+def test_vectorizer_adapter_accepts_integer_string_limit():
+    vectorizer = DummyVectorizerStringLimit()
+    adapter = VectorizerAdapter(
+        vectorizer,
+        {"Dense": {"TextField": "content", "ModelName": "dummy"}},
+    )
+    raw_text = "oversized memory content " * 80
+
+    adapter.vectorize_raw_data([{"content": raw_text}])
+
+    assert vectorizer.data[0]["text"].endswith(EMBEDDING_TRUNCATION_SUFFIX)
+
+
+def test_vectorizer_adapter_import_failure_fails_closed(monkeypatch):
+    real_import = builtins.__import__
+
+    def fail_embedding_input_import(name, *args, **kwargs):
+        if name == "openviking.utils.embedding_input":
+            raise ImportError("import failed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_embedding_input_import)
+    vectorizer = DummyVectorizer()
+    adapter = VectorizerAdapter(
+        vectorizer,
+        {"Dense": {"TextField": "content", "ModelName": "dummy"}},
+    )
+    raw_text = "oversized memory content " * 80
+
+    with pytest.raises(RuntimeError, match="truncation is unavailable"):
+        adapter.vectorize_raw_data([{"content": raw_text}])
+
+
+def test_vectorizer_adapter_truncation_failure_fails_closed(monkeypatch):
+    def fail_truncation(_text, _max_input_tokens):
+        raise RuntimeError("truncate failed")
+
+    monkeypatch.setattr(embedding_input, "truncate_embedding_input", fail_truncation)
+    vectorizer = DummyVectorizer()
+    adapter = VectorizerAdapter(
+        vectorizer,
+        {"Dense": {"TextField": "content", "ModelName": "dummy"}},
+    )
+    raw_text = "oversized memory content " * 80
+
+    with pytest.raises(RuntimeError, match="truncate failed"):
+        adapter.vectorize_raw_data([{"content": raw_text}])
+
+
+def test_vectorizer_adapter_raising_config_fails_closed():
+    with pytest.raises(RuntimeError, match="failed to read vectorizer config"):
+        VectorizerAdapter(
+            DummyVectorizerRaisingConfig(),
+            {"Dense": {"TextField": "content", "ModelName": "dummy"}},
+        )
+
+
+def test_vectorizer_adapter_preserves_media_fields_when_truncating_text():
+    vectorizer = DummyVectorizer()
+    adapter = VectorizerAdapter(
+        vectorizer,
+        {
+            "Dense": {
+                "TextField": "content",
+                "ImageField": "image",
+                "VideoField": "video",
+                "ModelName": "dummy",
+            }
+        },
+    )
+    raw_text = "oversized memory content " * 80
+    image = {"uri": "data:image/png;base64,aaa"}
+    video = {"uri": "data:video/mp4;base64,bbb"}
+
+    adapter.vectorize_raw_data([{"content": raw_text, "image": image, "video": video}])
+
+    provider_data = vectorizer.data[0]
+    assert provider_data["text"].endswith(EMBEDDING_TRUNCATION_SUFFIX)
+    assert provider_data["image"] is image
+    assert provider_data["video"] is video
+
+
+def test_vectorizer_adapter_vectorize_one_truncates_text_and_preserves_media():
+    vectorizer = DummyVectorizer()
+    adapter = VectorizerAdapter(
+        vectorizer,
+        {"Dense": {"TextField": "content", "ModelName": "dummy"}},
+    )
+    raw_text = "oversized memory content " * 80
+    image = {"uri": "data:image/png;base64,aaa"}
+    video = {"uri": "data:video/mp4;base64,bbb"}
+
+    adapter.vectorize_one(text=raw_text, image=image, video=video)
+
+    provider_data = vectorizer.data[0]
+    assert provider_data["text"].endswith(EMBEDDING_TRUNCATION_SUFFIX)
+    assert provider_data["image"] is image
+    assert provider_data["video"] is video
+
+
+@pytest.mark.parametrize(
+    "vectorizer_cls",
+    [
+        DummyVectorizerWithoutLimit,
+        DummyVectorizerDisabledLimit,
+        DummyVectorizerMalformedConfig,
+        DummyVectorizerMalformedLimit,
+        DummyVectorizerBoolLimit,
+        DummyVectorizerFloatLimit,
+    ],
+)
+def test_vectorizer_adapter_leaves_text_unchanged_without_explicit_limit(vectorizer_cls, caplog):
+    if vectorizer_cls in {
+        DummyVectorizerMalformedLimit,
+        DummyVectorizerBoolLimit,
+        DummyVectorizerFloatLimit,
+    }:
+        caplog.set_level(logging.WARNING)
+    vectorizer = vectorizer_cls()
+    adapter = VectorizerAdapter(
+        vectorizer,
+        {"Dense": {"TextField": "content", "ModelName": "dummy"}},
+    )
+    raw_text = "oversized memory content " * 80
+
+    adapter.vectorize_raw_data([{"content": raw_text}])
+
+    assert vectorizer.data[0]["text"] == raw_text
+    if vectorizer_cls in {
+        DummyVectorizerMalformedLimit,
+        DummyVectorizerBoolLimit,
+        DummyVectorizerFloatLimit,
+    }:
+        assert "max_input_tokens disabled" in caplog.text
+
+
+def test_vectorizer_adapter_vectorize_one_leaves_text_unchanged_without_limit():
+    vectorizer = DummyVectorizerWithoutLimit()
+    adapter = VectorizerAdapter(
+        vectorizer,
+        {"Dense": {"TextField": "content", "ModelName": "dummy"}},
+    )
+    raw_text = "oversized memory content " * 80
+
+    adapter.vectorize_one(text=raw_text)
+
+    assert vectorizer.data[0]["text"] == raw_text
 
 
 @pytest.mark.asyncio
