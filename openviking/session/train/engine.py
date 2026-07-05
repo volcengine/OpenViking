@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 from openviking.session.train.context import PipelineContext
 from openviking.session.train.domain import (
@@ -15,6 +16,7 @@ from openviking.session.train.domain import (
     Rollout,
     RolloutAnalysis,
 )
+from openviking.session.train.gates import default_policy_gate_runner
 from openviking.session.train.interfaces import (
     GradientEstimator,
     PolicyOptimizer,
@@ -46,6 +48,7 @@ class PolicyTrainingEngine:
             gradients=gradients,
             policy_set=policy_set,
             ctx=ctx,
+            analyses=analyses,
         )
         return analyses, gradients, plan, apply_result
 
@@ -75,7 +78,15 @@ class PolicyTrainingEngine:
                 for analysis in analyses
             ]
         )
-        return [gradient for batch in gradient_batches for gradient in batch]
+        gradients = [gradient for batch in gradient_batches for gradient in batch]
+        gate_runner = ctx.gate_runner or default_policy_gate_runner()
+        gradients, gate_report = await gate_runner.filter_gradients(
+            gradients,
+            analyses=analyses,
+            policy_set=policy_set,
+        )
+        _append_gate_report(ctx, gate_report)
+        return gradients
 
     async def plan_and_apply(
         self,
@@ -83,6 +94,7 @@ class PolicyTrainingEngine:
         gradients: list[SemanticGradient],
         policy_set: ExperienceSet,
         ctx: PipelineContext,
+        analyses: list[RolloutAnalysis] | None = None,
     ) -> tuple[PolicyUpdatePlan, PolicyApplyResult]:
         async with policy_set.lock() as transaction_handle:
             latest_policy_set = await policy_set.reload()
@@ -91,6 +103,23 @@ class PolicyTrainingEngine:
                 latest_policy_set,
                 ctx.optimization_context,
             )
+            gate_runner = ctx.gate_runner or default_policy_gate_runner()
+            filtered_items, gate_report = await gate_runner.filter_plan(
+                list(plan.items or []),
+                analyses=list(analyses or []),
+                policy_set=latest_policy_set,
+            )
+            _append_gate_report(ctx, gate_report)
+            if len(filtered_items) != len(plan.items or []):
+                plan = PolicyUpdatePlan(
+                    items=filtered_items,
+                    metadata={
+                        **dict(plan.metadata or {}),
+                        "gate_report": gate_report.to_dict(),
+                    },
+                )
+            elif gate_report.decisions:
+                plan.metadata.setdefault("gate_reports", []).append(gate_report.to_dict())
             apply_result = await self.policy_updater.apply(
                 plan,
                 latest_policy_set,
@@ -98,3 +127,9 @@ class PolicyTrainingEngine:
                 transaction_handle=transaction_handle,
             )
         return plan, apply_result
+
+
+def _append_gate_report(ctx: PipelineContext, report: Any) -> None:
+    if report is None:
+        return
+    ctx.execution_metadata.setdefault("gate_reports", []).append(report.to_dict())

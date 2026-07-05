@@ -839,6 +839,7 @@ class SessionCompressorV3:
             adds=adds,
             updates=updates,
             deletes=deletes,
+            gate_rejections=_gate_rejections_from_training_result(training_result),
         )
 
     async def _link_case_to_training_outputs(
@@ -1648,8 +1649,9 @@ def _make_memory_diff(
     adds: list[dict[str, Any]],
     updates: list[dict[str, Any]],
     deletes: list[dict[str, Any]],
+    gate_rejections: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "archive_uri": archive_uri,
         "trace_id": tracer.get_trace_id() or None,
         "extracted_at": datetime.utcnow().isoformat() + "Z",
@@ -1662,8 +1664,12 @@ def _make_memory_diff(
             "total_adds": len(adds),
             "total_updates": len(updates),
             "total_deletes": len(deletes),
+            "total_gate_rejections": len(gate_rejections or []),
         },
     }
+    if gate_rejections:
+        result["gate_rejections"] = list(gate_rejections)
+    return result
 
 
 def _merge_memory_diffs(
@@ -1674,6 +1680,7 @@ def _merge_memory_diffs(
     adds: list[dict[str, Any]] = []
     updates: list[dict[str, Any]] = []
     deletes: list[dict[str, Any]] = []
+    gate_rejections: list[dict[str, Any]] = []
     trace_id = tracer.get_trace_id() or None
     for diff in diffs:
         if not isinstance(diff, dict):
@@ -1686,14 +1693,57 @@ def _merge_memory_diffs(
         adds.extend([item for item in operations.get("adds", []) if isinstance(item, dict)])
         updates.extend([item for item in operations.get("updates", []) if isinstance(item, dict)])
         deletes.extend([item for item in operations.get("deletes", []) if isinstance(item, dict)])
+        gate_rejections.extend(
+            [item for item in diff.get("gate_rejections", []) if isinstance(item, dict)]
+        )
     merged = _make_memory_diff(
         archive_uri=archive_uri,
         adds=adds,
         updates=updates,
         deletes=deletes,
+        gate_rejections=gate_rejections,
     )
     merged["trace_id"] = trace_id
     return merged
+
+
+def _gate_rejections_from_training_result(
+    training_result: RolloutTrainingResult,
+) -> list[dict[str, Any]]:
+    reports: list[Any] = []
+    metadata = dict(getattr(training_result, "metadata", {}) or {})
+    if isinstance(metadata.get("gate_report"), dict):
+        reports.append(metadata.get("gate_report"))
+    if isinstance(metadata.get("gate_reports"), list):
+        reports.extend(item for item in metadata.get("gate_reports", []) if isinstance(item, dict))
+    plan = getattr(training_result, "plan", None)
+    plan_metadata = dict(getattr(plan, "metadata", {}) or {}) if plan is not None else {}
+    if isinstance(plan_metadata.get("gate_report"), dict):
+        reports.append(plan_metadata.get("gate_report"))
+    if isinstance(plan_metadata.get("gate_reports"), list):
+        reports.extend(
+            item for item in plan_metadata.get("gate_reports", []) if isinstance(item, dict)
+        )
+
+    rejections: list[dict[str, Any]] = []
+    for report in reports:
+        stage = str(report.get("stage") or "")
+        for decision in report.get("decisions", []) or []:
+            if not isinstance(decision, dict) or decision.get("action") != "reject":
+                continue
+            evidence = (
+                decision.get("evidence") if isinstance(decision.get("evidence"), dict) else {}
+            )
+            rejections.append(
+                {
+                    "stage": stage,
+                    "gate_name": decision.get("gate_name"),
+                    "reason": decision.get("reason"),
+                    "target_name": evidence.get("target_name"),
+                    "evidence": evidence,
+                }
+            )
+    return rejections
 
 
 def _memory_diff_has_changes(diff: Any) -> bool:

@@ -31,6 +31,7 @@ from openviking.session.train.domain import (
     ScopedRolloutTrainingResult,
 )
 from openviking.session.train.engine import PolicyTrainingEngine
+from openviking.session.train.gates import default_policy_gate_runner
 from openviking.session.train.interfaces import (
     GradientEstimator,
     PolicyOptimizer,
@@ -83,6 +84,7 @@ class BatchPolicyTrainer:
             gradients=gradients,
             policy_set=policy_set,
             ctx=ctx,
+            analyses=analyses,
         )
         return RolloutTrainingResult(
             analyses=analyses,
@@ -222,6 +224,16 @@ class StreamingPolicyTrainer:
             self.policy_set,
             self.context.gradient_context,
         )
+        gate_report = _pop_latest_gate_report(analysis)
+        if gate_report is None:
+            gate_runner = self.context.gate_runner or default_policy_gate_runner()
+            gradients, gate_report_obj = await gate_runner.filter_gradients(
+                list(gradients),
+                analyses=[analysis],
+                policy_set=self.policy_set,
+            )
+            gate_report = gate_report_obj.to_dict()
+        self.context.execution_metadata.setdefault("gate_reports", []).append(gate_report)
         tracer.info(
             "StreamingPolicyTrainer buffered rollout "
             f"rollout_case={rollout.case.name} "
@@ -232,6 +244,7 @@ class StreamingPolicyTrainer:
             gradients=list(gradients),
             analysis=analysis,
             rollout=rollout,
+            gate_report=gate_report,
         )
         result = await self._batcher.submit(buffered)
         self._last_apply_result = result.apply_result
@@ -266,6 +279,18 @@ class StreamingPolicyTrainer:
         """
         if self._closed:
             raise RuntimeError("StreamingPolicyTrainer is closed")
+        gate_report = None
+        if gradients:
+            gate_report = _pop_latest_gate_report(analysis) if analysis is not None else None
+            if gate_report is None:
+                gate_runner = self.context.gate_runner or default_policy_gate_runner()
+                gradients, gate_report_obj = await gate_runner.filter_gradients(
+                    list(gradients),
+                    analyses=[analysis] if analysis is not None else [],
+                    policy_set=self.policy_set,
+                )
+                gate_report = gate_report_obj.to_dict()
+            self.context.execution_metadata.setdefault("gate_reports", []).append(gate_report)
         if not gradients:
             # No gradients to submit — return a no-op result immediately.
             return RolloutTrainingResult(
@@ -278,7 +303,11 @@ class StreamingPolicyTrainer:
                     errors=[],
                     metadata={"no_op": True},
                 ),
-                metadata={"no_op": True, "gradient_count": 0},
+                metadata={
+                    "no_op": True,
+                    "gradient_count": 0,
+                    **({"gate_report": gate_report} if gate_report is not None else {}),
+                },
             )
         tracer.info(
             f"StreamingPolicyTrainer buffered gradients new_gradients={len(gradients)}",
@@ -288,6 +317,7 @@ class StreamingPolicyTrainer:
             gradients=list(gradients),
             analysis=analysis,
             rollout=rollout,
+            gate_report=gate_report,
         )
         result = await self._batcher.submit(buffered)
         self._last_apply_result = result.apply_result
@@ -355,6 +385,7 @@ class StreamingPolicyTrainer:
                 gradients=gradient_chunk,
                 policy_set=self.policy_set,
                 ctx=self.context,
+                analyses=analyses,
             )
             self.policy_set = apply_result.updated_policy_set
             plans.append(plan)
@@ -373,6 +404,20 @@ class StreamingPolicyTrainer:
         self.policy_set = apply_result.updated_policy_set
         self._last_apply_result = apply_result
         chunk_gradient_counts = [len(chunk.gradients) for chunk in chunks]
+        gradient_gate_reports = [
+            item.gate_report for item in items if getattr(item, "gate_report", None) is not None
+        ]
+        plan_gate_reports = [
+            dict(plan.metadata).get("gate_report")
+            for plan in plans
+            if isinstance(dict(getattr(plan, "metadata", {}) or {}).get("gate_report"), dict)
+        ]
+        plan_gate_reports.extend(
+            report
+            for plan in plans
+            for report in dict(getattr(plan, "metadata", {}) or {}).get("gate_reports", [])
+            if isinstance(report, dict)
+        )
         result = RolloutTrainingResult(
             analyses=analyses,
             gradients=gradients,
@@ -388,6 +433,7 @@ class StreamingPolicyTrainer:
                 "score": average_score(analyses),
                 "source": "streaming_rollouts",
                 "flush_reason": reason,
+                "gate_reports": [*gradient_gate_reports, *plan_gate_reports],
             },
         )
         tracer.info(
@@ -399,6 +445,16 @@ class StreamingPolicyTrainer:
             console=self.config.trace_console,
         )
         return result
+
+
+def _pop_latest_gate_report(analysis: RolloutAnalysis | None) -> dict[str, Any] | None:
+    if analysis is None:
+        return None
+    reports = analysis.metadata.get("gate_reports")
+    if isinstance(reports, list) and reports:
+        report = reports.pop()
+        return report if isinstance(report, dict) else None
+    return None
 
 
 def _chunks_buffered_items_by_gradient_count(
@@ -493,6 +549,11 @@ def _scope_training_result_to_submitter(
             "gradient_count": len(submitter.gradients),
             "source": "streaming_rollouts_scoped",
             "scoped_to_submitter": True,
+            **(
+                {"gate_report": submitter.gate_report}
+                if getattr(submitter, "gate_report", None) is not None
+                else {}
+            ),
         }
     )
     return ScopedRolloutTrainingResult(
@@ -611,6 +672,7 @@ class _BufferedRolloutTraining:
     gradients: list[SemanticGradient]
     analysis: RolloutAnalysis | None = None
     rollout: Rollout | None = None
+    gate_report: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)

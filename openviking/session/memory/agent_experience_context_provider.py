@@ -21,6 +21,7 @@ from openviking.session.memory.session_extract_context_provider import (
 from openviking.session.memory.tools import add_tool_call_pair_to_messages
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
+from openviking.session.train.gates import default_experience_gate_contract
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
@@ -100,13 +101,9 @@ Before outputting any experience, decide which case applies:
 - **Preserve object boundaries.** Do not create a repair that changes object cardinality, lifecycle shape, passenger/object membership, or target object unless the user explicitly requested and confirmed that change and the tool/policy supports it.
 - **Reward-critical communication counts.** If the failure was a missing confirmation, missing final required fact, or wrong user-visible policy explanation, the experience may target `communicate_with_user`; do not strip those steps.
 - **Consistent naming language.** All `experience_name` values in one output must use the same language.
-- **Constraint trigger required.** Every experience MUST include `trigger_code`. The trigger MUST
-  be a narrow multi-stage gate: first filter by `ctx.get("candidate_tool")`, then require a positive
-  failure-risk match using compact `ctx.get("messages", [])` and/or `ctx.get("candidate_tool_args", {{}})`,
-  and include negative gates for nearby non-applicable intents or incompatible tool args.
-  Return False immediately for unrelated tools. Prefer `regex_search(pattern, text)` or
-  `regex_match(pattern, text)` for natural-language intent checks; do not import `re`. The function
-  MUST return bool and must not import modules, read files, call external APIs, or mutate global state.
+- **Constraint trigger required.** Every experience MUST include `trigger_code` and satisfy the enforced Gate Contract below.
+
+{default_experience_gate_contract()}
 - **Do NOT use `delete_ids`** for experience operations — use `supersedes` instead.
 - Follow field descriptions in the schema.
 - Output JSON only. Do not call any tools.

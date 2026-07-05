@@ -14,9 +14,10 @@ from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
 )
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
-from openviking.session.memory.extract_loop import ExtractLoop
+from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.train.domain import ExperienceSet, RolloutAnalysis, Trajectory
+from openviking.session.train.gates import build_gate_retry_instruction, default_policy_gate_runner
 from openviking.session.train.gradients import PatchSemanticGradient
 from openviking.session.train.utils import first_uri, safe_int
 from openviking.storage.viking_fs import get_viking_fs
@@ -68,6 +69,8 @@ class ExperienceGradientEstimator:
         async def estimate_one(trajectory: Trajectory) -> list[PatchSemanticGradient]:
             if not _should_update_experience_from_trajectory(trajectory):
                 return []
+            extract_context.metadata["current_analysis"] = analysis
+            extract_context.metadata["current_experience_set"] = experience_set
             try:
                 operations = await self._run_extract_loop(trajectory, extract_context)
             except Exception:
@@ -77,12 +80,19 @@ class ExperienceGradientEstimator:
                 return []
             if operations is None:
                 return []
-            return _operations_to_gradients(
+            gradients = _operations_to_gradients(
                 operations=operations,
                 trajectory=trajectory,
                 analysis=analysis,
                 experience_set=experience_set,
             )
+            gated, report = await _evaluate_experience_gradients(
+                gradients=gradients,
+                analysis=analysis,
+                experience_set=experience_set,
+            )
+            _record_gate_report(report, analysis=analysis, context=context)
+            return gated
 
         gradient_batches = await asyncio.gather(
             *(estimate_one(trajectory) for trajectory in analysis.trajectories)
@@ -125,6 +135,25 @@ class ExperienceGradientEstimator:
         provider._ctx = context.request_context
         provider._viking_fs = viking_fs
 
+        async def post_validation_hook(operations: Any, retry_count: int):
+            del retry_count
+            gradients = _operations_to_gradients(
+                operations=operations,
+                trajectory=trajectory,
+                analysis=_analysis_from_context_metadata(context),
+                experience_set=_experience_set_from_context_metadata(context),
+            )
+            _, report = await _evaluate_experience_gradients(
+                gradients=gradients,
+                analysis=_analysis_from_context_metadata(context),
+                experience_set=_experience_set_from_context_metadata(context),
+            )
+            instruction = build_gate_retry_instruction(report)
+            if not instruction:
+                return None
+            context.metadata.setdefault("gate_retry_reports", []).append(report.to_dict())
+            return PostValidationRetryDecision(retry=True, instruction=instruction)
+
         orchestrator = ExtractLoop(
             vlm=vlm,
             viking_fs=viking_fs,
@@ -132,9 +161,51 @@ class ExperienceGradientEstimator:
             context_provider=provider,
             isolation_handler=isolation_handler,
             thinking=True,
+            post_validation_hook=post_validation_hook,
+            max_post_validation_retries=1,
         )
         operations, _ = await orchestrator.run()
         return operations
+
+
+async def _evaluate_experience_gradients(
+    *,
+    gradients: list[PatchSemanticGradient],
+    analysis: RolloutAnalysis,
+    experience_set: ExperienceSet,
+) -> tuple[list[PatchSemanticGradient], Any]:
+    gate_runner = default_policy_gate_runner()
+    return await gate_runner.filter_gradients(
+        list(gradients),
+        analyses=[analysis],
+        policy_set=experience_set,
+    )
+
+
+def _record_gate_report(
+    report: Any,
+    *,
+    analysis: RolloutAnalysis,
+    context: ExperienceGradientContext,
+) -> None:
+    context.metadata.setdefault("gate_reports", []).append(report.to_dict())
+    analysis.metadata.setdefault("gate_reports", []).append(report.to_dict())
+
+
+def _analysis_from_context_metadata(context: ExperienceGradientContext) -> RolloutAnalysis:
+    analysis = context.metadata.get("current_analysis")
+    if not isinstance(analysis, RolloutAnalysis):
+        raise RuntimeError("Experience gate post-validation requires current_analysis metadata")
+    return analysis
+
+
+def _experience_set_from_context_metadata(context: ExperienceGradientContext) -> ExperienceSet:
+    experience_set = context.metadata.get("current_experience_set")
+    if not isinstance(experience_set, ExperienceSet):
+        raise RuntimeError(
+            "Experience gate post-validation requires current_experience_set metadata"
+        )
+    return experience_set
 
 
 def _should_update_experience_from_trajectory(trajectory: Trajectory) -> bool:

@@ -7,9 +7,11 @@ Reference: bot/vikingbot/agent/loop.py AgentLoop structure
 """
 
 import asyncio
+import inspect
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.server.identity import RequestContext
@@ -79,6 +81,25 @@ def _preview_text(content: str, *, limit: int = 240) -> str:
     return text[: limit - 3] + "..."
 
 
+@dataclass(slots=True)
+class PostValidationRetryDecision:
+    """Generic post-validation decision for ExtractLoop final operations.
+
+    This is intentionally domain-agnostic. Higher-level callers may validate
+    resolved operations and ask ExtractLoop to append a retry instruction before
+    the next LLM call.
+    """
+
+    retry: bool = False
+    instruction: str = ""
+
+
+PostValidationHook = Callable[
+    [ResolvedOperations, int],
+    PostValidationRetryDecision | Awaitable[PostValidationRetryDecision | None] | None,
+]
+
+
 class ExtractLoop:
     """
     Simplified ReAct orchestrator for memory updates.
@@ -100,6 +121,8 @@ class ExtractLoop:
         context_provider: Optional[Any] = None,  # ExtractContextProvider
         isolation_handler: MemoryIsolationHandler = None,
         thinking: bool = False,
+        post_validation_hook: PostValidationHook | None = None,
+        max_post_validation_retries: int = 1,
     ):
         """
         Initialize the ExtractLoop.
@@ -112,6 +135,10 @@ class ExtractLoop:
             ctx: Request context
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
             thinking: Whether to explicitly enable model thinking for this extraction loop.
+            post_validation_hook: Optional domain-level validator called after operations are
+                resolved and built-in patch validation passes. It may request one or more
+                retry iterations by returning a retry instruction.
+            max_post_validation_retries: Maximum retry iterations requested by the hook.
         """
         self.vlm = vlm
         self.viking_fs = viking_fs or get_viking_fs()
@@ -120,6 +147,8 @@ class ExtractLoop:
         self.ctx = ctx
         self.context_provider = context_provider
         self.thinking = bool(thinking)
+        self.post_validation_hook = post_validation_hook
+        self.max_post_validation_retries = max(0, int(max_post_validation_retries))
         # Use provided isolation_handler or create one in run()
         self._isolation_handler = isolation_handler
         # Track format error retry (max 1 retry)
@@ -157,6 +186,7 @@ class ExtractLoop:
         # Reset format retry counter for each run
         self._format_retry_count = 0
         patch_repair_count = 0
+        post_validation_retry_count = 0
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -311,6 +341,30 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         console=True,
                     )
                     continue
+
+                if (
+                    self.post_validation_hook is not None
+                    and post_validation_retry_count < self.max_post_validation_retries
+                ):
+                    decision = await self._run_post_validation_hook(
+                        final_operations,
+                        post_validation_retry_count,
+                    )
+                    if decision is not None and decision.retry and decision.instruction.strip():
+                        post_validation_retry_count += 1
+                        max_iterations += 1
+                        self._disable_tools_for_iteration = True
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": decision.instruction.strip(),
+                            }
+                        )
+                        tracer.info(
+                            f"Extended max_iterations to {max_iterations} for post-validation retry",
+                            console=True,
+                        )
+                        continue
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             failure_kind = self._last_llm_failure_kind or "unknown"
@@ -324,9 +378,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
-                retry_reason = (
-                    "refusal_text" if failure_kind == "refusal_text" else "format_retry"
-                )
+                retry_reason = "refusal_text" if failure_kind == "refusal_text" else "format_retry"
                 tracer.info(f"Extended max_iterations to {max_iterations} for {retry_reason}")
                 self._add_format_error_message(messages)
 
@@ -485,7 +537,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     break
 
         return resolved, raw_links
-
 
     def _normalize_delete_ids(self, raw_delete_ids: List[Any]) -> List[DeleteId]:
         delete_ids: List[DeleteId] = []
@@ -916,6 +967,31 @@ The final output of the model must strictly follow the JSON Schema format shown 
         if errors:
             tracer.info(f"SEARCH/REPLACE patch validation failed before apply: {errors}")
         return errors
+
+    async def _run_post_validation_hook(
+        self,
+        operations: ResolvedOperations,
+        retry_count: int,
+    ) -> PostValidationRetryDecision | None:
+        hook = self.post_validation_hook
+        if hook is None:
+            return None
+        try:
+            decision = hook(operations, retry_count)
+            if inspect.isawaitable(decision):
+                decision = await decision
+        except Exception as exc:
+            logger.warning("ExtractLoop post-validation hook failed: %s", exc, exc_info=True)
+            return None
+        if decision is None:
+            return None
+        if not isinstance(decision, PostValidationRetryDecision):
+            logger.warning(
+                "ExtractLoop post-validation hook returned unsupported decision type: %s",
+                type(decision).__name__,
+            )
+            return None
+        return decision
 
     def _build_patch_repair_instruction(self, patch_errors: List[Dict[str, Any]]) -> str:
         details = json.dumps(patch_errors, ensure_ascii=False, indent=2)

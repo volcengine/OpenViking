@@ -40,6 +40,7 @@ class PipelineContext:
     gradient_context: Any = None
     optimization_context: Any = None
     apply_context: Any = None
+    gate_runner: Any = None
     execution_metadata: dict[str, Any] = field(default_factory=dict)
     max_epochs: int = 1
     eval_each_epoch_case_loader: CaseLoader | None = None
