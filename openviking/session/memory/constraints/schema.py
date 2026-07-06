@@ -95,7 +95,7 @@ class ConstraintExperience:
         )
 
     @classmethod
-    def from_rendered_markdown(
+    def from_content_and_fields(
         cls,
         content: str,
         *,
@@ -103,7 +103,7 @@ class ConstraintExperience:
         fallback_name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> "ConstraintExperience | None":
-        """Build from OV client content plus structured memory metadata."""
+        """Build runtime view from memory content plus structured fields."""
 
         uri = str(uri or "").strip()
         if not uri:

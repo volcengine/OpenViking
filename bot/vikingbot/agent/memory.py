@@ -702,7 +702,7 @@ class MemoryStore:
                     continue
                 try:
                     content = await client.read_content(uri, level="read")
-                    constraint = ConstraintExperience.from_rendered_markdown(
+                    constraint = ConstraintExperience.from_content_and_fields(
                         content or "",
                         uri=uri,
                         fallback_name=self._filename_from_uri(uri).removesuffix(".md"),

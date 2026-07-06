@@ -10,7 +10,7 @@ from vikingbot.agent.memory import MemoryStore
 
 
 def test_constraint_experience_uses_structured_metadata():
-    exp = ConstraintExperience.from_rendered_markdown(
+    exp = ConstraintExperience.from_content_and_fields(
         "Rendered content is not parsed for trigger metadata.",
         uri="viking://user/u/memories/experiences/refund.md",
         metadata={
@@ -43,7 +43,7 @@ def test_constraint_experience_uses_structured_metadata():
 
 
 def test_constraint_experience_ignores_template_rendered_metadata_without_structured_fields():
-    exp = ConstraintExperience.from_rendered_markdown(
+    exp = ConstraintExperience.from_content_and_fields(
         (
             "## Situation\n"
             "- Refund request\n\n"

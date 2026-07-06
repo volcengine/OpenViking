@@ -58,7 +58,7 @@ fields:
       - DO NOT LEARN FULL WORKFLOWS: Do NOT describe or learn the full successful workflow; learn only the minimal repair for the first reward-changing failure. Never write an end-to-end business SOP.
       - FIRST-WRONG-TOOL CARD: Structure the experience as a pre-call card for the exact `First Wrong Tool Call.Tool`. Every bullet must answer: "What should the agent check or change immediately before this one candidate call?" Delete setup, search, planning, and later recovery steps unless they are the single missing precondition for this tool.
       - ROOT-CAUSE FOCUS: The reminder must target the first materially reward-changing mistake, not the entire task. State the generalized failure cause in `Failure Pattern` and the minimal prevention/recovery action in `Repair Procedure`.
-      - USE TRAJECTORY ERROR TOOL: Prefer the trajectory's `First Wrong Tool Call`, `First Material Divergence`, `Causal Analysis`, and `Experience Repair Signal` over broad task descriptions. If `Experience Repair Signal.Action` is `create` or `update`, the experience MUST focus on the `First Wrong Tool Call.Tool` and its `Candidate shape`; if the trajectory says the failure is not reusable or should skip, output no experience changes.
+      - USE TRAJECTORY ERROR TOOL: Prefer the trajectory's `First Wrong Tool Call`, `First Material Divergence`, `Causal Analysis`, and `Experience Repair Signal` over broad task descriptions. For failed or partially failed trajectories, treat `Experience Repair Signal.Action` as advisory context rather than an authorization gate: even when it says `skip`, independently create or update an experience if the first reward-changing mistake is reusable and preventable at the `First Wrong Tool Call.Tool` boundary. The experience MUST focus on the `First Wrong Tool Call.Tool` and its `Candidate shape`; output no changes only when the trajectory is successful, case-specific, already covered correctly, or not preventable by a pre-tool reminder.
       - PRE-CALL CHECKLIST ONLY: `Repair Procedure` must be a short checklist for the candidate call itself: verify candidate args/content, compare with already-read runtime facts, then either proceed, block the call, correct one argument, ask one confirmation, or send one required communication. Do not include normal workflow steps that happened before the wrong call.
       - SELF-CORRECT BAD EXPERIENCE: If the trajectory says a loaded experience was `over-broad`, `misleading`, or `too_weak` and names it as the target experience, UPDATE that existing experience instead of creating a new one. The update must primarily narrow or correct the existing experience's Failure Pattern, Guardrails, and trigger_code so it no longer fires on the non-applicable First Wrong Tool Call candidate shape.
       - DO NOT PATCH NON-CAUSAL EXPERIENCES: If a loaded experience was present but marked `irrelevant`, `ignored`, or `not_needed`, do not update it merely because it was loaded. Only update a loaded experience when the trajectory explicitly identifies it as causal or too weak for the First Wrong Tool Call.
@@ -100,6 +100,9 @@ fields:
 
       Rules:
       - ALWAYS return a bool.
+      - Allowed builtins include `any`, `all`, `bool`, `dict`, `enumerate`, `float`, `int`,
+        `isinstance`, `len`, `list`, `max`, `min`, `range`, `reversed`, `set`, `str`,
+        `sum`, `tuple`, `regex_match`, and `regex_search`. Do not call other functions.
       - SINGLE-TOOL BOUNDARY: By default, one experience trigger MUST bind to exactly one
         candidate_tool, preferably the trajectory's `First Wrong Tool Call.Tool`, using
         `if ctx.get("candidate_tool") != "<tool_name>": return False`.

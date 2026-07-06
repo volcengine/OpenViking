@@ -20,7 +20,7 @@ class ConstraintExperience:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_rendered_markdown(
+    def from_content_and_fields(
         cls,
         content: str,
         *,

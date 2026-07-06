@@ -42,8 +42,64 @@ def should_trigger(ctx):
     )
 
 
+def test_trigger_allows_range_and_reversed_for_recent_context_scans():
+    code = """
+def should_trigger(ctx):
+    messages = ctx.get("messages", [])
+    for index in range(len(messages)):
+        message = messages[len(messages) - 1 - index]
+        if message.get("role") == "user":
+            return "cancel" in message.get("content", "").lower()
+    for message in reversed(messages):
+        if message.get("role") == "tool":
+            return True
+    return False
+"""
+
+    validate_trigger_code(code)
+
+    assert (
+        evaluate_trigger_code(
+            code,
+            {
+                "messages": [
+                    {"role": "tool", "content": "reservation details"},
+                    {"role": "user", "content": "Please cancel it"},
+                ]
+            },
+        )
+        is True
+    )
+
+
+def test_trigger_allows_broad_safe_python_expressions():
+    code = """
+def should_trigger(ctx):
+    args = ctx.get("candidate_tool_args", {})
+    content = str(args.get("content", ""))
+    score = (len(content) * 2) // 3
+    keywords = [word.strip().casefold() for word in content.split(",") if word.strip()]
+    has_refund = any(word.startswith("refund") or word.find("cancel") >= 0 for word in keywords)
+    prefix = content[:6].lower() if content else ""
+    return ctx.get("candidate_tool") == "communicate_with_user" and has_refund and score >= 4 and prefix != "ignore"
+"""
+
+    validate_trigger_code(code)
+
+    assert (
+        evaluate_trigger_code(
+            code,
+            {
+                "candidate_tool": "communicate_with_user",
+                "candidate_tool_args": {"content": "refund, cancel booking"},
+            },
+        )
+        is True
+    )
+
+
 def test_trigger_allows_regex_helpers_after_tool_gate():
-    code = r'''
+    code = r"""
 def should_trigger(ctx):
     if ctx.get("candidate_tool") != "book_reservation":
         return False
@@ -51,7 +107,7 @@ def should_trigger(ctx):
         if regex_search(r"(book|预订).*(flight|航班)|(flight|航班).*(book|预订)", message.get("content", "")):
             return True
     return False
-'''
+"""
 
     validate_trigger_code(code)
 
@@ -83,6 +139,10 @@ def should_trigger(ctx):
         "import os\ndef should_trigger(ctx):\n    return True",
         "def should_trigger(ctx):\n    return open('/tmp/x').read()",
         "def should_trigger(ctx):\n    while True:\n        pass",
+        "def should_trigger(ctx):\n    try:\n        return True\n    except Exception:\n        return False",
+        "def should_trigger(ctx):\n    return getattr(ctx, 'get')('candidate_tool')",
+        "def should_trigger(ctx):\n    return ctx.__class__ is dict",
+        "def should_trigger(ctx):\n    return '{}'.format(ctx)",
         "def other(ctx):\n    return True",
     ],
 )
