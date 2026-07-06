@@ -440,12 +440,14 @@ ensure_checkout() {
 }
 
 # Locate the plugin dir with real files on disk (for legacy / statusline).
+# Callers capture stdout ($(...)), so any progress output from the fetch has
+# to stay on stderr or it corrupts the captured path.
 plugin_dir_on_disk() { # plugin_dir_on_disk <plugin-subdir>
   if [ -n "$MKT_DIR" ] && [ -d "$MKT_DIR/$1" ]; then
     printf '%s' "$MKT_DIR/$1"
     return 0
   fi
-  ensure_checkout || true
+  ensure_checkout 1>&2 || true
   if [ -n "$SRC_ROOT" ] && [ -d "$SRC_ROOT/examples/$1" ]; then
     printf '%s' "$SRC_ROOT/examples/$1"
     return 0
