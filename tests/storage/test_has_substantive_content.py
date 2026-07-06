@@ -13,6 +13,7 @@ _CASES = [
     ("heading_only_setext", "Title\n=====\n", False),
     ("heading_plus_body", "# Install\n\nRun `make build` to compile.", True),
     ("frontmatter_only", "---\ntitle: x\ntags: [a]\n---\n", False),
+    ("frontmatter_only_eof", "---\ntitle: Test\n---", False),
     ("html_comment_only", "<!-- generated -->", False),
     ("table_only", "| A | B |\n|---|---|\n| foo | bar |", True),
     ("links_only_with_text", "- [Guide](a.md)\n- [API](b.md)", True),

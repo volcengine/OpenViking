@@ -65,7 +65,7 @@ logger = get_logger(__name__)
 
 # CJK ranges: Unified Ideographs, Hiragana, Katakana, Hangul, CJK punctuation.
 _CJK_RE = re.compile("[　-〿぀-ゟ゠-ヿ一-鿿가-힯]")
-_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)  # leading block only
+_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---[ \t]*(?:\n|\Z)", re.DOTALL)  # leading block only; closes at EOF too
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _ATX_RE = re.compile(r"^\s*#{1,6}\s+\S")
@@ -798,7 +798,9 @@ class SemanticProcessor(DequeueHandlerBase):
             file_vectorize_items = [
                 (file_path, summary)
                 for file_path, summary in zip(file_paths, file_summaries, strict=False)
-                if file_path in paths_to_vectorize and summary is not None
+                if file_path in paths_to_vectorize
+                and summary is not None
+                and summary.get("has_substantive_content", True)
             ]
             generated_content = await self._generate_overview(
                 dir_uri, completed_summaries, [], llm_sem=llm_sem
@@ -1485,8 +1487,10 @@ class SemanticProcessor(DequeueHandlerBase):
             return _neutral_directory_overview(dir_uri.split("/")[-1])
 
         if not vlm.is_available():
+            # VLM down is transient (retry later), not "empty" — keep the not-ready
+            # marker here; only genuinely non-substantive dirs get the no-content one.
             logger.warning("VLM not available, using default overview")
-            return _neutral_directory_overview(dir_uri.split("/")[-1])
+            return f"# {dir_uri.split('/')[-1]}\n\n{_OVERVIEW_NOT_READY_MARKER}"
 
         from openviking.session.memory.utils.language import resolve_output_language
 

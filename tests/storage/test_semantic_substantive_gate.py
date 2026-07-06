@@ -143,6 +143,26 @@ async def test_all_nonsubstantive_dir_writes_neutral_overview(monkeypatch):
     assert abstract == "[Directory has no substantive content]"
 
 
+@pytest.mark.asyncio
+async def test_vlm_unavailable_with_substantive_content_is_not_no_content(monkeypatch):
+    # VLM down is transient — a directory WITH substantive summaries must not be
+    # mislabeled "no substantive content" (which would be treated as permanently
+    # empty and non-embeddable). It gets the transient not-ready marker instead.
+    vlm = MagicMock()
+    vlm.is_available.return_value = False
+    vlm.get_completion_async = AsyncMock()
+    monkeypatch.setattr(sp, "get_openviking_config", lambda: _fake_config(vlm))
+
+    processor = SemanticProcessor()
+    summaries = [{"name": "a.md", "summary": "real content", "has_substantive_content": True}]
+    overview = await processor._generate_overview("viking://user/u/docs", summaries, [])
+
+    vlm.get_completion_async.assert_not_awaited()
+    assert overview != _neutral_directory_overview("docs")
+    assert is_neutral_overview(overview) is False
+    assert "[Directory overview is not ready]" in overview
+
+
 # --------------------------------------------------------------------------- #
 # Point 5 backstop — neutral overview is recognized as non-embeddable
 # --------------------------------------------------------------------------- #
