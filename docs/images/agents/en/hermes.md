@@ -6,15 +6,15 @@
 hermes memory setup
 ```
 
-## Step 2: Copy the Base URL and API Key
+## Step 2: Copy the Base URL and Authentication management
 
-After running the setup command, Hermes prompts for the Base URL and API Key. Copy them and paste them into Hermes:
+After running the setup command, Hermes prompts for the Base URL and Authentication management. Copy them and paste them into Hermes:
 
 - Base URL: Copy the following Base URL into Hermes:
 ```text
 https://api.vikingdb.cn-beijing.volces.com/openviking
 ```
-- API Key: Copy the API Key shown on the page into your Hermes terminal
+- Authentication management: Copy the Authentication management shown on the page into your Hermes terminal
 - Tenant account / user / agent ID: Used for multi-tenant deployments
 
 The configuration is saved to Hermes `config.yaml` and `.env` files.
