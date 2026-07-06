@@ -16,6 +16,16 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
 
+SYSTEM_PROMPT_PROFILES = {"full", "minimal"}
+
+
+def normalize_system_prompt_profile(value: str | None) -> str:
+    """Normalize VikingBot system prompt profile names."""
+    profile = str(value or "full").strip().lower()
+    if profile not in SYSTEM_PROMPT_PROFILES:
+        raise ValueError("system_prompt_profile must be 'full' or 'minimal'")
+    return profile
+
 
 class ContextBuilder:
     """
@@ -37,6 +47,7 @@ class ContextBuilder:
         is_group_chat: bool = False,
         eval: bool = False,
         openviking_connection: dict[str, Any] | None = None,
+        system_prompt_profile: str = "full",
     ):
         self.workspace = workspace
         self._templates_ensured = False
@@ -48,6 +59,7 @@ class ContextBuilder:
         self._is_group_chat = is_group_chat
         self._eval = eval
         self._openviking_connection = openviking_connection
+        self.system_prompt_profile = normalize_system_prompt_profile(system_prompt_profile)
         self.latest_relevant_memories: str | None = None
 
     @property
@@ -94,6 +106,7 @@ class ContextBuilder:
         profile_user_list: list[str] | None = None,
         memory_peer_ids: list[str] | None = None,
         memory_owner_user_ids: list[str] | None = None,
+        system_prompt_profile: str | None = None,
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -104,10 +117,17 @@ class ContextBuilder:
             profile_user_list: Deprecated list of additional peer IDs to fetch profiles for.
             memory_peer_ids: Peer IDs used for memory retrieval; profiles are fetched too.
             memory_owner_user_ids: Deprecated owner-user IDs used for trusted-mode lookup.
+            system_prompt_profile: "full" for the default rich prompt, or "minimal" to
+                omit generic VikingBot bootstrap/skills/persona docs while preserving runtime
+                tool registration and message flow.
 
         Returns:
             Complete system prompt.
         """
+        profile = normalize_system_prompt_profile(system_prompt_profile or self.system_prompt_profile)
+        if profile == "minimal":
+            return await self._get_minimal_identity(session_key)
+
         # Ensure workspace templates exist only when first needed
         self._ensure_templates_once()
         workspace_id = self._get_workspace_id(session_key)
@@ -317,6 +337,19 @@ IMPORTANT:
 ## Memory
 - Remember important facts: using openviking_memory_commit tool to commit"""
 
+    async def _get_minimal_identity(self, session_key: SessionKey) -> str:
+        """Get a compact system prompt for benchmark/automation contexts."""
+        del session_key
+        return """# VikingBot
+
+You are VikingBot executing a task through the active runtime.
+
+Follow the current user request and any domain-specific policy provided in other system messages.
+Use only the tools provided by the runtime tool schema; do not invent tool results.
+When communicating with users, be concise and preserve exact IDs, names, dates, prices, and other values from tool results.
+
+Note: generic workspace docs, skills catalog, soul/persona text, memory instructions, and long tool documentation are omitted because system_prompt_profile=minimal. Tool registration, tool schemas, sandboxing, memory providers, and agent loop behavior are unchanged."""
+
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
         parts = []
@@ -343,6 +376,7 @@ IMPORTANT:
         experience_recall_enable: bool | None = None,
         exp_exclude_uris: list[str] | None = None,
         experience_case_lookup: dict[str, Any] | None = None,
+        system_prompt_profile: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -373,6 +407,7 @@ IMPORTANT:
             profile_user_list=profile_user_list,
             memory_peer_ids=memory_peer_ids,
             memory_owner_user_ids=memory_owner_user_ids,
+            system_prompt_profile=system_prompt_profile,
         )
         messages.append({"role": "system", "content": system_prompt})
 

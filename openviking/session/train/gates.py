@@ -238,8 +238,6 @@ def default_policy_gate_runner() -> GateRunner:
             ExperienceContentFormatGate(mode="enforce"),
             ExperienceCausalSignalGate(mode="enforce"),
             ExperienceToolAlignmentGate(mode="enforce"),
-            ExperienceTriggerShapeGate(mode="enforce"),
-            ExperienceUpdateNarrowingGate(mode="warn"),
         ]
     )
 
@@ -262,17 +260,6 @@ Your experience output will be rejected unless every experience satisfies these 
 - trigger_code must bind exactly one candidate_tool.
 - The candidate_tool must match the trajectory's First Wrong Tool Call.Tool or Trigger boundary.
 - Do not choose earlier setup tools, later recovery tools, or multi-tool workflow triggers.
-
-4. Candidate-shape trigger
-- After the candidate_tool gate, write tools must inspect ctx["candidate_tool_args"].
-- communicate_with_user must inspect ctx["candidate_tool_args"]["content"].
-- Prefer inspecting stable object-binding fields such as reservation_id, flights, passengers, payment_methods, or the specific field that caused the failure, but do not invent unavailable fields.
-- Do not rely on ctx["messages"] alone. If decisive candidate args/content are absent, return False.
-- Add negative gates for nearby but non-applicable candidate shapes.
-
-5. Update safety
-- Updating an existing experience must not broaden the trigger.
-- Do not add extra candidate tools, remove candidate args/content checks, or turn a candidate-shape trigger into a history-only trigger.
 
 If you cannot satisfy this contract, output no experience changes."""
 
