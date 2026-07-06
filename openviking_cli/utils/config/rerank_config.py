@@ -4,6 +4,14 @@ from typing import Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+# Below this width the reranker query budget dominates and cross-encoder scores
+# become unstable; a non-zero cap under it is almost always a misconfiguration.
+_MIN_SAFE_CHARS_PER_DOC = 200
+
 
 class RerankConfig(BaseModel):
     """Configuration for rerank API. Supports VikingDB, Cohere, OpenAI-compatible, and LiteLLM providers."""
@@ -47,6 +55,32 @@ class RerankConfig(BaseModel):
         default=0.1, description="Relevance threshold (score > threshold is relevant)"
     )
 
+    max_chars_per_doc: int = Field(
+        default=0,
+        ge=0,
+        strict=True,
+        description=(
+            "Truncate each document to N characters before reranking; 0 = unbounded. "
+            "Bounds reranker input so one oversized abstract cannot overflow the model "
+            "and fail the whole batch. Truncates model input only; stored/returned "
+            "abstracts are untouched."
+        ),
+    )
+
+    max_tokens_per_doc: int = Field(
+        default=0,
+        ge=0,
+        strict=True,
+        description=(
+            "Forward a per-document token-truncation limit to rerank providers whose APIs "
+            "accept it (Cohere v2, LiteLLM, and OpenAI-compatible Cohere-schema endpoints "
+            "receive 'max_tokens_per_doc'); 0 = do not send the field (parity). Token "
+            "truncation is provider-native and closes the CJK gap a character cap cannot: "
+            "N characters can be many more than N tokens. VikingDB/doubao has no truncation "
+            "field, so use max_chars_per_doc for that provider."
+        ),
+    )
+
     model_config = {"extra": "forbid"}
 
     def _effective_provider(self) -> Optional[str]:
@@ -76,6 +110,18 @@ class RerankConfig(BaseModel):
         if provider == "litellm":
             if not self.model:
                 raise ValueError("LiteLLM rerank provider requires 'model'")
+        return self
+
+    @model_validator(mode="after")
+    def warn_small_char_cap(self) -> "RerankConfig":
+        """Soft-warn (never reject) when a non-zero char cap is below the stability floor."""
+        if 0 < self.max_chars_per_doc < _MIN_SAFE_CHARS_PER_DOC:
+            logger.warning(
+                "RerankConfig.max_chars_per_doc=%d is below the ~%d-char cross-encoder "
+                "stability floor; rerank scores may become unstable. Set 0 to disable truncation.",
+                self.max_chars_per_doc,
+                _MIN_SAFE_CHARS_PER_DOC,
+            )
         return self
 
     def is_available(self) -> bool:
