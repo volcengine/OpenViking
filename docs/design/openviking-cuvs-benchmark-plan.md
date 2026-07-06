@@ -1,5 +1,8 @@
 # OpenViking cuVS benchmark plan
 
+相关文档：[集成计划](./openviking-cuvs-integration-plan.md)、
+[初步结果](../../benchmark/cuvs/PRELIMINARY_RESULTS.md)。
+
 ## 目标
 
 本 benchmark 不追求单个“最高 QPS”数字，而是回答四个对集成决策更有用的问题：
