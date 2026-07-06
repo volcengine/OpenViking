@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import openviking.storage.vectordb.engine as engine
 from openviking.storage.vectordb.index.cuvs_index import (
     CuVSDenseIndex,
+    CuVSMemoryBudgetError,
+    CuVSUnavailableError,
     UnsupportedCuVSFilterError,
 )
 from openviking.storage.vectordb.index.index import IIndex
@@ -229,21 +231,31 @@ class LocalIndex(IIndex):
         self.meta = meta
         self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
         self.dense_search: Optional[CuVSDenseIndex] = None
+        self._auto_cuvs = False
         dense_search_config = dict(dense_search_config or {})
-        if dense_search_config.get("backend") == "cuvs":
+        dense_search_backend = dense_search_config.get("backend")
+        if dense_search_backend in {"cuvs", "auto_cuvs"}:
+            self._auto_cuvs = dense_search_backend == "auto_cuvs"
             vector_meta = meta.inner_meta.get("VectorIndex", {})
             field_types = {
                 name: DataProcessor.normalize_field_type(field_meta.get("FieldType", ""))
                 for name, field_meta in meta.collection_meta.fields_dict.items()
             }
-            self.dense_search = CuVSDenseIndex(
-                dimension=vector_meta.get("Dimension", meta.collection_meta.vector_dim),
-                distance=vector_meta.get("Distance", "ip"),
-                normalize_vectors=vector_meta.get("NormalizeVector", False),
-                field_types=field_types,
-                config=dense_search_config,
-            )
-            self.dense_search.add_candidates(initial_candidates or [])
+            try:
+                self.dense_search = CuVSDenseIndex(
+                    dimension=vector_meta.get("Dimension", meta.collection_meta.vector_dim),
+                    distance=vector_meta.get("Distance", "ip"),
+                    normalize_vectors=vector_meta.get("NormalizeVector", False),
+                    field_types=field_types,
+                    config=dense_search_config,
+                    auto_memory=self._auto_cuvs,
+                )
+                self.dense_search.add_candidates(initial_candidates or [])
+            except CuVSUnavailableError:
+                if not self._auto_cuvs:
+                    raise
+                logger.info("cuVS auto mode unavailable; keeping native dense search")
+                self.dense_search = None
 
     def update(
         self,
@@ -295,6 +307,10 @@ class LocalIndex(IIndex):
                 if not sparse_raw_terms and not sparse_values:
                     try:
                         return self.dense_search.search(query_vector, limit, filters)
+                    except CuVSMemoryBudgetError as exc:
+                        if not self._auto_cuvs:
+                            raise
+                        logger.debug("cuVS auto mode kept native dense search: %s", exc)
                     except UnsupportedCuVSFilterError as exc:
                         if not self.dense_search.fallback_to_native:
                             raise

@@ -34,8 +34,70 @@ class CuVSUnavailableError(RuntimeError):
     """Raised when the configured cuVS runtime cannot be used."""
 
 
+class CuVSMemoryBudgetError(RuntimeError):
+    """Raised when auto mode cannot safely admit a cuVS index into free VRAM."""
+
+
 class UnsupportedCuVSFilterError(ValueError):
     """Raised when a filter cannot be translated to a cuVS prefilter."""
+
+
+@dataclass(frozen=True)
+class CuVSMemoryEstimate:
+    """Conservative GPU-memory estimate used only for auto-admission."""
+
+    vector_bytes: int
+    graph_bytes: int
+    build_graph_bytes: int
+    filter_cache_bytes: int
+    estimated_peak_bytes: int
+
+
+def estimate_cuvs_memory(
+    *,
+    vector_count: int,
+    dimension: int,
+    algorithm: str,
+    build_params: Mapping[str, Any],
+    filter_cache_size: int,
+    safety_factor: float,
+) -> CuVSMemoryEstimate:
+    """Estimate peak VRAM without changing the explicit cuVS backend behavior.
+
+    The estimate accounts for the float32 dataset, retained and intermediate
+    CAGRA graphs, and the configured number of cached filter bitsets.  cuVS and
+    allocator workspaces vary by release and build algorithm, so the configured
+    safety factor intentionally covers the remaining uncertainty.
+    """
+
+    vector_count = max(0, int(vector_count))
+    dimension = max(0, int(dimension))
+    safety_factor = float(safety_factor)
+    if safety_factor < 1.0:
+        raise ValueError("cuVS auto memory safety factor must be at least 1.0")
+
+    vector_bytes = vector_count * dimension * 4
+    graph_bytes = 0
+    build_graph_bytes = 0
+    if algorithm == "cagra":
+        graph_degree = max(0, int(build_params.get("graph_degree", 64)))
+        intermediate_graph_degree = max(
+            0, int(build_params.get("intermediate_graph_degree", 128))
+        )
+        graph_bytes = vector_count * graph_degree * 4
+        build_graph_bytes = vector_count * intermediate_graph_degree * 4
+
+    filter_word_count = (vector_count + 31) // 32
+    filter_cache_bytes = filter_word_count * 4 * max(0, int(filter_cache_size))
+    known_peak_bytes = vector_bytes + graph_bytes + build_graph_bytes + filter_cache_bytes
+    estimated_peak_bytes = math.ceil(known_peak_bytes * safety_factor)
+    return CuVSMemoryEstimate(
+        vector_bytes=vector_bytes,
+        graph_bytes=graph_bytes,
+        build_graph_bytes=build_graph_bytes,
+        filter_cache_bytes=filter_cache_bytes,
+        estimated_peak_bytes=estimated_peak_bytes,
+    )
 
 
 def _normalize(vector: Sequence[float]) -> List[float]:
@@ -215,6 +277,27 @@ class _CuVSRuntime:
         self.search_params = dict(search_params)
         self.dataset = None
 
+    def memory_info(self) -> Tuple[int, int]:
+        free_bytes, total_bytes = self.cp.cuda.runtime.memGetInfo()
+        return int(free_bytes), int(total_bytes)
+
+    def release_index(self) -> None:
+        self.dataset = None
+        try:
+            self.cp.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            logger.debug("Could not release unused CuPy memory-pool blocks", exc_info=True)
+
+    def is_out_of_memory(self, exc: Exception) -> bool:
+        out_of_memory_type = getattr(self.cp.cuda.memory, "OutOfMemoryError", ())
+        if out_of_memory_type and isinstance(exc, out_of_memory_type):
+            return True
+        message = str(exc).lower()
+        return any(
+            marker in message
+            for marker in ("out of memory", "memory allocation", "bad_alloc")
+        )
+
     def build(self, dataset: Sequence[Sequence[float]]):
         self.dataset = self.cp.asarray(dataset, dtype=self.cp.float32)
         if self.algorithm == "brute_force":
@@ -267,7 +350,7 @@ class _CuVSRuntime:
         return [int(item) for item in host_neighbors], [float(item) for item in host_distances]
 
     def close(self) -> None:
-        self.dataset = None
+        self.release_index()
 
 
 @dataclass(frozen=True)
@@ -296,11 +379,13 @@ class CuVSDenseIndex:
         field_types: Mapping[str, str],
         config: Mapping[str, Any],
         runtime: Optional[Any] = None,
+        auto_memory: bool = False,
     ):
         self.dimension = int(dimension)
         self.distance = distance.lower()
         self.normalize_vectors = bool(normalize_vectors)
         self.field_types = dict(field_types)
+        self.auto_memory = bool(auto_memory)
         self.algorithm = str(config.get("algorithm", "brute_force")).lower()
         if self.algorithm not in self._SUPPORTED_ALGORITHMS:
             raise ValueError(
@@ -314,9 +399,20 @@ class CuVSDenseIndex:
         self.filter_cache_size = int(config.get("filter_cache_size", 16))
         if self.filter_cache_size < 0:
             raise ValueError("cuVS filter_cache_size cannot be negative")
+        self.auto_memory_reserve_bytes = (
+            int(config.get("auto_memory_reserve_mb", 1024)) * 1024 * 1024
+        )
+        if self.auto_memory_reserve_bytes < 0:
+            raise ValueError("cuVS auto memory reserve cannot be negative")
+        self.auto_memory_safety_factor = float(
+            config.get("auto_memory_safety_factor", 2.0)
+        )
+        if self.auto_memory_safety_factor < 1.0:
+            raise ValueError("cuVS auto memory safety factor must be at least 1.0")
         self._metric = "inner_product" if self.distance == "ip" else "sqeuclidean"
         build_params = dict(config.get("build_params", {}))
         search_params = dict(config.get("search_params", {}))
+        self._build_params = build_params
         if "metric" in build_params:
             raise ValueError(
                 "Set the cuVS metric through storage.vectordb.distance_metric, "
@@ -440,9 +536,46 @@ class CuVSDenseIndex:
             self._index = None
             self._dirty = False
             return
+        if self.auto_memory:
+            self._index = None
+            release_index = getattr(self._runtime, "release_index", None)
+            if release_index is not None:
+                release_index()
+            estimate = estimate_cuvs_memory(
+                vector_count=len(self._labels),
+                dimension=self.dimension,
+                algorithm=self.algorithm,
+                build_params=self._build_params,
+                filter_cache_size=self.filter_cache_size,
+                safety_factor=self.auto_memory_safety_factor,
+            )
+            try:
+                free_bytes, total_bytes = self._runtime.memory_info()
+            except Exception as exc:
+                raise CuVSMemoryBudgetError(
+                    "cuVS auto mode could not read free GPU memory"
+                ) from exc
+            usable_bytes = max(0, free_bytes - self.auto_memory_reserve_bytes)
+            if estimate.estimated_peak_bytes > usable_bytes:
+                raise CuVSMemoryBudgetError(
+                    "cuVS auto mode kept native search because the estimated GPU peak "
+                    f"({estimate.estimated_peak_bytes} bytes) exceeds the usable free "
+                    f"memory ({usable_bytes} of {total_bytes} bytes after reserve)"
+                )
         dataset = [self._records[label].vector for label in self._labels]
         self._index = None
-        self._index = self._runtime.build(dataset)
+        try:
+            self._index = self._runtime.build(dataset)
+        except Exception as exc:
+            is_out_of_memory = getattr(self._runtime, "is_out_of_memory", None)
+            if self.auto_memory and is_out_of_memory is not None and is_out_of_memory(exc):
+                release_index = getattr(self._runtime, "release_index", None)
+                if release_index is not None:
+                    release_index()
+                raise CuVSMemoryBudgetError(
+                    "cuVS auto mode fell back to native search after a GPU allocation failure"
+                ) from exc
+            raise
         self._dirty = False
         logger.info("Built cuVS %s index with %d vectors", self.algorithm, len(self._labels))
 

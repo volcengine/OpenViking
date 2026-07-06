@@ -1190,7 +1190,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `sparse_weight` | float | 混合向量搜索的稀疏权重，仅在使用混合索引时生效 | 0.0 |
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
-| `cuvs` | object | 'cuvs' 类型的 NVIDIA cuVS 配置，参见 [cuVS 使用指南](./16-cuvs.md) | - |
+| `cuvs` | object | NVIDIA cuVS 配置，也用于在 'local' 下显式开启显存感知自动模式，参见 [cuVS 使用指南](./16-cuvs.md) | - |
 | `qdrant` | object | 'qdrant' 类型的 Qdrant 配置 | - |
 | `opengauss` | object | 'opengauss' 原生向量后端配置 | - |
 

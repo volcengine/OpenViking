@@ -33,6 +33,34 @@ cuVS keeps a float32 GPU shadow. Opting into cuVS does not rewrite the native
 index. Those later sections are therefore not equal-dtype or equal-memory
 comparisons and report native Recall@K against cuVS brute-force.
 
+## GPU memory footprint
+
+The current cuVS shadow stores float32 vectors. The brute-force payload is
+therefore `N * dimension * 4` bytes. CAGRA also retains a uint32 neighbor graph
+of approximately `N * graph_degree * 4` bytes and may require an intermediate
+graph during build. A cached filter bitset adds approximately `N / 8` bytes.
+
+The harness records `cudaMemGetInfo` immediately before and after index build.
+The following retained-build deltas are medians from five clean processes:
+
+| Dataset | Backend | GPU memory delta |
+| --- | --- | ---: |
+| 100K x 768D synthetic | cuVS brute-force | 294 MiB |
+| 1M x 768D synthetic | cuVS brute-force | 2.9 GiB |
+| 100K x 1024D synthetic | cuVS brute-force | 392 MiB |
+| 1M x 1024D synthetic | cuVS brute-force | 3.9 GiB |
+| 1,183,514 x 100D GloVe | cuVS brute-force | 452 MiB |
+| 1,183,514 x 100D GloVe | cuVS CAGRA | 872 MiB |
+
+These are not peak-VRAM measurements. Allocator state, CAGRA build parameters,
+query batch size, and concurrent GPU use can add transient memory. The deltas
+also exclude the approximately 327 MiB CUDA runtime/context baseline observed
+before build in these processes. The opt-in memory-aware auto mode initializes
+that runtime first, then estimates the float32 payload, CAGRA retained and
+intermediate graphs, and filter cache; multiplies the result by a 2.0 default
+safety factor; and preserves 1 GiB of free memory. Insufficient budget keeps
+the native path for that query and allows a later retry.
+
 ## Batch size 1
 
 This is the closest index-level approximation of the current OpenViking

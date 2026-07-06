@@ -1218,7 +1218,7 @@ Vector database storage configuration
 | `sparse_weight` | float | Sparse weight for hybrid vector search, only effective when using hybrid index | 0.0 |
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
-| `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend; see the [cuVS guide](./16-cuvs.md) | - |
+| `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend and the opt-in memory-aware auto mode on 'local'; see the [cuVS guide](./16-cuvs.md) | - |
 | `qdrant` | object | 'qdrant' type Qdrant configuration | - |
 | `opengauss` | object | 'opengauss' native vector backend configuration | - |
 

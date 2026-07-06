@@ -639,11 +639,11 @@
         <table>
           <thead><tr><th>组件</th><th>职责</th><th>状态</th></tr></thead>
           <tbody>
-            <tr><td><code>VectorDBBackendConfig / CuVSConfig</code></td><td>解析 backend、算法、构建/查询参数和回退策略；拒绝未知配置。</td><td><span class="pill done">已实现</span></td></tr>
+            <tr><td><code>VectorDBBackendConfig / CuVSConfig</code></td><td>解析 backend、算法、构建/查询参数、回退策略和显存感知 auto admission；拒绝未知配置。</td><td><span class="pill done">已实现</span></td></tr>
             <tr><td><code>CuVSCollectionAdapter</code></td><td>复用 local adapter，只注入 <code>dense_search.backend=cuvs</code>，保持外部 API 不变。</td><td><span class="pill done">已实现</span></td></tr>
             <tr><td><code>LocalCollection</code></td><td>管理 schema、Store、delta、index 生命周期、恢复和结果回表。</td><td><span class="pill native">复用原生</span></td></tr>
-            <tr><td><code>LocalIndex</code></td><td>把 pure dense 路由到 cuVS；把 sparse/hybrid、复杂过滤、聚合和标量能力保留给 native。</td><td><span class="pill done">已扩展</span></td></tr>
-            <tr><td><code>CuVSDenseIndex</code></td><td>维护 host shadow、dirty 标记、过滤 bitset、GPU index 生命周期和得分映射。</td><td><span class="pill done">新增</span></td></tr>
+            <tr><td><code>LocalIndex</code></td><td>把 pure dense 路由到 cuVS；auto 模式在显存预算不足时保留 native，并在后续查询重试。</td><td><span class="pill done">已扩展</span></td></tr>
+            <tr><td><code>CuVSDenseIndex</code></td><td>维护 host shadow、dirty 标记、显存预算、过滤 bitset、GPU index 生命周期和得分映射。</td><td><span class="pill done">新增</span></td></tr>
             <tr><td><code>_CuVSRuntime</code></td><td>延迟导入 CuPy/cuVS，创建 brute-force/CAGRA 索引并调用 GPU search。</td><td><span class="pill done">新增</span></td></tr>
             <tr><td>Native <code>IndexEngine</code></td><td>继续处理 scalar、sparse/hybrid、sort、aggregate 与能力回退。</td><td><span class="pill native">保留</span></td></tr>
             <tr><td><code>StoreManager</code></td><td>保存完整 CandidateData，并作为重启恢复和回表的唯一权威来源。</td><td><span class="pill native">保留</span></td></tr>
@@ -770,6 +770,14 @@
           <code>float32</code>。因此两条 dense 路径不是等 dtype、等内存或完全相同数值语义的比较；
           native fallback 始终走原有 int8 index，benchmark 需要显式报告 dtype 与 Recall@K。
         </div>
+        <div class="callout">
+          <strong>显存感知 auto 模式：</strong>
+          只有在 <code>backend=local</code> 且显式设置 <code>cuvs.auto_enable=true</code> 时生效。
+          lazy build 前按 float32 vector payload、CAGRA retained/intermediate graph 和 filter cache
+          估算显存，再应用默认 2.0 safety factor 并保留 1 GiB。预算不足时本次查询走 native，dirty
+          状态保留，后续显存释放后重新尝试；显式 <code>backend=cuvs</code> 仍然 fail-fast。该开关只做
+          memory admission，不代表按 filter selectivity 做 latency-optimal routing。
+        </div>
 
         <h3>5.3 过滤与能力矩阵</h3>
         <table>
@@ -834,6 +842,21 @@
   }
 }</code></pre>
 
+        <h3>保留 local 默认、按空闲显存自动启用</h3>
+        <pre><code>{
+  "storage": {
+    "vectordb": {
+      "backend": "local",
+      "cuvs": {
+        "auto_enable": true,
+        "algorithm": "brute_force",
+        "auto_memory_reserve_mb": 1024,
+        "auto_memory_safety_factor": 2.0
+      }
+    }
+  }
+}</code></pre>
+
         <table>
           <thead><tr><th>配置项</th><th>默认值</th><th>含义</th></tr></thead>
           <tbody>
@@ -841,6 +864,9 @@
             <tr><td><code>build_params</code></td><td><code>{}</code></td><td>透传到 cuVS CAGRA <code>IndexParams</code>。</td></tr>
             <tr><td><code>search_params</code></td><td><code>{}</code></td><td>透传到 cuVS CAGRA <code>SearchParams</code>。</td></tr>
             <tr><td><code>fallback_to_native</code></td><td><code>true</code></td><td>遇到不支持的过滤或 dense+sparse 混合请求时是否使用 native 能力。</td></tr>
+            <tr><td><code>auto_enable</code></td><td><code>false</code></td><td>在 <code>backend=local</code> 下按空闲显存自动启用 cuVS；不改变默认行为。</td></tr>
+            <tr><td><code>auto_memory_reserve_mb</code></td><td><code>1024</code></td><td>auto admission 后仍保留的空闲显存。</td></tr>
+            <tr><td><code>auto_memory_safety_factor</code></td><td><code>2.0</code></td><td>对已知 vector/graph/filter 分配应用的峰值安全系数。</td></tr>
           </tbody>
         </table>
 
@@ -918,6 +944,7 @@ pip install cuvs-cu13 'cupy-cuda13x[ctk]' --extra-index-url=https://pypi.nvidia.
             <tr><td>native dense 仍并存</td><td>消耗 CPU 内存和写入成本。</td><td>等 cuVS 覆盖率、稳定性和回退策略明确后再评估裁剪。</td></tr>
             <tr><td>CPU int8 / GPU float32</td><td>显存、精度和 score 不属于等 dtype 对比，少量 top-k 顺序可能不同。</td><td>保留非侵入式默认；结果报告 dtype、Recall@K 与两侧内存。</td></tr>
             <tr><td>GPU shadow 固定 float32</td><td>大规模 collection 的显存容量受限。</td><td>先评估 float16；再评估 CAGRA int8/VPQ。native scaled-int8 兼容需要专门的 distance/rerank 路径。</td></tr>
+            <tr><td>auto admission 是估算</td><td>allocator、build algorithm 和并发 workload 会使实际 peak 波动。</td><td>默认 2.0 safety factor + 1 GiB reserve；allocation failure 自动回退，benchmark 持续校准。</td></tr>
           </tbody>
         </table>
         <p>
@@ -983,7 +1010,7 @@ pip install cuvs-cu13 'cupy-cuda13x[ctk]' --extra-index-url=https://pypi.nvidia.
           <li>upsert 后可搜到新值、delete 后不可搜到，连续多次变更后结果正确。</li>
           <li>持久化 Collection 关闭再打开，首次查询能重建 GPU index 并得到一致结果。</li>
           <li>CAGRA 能构建和检索，基础 recall@k 相对 brute-force 达到预设门槛。</li>
-          <li>无 GPU 或制造 CUDA 错误时不静默走 native。</li>
+          <li>显式 <code>backend=cuvs</code> 在无 GPU/CUDA 错误时 fail-fast；auto 模式在显存不足时走 native，并能在显存恢复后重试。</li>
         </ul>
 
         <h3>第一轮输出物</h3>

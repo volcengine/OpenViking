@@ -5,8 +5,10 @@ import pytest
 
 from openviking.storage.vectordb.index.cuvs_index import (
     CuVSDenseIndex,
+    CuVSMemoryBudgetError,
     CuVSUnavailableError,
     UnsupportedCuVSFilterError,
+    estimate_cuvs_memory,
     matches_filter,
 )
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
@@ -21,6 +23,9 @@ class FakeCuVSRuntime:
         self.build_count = 0
         self.prepare_filter_count = 0
         self.closed = False
+        self.free_memory_bytes = 1 << 60
+        self.total_memory_bytes = 1 << 60
+        self.release_count = 0
 
     def build(self, dataset):
         self.dataset = [list(vector) for vector in dataset]
@@ -48,6 +53,17 @@ class FakeCuVSRuntime:
     def prepare_filter(self, mask):
         self.prepare_filter_count += 1
         return tuple(mask)
+
+    def memory_info(self):
+        return self.free_memory_bytes, self.total_memory_bytes
+
+    def release_index(self):
+        self.dataset = []
+        self.release_count += 1
+
+    @staticmethod
+    def is_out_of_memory(_exc):
+        return False
 
     def close(self):
         self.closed = True
@@ -124,6 +140,87 @@ def test_cuvs_l2_scores_match_openviking_score_convention():
     labels, scores = index.search([1.0, 0.0], 2, None)
     assert labels == [1, 2]
     assert scores == [0.0, 0.0]  # OpenViking exposes 1 - squared-L2.
+
+
+def test_cuvs_memory_estimate_accounts_for_fp32_graphs_and_filter_cache():
+    estimate = estimate_cuvs_memory(
+        vector_count=1_000_000,
+        dimension=768,
+        algorithm="cagra",
+        build_params={"graph_degree": 64, "intermediate_graph_degree": 128},
+        filter_cache_size=16,
+        safety_factor=2.0,
+    )
+
+    assert estimate.vector_bytes == 1_000_000 * 768 * 4
+    assert estimate.graph_bytes == 1_000_000 * 64 * 4
+    assert estimate.build_graph_bytes == 1_000_000 * 128 * 4
+    assert estimate.filter_cache_bytes == ((1_000_000 + 31) // 32) * 4 * 16
+    assert estimate.estimated_peak_bytes == 2 * (
+        estimate.vector_bytes
+        + estimate.graph_bytes
+        + estimate.build_graph_bytes
+        + estimate.filter_cache_bytes
+    )
+
+
+def test_auto_cuvs_retries_after_gpu_memory_becomes_available():
+    runtime = FakeCuVSRuntime()
+    runtime.free_memory_bytes = 15
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={
+            "algorithm": "brute_force",
+            "filter_cache_size": 0,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0]), candidate(2, [0.0, 1.0])])
+
+    with pytest.raises(CuVSMemoryBudgetError, match="estimated GPU peak"):
+        index.search([1.0, 0.0], 1, None)
+    assert runtime.build_count == 0
+
+    runtime.free_memory_bytes = 16
+    assert index.search([1.0, 0.0], 1, None)[0] == [1]
+    assert runtime.build_count == 1
+    assert runtime.release_count == 2
+
+
+def test_auto_cuvs_converts_gpu_allocation_failure_to_native_fallback_signal():
+    class OutOfMemoryRuntime(FakeCuVSRuntime):
+        def build(self, _dataset):
+            raise RuntimeError("out of memory")
+
+        @staticmethod
+        def is_out_of_memory(_exc):
+            return True
+
+    runtime = OutOfMemoryRuntime()
+    index = CuVSDenseIndex(
+        dimension=4,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={
+            "filter_cache_size": 0,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0, 0.0, 0.0])])
+
+    with pytest.raises(CuVSMemoryBudgetError, match="allocation failure"):
+        index.search([1.0, 0.0, 0.0, 0.0], 1, None)
+    assert runtime.release_count == 2
 
 
 def test_filter_cache_reuses_prepared_mask_and_invalidates_on_mutation():

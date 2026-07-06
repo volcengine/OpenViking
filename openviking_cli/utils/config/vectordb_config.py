@@ -101,6 +101,28 @@ class CuVSConfig(BaseModel):
             "operations that cannot be represented as a cuVS prefilter."
         ),
     )
+    auto_enable: bool = Field(
+        default=False,
+        description=(
+            "When the VectorDB backend is 'local', automatically use cuVS dense search "
+            "only when a visible GPU has enough free memory. The default is disabled."
+        ),
+    )
+    auto_memory_reserve_mb: int = Field(
+        default=1024,
+        ge=0,
+        description=(
+            "Free GPU memory kept outside the cuVS auto-admission budget, in MiB."
+        ),
+    )
+    auto_memory_safety_factor: float = Field(
+        default=2.0,
+        ge=1.0,
+        description=(
+            "Multiplier applied to the estimated cuVS vector, graph, build, and filter "
+            "memory before auto-enabling GPU search."
+        ),
+    )
     filter_cache_size: int = Field(
         default=16,
         ge=0,

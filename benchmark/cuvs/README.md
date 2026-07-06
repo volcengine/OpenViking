@@ -12,6 +12,11 @@ The output contains:
 - current process RSS and GPU-memory deltas;
 - raw per-batch latency samples and runtime metadata.
 
+GPU-memory fields are `cudaMemGetInfo` snapshots around build. The delta
+excludes the CUDA runtime/context already present in the pre-build snapshot and
+is a retained-build measurement, not a sampled peak. Report that distinction
+when using the values for capacity planning.
+
 See [PRELIMINARY_RESULTS.md](PRELIMINARY_RESULTS.md) for the first public-data
 engineering checkpoint and its limitations.
 

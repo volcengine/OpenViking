@@ -35,6 +35,69 @@ Start with exact brute-force search:
 
 Set `algorithm` to `cagra` for approximate graph search. `build_params` and `search_params` are passed to cuVS `cagra.IndexParams` and `cagra.SearchParams` respectively.
 
+### Memory-aware auto mode
+
+Keep `backend` set to `local` and enable `cuvs.auto_enable` to use otherwise
+idle GPU memory without changing the default behavior for other installations:
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "local",
+      "cuvs": {
+        "auto_enable": true,
+        "algorithm": "brute_force",
+        "auto_memory_reserve_mb": 1024,
+        "auto_memory_safety_factor": 2.0
+      }
+    }
+  }
+}
+```
+
+Before each lazy build or rebuild, auto mode reads free device memory and
+estimates the float32 vector payload, CAGRA graph and intermediate graph when
+applicable, and the configured filter-bitset cache. It multiplies those known
+allocations by `auto_memory_safety_factor` and then preserves
+`auto_memory_reserve_mb`. If the estimate does not fit, or cuVS/GPU discovery
+is unavailable, that query uses the unchanged native index. The cuVS index
+remains dirty so a later query can retry after GPU memory becomes available.
+An allocation failure after admission also falls back to native. Explicit
+`backend: "cuvs"` retains fail-fast behavior and does not use this gate.
+This switch is memory-aware, not yet latency-aware: a highly selective scalar
+filter can still be faster on the native path because the native scalar index
+shrinks the distance candidate set, while cached cuVS brute-force remains near
+a full-matrix scan. Adaptive per-query routing is a separate follow-up.
+
+## GPU memory footprint
+
+The current GPU shadow is float32, so brute-force's dominant retained payload
+is `N * dimension * 4` bytes. CAGRA additionally retains approximately
+`N * graph_degree * 4` bytes for the graph and can require an intermediate
+`N * intermediate_graph_degree * 4` bytes while building. Each cached filter
+bitset costs approximately `ceil(N / 32) * 4` bytes.
+
+Prior index-only runs measured the following `cudaMemGetInfo` deltas from just
+before to just after build; each value is the median of five clean processes:
+
+| Dataset | cuVS algorithm | Measured GPU delta |
+| --- | --- | ---: |
+| 100K x 768D | brute-force | 294 MiB |
+| 1M x 768D | brute-force | 2.9 GiB |
+| 100K x 1024D | brute-force | 392 MiB |
+| 1M x 1024D | brute-force | 3.9 GiB |
+| 1,183,514 x 100D | brute-force | 452 MiB |
+| 1,183,514 x 100D | CAGRA | 872 MiB |
+
+These are retained-build deltas rather than sampled peak VRAM. Allocator
+state, cuVS version, CAGRA parameters, query batch size, and concurrent GPU
+workloads can increase the peak. The delta also excludes the approximately
+327 MiB CUDA runtime/context baseline observed before build in these processes.
+This is why auto mode initializes the runtime first, reads the remaining free
+memory, and then applies a conservative safety factor and independent reserve
+rather than admitting from the vector payload alone.
+
 ## Data type and native-index behavior
 
 Enabling cuVS does not change OpenViking's default backend or rewrite the

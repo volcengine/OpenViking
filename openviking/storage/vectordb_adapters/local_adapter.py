@@ -36,10 +36,20 @@ class LocalCollectionAdapter(CollectionAdapter):
         project_path = (
             str(Path(config.path) / cls.DEFAULT_LOCAL_PROJECT_NAME) if config.path else ""
         )
+        collection_config: Dict[str, Any] = {}
+        cuvs_config = getattr(config, "cuvs", None)
+        if cuvs_config is not None and getattr(cuvs_config, "auto_enable", False):
+            collection_config = {
+                "dense_search": {
+                    "backend": "auto_cuvs",
+                    **cuvs_config.model_dump(),
+                }
+            }
         return cls(
             collection_name=config.name or "context",
             project_path=project_path,
             index_name=config.index_name or "default",
+            collection_config=collection_config,
         )
 
     def _collection_path(self) -> str:
