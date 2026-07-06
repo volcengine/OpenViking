@@ -106,6 +106,11 @@ heading() { printf '\n%s%s%s\n' "$BOLD" "$*" "$RESET"; }
 # t <english> <chinese> — pick the UI language variant.
 t() { if [ "$UI_LANG" = "zh" ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
 
+# Pure-bash substring test. Never pipe `claude/codex plugin list` into
+# `grep -q`: with pipefail, grep exiting early SIGPIPEs the producer and the
+# pipeline reads as a miss even though the entry is there.
+str_contains() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
+
 usage() {
   cat <<EOF
 Usage: install.sh [options]
@@ -436,11 +441,23 @@ EOF
 select_dist() {
   if [ -n "$DIST_ARG" ]; then
     DIST="$DIST_ARG"
-  elif [ "$INTERACTIVE" -eq 1 ] && [ -z "$SOURCE_ARG" ] && [ -z "$CHECKOUT_DIR" ]; then
-    tui_menu "$(t 'Where should the plugins be downloaded from?' '插件从哪里下载？')" 0 \
-      "GitHub  $(t '(default; supports remote updates)' '（默认；支持远程更新）')" \
-      "$(t 'Volcengine TOS mirror (use when GitHub is unreachable)' '火山引擎 TOS 镜像（无法访问 GitHub 时使用）')"
-    if [ "$TUI_MENU_CHOICE" -eq 1 ]; then DIST="tos"; else DIST="github"; fi
+  elif [ "$INTERACTIVE" -eq 1 ] && [ -z "$SOURCE_ARG" ]; then
+    if [ -n "$CHECKOUT_DIR" ]; then
+      tui_menu "$(t 'Install source' '安装源模式')" 2 \
+        "GitHub  $(t '(remote marketplace; supports remote updates)' '（远程 marketplace；支持远程更新）')" \
+        "$(t 'Volcengine TOS mirror (use when GitHub is unreachable)' '火山引擎 TOS 镜像（无法访问 GitHub 时使用）')" \
+        "$(t 'This checkout (development; edits take effect live)' '当前 checkout（开发模式；改动即时生效）')"
+      case "$TUI_MENU_CHOICE" in
+        0) DIST="github" ;;
+        1) DIST="tos" ;;
+        *) SOURCE_ARG="dev" ;;
+      esac
+    else
+      tui_menu "$(t 'Install source' '安装源模式')" 0 \
+        "GitHub  $(t '(default; supports remote updates)' '（默认；支持远程更新）')" \
+        "$(t 'Volcengine TOS mirror (use when GitHub is unreachable)' '火山引擎 TOS 镜像（无法访问 GitHub 时使用）')"
+      if [ "$TUI_MENU_CHOICE" -eq 1 ]; then DIST="tos"; else DIST="github"; fi
+    fi
   fi
   case "$DIST" in
     github|tos) ;;
@@ -606,6 +623,9 @@ resolve_source_mode() {
     *) err "Invalid --source: $SOURCE_MODE (expected remote, archive, or dev)"; exit 2 ;;
   esac
   info "$(t 'Source mode:' '安装源模式：') $SOURCE_MODE ($(t 'channel' '渠道'): $DIST)"
+  if [ "$SOURCE_MODE" = "archive" ] && [ "$HAVE_CLAUDE" -eq 1 ] && contains_harness claude; then
+    warn "$(t 'TOS/archive installs cannot auto-update Claude Code (local directory marketplace); re-run this installer to update. Codex keeps remote updates via its TOS git marketplace.' 'TOS/归档方式安装的 Claude Code 插件无法自动更新（本地目录 marketplace），更新请重跑本安装脚本；Codex 走 TOS git marketplace 仍可远程更新。')"
+  fi
 }
 
 # Ensure a local copy of the plugin sources exists (legacy Claude Code and the
@@ -734,14 +754,16 @@ claude_marketplace_current_source() {
 }
 
 migrate_claude_legacy_marketplace() {
-  local id
+  local id plugin_list marketplace_list
+  plugin_list="$(command claude plugin list 2>/dev/null || true)"
   for id in $CC_OLD_IDS; do
-    if command claude plugin list 2>/dev/null | grep -qF "$id"; then
+    if str_contains "$plugin_list" "$id"; then
       info "$(t 'Removing pre-unification plugin install' '移除旧命名的插件安装') ($id)"
       command claude plugin uninstall "$id" >/dev/null 2>&1 || true
     fi
   done
-  if command claude plugin marketplace list 2>/dev/null | grep -qF "$OLD_MARKETPLACE_NAME"; then
+  marketplace_list="$(command claude plugin marketplace list 2>/dev/null || true)"
+  if str_contains "$marketplace_list" "$OLD_MARKETPLACE_NAME"; then
     info "$(t 'Removing pre-unification marketplace' '移除旧命名的 marketplace') ($OLD_MARKETPLACE_NAME)"
     command claude plugin marketplace remove "$OLD_MARKETPLACE_NAME" >/dev/null 2>&1 || true
   fi
@@ -803,7 +825,7 @@ install_claude_modern() {
       claude_marketplace_sync "$MKT_DIR" "$MKT_DIR" || return 1
       ;;
   esac
-  if command claude plugin list 2>/dev/null | grep -qF "$PLUGIN_ID"; then
+  if str_contains "$(command claude plugin list 2>/dev/null || true)" "$PLUGIN_ID"; then
     info "claude plugin update ($PLUGIN_ID)"
     command claude plugin update "$PLUGIN_ID" || warn 'claude plugin update returned non-zero'
   else
@@ -812,9 +834,6 @@ install_claude_modern() {
   fi
   command claude plugin enable "$PLUGIN_ID" >/dev/null 2>&1 || true
   info "$(t 'Claude plugin installed:' 'Claude 插件已安装：') $PLUGIN_ID"
-  if [ "$SOURCE_MODE" = "archive" ]; then
-    warn "$(t 'TOS/archive installs cannot auto-update Claude Code (local directory marketplace). Re-run this installer to update.' 'TOS/归档方式安装的 Claude Code 插件无法自动更新（本地目录 marketplace）。更新请重跑本安装脚本。')"
-  fi
 }
 
 install_claude_legacy() {
@@ -956,7 +975,7 @@ codex_marketplace_current_source() {
 
 migrate_codex_legacy_marketplace() {
   command codex plugin remove "$CODEX_OLD_ID" >/dev/null 2>&1 || true
-  if command codex plugin marketplace list 2>/dev/null | grep -qF "$OLD_MARKETPLACE_NAME"; then
+  if str_contains "$(command codex plugin marketplace list 2>/dev/null || true)" "$OLD_MARKETPLACE_NAME"; then
     info "$(t 'Removing pre-unification marketplace' '移除旧命名的 marketplace') ($OLD_MARKETPLACE_NAME)"
     command codex plugin marketplace remove "$OLD_MARKETPLACE_NAME" >/dev/null 2>&1 || true
   fi
@@ -1105,9 +1124,9 @@ install_codex_tos_git() {
 
 validate_install() {
   heading "$(t '5. Validation' '5. 安装校验')"
-  local ok=1 cached
+  local ok=1 cached codex_list
   if contains_harness claude && [ "$HAVE_CLAUDE" -eq 1 ] && has_plugin_subcommand; then
-    if command claude plugin list 2>/dev/null | grep -qF "$PLUGIN_NAME"; then
+    if str_contains "$(command claude plugin list 2>/dev/null || true)" "$PLUGIN_NAME"; then
       info "claude: $PLUGIN_NAME $(t 'visible in plugin list' '已出现在插件列表')"
     else
       warn "claude: $PLUGIN_NAME $(t 'not visible in plugin list' '未出现在插件列表')"
@@ -1115,7 +1134,8 @@ validate_install() {
     fi
   fi
   if contains_harness codex && [ "$HAVE_CODEX" -eq 1 ]; then
-    if command codex plugin list 2>/dev/null | grep -qiF "$PLUGIN_NAME"; then
+    codex_list="$(command codex plugin list 2>/dev/null || true)"
+    if str_contains "$codex_list" "$PLUGIN_NAME"; then
       info "codex: $PLUGIN_NAME $(t 'visible in plugin list' '已出现在插件列表')"
     else
       warn "codex: $PLUGIN_NAME $(t 'not visible in plugin list' '未出现在插件列表')"
@@ -1168,7 +1188,6 @@ validate_install
 
 heading "$(t 'Done' '完成')"
 info "$(t 'Credentials:' '凭据：') $OVCLI_CONF"
-info "$(t 'MCP: stdio proxy reads ovcli.conf/env at runtime' 'MCP：stdio 代理运行时读取 ovcli.conf/环境变量')"
 case "$SOURCE_MODE" in
   remote) info "Marketplace: remote ($REPO_URL @ $REPO_REF)" ;;
   *) info "Marketplace: ${MKT_DIR:-$CODEX_TOS_GIT_URL}" ;;
