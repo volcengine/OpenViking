@@ -5,7 +5,7 @@
 import asyncio
 import threading
 from dataclasses import dataclass, field
-from typing import ClassVar, Dict, List, Optional, Set
+from typing import Any, ClassVar, Dict, List, Optional, Set
 from weakref import WeakKeyDictionary
 
 from openviking.server.identity import RequestContext
@@ -33,7 +33,7 @@ class DirNode:
     file_paths: List[str]
     file_index: Dict[str, int]
     child_index: Dict[str, int]
-    file_summaries: List[Optional[Dict[str, str]]]
+    file_summaries: List[Optional[Dict[str, Any]]]
     children_abstracts: List[Optional[Dict[str, str]]]
     pending: int
     dispatched: bool = False
@@ -60,7 +60,7 @@ class VectorizeTask:
     semantic_msg_id: Optional[str] = None
     # For file tasks
     file_path: Optional[str] = None
-    summary_dict: Optional[Dict[str, str]] = None
+    summary_dict: Optional[Dict[str, Any]] = None
     parent_uri: Optional[str] = None
     use_summary: bool = False
     # For directory tasks
@@ -735,8 +735,8 @@ class SemanticDagExecutor:
         node.overview_scheduled = True
         self._schedule_work(DagWork(kind="overview", dir_uri=dir_uri))
 
-    def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, str]]:
-        summaries: List[Dict[str, str]] = []
+    def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, Any]]:
+        summaries: List[Dict[str, Any]] = []
         for idx, file_path in enumerate(node.file_paths):
             item = node.file_summaries[idx]
             if item is None:
