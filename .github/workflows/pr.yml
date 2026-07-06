@@ -41,6 +41,14 @@ jobs:
             examples/claude-code-memory-plugin/scripts/lib/pending-queue.test.mjs \
             examples/memory-plugin-shared/sync.test.mjs
 
+      - name: Check installer scripts parse
+        run: |
+          bash -n examples/memory-plugin-shared/install.sh
+          bash -n examples/claude-code-memory-plugin/setup-helper/install.sh
+          bash -n examples/claude-code-memory-plugin/setup-helper/tos-install.sh
+          bash -n examples/codex-memory-plugin/setup-helper/install.sh
+          bash -n examples/codex-memory-plugin/setup-helper/tos-install.sh
+
   check-deps:
     runs-on: ubuntu-24.04
     outputs:

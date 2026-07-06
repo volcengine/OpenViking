@@ -93,6 +93,21 @@ test("catalog source is local to the marketplace snapshot", () => {
   }
 });
 
+test("examples/.agents catalog backs the directory-marketplace install path", () => {
+  // The shared installer registers examples/ itself as a local marketplace in
+  // dev/archive mode, so a Codex catalog must exist there too and stay
+  // consistent with the repo-root one (same marketplace name -> same plugin id
+  // openviking-memory@openviking across all install modes).
+  const localCatalogPath = join(repoRoot, "examples", ".agents", "plugins", "marketplace.json");
+  assert.ok(existsSync(localCatalogPath), `missing catalog at ${localCatalogPath}`);
+  const localCatalog = readJson(localCatalogPath);
+  const rootCatalog = readJson(catalogPath);
+  assert.equal(localCatalog.name, rootCatalog.name, "examples/.agents catalog must keep the same marketplace name as the repo root");
+  const entry = localCatalog.plugins.find((p) => p && p.name === PLUGIN_NAME);
+  assert.ok(entry, `examples/.agents catalog must contain "${PLUGIN_NAME}"`);
+  assert.equal(resolve(repoRoot, "examples", sourcePath(entry.source)), pluginDir, "examples/.agents catalog source must resolve to this plugin directory");
+});
+
 test("required plugin files are present", () => {
   for (const rel of [".codex-plugin/plugin.json", ".mcp.json", "hooks/hooks.json"]) {
     assert.ok(existsSync(join(pluginDir, rel)), `missing required plugin file: ${rel}`);

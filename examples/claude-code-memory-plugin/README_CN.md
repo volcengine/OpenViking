@@ -2,7 +2,7 @@
 
 为 Claude Code 提供长期语义记忆，由 [OpenViking](https://github.com/volcengine/OpenViking) 驱动。每次用户输入前自动召回相关记忆，每轮对话结束后自动捕获上下文——模型不需要主动调用任何 MCP 工具。
 
-> 公开的 Claude Code 插件 marketplace 正在规划，暂未上线。当前请从本地源码安装（见下文）。
+> 插件可直接从仓库自带的 marketplace catalog 安装，无需单独的分发仓库。两条命令的远程安装方式见下文[手动安装](#手动安装)。
 
 ## 快速开始
 
@@ -47,16 +47,27 @@ curl http://localhost:1933/health   # 或者你的远程 URL
 
 #### 3. 安装插件
 
-仓库的 `examples/.claude-plugin/marketplace.json` 把本插件暴露为一个本地 marketplace 条目。在 OpenViking 仓库根目录：
+**远程 marketplace（推荐）** —— 无需 clone 仓库。仓库根目录自带 `.claude-plugin/marketplace.json`，其条目通过 `git-subdir` 拉取本插件：
+
+```bash
+claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
+claude plugin install openviking-memory@openviking
+```
+
+（`claude plugin marketplace add volcengine/OpenViking` 也可以，但会把整个仓库 clone 下来作为 marketplace。）
+
+如果跳过了第 2 步，装完后再配置连接：手写 `~/.openviking/ovcli.conf`、运行插件自带的交互向导 `node <插件目录>/scripts/setup.mjs`，或直接跑一行安装脚本。
+
+**本地目录（开发用）** —— 注册当前 checkout，`scripts/`、`hooks/` 的修改下次 hook 触发即生效、无需重装。在 OpenViking 仓库根目录：
 
 ```bash
 claude plugin marketplace add "$(pwd)/examples"
-claude plugin install openviking-memory@openviking-plugins-local
+claude plugin install openviking-memory@openviking
 ```
 
-> 两条命令默认都装在 user scope —— 插件在任何目录下都生效。这里**不显式传 `--scope user`**，因为老的 Claude Code 2.0.x（比如 2.0.76）不识别这个 flag 会直接报错。在支持 `--scope` 的新版本上，如果装完发现落到了 local scope，可以跑一次 `claude plugin enable openviking-memory@openviking-plugins-local --scope user` 提升到 user scope。
+> 两条命令默认都装在 user scope —— 插件在任何目录下都生效。这里**不显式传 `--scope user`**，因为老的 Claude Code 2.0.x（比如 2.0.76）不识别这个 flag 会直接报错。在支持 `--scope` 的新版本上，如果装完发现落到了 local scope，可以跑一次 `claude plugin enable openviking-memory@openviking --scope user` 提升到 user scope。
 >
-> marketplace 条目让 Claude Code 直接引用源码目录,对 `scripts/`、`hooks/`、配置文件的修改下次 hook 触发即生效,无需重装。但移动 / 重命名 / 删除源码目录,或 `git checkout` 到不含这些文件的分支,会立刻让插件失效。后续会发布公开 marketplace 以支持一键安装。
+> 目录模式注意：移动 / 重命名 / 删除源码目录，或 `git checkout` 到不含这些文件的分支，会立刻让插件失效。两种模式注册的 marketplace 都叫 `openviking`，插件 id 恒为 `openviking-memory@openviking`；切换模式时先移除 marketplace 再添加另一个来源（安装脚本会自动处理）。
 
 ##### 兼容模式（Claude Code < 2.0）
 
@@ -65,12 +76,9 @@ claude plugin install openviking-memory@openviking-plugins-local
 ```bash
 PLUGIN_DIR="$(pwd)/examples/claude-code-memory-plugin"
 
+# stdio MCP 代理 —— 自己读 ovcli.conf / OPENVIKING_*，不再需要拼 header。
 claude mcp remove openviking -s user 2>/dev/null
-claude mcp add --scope user --transport http openviking \
-  '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
-  --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
-  --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
-  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}'
+claude mcp add --scope user openviking -- node "$PLUGIN_DIR/servers/mcp-proxy.mjs"
 
 # 把插件 hooks 合并进 ~/.claude/settings.json（自动备份）
 mkdir -p ~/.claude && [ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
@@ -82,7 +90,7 @@ jq -e . /tmp/ov-settings.json >/dev/null && mv /tmp/ov-settings.json ~/.claude/s
 rm -f /tmp/ov-hooks.json
 ```
 
-兼容模式里的 `claude mcp add` 参数**必须用单引号**保留 `${VAR}` 字面量 —— Claude Code 在启动 MCP server 时才展开它们。换成双引号 shell 会提前把它们展开成空串，配置就废了。
+一行安装脚本在检测到 2.0 之前的版本时会自动执行以上流程（并在 `~/.openviking/openviking-repo` 保留一份源码 checkout 供上面的绝对路径引用）。
 
 #### 4. 启动 Claude Code
 

@@ -9,7 +9,8 @@ if [ -f "$LOCAL_SHARED" ]; then
   exec bash "$LOCAL_SHARED" --harness claude "$@"
 fi
 
+SHARED_URL="${OPENVIKING_SHARED_INSTALL_URL:-https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh}"
 tmp="$(mktemp "${TMPDIR:-/tmp}/ov-memory-install.XXXXXX")" || { echo "mktemp failed" >&2; exit 1; }
 trap 'rm -f "$tmp"' EXIT
-curl -fsSL -o "$tmp" "https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh"
+curl -fsSL -o "$tmp" "$SHARED_URL"
 exec bash "$tmp" --harness claude "$@"

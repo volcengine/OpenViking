@@ -25,7 +25,7 @@ test("repo-root Claude marketplace catalog uses git-subdir source", () => {
   const entry = catalog.plugins?.find((p) => p?.name === PLUGIN_NAME);
   assert.ok(entry, `root catalog must contain ${PLUGIN_NAME}`);
   assert.deepEqual(entry.source, {
-    type: "git-subdir",
+    source: "git-subdir",
     url: "https://github.com/volcengine/OpenViking.git",
     path: "examples/claude-code-memory-plugin",
     ref: "main",
@@ -35,6 +35,9 @@ test("repo-root Claude marketplace catalog uses git-subdir source", () => {
 test("local Claude marketplace entry name matches plugin manifest", () => {
   const catalog = readJson(localCatalogPath);
   const manifest = readJson(manifestPath);
+  // Same marketplace name in remote and directory mode keeps the plugin id
+  // (openviking-memory@openviking) stable across install modes.
+  assert.equal(catalog.name, "openviking");
   const entry = catalog.plugins?.find((p) => p?.name === PLUGIN_NAME);
   assert.ok(entry, `local catalog must contain ${PLUGIN_NAME}`);
   assert.equal(entry.name, manifest.name);

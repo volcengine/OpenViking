@@ -2,7 +2,7 @@
 
 Long-term semantic memory for Claude Code, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens automatically after every turn — no MCP tool calls required from the model.
 
-> A public Claude Code plugin marketplace listing is planned but not yet published. For now, install from local source (see below).
+> Installable straight from the repo's marketplace catalog — no separate distribution repo. See [Manual setup](#manual-setup) for the two-command remote install.
 
 ## Quick Start
 
@@ -47,16 +47,27 @@ If `ov.conf` is what you already maintain, the plugin reads it too — see [Conf
 
 #### 3. Install the plugin
 
-The repo's `examples/.claude-plugin/marketplace.json` exposes the plugin as a local marketplace entry. From the OpenViking repo root:
+**Remote marketplace (recommended)** — no clone needed. The repo root ships a `.claude-plugin/marketplace.json` whose entry fetches this plugin via `git-subdir`:
+
+```bash
+claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
+claude plugin install openviking-memory@openviking
+```
+
+(`claude plugin marketplace add volcengine/OpenViking` works too, but clones the whole repo as the marketplace.)
+
+If you skipped step 2, configure the connection afterwards: write `~/.openviking/ovcli.conf` by hand, run `node <plugin-dir>/scripts/setup.mjs` (an interactive wizard bundled with the plugin), or just run the one-line installer.
+
+**Local directory (development)** — registers this checkout so edits to `scripts/` and `hooks/` take effect on the next hook invocation without reinstalling. From the OpenViking repo root:
 
 ```bash
 claude plugin marketplace add "$(pwd)/examples"
-claude plugin install openviking-memory@openviking-plugins-local
+claude plugin install openviking-memory@openviking
 ```
 
-> Both commands install at user scope by default — the plugin is active from any directory. We don't pass `--scope user` explicitly because older Claude Code 2.0.x builds (e.g. 2.0.76) reject the flag. On newer builds that do accept `--scope`, you can lift a local-scoped install to user scope with `claude plugin enable openviking-memory@openviking-plugins-local --scope user`.
+> Both commands install at user scope by default — the plugin is active from any directory. We don't pass `--scope user` explicitly because older Claude Code 2.0.x builds (e.g. 2.0.76) reject the flag. On newer builds that do accept `--scope`, you can lift a local-scoped install to user scope with `claude plugin enable openviking-memory@openviking --scope user`.
 >
-> The marketplace entry points Claude Code at the source directory. Edits to `scripts/`, `hooks/`, and config files take effect on the next hook invocation — no reinstall. But moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin. A public marketplace listing for one-click install will follow.
+> Directory-mode caveat: moving / renaming / deleting the source dir, or `git checkout`-ing to a branch without these files, breaks the plugin. Both modes register a marketplace named `openviking`, so the plugin id is always `openviking-memory@openviking`; switch modes by removing the marketplace and re-adding the other source (the installer does this automatically).
 
 ##### Legacy mode (Claude Code < 2.0)
 
@@ -65,12 +76,9 @@ claude plugin install openviking-memory@openviking-plugins-local
 ```bash
 PLUGIN_DIR="$(pwd)/examples/claude-code-memory-plugin"
 
+# stdio MCP proxy — reads ovcli.conf / OPENVIKING_* itself, no header wiring needed.
 claude mcp remove openviking -s user 2>/dev/null
-claude mcp add --scope user --transport http openviking \
-  '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
-  --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
-  --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
-  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}'
+claude mcp add --scope user openviking -- node "$PLUGIN_DIR/servers/mcp-proxy.mjs"
 
 # Merge plugin hooks into ~/.claude/settings.json (with backup).
 mkdir -p ~/.claude && [ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
@@ -82,7 +90,7 @@ jq -e . /tmp/ov-settings.json >/dev/null && mv /tmp/ov-settings.json ~/.claude/s
 rm -f /tmp/ov-hooks.json
 ```
 
-The single-quoted `${VAR}` literals in `claude mcp add` are intentional for legacy mode: Claude Code expands them at MCP launch time. Don't switch to double quotes; your shell would expand them to empty strings before the command runs.
+The one-line installer automates exactly this when it detects a pre-2.0 build (it keeps a source checkout under `~/.openviking/openviking-repo` for the absolute paths above).
 
 #### 4. Start Claude Code
 

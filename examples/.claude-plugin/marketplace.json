@@ -1,6 +1,6 @@
 {
-  "name": "openviking-plugins-local",
-  "description": "OpenViking plugins (local development)",
+  "name": "openviking",
+  "description": "OpenViking plugins for Claude Code (local directory / archive install).",
   "owner": {
     "name": "OpenViking"
   },

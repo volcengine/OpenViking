@@ -9,7 +9,7 @@
       "name": "openviking-memory",
       "description": "Long-term semantic memory for Claude Code, powered by OpenViking",
       "source": {
-        "type": "git-subdir",
+        "source": "git-subdir",
         "url": "https://github.com/volcengine/OpenViking.git",
         "path": "examples/claude-code-memory-plugin",
         "ref": "main"

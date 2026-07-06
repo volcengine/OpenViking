@@ -23,12 +23,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 
 The installer is the shared OpenViking memory installer with `--harness codex` preselected. It:
 
-1. Checks `codex`, `git`, and Node.js 22+
-2. Clones or refreshes `~/.openviking/openviking-repo` unless run from a checkout
-3. Registers a local `openviking-plugins-local` marketplace, enables `openviking-memory@openviking-plugins-local`, sets `features.plugin_hooks = true`
+1. Checks `codex` and Node.js 18+ (the plugin itself wants Codex's bundled Node 22+ at runtime)
+2. Sets up `~/.openviking/ovcli.conf` interactively
+3. Registers the `openviking` marketplace — remote git by default (`codex plugin marketplace add https://github.com/volcengine/OpenViking.git`), or this checkout / a TOS archive in dev/archive mode — and enables `openviking-memory@openviking` with `features.plugin_hooks = true`
 4. Keeps the checked-in stdio `.mcp.json` intact; `servers/mcp-proxy.mjs` reads your active `ovcli.conf` at runtime
-5. Removes old OpenViking rc wrapper blocks when found
-6. Runs marketplace and stdio MCP contract validation
+5. Removes old OpenViking rc wrapper blocks and the pre-unification `openviking-plugins-local` marketplace when found
+6. Runs plugin-list and stdio MCP validation
 
 After install:
 
@@ -87,7 +87,9 @@ If you don't want the installer touching your rc, do these things yourself:
    }
    ```
 
-2. **Add the plugin** via a local marketplace pointing at this directory. See `setup-helper/install.sh` for the exact `codex plugin marketplace add` invocation. `hooks/hooks.json` needs no rendering on modern Codex: it uses the native `${PLUGIN_ROOT}` token, which Codex injects into the hook env and substitutes inline.
+   Or run the bundled interactive wizard: `node scripts/setup.mjs` (from the plugin directory).
+
+2. **Add the plugin** via the remote marketplace (path B above), or via a local directory marketplace: `codex plugin marketplace add <checkout>/examples` reads `examples/.agents/plugins/marketplace.json` and yields the same `openviking-memory@openviking` id. `hooks/hooks.json` needs no rendering on modern Codex: it uses the native `${PLUGIN_ROOT}` token, which Codex injects into the hook env and substitutes inline.
 
 ## Configuration
 
