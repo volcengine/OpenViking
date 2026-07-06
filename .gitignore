@@ -13,6 +13,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+# Shared memory-plugin JS source — not a Python build artifact.
+!examples/memory-plugin-shared/lib/
 lib64/
 parts/
 sdist/
