@@ -284,7 +284,7 @@ async def recall(
     )
     return Response(
         status="ok",
-        result=execution.result.to_dict(),
+        result=_sanitize_floats(execution.result.to_dict()),
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
 

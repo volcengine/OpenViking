@@ -242,6 +242,7 @@ async def search_type_quota_recall(
     used_by_type = dict.fromkeys(TYPE_ORDER, 0)
     total_chars = 0
     preference_full_count = 0
+    dropped = 0
     seen_content: set[int] = set()
 
     for index, (memory_type, item, rank) in enumerate(selected, start=1):
@@ -294,6 +295,20 @@ async def search_type_quota_recall(
             elif abstract:
                 summary = abstract
 
+        # VikingBot's heuristic only budgets full fragments, but max_chars is
+        # this API's contract: every rendered fragment counts. Fallbacks keep
+        # degrading (summary -> uri) and drop entirely once nothing fits.
+        if mode != "full":
+            fragment_chars = len(fragment) + (1 if total_chars else 0)
+            if total_chars + fragment_chars > max_chars and mode == "summary":
+                mode = "uri"
+                fragment = _uri_fragment(index, uri, score)
+                fragment_chars = len(fragment) + (1 if total_chars else 0)
+            if total_chars + fragment_chars > max_chars:
+                dropped += 1
+                continue
+            total_chars += fragment_chars
+
         entries.append(
             RecallEntry(
                 uri=uri,
@@ -325,6 +340,7 @@ async def search_type_quota_recall(
             "roots": roots,
             "searched": {key: len(value) for key, value in raw_by_type.items()},
             "returned": len(entries),
+            "dropped": dropped,
             "max_chars": max_chars,
             "min_score": min_score,
         },
