@@ -47,6 +47,25 @@ class RerankConfig(BaseModel):
         default=0.1, description="Relevance threshold (score > threshold is relevant)"
     )
 
+    normalize_scores: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "Apply a logistic (sigmoid) transform to reranker scores so that 'threshold' "
+            "is comparable across providers. Cross-encoder rerankers (e.g. BGE/MiniLM served "
+            "via OpenAI-compatible/LiteLLM endpoints) can return raw, unbounded logits for which "
+            "a fixed threshold like 0.1 is meaningless, while VikingDB/Cohere return scores in "
+            "[0, 1]. When true, every reranker score is mapped into [0, 1] (a closed range: "
+            "extreme logits saturate to exactly 0.0/1.0 in float) before thresholding and "
+            "blending, so a threshold in [0, 1] means the same thing everywhere. Leave disabled "
+            "for providers that already return normalized [0, 1] scores (e.g. VikingDB), or "
+            "double-normalization will distort them. Normalization is model-dependent, not "
+            "provider-dependent: a Cohere/OpenAI-compatible endpoint may serve a raw-logit "
+            "cross-encoder that legitimately needs it. "
+            "Default false = provider scores are used unchanged (byte-identical to before)."
+        ),
+    )
+
     model_config = {"extra": "forbid"}
 
     def _effective_provider(self) -> Optional[str]:

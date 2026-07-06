@@ -852,7 +852,8 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 | `api_base` | str | Endpoint URL (for `openai` provider) |
 | `model` | str | Model name (for `openai` providers) |
 | `timeout` | float | HTTP request timeout in seconds for OpenAI-compatible providers. Increase for slow or cold-starting local rerank servers. Default: `30.0` |
-| `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+| `threshold` | float | Relevance cutoff, applied as `score > threshold`. When `normalize_scores` is `true`, scores are sigmoid-mapped to `[0, 1]`, so a threshold in `[0, 1]` is portable across rerankers. When `false`, the threshold is compared in the provider's native score space, which may be **unbounded** for logit-based cross-encoders (BGE/MiniLM). Default: `0.1` (portable when normalization is on or the provider already returns bounded scores). |
+| `normalize_scores` | bool | Apply a sigmoid transform to reranker scores so `threshold` is comparable across providers. Cross-encoder rerankers (e.g. BGE/MiniLM via OpenAI-compatible/LiteLLM endpoints) can return raw, unbounded logits for which a fixed `0.1` threshold is meaningless, while VikingDB/Cohere return `[0, 1]` scores. When `true`, scores are mapped into `[0, 1]` (a closed range — extreme logits saturate to exactly `0.0`/`1.0`) before thresholding and blending. Leave disabled for providers that already return normalized `[0, 1]` scores (e.g. VikingDB), or double-normalization will distort them. Default: `false` (provider scores used unchanged). |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
 **Supported providers:**
@@ -1605,6 +1606,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "model": "string",
     "api_base": "string",
     "threshold": 0.1,
+    "normalize_scores": false,
     "extra_headers": {}
   },
   "retrieval": {

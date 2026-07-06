@@ -3,7 +3,10 @@
 
 """Hierarchical retriever rerank behavior tests."""
 
+import math
+
 import pytest
+from pydantic import ValidationError
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
@@ -515,3 +518,78 @@ async def test_convert_to_matched_contexts_returns_empty_relations():
     )
 
     assert result[0].relations == []
+
+
+# ---------------------------------------------------------------------------
+# normalize_scores — portable score_threshold across rerank providers
+# ---------------------------------------------------------------------------
+
+
+def _normalize_retriever(monkeypatch, fake_client, normalize: bool) -> HierarchicalRetriever:
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+    return HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=RerankConfig(ak="ak", sk="sk", threshold=0.1, normalize_scores=normalize),
+    )
+
+
+def test_normalize_off_passes_raw_scores_through(monkeypatch):
+    # Default (off): raw logit-style scores are returned unchanged (parity).
+    fake = FakeRerankClient([2.0, -1.0])
+    retriever = _normalize_retriever(monkeypatch, fake, normalize=False)
+
+    out = retriever._rerank_scores("q", ["a", "b"], [0.0, 0.0])
+
+    assert out == [2.0, -1.0]
+
+
+def test_normalize_on_maps_scores_into_unit_interval(monkeypatch):
+    fake = FakeRerankClient([0.0, 2.0, -2.0])
+    retriever = _normalize_retriever(monkeypatch, fake, normalize=True)
+
+    out = retriever._rerank_scores("q", ["a", "b", "c"], [0.0, 0.0, 0.0])
+
+    assert out[0] == pytest.approx(0.5)  # sigmoid(0)
+    assert out[1] == pytest.approx(1.0 / (1.0 + math.exp(-2.0)))
+    assert out[2] == pytest.approx(1.0 / (1.0 + math.exp(2.0)))
+    assert all(0.0 < value < 1.0 for value in out)
+
+
+def test_normalize_on_is_overflow_safe_for_extreme_logits(monkeypatch):
+    fake = FakeRerankClient([1000.0, -1000.0])
+    retriever = _normalize_retriever(monkeypatch, fake, normalize=True)
+
+    out = retriever._rerank_scores("q", ["a", "b"], [0.0, 0.0])
+
+    assert out[0] == pytest.approx(1.0)
+    assert out[1] == pytest.approx(0.0)
+
+
+def test_normalize_on_leaves_fallback_substitution_untransformed(monkeypatch):
+    # An invalid rerank score falls back to the vector score, which is already in
+    # score space and must NOT be pushed through sigmoid.
+    fake = FakeRerankClient([float("nan"), 3.0])
+    retriever = _normalize_retriever(monkeypatch, fake, normalize=True)
+
+    out = retriever._rerank_scores("q", ["a", "b"], [0.9, 0.1])
+
+    assert out[0] == pytest.approx(0.9)  # vector fallback, untouched
+    assert out[1] == pytest.approx(1.0 / (1.0 + math.exp(-3.0)))  # sigmoid(3.0)
+
+
+def test_rerank_config_default_normalize_scores_is_false():
+    assert RerankConfig(ak="ak", sk="sk").normalize_scores is False
+
+
+def test_rerank_config_rejects_non_bool_normalize_scores_under_strict():
+    with pytest.raises(ValidationError):
+        RerankConfig(ak="ak", sk="sk", normalize_scores="true")
+
+
+def test_rerank_config_rejects_unknown_field_normalize():
+    with pytest.raises(ValidationError):
+        RerankConfig(ak="ak", sk="sk", normalise_scores=True)  # British spelling typo
