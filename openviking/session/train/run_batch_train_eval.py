@@ -78,6 +78,15 @@ def parse_args() -> argparse.Namespace:
         help="Tau2 VikingBot experience loading mode (default: constraint).",
     )
     parser.add_argument(
+        "--system-prompt-profile",
+        choices=("full", "minimal"),
+        default=None,
+        help=(
+            "Override VikingBot system prompt profile. "
+            "When omitted, the benchmark service chooses its backend default."
+        ),
+    )
+    parser.add_argument(
         "--train-index",
         default=None,
         help=(
@@ -211,6 +220,7 @@ async def main_async() -> int:
             result_dir_name=args.result_dir_name,
             keep_default_tools=True,
             loader_mode=args.loader_mode,
+            system_prompt_profile=args.system_prompt_profile,
             max_iterations=args.max_iterations,
             train_index=_parse_indices_arg(args.train_index),
             eval_index=_parse_indices_arg(args.eval_index),

@@ -18,6 +18,7 @@ from benchmark.tau2.train.rollout_executor_vikingbot import (  # re-export vikin
     _append_final_answer_for_tau2_evaluation,
     _build_rollout_messages,
     _configure_tools,
+    normalize_system_prompt_profile,
     normalize_tau2_experience_loader_mode,
 )
 from benchmark.tau2.train.rollout_executor_vikingbot import (
@@ -56,6 +57,9 @@ def make_tau2_rollout_executor(
             rollout_language=str(opts.get("rollout_language") or rollout_language),
             loader_mode=normalize_tau2_experience_loader_mode(
                 opts.get("loader_mode") or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
+            ),
+            system_prompt_profile=normalize_system_prompt_profile(
+                opts.get("system_prompt_profile") or "full"
             ),
         )
     return NativeTau2RolloutExecutor(
@@ -154,6 +158,7 @@ __all__ = [
     "Tau2RolloutExecutor",
     "VikingBotTau2RolloutExecutor",
     "make_tau2_rollout_executor",
+    "normalize_system_prompt_profile",
     "normalize_tau2_experience_loader_mode",
     "normalize_tau2_rollout_backend",
     "_append_final_answer_for_tau2_evaluation",

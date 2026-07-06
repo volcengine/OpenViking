@@ -1048,6 +1048,47 @@ class TestApplyEditWithSearchReplacePatch:
         assert result.extra_fields["last_update_trace_id"] == "trace_1"
 
     @pytest.mark.asyncio
+    async def test_apply_upsert_persists_content_field_when_template_renders_body(self):
+        content_field = MemoryField(
+            name="content",
+            field_type=FieldType.STRING,
+            merge_op=MergeOp.REPLACE,
+        )
+        schema = MemoryTypeSchema(
+            memory_type="test_exp",
+            description="test",
+            fields=[content_field],
+            content_template="{{ content }}\n\n# Rendered Section",
+        )
+        registry = MemoryTypeRegistry()
+        registry.register(schema)
+        updater = MemoryUpdater(registry=registry)
+
+        mock_viking_fs = MagicMock()
+        mock_viking_fs.read_file = AsyncMock(side_effect=FileNotFoundError("missing"))
+        written_content = None
+
+        async def mock_write_file(uri, content, **kwargs):
+            nonlocal written_content
+            written_content = content
+
+        mock_viking_fs.write_file = mock_write_file
+        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
+
+        op = ResolvedOperation(
+            memory_fields={"content": "Raw repair content"},
+            memory_type="test_exp",
+            uris=["viking://user/u/memories/test_exp/demo.md"],
+        )
+        await updater._apply_upsert(op, MagicMock())
+
+        assert written_content is not None
+        assert "# Rendered Section" in written_content
+        assert '"content": "Raw repair content"' in written_content
+        result = MemoryFileUtils.read(written_content)
+        assert result.content == "Raw repair content"
+
+    @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_instance(self):
         """Test _apply_edit with StrPatch instance."""
         updater = self._make_updater_with_registry()

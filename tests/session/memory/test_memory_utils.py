@@ -341,6 +341,35 @@ Content"""
         assert result["value"] == 42
         assert result["content"] == "Content"
 
+    def test_memory_fields_content_takes_precedence_over_rendered_body(self):
+        """Template-rendered markdown should not replace structured content."""
+        content = """Rendered wrapper
+# Generated Section
+
+<!-- MEMORY_FIELDS
+{"memory_type": "experiences", "content": "Raw LLM content"}
+-->"""
+        result = parse_memory_file_with_fields(content)
+        assert result["content"] == "Raw LLM content"
+
+    def test_write_can_persist_structured_content_with_rendered_template(self):
+        memory_file = MemoryFile(
+            uri="viking://user/u/memories/experiences/demo.md",
+            content="Raw LLM content",
+            memory_type="experiences",
+            extra_fields={"memory_type": "experiences", "experience_name": "demo"},
+        )
+
+        rendered = MemoryFileUtils.write(
+            memory_file,
+            content_template="{{ content }}\n\n# Rendered Metadata\n{{ experience_name }}",
+            persist_content=True,
+        )
+
+        assert "# Rendered Metadata" in rendered
+        parsed = MemoryFileUtils.read(rendered)
+        assert parsed.content == "Raw LLM content"
+
     def test_write_preserves_memory_type_in_memory_fields_comment(self):
         memory_file = MemoryFile(
             uri="viking://user/default/memories/preferences/code_style.md",

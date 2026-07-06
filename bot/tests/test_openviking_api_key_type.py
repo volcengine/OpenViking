@@ -261,9 +261,7 @@ async def test_viking_client_search_preserves_serialized_group_results(monkeypat
     assert [item["uri"] for item in result["resources"]] == [
         "viking://resources/解释信-杜涛/解释信-杜涛.md"
     ]
-    assert [item["uri"] for item in result["skills"]] == [
-        "viking://user/default/skills/planner.md"
-    ]
+    assert [item["uri"] for item in result["skills"]] == ["viking://user/default/skills/planner.md"]
 
 
 def test_ov_server_api_key_mode_ignores_bot_root_key_and_uses_ovcli_user_key(monkeypatch):
@@ -2674,6 +2672,25 @@ async def test_context_loads_profiles_for_memory_peers(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_context_system_prompt_profile_minimal_omits_static_bootstrap(tmp_path):
+    (tmp_path / "AGENTS.md").write_text("agent bootstrap details", encoding="utf-8")
+    (tmp_path / "SOUL.md").write_text("persona details", encoding="utf-8")
+    (tmp_path / "TOOLS.md").write_text("long tool docs", encoding="utf-8")
+
+    context = ContextBuilder(workspace=tmp_path, system_prompt_profile="minimal")
+    system_prompt = await context.build_system_prompt(
+        session_key=SessionKey(type="cli", channel_id="default", chat_id="chat-1"),
+        ov_tools_enable=True,
+    )
+
+    assert system_prompt.startswith("# VikingBot")
+    assert "system_prompt_profile=minimal" in system_prompt
+    assert "agent bootstrap details" not in system_prompt
+    assert "persona details" not in system_prompt
+    assert "long tool docs" not in system_prompt
+
+
+@pytest.mark.asyncio
 async def test_openviking_memory_commit_prefers_sender_in_static_multi_user_bot(monkeypatch):
     tool = VikingMemoryCommitTool()
     calls = []
@@ -2812,7 +2829,7 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
     case_uri = "viking://user/admin/memories/cases/case1.md"
     exp_uri = "viking://user/admin/memories/experiences/exp1.md"
     direct_exp_uri = "viking://user/admin/memories/experiences/direct.md"
-    case_content = MemoryFileUtils.write(
+    MemoryFileUtils.write(
         MemoryFile(
             uri=case_uri,
             content="# case1\n\n## Linked Experiences\n- exp1",

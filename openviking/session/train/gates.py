@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Policy training gates.
 
-Gates are lightweight, deterministic checks that run inside the train framework
-before semantic gradients or planned policy updates are allowed to affect the
-policy set.  They are intentionally framework-level rather than tied to one
-extractor so future policy memory types can reuse the same interception points.
+Gates run inside the train framework before semantic gradients or planned
+policy updates are allowed to affect the policy set.  Most gates are lightweight
+deterministic checks; some gates may use an LLM for semantic reflection when the
+decision is about expected behavioral impact rather than static shape.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from openviking.session.train.domain import PolicyPlanItem, PolicySet, RolloutAn
 from openviking.session.train.interfaces import SemanticGradient
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.llm import parse_json_from_response
 
 logger = get_logger(__name__)
 
@@ -238,6 +239,7 @@ def default_policy_gate_runner() -> GateRunner:
             ExperienceContentFormatGate(mode="enforce"),
             ExperienceCausalSignalGate(mode="enforce"),
             ExperienceToolAlignmentGate(mode="enforce"),
+            ExperienceCounterfactualReflectionGate(mode="enforce"),
         ]
     )
 
@@ -260,6 +262,10 @@ Your experience output will be rejected unless every experience satisfies these 
 - trigger_code must bind exactly one candidate_tool.
 - The candidate_tool must match the trajectory's First Wrong Tool Call.Tool or Trigger boundary.
 - Do not choose earlier setup tools, later recovery tools, or multi-tool workflow triggers.
+
+4. Counterfactual reflection
+- Reflect on whether injecting this experience before the original First Wrong Tool Call would likely improve the source rollout.
+- Reject experiences that would not address the first reward-changing mistake, only summarize a successful workflow, require unavailable information, or likely make the original rollout worse.
 
 If you cannot satisfy this contract, output no experience changes."""
 
@@ -399,6 +405,116 @@ class ExperienceToolAlignmentGate:
                 "Tool Call.Tool or Trigger boundary; otherwise output no changes."
             ),
         )
+
+
+@dataclass(slots=True)
+class ExperienceCounterfactualReflectionGate:
+    """LLM reflection gate for whether a planned experience should improve its source rollout.
+
+    This gate intentionally does not replay trigger code or run deterministic
+    candidate-shape checks.  It asks the configured VLM to judge the
+    counterfactual: if the proposed experience were injected before the source
+    trajectory's first reward-changing mistake, would the original rollout most
+    likely execute better?
+    """
+
+    mode: GateMode = "enforce"
+    name: str = "experience_counterfactual_reflection"
+    vlm: Any = None
+    confidence_threshold: float = 0.5
+    max_trajectory_chars: int = 8000
+    max_policy_chars: int = 4000
+
+    def applies_to(self, target: GateTarget) -> bool:
+        return (
+            target.stage == "post_plan"
+            and target.memory_type == "experiences"
+            and target.target_kind == "plan_item"
+            and target.plan_item is not None
+            and target.plan_item.kind == "upsert"
+            and target.after_content.strip() != ""
+            and target.trajectory is not None
+        )
+
+    async def evaluate(self, target: GateTarget) -> GateDecision | None:
+        prompt = _counterfactual_reflection_prompt(
+            target,
+            max_trajectory_chars=self.max_trajectory_chars,
+            max_policy_chars=self.max_policy_chars,
+        )
+        try:
+            response = await self._get_vlm().get_completion_async(
+                prompt=prompt,
+                thinking=False,
+            )
+            parsed = parse_json_from_response(response)
+        except Exception as exc:
+            logger.warning("counterfactual reflection gate failed open: %s", exc, exc_info=True)
+            return GateDecision(
+                gate_name=self.name,
+                action="warn",
+                reason="counterfactual reflection failed open",
+                evidence={
+                    "target_name": target.target_name,
+                    "error": str(exc),
+                },
+            )
+
+        if not isinstance(parsed, dict):
+            return GateDecision(
+                gate_name=self.name,
+                action="warn",
+                reason="counterfactual reflection returned non-JSON or non-object output",
+                evidence={
+                    "target_name": target.target_name,
+                    "raw_response_preview": _preview_text(str(response), limit=500),
+                },
+            )
+
+        result = _normalize_reflection_result(parsed)
+        evidence = {
+            "target_name": target.target_name,
+            "would_improve_original_rollout": result["would_improve_original_rollout"],
+            "confidence": result["confidence"],
+            "failure_mode_addressed": result["failure_mode_addressed"],
+            "expected_behavior_change": result["expected_behavior_change"],
+            "reject_reason": result["reject_reason"],
+            "risks": result["risks"],
+        }
+        confidence = result["confidence"]
+        if result["would_improve_original_rollout"] and confidence >= self.confidence_threshold:
+            if result["risks"]:
+                return GateDecision(
+                    gate_name=self.name,
+                    action="warn",
+                    reason="counterfactual reflection allowed with risks",
+                    evidence=evidence,
+                )
+            return None
+
+        return GateDecision(
+            gate_name=self.name,
+            action="reject",
+            reason=(
+                result["reject_reason"]
+                or "LLM reflection judged the proposed experience unlikely to improve the original rollout"
+            ),
+            evidence=evidence,
+            retriable=True,
+            repair_prompt=(
+                "Revise or remove this experience. It must directly address the source "
+                "trajectory's first reward-changing mistake and plausibly improve the "
+                "original rollout if injected before that mistake."
+            ),
+        )
+
+    def _get_vlm(self) -> Any:
+        if self.vlm is not None:
+            return self.vlm
+        from openviking_cli.utils.config import get_openviking_config
+
+        self.vlm = get_openviking_config().vlm.get_vlm_instance()
+        return self.vlm
 
 
 @dataclass(slots=True)
@@ -676,6 +792,135 @@ class _TriggerProfileVisitor(ast.NodeVisitor):
         if _is_candidate_content_expr(node.value, self._candidate_content_aliases):
             self.uses_candidate_content = True
         self.generic_visit(node)
+
+
+def _counterfactual_reflection_prompt(
+    target: GateTarget,
+    *,
+    max_trajectory_chars: int,
+    max_policy_chars: int,
+) -> str:
+    trajectory = target.trajectory
+    analysis = target.analysis
+    evaluation_summary = _evaluation_summary(analysis) if analysis is not None else ""
+    before = _preview_text(target.before_content or "", limit=max_policy_chars)
+    after = _preview_text(target.after_content or "", limit=max_policy_chars)
+    fields: dict[str, Any] = {}
+    if target.plan_item is not None and isinstance(target.plan_item.metadata, dict):
+        for key in ("merge_memory_fields", "patch_metadata"):
+            value = target.plan_item.metadata.get(key)
+            if isinstance(value, dict):
+                fields.update(value)
+    trigger_code = str(fields.get("trigger_code") or "")
+    trajectory_content = _preview_text(
+        trajectory.content if trajectory is not None else "",
+        limit=max_trajectory_chars,
+    )
+    trajectory_uri = trajectory.uri if trajectory is not None else ""
+    trajectory_outcome = trajectory.outcome if trajectory is not None else ""
+
+    return f"""You are a strict policy-training gate.
+
+Judge one proposed experience update by counterfactual reflection only.
+
+Question:
+If the proposed experience below had been injected into the agent context immediately before the source trajectory's original first reward-changing mistake, would the original rollout likely execute better?
+
+Reject if the proposed experience:
+- does not directly address the source trajectory's first material divergence / first wrong tool call;
+- only summarizes a successful workflow or broad SOP;
+- targets a later recovery step rather than the first reward-changing mistake;
+- requires facts that were unavailable at that point in the original rollout;
+- is likely to make correct parts of the original rollout worse.
+
+Return JSON only, with exactly these fields:
+{{
+  "would_improve_original_rollout": true,
+  "confidence": 0.0,
+  "failure_mode_addressed": "short string",
+  "expected_behavior_change": "short string",
+  "reject_reason": null,
+  "risks": []
+}}
+
+Use confidence from 0.0 to 1.0. If uncertain, set would_improve_original_rollout=false.
+
+## Source trajectory
+uri: {trajectory_uri}
+outcome: {trajectory_outcome}
+
+{trajectory_content}
+
+## Evaluation summary
+{evaluation_summary}
+
+## Current experience content before update
+{before or "(none/new experience)"}
+
+## Proposed experience content after update
+target: {target.target_name}
+
+{after}
+
+## Proposed trigger_code
+```python
+{trigger_code}
+```
+"""
+
+
+def _evaluation_summary(analysis: RolloutAnalysis | None) -> str:
+    if analysis is None or analysis.evaluation is None:
+        return ""
+    evaluation = analysis.evaluation
+    lines = [
+        f"passed={evaluation.passed}",
+        f"score={evaluation.score}",
+    ]
+    feedback = list(getattr(evaluation, "feedback", []) or [])
+    if feedback:
+        lines.append("feedback=" + "; ".join(str(item) for item in feedback[:5]))
+    metadata = dict(getattr(evaluation, "metadata", {}) or {})
+    if metadata:
+        # Keep the most useful compact bits; full metadata can be huge in tau2.
+        for key in ("reward", "source"):
+            if key in metadata:
+                lines.append(f"{key}={metadata[key]}")
+        eval_result = metadata.get("evaluation_result")
+        if isinstance(eval_result, dict):
+            for key in ("reward", "reward_breakdown", "db_check", "communicate_checks"):
+                if key in eval_result:
+                    lines.append(f"{key}={_preview_text(str(eval_result[key]), limit=1000)}")
+    return "\n".join(lines)
+
+
+def _normalize_reflection_result(parsed: dict[str, Any]) -> dict[str, Any]:
+    raw_confidence = parsed.get("confidence", 0.0)
+    try:
+        confidence = float(raw_confidence)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    risks = parsed.get("risks") or []
+    if not isinstance(risks, list):
+        risks = [str(risks)]
+    return {
+        "would_improve_original_rollout": bool(parsed.get("would_improve_original_rollout")),
+        "confidence": confidence,
+        "failure_mode_addressed": str(parsed.get("failure_mode_addressed") or ""),
+        "expected_behavior_change": str(parsed.get("expected_behavior_change") or ""),
+        "reject_reason": (
+            str(parsed.get("reject_reason")) if parsed.get("reject_reason") is not None else ""
+        ),
+        "risks": [str(item) for item in risks if str(item)],
+    }
+
+
+def _preview_text(text: str, *, limit: int) -> str:
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 3)] + "..."
 
 
 def _effective_action(action: GateAction, mode: GateMode) -> GateAction:

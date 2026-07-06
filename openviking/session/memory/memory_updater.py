@@ -122,7 +122,6 @@ async def write_stored_links(
     return updated_uris
 
 
-
 def _remap_link_dict(link: Dict[str, Any], uri_remap: Dict[str, str]) -> Dict[str, Any]:
     remapped = dict(link or {})
     if remapped.get("from_uri") in uri_remap:
@@ -144,6 +143,7 @@ def remap_stored_links(links: List[StoredLink], uri_remap: Dict[str, str]) -> Li
         remapped_links.append(link.model_copy(update={"from_uri": from_uri, "to_uri": to_uri}))
     return remapped_links
 
+
 def _operation_trace_id(op: ResolvedOperation) -> str | None:
     source = getattr(op, "source", None)
     trace_id = getattr(source, "trace_id", None) if source else None
@@ -155,6 +155,12 @@ def _operation_trace_id(op: ResolvedOperation) -> str | None:
         return str(field_value)
     current_trace_id = get_trace_id()
     return current_trace_id or None
+
+
+def _schema_should_persist_content(schema: Any) -> bool:
+    return bool(getattr(schema, "content_template", None)) and any(
+        getattr(field, "name", None) == "content" for field in getattr(schema, "fields", [])
+    )
 
 
 class ExtractContext:
@@ -285,6 +291,7 @@ class ExtractContext:
     def get_year(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的年份，fallback 到当前年份"""
         from datetime import datetime
+
         if not ranges_str:
             return str(datetime.now().year)
         msg_range = self.read_message_ranges(ranges_str)
@@ -296,6 +303,7 @@ class ExtractContext:
     def get_month(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的月份，fallback 到当前月份"""
         from datetime import datetime
+
         if not ranges_str:
             return f"{datetime.now().month:02d}"
         msg_range = self.read_message_ranges(ranges_str)
@@ -307,6 +315,7 @@ class ExtractContext:
     def get_day(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的日期，fallback 到当前日期"""
         from datetime import datetime
+
         if not ranges_str:
             return f"{datetime.now().day:02d}"
         msg_range = self.read_message_ranges(ranges_str)
@@ -1071,6 +1080,7 @@ class MemoryUpdater:
                 mf,
                 content_template=schema.content_template,
                 extract_context=extract_context,
+                persist_content=_schema_should_persist_content(schema),
             )
             await viking_fs.write_file(uri, new_full_content, ctx=ctx)
 
@@ -1125,7 +1135,6 @@ class MemoryUpdater:
         skip = upserted_uris | (deleted_uris or set()) | non_memory_endpoints
         await write_stored_links(resolved_links, ctx, viking_fs, skip_uris=skip)
 
-
     async def _inherit_deleted_link_relations(
         self,
         operations: ResolvedOperations,
@@ -1148,7 +1157,9 @@ class MemoryUpdater:
             try:
                 content = await viking_fs.read_file(deleted_uri, ctx=ctx)
             except Exception as e:
-                tracer.error(f"Failed to read deleted memory links for replacement {deleted_uri}: {e}")
+                tracer.error(
+                    f"Failed to read deleted memory links for replacement {deleted_uri}: {e}"
+                )
                 continue
             if not content:
                 continue

@@ -1023,12 +1023,16 @@ def test_experience_content_template_renders_markdown_trigger_section():
             },
         ),
         content_template=schema.content_template,
+        persist_content=True,
     )
 
     assert "# Experience Trigger" in rendered
     assert "- experience_name: refund_check" in rendered
     assert "```python" in rendered
     assert DEFAULT_TRIGGER_CODE.strip() in rendered
+    assert '"content": "## Situation\\n- Refund request"' in rendered
+    parsed = MemoryFileUtils.read(rendered)
+    assert parsed.content == "## Situation\n- Refund request"
 
 
 @pytest.mark.asyncio

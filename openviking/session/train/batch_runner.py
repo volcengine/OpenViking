@@ -64,6 +64,7 @@ class BatchTrainEvalConfig:
     output_path: str | None = None
     keep_default_tools: bool = True
     loader_mode: str = "constraint"
+    system_prompt_profile: str | None = None
     max_iterations: int = 30
     server_url: str | None = None
     api_key: str | None = None
@@ -104,6 +105,10 @@ class BatchTrainEvalConfig:
         self.loader_mode = str(self.loader_mode or "constraint").strip().lower()
         if self.loader_mode not in {"skill", "constraint"}:
             raise ValueError("loader_mode must be skill or constraint")
+        if self.system_prompt_profile is not None:
+            self.system_prompt_profile = str(self.system_prompt_profile).strip().lower()
+            if self.system_prompt_profile not in {"full", "minimal"}:
+                raise ValueError("system_prompt_profile must be full or minimal")
         if self.max_iterations <= 0:
             raise ValueError("max_iterations must be > 0")
         if self.commit_poll_interval_seconds <= 0:
@@ -688,6 +693,7 @@ def _write_baseline_cache(
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
         "loader_mode": config.loader_mode,
+        "system_prompt_profile": _system_prompt_profile_payload(config),
         "created_at": datetime.now().isoformat(),
         "report": report,
     }
@@ -751,17 +757,21 @@ def _build_pipeline(
     config: BatchTrainEvalConfig,
     policy_trainer: SessionCommitPolicyTrainer,
 ) -> OfflinePolicyOptimizationPipeline:
+    rollout_options: dict[str, Any] = {
+        "config_path": config.config_path,
+        "keep_default_tools": config.keep_default_tools,
+        "loader_mode": config.loader_mode,
+        "max_iterations": config.max_iterations,
+    }
+    if config.system_prompt_profile is not None:
+        rollout_options["system_prompt_profile"] = config.system_prompt_profile
+
     rollout_executor: Any = RemoteRolloutExecutor(
         service_url=_require_benchmark_service_url(config),
         concurrency=config.concurrency,
         show_progress=True,
         progress_label="rollout",
-        options={
-            "config_path": config.config_path,
-            "keep_default_tools": config.keep_default_tools,
-            "loader_mode": config.loader_mode,
-            "max_iterations": config.max_iterations,
-        },
+        options=rollout_options,
     )
     if config.reuse_train_rollout_cache:
         rollout_executor = CachedEpochZeroTrainRolloutExecutor(
@@ -1088,6 +1098,7 @@ def _train_rollout_cache_key_prefix(config: BatchTrainEvalConfig) -> str:
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
         "loader_mode": config.loader_mode,
+        "system_prompt_profile": _system_prompt_profile_payload(config),
     }
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
@@ -1106,6 +1117,7 @@ def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
         "loader_mode": config.loader_mode,
+        "system_prompt_profile": _system_prompt_profile_payload(config),
     }
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
@@ -1118,6 +1130,10 @@ def _index_payload(indices: list[int] | None) -> int | list[int] | None:
     if indices is None:
         return None
     return indices[0] if len(indices) == 1 else list(indices)
+
+
+def _system_prompt_profile_payload(config: BatchTrainEvalConfig) -> str:
+    return config.system_prompt_profile or "service_default"
 
 
 def _index_label(indices: list[int] | None) -> str:

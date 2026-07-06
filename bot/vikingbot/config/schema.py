@@ -456,6 +456,13 @@ class AgentsConfig(BaseModel):
     )
     max_tool_iterations: int = 50
     memory_window: int = 50
+    system_prompt_profile: Literal["full", "minimal"] = Field(
+        default="full",
+        description=(
+            "System prompt profile: 'full' includes VikingBot bootstrap docs/skills/persona; "
+            "'minimal' omits generic static docs while keeping runtime tool registration unchanged."
+        ),
+    )
     session_context_enabled: bool = False
     session_context_token_budget: int = 3000
     commit_token_threshold: int = 200000

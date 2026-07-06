@@ -1028,6 +1028,13 @@ def render_operation_after_file_content(
         mf,
         content_template=schema.content_template,
         extract_context=extract_context,
+        persist_content=_schema_should_persist_content(schema),
+    )
+
+
+def _schema_should_persist_content(schema: MemoryTypeSchema) -> bool:
+    return bool(getattr(schema, "content_template", None)) and any(
+        getattr(field, "name", None) == "content" for field in getattr(schema, "fields", [])
     )
 
 

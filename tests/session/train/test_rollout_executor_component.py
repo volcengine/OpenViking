@@ -592,7 +592,18 @@ def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
         "max_iterations": 9,
         "rollout_language": "zh",
         "loader_mode": "constraint",
+        "system_prompt_profile": "full",
     }
+
+    module.make_tau2_rollout_executor(
+        backend="vikingbot",
+        options={
+            "config_path": "/tmp/ov.conf",
+            "system_prompt_profile": "minimal",
+        },
+        concurrency=1,
+    )
+    assert created["system_prompt_profile"] == "minimal"
 
 
 def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
@@ -621,9 +632,11 @@ def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
     assert calls[-1]["factory"]["backend"] == "vikingbot"
     assert calls[-1]["factory"]["options"]["max_iterations"] == 5
     assert calls[-1]["factory"]["options"]["show_progress"] is False
+    assert calls[-1]["factory"]["options"]["system_prompt_profile"] == "minimal"
 
     app["make_rollout_executor"]({"rollout_backend": "native", "show_progress": True})
     assert calls[-1]["factory"]["options"]["show_progress"] is True
+    assert "system_prompt_profile" not in calls[-1]["factory"]["options"]
 
 
 @pytest.mark.asyncio

@@ -36,7 +36,16 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 Tau2ExperienceLoaderMode = Literal["skill", "constraint"]
+VikingBotSystemPromptProfile = Literal["full", "minimal"]
 DEFAULT_TAU2_EXPERIENCE_LOADER_MODE: Tau2ExperienceLoaderMode = "constraint"
+DEFAULT_SYSTEM_PROMPT_PROFILE: VikingBotSystemPromptProfile = "full"
+
+
+def normalize_system_prompt_profile(value: Any) -> VikingBotSystemPromptProfile:
+    profile = str(value or DEFAULT_SYSTEM_PROMPT_PROFILE).strip().lower()
+    if profile not in {"full", "minimal"}:
+        raise ValueError("system_prompt_profile must be 'full' or 'minimal'")
+    return profile  # type: ignore[return-value]
 
 
 def normalize_tau2_experience_loader_mode(value: Any) -> Tau2ExperienceLoaderMode:
@@ -568,11 +577,13 @@ class VikingBotTau2RolloutExecutor:
     log_timings: bool = True
     rollout_language: str = "default"
     loader_mode: Tau2ExperienceLoaderMode = DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
+    system_prompt_profile: VikingBotSystemPromptProfile = DEFAULT_SYSTEM_PROMPT_PROFILE
 
     def __post_init__(self) -> None:
         if self.rollout_language not in {"default", "zh"}:
             raise ValueError("rollout_language must be 'default' or 'zh'")
         self.loader_mode = normalize_tau2_experience_loader_mode(self.loader_mode)
+        self.system_prompt_profile = normalize_system_prompt_profile(self.system_prompt_profile)
 
     async def execute(
         self,
@@ -668,6 +679,7 @@ class VikingBotTau2RolloutExecutor:
             sender_id="tau2_user",
             keep_default_tools=self.keep_default_tools,
             loader_mode=self.loader_mode,
+            system_prompt_profile=self.system_prompt_profile,
             timings=timings,
             case_lookup=_tau2_case_lookup(case),
         )
@@ -733,6 +745,7 @@ class VikingBotTau2RolloutExecutor:
                 "ov_tools_enable": False,
                 "experience_recall_enable": self.keep_default_tools,
                 "experience_loader_mode": self.loader_mode,
+                "system_prompt_profile": self.system_prompt_profile,
                 "experience_loader_skill": experience_loader_skill,
                 "execution_metadata": dict(context.metadata),
             },
@@ -1106,6 +1119,7 @@ async def _prepare_experience_loader_skill(
     *,
     agent: Any,
     session_key: Any,
+    system_prompt_profile: VikingBotSystemPromptProfile = DEFAULT_SYSTEM_PROMPT_PROFILE,
 ) -> Any:
     """Install the generic experience_loader skill into the rollout sandbox.
 
@@ -1141,6 +1155,7 @@ async def _prepare_experience_loader_skill(
         workspace_path,
         sandbox_manager=sandbox_manager,
         eval=True,
+        system_prompt_profile=system_prompt_profile,
     )
     context_builder.latest_experience_loader_skill_content = skill_content
     return context_builder
@@ -1229,11 +1244,13 @@ async def _run_agent(
     sender_id: str,
     keep_default_tools: bool,
     loader_mode: Tau2ExperienceLoaderMode = DEFAULT_TAU2_EXPERIENCE_LOADER_MODE,
+    system_prompt_profile: VikingBotSystemPromptProfile = DEFAULT_SYSTEM_PROMPT_PROFILE,
     timings: "_RolloutTiming | None" = None,
     case_lookup: dict[str, Any] | None = None,
 ):
     stage_started_at = time.perf_counter()
     loader_mode = normalize_tau2_experience_loader_mode(loader_mode)
+    system_prompt_profile = normalize_system_prompt_profile(system_prompt_profile)
     message_context = agent.context
     del case_lookup
     experience_loader_skill = None
@@ -1241,6 +1258,7 @@ async def _run_agent(
         message_context = await _prepare_experience_loader_skill(
             agent=agent,
             session_key=session_key,
+            system_prompt_profile=system_prompt_profile,
         )
         experience_loader_skill = getattr(
             message_context,
@@ -1255,6 +1273,7 @@ async def _run_agent(
         experience_recall_enable=False,
         media=None,
         profile_user_list=[],
+        system_prompt_profile=system_prompt_profile,
     )
     if timings is not None:
         timings.record("build_messages", stage_started_at)

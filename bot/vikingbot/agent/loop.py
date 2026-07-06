@@ -192,7 +192,16 @@ class AgentLoop:
         self.sandbox_manager = sandbox_manager
         self.config = config
 
-        self.context = ContextBuilder(workspace, sandbox_manager=sandbox_manager)
+        self.system_prompt_profile = (
+            getattr(getattr(config, "agents", None), "system_prompt_profile", "full")
+            if config is not None
+            else "full"
+        )
+        self.context = ContextBuilder(
+            workspace,
+            sandbox_manager=sandbox_manager,
+            system_prompt_profile=self.system_prompt_profile,
+        )
 
         self._register_builtin_hooks()
         self.sessions = session_manager or SessionManager(
@@ -1312,6 +1321,7 @@ class AgentLoop:
                 is_group_chat=is_group_chat,
                 eval=self._eval,
                 openviking_connection=openviking_connection,
+                system_prompt_profile=self.system_prompt_profile,
             )
 
             # Build initial messages (use OpenViking session context when enabled)
@@ -1339,6 +1349,7 @@ class AgentLoop:
                 memory_peer_ids=memory_peer_ids,
                 memory_owner_user_ids=memory_owner_user_ids,
                 exp_exclude_uris=exp_exclude_uris,
+                system_prompt_profile=self.system_prompt_profile,
             )
             relevant_memories = message_context.latest_relevant_memories
             auto_memory_tool = None

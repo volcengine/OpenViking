@@ -19,6 +19,7 @@ import uvicorn
 DEFAULT_NATIVE_THREAD_WORKERS = 128
 DEFAULT_MAX_ROLLOUT_CONCURRENCY = 200
 DEFAULT_ROLLOUT_THREAD_WORKERS = 200
+DEFAULT_TAU2_SERVICE_VIKINGBOT_SYSTEM_PROMPT_PROFILE = "minimal"
 TAU2_SERVICE_LOG_LEVEL = "WARNING"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -30,6 +31,7 @@ from benchmark.tau2.train.rollout_executor import (
     DEFAULT_TAU2_EXPERIENCE_LOADER_MODE,
     DEFAULT_TAU2_ROLLOUT_BACKEND,
     make_tau2_rollout_executor,
+    normalize_system_prompt_profile,
     normalize_tau2_experience_loader_mode,
     normalize_tau2_rollout_backend,
 )
@@ -88,14 +90,24 @@ def create_app(
         backend = normalize_tau2_rollout_backend(
             options.get("rollout_backend") or options.get("backend") or default_backend
         )
+        rollout_options = {
+            **options,
+            "show_progress": options.get("show_progress", False),
+            "progress_label": options.get("progress_label") or "tau2",
+            "loader_mode": options.get("loader_mode") or default_loader_mode,
+        }
+        raw_system_prompt_profile = options.get("system_prompt_profile")
+        if (
+            raw_system_prompt_profile is None or str(raw_system_prompt_profile).strip() == ""
+        ) and backend == "vikingbot":
+            raw_system_prompt_profile = DEFAULT_TAU2_SERVICE_VIKINGBOT_SYSTEM_PROMPT_PROFILE
+        if raw_system_prompt_profile is not None:
+            rollout_options["system_prompt_profile"] = normalize_system_prompt_profile(
+                raw_system_prompt_profile
+            )
         return make_tau2_rollout_executor(
             backend=backend,
-            options={
-                **options,
-                "show_progress": options.get("show_progress", False),
-                "progress_label": options.get("progress_label") or "tau2",
-                "loader_mode": options.get("loader_mode") or default_loader_mode,
-            },
+            options=rollout_options,
             config_path=config_path,
             concurrency=1,
             rollout_language=rollout_language,

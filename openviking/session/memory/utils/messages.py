@@ -113,8 +113,13 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
             except Exception as e:
                 tracer.warning(f"Failed to parse MEMORY_FIELDS JSON: {e}")
 
-    # Remove the comment from content
+    # Remove the comment from content.  When MEMORY_FIELDS itself contains a
+    # structured ``content`` field, prefer that value as the source of truth.
+    # The visible markdown body may be a schema ``content_template`` rendering
+    # (for example experiences append a trigger section), so using the rendered
+    # body as the parsed content would make future updates depend on reversing
+    # template-specific markdown.
     content_without_comment = re.sub(pattern, "", content).strip()
-    result["content"] = content_without_comment
+    result.setdefault("content", content_without_comment)
 
     return result

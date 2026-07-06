@@ -85,6 +85,16 @@ def test_baseline_cache_key_depends_on_trials_eval_index_and_split():
             benchmark_service_url="http://127.0.0.1:1944",
         )
     )
+    assert _baseline_cache_key(base) != _baseline_cache_key(
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            eval_index=25,
+            trials=8,
+            benchmark_service_url="http://127.0.0.1:1944",
+            system_prompt_profile="minimal",
+        )
+    )
 
 
 def test_train_split_baseline_cache_key_uses_effective_eval_index():
@@ -433,6 +443,16 @@ def test_train_rollout_cache_key_depends_on_train_trials_and_index():
             train_index=10,
             train_trials=1,
             benchmark_service_url="http://127.0.0.1:1944",
+        )
+    )
+    assert _train_rollout_cache_key_prefix(base) != _train_rollout_cache_key_prefix(
+        BatchTrainEvalConfig(
+            dataset="tau2",
+            domain="airline",
+            train_index=25,
+            train_trials=1,
+            benchmark_service_url="http://127.0.0.1:1944",
+            system_prompt_profile="minimal",
         )
     )
 
