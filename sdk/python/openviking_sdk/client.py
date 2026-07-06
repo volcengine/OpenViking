@@ -938,16 +938,15 @@ class AsyncHTTPClient:
         uri: str,
         pattern: str,
         case_insensitive: bool = False,
-        node_limit: Optional[int] = None,
+        node_limit: int = 256,
         exclude_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         request_json = {
             "uri": VikingURI.normalize(uri),
             "pattern": pattern,
             "case_insensitive": case_insensitive,
+            "node_limit": node_limit,
         }
-        if node_limit is not None:
-            request_json["node_limit"] = node_limit
         if exclude_uri is not None:
             request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
         response = await self._http.post("/api/v1/search/grep", json=request_json)
@@ -1617,9 +1616,7 @@ class SyncHTTPClient:
         skill_name: str,
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.delete_skill(skill_name, target_uri=target_uri)
-        )
+        return run_async(self._async_client.delete_skill(skill_name, target_uri=target_uri))
 
     def list_watches(
         self,
@@ -1846,7 +1843,7 @@ class SyncHTTPClient:
         uri: str,
         pattern: str,
         case_insensitive: bool = False,
-        node_limit: Optional[int] = None,
+        node_limit: int = 256,
         exclude_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
