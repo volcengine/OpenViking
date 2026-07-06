@@ -16,8 +16,13 @@ const manifest = JSON.parse(
 const packageJson = JSON.parse(
   readFileSync(resolve(pluginRoot, "package.json"), "utf8"),
 ) as {
+  engines?: { openclaw?: string };
   version?: string;
   files?: string[];
+  openclaw?: {
+    compat?: { pluginApi?: string; minGatewayVersion?: string };
+    build?: { openclawVersion?: string; pluginSdkVersion?: string };
+  };
   scripts?: Record<string, string>;
 };
 const installManifest = JSON.parse(
@@ -127,15 +132,25 @@ describe("OpenClaw 5.5 package runtime contract", () => {
       "package.json",
       "openclaw.plugin.json",
     ]));
-    expect(installManifest.compatibility?.minOpenclawVersion).toBe("2026.4.8");
+    expect(installManifest.compatibility?.minOpenclawVersion).toBe("2026.5.27");
   });
 
   it("declares compatibility floors and recommended versions, and keeps version fields in sync", () => {
     expect(installManifest.compatibility).toMatchObject({
-      minOpenclawVersion: "2026.4.8",
+      minOpenclawVersion: "2026.5.27",
       recommendedOpenclawVersion: "2026.6.6",
       minOpenvikingVersion: "0.4.1",
       recommendedOpenvikingVersion: "0.4.1",
+    });
+    // OpenClaw installers read these package fields as host-version floor metadata.
+    expect(packageJson.engines?.openclaw).toBe(">=2026.5.27");
+    expect(packageJson.openclaw?.compat).toMatchObject({
+      pluginApi: ">=2026.5.27",
+      minGatewayVersion: "2026.5.27",
+    });
+    expect(packageJson.openclaw?.build).toMatchObject({
+      openclawVersion: "2026.5.27",
+      pluginSdkVersion: "2026.5.27",
     });
     // package.json version and install-manifest pluginVersion must stay identical.
     expect(installManifest.pluginVersion).toBe(packageJson.version);

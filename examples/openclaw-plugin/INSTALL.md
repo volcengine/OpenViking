@@ -27,13 +27,13 @@ openclaw plugins install clawhub:@openviking/openclaw-plugin
 | Component | Required |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.4.8 |
+| OpenClaw | >= 2026.5.27 |
 
 The plugin connects to an existing OpenViking server. It does not start the OpenViking server for you. Start OpenViking first, keep it running, then point the plugin `baseUrl` at that HTTP service. The default local URL is `http://127.0.0.1:1933`.
 
 OpenClaw plugin package boundaries:
 
-- `2026.4.8` is the minimum supported OpenClaw version for the current plugin.
+- `2026.5.27` is the minimum supported OpenClaw version for the current plugin. This floor includes the July 2, 2026 OpenClaw advisory batch fixes, including GHSA-8wg3-5mcm-fjq8 and GHSA-83w9-h5wv-j9xm.
 - `2026.5.3` starts validating package installs so TypeScript plugin entries need compiled JavaScript output.
 - `2026.5.4` and later stop falling back to `.ts` source for installed/global plugin runtime loading when compiled JavaScript is missing.
 - The recommended `openclaw plugins install clawhub:@openviking/openclaw-plugin` path installs a published package that already includes `dist/*.js`.

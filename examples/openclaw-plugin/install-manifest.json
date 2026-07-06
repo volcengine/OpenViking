@@ -52,7 +52,7 @@
     "pruneAfterBuild": true
   },
   "compatibility": {
-    "minOpenclawVersion": "2026.4.8",
+    "minOpenclawVersion": "2026.5.27",
     "recommendedOpenclawVersion": "2026.6.6",
     "minOpenvikingVersion": "0.4.1",
     "recommendedOpenvikingVersion": "0.4.1"
