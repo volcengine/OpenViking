@@ -173,6 +173,148 @@ class QuickSearchStorage(DummyStorage):
         return [_result(f"{parent_uri}/should-not-be-returned", 1.0, abstract="child")]
 
 
+class EmptyAbstractLevelTwoGlobalStorage(DummyStorage):
+    async def search_global_roots_in_tenant(
+        self,
+        ctx,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        self.global_search_calls.append(
+            {
+                "ctx": ctx,
+                "query_vector": query_vector,
+                "sparse_query_vector": sparse_query_vector,
+                "context_type": context_type,
+                "target_directories": target_directories,
+                "extra_filter": extra_filter,
+                "limit": limit,
+            }
+        )
+        return [
+            {
+                "uri": "viking://resources/file-a.py",
+                "abstract": "",
+                "_score": 0.2,
+                "level": 2,
+                "context_type": "resource",
+                "category": "doc",
+            },
+            {
+                "uri": "viking://resources/file-b.py",
+                "abstract": "child B",
+                "_score": 0.8,
+                "level": 2,
+                "context_type": "resource",
+                "category": "doc",
+            },
+        ]
+
+    async def search_children_in_tenant(
+        self,
+        ctx,
+        parent_uri: str,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        self.child_search_calls.append(
+            {
+                "ctx": ctx,
+                "parent_uri": parent_uri,
+                "query_vector": query_vector,
+                "sparse_query_vector": sparse_query_vector,
+                "context_type": context_type,
+                "target_directories": target_directories,
+                "extra_filter": extra_filter,
+                "limit": limit,
+            }
+        )
+        return []
+
+
+class EmptyAbstractLevelTwoSearchInTenantStorage(DummyStorage):
+    async def search_in_tenant(
+        self,
+        ctx,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        level=None,
+        limit: int = 10,
+        offset: int = 0,
+    ):
+        self.search_calls.append(
+            {
+                "ctx": ctx,
+                "query_vector": query_vector,
+                "sparse_query_vector": sparse_query_vector,
+                "context_type": context_type,
+                "target_directories": target_directories,
+                "extra_filter": extra_filter,
+                "level": level,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
+        if level == [0, 1]:
+            return []
+        return []
+
+    async def search_children_in_tenant(
+        self,
+        ctx,
+        parent_uri: str,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        self.child_search_calls.append(
+            {
+                "ctx": ctx,
+                "parent_uri": parent_uri,
+                "query_vector": query_vector,
+                "sparse_query_vector": sparse_query_vector,
+                "context_type": context_type,
+                "target_directories": target_directories,
+                "extra_filter": extra_filter,
+                "limit": limit,
+            }
+        )
+        if parent_uri != "viking://resources":
+            return []
+        return [
+            {
+                "uri": "viking://resources/file-a.py",
+                "abstract": "",
+                "_score": 0.2,
+                "level": 2,
+                "context_type": "resource",
+                "category": "doc",
+            },
+            {
+                "uri": "viking://resources/file-b.py",
+                "abstract": "child B",
+                "_score": 0.8,
+                "level": 2,
+                "context_type": "resource",
+                "category": "doc",
+            },
+        ]
+
+
 class DirectChildProxy:
     async def search_children_in_tenant(
         self,
@@ -202,6 +344,16 @@ class FakeRerankClient:
         end = start + len(documents)
         self._cursor = end
         return list(self.scores[start:end])
+
+
+class FakeVikingFS:
+    def __init__(self, files):
+        self.files = files
+        self.calls = []
+
+    async def read_file(self, uri: str, ctx=None):
+        self.calls.append((uri, ctx))
+        return self.files[uri]
 
 
 def _ctx() -> RequestContext:
@@ -258,6 +410,68 @@ async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
     assert fake_client.calls[0] == ("hello", ["root A", "root B"])
     assert fake_client.calls[1] == ("hello", ["child A", "child B"])
     assert storage.search_calls[0]["level"] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_uses_file_content_fallback_for_empty_level_two_abstract(monkeypatch):
+    class RejectEmptyRerankClient(FakeRerankClient):
+        def rerank_batch(self, query: str, documents: list[str]):
+            self.calls.append((query, list(documents)))
+            if any(not document.strip() for document in documents):
+                raise ValueError("empty rerank document")
+            start = self._cursor
+            end = start + len(documents)
+            self._cursor = end
+            return list(self.scores[start:end])
+
+    fake_client = RejectEmptyRerankClient([0.95, 0.11])
+    fake_fs = FakeVikingFS({"viking://resources/file-a.py": "fallback file contents"})
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=EmptyAbstractLevelTwoSearchInTenantStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+    ctx = _ctx()
+    ctx.viking_fs = fake_fs
+
+    result = await retriever.retrieve(_query(), ctx=ctx, limit=2, mode=RetrieverMode.THINKING)
+
+    assert [matched_ctx.uri for matched_ctx in result.matched_contexts] == [
+        "viking://resources/file-a.py",
+        "viking://resources/file-b.py",
+    ]
+    assert fake_client.calls == [
+        ("hello", ["fallback file contents", "child B"]),
+    ]
+    assert fake_fs.calls == [("viking://resources/file-a.py", ctx)]
+
+
+def test_rerank_scores_filters_empty_documents_before_rerank(monkeypatch):
+    fake_client = FakeRerankClient([0.9])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+
+    scores = retriever._rerank_scores(
+        "hello",
+        ["", "   ", "document body"],
+        [0.1, 0.2, 0.3],
+    )
+
+    assert scores == [0.1, 0.2, 0.9]
+    assert fake_client.calls == [("hello", ["document body"])]
 
 
 @pytest.mark.asyncio

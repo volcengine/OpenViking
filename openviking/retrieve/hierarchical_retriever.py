@@ -13,6 +13,7 @@ import logging
 import math
 import time
 from datetime import datetime
+from pathlib import PurePath
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.core.retrieval_targets import default_target_directories
@@ -21,7 +22,7 @@ from openviking.models.rerank import RerankClient
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
-from openviking.storage import VikingDBManager, VikingDBManagerProxy
+from openviking.storage import VikingDBManager, VikingDBManagerProxy, get_viking_fs
 from openviking.storage.expr import FilterExpr
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
@@ -50,7 +51,44 @@ class HierarchicalRetriever:
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     MAX_PARALLEL_CHILD_SEARCHES = 4  # Limit per-request fan-out against remote vector stores
+    FILE_RERANK_FALLBACK_MAX_CHARS = 4000
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
+    _FILE_RERANK_FALLBACK_SUFFIXES = {
+        ".txt",
+        ".md",
+        ".csv",
+        ".json",
+        ".xml",
+        ".py",
+        ".js",
+        ".ts",
+        ".java",
+        ".cpp",
+        ".c",
+        ".h",
+        ".go",
+        ".rs",
+        ".lua",
+        ".rb",
+        ".php",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".fish",
+        ".sql",
+        ".kt",
+        ".swift",
+        ".scala",
+        ".r",
+        ".m",
+        ".pl",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".ini",
+        ".cfg",
+        ".conf",
+    }
 
     def __init__(
         self,
@@ -228,7 +266,7 @@ class HierarchicalRetriever:
             if self._rerank_client and mode == RetrieverMode.THINKING:
                 directory_scores = self._rerank_scores(
                     query.query,
-                    [str(r.get("abstract", "")) for r in global_results],
+                    await self._build_rerank_documents(global_results, ctx),
                     directory_scores,
                 )
 
@@ -273,6 +311,7 @@ class HierarchicalRetriever:
                     scope_dsl=scope_dsl,
                     initial_candidates=initial_candidates,
                     level=level,
+                    ctx=ctx,
                 )
             apply_hotness = True
             rerank_used = self._rerank_client is not None and mode == RetrieverMode.THINKING
@@ -328,25 +367,71 @@ class HierarchicalRetriever:
         if not self._rerank_client or not documents:
             return fallback_scores
 
+        rerank_documents: List[str] = []
+        rerank_indices: List[int] = []
+        for index, document in enumerate(documents):
+            if not str(document).strip():
+                continue
+            rerank_documents.append(document)
+            rerank_indices.append(index)
+
+        if not rerank_documents:
+            return fallback_scores
+
         try:
-            scores = self._rerank_client.rerank_batch(query, documents)
+            scores = self._rerank_client.rerank_batch(query, rerank_documents)
         except Exception as e:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
             )
             return fallback_scores
 
-        if not scores or len(scores) != len(documents):
+        if not scores or len(scores) != len(rerank_documents):
             logger.warning(
                 "[HierarchicalRetriever] Invalid rerank result, fallback to vector scores"
             )
             return fallback_scores
 
-        normalized_scores: List[float] = []
-        for score, fallback in zip(scores, fallback_scores, strict=True):
-            normalized_scores.append(self._finite_score(score, fallback))
+        normalized_scores = list(fallback_scores)
+        for index, score in zip(rerank_indices, scores, strict=True):
+            normalized_scores[index] = self._finite_score(score, fallback_scores[index])
         return normalized_scores
 
+    async def _build_rerank_document(
+        self,
+        result: Dict[str, Any],
+        ctx: RequestContext,
+    ) -> str:
+        abstract = str(result.get("abstract") or "").strip()
+        if abstract:
+            return abstract
+
+        if result.get("level") != 2:
+            return ""
+
+        uri = str(result.get("uri") or "").strip()
+        if not uri:
+            return ""
+
+        if PurePath(uri).suffix.lower() not in self._FILE_RERANK_FALLBACK_SUFFIXES:
+            return ""
+
+        try:
+            viking_fs = getattr(ctx, "viking_fs", None) or get_viking_fs()
+            content = await viking_fs.read_file(uri, ctx=ctx)
+        except Exception:
+            return ""
+
+        return str(content or "")[: self.FILE_RERANK_FALLBACK_MAX_CHARS]
+
+    async def _build_rerank_documents(
+        self,
+        results: List[Dict[str, Any]],
+        ctx: RequestContext,
+    ) -> List[str]:
+        return await asyncio.gather(
+            *(self._build_rerank_document(result, ctx) for result in results)
+        )
     async def _recursive_search(
         self,
         vector_proxy: VikingDBManagerProxy,
@@ -363,6 +448,7 @@ class HierarchicalRetriever:
         scope_dsl: Optional[FilterExpr | Dict[str, Any]] = None,
         initial_candidates: Optional[List[Dict[str, Any]]] = None,
         level: Optional[List[int]] = None,
+        ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """
         Recursive search with directory priority return and score propagation.
@@ -452,7 +538,10 @@ class HierarchicalRetriever:
 
                 query_scores = [self._finite_score(r.get("_score", 0.0)) for r in results]
                 if self._rerank_client and mode == RetrieverMode.THINKING:
-                    documents = [str(r.get("abstract", "")) for r in results]
+                    if ctx is not None:
+                        documents = await self._build_rerank_documents(results, ctx)
+                    else:
+                        documents = [str(r.get("abstract", "")) for r in results]
                     query_scores = self._rerank_scores(query, documents, query_scores)
 
                 for r, score in zip(results, query_scores, strict=True):
