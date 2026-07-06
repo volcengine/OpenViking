@@ -81,7 +81,7 @@ fields:
       - ATOMIC SCOPE: Each experience MUST cover exactly ONE failure pattern for ONE user intent and associated tool-call/communication boundary. Multiple distinct failures or intents → SEPARATE experiences. Hard limit: if `Repair Procedure` would exceed 3 bullets or mention more than one candidate tool, STOP and split or skip.
       - STRICT FORMATTING: Use exactly the 3 headings above in this order. Use concise markdown bullets (-) for every section. No numbered lists, no introductory sentences, no conversational filler, and no closing paragraphs. Token efficiency is critical.
 
-    merge_op: replace
+    merge_op: patch
 
   - name: trigger_code
     type: string
@@ -208,7 +208,7 @@ fields:
               return False
           content = str(ctx.get("candidate_tool_args", {}).get("content", ""))
           return "refund" in content.lower() and not regex_search(r"\$?\d+", content)
-    merge_op: replace
+    merge_op: patch
 
   - name: supersedes
     type: string
