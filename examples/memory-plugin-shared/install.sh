@@ -54,7 +54,10 @@ CODEX_CONFIG="${CODEX_CONFIG_FILE:-$HOME/.codex/config.toml}"
 CC_SETTINGS="$HOME/.claude/settings.json"
 CC_KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
 MKT_DIR_ARCHIVE="$OV_HOME/memory-plugin-marketplace"
-CC_REMOTE_MANIFEST="$OV_HOME/marketplaces/openviking-claude.json"
+# Directory-shaped on purpose: Claude Code's file-type marketplaces
+# mis-derive installLocation and fail `marketplace update` with EISDIR.
+CC_REMOTE_MKT_DIR="$OV_HOME/marketplaces/openviking-claude"
+CC_REMOTE_MANIFEST="$CC_REMOTE_MKT_DIR/.claude-plugin/marketplace.json"
 
 REQUESTED_HARNESSES=""
 SOURCE_ARG=""
@@ -539,6 +542,9 @@ migrate_claude_legacy_marketplace() {
 
 write_claude_remote_manifest() {
   mkdir -p "$(dirname "$CC_REMOTE_MANIFEST")"
+  # Pre-directory-layout leftover (a bare .json registered as a file-type
+  # marketplace); superseded by the directory registration below.
+  rm -f "$OV_HOME/marketplaces/openviking-claude.json"
   node - "$CC_REMOTE_MANIFEST" "$MARKETPLACE_NAME" "$REPO_URL" "$REPO_REF" <<'NODE'
 const fs = require("node:fs");
 const [file, name, url, ref] = process.argv.slice(2);
@@ -559,10 +565,10 @@ fs.writeFileSync(file, JSON.stringify(manifest, null, 2) + "\n");
 NODE
 }
 
-claude_marketplace_sync() { # claude_marketplace_sync <add-target> <expected-source-substring>
+claude_marketplace_sync() { # claude_marketplace_sync <add-target> <expected-source>
   local target="$1" needle="$2" current
   current="$(claude_marketplace_current_source)"
-  if [ -n "$current" ] && printf '%s' "$current" | grep -qF "$needle"; then
+  if [ -n "$current" ] && [ "$current" = "$needle" ]; then
     info "claude plugin marketplace update ($MARKETPLACE_NAME)"
     command claude plugin marketplace update "$MARKETPLACE_NAME" || \
       warn 'marketplace update returned non-zero — continuing'
@@ -584,7 +590,7 @@ install_claude_modern() {
   case "$SOURCE_MODE" in
     remote)
       write_claude_remote_manifest
-      claude_marketplace_sync "$CC_REMOTE_MANIFEST" "$CC_REMOTE_MANIFEST" || return 1
+      claude_marketplace_sync "$CC_REMOTE_MKT_DIR" "$CC_REMOTE_MKT_DIR" || return 1
       ;;
     archive|dev)
       claude_marketplace_sync "$MKT_DIR" "$MKT_DIR" || return 1
@@ -762,11 +768,11 @@ NODE
   fi
 }
 
-codex_marketplace_sync() { # codex_marketplace_sync <needle> <add-args...>
+codex_marketplace_sync() { # codex_marketplace_sync <expected-source> <add-args...>
   local needle="$1" current
   shift
   current="$(codex_marketplace_current_source)"
-  if [ -n "$current" ] && printf '%s' "$current" | grep -qF "$needle"; then
+  if [ -n "$current" ] && [ "$current" = "$needle" ]; then
     info "codex plugin marketplace upgrade ($MARKETPLACE_NAME)"
     command codex plugin marketplace upgrade "$MARKETPLACE_NAME" >/dev/null 2>&1 || true
     return 0
