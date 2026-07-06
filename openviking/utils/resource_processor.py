@@ -361,6 +361,15 @@ class ResourceProcessor:
                     except Exception:
                         pass
 
+            # #3029: single-doc sources whose parse is NOT a complete mirror of
+            # the target dir (a user may add their own files alongside). Feishu
+            # tags source_format as "feishu" (error path) or "feishu_<doctype>"
+            # (success path), so match by prefix. Plain web/http imports also
+            # qualify. git/directory stay LEGACY (unconditional mirror). Carried
+            # in `prepared` so the defer_post_processing path keeps the semantic
+            # even though parse_result is gone by finish_prepared_resource().
+            sf = parse_result.source_format or ""
+            ownership_tracked = sf in {"feishu", "web", "http"} or sf.startswith("feishu_")
             prepared = {
                 "root_uri": root_uri,
                 "temp_uri": temp_uri or parse_result.temp_dir_path,
@@ -368,6 +377,7 @@ class ResourceProcessor:
                 "source_committed": source_committed,
                 "target_preexisting": target_preexisting,
                 "is_code_repo": parse_result.source_format == "repository",
+                "ownership_tracked": ownership_tracked,
             }
             if defer_post_processing:
                 result["_post_process"] = prepared
@@ -422,6 +432,7 @@ class ResourceProcessor:
                         lock=resource_lock,
                         temp_uris=[temp_uri],
                         is_code_repo=bool(prepared.get("is_code_repo")),
+                        ownership_tracked=bool(prepared.get("ownership_tracked")),
                         target_preexisting=target_preexisting,
                         **kwargs,
                     )

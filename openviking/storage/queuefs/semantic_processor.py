@@ -3,10 +3,12 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+import os
 import re
 import threading
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openviking.observability.context import (
@@ -33,12 +35,21 @@ from openviking.parse.parsers.media.utils import (
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import LockAcquisitionError
+from openviking.storage.ovpack.format import sha256_hex
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.queuefs.semantic_sidecar import write_semantic_sidecars
+from openviking.storage.queuefs.sync_manifest import (
+    Manifest,
+    ManifestFile,
+    divergent,
+    manifest_entry,
+    read_manifest,
+    write_manifest_atomic,
+)
 from openviking.storage.transaction import NO_LOCK, LockLease
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
@@ -57,6 +68,15 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# #3029 temp->target delete policies (see .wiki/issue-3029-...md §3.1).
+# GUARDED     - a sync manifest exists at the target: four-condition guarded delete.
+# MERGE_ONLY  - ownership_tracked source, no manifest yet: delete NOTHING, migrate.
+# LEGACY_MIRROR - not ownership_tracked, no manifest (git/directory, a complete
+#               source): byte-identical to the historical unconditional mirror.
+_POLICY_GUARDED = "guarded"
+_POLICY_MERGE_ONLY = "merge_only"
+_POLICY_LEGACY = "legacy_mirror"
+
 
 @dataclass
 class DiffResult:
@@ -67,6 +87,7 @@ class DiffResult:
     updated_files: List[str] = field(default_factory=list)
     added_dirs: List[str] = field(default_factory=list)
     deleted_dirs: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
 
     def to_changes(self) -> Dict[str, List[str]]:
         return {
@@ -401,6 +422,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                         msg.target_uri,
                                         ctx=current_ctx,
                                         lock=semantic_lock.lock,
+                                        ownership_tracked=msg.ownership_tracked,
                                     )
                                     logger.info(
                                         "[SyncDiff] Diff computed: "
@@ -746,6 +768,7 @@ class SemanticProcessor(DequeueHandlerBase):
         ctx: Optional[RequestContext] = None,
         file_change_status: Optional[Dict[str, bool]] = None,
         lock: LockLease = NO_LOCK,
+        ownership_tracked: bool = False,
     ) -> DiffResult:
         viking_fs = get_viking_fs()
         if not await viking_fs.exists(root_uri, ctx=ctx):
@@ -754,6 +777,94 @@ class SemanticProcessor(DequeueHandlerBase):
             )
         diff = DiffResult()
         lock_handle = lock.handle
+        target_root = target_uri.rstrip("/")
+
+        # #3029 delete policy. Only ownership_tracked sources (single-doc:
+        # Feishu/web) ever read/write a manifest; git/directory stay LEGACY so
+        # the historical mirror behavior (which correctly prunes deleted upstream
+        # files) is byte-identical. NOTE: this "keep vs delete a target-only
+        # file" axis is orthogonal to ovpack's `on_conflict` (fail/overwrite/
+        # skip), which arbitrates files present in BOTH sides.
+        old_manifest: Optional[Manifest] = None
+        if ownership_tracked:
+            old_manifest = await read_manifest(
+                target_root, viking_fs, ctx=ctx, lock_handle=lock_handle
+            )
+        if old_manifest is not None:
+            policy = _POLICY_GUARDED
+        elif ownership_tracked:
+            policy = _POLICY_MERGE_ONLY
+        else:
+            policy = _POLICY_LEGACY
+        guarded = policy != _POLICY_LEGACY
+
+        # New manifest accumulators (only populated when guarded): OUR generated
+        # files/dirs, keyed by target-root-relative POSIX path. User-added files
+        # are never recorded, so a future resync cannot mistake them for ours.
+        new_files: List[ManifestFile] = []
+        new_dirs: List[str] = []
+
+        async def read_bytes(uri: str) -> bytes:
+            data = await viking_fs.read_file(uri, ctx=ctx)
+            if isinstance(data, str):
+                return data.encode("utf-8")
+            return data
+
+        async def record_ours(rel: str, uri: str) -> None:
+            try:
+                data = await read_bytes(uri)
+            except Exception as e:
+                logger.error(f"[SyncDiff] Failed to hash {uri} for manifest: {e}")
+                return
+            new_files.append(manifest_entry(rel, data))
+
+        async def can_delete(rel: str, uri: str) -> bool:
+            """Four-condition guarded delete (§3.3).
+
+            A target file (absent from the new parse, still present) is deleted
+            only when the OLD manifest tracked it AND its current hash still
+            matches what we recorded — i.e. it is unmistakably OUR stale file.
+            Anything else (user-added, or user-modified-then-source-removed) is
+            preserved. Under LEGACY_MIRROR delete unconditionally (unchanged).
+            """
+            if not guarded:
+                return True
+            if policy == _POLICY_MERGE_ONLY or old_manifest is None:
+                return False
+            entry = old_manifest.get(rel)
+            if entry is None:
+                return False  # user-added -> preserve
+            try:
+                data = await read_bytes(uri)
+            except Exception:
+                return False  # cannot verify -> preserve (fail safe)
+            if sha256_hex(data) == entry.sha256:
+                return True
+            diff.warnings.append(
+                f"Preserved '{uri}': user-modified since last sync and removed upstream."
+            )
+            return False
+
+        def dir_tracked(rel: str) -> bool:
+            if old_manifest is None:
+                return False
+            key = os.path.normcase(rel.replace("\\", "/"))
+            return any(
+                os.path.normcase(d.replace("\\", "/")) == key for d in old_manifest.dirs
+            )
+
+        async def write_conflict_sidecar(target_dir: str, name: str, remote: bytes) -> None:
+            """Materialize the fresh remote version alongside a user-edited file
+            (§3.4) instead of clobbering it: `<stem>.remote-<shorthash>.md`."""
+            short = sha256_hex(remote)[:8]
+            stem = name.rsplit(".", 1)[0] if "." in name else name
+            sidecar_uri = VikingURI(target_dir).join(f"{stem}.remote-{short}.md").uri
+            try:
+                await viking_fs.write_file(
+                    sidecar_uri, remote, ctx=ctx, lock_handle=lock_handle
+                )
+            except Exception as e:
+                logger.error(f"[SyncDiff] Failed to write conflict sidecar {sidecar_uri}: {e}")
 
         async def list_children(dir_uri: str) -> Tuple[Dict[str, str], Dict[str, str]]:
             files: Dict[str, str] = {}
@@ -775,7 +886,19 @@ class SemanticProcessor(DequeueHandlerBase):
                     files[name] = item_uri
             return files, dirs
 
-        async def sync_dir(root_dir: str, target_dir: str) -> None:
+        async def collect_all_as_ours(dir_uri: str, rel_prefix: str) -> None:
+            """Record every visible file/dir under a wholesale-moved source dir
+            as ours (the whole subtree came from the parse)."""
+            files, dirs = await list_children(dir_uri)
+            for n, uri in files.items():
+                r = f"{rel_prefix}/{n}" if rel_prefix else n
+                await record_ours(r, uri)
+            for n, uri in dirs.items():
+                r = f"{rel_prefix}/{n}" if rel_prefix else n
+                new_dirs.append(r)
+                await collect_all_as_ours(uri, r)
+
+        async def sync_dir(root_dir: str, target_dir: str, rel_prefix: str = "") -> None:
             root_files, root_dirs = await list_children(root_dir)
             target_files, target_dirs = await list_children(target_dir)
 
@@ -783,7 +906,10 @@ class SemanticProcessor(DequeueHandlerBase):
             for name in sorted(file_names):
                 root_file = root_files.get(name)
                 target_file = target_files.get(name)
+                rel = f"{rel_prefix}/{name}" if rel_prefix else name
 
+                # Source FILE vs target DIR: source file wins; drop the target
+                # dir. Unchanged for all policies (type conflict, §row16 reverse).
                 if root_file and name in target_dirs:
                     target_conflict_dir = target_dirs[name]
                     try:
@@ -801,26 +927,55 @@ class SemanticProcessor(DequeueHandlerBase):
                         )
                     target_file = None
 
+                # Source DIR vs target FILE: gated delete of the target file.
                 if target_file and name in root_dirs and not root_file:
-                    try:
-                        await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
-                        diff.deleted_files.append(target_file)
-                        target_files.pop(name, None)
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to delete file for dir conflict: {target_file}, error={e}"
-                        )
+                    if await can_delete(rel, target_file):
+                        try:
+                            await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
+                            diff.deleted_files.append(target_file)
+                            target_files.pop(name, None)
+                        except Exception as e:
+                            logger.error(
+                                f"[SyncDiff] Failed to delete file for dir conflict: {target_file}, error={e}"
+                            )
                     continue
 
+                # Target file absent from source: gated delete (§3.3).
                 if target_file and not root_file:
-                    try:
-                        await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
-                        diff.deleted_files.append(target_file)
-                    except Exception as e:
-                        logger.error(f"[SyncDiff] Failed to delete file: {target_file}, error={e}")
+                    if await can_delete(rel, target_file):
+                        try:
+                            await viking_fs.rm(target_file, ctx=ctx, lock_handle=lock_handle)
+                            diff.deleted_files.append(target_file)
+                        except Exception as e:
+                            logger.error(
+                                f"[SyncDiff] Failed to delete file: {target_file}, error={e}"
+                            )
                     continue
 
                 if root_file and target_file:
+                    # §3.4: user edited a file we generated -> preserve it, save
+                    # the fresh remote version to a sidecar, warn. Never clobber.
+                    if guarded and old_manifest is not None:
+                        try:
+                            current = await read_bytes(target_file)
+                            if divergent(sha256_hex(current), old_manifest, rel):
+                                remote = await read_bytes(root_file)
+                                await write_conflict_sidecar(target_dir, name, remote)
+                                old_entry = old_manifest.get(rel)
+                                if old_entry is not None:
+                                    # Keep our original fingerprint so the file
+                                    # stays flagged divergent on future resyncs.
+                                    new_files.append(old_entry)
+                                diff.warnings.append(
+                                    f"Preserved user-modified '{target_file}'; "
+                                    f"remote update saved to a .remote-*.md sidecar."
+                                )
+                                continue
+                        except Exception as e:
+                            logger.error(
+                                f"[SyncDiff] Divergence check failed for {target_file}: {e}"
+                            )
+
                     changed = False
                     if file_change_status and root_file in file_change_status:
                         changed = file_change_status[root_file]
@@ -853,6 +1008,8 @@ class SemanticProcessor(DequeueHandlerBase):
                             logger.error(
                                 f"[SyncDiff] Failed to move updated file: {root_file} -> {target_file}, error={e}"
                             )
+                    if guarded:
+                        await record_ours(rel, target_file)
                     continue
 
                 if root_file and not target_file:
@@ -869,29 +1026,59 @@ class SemanticProcessor(DequeueHandlerBase):
                         logger.error(
                             f"[SyncDiff] Failed to move added file: {root_file} -> {target_file_uri}, error={e}"
                         )
+                    if guarded:
+                        await record_ours(rel, target_file_uri)
 
             dir_names = set(root_dirs.keys()) | set(target_dirs.keys())
             for name in sorted(dir_names):
                 root_subdir = root_dirs.get(name)
                 target_subdir = target_dirs.get(name)
+                rel = f"{rel_prefix}/{name}" if rel_prefix else name
 
+                # Source DIR vs target FILE: gated delete of the target file.
                 if root_subdir and name in target_files:
                     target_conflict_file = target_files[name]
-                    try:
-                        await viking_fs.rm(
-                            target_conflict_file,
-                            ctx=ctx,
-                            lock_handle=lock_handle,
-                        )
-                        diff.deleted_files.append(target_conflict_file)
-                        target_files.pop(name, None)
-                    except Exception as e:
-                        logger.error(
-                            f"[SyncDiff] Failed to delete file for dir conflict: {target_conflict_file}, error={e}"
-                        )
-                    target_subdir = None
+                    if await can_delete(rel, target_conflict_file):
+                        try:
+                            await viking_fs.rm(
+                                target_conflict_file,
+                                ctx=ctx,
+                                lock_handle=lock_handle,
+                            )
+                            diff.deleted_files.append(target_conflict_file)
+                            target_files.pop(name, None)
+                        except Exception as e:
+                            logger.error(
+                                f"[SyncDiff] Failed to delete file for dir conflict: {target_conflict_file}, error={e}"
+                            )
+                        target_subdir = None
+                    else:
+                        continue  # preserve user file; cannot place source dir here
 
                 if target_subdir and not root_subdir:
+                    if guarded:
+                        # Recurse (source side empty) so OUR stale files inside a
+                        # source-absent dir are guard-deleted while user files
+                        # survive; then prune the dir only if it was tool-created
+                        # (in old.dirs) and is now empty (§3.6).
+                        empty_source = VikingURI(root_dir).join(name).uri
+                        await sync_dir(empty_source, target_subdir, rel)
+                        if policy == _POLICY_GUARDED and dir_tracked(rel):
+                            files_left, dirs_left = await list_children(target_subdir)
+                            if not files_left and not dirs_left:
+                                try:
+                                    await viking_fs.rm(
+                                        target_subdir,
+                                        recursive=True,
+                                        ctx=ctx,
+                                        lock_handle=lock_handle,
+                                    )
+                                    diff.deleted_dirs.append(target_subdir)
+                                except Exception as e:
+                                    logger.error(
+                                        f"[SyncDiff] Failed to prune empty dir: {target_subdir}, error={e}"
+                                    )
+                        continue
                     try:
                         await viking_fs.rm(
                             target_subdir,
@@ -920,10 +1107,33 @@ class SemanticProcessor(DequeueHandlerBase):
                         logger.error(
                             f"[SyncDiff] Failed to move added directory: {root_subdir} -> {target_subdir_uri}, error={e}"
                         )
+                    if guarded:
+                        new_dirs.append(rel)
+                        await collect_all_as_ours(target_subdir_uri, rel)
                     continue
 
                 if root_subdir and target_subdir:
-                    await sync_dir(root_subdir, target_subdir)
+                    if guarded:
+                        new_dirs.append(rel)
+                    await sync_dir(root_subdir, target_subdir, rel)
+
+        async def flush_manifest() -> None:
+            manifest = Manifest(
+                # ponytail: source.kind hardcoded — Feishu is the only
+                # ownership_tracked source today; thread the real source_format
+                # when web/http land alongside Web Studio (§3.10). kind is not
+                # read by the delete logic, only surfaced to the UI.
+                source={"kind": "feishu"},
+                synced_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                files=new_files,
+                dirs=new_dirs,
+            )
+            try:
+                await write_manifest_atomic(
+                    target_root, manifest, viking_fs, ctx=ctx, lock_handle=lock_handle
+                )
+            except Exception as e:
+                logger.error(f"[SyncDiff] Failed to write sync manifest for {target_root}: {e}")
 
         target_exists = await viking_fs.exists(target_uri, ctx=ctx)
         if not target_exists:
@@ -935,6 +1145,10 @@ class SemanticProcessor(DequeueHandlerBase):
             # The whole temp tree (including the hidden .image_mappings.json
             # sidecar) was moved into the target; rewrite local image paths now.
             await self._rewrite_target_image_uris(root_uri, target_uri, ctx=ctx, lock=lock)
+            if guarded:
+                # Nothing pre-existed at target, so the whole moved tree is ours.
+                await collect_all_as_ours(target_uri, "")
+                await flush_manifest()
             return diff
 
         await sync_dir(root_uri, target_uri)
@@ -946,6 +1160,10 @@ class SemanticProcessor(DequeueHandlerBase):
             await viking_fs.delete_temp(root_uri, ctx=ctx)
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
+        # #3029: write the manifest LAST, under the same lock, only after the
+        # tree sync succeeded — a crash leaves the OLD manifest (fail-safe).
+        if guarded:
+            await flush_manifest()
         return diff
 
     async def _rewrite_target_image_uris(
