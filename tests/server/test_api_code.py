@@ -3,6 +3,8 @@
 """Tests for /api/v1/code/* endpoints."""
 
 
+from pathlib import Path
+
 from openviking.parse.parsers.code.ast.code_tools import (
     CODE_LOCATE_FILE_CAP,
     CODE_SCAN_LS_LEVEL_LIMIT,
@@ -10,6 +12,7 @@ from openviking.parse.parsers.code.ast.code_tools import (
     CODE_SEARCH_FILE_CAP,
 )
 from openviking.server.routers.code import _select_local_code_files
+from openviking.pyagfs.exceptions import AGFSPluginError
 from openviking_cli.exceptions import PermissionDeniedError
 
 PY_SAMPLE = '''"""Module top doc."""
@@ -27,21 +30,41 @@ def make_greeter() -> Greeter:
 
 def test_local_locate_selection_keeps_weak_path_diagnostic_candidate_under_locate_cap(tmp_path):
     for index in range(260):
-        path = tmp_path / "sphinx" / "builders" / "latex" / f"generated_{index}.py"
+        path = tmp_path / "docsuite" / "builders" / "pdf" / f"generated_{index}.py"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("class Generated: pass\n")
-    std_path = tmp_path / "sphinx" / "domains" / "std.py"
+    std_path = tmp_path / "docsuite" / "domains" / "std.py"
     std_path.parent.mkdir(parents=True, exist_ok=True)
-    std_path.write_text('logger.warning("no number is assigned for %s: %s")\n')
+    std_path.write_text('logger.warning("resource id is missing for %s: %s")\n')
 
     paths, capped, _skipped = _select_local_code_files(
         tmp_path,
-        'Sphinx warning "no number is assigned for table" during latex build',
+        'DocSuite warning "resource id is missing for table" during pdf build',
     )
 
     assert len(paths) < CODE_LOCATE_FILE_CAP
     assert capped is False
     assert std_path in paths
+
+
+def test_local_locate_selection_prunes_skipped_dirs_before_descending(tmp_path, monkeypatch):
+    source_path = tmp_path / "pkg" / "module.py"
+    source_path.parent.mkdir()
+    source_path.write_text("def target():\n    return True\n", encoding="utf-8")
+    skipped_path = tmp_path / "node_modules" / "vendor.py"
+    skipped_path.parent.mkdir()
+    skipped_path.write_text("def target():\n    return False\n", encoding="utf-8")
+
+    def fail_rglob(*_args, **_kwargs):
+        raise AssertionError("Path.rglob should not be used for local locate scans")
+
+    monkeypatch.setattr(Path, "rglob", fail_rglob)
+
+    paths, capped, skipped = _select_local_code_files(tmp_path, "target")
+
+    assert paths == [source_path]
+    assert capped is False
+    assert skipped == ["node_modules"]
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +191,26 @@ class TestCodeSearchEndpoint:
         )
         assert resp.status_code == 200
         assert resp.json()["result"] == "Error: empty query"
+
+    async def test_file_uri_falls_back_to_single_file_read(self, client, service, monkeypatch):
+        async def fake_ls(uri, ctx=None, recursive=False, output=None, **_):
+            raise AGFSPluginError(f"plugin error: not a directory: {uri}")
+
+        async def fake_read(uri, ctx=None, **_):
+            return PY_SAMPLE
+
+        monkeypatch.setattr(service.fs, "ls", fake_ls)
+        monkeypatch.setattr(service.fs, "read", fake_read)
+
+        resp = await client.post(
+            "/api/v1/code/search",
+            json={"uri": "viking://r/greeter.py", "query": "greet"},
+        )
+
+        assert resp.status_code == 200
+        result = resp.json()["result"]
+        assert "Greeter" in result
+        assert "failed to list" not in result
 
     async def test_no_code_files(self, client, service, monkeypatch):
         async def fake_ls(uri, ctx=None, recursive=False, output=None, **_):
@@ -367,6 +410,34 @@ class EncodingChecker:
             "level_limit": CODE_SCAN_LS_LEVEL_LIMIT,
         }
 
+    async def test_viking_file_source_locates_single_file(self, client, service, monkeypatch):
+        async def fake_ls(uri, ctx=None, recursive=False, output=None, **_):
+            raise AGFSPluginError(f"plugin error: not a directory: {uri}")
+
+        async def fake_read(uri, ctx=None, **_):
+            return "class EncodingChecker:\n    def open(self):\n        return 'W0511 fixme notes'\n"
+
+        monkeypatch.setattr(service.fs, "ls", fake_ls)
+        monkeypatch.setattr(service.fs, "read", fake_read)
+
+        resp = await client.post(
+            "/api/v1/code/locate",
+            json={
+                "source": {"type": "viking", "uri": "viking://r/pylint/checkers/misc.py"},
+                "query": "Fix W0511 fixme notes handling in the misc checker",
+                "output_format": "json",
+            },
+        )
+
+        assert resp.status_code == 200
+        result = resp.json()["result"]
+        assert result["edit_candidates"][0]["location"] == {
+            "type": "viking",
+            "uri": "viking://r/pylint/checkers/misc.py",
+            "relative_path": "misc.py",
+        }
+        assert result["warnings"] == []
+
     async def test_local_json_reads_current_checkout_and_returns_local_paths(self, client, tmp_path):
         client._transport.app.state.config.allow_local_code_source_paths = True
         repo = tmp_path / "repo"
@@ -405,6 +476,30 @@ class EncodingChecker:
         assert "uri" not in location
         assert result["verification"][0]["cwd"] == str(repo)
         assert result["verification"][0]["command"].startswith("python3 -m py_compile ")
+
+    async def test_local_json_without_supported_files_keeps_local_source(self, client, tmp_path):
+        client._transport.app.state.config.allow_local_code_source_paths = True
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "README.md").write_text("# notes\n", encoding="utf-8")
+
+        resp = await client.post(
+            "/api/v1/code/locate",
+            json={
+                "source": {"type": "local", "path": str(repo)},
+                "query": "changed greet behavior",
+                "output_format": "json",
+            },
+        )
+
+        assert resp.status_code == 200
+        result = resp.json()["result"]
+        assert result["source"] == {"type": "local", "root": str(repo)}
+        assert result["warnings"][0]["code"] == "no_supported_source_files"
+        assert result["edit_candidates"] == []
+        assert result["behavior_references"] == []
+        assert result["verification"] == []
+        assert "no local checkout mapping" not in str(result)
 
     async def test_old_issue_shape_is_not_accepted(self, client):
         resp = await client.post(

@@ -6,14 +6,17 @@ code_outline / code_search / code_expand MCP tools."""
 from openviking.parse.parsers.code.ast.code_tools import (
     CODE_SEARCH_FILE_CAP,
     CodeLocateFile,
+    CodeLocateHints,
     _CodeLocateHit,
     _diagnostic_phrase_bonus,
     _format_verification_section,
     _is_diagnostic_assertion_line,
     expand_symbol,
     format_locate_json_text,
+    format_locate_text,
     locate_code,
     locate_code_structured,
+    locate_selection_query,
     outline_file,
     search_code,
     search_symbols,
@@ -387,39 +390,100 @@ class TestSearchCode:
 
     def test_select_code_uris_keeps_related_tests_for_selected_implementation_files(self):
         entries = [
-            {"uri": f"viking://r/sklearn/generic_changed_{i}.py", "isDir": False}
+            {"uri": f"viking://r/samplepkg/generic_changed_{i}.py", "isDir": False}
             for i in range(CODE_SEARCH_FILE_CAP - 1)
         ]
         entries.extend(
             [
-                {"uri": "viking://r/sklearn/utils/_pprint.py", "isDir": False},
-                {"uri": "viking://r/sklearn/utils/tests/test_pprint.py", "isDir": False},
-                {"uri": "viking://r/sklearn/z_other.py", "isDir": False},
+                {"uri": "viking://r/samplepkg/utils/pretty.py", "isDir": False},
+                {"uri": "viking://r/samplepkg/utils/tests/test_pretty.py", "isDir": False},
+                {"uri": "viking://r/samplepkg/z_other.py", "isDir": False},
             ]
         )
 
-        uris, capped = select_code_uris(entries, "print_changed_only repr vector values")
+        uris, capped = select_code_uris(entries, "compact_repr repr vector values")
 
         assert capped is True
-        assert "viking://r/sklearn/utils/_pprint.py" in uris
-        assert "viking://r/sklearn/utils/tests/test_pprint.py" in uris
+        assert "viking://r/samplepkg/utils/pretty.py" in uris
+        assert "viking://r/samplepkg/utils/tests/test_pretty.py" in uris
         assert len(uris) == CODE_SEARCH_FILE_CAP
 
     def test_select_code_uris_uses_unified_cap_for_diagnostic_queries(self):
         entries = [
-            {"uri": f"viking://r/sphinx/builders/latex/generated_{i}.py", "isDir": False}
+            {"uri": f"viking://r/docsuite/builders/pdf/generated_{i}.py", "isDir": False}
             for i in range(CODE_SEARCH_FILE_CAP)
         ]
-        entries.append({"uri": "viking://r/sphinx/domains/std.py", "isDir": False})
+        entries.append({"uri": "viking://r/docsuite/domains/std.py", "isDir": False})
 
         uris, capped = select_code_uris(
             entries,
-            "get_fignumber table no number is assigned numref warning table singlehtml latex std",
+            "get_resource_id table resource id is missing docref warning table singlepage pdf std",
         )
 
         assert capped is True
         assert len(uris) == CODE_SEARCH_FILE_CAP
-        assert "viking://r/sphinx/domains/std.py" in uris
+        assert "viking://r/docsuite/domains/std.py" in uris
+
+    def test_locate_selection_query_expands_structured_hints_for_prefiltering(self):
+        entries = [
+            {"uri": f"viking://r/pkg/noise_{i}.py", "isDir": False}
+            for i in range(5)
+        ]
+        entries.append({"uri": "viking://r/pkg/serializers.py", "isDir": False})
+
+        selection_query = locate_selection_query(
+            "Regression in output.",
+            terms=["flag"],
+            hints=CodeLocateHints(paths=["serializers.py"], symbols=["serialize_flag"]),
+        )
+        uris, capped = select_code_uris(entries, selection_query, cap=3)
+
+        assert capped is True
+        assert "serializers.py" in selection_query
+        assert "serialize_flag" in selection_query
+        assert "viking://r/pkg/serializers.py" in uris
+
+    def test_select_code_uris_prefers_implementation_files_for_locate_cap(self):
+        entries = [
+            {"uri": f"viking://r/tests/migrations/test_generated_{i}.py", "isDir": False}
+            for i in range(20)
+        ]
+        entries.extend(
+            [
+                {"uri": "viking://r/webfw/db/migrations/autodetector.py", "isDir": False},
+                {"uri": "viking://r/webfw/db/migrations/operations/models.py", "isDir": False},
+            ]
+        )
+
+        uris, capped = select_code_uris(
+            entries,
+            "migration relative_order_field AddIndex _order",
+            cap=5,
+            prefer_implementation=True,
+            priority_terms=["migrations"],
+        )
+
+        assert capped is True
+        assert "viking://r/webfw/db/migrations/autodetector.py" in uris
+        assert "viking://r/webfw/db/migrations/operations/models.py" in uris
+
+    def test_select_code_uris_honors_explicit_locate_path_hints_before_cap(self):
+        entries = [
+            {"uri": f"viking://r/tests/queries/test_generated_{i}.py", "isDir": False}
+            for i in range(20)
+        ]
+        entries.append({"uri": "viking://r/webfw/db/models/query_utils.py", "isDir": False})
+
+        uris, capped = select_code_uris(
+            entries,
+            "cannot pickle Q object",
+            cap=3,
+            prefer_implementation=True,
+            priority_paths=["webfw/db/models/query_utils.py"],
+        )
+
+        assert capped is True
+        assert "viking://r/webfw/db/models/query_utils.py" in uris
 
     def test_hybrid_ranks_content_and_path_hits_with_symbol_hits(self):
         result = search_code(
@@ -447,34 +511,34 @@ class TestSearchCode:
 
     def test_hybrid_prioritizes_diagnostic_emitter_over_builder_path_noise(self):
         std_content = """\
-class StandardDomain:
-    def get_fignumber(self):
+class DiagnosticDomain:
+    def get_resource_id(self):
         return ()
 
-    def _resolve_numref_xref(self):
-        logger.warning("no number is assigned for %s: %s")
+    def _resolve_docref(self):
+        logger.warning("resource id is missing for %s: %s")
 """
-        latex_content = """\
+        pdf_content = """\
 class Table:
     def get_table_type(self): pass
     def visit_table(self): pass
     def depart_table(self): pass
 import warnings
-# latex table singlehtml numref table latex
+# pdf table singlepage docref table pdf
 """
 
         result = search_code(
-            "get_fignumber table no number is assigned numref warning table singlehtml latex",
+            "get_resource_id table resource id is missing docref warning table singlepage pdf",
             [
-                (latex_content, "viking://r/sphinx/writers/latex.py"),
-                (std_content, "viking://r/sphinx/domains/std.py"),
+                (pdf_content, "viking://r/docsuite/writers/pdf.py"),
+                (std_content, "viking://r/docsuite/domains/std.py"),
             ],
         )
 
         assert "Diagnostic search note" in result
-        assert "builder/path-only matches as context" in result
-        assert result.index("viking://r/sphinx/domains/std.py") < result.index(
-            "viking://r/sphinx/writers/latex.py"
+        assert "path-only matches as context" in result
+        assert result.index("viking://r/docsuite/domains/std.py") < result.index(
+            "viking://r/docsuite/writers/pdf.py"
         )
 
     def test_hybrid_prefers_implementation_for_non_test_issue_terms(self):
@@ -499,6 +563,617 @@ import warnings
 
 
 class TestLocateCode:
+    def test_locate_code_defaults_to_compact_candidates_and_guidance(self):
+        files = [
+            CodeLocateFile(
+                f"def target_{idx}():\n    return 'fix parser regression {idx}'\n",
+                f"/repo/pkg/module_{idx}.py",
+                location_type="local",
+                relative_path=f"pkg/module_{idx}.py",
+            )
+            for idx in range(5)
+        ] + [
+            CodeLocateFile(
+                f"def test_target_{idx}():\n    assert 'parser regression'\n",
+                f"/repo/tests/test_module_{idx}.py",
+                location_type="local",
+                relative_path=f"tests/test_module_{idx}.py",
+            )
+            for idx in range(3)
+        ]
+
+        result = locate_code_structured("fix parser regression target", files)
+        text = format_locate_text(result)
+
+        assert len(result.edit_candidates) <= 3
+        assert len(result.behavior_references) <= 2
+        assert "Contract: read the top edit candidate first" in text
+        assert "Patch before broader grep/read/codesearch" in text
+        assert "If pytest fails before collection or dependency imports" in text
+
+    def test_locate_code_structured_uses_structured_terms_and_hints(self):
+        result = locate_code_structured(
+            "Regression in flag serialization output.",
+            [
+                CodeLocateFile(
+                    content=(
+                        "def unrelated():\n"
+                        "    return 'flag serialization output regression'\n"
+                    ),
+                    file_name="/repo/pkg/noise.py",
+                    location_type="local",
+                    relative_path="pkg/noise.py",
+                ),
+                CodeLocateFile(
+                    content=(
+                        "def serialize_flag(value):\n"
+                        "    raise TypeError('unsupported flag value')\n"
+                    ),
+                    file_name="/repo/pkg/serializers.py",
+                    location_type="local",
+                    relative_path="pkg/serializers.py",
+                ),
+            ],
+            terms=["flag", "serializer"],
+            hints=CodeLocateHints(
+                paths=["serializers.py"],
+                symbols=["serialize_flag"],
+                errors=["unsupported flag value"],
+            ),
+            debug=True,
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == "pkg/serializers.py"
+        assert any("hint path" in reason for reason in result.edit_candidates[0].reasons)
+        assert result.debug["terms"] == ["flag", "serializer"]
+        assert result.debug["hints"]["paths"] == ["serializers.py"]
+
+    def test_locate_code_structured_does_not_split_structured_symbol_hints(self):
+        result = locate_code_structured(
+            "cluster metrics validation",
+            [
+                CodeLocateFile(
+                    "def check_estimators_nan_inf():\n    return True\n",
+                    "/repo/samplepkg/utils/estimator_checks.py",
+                    location_type="local",
+                    relative_path="samplepkg/utils/estimator_checks.py",
+                ),
+                CodeLocateFile(
+                    "def check_clusterings(labels_true, labels_pred):\n    return labels_true\n",
+                    "/repo/samplepkg/metrics/cluster/_supervised.py",
+                    location_type="local",
+                    relative_path="samplepkg/metrics/cluster/_supervised.py",
+                ),
+            ],
+            hints=CodeLocateHints(symbols=["check_clusterings"]),
+        )
+
+        by_path = {
+            candidate.location["relative_path"]: candidate
+            for candidate in result.edit_candidates
+        }
+        assert "hint symbols: check_clusterings" in by_path[
+            "samplepkg/metrics/cluster/_supervised.py"
+        ].reasons
+        assert not any(
+            reason.startswith("hint symbols")
+            for reason in by_path["samplepkg/utils/estimator_checks.py"].reasons
+        )
+
+    def test_locate_code_structured_boosts_generic_operation_family_symbols(self):
+        result = locate_code_structured(
+            "Squash duplicate operations when merging migration-style edits.",
+            [
+                CodeLocateFile(
+                    (
+                        "def describe_issue():\n"
+                        "    return 'squash duplicate operations merging edits'\n"
+                    ),
+                    "/repo/pkg/reporting.py",
+                    location_type="local",
+                    relative_path="pkg/reporting.py",
+                ),
+                CodeLocateFile(
+                    "def combine_operations(operations):\n    return operations\n",
+                    "/repo/pkg/optimizer.py",
+                    location_type="local",
+                    relative_path="pkg/optimizer.py",
+                ),
+            ],
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == "pkg/optimizer.py"
+        assert any(
+            "operation-family symbol" in reason
+            for reason in result.edit_candidates[0].reasons
+        )
+
+    def test_locate_code_honors_explicit_path_hint_over_generic_content_noise(self):
+        result = locate_code_structured(
+            "Where ChangePlanner orders operations for create model and altered options including relative_order_field and indexes",
+            [
+                CodeLocateFile(
+                    (
+                        "class GenericRelation:\n"
+                        "    def contribute_to_class(self, model):\n"
+                        "        if model._meta.relative_order_field:\n"
+                        "            return 'create operation order indexes fields'\n"
+                    ),
+                    "/repo/webfw/contrib/contenttypes/fields.py",
+                    location_type="local",
+                    relative_path="webfw/contrib/contenttypes/fields.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "class ChangePlanner:\n"
+                        "    def generate_created_models(self):\n"
+                        "        self.add_operation('AlterRelativeOrderField')\n"
+                        "    def generate_altered_options(self):\n"
+                        "        return 'indexes relative_order_field'\n"
+                    ),
+                    "/repo/webfw/db/migrations/autodetector.py",
+                    location_type="local",
+                    relative_path="webfw/db/migrations/autodetector.py",
+                ),
+            ],
+            terms=[
+                "relative_order_field",
+                "AddIndex",
+                "AlterRelativeOrderField",
+                "ChangePlanner",
+                "generate_created_models",
+                "add_operation",
+                "indexes",
+            ],
+            hints=CodeLocateHints(
+                paths=["webfw/db/migrations/autodetector.py"],
+                path_terms=["autodetector"],
+                symbols=[
+                    "ChangePlanner",
+                    "generate_created_models",
+                    "generate_altered_options",
+                ],
+                imports=["webfw.db.migrations.autodetector"],
+            ),
+            failing_tests=["test_order_fields_indexes"],
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == (
+            "webfw/db/migrations/autodetector.py"
+        )
+
+    def test_locate_code_honors_specific_path_term_basename_over_symbol_pileup(self):
+        result = locate_code_structured(
+            "ChangePlanner emits AddIndex before AlterRelativeOrderField for _order",
+            [
+                CodeLocateFile(
+                    (
+                        "class AddIndex:\n"
+                        "    pass\n"
+                        "class AlterRelativeOrderField:\n"
+                        "    def database_forwards(self):\n"
+                        "        return '_order'\n"
+                        "class CreateResource:\n"
+                        "    pass\n"
+                    ),
+                    "/repo/webfw/db/migrations/operations/models.py",
+                    location_type="local",
+                    relative_path="webfw/db/migrations/operations/models.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "class ChangePlanner:\n"
+                        "    def generate_altered_relative_order_field(self):\n"
+                        "        return 'AlterRelativeOrderField before indexes'\n"
+                    ),
+                    "/repo/webfw/db/migrations/autodetector.py",
+                    location_type="local",
+                    relative_path="webfw/db/migrations/autodetector.py",
+                ),
+            ],
+            terms=[
+                "ChangePlanner",
+                "AddIndex",
+                "AlterRelativeOrderField",
+                "_order",
+            ],
+            hints=CodeLocateHints(
+                paths=["webfw/db/migrations"],
+                path_terms=["migrations", "autodetector", "operations"],
+                symbols=[
+                    "AlterRelativeOrderField",
+                    "AddIndex",
+                    "ChangePlanner",
+                ],
+                imports=["webfw.db.migrations"],
+            ),
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == (
+            "webfw/db/migrations/autodetector.py"
+        )
+
+    def test_locate_code_prefers_symbol_definition_over_import_reexport(self):
+        result = locate_code_structured(
+            "TypeError cannot pickle when applying | operator to a Q object with dict_keys in Q._combine",
+            [
+                CodeLocateFile(
+                    (
+                        "from webfw.db.models.query_utils import Q\n\n"
+                        "class QuerySet:\n"
+                        "    def __or__(self, other):\n"
+                        "        return Q() | Q(other)\n"
+                    ),
+                    "/repo/webfw/db/models/query.py",
+                    location_type="local",
+                    relative_path="webfw/db/models/query.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "class Q:\n"
+                        "    def _combine(self, other, conn):\n"
+                        "        obj = self.copy()\n"
+                        "        return obj\n"
+                        "    def __or__(self, other):\n"
+                        "        return self._combine(other, 'OR')\n"
+                    ),
+                    "/repo/webfw/db/models/query_utils.py",
+                    location_type="local",
+                    relative_path="webfw/db/models/query_utils.py",
+                ),
+            ],
+            terms=["cannot pickle", "dict_keys", "Q", "_combine", "__or__"],
+            hints=CodeLocateHints(
+                path_terms=["webfw/db/models"],
+                symbols=["Q", "_combine", "__or__"],
+                imports=["webfw.db.models.Q"],
+                errors=["TypeError: cannot pickle 'dict_keys' object"],
+            ),
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == (
+            "webfw/db/models/query_utils.py"
+        )
+
+    def test_warning_query_without_emitter_keeps_normal_guidance(self):
+        result = locate_code_structured(
+            "Squashing migrations with legacy_indexes should remove deprecation warnings",
+            [
+                CodeLocateFile(
+                    (
+                        "class CreateResource:\n"
+                        "    def reduce(self, operation):\n"
+                        "        return 'legacy_indexes indexes squashed migration'\n"
+                    ),
+                    "/repo/webfw/db/migrations/operations/models.py",
+                    location_type="local",
+                    relative_path="webfw/db/migrations/operations/models.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "class Command:\n"
+                        "    help = 'squash migrations'\n"
+                        "    def handle(self):\n"
+                        "        return 'migration squash command'\n"
+                    ),
+                    "/repo/webfw/core/management/commands/squashmigrations.py",
+                    location_type="local",
+                    relative_path="webfw/core/management/commands/squashmigrations.py",
+                ),
+            ],
+            terms=["legacy_indexes", "indexes", "squash", "deprecation warning"],
+            hints=CodeLocateHints(
+                path_terms=["migrations", "squash"],
+                symbols=["CreateResource", "AlterLegacyIndexes"],
+                imports=["webfw.db.migrations"],
+                errors=["legacy_indexes deprecation warning"],
+            ),
+        )
+
+        next_action = result.edit_candidates[0].next_action
+        assert "patch before broader grep/read/codesearch" in next_action
+        assert "diagnostic emitter" not in next_action
+        assert "message/arguments" not in next_action
+
+    def test_locate_code_does_not_promote_deprecation_helper_by_basename(self):
+        result = locate_code_structured(
+            "Squashed migration should not preserve deprecated legacy_indexes options",
+            [
+                CodeLocateFile(
+                    (
+                        "class RemovedInWebfw51Warning(DeprecationWarning):\n"
+                        "    pass\n"
+                    ),
+                    "/repo/webfw/utils/deprecation.py",
+                    location_type="local",
+                    relative_path="webfw/utils/deprecation.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "class CreateResource:\n"
+                        "    def reduce(self, operation):\n"
+                        "        return 'legacy_indexes indexes squashed migration'\n"
+                    ),
+                    "/repo/webfw/db/migrations/operations/models.py",
+                    location_type="local",
+                    relative_path="webfw/db/migrations/operations/models.py",
+                ),
+            ],
+            terms=["legacy_indexes", "indexes", "squash", "deprecation warning"],
+            hints=CodeLocateHints(
+                path_terms=["migrations", "squash", "deprecation", "legacy_indexes"],
+                symbols=["CreateResource", "AlterLegacyIndexes"],
+                imports=["webfw.db.migrations"],
+                errors=["legacy_indexes is deprecated"],
+            ),
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == (
+            "webfw/db/migrations/operations/models.py"
+        )
+
+    def test_runtime_error_query_without_diagnostic_emitter_uses_normal_next_action(self):
+        result = locate_code_structured(
+            "mutual_info_score raises ValueError when object string labels are validated",
+            [
+                CodeLocateFile(
+                    (
+                        "def check_clusterings(labels_true, labels_pred):\n"
+                        "    labels_true = check_array(labels_true, ensure_2d=False)\n"
+                        "    labels_pred = check_array(labels_pred, ensure_2d=False)\n"
+                        "    return labels_true, labels_pred\n"
+                    ),
+                    "/repo/samplepkg/metrics/cluster/_supervised.py",
+                    location_type="local",
+                    relative_path="samplepkg/metrics/cluster/_supervised.py",
+                ),
+                CodeLocateFile(
+                    "def test_mutual_info_score():\n    assert mutual_info_score(['a'], ['a']) == 1\n",
+                    "/repo/samplepkg/metrics/cluster/tests/test_supervised.py",
+                    location_type="local",
+                    relative_path="samplepkg/metrics/cluster/tests/test_supervised.py",
+                ),
+            ],
+            terms=["mutual_info_score", "ValueError", "object labels"],
+            hints=CodeLocateHints(
+                paths=["samplepkg/metrics/cluster"],
+                symbols=["mutual_info_score", "check_clusterings", "check_array"],
+            ),
+        )
+
+        next_action = result.edit_candidates[0].next_action
+        assert "patch before broader grep/read/codesearch" in next_action
+        assert "diagnostic emitter" not in next_action
+        assert "message/arguments" not in next_action
+
+    def test_lower_ranked_diagnostic_hit_does_not_switch_top_edit_guidance(self):
+        result = locate_code_structured(
+            "warning appears during migration optimization for legacy_indexes",
+            [
+                CodeLocateFile(
+                    "class ChangePlanner:\n    def optimize(self):\n        return 'legacy_indexes indexes migration'\n",
+                    "/repo/webfw/db/migrations/autodetector.py",
+                    location_type="local",
+                    relative_path="webfw/db/migrations/autodetector.py",
+                ),
+                CodeLocateFile(
+                    "def unrelated():\n    warnings.warn('legacy_indexes warning')\n",
+                    "/repo/webfw/contrib/postgres/indexes.py",
+                    location_type="local",
+                    relative_path="webfw/contrib/postgres/indexes.py",
+                ),
+                CodeLocateFile(
+                    "def test_migration_warning():\n    assert 'legacy_indexes' in output\n",
+                    "/repo/tests/migrations/test_autodetector.py",
+                    location_type="local",
+                    relative_path="tests/migrations/test_autodetector.py",
+                ),
+            ],
+            terms=["legacy_indexes", "indexes", "migration"],
+            hints=CodeLocateHints(
+                paths=["webfw/db/migrations/autodetector.py"],
+                path_terms=["migrations"],
+                imports=["webfw.db.migrations"],
+                symbols=["ChangePlanner"],
+            ),
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == (
+            "webfw/db/migrations/autodetector.py"
+        )
+        next_action = result.edit_candidates[0].next_action
+        assert "patch before broader grep/read/codesearch" in next_action
+        assert "diagnostic emitter" not in next_action
+
+    def test_locate_code_structured_downranks_broad_hint_matches(self):
+        result = locate_code_structured(
+            "ValueError truth value of an array ambiguous compact_repr repr vector values",
+            [
+                CodeLocateFile(
+                    (
+                        "import numpy as np\n\n"
+                        "class Kernel:\n"
+                        "    def __repr__(self):\n"
+                        "        return repr(np.array([]))\n\n"
+                        "class Sum:\n"
+                        "    def __repr__(self):\n"
+                        "        return 'value changed only repr'\n\n"
+                        "class Product:\n"
+                        "    def __repr__(self):\n"
+                        "        return 'value changed only repr'\n"
+                    ),
+                    "/repo/samplepkg/gaussian_process/kernels.py",
+                    location_type="local",
+                    relative_path="samplepkg/gaussian_process/kernels.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "import numpy as np\n\n"
+                        "def _changed_params(estimator):\n"
+                        "    params = estimator.get_params(deep=False)\n"
+                        "    filtered_params = {}\n"
+                        "    for k, v in params.items():\n"
+                        "        if v != init_params[k]:\n"
+                        "            filtered_params[k] = v\n"
+                        "    return filtered_params\n\n"
+                        "class _EstimatorPrettyPrinter:\n"
+                        "    def __init__(self):\n"
+                        "        self._changed_only = get_config()['compact_repr']\n"
+                        "    def __repr__(self):\n"
+                        "        return 'repr'\n"
+                    ),
+                    "/repo/samplepkg/utils/pretty.py",
+                    location_type="local",
+                    relative_path="samplepkg/utils/pretty.py",
+                ),
+            ],
+            terms=["compact_repr", "repr"],
+            hints=CodeLocateHints(
+                paths=["samplepkg"],
+                path_terms=["base", "utils", "repr"],
+                symbols=["__repr__"],
+                imports=["numpy"],
+            ),
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == "samplepkg/utils/pretty.py"
+
+    def test_locate_code_ignores_package_name_path_hint_as_broad_noise(self):
+        result = locate_code_structured(
+            "ValueError truth value of an array ambiguous compact_repr repr",
+            [
+                CodeLocateFile(
+                    "class BaseEstimator:\n    def _get_param_names(cls):\n        return []\n",
+                    "/repo/samplepkg/base.py",
+                    location_type="local",
+                    relative_path="samplepkg/base.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "def _changed_params(estimator):\n"
+                        "    compact_repr = True\n"
+                        "    if value != init_params[name]:\n"
+                        "        return repr(value)\n"
+                        "        return value\n"
+                    ),
+                    "/repo/samplepkg/utils/pretty.py",
+                    location_type="local",
+                    relative_path="samplepkg/utils/pretty.py",
+                ),
+            ],
+            terms=["compact_repr", "repr"],
+            hints=CodeLocateHints(
+                paths=["samplepkg"],
+                path_terms=["base", "utils"],
+                symbols=["_get_param_names"],
+            ),
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == "samplepkg/utils/pretty.py"
+
+    def test_locate_code_ignores_natural_language_failing_test_as_path_hint(self):
+        result = locate_code_structured(
+            "ValueError truth value of an array ambiguous compact_repr repr vector values",
+            [
+                CodeLocateFile(
+                    "class DictVectorizer:\n    '''Transforms mappings to vectors.'''\n",
+                    "/repo/samplepkg/feature_extraction/dict_vectorizer.py",
+                    location_type="local",
+                    relative_path="samplepkg/feature_extraction/dict_vectorizer.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "def _changed_params(estimator):\n"
+                        "    if value != init_params[name]:\n"
+                        "        return value\n"
+                        "class _EstimatorPrettyPrinter:\n"
+                        "    pass\n"
+                    ),
+                    "/repo/samplepkg/utils/pretty.py",
+                    location_type="local",
+                    relative_path="samplepkg/utils/pretty.py",
+                ),
+            ],
+            terms=["compact_repr", "repr"],
+            failing_tests=["repr with vector values"],
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == "samplepkg/utils/pretty.py"
+
+    def test_locate_code_prefers_operation_family_symbol_for_squash_issues(self):
+        result = locate_code_structured(
+            "Squashing migrations should fold old options into the final output.",
+            [
+                CodeLocateFile(
+                    "class Options:\n    legacy_indexes = None\n",
+                    "/repo/webfw/db/models/options.py",
+                    location_type="local",
+                    relative_path="webfw/db/models/options.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "class CreateResource:\n"
+                        "    def reduce(self, operation, app_label):\n"
+                        "        return 'fold options into migration operation'\n"
+                    ),
+                    "/repo/webfw/db/migrations/operations/models.py",
+                    location_type="local",
+                    relative_path="webfw/db/migrations/operations/models.py",
+                ),
+            ],
+            terms=["squash", "options"],
+            hints=CodeLocateHints(
+                paths=["webfw/db/migrations", "webfw/db/models/options.py"],
+                symbols=["Options"],
+            ),
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == (
+            "webfw/db/migrations/operations/models.py"
+        )
+
+    def test_locate_code_structured_prefers_package_code_over_examples(self):
+        result = locate_code_structured(
+            "Regression in input validation of clustering metrics",
+            [
+                CodeLocateFile(
+                    (
+                        "from samplepkg.metrics.cluster import mutual_info_score\n\n"
+                        "def plot_agglomerative_clustering_metrics():\n"
+                        "    return mutual_info_score(['a'], ['a'])\n"
+                    ),
+                    "/repo/examples/cluster/plot_agglomerative_clustering_metrics.py",
+                    location_type="local",
+                    relative_path="examples/cluster/plot_agglomerative_clustering_metrics.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "def check_clusterings(labels_true, labels_pred):\n"
+                        "    labels_true = check_array(labels_true, ensure_2d=False)\n"
+                        "    labels_pred = check_array(labels_pred, ensure_2d=False)\n"
+                        "    return labels_true, labels_pred\n\n"
+                        "def mutual_info_score(labels_true, labels_pred):\n"
+                        "    labels_true, labels_pred = check_clusterings(labels_true, labels_pred)\n"
+                        "    return 1.0\n"
+                    ),
+                    "/repo/samplepkg/metrics/cluster/_supervised.py",
+                    location_type="local",
+                    relative_path="samplepkg/metrics/cluster/_supervised.py",
+                ),
+            ],
+            terms=["mutual_info_score", "input validation", "clustering metrics"],
+            hints=CodeLocateHints(
+                paths=["samplepkg/metrics/cluster"],
+                symbols=["check_clusterings", "mutual_info_score"],
+                imports=["samplepkg.metrics.cluster"],
+            ),
+        )
+
+        assert (
+            result.edit_candidates[0].location["relative_path"]
+            == "samplepkg/metrics/cluster/_supervised.py"
+        )
+
     def test_locate_code_structured_returns_local_locations_without_viking_paths(self):
         result = locate_code_structured(
             "Fix W0511 fixme notes handling in the misc checker",
@@ -581,7 +1256,7 @@ class TestLocateCode:
             failing_tests=["test_fixme_with_message"],
         )
 
-        assert result.startswith("Likely edit locations:")
+        assert "Likely edit locations:" in result
         assert "Useful behavior references:" in result
         assert "viking://r/pylint/checkers/misc.py" in result
         assert "viking://r/tests/checkers/unittest_misc.py" in result
@@ -591,7 +1266,8 @@ class TestLocateCode:
         assert result.index("Useful behavior references:") < result.index(
             "viking://r/tests/checkers/unittest_misc.py"
         )
-        assert "next: inspect current checkout lines; no web/upstream/git history" in result
+        assert "Contract: read the top edit candidate first" in result
+        assert "next: read this top edit file first" in result
         assert "viking://r/ChangeLog" not in result
 
     def test_locate_code_includes_compact_import_context(self):
@@ -608,10 +1284,10 @@ class TestLocateCode:
     def test_locate_code_ranks_specific_symbols_above_common_word_noise(self):
         noisy_content = "\n".join(
             [
-                '"""This module contains methods in the sklearn package."""',
-                "# in the an is with sklearn",
-                "# in the an is with sklearn",
-                "# in the an is with sklearn",
+                '"""This module contains methods in the samplepkg package."""',
+                "# in the an is with samplepkg",
+                "# in the an is with samplepkg",
+                "# in the an is with samplepkg",
             ]
         )
         pprint_content = '''"""Pretty print estimators."""
@@ -636,20 +1312,20 @@ def _changed_params(estimator):
 
 
 class _EstimatorPrettyPrinter(pprint.PrettyPrinter):
-    def _pprint_estimator(self, object, stream, indent, allowance, context, level):
+    def pretty_estimator(self, object, stream, indent, allowance, context, level):
         return object.__repr__()
 '''
 
         result = locate_code(
-            "bug in print_changed_only in new repr: vector values truth value array ambiguous",
+            "bug in compact_repr in new repr: vector values truth value array ambiguous",
             [
-                (noisy_content, "viking://r/sklearn/ensemble/gradient_boosting.py"),
-                (pprint_content, "viking://r/sklearn/utils/_pprint.py"),
+                (noisy_content, "viking://r/samplepkg/ensemble/gradient_boosting.py"),
+                (pprint_content, "viking://r/samplepkg/utils/pretty.py"),
             ],
         )
 
-        assert result.index("viking://r/sklearn/utils/_pprint.py") < result.index(
-            "viking://r/sklearn/ensemble/gradient_boosting.py"
+        assert result.index("viking://r/samplepkg/utils/pretty.py") < result.index(
+            "viking://r/samplepkg/ensemble/gradient_boosting.py"
         )
         assert "focus: _changed_params" in result
         assert "if value != default" in result
@@ -689,21 +1365,21 @@ def _changed_params(estimator):
 
 
 class _EstimatorPrettyPrinter(pprint.PrettyPrinter):
-    def _pprint_estimator(self, object, stream, indent, allowance, context, level):
+    def pretty_estimator(self, object, stream, indent, allowance, context, level):
         return object.__repr__()
 '''
 
         result = locate_code(
-            "bug in print_changed_only in new repr: vector values truth value array ambiguous",
+            "bug in compact_repr in new repr: vector values truth value array ambiguous",
             [
-                (broad_model_file, "viking://r/sklearn/linear_model/logistic.py"),
-                (pprint_content, "viking://r/sklearn/utils/_pprint.py"),
+                (broad_model_file, "viking://r/samplepkg/linear_model/logistic.py"),
+                (pprint_content, "viking://r/samplepkg/utils/pretty.py"),
             ],
-            failing_tests=["sklearn/utils/tests/test_pprint.py::test_changed_only"],
+            failing_tests=["samplepkg/utils/tests/test_pretty.py::test_changed_only"],
         )
 
-        assert result.index("viking://r/sklearn/utils/_pprint.py") < result.index(
-            "viking://r/sklearn/linear_model/logistic.py"
+        assert result.index("viking://r/samplepkg/utils/pretty.py") < result.index(
+            "viking://r/samplepkg/linear_model/logistic.py"
         )
         assert "focus: _changed_params" in result
 
@@ -741,22 +1417,22 @@ def _changed_params(estimator):
 
 class _EstimatorPrettyPrinter(pprint.PrettyPrinter):
     def __init__(self):
-        self._changed_only = get_config()["print_changed_only"]
+        self._changed_only = get_config()["compact_repr"]
 
     def _safe_repr(self, object, context, maxlevels, level):
         return repr(object)
 '''
 
         result = locate_code(
-            "bug in print_changed_only repr generation for vector-valued params",
+            "bug in compact_repr repr generation for vector-valued params",
             [
-                (vectorizer_content, "viking://r/sklearn/feature_extraction/dict_vectorizer.py"),
-                (pprint_content, "viking://r/sklearn/utils/_pprint.py"),
+                (vectorizer_content, "viking://r/samplepkg/feature_extraction/dict_vectorizer.py"),
+                (pprint_content, "viking://r/samplepkg/utils/pretty.py"),
             ],
         )
 
-        assert result.index("viking://r/sklearn/utils/_pprint.py") < result.index(
-            "viking://r/sklearn/feature_extraction/dict_vectorizer.py"
+        assert result.index("viking://r/samplepkg/utils/pretty.py") < result.index(
+            "viking://r/samplepkg/feature_extraction/dict_vectorizer.py"
         )
 
     def test_locate_code_prioritizes_exact_identifier_over_path_noise(self):
@@ -804,41 +1480,41 @@ def _changed_params(estimator):
 
 class _EstimatorPrettyPrinter(pprint.PrettyPrinter):
     def __init__(self):
-        self._changed_only = get_config()["print_changed_only"]
+        self._changed_only = get_config()["compact_repr"]
 
     def _safe_repr(self, object, context, maxlevels, level):
         return repr(object)
 '''
 
         result = locate_code(
-            "bug in print_changed_only in new repr: vector values. "
+            "bug in compact_repr in new repr: vector values. "
             "Reproduces with LogisticRegressionCV(Cs=np.array([0.1, 1])) after "
-            "sklearn.set_config(print_changed_only=True): ValueError from ambiguous "
+            "samplepkg.set_config(compact_repr=True): ValueError from ambiguous "
             "truth value of array. Need fix repr generation for vector/array-valued "
-            "params in print_changed_only mode.",
+            "params in compact_repr mode.",
             [
-                (vectorizer_content, "viking://r/sklearn/feature_extraction/dict_vectorizer.py"),
-                (pprint_content, "viking://r/sklearn/utils/_pprint.py"),
+                (vectorizer_content, "viking://r/samplepkg/feature_extraction/dict_vectorizer.py"),
+                (pprint_content, "viking://r/samplepkg/utils/pretty.py"),
             ],
         )
 
-        assert result.index("viking://r/sklearn/utils/_pprint.py") < result.index(
-            "viking://r/sklearn/feature_extraction/dict_vectorizer.py"
+        assert result.index("viking://r/samplepkg/utils/pretty.py") < result.index(
+            "viking://r/samplepkg/feature_extraction/dict_vectorizer.py"
         )
 
     def test_locate_code_ignores_reproducing_setup_for_exact_identifiers(self):
         config_content = '''"""Global configuration."""
 
-_global_config = {"print_changed_only": False}
+_global_config = {"compact_repr": False}
 
 
 def get_config():
     return _global_config.copy()
 
 
-def set_config(print_changed_only=None):
-    if print_changed_only is not None:
-        _global_config["print_changed_only"] = print_changed_only
+def set_config(compact_repr=None):
+    if compact_repr is not None:
+        _global_config["compact_repr"] = compact_repr
 '''
         pprint_content = '''"""Pretty print estimators."""
 
@@ -864,39 +1540,39 @@ def _changed_params(estimator):
 
 class _EstimatorPrettyPrinter(pprint.PrettyPrinter):
     def __init__(self):
-        self._changed_only = get_config()["print_changed_only"]
+        self._changed_only = get_config()["compact_repr"]
 
     def _safe_repr(self, object, context, maxlevels, level):
         return repr(object)
 '''
 
         result = locate_code(
-            "bug in print_changed_only repr logic for vector-valued parameters. "
+            "bug in compact_repr repr logic for vector-valued parameters. "
             "Reproducing with LogisticRegressionCV(Cs=np.array([0.1, 1])) under "
-            "sklearn.set_config(print_changed_only=True) raises ValueError.",
+            "samplepkg.set_config(compact_repr=True) raises ValueError.",
             [
-                (config_content, "viking://r/sklearn/_config.py"),
-                (pprint_content, "viking://r/sklearn/utils/_pprint.py"),
+                (config_content, "viking://r/samplepkg/_config.py"),
+                (pprint_content, "viking://r/samplepkg/utils/pretty.py"),
             ],
         )
 
-        assert result.index("viking://r/sklearn/utils/_pprint.py") < result.index(
-            "viking://r/sklearn/_config.py"
+        assert result.index("viking://r/samplepkg/utils/pretty.py") < result.index(
+            "viking://r/samplepkg/_config.py"
         )
 
     def test_locate_code_downranks_fenced_reproduction_code(self):
         config_content = '''"""Global configuration."""
 
-_global_config = {"print_changed_only": False}
+_global_config = {"compact_repr": False}
 
 
 def get_config():
     return _global_config.copy()
 
 
-def set_config(print_changed_only=None):
-    if print_changed_only is not None:
-        _global_config["print_changed_only"] = print_changed_only
+def set_config(compact_repr=None):
+    if compact_repr is not None:
+        _global_config["compact_repr"] = compact_repr
 '''
         logistic_content = '''"""Logistic regression estimators."""
 
@@ -929,50 +1605,50 @@ def _changed_params(estimator):
 
 class _EstimatorPrettyPrinter(pprint.PrettyPrinter):
     def __init__(self):
-        self._changed_only = get_config()["print_changed_only"]
+        self._changed_only = get_config()["compact_repr"]
 
     def _safe_repr(self, object, context, maxlevels, level):
         return repr(object)
 '''
 
         result = locate_code(
-            """bug in print_changed_only in new repr: vector values
+            """bug in compact_repr in new repr: vector values
 ```python
-import sklearn
+import samplepkg
 import numpy as np
-from sklearn.linear_model import LogisticRegressionCV
-sklearn.set_config(print_changed_only=True)
+from samplepkg.linear_model import LogisticRegressionCV
+samplepkg.set_config(compact_repr=True)
 print(LogisticRegressionCV(Cs=np.array([0.1, 1])))
 ```
 > ValueError: The truth value of an array with more than one element is ambiguous.
 """,
             [
-                (config_content, "viking://r/sklearn/_config.py"),
-                (logistic_content, "viking://r/sklearn/linear_model/logistic.py"),
-                (pprint_content, "viking://r/sklearn/utils/_pprint.py"),
+                (config_content, "viking://r/samplepkg/_config.py"),
+                (logistic_content, "viking://r/samplepkg/linear_model/logistic.py"),
+                (pprint_content, "viking://r/samplepkg/utils/pretty.py"),
             ],
         )
 
-        assert result.index("viking://r/sklearn/utils/_pprint.py") < result.index(
-            "viking://r/sklearn/_config.py"
+        assert result.index("viking://r/samplepkg/utils/pretty.py") < result.index(
+            "viking://r/samplepkg/_config.py"
         )
-        assert result.index("viking://r/sklearn/utils/_pprint.py") < result.index(
-            "viking://r/sklearn/linear_model/logistic.py"
+        assert result.index("viking://r/samplepkg/utils/pretty.py") < result.index(
+            "viking://r/samplepkg/linear_model/logistic.py"
         )
 
     def test_locate_code_downranks_agent_setup_context(self):
         config_content = '''"""Global configuration."""
 
-_global_config = {"print_changed_only": False}
+_global_config = {"compact_repr": False}
 
 
 def get_config():
     return _global_config.copy()
 
 
-def set_config(print_changed_only=None):
-    if print_changed_only is not None:
-        _global_config["print_changed_only"] = print_changed_only
+def set_config(compact_repr=None):
+    if compact_repr is not None:
+        _global_config["compact_repr"] = compact_repr
 '''
         pprint_content = '''"""BaseEstimator.__repr__ for pretty-printing estimators."""
 
@@ -998,7 +1674,7 @@ def _changed_params(estimator):
 
 class _EstimatorPrettyPrinter(pprint.PrettyPrinter):
     def __init__(self):
-        self._changed_only = get_config()["print_changed_only"]
+        self._changed_only = get_config()["compact_repr"]
 
     def _safe_repr(self, object, context, maxlevels, level):
         return repr(object)
@@ -1016,47 +1692,47 @@ class _EstimatorPrettyPrinter(pprint.PrettyPrinter):
             * 8
         )
         test_config_content = """\
-from sklearn import get_config, set_config, config_context
+from samplepkg import get_config, set_config, config_context
 
 
 def test_set_config():
-    set_config(print_changed_only=True)
-    assert get_config()["print_changed_only"]
+    set_config(compact_repr=True)
+    assert get_config()["compact_repr"]
 """
-        test_pprint_content = """\
+        test_pretty_content = """\
 import numpy as np
-from sklearn import set_config
-from sklearn.linear_model import LogisticRegressionCV
+from samplepkg import set_config
+from samplepkg.linear_model import LogisticRegressionCV
 
 
 def test_changed_only():
-    set_config(print_changed_only=True)
+    set_config(compact_repr=True)
     repr(LogisticRegressionCV(Cs=np.array([0.1, 1])))
 """
 
         result = locate_code(
-            "Bug in `print_changed_only` repr for estimators with vector-valued "
+            "Bug in `compact_repr` repr for estimators with vector-valued "
             "parameters: `LogisticRegressionCV(Cs=np.array([0.1, 1]))` raises "
             "`ValueError: The truth value of an array with more than one element "
-            "is ambiguous` when `sklearn.set_config(print_changed_only=True)` is "
+            "is ambiguous` when `samplepkg.set_config(compact_repr=True)` is "
             "enabled. Find the repr/pretty-print code path and likely edit locations.",
             [
-                (config_content, "viking://r/sklearn/_config.py"),
-                (estimator_checks_content, "viking://r/sklearn/utils/estimator_checks.py"),
-                (pprint_content, "viking://r/sklearn/utils/_pprint.py"),
-                (test_config_content, "viking://r/sklearn/tests/test_config.py"),
-                (test_pprint_content, "viking://r/sklearn/utils/tests/test_pprint.py"),
+                (config_content, "viking://r/samplepkg/_config.py"),
+                (estimator_checks_content, "viking://r/samplepkg/utils/estimator_checks.py"),
+                (pprint_content, "viking://r/samplepkg/utils/pretty.py"),
+                (test_config_content, "viking://r/samplepkg/tests/test_config.py"),
+                (test_pretty_content, "viking://r/samplepkg/utils/tests/test_pretty.py"),
             ],
         )
 
-        assert result.index("viking://r/sklearn/utils/_pprint.py") < result.index(
-            "viking://r/sklearn/_config.py"
+        assert result.index("viking://r/samplepkg/utils/pretty.py") < result.index(
+            "viking://r/samplepkg/_config.py"
         )
-        assert result.index("viking://r/sklearn/utils/_pprint.py") < result.index(
-            "viking://r/sklearn/utils/estimator_checks.py"
+        assert result.index("viking://r/samplepkg/utils/pretty.py") < result.index(
+            "viking://r/samplepkg/utils/estimator_checks.py"
         )
-        assert result.index("viking://r/sklearn/utils/tests/test_pprint.py") < result.index(
-            "viking://r/sklearn/tests/test_config.py"
+        assert result.index("viking://r/samplepkg/utils/tests/test_pretty.py") < result.index(
+            "viking://r/samplepkg/tests/test_config.py"
         )
 
     def test_locate_code_suggests_narrow_verification_before_full_tests(self):
@@ -1071,9 +1747,9 @@ def _changed_params(estimator):
             return {name: value}
     return {}
 """
-        test_pprint_content = """\
+        test_pretty_content = """\
 import numpy as np
-from sklearn.linear_model import LogisticRegressionCV
+from samplepkg.linear_model import LogisticRegressionCV
 
 
 def test_changed_only():
@@ -1081,65 +1757,90 @@ def test_changed_only():
 """
 
         result = locate_code(
-            "Bug in print_changed_only repr for vector-valued estimator params",
+            "Bug in compact_repr repr for vector-valued estimator params",
             [
-                (pprint_content, "viking://r/sklearn/utils/_pprint.py"),
-                (test_pprint_content, "viking://r/sklearn/utils/tests/test_pprint.py"),
+                (pprint_content, "viking://r/samplepkg/utils/pretty.py"),
+                (test_pretty_content, "viking://r/samplepkg/utils/tests/test_pretty.py"),
             ],
         )
 
         assert "Suggested verification:" in result
-        assert "python3 -m py_compile sklearn/utils/_pprint.py" in result
-        assert "python3 -m pytest sklearn/utils/tests/test_pprint.py" in result
-        assert "If pytest fails before collection, treat as setup" in result
+        assert "python3 -m py_compile samplepkg/utils/pretty.py" in result
+        assert "python3 -m pytest samplepkg/utils/tests/test_pretty.py" in result
+        assert "If pytest fails before collection or dependency imports" in result
+        assert "do not broaden code search" in result
 
     def test_locate_code_suggested_verification_stays_minimal(self):
         pprint_content = """\
-from sklearn._config import get_config
+from samplepkg._config import get_config
 
 
 def _changed_params(estimator):
-    if get_config()["print_changed_only"]:
+    if get_config()["compact_repr"]:
         return repr(estimator)
     return {}
 """
         example_content = """\
-from sklearn import set_config
+from samplepkg import set_config
 
 
-set_config(print_changed_only=True)
+set_config(compact_repr=True)
 print("changed only repr example")
 """
-        test_pprint_content = """\
-from sklearn import set_config
+        test_pretty_content = """\
+from samplepkg import set_config
 
 
 def test_changed_only():
-    set_config(print_changed_only=True)
+    set_config(compact_repr=True)
 """
         test_config_content = """\
-from sklearn import get_config, set_config
+from samplepkg import get_config, set_config
 
 
 def test_config_context():
-    set_config(print_changed_only=True)
-    assert get_config()["print_changed_only"]
+    set_config(compact_repr=True)
+    assert get_config()["compact_repr"]
 """
 
         result = locate_code(
-            "Bug in print_changed_only repr for vector-valued estimator params",
+            "Bug in compact_repr repr for vector-valued estimator params",
             [
-                (pprint_content, "viking://r/sklearn/utils/_pprint.py"),
-                (example_content, "viking://r/examples/plot_changed_only_pprint_parameter.py"),
-                (test_pprint_content, "viking://r/sklearn/utils/tests/test_pprint.py"),
-                (test_config_content, "viking://r/sklearn/tests/test_config.py"),
+                (pprint_content, "viking://r/samplepkg/utils/pretty.py"),
+                (example_content, "viking://r/examples/plot_changed_onlypretty_parameter.py"),
+                (test_pretty_content, "viking://r/samplepkg/utils/tests/test_pretty.py"),
+                (test_config_content, "viking://r/samplepkg/tests/test_config.py"),
             ],
         )
 
         static_line = next(line for line in result.splitlines() if line.startswith("- static:"))
         tests_line = next(line for line in result.splitlines() if line.startswith("- narrow tests:"))
-        assert static_line == "- static: python3 -m py_compile sklearn/utils/_pprint.py"
-        assert tests_line == "- narrow tests: python3 -m pytest sklearn/utils/tests/test_pprint.py"
+        assert static_line == "- static: python3 -m py_compile samplepkg/utils/pretty.py"
+        assert tests_line == "- narrow tests: python3 -m pytest samplepkg/utils/tests/test_pretty.py"
+
+    def test_locate_code_structured_quotes_verification_paths(self):
+        result = locate_code_structured(
+            "Bug in print changed only repr",
+            [
+                CodeLocateFile(
+                    "def _changed_params(estimator):\n    return repr(estimator)\n",
+                    "/repo/pkg with spaces/pretty.py",
+                    location_type="local",
+                    relative_path="pkg with spaces/pretty.py",
+                ),
+                CodeLocateFile(
+                    "def test_changed_only():\n    assert repr(estimator)\n",
+                    "/repo/pkg with spaces/tests/test_pretty.py",
+                    location_type="local",
+                    relative_path="pkg with spaces/tests/test_pretty.py",
+                ),
+            ],
+            source_root="/repo",
+        )
+
+        commands = [item["command"] for item in result.verification if item.get("command")]
+        assert "python3 -m py_compile 'pkg with spaces/pretty.py'" in commands
+        assert "python3 -m pytest 'pkg with spaces/tests/test_pretty.py'" in commands
 
     def test_locate_code_boosts_nearby_issue_terms_over_repeated_noise(self):
         noisy_order_content = "\n".join(
@@ -1150,73 +1851,74 @@ def test_config_context():
             + ["        return self.ordering  # order value" for _ in range(40)]
         )
         migration_content = """\
-from django.db.migrations import operations
+from webfw.db.migrations import operations
 
 
-class MigrationAutodetector:
+class ChangePlanner:
     def generate_created_models(self):
-        operations.CreateModel(name="LookImage")
+        operations.CreateResource(name="LookImage")
         operations.AddIndex(
             model_name="lookimage",
             index=models.Index(fields=["look", "_order"]),
         )
-        operations.AlterOrderWithRespectTo(
+        operations.AlterRelativeOrderField(
             name="lookimage",
-            order_with_respect_to="look",
+            relative_order_field="look",
         )
 """
 
         result = locate_code(
-            "AlterOrderWithRespectTo with ForeignKey crash when _order is included "
+            "AlterRelativeOrderField with ForeignKey crash when _order is included "
             "in AddIndex. AddIndex of _order is emitted before "
-            "AlterOrderWithRespectTo creates the _order field.",
+            "AlterRelativeOrderField creates the _order field.",
             [
-                (noisy_order_content, "viking://r/django/views/generic/list.py"),
-                (migration_content, "viking://r/django/db/migrations/autodetector.py"),
+                (noisy_order_content, "viking://r/webfw/views/generic/list.py"),
+                (migration_content, "viking://r/webfw/db/migrations/autodetector.py"),
             ],
         )
 
-        assert result.index("viking://r/django/db/migrations/autodetector.py") < result.index(
-            "viking://r/django/views/generic/list.py"
+        assert result.index("viking://r/webfw/db/migrations/autodetector.py") < result.index(
+            "viking://r/webfw/views/generic/list.py"
         )
 
     def test_locate_code_verification_guidance_bounds_agent_search(self):
         result = locate_code(
-            "WARNING no number is assigned for table numref in singlehtml latex",
+            "WARNING resource id is missing for table docref in singlepage pdf",
             [
                 (
                     "def assign_figure_numbers(app):\n"
-                    "    return {'table': app.config.numfig}\n",
-                    "viking://r/sphinx/environment/collectors/toctree.py",
+                    "    return {'table': app.config.resource_ids}\n",
+                    "viking://r/docsuite/environment/collectors/toctree.py",
                 ),
                 (
-                    "def test_numref_table_warning(app):\n"
-                    "    assert 'table' in app.builder.fignumbers\n",
+                    "def test_docref_table_warning(app):\n"
+                    "    assert 'table' in app.builder.resource_ids\n",
                     "viking://r/tests/test_build_html.py",
                 ),
             ],
         )
 
-        assert "current checkout" in result
+        assert "Run the static check first" in result
+        assert "do not broaden code search" in result
         assert "Do not use web, upstream patches, or git log" in result
 
     def test_locate_code_structured_verification_guidance_bounds_agent_search(self):
         result = locate_code_structured(
-            "WARNING no number is assigned for table numref in singlehtml latex",
+            "WARNING resource id is missing for table docref in singlepage pdf",
             [
                 CodeLocateFile(
                     content=(
                         "def assign_figure_numbers(app):\n"
-                        "    return {'table': app.config.numfig}\n"
+                        "    return {'table': app.config.resource_ids}\n"
                     ),
-                    file_name="/repo/sphinx/environment/collectors/toctree.py",
+                    file_name="/repo/docsuite/environment/collectors/toctree.py",
                     location_type="local",
-                    relative_path="sphinx/environment/collectors/toctree.py",
+                    relative_path="docsuite/environment/collectors/toctree.py",
                 ),
                 CodeLocateFile(
                     content=(
-                        "def test_numref_table_warning(app):\n"
-                        "    assert 'table' in app.builder.fignumbers\n"
+                        "def test_docref_table_warning(app):\n"
+                        "    assert 'table' in app.builder.resource_ids\n"
                     ),
                     file_name="/repo/tests/test_build_html.py",
                     location_type="local",
@@ -1227,27 +1929,28 @@ class MigrationAutodetector:
         )
 
         setup_note = next(item for item in result.verification if item["kind"] == "setup_note")
-        assert "current checkout" in setup_note["reason"]
+        assert "Run the static check first" in setup_note["reason"]
+        assert "do not broaden code search" in setup_note["reason"]
         assert "Do not use web, upstream patches, or git log" in setup_note["reason"]
 
     def test_locate_code_structured_uses_existing_fields_for_agent_harness_guidance(self):
         result = locate_code_structured(
-            "WARNING no number is assigned for table numref in singlehtml latex",
+            "WARNING resource id is missing for table docref in singlepage pdf",
             [
                 CodeLocateFile(
                     content=(
-                        "class StandardDomain:\n"
-                        "    def _resolve_numref_xref(self, env, fromdocname, builder):\n"
-                        "        return env.toc_fignumbers.get('table')\n"
+                        "class DiagnosticDomain:\n"
+                        "    def _resolve_docref(self, env, fromdocname, builder):\n"
+                        "        return env.toc_resource_ids.get('table')\n"
                     ),
-                    file_name="/repo/sphinx/domains/std.py",
+                    file_name="/repo/docsuite/domains/std.py",
                     location_type="local",
-                    relative_path="sphinx/domains/std.py",
+                    relative_path="docsuite/domains/std.py",
                 ),
                 CodeLocateFile(
                     content=(
-                        "def test_numref_table_warning(app):\n"
-                        "    assert 'table' in app.builder.fignumbers\n"
+                        "def test_docref_table_warning(app):\n"
+                        "    assert 'table' in app.builder.resource_ids\n"
                     ),
                     file_name="/repo/tests/test_build_html.py",
                     location_type="local",
@@ -1260,21 +1963,8 @@ class MigrationAutodetector:
         payload = result.to_dict()
         assert "search_policy" not in payload
         assert "workflow" not in payload
-        assert "current checkout" in result.edit_candidates[0].next_action
-        assert "web" in result.edit_candidates[0].next_action
-        assert "git log" in result.edit_candidates[0].next_action
-        assert (
-            "same-file or same-domain resolver/error-handling precedent"
-            in result.edit_candidates[0].next_action
-        )
-        assert "first patch near the emitter guard" in result.edit_candidates[0].next_action
-        assert "static check first" in result.edit_candidates[0].next_action
-        assert "stop broad fixture search" in result.edit_candidates[0].next_action
-        assert "preserve the diagnostic" in result.edit_candidates[0].next_action
-        assert "wording or argument changes" in result.edit_candidates[0].next_action
-        assert "fail-to-pass risk" in result.edit_candidates[0].next_action
-        assert "message/arguments first" in result.edit_candidates[0].next_action
-        assert "prefer the local diagnostic patch before broader implementation changes" in (
+        assert "read this top edit file first" in result.edit_candidates[0].next_action
+        assert "patch before broader grep/read/codesearch" in (
             result.edit_candidates[0].next_action
         )
         assert "lookup" not in result.edit_candidates[0].next_action
@@ -1282,81 +1972,81 @@ class MigrationAutodetector:
 
     def test_locate_code_prioritizes_warning_emitter_and_assertions(self):
         std_content = """\
-class StandardDomain:
-    def _resolve_numref_xref(self, env, fromdocname, builder, typ, target, node, contnode):
+class DiagnosticDomain:
+    def _resolve_docref(self, env, fromdocname, builder, typ, target, node, contnode):
         try:
-            fignumber = self.get_fignumber(env, builder, "table", "index", node)
+            resource_id = self.get_resource_id(env, builder, "table", "index", node)
         except ValueError:
-            logger.warning(__("no number is assigned for %s: %s"), "table", "id1",
+            logger.warning(__("resource id is missing for %s: %s"), "table", "id1",
                            location=node)
             return contnode
 
     def warn_missing_xref_title(self, target, node):
-        msg = __("Failed to create a cross reference. A title or caption not found: %s")
+        msg = __("Failed to resolve a document reference. A title or label was not found: %s")
         logger.warning(msg % target, location=node)
 """
         toctree_content = """\
 class TocTreeCollector:
     def assign_figure_numbers(self, env):
         # Skip if uncaptioned node.
-        if domain.name == "std" and not domain.get_numfig_title(node):
+        if domain.name == "std" and not domain.get_resource_ids_title(node):
             return None
 """
         broad_writer_content = """\
-class LaTeXTranslator:
+class PdfTranslator:
     def visit_table(self, node):
-        if self.builder.name == "latex":
-            self.body.append("numfig table numbering")
-        if self.builder.name == "singlehtml":
+        if self.builder.name == "pdf":
+            self.body.append("resource_ids table numbering")
+        if self.builder.name == "singlepage":
             self.body.append("assigned number changed for table")
-        return "table numfig numbering assigned number latex singlehtml"
+        return "table resource_ids numbering assigned number pdf singlepage"
 """
         html_test_content = """\
-def test_numfig_without_numbered_toctree_warn(app, warning):
+def test_resource_ids_without_numbered_toctree_warn(app, warning):
     app.build()
     warnings = warning.getvalue()
-    assert "index.rst:55: WARNING: no number is assigned for section: index" in warnings
+    assert "index.rst:55: WARNING: resource id is missing for section: index" in warnings
 """
-        latex_test_content = """\
-def test_numfig_table_warning_is_not_emitted(app, warning):
+        pdf_test_content = """\
+def test_resource_ids_table_warning_is_not_emitted(app, warning):
     app.build()
-    assert "WARNING: no number is assigned for table:" not in warning.getvalue()
+    assert "WARNING: resource id is missing for table:" not in warning.getvalue()
 """
         root_conf_content = """\
-import sphinx
+import docsuite
 
-numfig = True
-latex_documents = [("index", "Sphinx.tex", "Sphinx", "Sphinx", "manual")]
+resource_ids = True
+pdf_documents = [("index", "DocSuite.tex", "DocSuite", "DocSuite", "manual")]
 keep_warnings = True
 """
         unrelated_test_content = """\
-def test_intersphinx_warning(app, warning):
+def test_interdocsuite_warning(app, warning):
     assert "WARNING" in warning.getvalue()
 """
 
         result = locate_code_structured(
-            "Sphinx 3.3 upgrade started generating "
-            'warning "no number is assigned for table" when building '
-            "singlehtml or latex with numref.",
+            "DocSuite 3.3 upgrade started generating "
+            'warning "resource id is missing for table" when building '
+            "singlepage or pdf with docref.",
             [
                 CodeLocateFile(
                     toctree_content,
-                    "viking://r/sphinx/environment/collectors/toctree.py",
+                    "viking://r/docsuite/environment/collectors/toctree.py",
                 ),
-                CodeLocateFile(std_content, "viking://r/sphinx/domains/std.py"),
-                CodeLocateFile(broad_writer_content, "viking://r/sphinx/writers/latex.py"),
+                CodeLocateFile(std_content, "viking://r/docsuite/domains/std.py"),
+                CodeLocateFile(broad_writer_content, "viking://r/docsuite/writers/pdf.py"),
                 CodeLocateFile(root_conf_content, "viking://r/tests/roots/test-root/conf.py"),
                 CodeLocateFile(
                     unrelated_test_content,
-                    "viking://r/tests/test_ext_intersphinx.py",
+                    "viking://r/tests/test_ext_interdocsuite.py",
                 ),
-                CodeLocateFile(latex_test_content, "viking://r/tests/test_build_latex.py"),
+                CodeLocateFile(pdf_test_content, "viking://r/tests/test_build_pdf.py"),
                 CodeLocateFile(html_test_content, "viking://r/tests/test_build_html.py"),
             ],
             allow_viking_commands=True,
         )
 
-        assert result.edit_candidates[0].location["uri"] == "viking://r/sphinx/domains/std.py"
+        assert result.edit_candidates[0].location["uri"] == "viking://r/docsuite/domains/std.py"
         assert (
             result.behavior_references[0].location["uri"]
             == "viking://r/tests/test_build_html.py"
@@ -1369,51 +2059,48 @@ def test_intersphinx_warning(app, warning):
             for reason in result.behavior_references[0].reasons
         )
         assert any(
-            "no number is assigned for section" in snippet["text"]
+            "resource id is missing for section" in snippet["text"]
             for snippet in result.behavior_references[0].snippets
         )
         assert any(
             "same-file diagnostic precedent" in snippet["text"]
-            and "Failed to create a cross reference" in snippet["text"]
             for snippet in result.edit_candidates[0].snippets
         )
         assert any(
             "same-file diagnostic precedent found" in reason
             for reason in result.edit_candidates[0].reasons
         )
-        assert "diagnostic wording delta" in result.edit_candidates[0].next_action
-        assert "not a numbering/builder regression" in result.edit_candidates[0].next_action
+        assert "diagnostic wording or argument delta" in result.edit_candidates[0].next_action
+        assert "diagnostic wording or argument delta" in result.edit_candidates[0].next_action
         assert "production diagnostic emitter" in result.edit_candidates[0].next_action
-        assert "same-file diagnostic precedent prefix/style" in (
+        assert "same-file diagnostic precedents as style evidence" in (
             result.edit_candidates[0].next_action
         )
-        assert "reason semantics" in result.edit_candidates[0].next_action
-        assert "if it passes" in result.edit_candidates[0].next_action
-        assert "final-answer immediately" in result.edit_candidates[0].next_action
-        assert "do not inspect visible tests" in result.edit_candidates[0].next_action
-        assert "get_fignumber" not in result.edit_candidates[0].next_action
-        assert "toc_fignumbers" not in result.edit_candidates[0].next_action
+        assert "original semantics" in result.edit_candidates[0].next_action
+        assert "immediate verification fails" in result.edit_candidates[0].next_action
+        assert "get_resource_id" not in result.edit_candidates[0].next_action
+        assert "toc_resource_ids" not in result.edit_candidates[0].next_action
         assert len(result.edit_candidates) == 1
         assert len(result.behavior_references) == 1
-        assert result.verification[0]["targets"][0]["relative_path"] == "sphinx/domains/std.py"
+        assert result.verification[0]["targets"][0]["relative_path"] == "docsuite/domains/std.py"
         assert all(
             item.get("kind") != "narrow_tests" or item.get("command") is None
             for item in result.verification
         )
 
-    def test_locate_code_prefers_warning_emitter_for_full_sphinx_issue(self):
+    def test_locate_code_prefers_warning_emitter_for_full_docsuite_issue(self):
         std_content = """\
-class StandardDomain:
-    def _resolve_numref_xref(self, env, fromdocname, builder, typ, target, node, contnode):
+class DiagnosticDomain:
+    def _resolve_docref(self, env, fromdocname, builder, typ, target, node, contnode):
         try:
-            fignumber = self.get_fignumber(env, builder, "table", "index", node)
+            resource_id = self.get_resource_id(env, builder, "table", "index", node)
         except ValueError:
-            logger.warning(__("no number is assigned for %s: %s"), "table", "id1",
+            logger.warning(__("resource id is missing for %s: %s"), "table", "id1",
                            location=node)
             return contnode
 
-    def get_fignumber(self, env, builder, figtype, docname, target_node):
-        return env.toc_fignumbers[docname][figtype][target_node["ids"][0]]
+    def get_resource_id(self, env, builder, figtype, docname, target_node):
+        return env.toc_resource_ids[docname][figtype][target_node["ids"][0]]
 """
         toctree_content = """\
 class TocTreeCollector:
@@ -1426,39 +2113,39 @@ class TocTreeCollector:
         for docname in env.found_docs:
             numbers = {}
             for figtype in ("figure", "table", "code-block"):
-                numbers[figtype] = self.get_fignumbers(env, docname, figtype)
-            env.toc_fignumbers[docname] = numbers
+                numbers[figtype] = self.get_resource_ids(env, docname, figtype)
+            env.toc_resource_ids[docname] = numbers
 
-    def get_fignumbers(self, env, docname, figtype):
+    def get_resource_ids(self, env, docname, figtype):
         if figtype == "table":
             return {"id1": (1,)}
         return {}
 """
         html_test_content = """\
-def test_numfig_without_numbered_toctree_warn(app, warning):
+def test_resource_ids_without_numbered_toctree_warn(app, warning):
     app.build()
     warnings = warning.getvalue()
-    assert "index.rst:55: WARNING: no number is assigned for section: index" in warnings
+    assert "index.rst:55: WARNING: resource id is missing for section: index" in warnings
 """
 
         result = locate_code_structured(
-            'v3.3 upgrade started generating "WARNING: no number is assigned for table" '
-            "warnings. We've updated to Sphinx 3.3 in our documentation, and suddenly "
+            'v3.3 upgrade started generating "WARNING: resource id is missing for table" '
+            "warnings. We've updated to DocSuite 3.3 in our documentation, and suddenly "
             "the following warning started popping up in our builds when we build either "
-            "`singlehtml` or `latex`: `WARNING: no number is assigned for table:`. "
+            "`singlepage` or `pdf`: `WARNING: resource id is missing for table:`. "
             "I looked through the changelog but it didn't seem like there was anything "
-            "related to `numref` that was changed. Could anyone point me to a change in "
-            "the numref logic so I can figure out where these warnings are coming from?",
+            "related to `docref` that was changed. Could anyone point me to a change in "
+            "the docref logic so I can figure out where these warnings are coming from?",
             [
-                CodeLocateFile(toctree_content, "viking://r/sphinx/environment/collectors/toctree.py"),
-                CodeLocateFile(std_content, "viking://r/sphinx/domains/std.py"),
+                CodeLocateFile(toctree_content, "viking://r/docsuite/environment/collectors/toctree.py"),
+                CodeLocateFile(std_content, "viking://r/docsuite/domains/std.py"),
                 CodeLocateFile(html_test_content, "viking://r/tests/test_build_html.py"),
             ],
             allow_viking_commands=True,
         )
 
-        assert result.edit_candidates[0].location["uri"] == "viking://r/sphinx/domains/std.py"
-        assert result.verification[0]["targets"][0]["relative_path"] == "sphinx/domains/std.py"
+        assert result.edit_candidates[0].location["uri"] == "viking://r/docsuite/domains/std.py"
+        assert result.verification[0]["targets"][0]["relative_path"] == "docsuite/domains/std.py"
         assert any(
             "asserted diagnostic wording differs from issue" in reason
             for reason in result.behavior_references[0].reasons
@@ -1466,48 +2153,48 @@ def test_numfig_without_numbered_toctree_warn(app, warning):
 
     def test_locate_code_promotes_diagnostic_wording_delta_to_action(self):
         std_content = """\
-class StandardDomain:
-    def _resolve_numref_xref(self, env, fromdocname, builder, typ, target, node, contnode):
+class DiagnosticDomain:
+    def _resolve_docref(self, env, fromdocname, builder, typ, target, node, contnode):
         try:
-            fignumber = self.get_fignumber(env, builder, "table", "index", node)
+            resource_id = self.get_resource_id(env, builder, "table", "index", node)
         except ValueError:
-            logger.warning(__("no number is assigned for %s: %s"), "table", "id1",
+            logger.warning(__("resource id is missing for %s: %s"), "table", "id1",
                            location=node)
             return contnode
 
     def warn_missing_xref_title(self, target, node):
-        msg = __("Failed to create a cross reference. A title or caption not found: %s")
+        msg = __("Failed to resolve a document reference. A title or label was not found: %s")
         logger.warning(msg % target, location=node)
 """
         html_test_content = """\
-def test_numfig_without_numbered_toctree_warn(app, warning):
+def test_resource_ids_without_numbered_toctree_warn(app, warning):
     app.build()
     warnings = warning.getvalue()
-    assert "index.rst:55: WARNING: no number is assigned for section: index" in warnings
+    assert "index.rst:55: WARNING: resource id is missing for section: index" in warnings
 """
-        singlehtml_content = """\
+        singlepage_content = """\
 class SingleFileHTMLBuilder:
-    name = "singlehtml"
+    name = "singlepage"
 
-    def assemble_toc_fignumbers(self):
-        # singlehtml latex table builder numbering numref assigned number
+    def assemble_toc_resource_ids(self):
+        # singlepage pdf table builder numbering docref assigned number
         return {"index": {"table": {"id1": (1,)}}}
 """
-        latex_test_content = """\
-def test_numref_with_latex_builder(app, warning):
+        pdf_test_content = """\
+def test_docref_with_pdf_builder(app, warning):
     app.build()
-    assert "latex" in app.builder.name
+    assert "pdf" in app.builder.name
 """
 
         result = locate_code_structured(
-            "Sphinx 3.3 upgrade started generating warning "
-            '"no number is assigned for table" for singlehtml or latex builds; '
-            "likely numref/table numbering logic regression",
+            "DocSuite 3.3 upgrade started generating warning "
+            '"resource id is missing for table" for singlepage or pdf builds; '
+            "likely docref/table numbering logic regression",
             [
-                CodeLocateFile(std_content, "viking://r/sphinx/domains/std.py"),
+                CodeLocateFile(std_content, "viking://r/docsuite/domains/std.py"),
                 CodeLocateFile(html_test_content, "viking://r/tests/test_build_html.py"),
-                CodeLocateFile(singlehtml_content, "viking://r/sphinx/builders/singlehtml.py"),
-                CodeLocateFile(latex_test_content, "viking://r/tests/test_build_latex.py"),
+                CodeLocateFile(singlepage_content, "viking://r/docsuite/builders/singlepage.py"),
+                CodeLocateFile(pdf_test_content, "viking://r/tests/test_build_pdf.py"),
             ],
             allow_viking_commands=True,
         )
@@ -1515,33 +2202,31 @@ def test_numref_with_latex_builder(app, warning):
         assert "wording delta" in result.summary_text
         assert "patch diagnostic message/arguments first" in result.summary_text
         assert "as behavior references" in result.summary_text
-        assert "python3 -m py_compile sphinx/domains/std.py" in result.summary_text
+        assert "python3 -m py_compile docsuite/domains/std.py" in result.summary_text
         assert "python3 -m pytest tests/test_build_html.py" not in result.summary_text
         assert "positive warning assertion means preserve the diagnostic first" in result.summary_text
-        assert "same-file diagnostic precedent prefix/style" in result.summary_text
-        assert "reason semantics" in result.summary_text
+        assert "same-file diagnostic precedent" in result.summary_text
+        assert "style evidence" in result.summary_text
+        assert "original semantics" in result.summary_text
         assert "report-only terms are context" in result.summary_text
-        assert "if that static check passes, stop" in result.summary_text
-        assert "continue broader discovery only if that immediate path fails" in result.summary_text
-        assert "get_fignumber" not in result.summary_text
-        assert "toc_fignumbers" not in result.summary_text
-        assert "diagnostic wording delta" in result.edit_candidates[0].next_action
+        assert "run any listed narrow verification after the static check" in result.summary_text
+        assert "continue broader discovery only if that immediate verification fails" in result.summary_text
+        assert "get_resource_id" not in result.summary_text
+        assert "toc_resource_ids" not in result.summary_text
+        assert "diagnostic wording or argument delta" in result.edit_candidates[0].next_action
         assert result.edit_candidates[0].next_action.startswith("PATCH FIRST:")
         assert "production diagnostic emitter" in result.edit_candidates[0].next_action
-        assert "do not edit tests, assertions, fixtures, builders, or numbering logic" in (
+        assert "tests and assertions as behavior evidence" in (
             result.edit_candidates[0].next_action
         )
-        assert "not a numbering/builder regression" in result.edit_candidates[0].next_action
-        assert "same-file diagnostic precedent prefix/style" in (
+        assert "diagnostic wording or argument delta" in result.edit_candidates[0].next_action
+        assert "same-file diagnostic precedents as style evidence" in (
             result.edit_candidates[0].next_action
         )
-        assert "reason semantics" in result.edit_candidates[0].next_action
-        assert "if patch application fails" in result.edit_candidates[0].next_action
-        assert "if it passes" in result.edit_candidates[0].next_action
-        assert "final-answer immediately" in result.edit_candidates[0].next_action
-        assert "not a numbering/builder regression" in result.edit_candidates[0].next_action
-        assert "get_fignumber" not in result.edit_candidates[0].next_action
-        assert "toc_fignumbers" not in result.edit_candidates[0].next_action
+        assert "original semantics" in result.edit_candidates[0].next_action
+        assert "immediate verification fails" in result.edit_candidates[0].next_action
+        assert "get_resource_id" not in result.edit_candidates[0].next_action
+        assert "toc_resource_ids" not in result.edit_candidates[0].next_action
         assert "same-file or same-domain" not in result.edit_candidates[0].next_action
         assert "unless local evidence proves" not in result.edit_candidates[0].next_action
         assert len(result.edit_candidates) == 1
@@ -1553,41 +2238,41 @@ def test_numref_with_latex_builder(app, warning):
 
     def test_locate_code_detects_unquoted_warning_wording_delta(self):
         std_content = """\
-class StandardDomain:
-    def _resolve_numref_xref(self, env, fromdocname, builder, typ, target, node, contnode):
+class DiagnosticDomain:
+    def _resolve_docref(self, env, fromdocname, builder, typ, target, node, contnode):
         try:
-            fignumber = self.get_fignumber(env, builder, "table", "index", node)
+            resource_id = self.get_resource_id(env, builder, "table", "index", node)
         except ValueError:
-            logger.warning(__("no number is assigned for %s: %s"), "table", "id1",
+            logger.warning(__("resource id is missing for %s: %s"), "table", "id1",
                            location=node)
             return contnode
 """
         html_test_content = """\
-def test_numfig_without_numbered_toctree_warn(app, warning):
+def test_resource_ids_without_numbered_toctree_warn(app, warning):
     app.build()
     warnings = warning.getvalue()
-    assert "index.rst:55: WARNING: no number is assigned for section: index" in warnings
+    assert "index.rst:55: WARNING: resource id is missing for section: index" in warnings
 """
-        latex_test_content = """\
-def test_numref_table_caption(app):
+        pdf_test_content = """\
+def test_docref_table_caption(app):
     result = app.outdir.joinpath("python.tex").read_text()
-    assert "\\\\sphinxcaption{The table title with a reference" in result
+    assert "\\\\docsuitecaption{The table title with a reference" in result
 """
 
         result = locate_code_structured(
-            "Sphinx 3.3 upgrade started generating warning: no number is assigned "
-            "for table in singlehtml or latex builds, likely numref logic change",
+            "DocSuite 3.3 upgrade started generating warning: resource id is missing "
+            "for table in singlepage or pdf builds, likely docref logic change",
             [
-                CodeLocateFile(std_content, "viking://r/sphinx/domains/std.py"),
+                CodeLocateFile(std_content, "viking://r/docsuite/domains/std.py"),
                 CodeLocateFile(html_test_content, "viking://r/tests/test_build_html.py"),
-                CodeLocateFile(latex_test_content, "viking://r/tests/test_build_latex.py"),
+                CodeLocateFile(pdf_test_content, "viking://r/tests/test_build_pdf.py"),
             ],
             allow_viking_commands=True,
         )
 
         assert "wording delta" in result.summary_text
         assert len(result.edit_candidates) == 1
-        assert result.edit_candidates[0].location["uri"] == "viking://r/sphinx/domains/std.py"
+        assert result.edit_candidates[0].location["uri"] == "viking://r/docsuite/domains/std.py"
         assert len(result.behavior_references) == 1
         assert (
             result.behavior_references[0].location["uri"]
@@ -1596,42 +2281,42 @@ def test_numref_table_caption(app):
 
     def test_locate_code_keeps_multiple_positive_diagnostic_assertions(self):
         std_content = """\
-class StandardDomain:
-    def _resolve_numref_xref(self, env, fromdocname, builder, typ, target, node, contnode):
+class DiagnosticDomain:
+    def _resolve_docref(self, env, fromdocname, builder, typ, target, node, contnode):
         try:
-            fignumber = self.get_fignumber(env, builder, "section", "index", node)
+            resource_id = self.get_resource_id(env, builder, "section", "index", node)
         except ValueError:
-            logger.warning(__("no number is assigned for %s: %s"), "section", "index",
+            logger.warning(__("resource id is missing for %s: %s"), "section", "index",
                            location=node)
             return contnode
 
     def warn_missing_xref_title(self, target, node):
-        msg = __("Failed to create a cross reference. A title or caption not found: %s")
+        msg = __("Failed to resolve a document reference. A title or label was not found: %s")
         logger.warning(msg % target, location=node)
 """
         html_test_content = """\
-def test_numfig_without_numbered_toctree_warn(app, warning):
+def test_resource_ids_without_numbered_toctree_warn(app, warning):
     warnings = warning.getvalue()
-    assert "index.rst:55: WARNING: no number is assigned for section: index" in warnings
+    assert "index.rst:55: WARNING: resource id is missing for section: index" in warnings
 
-def test_numfig_with_numbered_toctree_warn(app, warning):
+def test_resource_ids_with_numbered_toctree_warn(app, warning):
     warnings = warning.getvalue()
-    assert "index.rst:55: WARNING: no number is assigned for section: index" in warnings
+    assert "index.rst:55: WARNING: resource id is missing for section: index" in warnings
 
-def test_numfig_with_prefix_warn(app, warning):
+def test_resource_ids_with_prefix_warn(app, warning):
     warnings = warning.getvalue()
-    assert "index.rst:55: WARNING: no number is assigned for section: index" in warnings
+    assert "index.rst:55: WARNING: resource id is missing for section: index" in warnings
 
-def test_numfig_with_secnum_depth_warn(app, warning):
+def test_resource_ids_with_secnum_depth_warn(app, warning):
     warnings = warning.getvalue()
-    assert "index.rst:55: WARNING: no number is assigned for section: index" in warnings
+    assert "index.rst:55: WARNING: resource id is missing for section: index" in warnings
 """
 
         result = locate_code_structured(
-            "Sphinx 3.3 started generating warning: no number is assigned for table "
-            "during singlehtml or latex numref builds",
+            "DocSuite 3.3 started generating warning: resource id is missing for table "
+            "during singlepage or pdf docref builds",
             [
-                CodeLocateFile(std_content, "viking://r/sphinx/domains/std.py"),
+                CodeLocateFile(std_content, "viking://r/docsuite/domains/std.py"),
                 CodeLocateFile(html_test_content, "viking://r/tests/test_build_html.py"),
             ],
             allow_viking_commands=True,
@@ -1641,39 +2326,39 @@ def test_numfig_with_secnum_depth_warn(app, warning):
         warning_snippets = [
             snippet
             for snippet in reference.snippets
-            if "no number is assigned for section" in snippet["text"]
+            if "resource id is missing for section" in snippet["text"]
         ]
         assert len(warning_snippets) == 4
 
     def test_locate_code_keeps_diagnostic_snippets_on_emitter_when_wording_differs(self):
         std_content = """\
-class StandardDomain:
-    def _resolve_numref_xref(self, env, fromdocname, builder, typ, target, node, contnode):
+class DiagnosticDomain:
+    def _resolve_docref(self, env, fromdocname, builder, typ, target, node, contnode):
         try:
-            fignumber = self.get_fignumber(env, builder, "table", "index", node)
+            resource_id = self.get_resource_id(env, builder, "table", "index", node)
         except ValueError:
-            logger.warning(__("no number is assigned for %s: %s"), "table", "id1",
+            logger.warning(__("resource id is missing for %s: %s"), "table", "id1",
                            location=node)
             return contnode
 
-    def get_fignumber(self, env, builder, figtype, docname, target_node):
-        if builder.name == "latex":
-            return env.toc_fignumbers[docname][figtype][target_node["ids"][0]]
+    def get_resource_id(self, env, builder, figtype, docname, target_node):
+        if builder.name == "pdf":
+            return env.toc_resource_ids[docname][figtype][target_node["ids"][0]]
         return ()
 """
         html_test_content = """\
-def test_numfig_without_numbered_toctree_warn(app, warning):
+def test_resource_ids_without_numbered_toctree_warn(app, warning):
     app.build()
     warnings = warning.getvalue()
-    assert "index.rst:55: WARNING: no number is assigned for section: index" in warnings
+    assert "index.rst:55: WARNING: resource id is missing for section: index" in warnings
 """
 
         result = locate_code_structured(
-            "Sphinx 3.3 upgrade started generating "
-            "'WARNING: no number is assigned for table' warnings in "
-            "singlehtml or latex builds; likely numref logic around tables and warnings",
+            "DocSuite 3.3 upgrade started generating "
+            "'WARNING: resource id is missing for table' warnings in "
+            "singlepage or pdf builds; likely docref logic around tables and warnings",
             [
-                CodeLocateFile(std_content, "viking://r/sphinx/domains/std.py"),
+                CodeLocateFile(std_content, "viking://r/docsuite/domains/std.py"),
                 CodeLocateFile(html_test_content, "viking://r/tests/test_build_html.py"),
             ],
             allow_viking_commands=True,
@@ -1683,46 +2368,46 @@ def test_numfig_without_numbered_toctree_warn(app, warning):
         assert any("logger.warning" in snippet["text"] for snippet in top.snippets)
         assert all("builder.name" not in snippet["text"] for snippet in top.snippets)
         assert all(
-            symbol["name"] != "StandardDomain.get_fignumber"
+            symbol["name"] != "DiagnosticDomain.get_resource_id"
             for symbol in top.focus_symbols
         )
 
-    def test_diagnostic_phrase_bonus_distinguishes_inverse_warning_meaning(self):
+    def test_diagnostic_phrase_bonus_uses_generic_message_shape(self):
         assert (
             _diagnostic_phrase_bonus(
-                'logger.warning(__("no number is assigned for %s: %s"), figtype, labelid)',
-                {"number", "assigned"},
+                'logger.warning(__("invalid value for %s: %s"), field, value)',
+                {"invalid", "value", "field"},
             )
             > 0
         )
         assert (
             _diagnostic_phrase_bonus(
-                "logger.warning(__('%s is already assigned section numbers'), ref)",
-                {"number", "assigned"},
+                "logger.warning(__('changed'), value)",
+                {"changed"},
             )
             == 0
         )
 
     def test_plain_render_assertion_is_not_diagnostic_assertion(self):
         assert not _is_diagnostic_assertion_line(
-            r"assert '\\sphinxcaption{The table title with a reference' in result"
+            r"assert '\\docsuitecaption{The table title with a reference' in result"
         )
 
     def test_suggested_verification_prefers_edit_matching_top_behavior_test(self):
         lines = _format_verification_section(
             [
-                _CodeLocateHit(file_name="viking://r/sklearn/externals/_arff.py", score=200),
-                _CodeLocateHit(file_name="viking://r/sklearn/utils/_pprint.py", score=180),
+                _CodeLocateHit(file_name="viking://r/samplepkg/externals/_arff.py", score=200),
+                _CodeLocateHit(file_name="viking://r/samplepkg/utils/pretty.py", score=180),
             ],
             [
                 _CodeLocateHit(
-                    file_name="viking://r/sklearn/utils/tests/test_pprint.py",
+                    file_name="viking://r/samplepkg/utils/tests/test_pretty.py",
                     score=300,
                 )
             ],
         )
 
-        assert "- static: python3 -m py_compile sklearn/utils/_pprint.py" in lines
+        assert "- static: python3 -m py_compile samplepkg/utils/pretty.py" in lines
 
 
 # ---------------------------------------------------------------------------

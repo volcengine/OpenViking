@@ -11,6 +11,7 @@ the 1000-file cap, and error mapping.
 """
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -26,12 +27,14 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.mcp_endpoint import (
     _filter_code_uris,
     _mcp_ctx,
+    _read_local_code_files_for_mcp,
     _require_viking_uri,
     code_expand,
     code_locate,
     code_outline,
     code_search,
 )
+from openviking.pyagfs.exceptions import AGFSPluginError
 from openviking_cli.session.user_id import UserIdentifier
 
 DEFAULT_CTX = RequestContext(
@@ -215,6 +218,20 @@ class TestCodeSearch:
         out = await code_search("", "viking://resources")
         assert out == "Error: empty query"
 
+    async def test_file_uri_falls_back_to_single_file_read(self, service, monkeypatch):
+        async def fake_ls(uri, ctx=None, recursive=False, output=None, **_):
+            raise AGFSPluginError(f"plugin error: not a directory: {uri}")
+
+        async def fake_read(uri, ctx=None, **_):
+            return PY_SAMPLE
+
+        _patch_fs(monkeypatch, service, ls=fake_ls, read=fake_read)
+
+        out = await code_search("greet", "viking://r/greeter.py")
+
+        assert "Greeter" in out
+        assert "failed to list" not in out
+
     async def test_lists_and_searches(self, service, monkeypatch):
         ls_calls = {}
         read_uris: list[str] = []
@@ -355,19 +372,19 @@ class TestCodeLocate:
             ls_calls["node_limit"] = kwargs.get("node_limit")
             ls_calls["level_limit"] = kwargs.get("level_limit")
             return [
-                {"uri": "viking://r/sklearn/utils/_pprint.py", "isDir": False},
-                {"uri": "viking://r/sklearn/utils/tests/test_pprint.py", "isDir": False},
+                {"uri": "viking://r/samplepkg/utils/pretty.py", "isDir": False},
+                {"uri": "viking://r/samplepkg/utils/tests/test_pretty.py", "isDir": False},
             ]
 
         async def fake_read(uri, ctx=None, **_):
-            if uri.endswith("test_pprint.py"):
+            if uri.endswith("test_pretty.py"):
                 return "def test_changed_only_array_repr():\n    assert True\n"
             return "def _changed_params():\n    if value != init_value:\n        return True\n"
 
         _patch_fs(monkeypatch, service, ls=fake_ls, read=fake_read)
 
         out = await code_locate(
-            "print_changed_only array repr",
+            "compact_repr array repr",
             {"type": "viking", "uri": "viking://r"},
             output_format="json",
         )
@@ -383,9 +400,90 @@ class TestCodeLocate:
         }
         assert payload["edit_candidates"][0]["location"]["type"] == "viking"
         assert payload["edit_candidates"][0]["location"]["uri"] == (
-            "viking://r/sklearn/utils/_pprint.py"
+            "viking://r/samplepkg/utils/pretty.py"
         )
         assert "path" not in payload["edit_candidates"][0]["location"]
+
+    async def test_viking_file_source_locates_single_file(self, service, monkeypatch):
+        async def fake_ls(uri, ctx=None, recursive=False, output=None, **_):
+            raise AGFSPluginError(f"plugin error: not a directory: {uri}")
+
+        async def fake_read(uri, ctx=None, **_):
+            return "class EncodingChecker:\n    def open(self):\n        return 'W0511 fixme notes'\n"
+
+        _patch_fs(monkeypatch, service, ls=fake_ls, read=fake_read)
+
+        out = await code_locate(
+            "Fix W0511 fixme notes handling in the misc checker",
+            {"type": "viking", "uri": "viking://r/pylint/checkers/misc.py"},
+            output_format="json",
+        )
+        payload = json.loads(out)
+
+        assert payload["edit_candidates"][0]["location"] == {
+            "type": "viking",
+            "uri": "viking://r/pylint/checkers/misc.py",
+            "relative_path": "misc.py",
+        }
+        assert payload["warnings"] == []
+
+    async def test_viking_source_accepts_structured_locate_hints(self, service, monkeypatch):
+        async def fake_ls(uri, ctx=None, recursive=False, output=None, **kwargs):
+            return [
+                {"uri": "viking://r/pkg/noise.py", "isDir": False},
+                {"uri": "viking://r/pkg/serializers.py", "isDir": False},
+            ]
+
+        async def fake_read(uri, ctx=None, **_):
+            if uri.endswith("serializers.py"):
+                return "def serialize_flag(value):\n    raise TypeError('unsupported flag value')\n"
+            return "def unrelated():\n    return 'flag serialization output regression'\n"
+
+        _patch_fs(monkeypatch, service, ls=fake_ls, read=fake_read)
+
+        out = await code_locate(
+            "Regression in flag serialization output.",
+            {"type": "viking", "uri": "viking://r"},
+            terms=["flag", "serializer"],
+            hints={
+                "paths": ["serializers.py"],
+                "symbols": ["serialize_flag"],
+                "errors": ["unsupported flag value"],
+            },
+            output_format="json",
+        )
+        payload = json.loads(out)
+
+        assert payload["edit_candidates"][0]["location"]["uri"] == (
+            "viking://r/pkg/serializers.py"
+        )
+        assert payload["query"]["terms"] == ["flag", "serializer"]
+        assert payload["query"]["hints"]["symbols"] == ["serialize_flag"]
+
+    async def test_positional_failing_tests_remains_third_argument(self, service, monkeypatch):
+        async def fake_ls(uri, ctx=None, recursive=False, output=None, **kwargs):
+            return [
+                {"uri": "viking://r/pkg/greeter.py", "isDir": False},
+                {"uri": "viking://r/tests/test_greeter.py", "isDir": False},
+            ]
+
+        async def fake_read(uri, ctx=None, **_):
+            if uri.endswith("test_greeter.py"):
+                return "def test_changed_greet_behavior():\n    assert greet() == 'hi'\n"
+            return "def greet():\n    return 'hello changed behavior'\n"
+
+        _patch_fs(monkeypatch, service, ls=fake_ls, read=fake_read)
+
+        out = await code_locate(
+            "changed greet behavior",
+            {"type": "viking", "uri": "viking://r"},
+            ["test_changed_greet_behavior"],
+            output_format="json",
+        )
+        payload = json.loads(out)
+
+        assert payload["query"]["failing_tests"] == ["test_changed_greet_behavior"]
+        assert payload["query"]["terms"] == []
 
     async def test_local_source_json_reads_current_checkout(self, tmp_path):
         set_server_config(ServerConfig(allow_local_code_source_paths=True))
@@ -408,6 +506,46 @@ class TestCodeLocate:
         assert location["type"] == "local"
         assert location["path"] == str(impl)
         assert "uri" not in location
+
+    async def test_local_source_json_without_supported_files_keeps_local_source(self, tmp_path):
+        set_server_config(ServerConfig(allow_local_code_source_paths=True))
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "README.md").write_text("# notes\n", encoding="utf-8")
+
+        out = await code_locate(
+            "changed greet behavior",
+            {"type": "local", "path": str(repo)},
+            output_format="json",
+        )
+        payload = json.loads(out)
+
+        assert payload["source"] == {"type": "local", "root": str(repo)}
+        assert payload["warnings"][0]["code"] == "no_supported_source_files"
+        assert payload["edit_candidates"] == []
+        assert payload["behavior_references"] == []
+        assert payload["verification"] == []
+        assert "no local checkout mapping" not in out
+
+    def test_local_source_scan_prunes_skipped_dirs_before_descending(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        source_path = repo / "pkg" / "module.py"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("def target():\n    return True\n", encoding="utf-8")
+        skipped_path = repo / "dist" / "generated.py"
+        skipped_path.parent.mkdir()
+        skipped_path.write_text("def target():\n    return False\n", encoding="utf-8")
+
+        def fail_rglob(*_args, **_kwargs):
+            raise AssertionError("Path.rglob should not be used for local locate scans")
+
+        monkeypatch.setattr(Path, "rglob", fail_rglob)
+
+        files, warnings, scan = _read_local_code_files_for_mcp(str(repo), "target")
+
+        assert [file.relative_path for file in files] == ["pkg/module.py"]
+        assert warnings == []
+        assert scan["skipped_dirs"] == ["dist"]
 
 
 # ---------------------------------------------------------------------------

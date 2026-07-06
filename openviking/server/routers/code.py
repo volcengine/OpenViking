@@ -3,11 +3,12 @@
 """Code navigation endpoints for OpenViking HTTP Server."""
 
 import asyncio
+import os
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from openviking.parse.parsers.code.ast.code_tools import (
     CODE_LOCATE_FILE_CAP,
@@ -16,10 +17,13 @@ from openviking.parse.parsers.code.ast.code_tools import (
     CODE_SEARCH_CONCURRENCY,
     CODE_SEARCH_FILE_CAP,
     CodeLocateFile,
+    CodeLocateHints,
     CodeLocateResult,
+    empty_code_locate_result,
     expand_symbol,
     format_locate_text,
     locate_code_structured,
+    locate_selection_query,
     outline_file,
     search_code,
     select_code_paths,
@@ -61,14 +65,24 @@ class CodeLocateSource(BaseModel):
     uri: str | None = None
 
 
+class CodeLocateHintInput(BaseModel):
+    paths: list[str] = Field(default_factory=list)
+    path_terms: list[str] = Field(default_factory=list)
+    symbols: list[str] = Field(default_factory=list)
+    imports: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
 class CodeLocateRequest(BaseModel):
     source: CodeLocateSource
     query: str
-    failing_tests: list[str] = []
+    terms: list[str] = Field(default_factory=list)
+    hints: CodeLocateHintInput = Field(default_factory=CodeLocateHintInput)
+    failing_tests: list[str] = Field(default_factory=list)
     output_format: Literal["text", "json", "both"] = "text"
     debug: bool = False
-    max_edit: int = 5
-    max_references: int = 3
+    max_edit: int = 3
+    max_references: int = 2
 
 
 class CodeExpandRequest(BaseModel):
@@ -86,6 +100,26 @@ _LOCAL_SKIP_DIRS = {
     "build",
     "dist",
 }
+
+
+def _is_not_directory_error(exc: Exception) -> bool:
+    return "not a directory" in str(exc).lower()
+
+
+def _viking_relative_path(uri: str, root: str) -> str:
+    prefix = root.rstrip("/") + "/"
+    if uri.startswith(prefix):
+        return uri.removeprefix(prefix)
+    if uri == root:
+        return uri.rsplit("/", 1)[-1]
+    return uri
+
+
+async def _read_viking_code_file(service, uri: str, ctx: RequestContext):
+    if not get_extractor().supports(uri):
+        return None
+    content = await service.fs.read(uri, ctx=ctx)
+    return (content, uri) if isinstance(content, str) else None
 
 
 def _format_locate_response(result: CodeLocateResult, output_format: str):
@@ -107,7 +141,12 @@ def _error_locate_result(request: CodeLocateRequest, code: str, message: str) ->
     return CodeLocateResult(
         schema_version="code-locate/v1",
         source={"type": request.source.type, "root": request.source.path or request.source.uri or ""},
-        query={"text": request.query, "failing_tests": request.failing_tests},
+        query={
+            "text": request.query,
+            "terms": request.terms,
+            "hints": request.hints.model_dump(),
+            "failing_tests": request.failing_tests,
+        },
         edit_candidates=[],
         behavior_references=[],
         verification=[],
@@ -120,27 +159,45 @@ def _local_source_root(path: Path) -> Path:
     return path if path.is_dir() else path.parent
 
 
-def _select_local_code_files(root: Path, query: str) -> tuple[list[Path], bool, list[str]]:
+def _select_local_code_files(
+    root: Path,
+    query: str,
+    *,
+    priority_paths: list[str] | None = None,
+    priority_terms: list[str] | None = None,
+) -> tuple[list[Path], bool, list[str]]:
     extractor = get_extractor()
     paths: list[Path] = []
     skipped_dirs: set[str] = set()
     if root.is_file():
         return ([root] if extractor.supports(str(root)) else []), False, []
 
-    for path in root.rglob("*"):
-        if any(part in _LOCAL_SKIP_DIRS for part in path.parts):
-            skipped_dirs.update(part for part in path.parts if part in _LOCAL_SKIP_DIRS)
-            continue
-        if not path.is_file():
-            continue
-        if extractor.supports(str(path)):
-            paths.append(path)
+    for dirpath, dirnames, filenames in os.walk(root):
+        skipped_dirs.update(name for name in dirnames if name in _LOCAL_SKIP_DIRS)
+        dirnames[:] = [name for name in dirnames if name not in _LOCAL_SKIP_DIRS]
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            if extractor.supports(str(path)):
+                paths.append(path)
 
-    paths, capped = select_code_paths(paths, query, cap=CODE_LOCATE_FILE_CAP)
+    paths, capped = select_code_paths(
+        paths,
+        query,
+        cap=CODE_LOCATE_FILE_CAP,
+        prefer_implementation=True,
+        priority_paths=priority_paths,
+        priority_terms=priority_terms,
+    )
     return paths, capped, sorted(skipped_dirs)
 
 
-def _read_local_code_source(path_value: str, query: str) -> tuple[list[CodeLocateFile], bool, list[dict], dict]:
+def _read_local_code_source(
+    path_value: str,
+    query: str,
+    *,
+    priority_paths: list[str] | None = None,
+    priority_terms: list[str] | None = None,
+) -> tuple[list[CodeLocateFile], bool, list[dict], dict]:
     path = Path(path_value).expanduser().resolve()
     if not path.exists():
         return (
@@ -163,7 +220,12 @@ def _read_local_code_source(path_value: str, query: str) -> tuple[list[CodeLocat
         )
 
     root = _local_source_root(path)
-    code_paths, capped, skipped_dirs = _select_local_code_files(path, query)
+    code_paths, capped, skipped_dirs = _select_local_code_files(
+        path,
+        query,
+        priority_paths=priority_paths,
+        priority_terms=priority_terms,
+    )
     if not code_paths:
         return (
             [],
@@ -260,20 +322,34 @@ async def code_search_endpoint(
     if not request.query:
         return Response(status="ok", result="Error: empty query").model_dump(exclude_none=True)
     service = get_service()
-    entries = await service.fs.ls(
-        request.uri,
-        ctx=_ctx,
-        recursive=True,
-        output="original",
-        node_limit=CODE_SCAN_LS_NODE_LIMIT,
-        level_limit=CODE_SCAN_LS_LEVEL_LIMIT,
-    )
-    code_uris, capped = select_code_uris(entries or [], request.query)
-    if not code_uris:
-        return Response(
-            status="ok",
-            result=f"No supported source files found under {request.uri}",
-        ).model_dump(exclude_none=True)
+    files = None
+    capped = False
+    try:
+        entries = await service.fs.ls(
+            request.uri,
+            ctx=_ctx,
+            recursive=True,
+            output="original",
+            node_limit=CODE_SCAN_LS_NODE_LIMIT,
+            level_limit=CODE_SCAN_LS_LEVEL_LIMIT,
+        )
+        code_uris, capped = select_code_uris(entries or [], request.query)
+        if not code_uris:
+            return Response(
+                status="ok",
+                result=f"No supported source files found under {request.uri}",
+            ).model_dump(exclude_none=True)
+    except Exception as exc:
+        if not _is_not_directory_error(exc):
+            raise
+        file_pair = await _read_viking_code_file(service, request.uri, _ctx)
+        if file_pair is None:
+            return Response(
+                status="ok",
+                result=f"No supported source files found under {request.uri}",
+            ).model_dump(exclude_none=True)
+        code_uris = [request.uri]
+        files = [file_pair]
 
     semaphore = asyncio.Semaphore(CODE_SEARCH_CONCURRENCY)
 
@@ -286,14 +362,16 @@ async def code_search_endpoint(
                 return None, uri
             return ((body, uri) if isinstance(body, str) else None), uri
 
-    fetched = await asyncio.gather(*[_read_one(u) for u in code_uris])
-    files = [pair for pair, _uri in fetched if pair is not None]
-    failed_reads = len(fetched) - len(files)
-    if failed_reads == len(code_uris):
-        return Response(
-            status="ok",
-            result=f"Error: failed to read all {len(code_uris)} source files under {request.uri}",
-        ).model_dump(exclude_none=True)
+    failed_reads = 0
+    if files is None:
+        fetched = await asyncio.gather(*[_read_one(u) for u in code_uris])
+        files = [pair for pair, _uri in fetched if pair is not None]
+        failed_reads = len(fetched) - len(files)
+        if failed_reads == len(code_uris):
+            return Response(
+                status="ok",
+                result=f"Error: failed to read all {len(code_uris)} source files under {request.uri}",
+            ).model_dump(exclude_none=True)
     result = search_code(request.query, files)
     if failed_reads:
         result += f"\n\n(warning: skipped {failed_reads} unreadable source file(s))"
@@ -317,6 +395,14 @@ async def code_locate_endpoint(
     warnings: list[dict] = []
     scan_debug: dict | None = None
     source_root = ""
+    locate_hints = CodeLocateHints(**request.hints.model_dump())
+    selection_query = locate_selection_query(
+        request.query,
+        terms=request.terms,
+        hints=locate_hints,
+    )
+    priority_paths = locate_hints.paths
+    priority_terms = locate_hints.path_terms + locate_hints.imports
     if request.source.type == "local":
         if not request.source.path or request.source.uri:
             result = _error_locate_result(
@@ -339,9 +425,27 @@ async def code_locate_endpoint(
                 result=_format_locate_response(result, request.output_format),
             ).model_dump(exclude_none=True)
         files, _capped, warnings, scan_debug = _read_local_code_source(
-            request.source.path, request.query
+            request.source.path,
+            selection_query,
+            priority_paths=priority_paths,
+            priority_terms=priority_terms,
         )
         source_root = scan_debug.get("root", request.source.path)
+        if not files:
+            result = empty_code_locate_result(
+                request.query,
+                source_type="local",
+                source_root=source_root,
+                terms=request.terms,
+                hints=locate_hints,
+                failing_tests=request.failing_tests,
+                warnings=warnings,
+                debug={"scan": scan_debug} if request.debug else None,
+            )
+            return Response(
+                status="ok",
+                result=_format_locate_response(result, request.output_format),
+            ).model_dump(exclude_none=True)
     else:
         if not request.source.uri or request.source.path:
             result = _error_locate_result(
@@ -361,27 +465,56 @@ async def code_locate_endpoint(
             ).model_dump(exclude_none=True)
 
         service = get_service()
-        entries = await service.fs.ls(
-            request.source.uri,
-            ctx=_ctx,
-            recursive=True,
-            output="original",
-            node_limit=CODE_SCAN_LS_NODE_LIMIT,
-            level_limit=CODE_SCAN_LS_LEVEL_LIMIT,
-        )
-        code_uris, capped = select_code_uris(
-            entries or [], request.query, cap=CODE_LOCATE_FILE_CAP
-        )
-        if not code_uris:
-            result = _error_locate_result(
-                request,
-                "no_supported_source_files",
-                f"No supported source files found under {request.source.uri}",
+        single_file = None
+        try:
+            entries = await service.fs.ls(
+                request.source.uri,
+                ctx=_ctx,
+                recursive=True,
+                output="original",
+                node_limit=CODE_SCAN_LS_NODE_LIMIT,
+                level_limit=CODE_SCAN_LS_LEVEL_LIMIT,
             )
-            return Response(
-                status="ok",
-                result=_format_locate_response(result, request.output_format),
-            ).model_dump(exclude_none=True)
+            code_uris, capped = select_code_uris(
+                entries or [],
+                selection_query,
+                cap=CODE_LOCATE_FILE_CAP,
+                prefer_implementation=True,
+                priority_paths=priority_paths,
+                priority_terms=priority_terms,
+            )
+            if not code_uris:
+                result = _error_locate_result(
+                    request,
+                    "no_supported_source_files",
+                    f"No supported source files found under {request.source.uri}",
+                )
+                return Response(
+                    status="ok",
+                    result=_format_locate_response(result, request.output_format),
+                ).model_dump(exclude_none=True)
+        except Exception as exc:
+            if not _is_not_directory_error(exc):
+                raise
+            file_pair = await _read_viking_code_file(service, request.source.uri, _ctx)
+            if file_pair is None:
+                result = _error_locate_result(
+                    request,
+                    "no_supported_source_files",
+                    f"No supported source files found under {request.source.uri}",
+                )
+                return Response(
+                    status="ok",
+                    result=_format_locate_response(result, request.output_format),
+                ).model_dump(exclude_none=True)
+            single_file = CodeLocateFile(
+                content=file_pair[0],
+                file_name=request.source.uri,
+                location_type="viking",
+                relative_path=_viking_relative_path(request.source.uri, request.source.uri),
+            )
+            code_uris = [request.source.uri]
+            capped = False
 
         semaphore = asyncio.Semaphore(CODE_SEARCH_CONCURRENCY)
 
@@ -398,7 +531,7 @@ async def code_locate_endpoint(
                             content=body,
                             file_name=uri,
                             location_type="viking",
-                            relative_path=uri.removeprefix(request.source.uri.rstrip("/") + "/"),
+                            relative_path=_viking_relative_path(uri, request.source.uri),
                         ),
                         uri,
                     )
@@ -406,9 +539,13 @@ async def code_locate_endpoint(
                     else (None, uri)
                 )
 
-        fetched = await asyncio.gather(*[_read_one(u) for u in code_uris])
-        files = [pair for pair, _uri in fetched if pair is not None]
-        failed_reads = len(fetched) - len(files)
+        if single_file is None:
+            fetched = await asyncio.gather(*[_read_one(u) for u in code_uris])
+            files = [pair for pair, _uri in fetched if pair is not None]
+            failed_reads = len(fetched) - len(files)
+        else:
+            files = [single_file]
+            failed_reads = 0
         if failed_reads == len(code_uris):
             result = _error_locate_result(
                 request,
@@ -451,6 +588,8 @@ async def code_locate_endpoint(
         request.query,
         files,
         request.failing_tests,
+        terms=request.terms,
+        hints=locate_hints,
         max_edit=request.max_edit,
         max_references=request.max_references,
         debug=request.debug,

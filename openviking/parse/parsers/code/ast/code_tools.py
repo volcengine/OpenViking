@@ -10,7 +10,9 @@ content -> CodeSkeleton -> formatted text.
 from __future__ import annotations
 
 import json
+import math
 import re
+import shlex
 from dataclasses import asdict, dataclass, field
 from typing import Iterable, List, Optional, Tuple
 
@@ -41,6 +43,40 @@ def _path_relevance(uri: str, terms: list[str]) -> int:
     for term in terms:
         if term in lower_uri:
             score += 3 if "/" in lower_uri and term in lower_uri.rsplit("/", 1)[-1] else 1
+    return score
+
+
+def _normalized_path_fragment(value: str) -> str:
+    return value.strip().replace("\\", "/").strip("/").lower()
+
+
+def _priority_path_relevance(
+    uri: str,
+    priority_paths: list[str] | None,
+    priority_terms: list[str] | None,
+) -> int:
+    lower_uri = uri.replace("\\", "/").lower()
+    basename = lower_uri.rsplit("/", 1)[-1]
+    score = 0
+    for fragment in priority_paths or []:
+        normalized = _normalized_path_fragment(fragment)
+        if not normalized:
+            continue
+        if normalized in lower_uri:
+            score += 2000 if "/" in normalized else 700
+        elif basename == normalized:
+            score += 700
+
+    for fragment in priority_terms or []:
+        normalized = _normalized_path_fragment(fragment)
+        module_path = normalized.replace(".", "/")
+        if "/" in module_path and module_path in lower_uri:
+            score += 1200
+
+    path_terms = _query_terms("\n".join(priority_terms or []))
+    for term in path_terms:
+        if term in lower_uri:
+            score += 120 if term in basename else 40
     return score
 
 
@@ -101,6 +137,9 @@ def select_code_uris(
     query: str = "",
     *,
     cap: int = CODE_SEARCH_FILE_CAP,
+    prefer_implementation: bool = False,
+    priority_paths: list[str] | None = None,
+    priority_terms: list[str] | None = None,
 ) -> tuple[list[str], bool]:
     """Pick supported code file entries, prioritizing query path terms before capping.
 
@@ -120,11 +159,20 @@ def select_code_uris(
             uris.append(entry_uri)
 
     terms = _query_terms(query) if query else []
-    if terms:
-        uris.sort(key=lambda uri: (-_path_relevance(uri, terms), uri))
+    if terms or priority_paths or priority_terms or prefer_implementation:
+        uris.sort(
+            key=lambda uri: (
+                -_priority_path_relevance(uri, priority_paths, priority_terms),
+                1 if prefer_implementation and _is_test_uri(uri) else 0,
+                -_path_relevance(uri, terms),
+                uri,
+            )
+        )
 
     capped = len(uris) > cap
     if capped:
+        if prefer_implementation:
+            return uris[:cap], True
         return _keep_related_tests_under_cap(uris, cap), True
     return uris, False
 
@@ -134,11 +182,26 @@ def filter_code_uris(entries) -> tuple[list[str], bool]:
     return select_code_uris(entries)
 
 
-def select_code_paths(paths, query: str = "", *, cap: int = CODE_SEARCH_FILE_CAP):
+def select_code_paths(
+    paths,
+    query: str = "",
+    *,
+    cap: int = CODE_SEARCH_FILE_CAP,
+    prefer_implementation: bool = False,
+    priority_paths: list[str] | None = None,
+    priority_terms: list[str] | None = None,
+):
     """Rank local source paths with the same policy as viking URI selection."""
     path_by_uri = {str(path): path for path in paths}
     entries = [{"uri": uri, "isDir": False} for uri in path_by_uri]
-    uris, capped = select_code_uris(entries, query, cap=cap)
+    uris, capped = select_code_uris(
+        entries,
+        query,
+        cap=cap,
+        prefer_implementation=prefer_implementation,
+        priority_paths=priority_paths,
+        priority_terms=priority_terms,
+    )
     return [path_by_uri[uri] for uri in uris if uri in path_by_uri], capped
 
 
@@ -253,30 +316,32 @@ def search_symbols(query: str, files: List[Tuple[str, str]]) -> str:
 CODE_SEARCH_CONTENT_MAX_PER_FILE = 5
 CODE_SEARCH_CONTENT_MAX_TOTAL = 50
 CODE_SEARCH_HYBRID_RESULT_LIMIT = 20
-CODE_LOCATE_EDIT_LIMIT = 5
-CODE_LOCATE_REFERENCE_LIMIT = 3
+CODE_LOCATE_EDIT_LIMIT = 3
+CODE_LOCATE_REFERENCE_LIMIT = 2
 CODE_LOCATE_IMPORT_LIMIT = 8
 CODE_LOCATE_FOCUS_LIMIT = 3
 CODE_LOCATE_CONTENT_SCORE_CAP = 120
 CODE_LOCATE_EXACT_IDENTIFIER_SCORE = 80
-CODE_LOCATE_EDIT_NEXT_ACTION = "inspect current checkout lines; no web/upstream/git history"
-CODE_LOCATE_REFERENCE_NEXT_ACTION = "read current checkout assertions; no web/upstream/git history"
+CODE_LOCATE_EDIT_NEXT_ACTION = (
+    "read this top edit file first; patch before broader grep/read/codesearch"
+)
+CODE_LOCATE_REFERENCE_NEXT_ACTION = (
+    "read only this top behavior reference after top edit; do not inspect extra tests unless patch/static check fails"
+)
 CODE_LOCATE_DIAGNOSTIC_WORDING_DELTA_ACTION = (
-    "PATCH FIRST: diagnostic wording delta, not a numbering/builder "
-    "regression; patch only the production diagnostic emitter "
-    "message/arguments; borrow same-file diagnostic precedent prefix/style "
-    "but keep the emitter's original reason semantics; then run the immediate "
-    "static check; if it passes, stop and final-answer immediately; do not "
-    "inspect visible tests or implementation logic for extra confidence; do "
-    "not edit tests, assertions, fixtures, builders, or numbering logic; if "
-    "patch application fails, read the exact edit line and retry the same "
-    "diagnostic patch; broaden only if the patch or static check fails"
+    "PATCH FIRST: diagnostic wording or argument delta; patch only the "
+    "production diagnostic emitter message, arguments, or nearby guard "
+    "identified by the edit line; use same-file diagnostic precedents as "
+    "style evidence but keep the emitter's original semantics; then run the "
+    "immediate static check and any listed narrow verification; treat tests "
+    "and assertions as behavior evidence unless the issue explicitly asks to "
+    "update tests; broaden only if the patch or immediate verification fails"
 )
 CODE_LOCATE_DIAGNOSTIC_NEXT_ACTION = (
     "inspect diagnostic emitter and matching assertions in current checkout; "
     "if a nearby positive assertion expects this diagnostic, treat it as "
     "fail-to-pass risk and update the diagnostic message/arguments first; "
-    "compare same-file or same-domain resolver/error-handling precedent; keep "
+    "compare same-file diagnostic or error-handling precedent; keep "
     "the first patch near the emitter guard; reproduce or verify narrowly "
     "after the patch, static check first; if pytest fails before collection, stop broad fixture search and "
     "treat it as setup; if nearby tests assert this diagnostic, preserve the "
@@ -284,12 +349,16 @@ CODE_LOCATE_DIAGNOSTIC_NEXT_ACTION = (
     "argument changes over broad conditional silencing; prefer the local "
     "diagnostic patch before broader implementation changes; decide if this "
     "is diagnostic wording or guard behavior before changing unrelated logic; "
-    "treat changelog/upstream "
-    "wording as background, do not use web, upstream patches, or git log"
+    "do not use web, upstream patches, or git log"
 )
 CODE_LOCATE_SETUP_NOTE = (
-    "Use current checkout ranked candidates. Do not use web, upstream patches, "
-    "or git log. If pytest fails before collection, treat as setup."
+    "Run the static check first. If pytest fails before collection or dependency "
+    "imports, treat as setup and do not broaden code search. Do not use web, "
+    "upstream patches, or git log."
+)
+CODE_LOCATE_CONTRACT = (
+    "Contract: read the top edit candidate first and the top behavior reference "
+    "only if needed. Patch before broader grep/read/codesearch."
 )
 QUERY_STOPWORDS = {
     "a",
@@ -351,7 +420,6 @@ LOCATE_LOW_SIGNAL_TERMS = {
     "reproduces",
     "reproducing",
     "set",
-    "sklearn",
     "than",
     "true",
     "use",
@@ -359,8 +427,6 @@ LOCATE_LOW_SIGNAL_TERMS = {
     "when",
     "values",
     "valued",
-    "ping",
-    "nicolashug",
 }
 DIAGNOSTIC_LOW_SIGNAL_TERMS = {
     "build",
@@ -378,7 +444,6 @@ DIAGNOSTIC_LOW_SIGNAL_TERMS = {
     "html",
     "latex",
     "singlehtml",
-    "sphinx",
     "started",
     "upgrade",
     "upgraded",
@@ -387,7 +452,6 @@ DIAGNOSTIC_LOW_SIGNAL_TERMS = {
 }
 FAILING_TEST_PATH_STOPWORDS = {
     "py",
-    "sklearn",
     "test",
     "tests",
     "unittest",
@@ -395,10 +459,56 @@ FAILING_TEST_PATH_STOPWORDS = {
 FAILING_TEST_IMPL_PATH_STOPWORDS = {
     "common",
     "core",
+    "field",
+    "fields",
     "helper",
     "helpers",
+    "index",
+    "indexes",
+    "model",
+    "models",
+    "operation",
+    "operations",
     "util",
     "utils",
+}
+LOCATE_PATH_TERM_LOW_SIGNAL_TERMS = {
+    "base",
+    "builder",
+    "builders",
+    "common",
+    "core",
+    "deprecation",
+    "deprecated",
+    "field",
+    "fields",
+    "helper",
+    "helpers",
+    "index",
+    "indexes",
+    "migration",
+    "migrations",
+    "model",
+    "models",
+    "operation",
+    "operations",
+    "option",
+    "options",
+    "repr",
+    "state",
+    "test",
+    "tests",
+    "transform",
+    "transforms",
+    "util",
+    "utils",
+}
+LOCATE_SYMBOL_HINT_LOW_SIGNAL_TERMS = {
+    "__init__",
+    "__repr__",
+    "__str__",
+    "option",
+    "options",
 }
 
 
@@ -436,6 +546,15 @@ class CodeLocateFile:
     file_name: str
     location_type: str = "viking"
     relative_path: str | None = None
+
+
+@dataclass
+class CodeLocateHints:
+    paths: list[str] = field(default_factory=list)
+    path_terms: list[str] = field(default_factory=list)
+    symbols: list[str] = field(default_factory=list)
+    imports: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -492,6 +611,85 @@ def _query_terms(query: str) -> list[str]:
     return list(dict.fromkeys(terms))
 
 
+def _bounded_strings(values: list[str] | None, limit: int) -> list[str]:
+    items: list[str] = []
+    for value in values or []:
+        text = str(value).strip()
+        if text:
+            _append_unique(items, text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _normalize_locate_hints(hints: CodeLocateHints | None) -> CodeLocateHints:
+    if hints is None:
+        return CodeLocateHints()
+    return CodeLocateHints(
+        paths=_bounded_strings(hints.paths, 10),
+        path_terms=_bounded_strings(hints.path_terms, 20),
+        symbols=_bounded_strings(hints.symbols, 20),
+        imports=_bounded_strings(hints.imports, 10),
+        errors=_bounded_strings(hints.errors, 5),
+    )
+
+
+def _lower_bounded_strings(values: list[str] | None, limit: int) -> list[str]:
+    return [item.lower() for item in _bounded_strings(values, limit)]
+
+
+def empty_code_locate_result(
+    query: str,
+    *,
+    source_type: str,
+    source_root: str,
+    terms: list[str] | None = None,
+    hints: CodeLocateHints | None = None,
+    failing_tests: list[str] | None = None,
+    warnings: list[dict] | None = None,
+    debug: dict | None = None,
+) -> CodeLocateResult:
+    locate_hints = _normalize_locate_hints(hints)
+    structured_terms = _bounded_strings(terms, 30)
+    locate_warnings = list(warnings or [])
+    summary = locate_warnings[0]["message"] if locate_warnings else "No ranked candidates."
+    return CodeLocateResult(
+        schema_version="code-locate/v1",
+        source={"type": source_type, "root": source_root},
+        query={
+            "text": query,
+            "terms": structured_terms,
+            "hints": asdict(locate_hints),
+            "failing_tests": failing_tests or [],
+        },
+        edit_candidates=[],
+        behavior_references=[],
+        verification=[],
+        warnings=locate_warnings,
+        summary_text=summary,
+        debug=debug,
+    )
+
+
+def locate_selection_query(
+    query: str,
+    *,
+    terms: list[str] | None = None,
+    hints: CodeLocateHints | None = None,
+) -> str:
+    locate_hints = _normalize_locate_hints(hints)
+    pieces = [
+        query,
+        *_bounded_strings(terms, 30),
+        *locate_hints.paths,
+        *locate_hints.path_terms,
+        *locate_hints.symbols,
+        *locate_hints.imports,
+        *locate_hints.errors,
+    ]
+    return "\n".join(piece for piece in pieces if piece)
+
+
 def _strip_fenced_code_blocks(text: str) -> str:
     return re.sub(r"```.*?```", " ", text, flags=re.S)
 
@@ -531,11 +729,18 @@ def _diagnostic_issue_phrases(issue: str) -> list[str]:
         if len(lower) >= 8 and any(ch.isalpha() for ch in lower):
             _append_unique(phrases, lower)
     for match in re.finditer(
-        r"\b(?:warning|warnings|error|errors|exception)\s*:\s*([^.;,\n\r`'\"]+)",
+        r"\b(?:warning|warnings|error|errors|exception)\s*:?\s*([^.;,\n\r`'\"]+)",
         focus,
         re.I,
     ):
         lower = match.group(1).strip().lower()
+        core = re.split(
+            r"\b(?:when|while|during|under|using|with|in)\b",
+            lower,
+            maxsplit=1,
+        )[0].strip()
+        if len(core) >= 8:
+            lower = core
         if len(lower) >= 8 and any(ch.isalpha() for ch in lower):
             _append_unique(phrases, lower)
     return phrases[:3]
@@ -581,6 +786,8 @@ def _failing_test_path_terms(failing_tests: list[str] | None) -> list[str]:
     terms: list[str] = []
     for failing_test in failing_tests or []:
         path_part = failing_test.split("::", 1)[0]
+        if not any(marker in path_part for marker in ("/", "\\", ".py")):
+            continue
         for term in _query_terms(path_part):
             if term in FAILING_TEST_PATH_STOPWORDS:
                 continue
@@ -612,17 +819,67 @@ def _path_term_score(
     *,
     path_weight: int,
     basename_weight: int,
+    term_weights: dict[str, float] | None = None,
 ) -> tuple[int, list[str]]:
     lower_path = file_name.lower()
     basename = lower_path.rsplit("/", 1)[-1]
-    score = 0
+    score = 0.0
     matched_terms: list[str] = []
     for term in terms:
         if term not in lower_path:
             continue
         _append_unique(matched_terms, term)
-        score += basename_weight if term in basename else path_weight
-    return score, matched_terms
+        weight = (term_weights or {}).get(term, 1.0)
+        if "/" in term:
+            score += max(basename_weight, path_weight * 10) * weight
+        else:
+            score += (basename_weight if term in basename else path_weight) * weight
+    return int(round(score)), matched_terms
+
+
+def _explicit_hint_path_score(file_name: str, hint_paths: list[str]) -> tuple[int, list[str]]:
+    lower_path = _normalized_path_fragment(file_name)
+    basename = lower_path.rsplit("/", 1)[-1]
+    score = 0
+    matched: list[str] = []
+    for hint_path in hint_paths:
+        hint = _normalized_path_fragment(hint_path)
+        if not hint:
+            continue
+        if "/" in hint:
+            if lower_path == hint or lower_path.endswith("/" + hint):
+                score += 1200
+            elif hint in lower_path:
+                score += 700
+            else:
+                continue
+        elif basename == hint:
+            score += 700
+        elif hint in basename:
+            score += 500
+        else:
+            continue
+        _append_unique(matched, hint)
+    return score, matched
+
+
+def _specific_hint_basename_score(
+    file_name: str,
+    hint_path_terms: list[str],
+) -> tuple[int, list[str]]:
+    basename = _normalized_path_fragment(file_name).rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    matched: list[str] = []
+    for term in hint_path_terms:
+        normalized = _normalized_path_fragment(term)
+        if (
+            len(normalized) < 6
+            or "/" in normalized
+            or normalized in LOCATE_PATH_TERM_LOW_SIGNAL_TERMS
+        ):
+            continue
+        if normalized == basename:
+            _append_unique(matched, normalized)
+    return (3500 if matched else 0), matched
 
 
 def _append_unique(items: list[str], value: str) -> None:
@@ -689,9 +946,31 @@ def _is_negative_diagnostic_assertion_line(line: str) -> bool:
 
 def _diagnostic_phrase_bonus(line: str, matched_terms: set[str]) -> int:
     lower = line.lower()
-    if "no number is assigned" in lower or "number is not assigned" in lower:
-        return 220
+    if len(matched_terms) >= 3 and any(token in lower for token in ("%s", "{}", "{0}", "{name}")):
+        return 80
+    if len(matched_terms) >= 3 and re.search(r"['\"][^'\"]{12,}['\"]", line):
+        return 40
     return 0
+
+
+def _line_overlaps_diagnostic_phrase(line: str, diagnostic_issue_phrases: list[str]) -> bool:
+    line_terms = {
+        term
+        for term in _query_terms(line)
+        if term not in QUERY_STOPWORDS and term not in LOCATE_LOW_SIGNAL_TERMS
+    }
+    if not line_terms:
+        return False
+    for phrase in diagnostic_issue_phrases:
+        phrase_terms = {
+            term
+            for term in _query_terms(phrase)
+            if term not in QUERY_STOPWORDS and term not in LOCATE_LOW_SIGNAL_TERMS
+        }
+        overlap = len(line_terms & phrase_terms)
+        if overlap >= 3 or (overlap >= 2 and overlap * 2 >= len(phrase_terms)):
+            return True
+    return False
 
 
 def _diagnostic_precedent_hits(
@@ -700,19 +979,25 @@ def _diagnostic_precedent_hits(
     *,
     exclude_lines: set[int],
 ) -> list[tuple[int, str]]:
-    if not any(term in {"ref", "xref", "numref", "reference", "caption", "title"} for term in issue_terms):
+    precedent_terms = {
+        term
+        for term in issue_terms
+        if len(term) >= 4 and term not in LOCATE_LOW_SIGNAL_TERMS and term not in QUERY_STOPWORDS
+    }
+    if not precedent_terms:
         return []
-
     hits: list[tuple[int, str]] = []
     for lineno, line in enumerate(content.splitlines(), start=1):
         if lineno in exclude_lines:
             continue
         lower = line.lower()
-        if (
-            "cross reference" in lower
-            and ("failed to" in lower or "not found" in lower)
-            and ("__(" in line or "logger.warning" in line or re.search(r"\bmsg\s*=", line))
+        if not (
+            _is_diagnostic_emitter_line(line)
+            or "__(" in line
+            or re.search(r"\bmsg\s*=", line)
         ):
+            continue
+        if any(term in lower for term in precedent_terms):
             hits.append((lineno, "same-file diagnostic precedent: " + _snippet(line)))
             if len(hits) >= 2:
                 break
@@ -725,7 +1010,7 @@ def _is_low_value_path(file_name: str) -> bool:
 
 
 def _is_test_path(file_name: str) -> bool:
-    lower = file_name.lower()
+    lower = "/" + file_name.lower().lstrip("/")
     return any(part in lower for part in ("/tests/", "/test/", "unittest_", "_test."))
 
 
@@ -735,8 +1020,20 @@ def _is_test_fixture_config_path(file_name: str) -> bool:
     return "/tests/roots/" in lower or basename in {"conf.py", "conftest.py"}
 
 
+def _is_support_example_path(file_name: str) -> bool:
+    lower = file_name.lower()
+    return any(part in lower for part in ("/examples/", "/example/", "/benchmarks/", "/benchmark/"))
+
+
 def _query_wants_tests(terms: list[str]) -> bool:
     return any(term in {"test", "tests", "unittest", "pytest", "regression"} for term in terms)
+
+
+def _query_wants_support_examples(terms: list[str]) -> bool:
+    return any(
+        term in {"example", "examples", "demo", "tutorial", "benchmark", "benchmarks"}
+        for term in terms
+    )
 
 
 def _enclosing_symbol(skeleton: CodeSkeleton, line: int) -> str:
@@ -889,7 +1186,7 @@ def search_code(query: str, files: List[Tuple[str, str]]) -> str:
     if diagnostic_terms:
         out.append(
             "Diagnostic search note: prioritize emitter/assertion lines; treat "
-            "builder/path-only matches as context unless the emitter patch fails."
+            "path-only matches as context unless the emitter patch fails."
         )
     for hit in hits:
         out.append("")
@@ -943,6 +1240,100 @@ def _match_terms(text: str, terms: list[str]) -> list[str]:
     return [term for term in terms if term in lower]
 
 
+def _match_symbol_hint_terms(symbol_name: str, terms: list[str]) -> list[str]:
+    lower = symbol_name.lower()
+    symbol_parts = set(re.findall(r"[a-z0-9_]+", lower))
+    matches: list[str] = []
+    for term in terms:
+        if len(term) <= 2 or "." in term or "_" in term:
+            if term == lower or term in symbol_parts or lower.endswith("." + term):
+                matches.append(term)
+        elif term in lower:
+            matches.append(term)
+    return matches
+
+
+def _symbol_hint_bonus(term: str) -> int:
+    if _is_low_signal_symbol_hint(term):
+        return 20
+    return 180
+
+
+def _is_low_signal_symbol_hint(term: str) -> bool:
+    if term in LOCATE_SYMBOL_HINT_LOW_SIGNAL_TERMS:
+        return True
+    return (
+        term.startswith(("get_", "set_"))
+        and (term.endswith("_config") or term.endswith("_option"))
+    ) or term.endswith("_context")
+
+
+OPERATION_QUERY_PREFIXES = (
+    "aggregat",
+    "collaps",
+    "combin",
+    "dedup",
+    "fold",
+    "merge",
+    "optim",
+    "squash",
+)
+OPERATION_SYMBOL_TERMS = {
+    "aggregate",
+    "collapse",
+    "coalesce",
+    "combine",
+    "dedupe",
+    "deduplicate",
+    "fold",
+    "merge",
+    "optimize",
+    "reduce",
+    "squash",
+}
+
+
+def _query_implies_operation_family(terms: list[str]) -> bool:
+    return any(
+        term.startswith(OPERATION_QUERY_PREFIXES)
+        for term in terms
+    )
+
+
+def _operation_family_symbol_terms(symbol_name: str) -> list[str]:
+    lower = symbol_name.lower()
+    parts = set(re.findall(r"[a-z0-9]+", lower.replace("_", " ")))
+    matches = [
+        term
+        for term in OPERATION_SYMBOL_TERMS
+        if term in parts or lower.endswith(term) or f"_{term}_" in lower
+    ]
+    return matches
+
+
+def _locate_term_weights(files: list[CodeLocateFile], terms: list[str]) -> dict[str, float]:
+    terms = list(dict.fromkeys(term for term in terms if term))
+    if not terms or len(files) <= 1:
+        return {term: 1.0 for term in terms}
+
+    dfs = {term: 0 for term in terms}
+    for file in files:
+        haystack = (file.file_name + "\n" + file.content).lower()
+        for term in terms:
+            if term in haystack:
+                dfs[term] += 1
+
+    total = len(files)
+    weights: dict[str, float] = {}
+    for term, df in dfs.items():
+        if df <= 0:
+            weights[term] = 1.0
+            continue
+        idf = math.log(1.0 + (total - df + 0.5) / (df + 0.5))
+        weights[term] = max(0.15, min(1.0, idf / 0.7))
+    return weights
+
+
 def _nearby_issue_terms_bonus(content: str, terms: list[str]) -> tuple[int, list[str]]:
     high_value_terms = [
         term
@@ -975,6 +1366,12 @@ def _score_locate_file(
     diagnostic_terms: list[str],
     diagnostic_issue_phrases: list[str],
     exact_issue_identifiers: list[str],
+    hint_paths: list[str],
+    hint_path_terms: list[str],
+    hint_symbols: list[str],
+    hint_imports: list[str],
+    hint_errors: list[str],
+    term_weights: dict[str, float],
     failing_test_path_terms: list[str],
     failing_test_name_terms: list[str],
     content: str,
@@ -996,6 +1393,48 @@ def _score_locate_file(
     if path_terms:
         hit.score += len(path_terms) * 4
         hit.why.append("path matches: " + ", ".join(path_terms[:5]))
+
+    explicit_path_score, explicit_hint_paths = _explicit_hint_path_score(
+        file_name,
+        hint_paths,
+    )
+    if explicit_hint_paths:
+        hit.score += explicit_path_score
+        hit.why.append("explicit hint path: " + ", ".join(explicit_hint_paths[:3]))
+
+    basename_hint_score, basename_hint_terms = _specific_hint_basename_score(
+        file_name,
+        hint_path_terms,
+    )
+    if basename_hint_terms:
+        hit.score += basename_hint_score
+        hit.why.append("specific hint basename: " + ", ".join(basename_hint_terms[:3]))
+
+    specific_hint_paths = [
+        term for term in hint_paths if "/" in term or "." in term
+    ]
+    hint_path_score, matched_hint_paths = _path_term_score(
+        file_name,
+        specific_hint_paths,
+        path_weight=80,
+        basename_weight=700,
+        term_weights=term_weights,
+    )
+    specific_hint_path_terms = [
+        term for term in hint_path_terms if term not in LOCATE_PATH_TERM_LOW_SIGNAL_TERMS
+    ]
+    hint_path_term_score, matched_hint_path_terms = _path_term_score(
+        file_name,
+        specific_hint_path_terms,
+        path_weight=40,
+        basename_weight=120,
+        term_weights=term_weights,
+    )
+    hint_path_score += hint_path_term_score
+    matched_hint_paths.extend(term for term in matched_hint_path_terms if term not in matched_hint_paths)
+    if matched_hint_paths:
+        hit.score += hint_path_score
+        hit.why.append("hint path matches: " + ", ".join(matched_hint_paths[:5]))
 
     if not is_test:
         impl_path_terms = [
@@ -1024,15 +1463,31 @@ def _score_locate_file(
 
     if skeleton is not None:
         hit.imports = skeleton.imports[:CODE_LOCATE_IMPORT_LIMIT]
+        wants_operation_family = _query_implies_operation_family(issue_terms)
+        matched_imports = [
+            import_name
+            for import_name in skeleton.imports
+            if _match_terms(import_name, hint_imports)
+        ][:3]
+        if matched_imports:
+            import_terms = {
+                term
+                for import_name in matched_imports
+                for term in _match_terms(import_name, hint_imports)
+            }
+            import_weight = max((term_weights.get(term, 1.0) for term in import_terms), default=1.0)
+            hit.score += int(round((120 + len(matched_imports) * 40) * import_weight))
+            hit.why.append("hint imports: " + ", ".join(matched_imports))
         for name, start, end in _iter_symbols(skeleton):
             symbol_terms = _match_terms(name, issue_terms)
             exact_symbol_terms = _match_terms(name, exact_issue_identifiers)
+            hint_symbol_terms = _match_symbol_hint_terms(name, hint_symbols)
             symbol_hint_terms = []
             if not is_test:
                 symbol_hint_terms = _match_terms(name, failing_test_name_terms)
             if not symbol_terms and is_test:
                 symbol_terms = _match_terms(name, failing_test_name_terms)
-            if symbol_terms or exact_symbol_terms or symbol_hint_terms:
+            if symbol_terms or exact_symbol_terms or symbol_hint_terms or hint_symbol_terms:
                 span = f"{name} L{start}-{end}" if start and end else name
                 _append_unique(hit.symbols, span)
                 new_symbol_terms = set(symbol_terms) - scored_symbol_terms
@@ -1045,10 +1500,37 @@ def _score_locate_file(
                 if new_symbol_terms or new_exact_symbol_terms or new_symbol_hint_terms:
                     score = 12 + len(new_symbol_terms) * 3 + len(new_symbol_hint_terms) * 12
                     score += len(new_exact_symbol_terms) * CODE_LOCATE_EXACT_IDENTIFIER_SCORE
+                if hint_symbol_terms:
+                    new_hint_symbol_terms = set(hint_symbol_terms) - scored_symbol_hint_terms
+                    if new_hint_symbol_terms:
+                        hint_weight = max(
+                            term_weights.get(term, 1.0) for term in new_hint_symbol_terms
+                        )
+                        score += int(
+                            round((80 + len(new_hint_symbol_terms) * 20) * hint_weight)
+                        )
+                        score += sum(_symbol_hint_bonus(term) for term in new_hint_symbol_terms)
+                    scored_symbol_hint_terms.update(new_hint_symbol_terms)
+                    reason = "hint symbols: " + ", ".join(hint_symbol_terms[:3])
+                    if reason not in hit.why:
+                        hit.why.append(reason)
                 hit.score += score
                 if score and start and end:
                     current = symbol_scores.get(name)
                     new_score = score + (current.score if current else 0)
+                    symbol_scores[name] = _CodeFocusSymbol(new_score, name, start, end)
+            operation_terms = (
+                _operation_family_symbol_terms(name) if wants_operation_family else []
+            )
+            if operation_terms:
+                hit.score += 420
+                _append_unique(
+                    hit.why,
+                    "operation-family symbol: " + ", ".join(operation_terms[:3]),
+                )
+                if start and end:
+                    current = symbol_scores.get(name)
+                    new_score = 420 + (current.score if current else 0)
                     symbol_scores[name] = _CodeFocusSymbol(new_score, name, start, end)
 
     content_term_names: set[str] = set()
@@ -1068,7 +1550,8 @@ def _score_locate_file(
         matched = _match_terms(line, all_terms)
         exact_matched = _match_terms(line, exact_issue_identifiers)
         diagnostic_matched = set(_match_terms(line, diagnostic_terms))
-        if not matched and not exact_matched and not diagnostic_matched:
+        hint_error_matched = set(_match_terms(line, hint_errors))
+        if not matched and not exact_matched and not diagnostic_matched and not hint_error_matched:
             continue
         unique = set(matched)
         content_term_names.update(unique)
@@ -1085,16 +1568,20 @@ def _score_locate_file(
         if exact_matched:
             exact_content_terms.update(exact_matched)
             line_score += len(set(exact_matched)) * CODE_LOCATE_EXACT_IDENTIFIER_SCORE
+        if hint_error_matched:
+            diagnostic_signal_terms.update(hint_error_matched)
+            line_score += 120 + len(hint_error_matched) * 20
         action_bonus = _actionable_code_bonus(line)
         if line_score or action_bonus >= 16:
             line_score += action_bonus
 
         if diagnostic_matched:
             phrase_bonus = _diagnostic_phrase_bonus(line, diagnostic_matched)
-            if _is_diagnostic_emitter_line(line) and (
-                phrase_bonus or len(diagnostic_matched) >= 3
+            phrase_overlap = _line_overlaps_diagnostic_phrase(line, diagnostic_issue_phrases)
+            if not is_test and _is_diagnostic_emitter_line(line) and (
+                phrase_bonus or phrase_overlap or len(diagnostic_matched) >= 3
             ):
-                line_score += 80 + phrase_bonus + len(diagnostic_matched) * 12
+                line_score += 80 + phrase_bonus + (40 if phrase_overlap else 0) + len(diagnostic_matched) * 12
                 diagnostic_signal_terms.update(diagnostic_matched)
                 has_diagnostic_emitter = True
                 diagnostic_line_hits.append((line_score, lineno, _snippet(line)))
@@ -1102,9 +1589,9 @@ def _score_locate_file(
                 is_test
                 and _is_diagnostic_assertion_line(line)
                 and not _is_negative_diagnostic_assertion_line(line)
-                and (phrase_bonus or len(diagnostic_matched) >= 3)
+                and (phrase_bonus or phrase_overlap or len(diagnostic_matched) >= 3)
             ):
-                line_score += 70 + phrase_bonus + len(diagnostic_matched) * 10
+                line_score += 70 + phrase_bonus + (40 if phrase_overlap else 0) + len(diagnostic_matched) * 10
                 diagnostic_signal_terms.update(diagnostic_matched)
                 has_diagnostic_assertion = True
                 diagnostic_line_hits.append((line_score, lineno, _snippet(line)))
@@ -1114,6 +1601,12 @@ def _score_locate_file(
                 ):
                     line_score += 120
                     has_diagnostic_wording_delta = True
+            elif (
+                is_test
+                and _is_diagnostic_assertion_line(line)
+                and _is_negative_diagnostic_assertion_line(line)
+            ):
+                line_score -= 60
 
         line_hits.append((line_score, lineno, _snippet(line)))
         content_score += line_score
@@ -1294,7 +1787,8 @@ def _format_verification_section(
     if not python_edit_paths:
         python_edit_paths = [_repo_relative_path(hit.file_name) for hit in python_edit_hits[:1]]
     if python_edit_paths:
-        lines.append("- static: python3 -m py_compile " + " ".join(python_edit_paths))
+        paths = " ".join(shlex.quote(path) for path in python_edit_paths)
+        lines.append("- static: python3 -m py_compile " + paths)
 
     python_test_paths = [
         _repo_relative_path(hit.file_name)
@@ -1302,7 +1796,8 @@ def _format_verification_section(
         if hit.file_name.lower().endswith(".py")
     ][:1]
     if python_test_paths:
-        lines.append("- narrow tests: python3 -m pytest " + " ".join(python_test_paths))
+        paths = " ".join(shlex.quote(path) for path in python_test_paths)
+        lines.append("- narrow tests: python3 -m pytest " + paths)
 
     lines.append("- " + CODE_LOCATE_SETUP_NOTE)
     return lines
@@ -1437,10 +1932,11 @@ def _verification_entries(
     if python_edit_hit is not None:
         target = _verification_target_for_hit(python_edit_hit, file_by_name)
         rel_path = target.get("relative_path") or target.get("path")
+        quoted_path = shlex.quote(rel_path) if rel_path else ""
         entries.append(
             {
                 "kind": "static",
-                "command": f"python3 -m py_compile {rel_path}",
+                "command": f"python3 -m py_compile {quoted_path}",
                 "cwd": source_root or None,
                 "targets": [target],
                 "reason": "top Python edit candidate",
@@ -1459,10 +1955,11 @@ def _verification_entries(
     if python_test_hit is not None:
         target = _verification_target_for_hit(python_test_hit, file_by_name)
         rel_path = target.get("relative_path") or target.get("path")
+        quoted_path = shlex.quote(rel_path) if rel_path else ""
         entries.append(
             {
                 "kind": "narrow_tests",
-                "command": f"python3 -m pytest {rel_path}",
+                "command": f"python3 -m pytest {quoted_path}",
                 "cwd": source_root or None,
                 "targets": [target],
                 "reason": "top related behavior reference",
@@ -1494,6 +1991,15 @@ def _hit_has_diagnostic_wording_delta(hit: _CodeLocateHit) -> bool:
 
 def _hit_is_diagnostic_emitter(hit: _CodeLocateHit) -> bool:
     return any("diagnostic emitter line matches issue" in reason for reason in hit.why)
+
+
+def _hit_has_diagnostic_guidance_signal(hit: _CodeLocateHit) -> bool:
+    return any(
+        "diagnostic emitter line matches issue" in reason
+        or "positive diagnostic assertion" in reason
+        or "asserted diagnostic wording differs from issue" in reason
+        for reason in hit.why
+    )
 
 
 def _candidate_location_label(candidate: CodeLocateCandidate) -> str:
@@ -1543,13 +2049,12 @@ def _summary_text(result: CodeLocateResult) -> str:
             parts.append("suggested verification: " + immediate["command"])
         parts.append(
             "positive warning assertion means preserve the diagnostic first; "
-            "borrow any same-file diagnostic precedent prefix/style shown in "
-            "snippets, but keep the emitter's original reason semantics; "
+            "use any same-file diagnostic precedent shown in snippets as "
+            "style evidence, but keep the emitter's original semantics; "
             "report-only terms are context; apply that first "
             "patch and run its immediate static check before any additional code discovery; "
-            "if that static check passes, stop instead of inspecting visible tests "
-            "or implementation logic for extra confidence; "
-            "continue broader discovery only if that immediate path fails; do not "
+            "run any listed narrow verification after the static check; "
+            "continue broader discovery only if that immediate verification fails; do not "
             "use changelog, web, or git history"
         )
         return "; ".join(parts) + "."
@@ -1573,6 +2078,11 @@ def format_locate_json_text(result: CodeLocateResult) -> str:
 
 def format_locate_text(result: CodeLocateResult) -> str:
     sections: list[str] = []
+    sections.append(CODE_LOCATE_CONTRACT)
+    sections.append(
+        "If pytest fails before collection or dependency imports, treat it as setup and do not broaden code search."
+    )
+    sections.append("")
     sections.append("Likely edit locations:")
     if not result.edit_candidates:
         sections.append("- no ranked candidates")
@@ -1696,6 +2206,8 @@ def locate_code_structured(
     files: list[CodeLocateFile],
     failing_tests: list[str] | None = None,
     *,
+    terms: list[str] | None = None,
+    hints: CodeLocateHints | None = None,
     max_edit: int = CODE_LOCATE_EDIT_LIMIT,
     max_references: int = CODE_LOCATE_REFERENCE_LIMIT,
     debug: bool = False,
@@ -1707,7 +2219,12 @@ def locate_code_structured(
         return CodeLocateResult(
             schema_version="code-locate/v1",
             source={"type": "unknown", "root": source_root or ""},
-            query={"text": query, "failing_tests": failing_tests or []},
+            query={
+                "text": query,
+                "terms": [],
+                "hints": asdict(CodeLocateHints()),
+                "failing_tests": failing_tests or [],
+            },
             edit_candidates=[],
             behavior_references=[],
             verification=[],
@@ -1717,10 +2234,29 @@ def locate_code_structured(
 
     source_type = files[0].location_type if files else "unknown"
     root = source_root or ""
-    issue_terms = _locate_issue_terms(query)
+    locate_hints = _normalize_locate_hints(hints)
+    structured_terms = _bounded_strings(terms, 30)
+    issue_terms = list(
+        dict.fromkeys(_locate_issue_terms(query) + _lower_bounded_strings(structured_terms, 30))
+    )
     diagnostic_terms = _diagnostic_issue_terms(query)
     diagnostic_issue_phrases = _diagnostic_issue_phrases(query)
     exact_issue_identifiers = _exact_issue_identifiers(query)
+    hint_paths = _lower_bounded_strings(locate_hints.paths, 10)
+    hint_path_terms = _lower_bounded_strings(locate_hints.path_terms, 20)
+    hint_symbols = _lower_bounded_strings(locate_hints.symbols, 20)
+    hint_imports = _lower_bounded_strings(locate_hints.imports, 10)
+    hint_errors = _lower_bounded_strings(locate_hints.errors, 5)
+    term_weights = _locate_term_weights(
+        files,
+        issue_terms
+        + exact_issue_identifiers
+        + hint_paths
+        + hint_path_terms
+        + hint_symbols
+        + hint_imports
+        + hint_errors,
+    )
     failing_test_path_terms = _failing_test_path_terms(failing_tests)
     failing_test_name_terms = _failing_test_name_terms(failing_tests)
     hits: list[_CodeLocateHit] = []
@@ -1731,6 +2267,12 @@ def locate_code_structured(
             diagnostic_terms,
             diagnostic_issue_phrases,
             exact_issue_identifiers,
+            hint_paths,
+            hint_path_terms,
+            hint_symbols,
+            hint_imports,
+            hint_errors,
+            term_weights,
             failing_test_path_terms,
             failing_test_name_terms,
             file.content,
@@ -1740,7 +2282,30 @@ def locate_code_structured(
             hits.append(hit)
 
     hits.sort(key=lambda item: (-item.score, item.file_name))
-    edit_hits = [hit for hit in hits if not _is_test_path(hit.file_name)][:max_edit]
+    reference_stems = {
+        stem
+        for stem in (
+            _test_target_stem(hit.file_name)
+            for hit in sorted(
+                [hit for hit in hits if _is_test_path(hit.file_name)],
+                key=lambda item: (-item.score, item.file_name),
+            )[:max_references]
+        )
+        if stem
+    }
+    if reference_stems:
+        for hit in hits:
+            if not _is_test_path(hit.file_name) and _implementation_stem(hit.file_name) in reference_stems:
+                hit.score += 80
+                hit.why.append("implementation matched top behavior reference")
+        hits.sort(key=lambda item: (-item.score, item.file_name))
+    wants_support_examples = _query_wants_support_examples(issue_terms)
+    edit_hits = [
+        hit
+        for hit in hits
+        if not _is_test_path(hit.file_name)
+        and (wants_support_examples or not _is_support_example_path(hit.file_name))
+    ][:max_edit]
     edit_stems = {_implementation_stem(hit.file_name) for hit in edit_hits[:1]}
     edit_stems.discard("")
     for hit in hits:
@@ -1752,11 +2317,19 @@ def locate_code_structured(
         [hit for hit in hits if _is_test_path(hit.file_name)],
         key=lambda item: (-item.score, item.file_name),
     )[:max_references]
+    use_diagnostic_guidance = bool(diagnostic_terms) and any(
+        _hit_has_diagnostic_guidance_signal(hit)
+        for hit in edit_hits[:1] + reference_hits[:1]
+    )
     edit_next_action = (
-        CODE_LOCATE_DIAGNOSTIC_NEXT_ACTION if diagnostic_terms else CODE_LOCATE_EDIT_NEXT_ACTION
+        CODE_LOCATE_DIAGNOSTIC_NEXT_ACTION
+        if use_diagnostic_guidance
+        else CODE_LOCATE_EDIT_NEXT_ACTION
     )
     reference_next_action = (
-        CODE_LOCATE_DIAGNOSTIC_NEXT_ACTION if diagnostic_terms else CODE_LOCATE_REFERENCE_NEXT_ACTION
+        CODE_LOCATE_DIAGNOSTIC_NEXT_ACTION
+        if use_diagnostic_guidance
+        else CODE_LOCATE_REFERENCE_NEXT_ACTION
     )
     if any(_hit_has_diagnostic_wording_delta(hit) for hit in reference_hits):
         diagnostic_edit_hits = [hit for hit in edit_hits if _hit_is_diagnostic_emitter(hit)]
@@ -1798,6 +2371,8 @@ def locate_code_structured(
     if debug:
         debug_payload = {
             "query_terms": issue_terms,
+            "terms": structured_terms,
+            "hints": asdict(locate_hints),
             "diagnostic_terms": diagnostic_terms,
             "exact_query_identifiers": exact_issue_identifiers,
             "ranking_signals": [
@@ -1819,7 +2394,12 @@ def locate_code_structured(
     result = CodeLocateResult(
         schema_version="code-locate/v1",
         source={"type": source_type, "root": root},
-        query={"text": query, "failing_tests": failing_tests or []},
+        query={
+            "text": query,
+            "terms": structured_terms,
+            "hints": asdict(locate_hints),
+            "failing_tests": failing_tests or [],
+        },
         edit_candidates=edit_candidates,
         behavior_references=behavior_references,
         verification=verification,

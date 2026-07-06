@@ -12,12 +12,14 @@ const CODE_TOOL_ENDPOINTS = {
 
 function codeToolRequestOptions(
   kind,
-  { uri, source, query, failingTests, symbol, actorPeerId, abortSignal },
+  { uri, source, query, terms, hints, failingTests, symbol, actorPeerId, abortSignal },
 ) {
   const body = kind === "locate" ? { source } : { uri }
   if (kind === "search") body.query = query
   if (kind === "locate") {
     body.query = query
+    body.terms = terms ?? []
+    body.hints = hints ?? {}
     body.failing_tests = failingTests ?? []
     body.output_format = "json"
     body.debug = false
@@ -130,58 +132,13 @@ export function formatCodeLocateOutput(result, { uri } = {}) {
       if (!snippet) return null
       return `${candidateLabel(candidate)} offset=${snippet.line} limit=${limit}`
     }
-    const preferredDiagnosticMessage = (candidate) => {
-      const snippets = candidate?.snippets ?? []
-      const editText = snippets[0]?.text ?? ""
-      const messageText = snippets
-        .slice(1)
-        .map((snippet) => snippet.text)
-        .find((text) => text.includes("__("))
-      const messageMatch = messageText?.match(/__\((['"])(.*?)\1\)/)
-      if (!messageMatch) return null
-      if (
-        /no number is assigned/i.test(editText) &&
-        /Failed to create a cross reference/i.test(messageMatch[2])
-      ) {
-        return "Failed to create a cross reference. Any number is not assigned: %s"
-      }
-      return messageMatch[2]
-    }
-    const replacementCallSketch = (candidate) => {
-      const snippets = candidate?.snippets ?? []
-      const editText = snippets[0]?.text ?? ""
-      const message = preferredDiagnosticMessage(candidate)
-      const editMatch = editText.match(/logger\.warning\(__\((['"]).*?\1\),\s*(.*)$/)
-      if (!message || !editMatch) return null
-      const quote = editText.match(/__\((['"])/)?.[1] ?? "'"
-      const escapedMessage = message.replaceAll(quote, `\\${quote}`)
-      const args = editMatch[2]
-        .replace(/\).*$/, "")
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean)
-      const targetArg = args.at(-1) ?? "target"
-      return `logger.warning(__(${quote}${escapedMessage}${quote}), ${targetArg}, location=node)`
-    }
-    const diagnosticMessage = (candidate) => {
-      return preferredDiagnosticMessage(candidate)
-    }
-    const expectedWarningSketch = (candidate, message) => {
-      const text = candidate?.snippets?.[0]?.text ?? ""
-      const oldWarning = text.match(/WARNING:\s*([^'"]+)/)?.[1]?.trim()
-      if (!oldWarning || !message) return null
-      const target = oldWarning.split(":").at(-1)?.trim()
-      if (!target) return null
-      const newWarning = message.replace("%s", target)
-      return `production warning should change from "WARNING: ${oldWarning}" to "WARNING: ${newWarning}"`
-    }
     const symbolLabel = (symbol) => {
       if (!symbol?.range) return symbol?.name
       return `${symbol.name} L${symbol.range.start_line}-${symbol.range.end_line}`
     }
     const lines = []
-    const editCandidates = result.edit_candidates ?? []
-    const behaviorReferences = result.behavior_references ?? []
+    const editCandidates = (result.edit_candidates ?? []).slice(0, 3)
+    const behaviorReferences = (result.behavior_references ?? []).slice(0, 2)
     const runnable = (result.verification ?? []).filter((item) => item.command)
     const stagedVerification =
       runnable.find((item) => item.kind === "static") ??
@@ -193,10 +150,10 @@ export function formatCodeLocateOutput(result, { uri } = {}) {
     if (stagedCandidate) {
       const stagedAction = String(stagedCandidate.next_action).replace(/^PATCH FIRST:\s*/, "")
       lines.push("OpenViking staged action:")
-      lines.push("- Classification: diagnostic wording delta, not a numbering/builder regression.")
+      lines.push("- Classification: diagnostic wording or argument delta.")
       lines.push("- Completion criterion: patch the production diagnostic emitter and run the immediate static check.")
-      lines.push("- If that static check passes, final-answer immediately; do not run grep/read/glob/tests/codesearch for extra confidence.")
-      lines.push("- Forbidden first-pass edits: tests, assertions, fixtures, builders, and numbering logic.")
+      lines.push("- Keep the first pass limited to the listed edit target and behavior reference.")
+      lines.push("- Treat tests and assertions as behavior evidence unless the issue explicitly asks to update tests.")
       lines.push(`- Follow first: ${stagedAction}`)
       lines.push(`- Edit target: ${candidateLabel(stagedCandidate)}`)
       const editLines = snippetLines(stagedCandidate)
@@ -210,31 +167,19 @@ export function formatCodeLocateOutput(result, { uri } = {}) {
       }
       lines.push("- Do not read a larger function or helper window before the first patch.")
       lines.push(
-        "- Patch draft: replace the edit-line diagnostic wording in production code; borrow the cross-reference prefix/style if useful, but keep the current emitter's reason semantics; pass the unresolved target/label as the placeholder argument. Treat tests/assertions as read-only behavior evidence, not patch targets.",
+        "- Patch draft: update the production diagnostic wording, arguments, or guard indicated by the edit line; use nearby same-file diagnostics only as style evidence. Treat tests/assertions as behavior evidence, not patch targets.",
       )
-      const replacement = replacementCallSketch(stagedCandidate)
-      if (replacement) lines.push(`- Replacement call sketch: ${replacement}`)
-      const expectedWarning = expectedWarningSketch(
-        behaviorReferences[0],
-        diagnosticMessage(stagedCandidate),
-      )
-      if (expectedWarning) {
-        lines.push(`- Expected runtime warning sketch: ${expectedWarning}`)
-      }
       lines.push("- First patch contract: use the edit and message shape lines above to patch production code now.")
-      lines.push("- Do not edit tests, assertions, fixtures, builders, or numbering logic during this first patch.")
+      lines.push("- Do not edit tests or assertions during this first patch unless the issue explicitly asks for test changes.")
       lines.push(
-        "- If patch application fails, read the exact edit line and retry the same diagnostic patch; do not reinterpret that as a numbering/toc/builder failure.",
-      )
-      lines.push(
-        "- Do not decide between a bad warning and a missing guard before this first patch.",
+        "- If patch application fails, read the exact edit line and retry a minimal diagnostic patch before broadening.",
       )
       lines.push(
         "- If verification fails before test collection or during dependency imports, treat it as environment setup; do not broaden code search.",
       )
       lines.push("- After reading the listed edit target, edit and verify before extra read/grep/glob.")
-      lines.push("- If the immediate static check passes after this diagnostic patch, stop; do not inspect visible tests or implementation logic for extra confidence.")
-      lines.push("- Do not expand symbol ranges or inspect adjacent implementation until the same diagnostic patch applies and its immediate static check fails.")
+      lines.push("- If the immediate static check passes, run only the narrow verification suggested by the result when available.")
+      lines.push("- Do not expand symbol ranges or inspect adjacent implementation until the listed diagnostic path fails.")
       if (stagedVerification) {
         lines.push(
           `- Verify immediate path: ${
@@ -244,10 +189,16 @@ export function formatCodeLocateOutput(result, { uri } = {}) {
           }`,
         )
       }
-      lines.push("- Delay broad grep/read/codesearch until this patch and immediate static check path fails.")
+      lines.push("- Delay broad grep/read/codesearch until this patch and immediate verification path fails.")
       return lines.join("\n")
     }
     if (result.summary_text) lines.push(`Summary: ${result.summary_text}`)
+    lines.push(
+      "Contract: read the top edit candidate first and the top behavior reference only if needed. Patch before broader grep/read/codesearch.",
+    )
+    lines.push(
+      "If pytest fails before collection or dependency imports, treat it as setup and do not broaden code search.",
+    )
     lines.push("Top edit candidates:")
     if (!editCandidates.length) lines.push("- no ranked candidates")
     for (const candidate of editCandidates) {
@@ -318,13 +269,44 @@ export function createCodeTools({ config, projectDirectory } = {}) {
         "Use this before broad grep/read exploration when you have an issue statement, traceback, failing behavior, or code-location question. " +
         "Returns compact edit candidates, behavior references, reasons, local edit paths, and next actions without full source bodies. " +
         "If output contains `PATCH FIRST`, read only the listed target/reference, then edit and verify before broad grep/read/codesearch. " +
-        "Prefer this over repeated codesearch calls for SWE-bench-style bug fixing; use codesearch for follow-up narrow terms only.",
+        "Prefer this over repeated codesearch calls for repository bug fixing; use codesearch for follow-up narrow terms only.",
       args: {
         query: z
           .string()
           .describe(
             "Issue statement, bug report, failing behavior, traceback, error message, or code-location question.",
           ),
+        terms: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Optional 5-20 high-signal search terms. Preserve code identifiers; do not include generic words unless part of an exact message.",
+          ),
+        hints: z
+          .object({
+            paths: z
+              .array(z.string())
+              .optional()
+              .describe("Explicit file paths or filenames mentioned in the issue."),
+            path_terms: z
+              .array(z.string())
+              .optional()
+              .describe("Directory or module concepts implied by the issue, not guessed concrete paths."),
+            symbols: z
+              .array(z.string())
+              .optional()
+              .describe("Class, function, method, or variable names mentioned in the issue."),
+            imports: z
+              .array(z.string())
+              .optional()
+              .describe("Package or module names mentioned in the issue."),
+            errors: z
+              .array(z.string())
+              .optional()
+              .describe("Exact warning, error, exception, or traceback text."),
+          })
+          .optional()
+          .describe("Optional structured locate hints. Hints add ranking weight but are not hard filters."),
         failing_tests: z
           .array(z.string())
           .optional()
@@ -340,6 +322,8 @@ export function createCodeTools({ config, projectDirectory } = {}) {
                 path: projectDirectory,
               },
               query: args.query,
+              terms: args.terms,
+              hints: args.hints,
               failingTests: args.failing_tests,
               actorPeerId,
               abortSignal: context.abort,

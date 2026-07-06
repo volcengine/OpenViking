@@ -27,3 +27,17 @@ test("code tool descriptions restrict use to confirmed viking code repositories"
   assert.match(source, /chat\/session history/)
   assert.match(source, /local filesystem paths/)
 })
+
+test("codelocate exposes structured terms and hints", async () => {
+  const source = await readFile(codeToolsPath, "utf8")
+
+  assert.match(source, /body\.terms = terms \?\? \[\]/)
+  assert.match(source, /body\.hints = hints \?\? \{\}/)
+  assert.match(source, /terms: z\s*\n\s*\.array\(z\.string\(\)\)/)
+  assert.match(source, /hints: z\s*\n\s*\.object\(\{/)
+  assert.match(source, /paths: z/)
+  assert.match(source, /path_terms: z/)
+  assert.match(source, /symbols: z/)
+  assert.match(source, /imports: z/)
+  assert.match(source, /errors: z/)
+})
