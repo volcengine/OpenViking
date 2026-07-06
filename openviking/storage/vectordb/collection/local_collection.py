@@ -48,9 +48,6 @@ from openviking.storage.vectordb.utils.path_safety import (
     safe_join_name,
 )
 from openviking.storage.vectordb.utils.str_to_uint64 import str_to_uint64
-from openviking.storage.vectordb.vectorize.base import BaseVectorizer
-from openviking.storage.vectordb.vectorize.vectorizer import VectorizerAdapter
-from openviking.storage.vectordb.vectorize.vectorizer_factory import VectorizerFactory
 from openviking_cli.utils.logger import default_logger as logger
 
 # Use imported constants, no longer defined here
@@ -60,7 +57,7 @@ AUTO_ID_KEY = SpecialFields.AUTO_ID.value
 def get_or_create_local_collection(
     meta_data: Optional[Dict[str, Any]] = None,
     path: str = "",
-    vectorizer: Optional[BaseVectorizer] = None,
+    *,
     config: Optional[Dict[str, Any]] = None,
 ):
     """Create or retrieve a local Collection.
@@ -68,7 +65,6 @@ def get_or_create_local_collection(
     Args:
         meta_data: Collection metadata configuration
         path: Persistence path. If empty, creates an in-memory collection
-        vectorizer: Vectorizer for embedding generation
         config: Configuration parameters, optional settings include:
             - "ttl_cleanup_seconds": Interval (in seconds) for TTL expiration data cleanup
             - "index_maintenance_seconds": Interval (in seconds) for index maintenance tasks
@@ -102,30 +98,18 @@ def get_or_create_local_collection(
     collection: ICollection
     if not path:
         meta = create_collection_meta(path, meta_data)
-        vectorizer = (
-            VectorizerFactory.create(meta.vectorize)
-            if meta.vectorize and vectorizer is None
-            else vectorizer
-        )
         store_mgr = create_store_manager("local")
-        collection = VolatileCollection(
-            meta=meta, store=store_mgr, vectorizer=vectorizer, config=config
-        )
+        collection = VolatileCollection(meta=meta, store=store_mgr, config=config)
         return Collection(collection)
     else:
         collection_dir = str(resolve_storage_path(path))
         os.makedirs(collection_dir, exist_ok=True)
         meta_path = str(safe_join(collection_dir, "collection_meta.json"))
         meta = create_collection_meta(meta_path, meta_data)
-        vectorizer = (
-            VectorizerFactory.create(meta.vectorize)
-            if meta.vectorize and vectorizer is None
-            else vectorizer
-        )
         storage_path = str(safe_join(collection_dir, STORAGE_DIR_NAME))
         store_mgr = create_store_manager("local", storage_path)
         collection = PersistCollection(
-            path=collection_dir, meta=meta, store=store_mgr, vectorizer=vectorizer, config=config
+            path=collection_dir, meta=meta, store=store_mgr, config=config
         )
         return Collection(collection)
 
@@ -135,7 +119,6 @@ class LocalCollection(ICollection):
         self,
         meta: CollectionMeta,
         store_mgr: StoreManager,
-        vectorizer: Optional[BaseVectorizer] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
         self.indexes = ThreadSafeDictManager[IIndex]()
@@ -156,10 +139,6 @@ class LocalCollection(ICollection):
         self.data_processor = DataProcessor(
             self.meta.fields_dict, collection_name=self.meta.collection_name
         )
-        self.vectorizer_adapter = None
-        if meta.vectorize and vectorizer:
-            self.vectorizer_adapter = VectorizerAdapter(vectorizer, meta.vectorize)
-            self.meta.vector_dim = self.vectorizer_adapter.get_dim()
 
         self.ttl_cleanup_job_id: Optional[str] = None
         self.index_manage_job_id: Optional[str] = None
@@ -405,7 +384,7 @@ class LocalCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
     ) -> SearchResult:
-        """Search using multimodal data by generating vectors and calling search_by_vector.
+        """Local backend does not generate vectors from multimodal input.
 
         Args:
             index_name: Name of the index to search
@@ -420,18 +399,9 @@ class LocalCollection(ICollection):
         Returns:
             SearchResult: Search results
         """
-        if not self.vectorizer_adapter:
-            raise ValueError("vectorizer is not initialized")
-
-        # Currently mainly supports text vectorization
-        if not text and not image and not video:
-            raise ValueError("At least one of text, image, or video must be provided")
-
-        dense_vector, sparse_vector = self.vectorizer_adapter.vectorize_one(
-            text=text, image=image, video=video
-        )
-        return self.search_by_vector(
-            index_name, dense_vector, limit, offset, filters, sparse_vector, output_fields
+        raise NotImplementedError(
+            "LocalCollection.search_by_multimodal no longer performs automatic vectorization; "
+            "call search_by_vector with caller-provided vectors"
         )
 
     def search_by_random(
@@ -457,7 +427,7 @@ class LocalCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
     ) -> SearchResult:
-        """Search by keywords by generating vectors and calling search_by_vector.
+        """Local backend does not generate vectors from keywords.
 
         Args:
             index_name: Name of the index to search
@@ -471,26 +441,9 @@ class LocalCollection(ICollection):
         Returns:
             SearchResult: Search results
         """
-        if not self.vectorizer_adapter:
-            raise ValueError("vectorizer is not initialized")
-
-        if not keywords and not query:
-            raise ValueError("At least one of keywords or query must be provided")
-
-        # Construct query text
-        if query:
-            query_text = query
-        elif keywords:
-            # Join keyword list into a string
-            query_text = " ".join(keywords)
-        else:
-            raise ValueError("No valid query input provided")
-
-        # Call vectorization interface to generate vectors
-        dense_vector, sparse_vector = self.vectorizer_adapter.vectorize_one(text=query_text)
-
-        return self.search_by_vector(
-            index_name, dense_vector, limit, offset, filters, sparse_vector, output_fields
+        raise NotImplementedError(
+            "LocalCollection.search_by_keywords no longer performs automatic vectorization; "
+            "call search_by_vector with caller-provided vectors"
         )
 
     def search_by_scalar(
@@ -588,12 +541,6 @@ class LocalCollection(ICollection):
     def _write_data_list(self, data_list: List[Dict[str, Any]], ttl=0):
         result = UpsertDataResult()
 
-        dense_emb, sparse_emb = (
-            self.vectorizer_adapter.vectorize_raw_data(data_list)
-            if self.vectorizer_adapter
-            else ([], [])
-        )
-
         cands_list = [CandidateData() for _ in range(len(data_list))]
         pk = self.meta.primary_key
         vk = self.meta.vector_key
@@ -608,19 +555,12 @@ class LocalCollection(ICollection):
                 data[AUTO_ID_KEY] = label
 
             cands_list[i].label = label
-            if self.vectorizer_adapter:
-                if dense_emb:
-                    cands_list[i].vector = dense_emb[i]
-                if sparse_emb:
-                    cands_list[i].sparse_raw_terms = list(sparse_emb[i].keys())
-                    cands_list[i].sparse_values = list(sparse_emb[i].values())
-            else:
-                cands_list[i].vector = data.pop(vk, None)
-                if svk:
-                    sparse_dict = data.pop(svk, None)
-                    if sparse_dict and isinstance(sparse_dict, dict):
-                        cands_list[i].sparse_raw_terms = list(sparse_dict.keys())
-                        cands_list[i].sparse_values = list(sparse_dict.values())
+            cands_list[i].vector = data.pop(vk, None)
+            if svk:
+                sparse_dict = data.pop(svk, None)
+                if sparse_dict and isinstance(sparse_dict, dict):
+                    cands_list[i].sparse_raw_terms = list(sparse_dict.keys())
+                    cands_list[i].sparse_values = list(sparse_dict.values())
             cands_list[i].fields = safe_json_dumps(data, ensure_ascii=False)
             cands_list[i].expire_ns_ts = time.time_ns() + ttl * 1000000000 if ttl > 0 else 0
 
@@ -634,9 +574,8 @@ class LocalCollection(ICollection):
 
         self.indexes.iterate(upsert_to_index)
 
-        if not self.vectorizer_adapter:
-            for i, data in enumerate(data_list):
-                data[vk] = list(cands_list[i].vector) if cands_list[i].vector else []
+        for i, data in enumerate(data_list):
+            data[vk] = list(cands_list[i].vector) if cands_list[i].vector else []
 
         if pk != AUTO_ID_KEY:
             primary_keys = [data.get(pk) for data in data_list]
@@ -665,12 +604,11 @@ class LocalCollection(ICollection):
                 raw_data_list.append(None)
                 continue
             raw_data = json.loads(cand_data.fields)
-            if not self.vectorizer_adapter:
-                raw_data[vk] = list(cand_data.vector)
-                if svk and cand_data.sparse_raw_terms and cand_data.sparse_values:
-                    raw_data[svk] = dict(
-                        zip(cand_data.sparse_raw_terms, cand_data.sparse_values, strict=False)
-                    )
+            raw_data[vk] = list(cand_data.vector)
+            if svk and cand_data.sparse_raw_terms and cand_data.sparse_values:
+                raw_data[svk] = dict(
+                    zip(cand_data.sparse_raw_terms, cand_data.sparse_values, strict=False)
+                )
             raw_data = validation.fix_fields_data(raw_data, self.meta.fields_dict)
             raw_data_list.append(raw_data)
 
@@ -956,10 +894,9 @@ class VolatileCollection(LocalCollection):
         self,
         meta: CollectionMeta,
         store: StoreManager,
-        vectorizer: Optional[BaseVectorizer] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
-        super().__init__(meta, store, vectorizer, config)
+        super().__init__(meta, store, config=config)
         LocalCollection._register_scheduler_job(self)
 
     def _new_index(
@@ -987,14 +924,13 @@ class PersistCollection(LocalCollection):
         path: str,
         meta: CollectionMeta,
         store: StoreManager,
-        vectorizer: Optional[BaseVectorizer] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
         self.collection_dir = str(resolve_storage_path(path))
         os.makedirs(self.collection_dir, exist_ok=True)
         self.index_dir = str(safe_join(self.collection_dir, "index"))
         os.makedirs(self.index_dir, exist_ok=True)
-        super().__init__(meta, store, vectorizer, config)
+        super().__init__(meta, store, config=config)
         self._recover()
         LocalCollection._register_scheduler_job(self)  # TTL expiration data cleanup
 
