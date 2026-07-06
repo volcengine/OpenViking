@@ -31,4 +31,4 @@ _CASES = [
 
 @pytest.mark.parametrize("name,text,expected", _CASES, ids=[c[0] for c in _CASES])
 def test_has_substantive_content(name, text, expected):
-    assert has_substantive_content(text)[0] == expected
+    assert has_substantive_content(text) == expected

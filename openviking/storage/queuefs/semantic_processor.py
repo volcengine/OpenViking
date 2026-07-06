@@ -65,6 +65,7 @@ logger = get_logger(__name__)
 
 # CJK ranges: Unified Ideographs, Hiragana, Katakana, Hangul, CJK punctuation.
 _CJK_RE = re.compile("[　-〿぀-ゟ゠-ヿ一-鿿가-힯]")
+_CJK_WEIGHT = 2.5  # CJK chars count heavier: 1 char ≈ 1 word (dense CJK has no spaces)
 _FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---[ \t]*(?:\n|\Z)", re.DOTALL)  # leading block only; closes at EOF too
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
@@ -82,30 +83,28 @@ _EMPHASIS_RE = re.compile(r"(\*\*|\*|__|_|~~)")
 _PUNCT_ONLY_RE = re.compile(r"^[\W_\s]+$")
 
 
-def _weighted_len(residual: str, cjk_weight: float) -> float:
+def _weighted_len(residual: str) -> float:
     """CJK-weighted content length; whitespace excluded (dense CJK has no spaces)."""
     total = 0.0
     for ch in residual:
         if _CJK_RE.match(ch):
-            total += cjk_weight
+            total += _CJK_WEIGHT
         elif not ch.isspace():
             total += 1.0
     return total
 
 
-def has_substantive_content(
-    text: str, min_chars: int = 8, cjk_weight: float = 2.5
-) -> tuple[bool, int]:
-    """Return (is_substantive, weighted_residual_len).
+def has_substantive_content(text: str, min_chars: int = 8) -> bool:
+    """Return True if *text* has substantive content after stripping markdown.
 
     Strips markdown structure (frontmatter, HTML comments, headings, setext/HR,
     blockquote/list markers, table pipes, code fences, link/image markup,
     emphasis markers) with regex only — no AST. Keeps code body, table cell
     text, and link/image label text. Weighted length counts CJK chars heavier.
-    The residual length is returned for telemetry/logging. See issue #3028.
+    See issue #3028.
     """
     if not text:
-        return False, 0
+        return False
 
     # 1. Normalize line endings first (reporter is on Windows → CRLF expected).
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -151,10 +150,9 @@ def has_substantive_content(
 
     residual = " ".join(part for part in " ".join(kept).split() if part)
     if not residual or _PUNCT_ONLY_RE.match(residual):
-        return False, 0
+        return False
 
-    weighted = _weighted_len(residual, cjk_weight)
-    return weighted >= min_chars, int(weighted)
+    return _weighted_len(residual) >= min_chars
 
 
 # Directory placeholder markers, all shaped like reindex_executor's sentinels
@@ -1214,8 +1212,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_type = self._detect_file_type(file_name)
         if file_type != FILE_TYPE_CODE:
             min_chars = get_openviking_config().semantic.min_substantive_chars
-            is_substantive, _residual = has_substantive_content(full_content, min_chars=min_chars)
-            if not is_substantive:
+            if not has_substantive_content(full_content, min_chars=min_chars):
                 logger.info("Skipping VLM for non-substantive file: %s", file_path)
                 return result("", has_substantive=False)
 
