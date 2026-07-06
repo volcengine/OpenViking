@@ -41,6 +41,7 @@ The default composition runs left to right, joined by ` │ `. Segments are cond
 |               | `OV ⚠ slow`            | yellow | probe timed out (>1 s) — server may be alive but lagging                                                              |
 |               | `OV ✗ offline`         | red    | probe errored (refused, DNS fail, network down)                                                                       |
 |               | `OV ⚡ bypass`         | yellow | session matched `OPENVIKING_BYPASS_SESSION` or `*_PATTERNS`                                                           |
+| Model · ctx   | `Fable 5 · ctx 42%`    | dim / by usage | always, when CC's statusline payload carries `model` / `context_window`. Registering a custom statusLine replaces CC's native context indicator, so this reproduces it: `<70%` dim, `70–89%` yellow, `≥90%` red (native thresholds). Hide with `OPENVIKING_STATUSLINE_CTX=off`. Shows in bypass mode too — it describes the CC conversation, not OV |
 | Recall        | `↩ 6 mem (0.92) · 50ms` | dim    | last user prompt actually injected memories. `(0.92)` is the top similarity score among picked items; latency is the recall round-trip |
 | Capture       | `✎ 573/20k · 2 arch`   | dim    | tokens pending toward the next archive (sawtooth — resets on commit), `2 arch` = archives produced this session       |
 |               | `✎ committed · 2 arch` | dim    | the turn that just finished produced an archive                                                                       |
@@ -57,7 +58,9 @@ When a segment is **missing** but you'd expect it, the most common reasons are:
 - **`+N today`** — no archives committed yet today, or `daily-stats.json` is missing entirely.
 - **`↩` recall** — last prompt produced no usable memories (too-short query, score under threshold, or all results filtered out). The hook ran; it just had nothing worth showing.
 
-The whole line is hard-capped at 80 visible chars and trailing-truncated with `…` if it overflows.
+- **`ctx` percentage** — the CC build doesn't send `context_window` in the statusline payload (older versions), or `OPENVIKING_STATUSLINE_CTX=off` is set.
+
+The whole line is hard-capped at 100 visible chars and trailing-truncated with `…` if it overflows.
 
 ---
 

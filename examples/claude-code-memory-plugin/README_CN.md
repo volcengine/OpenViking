@@ -235,13 +235,15 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 示例：
 
 ```text
-OV ✓ │ ↩ 6 mem (0.92) · 50ms              本轮注入 6 条记忆，最高分 0.92
+OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms   注入 6 条记忆；模型 + 上下文占比
 OV ⚠ slow                                  探针超过 1s 预算（服务器可能在抽风）
 OV ✗ offline                               服务器不可达
-OV ⚡ bypass                                命中 OPENVIKING_BYPASS_SESSION*
+OV ⚡ bypass │ Fable 5 · ctx 42%            命中 OPENVIKING_BYPASS_SESSION*
 OV ✓ │ ✎ 573/20k · 2 arch                  待提交进度 + 本 session 已归档 2 次
 OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；今日累计归档 3 次
 ```
+
+`ctx` 百分比复刻 Claude Code 原生上下文指示器（自定义 statusLine 会替换掉原生那条），配色阈值与原生一致：`<70%` 灰、`70–89%` 黄、`≥90%` 红。不想显示可设 `OPENVIKING_STATUSLINE_CTX=off`。
 
 完整段位说明 + 个性化 recipe（隐藏段位、改色、与已有 statusline 组合、自定义段位），见 [`STATUSLINE.md`](./STATUSLINE.md)。
 

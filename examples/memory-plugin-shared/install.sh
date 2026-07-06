@@ -652,7 +652,7 @@ register_statusline() {
     [ "$INTERACTIVE" -eq 1 ] || return 0
     heading 'Statusline (optional)'
     info 'OpenViking can show a one-line server/recall status under the input box.'
-    info 'Sample: "OV ✓ │ ↩ 6 mem (0.92) · 50ms │ ✎ 573/20k · 2 arch │ +3 today"'
+    info 'Sample: "OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms │ ✎ 573/20k · 2 arch │ +3 today"'
     ask 'Enable OpenViking statusline? [y/N] '
     read_tty reply
     case "$reply" in

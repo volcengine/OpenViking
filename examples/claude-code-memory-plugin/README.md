@@ -235,13 +235,15 @@ The plugin renders a one-line status of OpenViking under your Claude Code input 
 Examples:
 
 ```text
-OV ✓ │ ↩ 6 mem (0.92) · 50ms              last turn injected 6 memories, top score 0.92
+OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms   6 memories injected; model + context usage
 OV ⚠ slow                                  probe missed the 1 s budget (server may be lagging)
 OV ✗ offline                               server unreachable
-OV ⚡ bypass                                OPENVIKING_BYPASS_SESSION* matched
+OV ⚡ bypass │ Fable 5 · ctx 42%            OPENVIKING_BYPASS_SESSION* matched
 OV ✓ │ ✎ 573/20k · 2 arch                  pending capture, two archives produced this session
 OV ✓ │ 🔗 resumed │ +3 today               session re-hydrated; 3 archives committed today
 ```
+
+The `ctx` percentage reproduces Claude Code's native context indicator (a custom statusLine replaces it), with the native color thresholds: `<70%` dim, `70–89%` yellow, `≥90%` red. Hide it with `OPENVIKING_STATUSLINE_CTX=off`.
 
 For the full segment glossary and personalization recipes (hide segments, recolor, compose with another statusline, add a custom segment), see [`STATUSLINE.md`](./STATUSLINE.md).
 
