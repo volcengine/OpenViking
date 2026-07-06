@@ -105,6 +105,9 @@ class RequestContext:
     # prevent a stolen access token from laundering itself into a long-lived
     # refresh-token chain.
     from_oauth: bool = False
+    # Raw API key from the request — used by Connector to call back into OV
+    # on behalf of the original user
+    api_key: Optional[str] = field(default=None, repr=False)
 
     @property
     def account_id(self) -> str:

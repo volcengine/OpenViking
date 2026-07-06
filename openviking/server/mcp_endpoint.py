@@ -44,7 +44,7 @@ from openviking.retrieve.type_quota_recall import (
     DEFAULT_QUOTAS,
     search_type_quota_recall,
 )
-from openviking.server.auth import resolve_actor_peer_headers, resolve_identity
+from openviking.server.auth import _extract_api_key, resolve_actor_peer_headers, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -150,11 +150,13 @@ class _IdentityASGIMiddleware:
             return await self.app(scope, receive, send)
 
         request = Request(scope)
+        x_api_key = request.headers.get("x-api-key")
+        authorization = request.headers.get("authorization")
         try:
             identity = await resolve_identity(
                 request,
-                x_api_key=request.headers.get("x-api-key"),
-                authorization=request.headers.get("authorization"),
+                x_api_key=x_api_key,
+                authorization=authorization,
                 x_openviking_account=request.headers.get("x-openviking-account"),
                 x_openviking_user=request.headers.get("x-openviking-user"),
             )
@@ -195,6 +197,7 @@ class _IdentityASGIMiddleware:
             actor_peer_id=actor_peer_id,
             legacy_agent_id=legacy_agent_id,
             from_oauth=identity.from_oauth,
+            api_key=_extract_api_key(x_api_key, authorization),
         )
         url_info = {
             "x_forwarded_proto": request.headers.get("x-forwarded-proto"),
@@ -531,6 +534,7 @@ async def add_resource(
     description: str = "",
     watch_interval: float = 0,
     to: str = "",
+    parent: str = "",
     args: Optional[dict[str, Any]] = None,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
@@ -552,6 +556,8 @@ async def add_resource(
             Only applies to remote-URL invocations.
         to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
             Leave empty to derive a URI from the source.
+        parent: Parent URI under viking://resources/ for remote imports. Mutually exclusive
+            with ``to``.
         args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
             or {"site": true} for whole-site ingestion.
     """
@@ -616,6 +622,7 @@ async def add_resource(
                 path=path,
                 ctx=ctx,
                 to=to or None,
+                parent=parent or None,
                 reason=description,
                 wait=False,
                 watch_interval=watch_interval,
@@ -625,15 +632,19 @@ async def add_resource(
         except Exception as exc:
             return f"Error adding resource: {exc}"
         root_uri = result.get("root_uri", "")
+        task_id = result.get("task_id", "")
         if watch_interval > 0:
             watch_suffix = f" (watch enabled, refresh every {watch_interval:g} minute(s))"
         else:
             watch_suffix = ""
-        message = (
-            f"Resource added: {root_uri}{watch_suffix}"
-            if root_uri
-            else f"Resource added (processing in background){watch_suffix}."
-        )
+        if root_uri:
+            message = f"Resource added: {root_uri}{watch_suffix}"
+        elif task_id:
+            message = (
+                f"Resource accepted (task_id: {task_id}; processing in background){watch_suffix}."
+            )
+        else:
+            message = f"Resource added (processing in background){watch_suffix}."
         # Detect-and-suggest: if this single page belongs to a site that exposes a
         # sitemap/RSS feed, hint at whole-site ingestion. Never auto-crawls; the
         # add above is already done, so a slow/failed probe has no functional impact.
