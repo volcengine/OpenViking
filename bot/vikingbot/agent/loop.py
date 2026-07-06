@@ -1598,7 +1598,11 @@ class AgentLoop:
         )
         await self.sessions.save(session)
 
-        return OutboundMessage(session_key=msg.session_key, content=final_content)
+        return OutboundMessage(
+            session_key=msg.session_key,
+            content=final_content,
+            metadata=dict(msg.metadata or {}),
+        )
 
     async def _consolidate_memory(self, session, archive_all: bool = False) -> None:
         """Consolidate old messages into MEMORY.md + HISTORY.md. Works on a cloned session."""

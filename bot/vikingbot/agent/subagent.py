@@ -127,7 +127,8 @@ class SubagentManager:
                 logger.warning(f"Subagent [{task_id}] failed to load experience memory: {e}")
 
             # Build messages with subagent-specific prompt
-            system_prompt = self._build_subagent_prompt(task)
+            prompt_workspace = await self._get_session_workspace(session_key)
+            system_prompt = self._build_subagent_prompt(task, workspace=prompt_workspace)
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": task_content},
@@ -241,14 +242,23 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         await self.bus.publish_inbound(msg)
         logger.debug(f"Subagent [{task_id}] announced result to {session_key}")
 
-    def _build_subagent_prompt(self, task: str) -> str:
+    async def _get_session_workspace(self, session_key: SessionKey) -> Path:
+        """Return the workspace path used by tools for this subagent session."""
+        if not self.sandbox_manager:
+            return self.workspace
+
+        await self.sandbox_manager.get_sandbox(session_key)
+        return self.sandbox_manager.get_workspace_path(session_key)
+
+    def _build_subagent_prompt(self, task: str, workspace: Path | None = None) -> str:
         """Build a focused system prompt for the subagent."""
         from datetime import datetime
         import time as _time
 
+        workspace = workspace or self.workspace
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         tz = _time.strftime("%Z") or "UTC"
-        skills_context = self._build_subagent_skills_context()
+        skills_context = self._build_subagent_skills_context(workspace)
 
         prompt = f"""# Subagent
 
@@ -275,20 +285,21 @@ You are a subagent spawned by the main agent to complete a specific task.
 - Access the main agent's conversation history
 
 ## Workspace
-Your workspace is at: {self.workspace}
-Skills are available at: {self.workspace}/skills/ (read SKILL.md files as needed)
+Your workspace is at: {workspace}
+Skills are available at: {workspace}/skills/ (read SKILL.md files as needed)
 
 When you have completed the task, provide a clear summary of your findings or actions."""
         if skills_context:
             prompt = f"{prompt}\n\n{skills_context}"
         return prompt
 
-    def _build_subagent_skills_context(self) -> str:
+    def _build_subagent_skills_context(self, workspace: Path | None = None) -> str:
         """Build the same local skills context format used by the main agent."""
         try:
             from vikingbot.agent.skills import SkillsLoader
 
-            skills = SkillsLoader(self.workspace)
+            workspace = workspace or self.workspace
+            skills = SkillsLoader(workspace)
             parts: list[str] = []
 
             always_skills = skills.get_always_skills()
@@ -305,7 +316,7 @@ When you have completed the task, provide a clear summary of your findings or ac
                     "skills/task_case_experience/SKILL.md",
                 ]
                 for skill_path in required_skill_candidates:
-                    if (self.workspace / skill_path).exists():
+                    if (workspace / skill_path).exists():
                         required_skill_note = (
                             "\nRequired skill: before taking any task action, you MUST read "
                             f"`{skill_path}` and apply its instructions.\n"

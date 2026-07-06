@@ -10,14 +10,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from vikingbot.agent.loop import AgentLoop  # noqa: E402
 from vikingbot.agent.subagent import SubagentManager  # noqa: E402
 from vikingbot.agent.tools.cron import CronTool  # noqa: E402
 from vikingbot.agent.tools.message import MessageTool  # noqa: E402
 from vikingbot.agent.tools.spawn import SpawnTool  # noqa: E402
-from vikingbot.bus.events import OutboundMessage  # noqa: E402
+from vikingbot.bus.events import InboundMessage, OutboundMessage  # noqa: E402
 from vikingbot.bus.queue import MessageBus  # noqa: E402
 from vikingbot.channels.feishu import FeishuChannel  # noqa: E402
-from vikingbot.config.schema import FeishuChannelConfig, SessionKey  # noqa: E402
+from vikingbot.config.schema import Config, FeishuChannelConfig, SessionKey  # noqa: E402
 from vikingbot.cron.service import CronService  # noqa: E402
 from vikingbot.cron.types import CronSchedule  # noqa: E402
 
@@ -90,6 +91,51 @@ async def test_subagent_announcement_preserves_channel_metadata(tmp_path):
     inbound = await bus.consume_inbound()
     assert inbound.metadata == metadata
     assert inbound.metadata is not metadata
+
+
+@pytest.mark.asyncio
+async def test_system_message_response_preserves_channel_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", lambda **kwargs: SimpleNamespace())
+
+    metadata = {"reply_to": "oc_chat", "chat_type": "group", "message_id": "om_old"}
+    session_key = SessionKey(type="feishu", channel_id="cli_app", chat_id="oc_chat")
+    config = Config(storage_workspace=str(tmp_path / "data"))
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=SimpleNamespace(get_default_model=lambda: "fake-model"),
+        workspace=tmp_path / "workspace",
+        model=config.agents.model,
+        temperature=config.agents.temperature,
+        config=config,
+    )
+
+    async def fake_build_prompt_history(*args, **kwargs):
+        return []
+
+    async def fake_build_messages(**kwargs):
+        return [{"role": "user", "content": kwargs["current_message"]}]
+
+    async def fake_run_agent_loop(**kwargs):
+        return "summary", None, [], {}, 1
+
+    loop._build_prompt_history = fake_build_prompt_history
+    loop.context = SimpleNamespace(build_messages=fake_build_messages)
+    loop._run_agent_loop = fake_run_agent_loop
+
+    outbound = await loop._process_system_message(
+        InboundMessage(
+            sender_id="subagent",
+            session_key=session_key,
+            content="subagent done",
+            metadata=metadata,
+        )
+    )
+
+    assert outbound.content == "summary"
+    assert outbound.metadata == metadata
+    assert outbound.metadata is not metadata
 
 
 @pytest.mark.asyncio

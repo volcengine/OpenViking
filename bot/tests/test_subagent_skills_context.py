@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from vikingbot.agent.subagent import SubagentManager  # noqa: E402
@@ -60,3 +62,63 @@ Read this only when needed.
     assert "<name>normal-skill</name>" in prompt
     assert "<description>Normal on-demand instructions</description>" in prompt
     assert "<location>skills/normal-skill/SKILL.md</location>" in prompt
+
+
+@pytest.mark.asyncio
+async def test_subagent_prompt_loads_skills_from_session_workspace(tmp_path):
+    source_workspace = tmp_path / "source"
+    session_workspace = tmp_path / "sandboxes" / "session"
+    _write_skill(
+        source_workspace,
+        "global-skill",
+        """---
+description: Global instructions
+always: true
+---
+# Global Skill
+
+Global-loaded instruction.
+""",
+    )
+    _write_skill(
+        session_workspace,
+        "session-skill",
+        """---
+description: Session instructions
+always: true
+---
+# Session Skill
+
+Session-loaded instruction.
+""",
+    )
+
+    class FakeSandboxManager:
+        def __init__(self):
+            self.created_for = []
+
+        async def get_sandbox(self, session_key):
+            self.created_for.append(session_key)
+            return SimpleNamespace()
+
+        def get_workspace_path(self, session_key):
+            return session_workspace
+
+    sandbox_manager = FakeSandboxManager()
+    manager = SubagentManager(
+        provider=SimpleNamespace(get_default_model=lambda: "fake-model"),
+        workspace=source_workspace,
+        bus=MessageBus(),
+        config=SimpleNamespace(),
+        sandbox_manager=sandbox_manager,
+    )
+    session_key = SimpleNamespace()
+
+    prompt_workspace = await manager._get_session_workspace(session_key)
+    prompt = manager._build_subagent_prompt("inspect local files", workspace=prompt_workspace)
+
+    assert sandbox_manager.created_for == [session_key]
+    assert f"Your workspace is at: {session_workspace}" in prompt
+    assert "### Skill: session-skill" in prompt
+    assert "Session-loaded instruction." in prompt
+    assert "Global-loaded instruction." not in prompt
