@@ -163,6 +163,79 @@ read_tty() { # read_tty <varname> [-s]
 }
 
 # ---------------------------------------------------------------------------
+# Single-select TUI menu (arrow keys + digit shortcuts; numbered fallback when
+# /dev/tty can't be drawn on; default choice when non-interactive)
+# ---------------------------------------------------------------------------
+
+TUI_MENU_CHOICE=0
+
+tui_menu() { # tui_menu <title> <default-index> <option...>  -> TUI_MENU_CHOICE
+  local title="$1" def="$2"
+  shift 2
+  local opts
+  opts=("$@")
+  local n=${#opts[@]} cursor="$def" key rest reply i lines=0
+  TUI_MENU_CHOICE="$def"
+  [ "$INTERACTIVE" -eq 1 ] || return 0
+  if [ ! -w /dev/tty ]; then
+    printf '%s%s%s\n' "$BOLD" "$title" "$RESET"
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      printf '  %d) %s\n' $((i + 1)) "${opts[$i]}"
+      i=$((i + 1))
+    done
+    ask "[1-$n, $(t 'default' '默认') $((def + 1))]: "
+    read_tty reply
+    case "$reply" in
+      ''|*[!0-9]*) ;;
+      *) [ "$reply" -ge 1 ] && [ "$reply" -le "$n" ] && TUI_MENU_CHOICE=$((reply - 1)) ;;
+    esac
+    return 0
+  fi
+  printf '%s%s%s\n' "$BOLD" "$title" "$RESET" >/dev/tty
+  printf '\033[?25l' >/dev/tty
+  trap 'printf "\033[?25h" >/dev/tty' EXIT
+  while :; do
+    [ "$lines" -gt 0 ] && printf '\033[%dA' "$lines" >/dev/tty
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      if [ "$i" -eq "$cursor" ]; then
+        printf '\r\033[K %s>%s (%s•%s) %s\n' "$CYAN" "$RESET" "$GREEN" "$RESET" "${opts[$i]}" >/dev/tty
+      else
+        printf '\r\033[K   ( ) %s\n' "${opts[$i]}" >/dev/tty
+      fi
+      i=$((i + 1))
+    done
+    printf '\r\033[K   %s%s%s\n' "$CYAN" "$(t '↑/↓ move · 1-9 jump · enter confirm' '↑/↓ 移动 · 数字直选 · 回车确认')" "$RESET" >/dev/tty
+    lines=$((n + 1))
+    IFS= read -rsn1 key <&3 || key=""
+    case "$key" in
+      $'\x1b')
+        rest=""
+        IFS= read -rsn2 -t 1 rest <&3 || rest=""
+        case "$rest" in
+          '[A') cursor=$(( (cursor + n - 1) % n )) ;;
+          '[B') cursor=$(( (cursor + 1) % n )) ;;
+        esac
+        ;;
+      k) cursor=$(( (cursor + n - 1) % n )) ;;
+      j) cursor=$(( (cursor + 1) % n )) ;;
+      [1-9])
+        if [ "$key" -le "$n" ]; then
+          cursor=$((key - 1))
+          break
+        fi
+        ;;
+      ''|$'\n'|$'\r') break ;;
+      q|Q) cursor="$def"; break ;;
+    esac
+  done
+  printf '\033[?25h' >/dev/tty
+  trap - EXIT
+  TUI_MENU_CHOICE="$cursor"
+}
+
+# ---------------------------------------------------------------------------
 # UI language
 # ---------------------------------------------------------------------------
 
@@ -174,23 +247,15 @@ detect_lang_default() {
 }
 
 select_language() {
-  local detected reply
+  local detected def
   detected="$(detect_lang_default)"
   if [ -n "$LANG_ARG" ]; then
     UI_LANG="$LANG_ARG"
   elif [ "$INTERACTIVE" -eq 1 ]; then
-    printf '%sLanguage / 语言:%s  1) English  2) 中文\n' "$BOLD" "$RESET"
-    if [ "$detected" = "zh" ]; then
-      ask '[1/2, default 2]: '
-    else
-      ask '[1/2, default 1]: '
-    fi
-    read_tty reply
-    case "$reply" in
-      1) UI_LANG="en" ;;
-      2) UI_LANG="zh" ;;
-      *) UI_LANG="$detected" ;;
-    esac
+    def=0
+    [ "$detected" = "zh" ] && def=1
+    tui_menu "Language / 语言" "$def" "English" "中文"
+    if [ "$TUI_MENU_CHOICE" -eq 1 ]; then UI_LANG="zh"; else UI_LANG="en"; fi
   else
     UI_LANG="$detected"
   fi
@@ -369,19 +434,13 @@ EOF
 # ---------------------------------------------------------------------------
 
 select_dist() {
-  local reply
   if [ -n "$DIST_ARG" ]; then
     DIST="$DIST_ARG"
   elif [ "$INTERACTIVE" -eq 1 ] && [ -z "$SOURCE_ARG" ] && [ -z "$CHECKOUT_DIR" ]; then
-    printf '%s%s%s\n' "$BOLD" "$(t 'Where should the plugins be downloaded from?' '插件从哪里下载？')" "$RESET"
-    printf '  1) GitHub    %s\n' "$(t '(default; supports remote updates)' '（默认；支持远程更新）')"
-    printf '  2) %s\n' "$(t 'Volcengine TOS mirror (use when GitHub is unreachable)' '火山引擎 TOS 镜像（无法访问 GitHub 时使用）')"
-    ask '[1/2, default 1]: '
-    read_tty reply
-    case "$reply" in
-      2) DIST="tos" ;;
-      *) DIST="github" ;;
-    esac
+    tui_menu "$(t 'Where should the plugins be downloaded from?' '插件从哪里下载？')" 0 \
+      "GitHub  $(t '(default; supports remote updates)' '（默认；支持远程更新）')" \
+      "$(t 'Volcengine TOS mirror (use when GitHub is unreachable)' '火山引擎 TOS 镜像（无法访问 GitHub 时使用）')"
+    if [ "$TUI_MENU_CHOICE" -eq 1 ]; then DIST="tos"; else DIST="github"; fi
   fi
   case "$DIST" in
     github|tos) ;;
@@ -394,16 +453,14 @@ select_dist() {
 # ---------------------------------------------------------------------------
 
 prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KEEP__)
-  local current_url="$1" current_key="$2" mode url_input reply
-  printf '%s%s%s\n' "$BOLD" "$(t 'Where do you connect to OpenViking?' '连接到哪个 OpenViking 服务？')"  "$RESET"
-  printf '  1) %s [http://127.0.0.1:1933]\n' "$(t 'Self-hosted / local' '自建 / 本地')"
-  printf '  2) %s [https://api.vikingdb.cn-beijing.volces.com/openviking]\n' "$(t 'Volcengine OpenViking Cloud' '火山引擎 OpenViking 云服务')"
-  printf '  3) %s [%s]\n' "$(t 'Custom URL / keep current' '自定义 URL / 保持当前')" "${current_url:-http://127.0.0.1:1933}"
-  ask '[1/2/3]: '
-  read_tty mode
-  case "$mode" in
-    1) WIZ_URL="http://127.0.0.1:1933" ;;
-    2) WIZ_URL="https://api.vikingdb.cn-beijing.volces.com/openviking" ;;
+  local current_url="$1" current_key="$2" url_input reply
+  tui_menu "$(t 'Where do you connect to OpenViking?' '连接到哪个 OpenViking 服务？')" 2 \
+    "$(t 'Self-hosted / local' '自建 / 本地')  [http://127.0.0.1:1933]" \
+    "$(t 'Volcengine OpenViking Cloud' '火山引擎 OpenViking 云服务')  [api.vikingdb.cn-beijing.volces.com]" \
+    "$(t 'Custom URL / keep current' '自定义 URL / 保持当前')  [${current_url:-http://127.0.0.1:1933}]"
+  case "$TUI_MENU_CHOICE" in
+    0) WIZ_URL="http://127.0.0.1:1933" ;;
+    1) WIZ_URL="https://api.vikingdb.cn-beijing.volces.com/openviking" ;;
     *)
       ask "$(t 'Server URL' '服务地址') [${current_url:-http://127.0.0.1:1933}]: "
       read_tty url_input
@@ -461,14 +518,13 @@ configure_ovcli() {
 
   if [ "$INTERACTIVE" -eq 1 ] && [ -z "$URL_ARG" ] && [ "$API_KEY_ARG" = "__OPENVIKING_UNSET__" ]; then
     if [ -n "$current_url" ] || [ -n "$current_key" ]; then
-      ask "$(t 'Keep current credentials? [Y/n] ' '沿用当前凭据？[Y/n] ')"
-      read_tty reply
-      case "$reply" in
-        n|N|no|No|NO)
-          prompt_connection "$current_url" "$current_key"
-          url="$WIZ_URL"; key="$WIZ_KEY"
-          ;;
-      esac
+      tui_menu "$(t 'Existing credentials found — what next?' '检测到已有凭据——如何处理？')" 0 \
+        "$(t 'Keep current credentials' '沿用当前凭据')" \
+        "$(t 'Reconfigure (server URL / API key)' '重新配置（服务地址 / API key）')"
+      if [ "$TUI_MENU_CHOICE" -eq 1 ]; then
+        prompt_connection "$current_url" "$current_key"
+        url="$WIZ_URL"; key="$WIZ_KEY"
+      fi
     else
       prompt_connection "" ""
       url="$WIZ_URL"; key="$WIZ_KEY"
@@ -807,12 +863,13 @@ register_statusline() {
     heading "$(t 'Statusline (optional)' 'Statusline 状态栏（可选）')"
     info "$(t 'OpenViking can show a one-line server/recall status under the input box.' 'OpenViking 可以在输入框下方显示一行服务/召回状态。')"
     info 'Sample: "OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms │ ✎ 573/20k · 2 arch │ +3 today"'
-    ask "$(t 'Enable OpenViking statusline? [y/N] ' '启用 OpenViking statusline？[y/N] ')"
-    read_tty reply
-    case "$reply" in
-      y|Y|yes|Yes|YES) ;;
-      *) info "$(t 'Skipped statusline registration. Re-run the installer to enable it later.' '跳过 statusline 注册，之后重跑安装脚本可启用。')"; return 0 ;;
-    esac
+    tui_menu "$(t 'Enable the OpenViking statusline?' '启用 OpenViking statusline？')" 1 \
+      "$(t 'Enable' '启用')" \
+      "$(t 'Skip' '跳过')"
+    if [ "$TUI_MENU_CHOICE" -ne 0 ]; then
+      info "$(t 'Skipped statusline registration. Re-run the installer to enable it later.' '跳过 statusline 注册，之后重跑安装脚本可启用。')"
+      return 0
+    fi
   fi
   plugin_dir="$(plugin_dir_on_disk claude-code-memory-plugin)" || {
     warn 'statusline needs the plugin sources on disk and none could be fetched; skipping'
@@ -833,12 +890,13 @@ register_statusline() {
   fi
   if [ -n "$existing" ] && [ "$STATUSLINE_ARG" != "yes" ]; then
     warn "$(t 'Existing statusline detected:' '检测到已有 statusline：') $existing"
-    ask "$(t 'Replace it with OpenViking statusline? [y/N] ' '替换为 OpenViking statusline？[y/N] ')"
-    read_tty reply
-    case "$reply" in
-      y|Y|yes|Yes|YES) ;;
-      *) info "$(t 'Kept the existing statusline.' '保留了已有 statusline。')"; return 0 ;;
-    esac
+    tui_menu "$(t 'Replace it with the OpenViking statusline?' '替换为 OpenViking statusline？')" 1 \
+      "$(t 'Replace' '替换')" \
+      "$(t 'Keep existing' '保留现有')"
+    if [ "$TUI_MENU_CHOICE" -ne 0 ]; then
+      info "$(t 'Kept the existing statusline.' '保留了已有 statusline。')"
+      return 0
+    fi
   fi
   ts=$(date +%Y%m%d-%H%M%S)
   cp -p "$CC_SETTINGS" "$CC_SETTINGS.bak.$ts"
@@ -864,15 +922,15 @@ install_claude() {
     install_claude_modern || return 1
   else
     warn "$(t "This Claude Code build doesn't expose 'claude plugin' (introduced in 2.0)." '当前 Claude Code 版本没有 claude plugin 子命令（2.0 引入）。')"
-    local reply="y"
     if [ "$INTERACTIVE" -eq 1 ]; then
-      ask "$(t 'Use legacy compatibility mode (claude mcp add + settings.json merge)? [Y/n] ' '使用旧版兼容模式（claude mcp add + settings.json 合并）？[Y/n] ')"
-      read_tty reply
-      reply="${reply:-y}"
+      tui_menu "$(t 'Use legacy compatibility mode (claude mcp add + settings.json merge)?' '使用旧版兼容模式（claude mcp add + settings.json 合并）？')" 0 \
+        "$(t 'Yes, install in legacy mode' '是，用兼容模式安装')" \
+        "$(t 'Skip Claude Code' '跳过 Claude Code')"
+      if [ "$TUI_MENU_CHOICE" -eq 1 ]; then
+        info "$(t 'Skipped Claude Code install.' '跳过 Claude Code 安装。')"
+        return 0
+      fi
     fi
-    case "$reply" in
-      n|N|no|No|NO) info "$(t 'Skipped Claude Code install.' '跳过 Claude Code 安装。')"; return 0 ;;
-    esac
     install_claude_legacy || return 1
   fi
   register_statusline || true
