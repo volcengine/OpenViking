@@ -98,6 +98,21 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
             },
           },
         }),
+        JSON.stringify({
+          payload: {
+            type: "function_call",
+            id: "call-1",
+            name: "shell",
+            arguments: "{\"cmd\":\"pwd\"}",
+          },
+        }),
+        JSON.stringify({
+          payload: {
+            type: "function_call_output",
+            call_id: "call-1",
+            output: "project root",
+          },
+        }),
       ].join("\n"),
     );
 
@@ -155,6 +170,30 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
     const debugLog = await readFile(debugLogPath, "utf-8").catch(() => "");
     assert.ok(commitCall, `expected threshold commit call; calls=${JSON.stringify(calls)} debug=${debugLog}`);
     assert.deepEqual(commitCall.body, { keep_recent_count: 7 });
+
+    const messageBodies = calls
+      .filter((call) => call.path.endsWith("/messages"))
+      .map((call) => call.body);
+    const toolCallBody = messageBodies.find((body) =>
+      body.parts?.some((part) => part.type === "tool" && part.tool_status === "running")
+    );
+    const toolResultBody = messageBodies.find((body) =>
+      body.parts?.some((part) => part.type === "tool" && part.tool_status === "completed")
+    );
+    assert.deepEqual(toolCallBody.parts[0], {
+      type: "tool",
+      tool_id: "call-1",
+      tool_name: "shell",
+      tool_status: "running",
+      tool_input: { cmd: "pwd" },
+    });
+    assert.deepEqual(toolResultBody.parts[0], {
+      type: "tool",
+      tool_id: "call-1",
+      tool_name: "shell",
+      tool_status: "completed",
+      tool_output: "project root",
+    });
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

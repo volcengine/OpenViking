@@ -27,10 +27,7 @@
 
 import { readFile } from "node:fs/promises";
 import {
-  extractTextFromPayload,
-  isAssistantSideCaptureRole,
-  normalizeCaptureRole,
-  shouldCaptureText,
+  extractCaptureTurns,
 } from "./capture-utils.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
@@ -89,22 +86,7 @@ function parseTranscript(content) {
 }
 
 function extractTurns(rolloutEntries) {
-  const turns = [];
-  for (const entry of rolloutEntries) {
-    if (!entry || typeof entry !== "object") continue;
-    const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
-    const message = payload.message && typeof payload.message === "object" ? payload.message : null;
-    const rawRole = message?.role || payload.role || payload.type || payload.kind;
-    const role = normalizeCaptureRole(rawRole);
-    if (!role) continue;
-    if (isAssistantSideCaptureRole(rawRole) && !cfg.captureAssistantTurns) continue;
-
-    const rawText = extractTextFromPayload(payload, { toolMaxChars: cfg.captureToolMaxChars });
-    const decision = shouldCaptureText(rawText, role, cfg);
-    if (!decision.shouldCapture) continue;
-    turns.push({ role, text: decision.text });
-  }
-  return turns;
+  return extractCaptureTurns(rolloutEntries, cfg);
 }
 
 async function readTranscriptTurns(transcriptPath) {
@@ -131,7 +113,9 @@ function selectStopTurns(state, turns) {
 async function appendTurns(ovSessionId, turns, state) {
   let appended = 0;
   for (const turn of turns) {
-    const body = { role: turn.role, content: turn.text };
+    const body = turn.parts?.length
+      ? { role: turn.role, parts: turn.parts }
+      : { role: turn.role, content: turn.text };
     if (cfg.peerId) body.peer_id = cfg.peerId;
     const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
       method: "POST",
