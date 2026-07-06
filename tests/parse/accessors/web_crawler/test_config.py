@@ -47,7 +47,3 @@ class TestCrawlConfigValidation:
     def test_max_html_bytes_zero_rejected(self):
         with pytest.raises(ValueError):
             CrawlConfig(max_html_bytes=0)
-
-    def test_playwright_timeout_non_positive_rejected(self):
-        with pytest.raises(ValueError):
-            CrawlConfig(playwright_timeout=0)

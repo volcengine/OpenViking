@@ -47,7 +47,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 网页类（递归网页爬虫）
 | 类型 | 资源名 | 说明 |
 |------|--------|------|
-| 单页 / 递归抓取 | `https://host/path` | 默认仅抓入口页；设置 `args.depth > 0` 后，沿同域链接 BFS 递归展开，`args.max_pages` 只限制最多收集的页面数。每页用 trafilatura 抽成 Markdown，对 SPA 等静态 HTML 拿不到正文的站点自动降级到 Playwright 渲染。可选 `args`：`depth`、`max_pages`、`include_paths`、`exclude_paths`、`allow_external_links`、`skip_download_links`。页面中发现的下载链接默认跳过（`skip_download_links=true`），避免导入 `llms.txt` 等 sidecar 文件造成重复；设为 `false` 时会下载同域文件链接，并计入 `max_pages`。`include_paths`/`exclude_paths` 按**路径前缀**匹配（例如 `/docs/` 仅匹配以 `/docs/` 开头的路径，不会误命中 `/blog/docs-tips`）。|
+| 单页 / 递归抓取 | `https://host/path` | 默认仅抓入口页；设置 `args.depth > 0` 后，沿同域链接 BFS 递归展开，`args.max_pages` 只限制最多收集的页面数。每页用 trafilatura 抽成 Markdown。可选 `args`：`depth`、`max_pages`、`include_paths`、`exclude_paths`、`allow_external_links`、`skip_download_links`。页面中发现的下载链接默认跳过（`skip_download_links=true`），避免导入 `llms.txt` 等 sidecar 文件造成重复；设为 `false` 时会下载同域文件链接，并计入 `max_pages`。`include_paths`/`exclude_paths` 按**路径前缀**匹配（例如 `/docs/` 仅匹配以 `/docs/` 开头的路径，不会误命中 `/blog/docs-tips`）。|
 
 > 路由说明：`https://host/sitemap.xml`、`https://host/feed.xml`、`*.atom` 等 sitemap-looking URL 和显式 `args.site=true` 让出给下表的整站导入；`https://github.com/{org}/{repo}` 等 Git 托管平台 URL 让出给上文的代码导入。
 
