@@ -647,7 +647,7 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
-| node_limit | int | No | None | Maximum number of matches to return |
+| node_limit | int | No | 256 | Maximum number of matches to return. Omitted requests default to 256; explicitly sending `null` passes through `None` |
 
 #### 3. Usage Examples
 

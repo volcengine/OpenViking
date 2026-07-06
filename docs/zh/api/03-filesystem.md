@@ -998,7 +998,7 @@ openviking grep "authentication" --uri viking://resources/ [--ignore-case]
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`） |
 | uri | str | 否 | "viking://" | 起始 URI |
-| node_limit | int | 否 | None | 最大返回匹配数 |
+| node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；显式传 `null` 时会透传为 `None` |
 
 **Python SDK (Embedded / HTTP)**
 

@@ -149,7 +149,7 @@ class GlobRequest(BaseModel):
 
     pattern: str
     uri: str = "viking://"
-    node_limit: Optional[int] = None
+    node_limit: Optional[int] = 256
 
 
 @router.post("/find")
