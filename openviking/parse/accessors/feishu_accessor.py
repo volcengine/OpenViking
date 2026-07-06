@@ -7,7 +7,7 @@ Fetches Feishu/Lark cloud documents using the lark-oapi SDK.
 This is the DataAccessor layer extracted from FeishuParser.
 
 Note: This accessor requires the `lark-oapi` package.
-Install with: pip install 'openviking[bot-feishu]'
+Included by default in `openviking[bot]` installation.
 """
 
 import os
@@ -319,8 +319,8 @@ class FeishuAccessor(DataAccessor):
                 import lark_oapi as lark
             except ImportError:
                 raise ImportError(
-                    "lark-oapi is required for Feishu document parsing. "
-                    "Install it with: pip install 'openviking[bot-feishu]'"
+                "lark-oapi is required for Feishu document parsing. "
+                "Install it with: pip install lark-oapi>=1.0.0"
                 )
             config = self._get_config()
             app_id = config.app_id or os.getenv("FEISHU_APP_ID", "")

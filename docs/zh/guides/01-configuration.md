@@ -716,7 +716,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 | `max_rows_per_sheet` | int | 电子表格每个 sheet 最大导入行数（默认 `1000`） |
 | `max_records_per_table` | int | 多维表格每个表最大导入记录数（默认 `1000`） |
 
-**依赖**：`pip install 'openviking[bot-feishu]'`
+**依赖**：已默认包含在 `openviking[bot]` 安装中
 
 **Lark 国际版**：对于 Lark URL（`*.larksuite.com`），请将 `domain` 设为 `https://open.larksuite.com`。
 

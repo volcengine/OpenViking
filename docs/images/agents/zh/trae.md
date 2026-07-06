@@ -92,7 +92,7 @@ ov health
 |`mcpServers`|是|MCP Server 配置根节点|
 |`ov\-mcp\-server`|是|服务别名，可自定义；建议保持与上下文识别一致|
 |`url`|是|OpenViking MCP 服务端点；CN 区固定为 `https://api\.vikingdb\.cn\-beijing\.volces\.com/openviking/mcp`|
-|`headers\.Authorization`|是|格式 `Bearer \&lt;API Key\&gt;`，来源见第二章|
+|`headers\.Authorization`|是|格式 `Bearer API Key`，来源见第二章|
 
 ---
 

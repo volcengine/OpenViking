@@ -140,7 +140,7 @@ class FeishuOAuthClient:
         except ImportError as exc:
             raise FeishuTokenRefreshError(
                 "lark-oapi is required to refresh Feishu user tokens. "
-                "Install it with: pip install 'openviking[bot-feishu]'",
+                "Install it with: pip install lark-oapi>=1.0.0",
                 permanent=True,
             ) from exc
 
@@ -197,7 +197,7 @@ class FeishuOAuthClient:
             except ImportError as exc:
                 raise FeishuTokenRefreshError(
                     "lark-oapi is required to refresh Feishu user tokens. "
-                    "Install it with: pip install 'openviking[bot-feishu]'",
+                    "Install it with: pip install lark-oapi>=1.0.0",
                     permanent=True,
                 ) from exc
 
