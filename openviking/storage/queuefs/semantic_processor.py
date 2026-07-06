@@ -58,6 +58,105 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+# --- Substantive-content detector (issue #3028) -----------------------------
+# Regex-only markdown strip (no AST). Decides whether a text file has real
+# authored content or is just headings/markup/frontmatter that would make a VLM
+# hallucinate an L0/L1 summary. Spec: .wiki/issue-3028-...md §3.1/§3.2.
+
+# CJK ranges: Unified Ideographs, Hiragana, Katakana, Hangul, CJK punctuation.
+_CJK_RE = re.compile("[　-〿぀-ゟ゠-ヿ一-鿿가-힯]")
+_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)  # leading block only
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_ATX_RE = re.compile(r"^\s*#{1,6}\s+\S")
+_SETEXT_UNDERLINE_RE = re.compile(r"^(=+|-+)$")  # === (h1) or --- (h2/divider)
+_HR_RE = re.compile(r"^([-*_])(\s*\1){2,}$")  # ---, ***, ___
+_BLOCKQUOTE_RE = re.compile(r"^\s*>+\s?")
+_LIST_RE = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
+_TABLE_SEP_RE = re.compile(r"^[\s|:\-]+$")
+_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")  # keep alt
+_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")  # keep text
+_AUTOLINK_RE = re.compile(r"<[a-z][a-z0-9+.-]*://[^>]*>")
+_BARE_URL_RE = re.compile(r"(https?://|www\.)\S+")
+_EMPHASIS_RE = re.compile(r"(\*\*|\*|__|_|~~)")
+_PUNCT_ONLY_RE = re.compile(r"^[\W_\s]+$")
+
+
+def _weighted_len(residual: str, cjk_weight: float) -> float:
+    """CJK-weighted content length; whitespace excluded (dense CJK has no spaces)."""
+    total = 0.0
+    for ch in residual:
+        if _CJK_RE.match(ch):
+            total += cjk_weight
+        elif not ch.isspace():
+            total += 1.0
+    return total
+
+
+def has_substantive_content(
+    text: str, min_chars: int = 8, cjk_weight: float = 2.5
+) -> tuple[bool, int]:
+    """Return (is_substantive, weighted_residual_len).
+
+    Strips markdown structure (frontmatter, HTML comments, headings, setext/HR,
+    blockquote/list markers, table pipes, code fences, link/image markup,
+    emphasis markers) with regex only — no AST. Keeps code body, table cell
+    text, and link/image label text. Weighted length counts CJK chars heavier.
+    The residual length is returned for telemetry/logging. See issue #3028.
+    """
+    if not text:
+        return False, 0
+
+    # 1. Normalize line endings first (reporter is on Windows → CRLF expected).
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # 2. Leading YAML frontmatter only — never a mid-doc `---`.
+    text = _FRONTMATTER_RE.sub("", text)
+    # 3. HTML comments.
+    text = _HTML_COMMENT_RE.sub("", text)
+
+    kept: list[str] = []
+    in_fence = False
+    for line in text.split("\n"):
+        # 4. Code fences before heading/list rules, so a `#`/`-` inside a fenced
+        #    block isn't mistaken for a heading/list marker. Keep the body.
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            kept.append(line)  # code body
+            continue
+
+        stripped = line.strip()
+        if _ATX_RE.match(line):
+            continue  # heading marker + text dropped
+        if _SETEXT_UNDERLINE_RE.match(stripped):
+            if kept and kept[-1].strip():
+                kept.pop()  # drop the heading text this underlines
+            continue
+        if _HR_RE.match(stripped):
+            continue
+
+        line = _BLOCKQUOTE_RE.sub("", line)
+        line = _LIST_RE.sub("", line)
+        if "|" in line and _TABLE_SEP_RE.match(line.strip()):
+            continue  # table separator row
+        line = line.replace("|", " ")  # keep cell text, drop pipes
+        line = _IMAGE_RE.sub(r"\1", line)  # keep alt
+        line = _LINK_RE.sub(r"\1", line)  # keep text
+        line = _AUTOLINK_RE.sub("", line)
+        line = _BARE_URL_RE.sub("", line)
+        line = line.replace("`", "")  # inline code markers, keep body
+        line = _EMPHASIS_RE.sub("", line)  # markers only, keep span
+        kept.append(line)
+
+    residual = " ".join(part for part in " ".join(kept).split() if part)
+    if not residual or _PUNCT_ONLY_RE.match(residual):
+        return False, 0
+
+    weighted = _weighted_len(residual, cjk_weight)
+    return weighted >= min_chars, int(weighted)
+
+
 @dataclass
 class DiffResult:
     """Directory diff result for sync operations."""
