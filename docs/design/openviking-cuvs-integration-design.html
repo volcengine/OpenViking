@@ -775,24 +775,32 @@
           只有在 <code>backend=local</code> 且显式设置 <code>cuvs.auto_enable=true</code> 时生效。
           lazy build 前按 float32 vector payload、CAGRA retained/intermediate graph 和 filter cache
           估算显存，再应用默认 2.0 safety factor 并保留 1 GiB。预算不足时本次查询走 native，dirty
-          状态保留，后续显存释放后重新尝试；显式 <code>backend=cuvs</code> 仍然 fail-fast。该开关只做
-          memory admission，不代表按 filter selectivity 做 latency-optimal routing。
+          状态保留，后续显存释放后重新尝试；显式 <code>backend=cuvs</code> 仍然 fail-fast。auto 模式还会
+          根据 native scalar index 返回的候选数做请求级路由：普通标量默认不超过 2,000 条走 native，
+          URI path 默认不超过 200 条走 native；两个阈值都可配置或设为 0 关闭。
         </div>
 
         <h3>5.3 过滤与能力矩阵</h3>
         <table>
           <thead><tr><th>能力</th><th>执行路径</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td><code>and / or</code></td><td><span class="pill done">cuVS prefilter</span></td><td>在 CPU 递归组合 mask。</td></tr>
+            <tr><td><code>and / or</code></td><td><span class="pill done">cuVS prefilter</span></td><td>复用 native scalar index 的 bitmap 组合语义。</td></tr>
             <tr><td><code>must / must_not</code></td><td><span class="pill done">cuVS prefilter</span></td><td>支持标量值与列表值；覆盖常见 <code>account_id</code> 租户过滤。</td></tr>
             <tr><td><code>contains</code></td><td><span class="pill done">cuVS prefilter</span></td><td>在字段值上计算包含关系。</td></tr>
             <tr><td><code>range / range_out</code></td><td><span class="pill done">cuVS prefilter</span></td><td>支持可比较的数值/标量范围。</td></tr>
             <tr><td>path prefix / depth</td><td><span class="pill done">cuVS prefilter</span></td><td>保持 OpenViking 路径层级过滤。</td></tr>
-            <tr><td><code>date_time / geo_point</code></td><td><span class="pill native">native fallback</span></td><td>首版不在 Python evaluator 重复复杂字段转换语义。</td></tr>
+            <tr><td><code>date_time / geo_point</code></td><td><span class="pill done">native bitmap → cuVS</span></td><td>复用 native 字段转换和过滤语义，不在 Python 重复实现。</td></tr>
             <tr><td>sparse / hybrid</td><td><span class="pill native">native</span></td><td>cuVS 只接管 pure dense；混合查询保留现有引擎。</td></tr>
             <tr><td>scalar sort / aggregate</td><td><span class="pill native">native</span></td><td>不属于 cuVS dense top-k 的职责。</td></tr>
           </tbody>
         </table>
+
+        <div class="callout">
+          <strong>bitmap bridge：</strong>
+          GPU rebuild 时只注册一次 cuVS label 顺序；新 filter 由 native scalar/path index 计算 bitmap，
+          再按已注册的 native offset layout 投影成 cuVS row bitset。重复 filter 直接复用 device bitset，
+          mutation 会同时失效 layout 和 filter cache。
+        </div>
 
         <div class="callout">
           <strong>为什么不做 post-filter：</strong>
@@ -851,7 +859,9 @@
         "auto_enable": true,
         "algorithm": "brute_force",
         "auto_memory_reserve_mb": 1024,
-        "auto_memory_safety_factor": 2.0
+        "auto_memory_safety_factor": 2.0,
+        "auto_filter_native_threshold": 2000,
+        "auto_path_filter_native_threshold": 200
       }
     }
   }
@@ -863,10 +873,13 @@
             <tr><td><code>algorithm</code></td><td><code>brute_force</code></td><td><code>brute_force</code> 用于精确基线；<code>cagra</code> 用于大规模 ANN。</td></tr>
             <tr><td><code>build_params</code></td><td><code>{}</code></td><td>透传到 cuVS CAGRA <code>IndexParams</code>。</td></tr>
             <tr><td><code>search_params</code></td><td><code>{}</code></td><td>透传到 cuVS CAGRA <code>SearchParams</code>。</td></tr>
-            <tr><td><code>fallback_to_native</code></td><td><code>true</code></td><td>遇到不支持的过滤或 dense+sparse 混合请求时是否使用 native 能力。</td></tr>
+            <tr><td><code>fallback_to_native</code></td><td><code>true</code></td><td>sparse/hybrid 或 cuVS dense top-k 之外的能力是否使用 native 路径。</td></tr>
             <tr><td><code>auto_enable</code></td><td><code>false</code></td><td>在 <code>backend=local</code> 下按空闲显存自动启用 cuVS；不改变默认行为。</td></tr>
             <tr><td><code>auto_memory_reserve_mb</code></td><td><code>1024</code></td><td>auto admission 后仍保留的空闲显存。</td></tr>
             <tr><td><code>auto_memory_safety_factor</code></td><td><code>2.0</code></td><td>对已知 vector/graph/filter 分配应用的峰值安全系数。</td></tr>
+            <tr><td><code>auto_filter_native_threshold</code></td><td><code>2000</code></td><td>auto 模式下普通过滤走 native recall 的最大候选数；0 表示关闭。</td></tr>
+            <tr><td><code>auto_path_filter_native_threshold</code></td><td><code>200</code></td><td>URI path 过滤使用的更保守 native 路由阈值；0 表示关闭。</td></tr>
+            <tr><td><code>filter_cache_size</code></td><td><code>16</code></td><td>缓存的 device bitset 或 native 路由决策数量。</td></tr>
           </tbody>
         </table>
 
@@ -1030,8 +1043,10 @@ pip install cuvs-cu13 'cupy-cuda13x[ctk]' --extra-index-url=https://pypi.nvidia.
         <table>
           <thead><tr><th>文件</th><th>变更职责</th></tr></thead>
           <tbody>
-            <tr><td><code>openviking/storage/vectordb/index/cuvs_index.py</code></td><td>cuVS runtime、host shadow、filter evaluator、bitset、index build/search、得分转换。</td></tr>
+            <tr><td><code>openviking/storage/vectordb/index/cuvs_index.py</code></td><td>cuVS runtime、host shadow、native bitmap 消费、bitset cache、index build/search、得分转换。</td></tr>
             <tr><td><code>openviking/storage/vectordb/index/local_index.py</code></td><td>创建 cuVS dense index；同步 mutation；请求级路由和 native fallback。</td></tr>
+            <tr><td><code>src/index/detail/index_manager_impl.cpp</code></td><td>注册 cuVS label layout，并把 native scalar/path bitmap 投影到外部 row 顺序。</td></tr>
+            <tr><td><code>src/abi3_engine_backend.cpp</code></td><td>通过稳定 Python ABI 暴露内部 layout 注册和 filter bitmap bridge。</td></tr>
             <tr><td><code>openviking/storage/vectordb/collection/local_collection.py</code></td><td>向 volatile/persistent index 传递配置，并在恢复时注入当前 candidates。</td></tr>
             <tr><td><code>openviking/storage/vectordb_adapters/local_adapter.py</code></td><td>新增 <code>CuVSCollectionAdapter</code>，复用本地存储能力。</td></tr>
             <tr><td><code>openviking/storage/vectordb_adapters/factory.py</code></td><td>注册 <code>backend="cuvs"</code>。</td></tr>

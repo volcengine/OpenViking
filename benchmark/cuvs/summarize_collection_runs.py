@@ -47,7 +47,7 @@ RESTART_METRICS = {
     "first_query_ms": ("first_query_ms",),
     "warm_query_ms": ("warm_query_ms",),
 }
-BACKEND_ORDER = {"native": 0, "cuvs_brute_force": 1}
+BACKEND_ORDER = {"native": 0, "cuvs_brute_force": 1, "auto_cuvs": 2}
 
 
 def dataset_signature(document: dict[str, Any]) -> dict[str, Any]:

@@ -23,7 +23,7 @@ import re
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 
@@ -36,6 +36,10 @@ class CuVSUnavailableError(RuntimeError):
 
 class CuVSMemoryBudgetError(RuntimeError):
     """Raised when auto mode cannot safely admit a cuVS index into free VRAM."""
+
+
+class CuVSNativeRouteError(RuntimeError):
+    """Raised when auto mode predicts that a filtered native search is cheaper."""
 
 
 class UnsupportedCuVSFilterError(ValueError):
@@ -81,9 +85,7 @@ def estimate_cuvs_memory(
     build_graph_bytes = 0
     if algorithm == "cagra":
         graph_degree = max(0, int(build_params.get("graph_degree", 64)))
-        intermediate_graph_degree = max(
-            0, int(build_params.get("intermediate_graph_degree", 128))
-        )
+        intermediate_graph_degree = max(0, int(build_params.get("intermediate_graph_degree", 128)))
         graph_bytes = vector_count * graph_degree * 4
         build_graph_bytes = vector_count * intermediate_graph_degree * 4
 
@@ -174,6 +176,29 @@ def _in_range(value: Any, node: Mapping[str, Any]) -> bool:
     except TypeError:
         return False
     return True
+
+
+def _filter_uses_field_type(
+    node: Optional[Mapping[str, Any]],
+    field_types: Mapping[str, str],
+    expected_type: str,
+) -> bool:
+    if not node or not isinstance(node, Mapping):
+        return False
+    nested = node.get("filter")
+    if isinstance(nested, Mapping) and _filter_uses_field_type(nested, field_types, expected_type):
+        return True
+    field = node.get("field")
+    if isinstance(field, str) and str(field_types.get(field, "")).lower() == expected_type:
+        return True
+    children = node.get("conds")
+    if isinstance(children, list):
+        return any(
+            _filter_uses_field_type(child, field_types, expected_type)
+            for child in children
+            if isinstance(child, Mapping)
+        )
+    return False
 
 
 def matches_filter(
@@ -294,8 +319,7 @@ class _CuVSRuntime:
             return True
         message = str(exc).lower()
         return any(
-            marker in message
-            for marker in ("out of memory", "memory allocation", "bad_alloc")
+            marker in message for marker in ("out of memory", "memory allocation", "bad_alloc")
         )
 
     def build(self, dataset: Sequence[Sequence[float]]):
@@ -316,6 +340,11 @@ class _CuVSRuntime:
         for index, included in enumerate(mask):
             if included:
                 words[index // 32] |= 1 << (index % 32)
+        return self.cp.asarray(words, dtype=self.cp.uint32)
+
+    def prepare_filter_words(self, words: Sequence[int]):
+        """Copy an already packed native filter bitmap to the device."""
+
         return self.cp.asarray(words, dtype=self.cp.uint32)
 
     def search(
@@ -363,6 +392,8 @@ class _Record:
 class _CachedFilter:
     prepared: Any
     eligible_count: int
+    route_native: bool = False
+    native_threshold: int = 0
 
 
 class CuVSDenseIndex:
@@ -404,11 +435,17 @@ class CuVSDenseIndex:
         )
         if self.auto_memory_reserve_bytes < 0:
             raise ValueError("cuVS auto memory reserve cannot be negative")
-        self.auto_memory_safety_factor = float(
-            config.get("auto_memory_safety_factor", 2.0)
-        )
+        self.auto_memory_safety_factor = float(config.get("auto_memory_safety_factor", 2.0))
         if self.auto_memory_safety_factor < 1.0:
             raise ValueError("cuVS auto memory safety factor must be at least 1.0")
+        self.auto_filter_native_threshold = int(config.get("auto_filter_native_threshold", 2000))
+        if self.auto_filter_native_threshold < 0:
+            raise ValueError("cuVS auto filter native threshold cannot be negative")
+        self.auto_path_filter_native_threshold = int(
+            config.get("auto_path_filter_native_threshold", 200)
+        )
+        if self.auto_path_filter_native_threshold < 0:
+            raise ValueError("cuVS auto path filter native threshold cannot be negative")
         self._metric = "inner_product" if self.distance == "ip" else "sqeuclidean"
         build_params = dict(config.get("build_params", {}))
         search_params = dict(config.get("search_params", {}))
@@ -507,7 +544,13 @@ class CuVSDenseIndex:
         except (TypeError, ValueError):
             return None
 
-    def _prepare_filter(self, filters: Mapping[str, Any]) -> _CachedFilter:
+    def _prepare_filter(
+        self,
+        filters: Mapping[str, Any],
+        native_filter_resolver: Optional[
+            Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]]
+        ] = None,
+    ) -> _CachedFilter:
         cache_key = self._filter_cache_key(filters)
         if cache_key is not None:
             cached = self._filter_cache.pop(cache_key, None)
@@ -515,20 +558,53 @@ class CuVSDenseIndex:
                 self._filter_cache[cache_key] = cached
                 return cached
 
-        mask = [
-            matches_filter(self._records[label].fields, filters, self.field_types)
-            for label in self._labels
-        ]
-        prepare_filter = getattr(self._runtime, "prepare_filter", None)
-        prepared = prepare_filter(mask) if prepare_filter is not None else tuple(mask)
-        cached = _CachedFilter(prepared=prepared, eligible_count=sum(mask))
+        if native_filter_resolver is not None:
+            words, eligible_count = native_filter_resolver(filters)
+            native_threshold = (
+                self.auto_path_filter_native_threshold
+                if _filter_uses_field_type(filters, self.field_types, "path")
+                else self.auto_filter_native_threshold
+            )
+            route_native = (
+                self.auto_memory and native_threshold > 0 and eligible_count <= native_threshold
+            )
+            if route_native:
+                prepared = None
+            else:
+                prepare_filter_words = getattr(self._runtime, "prepare_filter_words", None)
+                if prepare_filter_words is not None:
+                    prepared = prepare_filter_words(words)
+                else:
+                    prepared = tuple(
+                        bool(words[row // 32] & (1 << (row % 32)))
+                        for row in range(len(self._labels))
+                    )
+        else:
+            mask = [
+                matches_filter(self._records[label].fields, filters, self.field_types)
+                for label in self._labels
+            ]
+            prepare_filter = getattr(self._runtime, "prepare_filter", None)
+            prepared = prepare_filter(mask) if prepare_filter is not None else tuple(mask)
+            eligible_count = sum(mask)
+            route_native = False
+            native_threshold = 0
+        cached = _CachedFilter(
+            prepared=prepared,
+            eligible_count=eligible_count,
+            route_native=route_native,
+            native_threshold=native_threshold,
+        )
         if cache_key is not None and self.filter_cache_size > 0:
             self._filter_cache[cache_key] = cached
             while len(self._filter_cache) > self.filter_cache_size:
                 self._filter_cache.popitem(last=False)
         return cached
 
-    def _rebuild_if_needed(self) -> None:
+    def _rebuild_if_needed(
+        self,
+        native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
+    ) -> None:
         if not self._dirty:
             return
         self._labels = list(self._records)
@@ -576,6 +652,8 @@ class CuVSDenseIndex:
                     "cuVS auto mode fell back to native search after a GPU allocation failure"
                 ) from exc
             raise
+        if native_filter_layout_registrar is not None:
+            native_filter_layout_registrar(self._labels)
         self._dirty = False
         logger.info("Built cuVS %s index with %d vectors", self.algorithm, len(self._labels))
 
@@ -584,22 +662,32 @@ class CuVSDenseIndex:
         query_vector: Sequence[float],
         limit: int,
         filters: Optional[Mapping[str, Any]],
+        native_filter_resolver: Optional[
+            Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]]
+        ] = None,
+        native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
     ) -> Tuple[List[int], List[float]]:
         if limit <= 0:
             return [], []
         query = self._prepare_vector(query_vector)
         with self._lock:
-            self._rebuild_if_needed()
+            self._rebuild_if_needed(native_filter_layout_registrar)
             if self._index is None:
                 return [], []
 
             mask: Optional[Any] = None
             if filters:
-                cached_filter = self._prepare_filter(filters)
+                cached_filter = self._prepare_filter(filters, native_filter_resolver)
                 mask = cached_filter.prepared
                 eligible_count = cached_filter.eligible_count
                 if eligible_count == 0:
                     return [], []
+                if cached_filter.route_native:
+                    raise CuVSNativeRouteError(
+                        "cuVS auto mode routed a selective filter to native search "
+                        f"({eligible_count} candidates <= "
+                        f"{cached_filter.native_threshold})"
+                    )
                 result_limit = min(limit, eligible_count)
             else:
                 result_limit = min(limit, len(self._labels))

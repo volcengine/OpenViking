@@ -40,7 +40,7 @@ from openviking.storage.vectordb_adapters.local_adapter import (  # noqa: E402
     LocalCollectionAdapter,
 )
 
-SUPPORTED_BACKENDS = ("native", "cuvs_brute_force")
+SUPPORTED_BACKENDS = ("native", "cuvs_brute_force", "auto_cuvs")
 
 
 @dataclass(frozen=True)
@@ -82,6 +82,24 @@ def filter_scenarios() -> list[FilterScenario]:
                     selectivity=selectivity,
                 )
             )
+    for label, prefix, selectivity in (
+        ("10pct", "/docs/g0", 0.10),
+        ("1pct", "/docs/g0/h0", 0.01),
+        ("0_1pct", "/docs/g0/h0/i0", 0.001),
+    ):
+        scenarios.append(
+            FilterScenario(
+                name=f"path_{label}",
+                filter={
+                    "op": "must",
+                    "field": "uri",
+                    "conds": [prefix],
+                    "para": "-d=-1",
+                },
+                distribution="path",
+                selectivity=selectivity,
+            )
+        )
     return scenarios
 
 
@@ -102,6 +120,10 @@ def make_record(
         "vector": list(vector),
         "uniform_bucket": uniform_bucket,
         "cluster_bucket": cluster_bucket,
+        "uri": (
+            f"/docs/g{row_index % 10}/h{(row_index // 10) % 10}/"
+            f"i{(row_index // 100) % 10}/item-{row_index}"
+        ),
     }
 
 
@@ -111,6 +133,8 @@ def make_adapter(
     collection_name: str,
     *,
     filter_cache_size: int,
+    auto_filter_native_threshold: int,
+    auto_path_filter_native_threshold: int,
 ):
     if backend == "native":
         return LocalCollectionAdapter(
@@ -129,6 +153,22 @@ def make_adapter(
                 "filter_cache_size": filter_cache_size,
             },
         )
+    if backend == "auto_cuvs":
+        return LocalCollectionAdapter(
+            collection_name=collection_name,
+            project_path=str(project_path),
+            index_name="default",
+            collection_config={
+                "dense_search": {
+                    "backend": "auto_cuvs",
+                    "algorithm": "brute_force",
+                    "fallback_to_native": True,
+                    "filter_cache_size": filter_cache_size,
+                    "auto_filter_native_threshold": auto_filter_native_threshold,
+                    "auto_path_filter_native_threshold": auto_path_filter_native_threshold,
+                }
+            },
+        )
     raise ValueError(f"Unsupported backend: {backend}")
 
 
@@ -140,8 +180,9 @@ def collection_schema(collection_name: str, dimension: int) -> dict[str, Any]:
             {"FieldName": "vector", "FieldType": "vector", "Dim": dimension},
             {"FieldName": "uniform_bucket", "FieldType": "int64"},
             {"FieldName": "cluster_bucket", "FieldType": "int64"},
+            {"FieldName": "uri", "FieldType": "path"},
         ],
-        "ScalarIndex": ["uniform_bucket", "cluster_bucket"],
+        "ScalarIndex": ["uniform_bucket", "cluster_bucket", "uri"],
     }
 
 
@@ -357,6 +398,8 @@ def run_backend(
     mutation_sizes: Sequence[int],
     delete_count: int,
     filter_cache_size: int,
+    auto_filter_native_threshold: int,
+    auto_path_filter_native_threshold: int,
 ) -> dict[str, Any]:
     collection_name = f"collection_benchmark_{backend}"
     project_path = run_root / backend
@@ -365,6 +408,8 @@ def run_backend(
         project_path,
         collection_name,
         filter_cache_size=filter_cache_size,
+        auto_filter_native_threshold=auto_filter_native_threshold,
+        auto_path_filter_native_threshold=auto_path_filter_native_threshold,
     )
     reopened = None
     rss_before = current_rss_bytes()
@@ -423,6 +468,8 @@ def run_backend(
             project_path,
             collection_name,
             filter_cache_size=filter_cache_size,
+            auto_filter_native_threshold=auto_filter_native_threshold,
+            auto_path_filter_native_threshold=auto_path_filter_native_threshold,
         )
         construct_seconds = time.perf_counter() - construct_started
         reopen_query_ms, reopen_ids = time_query(reopened, queries[0], k)
@@ -525,6 +572,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--delete-count", type=int, default=100)
     parser.add_argument("--filter-cache-size", type=int, default=16)
+    parser.add_argument("--auto-filter-native-threshold", type=int, default=2000)
+    parser.add_argument("--auto-path-filter-native-threshold", type=int, default=200)
     parser.add_argument("--data-root", type=Path, default=Path("/tmp/openviking-cuvs-benchmark"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--keep-collections", action="store_true")
@@ -547,6 +596,10 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--k cannot exceed --vector-count")
     if args.filter_cache_size < 0:
         parser.error("--filter-cache-size cannot be negative")
+    if args.auto_filter_native_threshold < 0:
+        parser.error("--auto-filter-native-threshold cannot be negative")
+    if args.auto_path_filter_native_threshold < 0:
+        parser.error("--auto-path-filter-native-threshold cannot be negative")
     backends = [item.strip() for item in args.backends.split(",") if item.strip()]
     unknown = sorted(set(backends).difference(SUPPORTED_BACKENDS))
     if unknown:
@@ -594,6 +647,8 @@ def main() -> None:
                     mutation_sizes=args.mutation_sizes,
                     delete_count=args.delete_count,
                     filter_cache_size=args.filter_cache_size,
+                    auto_filter_native_threshold=args.auto_filter_native_threshold,
+                    auto_path_filter_native_threshold=(args.auto_path_filter_native_threshold),
                 )
             )
         attach_recall(results, args.k)
@@ -619,6 +674,8 @@ def main() -> None:
                 "mutation_sizes": args.mutation_sizes,
                 "delete_count": args.delete_count,
                 "filter_cache_size": args.filter_cache_size,
+                "auto_filter_native_threshold": args.auto_filter_native_threshold,
+                "auto_path_filter_native_threshold": (args.auto_path_filter_native_threshold),
                 "filter_scenarios": [scenario.name for scenario in filter_scenarios()],
             },
             "results": results,

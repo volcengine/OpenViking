@@ -6,6 +6,7 @@ import pytest
 from openviking.storage.vectordb.index.cuvs_index import (
     CuVSDenseIndex,
     CuVSMemoryBudgetError,
+    CuVSNativeRouteError,
     CuVSUnavailableError,
     UnsupportedCuVSFilterError,
     estimate_cuvs_memory,
@@ -252,6 +253,115 @@ def test_filter_cache_reuses_prepared_mask_and_invalidates_on_mutation():
     index.delete([DeltaRecord(label=1)])
     assert index.search([1.0, 0.0], 2, filter_a)[0] == [2]
     assert runtime.prepare_filter_count == 3
+
+
+def test_native_filter_resolver_projects_bitset_in_cuvs_row_order():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"filter_cache_size": 2},
+        runtime=runtime,
+    )
+    index.add_candidates(
+        [
+            candidate(30, [0.0, 1.0], account_id="b"),
+            candidate(10, [1.0, 0.0], account_id="a"),
+            candidate(20, [0.5, 0.5], account_id="a"),
+        ]
+    )
+    calls = []
+
+    def register(ordered_labels):
+        calls.append(("register", list(ordered_labels)))
+
+    def resolve(filters):
+        calls.append(("resolve", filters))
+        # Rows 1 and 2 are eligible in the cuVS dataset order above.
+        return [0b110], 2
+
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    assert index.search([1.0, 0.0], 3, filter_a, resolve, register)[0] == [10, 20]
+    assert index.search([1.0, 0.0], 3, filter_a, resolve, register)[0] == [10, 20]
+    assert calls == [("register", [30, 10, 20]), ("resolve", filter_a)]
+    # Native packed words bypass the Python predicate/mask packer.
+    assert runtime.prepare_filter_count == 0
+
+
+def test_auto_mode_caches_native_route_for_selective_filter():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={
+            "auto_filter_native_threshold": 1,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates(
+        [
+            candidate(10, [1.0, 0.0], account_id="a"),
+            candidate(20, [0.0, 1.0], account_id="b"),
+        ]
+    )
+    calls = []
+
+    def register(ordered_labels):
+        calls.append(("register", list(ordered_labels)))
+
+    def resolve(filters):
+        calls.append(("resolve", filters))
+        return [0b01], 1
+
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    for _ in range(2):
+        with pytest.raises(CuVSNativeRouteError, match="1 candidates"):
+            index.search([1.0, 0.0], 1, filter_a, resolve, register)
+
+    assert calls == [("register", [10, 20]), ("resolve", filter_a)]
+    assert runtime.prepare_filter_count == 0
+
+
+def test_auto_mode_uses_lower_native_threshold_for_path_filters():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"uri": "path"},
+        config={
+            "auto_filter_native_threshold": 2,
+            "auto_path_filter_native_threshold": 0,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates(
+        [
+            candidate(10, [1.0, 0.0], uri="/docs/one"),
+            candidate(20, [0.0, 1.0], uri="/other/two"),
+        ]
+    )
+
+    def resolve(_filters):
+        return [0b01], 1
+
+    path_filter = {
+        "op": "must",
+        "field": "uri",
+        "conds": ["/docs"],
+        "para": "-d=-1",
+    }
+    assert index.search([1.0, 0.0], 1, path_filter, resolve, lambda _labels: None)[0] == [10]
 
 
 def test_filter_cache_uses_lru_bound():

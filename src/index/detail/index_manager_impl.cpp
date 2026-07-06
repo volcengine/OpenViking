@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <memory>
 #include <chrono>
+#include <limits>
 #include <thread>
 #include "spdlog/spdlog.h"
 #include "common/ann_utils.h"
@@ -203,6 +204,55 @@ int IndexManagerImpl::search(const SearchRequest& req, SearchResult& result) {
   return ret;
 }
 
+int IndexManagerImpl::set_filter_layout(
+    const std::vector<uint64_t>& ordered_labels) {
+  std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+  filter_layout_offsets_.clear();
+  filter_layout_offsets_.reserve(ordered_labels.size());
+  for (const uint64_t label : ordered_labels) {
+    const int offset = vector_index_->get_offset_by_label(label);
+    filter_layout_offsets_.push_back(
+        offset >= 0 ? static_cast<uint32_t>(offset)
+                    : std::numeric_limits<uint32_t>::max());
+  }
+  return 0;
+}
+
+int IndexManagerImpl::evaluate_filter(const std::string& dsl,
+                                      FilterResult& result) {
+  SearchContext ctx;
+  if (int ret = parse_dsl_query(dsl, ctx); ret != 0) {
+    SPDLOG_ERROR("IndexManagerImpl::evaluate_filter [{}] parse failed", dsl);
+    return ret;
+  }
+
+  std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+  BitmapPtr bitmap = nullptr;
+  if (ctx.filter_op) {
+    bitmap = calculate_filter_bitmap(ctx, dsl);
+    if (!bitmap) {
+      SPDLOG_DEBUG(
+          "IndexManagerImpl::evaluate_filter calculate_filter_bitmap returned null");
+      return -1;
+    }
+  }
+
+  result.eligible_count = 0;
+  result.bitset_words.assign((filter_layout_offsets_.size() + 31) / 32, 0);
+  for (size_t row = 0; row < filter_layout_offsets_.size(); ++row) {
+    const uint32_t offset = filter_layout_offsets_[row];
+    const bool eligible = offset != std::numeric_limits<uint32_t>::max() &&
+                          (!bitmap || bitmap->Isset(offset));
+    if (!eligible) {
+      continue;
+    }
+    result.bitset_words[row / 32] |=
+        static_cast<uint32_t>(1U << (row % 32));
+    ++result.eligible_count;
+  }
+  return 0;
+}
+
 BitmapPtr IndexManagerImpl::calculate_filter_bitmap(const SearchContext& ctx,
                                                     const std::string& dsl) {
   auto bitmap = ctx.filter_op->calc_bitmap(scalar_index_->get_field_sets(),
@@ -313,6 +363,7 @@ int IndexManagerImpl::add_data(const std::vector<AddDataRequest>& data_list) {
                                 parsed_old_fields_list[i]);
   }
   if (has_update) {
+    filter_layout_offsets_.clear();
     auto duration = std::chrono::system_clock::now().time_since_epoch();
     manager_meta_->update_timestamp =
         std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
@@ -355,6 +406,7 @@ int IndexManagerImpl::delete_data(
     vector_index_->stream_delete_data(data.label);
   }
   if (has_update) {
+    filter_layout_offsets_.clear();
     auto duration = std::chrono::system_clock::now().time_since_epoch();
     manager_meta_->update_timestamp =
         std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();

@@ -68,11 +68,23 @@ def main(algorithm: str) -> None:
                 for index in range(128)
             )
         collection.upsert_data(records)
+        demo_filter = {
+            "op": "and",
+            "conds": [
+                {"op": "must", "field": "account_id", "conds": ["demo"]},
+                {
+                    "op": "must",
+                    "field": "uri",
+                    "conds": ["/docs"],
+                    "para": "-d=-1",
+                },
+            ],
+        }
         result = collection.search_by_vector(
             "default",
             dense_vector=[1, 0, 0, 0],
             limit=2,
-            filters={"op": "must", "field": "account_id", "conds": ["demo"]},
+            filters=demo_filter,
         )
         ids = [item.id for item in result.data]
         assert ids == ["a", "b"], ids
@@ -92,7 +104,7 @@ def main(algorithm: str) -> None:
             "default",
             dense_vector=[1, 0, 0, 0],
             limit=2,
-            filters={"op": "must", "field": "account_id", "conds": ["demo"]},
+            filters=demo_filter,
         )
         ids_after_mutation = [item.id for item in result.data]
         assert ids_after_mutation == ["b"], ids_after_mutation

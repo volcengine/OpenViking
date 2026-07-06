@@ -246,6 +246,13 @@ def test_engine_loader_wraps_abi3_backend_with_python_api(monkeypatch):
                 "extra_json": '{"ok":true}',
             }
         ),
+        _index_engine_set_filter_layout=lambda handle, labels: (
+            calls.append(("set_filter_layout", handle, labels)) or 0
+        ),
+        _index_engine_evaluate_filter=lambda handle, dsl: (
+            calls.append(("evaluate_filter", handle, dsl))
+            or {"eligible_count": 1, "bitset_words": [4]}
+        ),
         _index_engine_dump=lambda handle, path: calls.append(("dump", handle, path)) or 11,
         _index_engine_get_state=lambda handle: (
             calls.append(("get_state", handle)) or {"update_timestamp": 123, "element_count": 7}
@@ -310,6 +317,11 @@ def test_engine_loader_wraps_abi3_backend_with_python_api(monkeypatch):
     assert result.labels == [101, 202]
     assert result.scores == [0.9, 0.8]
     assert result.extra_json == '{"ok":true}'
+
+    assert index.set_filter_layout([202, 999, 101]) == 0
+    filter_result = index.evaluate_filter('{"op":"must"}')
+    assert filter_result.eligible_count == 1
+    assert filter_result.bitset_words == [4]
 
     state = index.get_state()
     assert state.update_timestamp == 123

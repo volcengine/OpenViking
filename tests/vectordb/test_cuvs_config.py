@@ -26,17 +26,21 @@ def test_cuvs_auto_mode_is_opt_in_and_validates_memory_guardrails():
     assert config.auto_enable is False
     assert config.auto_memory_reserve_mb == 1024
     assert config.auto_memory_safety_factor == 2.0
+    assert config.auto_filter_native_threshold == 2000
+    assert config.auto_path_filter_native_threshold == 200
 
     with pytest.raises(ValidationError, match="auto_memory_reserve_mb"):
         CuVSConfig(auto_memory_reserve_mb=-1)
     with pytest.raises(ValidationError, match="auto_memory_safety_factor"):
         CuVSConfig(auto_memory_safety_factor=0.5)
+    with pytest.raises(ValidationError, match="auto_filter_native_threshold"):
+        CuVSConfig(auto_filter_native_threshold=-1)
+    with pytest.raises(ValidationError, match="auto_path_filter_native_threshold"):
+        CuVSConfig(auto_path_filter_native_threshold=-1)
 
 
 def test_local_adapter_only_passes_auto_cuvs_config_when_enabled():
-    default_adapter = LocalCollectionAdapter.from_config(
-        VectorDBBackendConfig(backend="local")
-    )
+    default_adapter = LocalCollectionAdapter.from_config(VectorDBBackendConfig(backend="local"))
     assert default_adapter.mode == "local"
     assert default_adapter._collection_config == {}
 
@@ -47,6 +51,8 @@ def test_local_adapter_only_passes_auto_cuvs_config_when_enabled():
                 "auto_enable": True,
                 "auto_memory_reserve_mb": 512,
                 "auto_memory_safety_factor": 1.5,
+                "auto_filter_native_threshold": 1000,
+                "auto_path_filter_native_threshold": 100,
             },
         )
     )
@@ -56,6 +62,8 @@ def test_local_adapter_only_passes_auto_cuvs_config_when_enabled():
     assert dense_search["auto_enable"] is True
     assert dense_search["auto_memory_reserve_mb"] == 512
     assert dense_search["auto_memory_safety_factor"] == 1.5
+    assert dense_search["auto_filter_native_threshold"] == 1000
+    assert dense_search["auto_path_filter_native_threshold"] == 100
 
 
 def test_cuvs_adapter_preserves_native_int8_index_default():

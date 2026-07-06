@@ -192,21 +192,29 @@ python benchmark/cuvs/run_collection_benchmark.py \
   --vector-count 100000 \
   --dimension 768 \
   --query-count 50 \
-  --backends native,cuvs_brute_force \
+  --backends native,cuvs_brute_force,auto_cuvs \
   --mutation-sizes 1,100,1000,10000 \
   --filter-cache-size 16 \
+  --auto-filter-native-threshold 2000 \
+  --auto-path-filter-native-threshold 200 \
   --data-root /data/openviking-cuvs
 ```
 
 The filter matrix covers unfiltered, 10%, 1%, and 0.1% selectivity with both
-uniform and clustered matching labels. Lifecycle output keeps write latency,
-the write-after first query, warm query, and restart first query separate so a
-lazy rebuild is not hidden in steady-state search latency.
+uniform and clustered scalar fields, plus hierarchical URI prefixes with the
+same target selectivities. Lifecycle output keeps write latency, the
+write-after first query, warm query, and restart first query separate so a lazy
+rebuild is not hidden in steady-state search latency.
 
 `--filter-cache-size` controls the cuVS LRU of prepared GPU bitsets. The
 per-scenario `first_query_ms` includes construction of a new filter mask;
 timed warm latency reuses the cached mask. Set it to zero to reproduce the
 uncached path.
+
+`auto_cuvs` additionally measures the memory-aware backend's per-query routing.
+It keeps unfiltered and wider filters on cuVS while routing small scalar and
+path candidate sets to native recall according to the two configurable
+thresholds. Set a threshold to zero to disable that part of the policy.
 
 Aggregate independent process runs with median and median absolute deviation:
 

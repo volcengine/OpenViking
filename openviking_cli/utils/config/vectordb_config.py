@@ -97,8 +97,8 @@ class CuVSConfig(BaseModel):
     fallback_to_native: bool = Field(
         default=True,
         description=(
-            "Use OpenViking's native local index for sparse search or scalar filter "
-            "operations that cannot be represented as a cuVS prefilter."
+            "Use OpenViking's native local index for sparse/hybrid search or other "
+            "operations outside cuVS dense top-k."
         ),
     )
     auto_enable: bool = Field(
@@ -111,9 +111,7 @@ class CuVSConfig(BaseModel):
     auto_memory_reserve_mb: int = Field(
         default=1024,
         ge=0,
-        description=(
-            "Free GPU memory kept outside the cuVS auto-admission budget, in MiB."
-        ),
+        description=("Free GPU memory kept outside the cuVS auto-admission budget, in MiB."),
     )
     auto_memory_safety_factor: float = Field(
         default=2.0,
@@ -121,6 +119,24 @@ class CuVSConfig(BaseModel):
         description=(
             "Multiplier applied to the estimated cuVS vector, graph, build, and filter "
             "memory before auto-enabling GPU search."
+        ),
+    )
+    auto_filter_native_threshold: int = Field(
+        default=2000,
+        ge=0,
+        description=(
+            "In cuVS auto mode, route filtered queries with at most this many "
+            "eligible vectors to the native index. Set to zero to disable "
+            "latency-aware filter routing."
+        ),
+    )
+    auto_path_filter_native_threshold: int = Field(
+        default=200,
+        ge=0,
+        description=(
+            "In cuVS auto mode, use this lower native-routing threshold for path "
+            "filters, whose native Trie/bitmap construction cost can dominate wider "
+            "subtree queries. Set to zero to keep all path filters on cuVS."
         ),
     )
     filter_cache_size: int = Field(

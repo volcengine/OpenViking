@@ -4,6 +4,7 @@ import json
 import math
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -12,6 +13,7 @@ import openviking.storage.vectordb.engine as engine
 from openviking.storage.vectordb.index.cuvs_index import (
     CuVSDenseIndex,
     CuVSMemoryBudgetError,
+    CuVSNativeRouteError,
     CuVSUnavailableError,
     UnsupportedCuVSFilterError,
 )
@@ -184,6 +186,23 @@ class IndexEngineProxy:
         state_result = self.index_engine.get_state()
         return state_result.data_count
 
+    def set_filter_layout(self, ordered_labels: List[int]) -> None:
+        """Register the dense-index row order with the native scalar engine."""
+
+        if not self.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        result = self.index_engine.set_filter_layout(ordered_labels)
+        if result != 0:
+            raise RuntimeError("Failed to register native scalar filter layout")
+
+    def evaluate_filter(self, filters: Dict[str, Any]) -> Tuple[List[int], int]:
+        """Evaluate a native scalar filter in the registered dense-index row order."""
+
+        if not self.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        result = self.index_engine.evaluate_filter(json.dumps(filters))
+        return result.bitset_words, result.eligible_count
+
     def drop(self):
         """Release the index engine resources.
 
@@ -231,6 +250,7 @@ class LocalIndex(IIndex):
         self.meta = meta
         self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
         self.dense_search: Optional[CuVSDenseIndex] = None
+        self._dense_search_lock = threading.RLock()
         self._auto_cuvs = False
         dense_search_config = dict(dense_search_config or {})
         dense_search_backend = dense_search_config.get("backend")
@@ -275,16 +295,22 @@ class LocalIndex(IIndex):
         return self.meta.get_meta_data()
 
     def upsert_data(self, delta_list: List[DeltaRecord]):
-        if self.engine_proxy:
-            self.engine_proxy.upsert_data(self._convert_delta_list_for_index(delta_list))
         if self.dense_search:
-            self.dense_search.upsert(delta_list)
+            with self._dense_search_lock:
+                if self.engine_proxy:
+                    self.engine_proxy.upsert_data(self._convert_delta_list_for_index(delta_list))
+                self.dense_search.upsert(delta_list)
+        elif self.engine_proxy:
+            self.engine_proxy.upsert_data(self._convert_delta_list_for_index(delta_list))
 
     def delete_data(self, delta_list: List[DeltaRecord]):
-        if self.engine_proxy:
-            self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
         if self.dense_search:
-            self.dense_search.delete(delta_list)
+            with self._dense_search_lock:
+                if self.engine_proxy:
+                    self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
+                self.dense_search.delete(delta_list)
+        elif self.engine_proxy:
+            self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
 
     def search(
         self,
@@ -303,25 +329,35 @@ class LocalIndex(IIndex):
             if sparse_values is None:
                 sparse_values = []
 
-            if self.dense_search and query_vector:
-                if not sparse_raw_terms and not sparse_values:
-                    try:
-                        return self.dense_search.search(query_vector, limit, filters)
-                    except CuVSMemoryBudgetError as exc:
-                        if not self._auto_cuvs:
-                            raise
-                        logger.debug("cuVS auto mode kept native dense search: %s", exc)
-                    except UnsupportedCuVSFilterError as exc:
-                        if not self.dense_search.fallback_to_native:
-                            raise
-                        logger.debug("Falling back to native dense search: %s", exc)
-                elif not self.dense_search.fallback_to_native:
-                    raise ValueError(
-                        "cuVS dense search does not support OpenViking sparse/hybrid queries"
-                    )
-
             if self.field_type_converter and filters is not None:
                 filters = self.field_type_converter.convert_filter_for_index(filters)
+
+            if self.dense_search and query_vector:
+                with self._dense_search_lock:
+                    if not sparse_raw_terms and not sparse_values:
+                        try:
+                            return self.dense_search.search(
+                                query_vector,
+                                limit,
+                                filters,
+                                self.engine_proxy.evaluate_filter,
+                                self.engine_proxy.set_filter_layout,
+                            )
+                        except CuVSMemoryBudgetError as exc:
+                            if not self._auto_cuvs:
+                                raise
+                            logger.debug("cuVS auto mode kept native dense search: %s", exc)
+                        except CuVSNativeRouteError as exc:
+                            logger.debug("cuVS auto mode selected native dense search: %s", exc)
+                        except UnsupportedCuVSFilterError as exc:
+                            if not self.dense_search.fallback_to_native:
+                                raise
+                            logger.debug("Falling back to native dense search: %s", exc)
+                    elif not self.dense_search.fallback_to_native:
+                        raise ValueError(
+                            "cuVS dense search does not support OpenViking sparse/hybrid queries"
+                        )
+
             return self.engine_proxy.search(
                 query_vector, limit, filters, sparse_raw_terms, sparse_values
             )

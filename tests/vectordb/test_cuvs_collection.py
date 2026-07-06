@@ -10,11 +10,13 @@ from openviking.storage.vectordb.index import cuvs_index
 class FakeCuVSRuntime:
     def __init__(self, metric):
         self.metric = metric
+        self.search_count = 0
 
     def build(self, dataset):
         return [list(vector) for vector in dataset]
 
     def search(self, index, query, limit, mask):
+        self.search_count += 1
         rows = []
         for offset, vector in enumerate(index):
             if mask is not None and not mask[offset]:
@@ -76,6 +78,7 @@ def test_local_collection_routes_dense_search_to_cuvs(monkeypatch):
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "rank", "FieldType": "int64"},
                 {"FieldName": "created_at", "FieldType": "date_time"},
+                {"FieldName": "uri", "FieldType": "path"},
             ],
         },
         config={
@@ -91,7 +94,7 @@ def test_local_collection_routes_dense_search_to_cuvs(monkeypatch):
             {
                 "IndexName": "default",
                 "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
-                "ScalarIndex": ["account_id", "rank", "created_at"],
+                "ScalarIndex": ["account_id", "rank", "created_at", "uri"],
             },
         )
         collection.upsert_data(
@@ -102,6 +105,7 @@ def test_local_collection_routes_dense_search_to_cuvs(monkeypatch):
                     "account_id": "a",
                     "rank": 3,
                     "created_at": "2026-07-02T00:00:00Z",
+                    "uri": "/docs/one",
                 },
                 {
                     "id": "second",
@@ -109,6 +113,7 @@ def test_local_collection_routes_dense_search_to_cuvs(monkeypatch):
                     "account_id": "a",
                     "rank": 2,
                     "created_at": "2026-07-01T00:00:00Z",
+                    "uri": "/docs/deep/two",
                 },
                 {
                     "id": "hidden",
@@ -116,6 +121,7 @@ def test_local_collection_routes_dense_search_to_cuvs(monkeypatch):
                     "account_id": "b",
                     "rank": 1,
                     "created_at": "2026-06-01T00:00:00Z",
+                    "uri": "/other/hidden",
                 },
             ]
         )
@@ -125,6 +131,19 @@ def test_local_collection_routes_dense_search_to_cuvs(monkeypatch):
             dense_vector=[1, 0, 0, 0],
             limit=3,
             filters={"op": "must", "field": "account_id", "conds": ["a"]},
+        )
+        assert [item.id for item in result.data] == ["first", "second"]
+
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1, 0, 0, 0],
+            limit=3,
+            filters={
+                "op": "must",
+                "field": "uri",
+                "conds": ["/docs"],
+                "para": "-d=-1",
+            },
         )
         assert [item.id for item in result.data] == ["first", "second"]
 
@@ -215,6 +234,7 @@ def test_auto_cuvs_falls_back_then_retries_when_memory_is_available(monkeypatch)
             "Fields": [
                 {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
                 {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+                {"FieldName": "account_id", "FieldType": "string"},
             ],
         },
         config={
@@ -233,27 +253,42 @@ def test_auto_cuvs_falls_back_then_retries_when_memory_is_available(monkeypatch)
             {
                 "IndexName": "default",
                 "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+                "ScalarIndex": ["account_id"],
             },
         )
         collection.upsert_data(
             [
-                {"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]},
-                {"id": "second", "vector": [0.0, 1.0, 0.0, 0.0]},
+                {
+                    "id": "first",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "account_id": "a",
+                },
+                {
+                    "id": "second",
+                    "vector": [0.0, 1.0, 0.0, 0.0],
+                    "account_id": "b",
+                },
             ]
         )
 
-        result = collection.search_by_vector(
-            "default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1
-        )
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
         assert [item.id for item in result.data] == ["first"]
         assert runtimes[0].build_count == 0
 
         runtimes[0].free_memory_bytes = 32
-        result = collection.search_by_vector(
-            "default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1
-        )
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
         assert [item.id for item in result.data] == ["first"]
         assert runtimes[0].build_count == 1
+
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=1,
+            filters={"op": "must", "field": "account_id", "conds": ["a"]},
+        )
+        assert [item.id for item in result.data] == ["first"]
+        # The selective filtered query uses native search in auto mode.
+        assert runtimes[0].search_count == 1
     finally:
         collection.close()
 
@@ -284,9 +319,7 @@ def test_auto_cuvs_keeps_native_when_runtime_is_unavailable(monkeypatch):
         assert index.dense_search is None
 
         collection.upsert_data([{"id": "native", "vector": [1.0, 0.0, 0.0, 0.0]}])
-        result = collection.search_by_vector(
-            "default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1
-        )
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
         assert [item.id for item in result.data] == ["native"]
     finally:
         collection.close()

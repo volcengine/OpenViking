@@ -49,7 +49,9 @@ idle GPU memory without changing the default behavior for other installations:
         "auto_enable": true,
         "algorithm": "brute_force",
         "auto_memory_reserve_mb": 1024,
-        "auto_memory_safety_factor": 2.0
+        "auto_memory_safety_factor": 2.0,
+        "auto_filter_native_threshold": 2000,
+        "auto_path_filter_native_threshold": 200
       }
     }
   }
@@ -65,10 +67,14 @@ is unavailable, that query uses the unchanged native index. The cuVS index
 remains dirty so a later query can retry after GPU memory becomes available.
 An allocation failure after admission also falls back to native. Explicit
 `backend: "cuvs"` retains fail-fast behavior and does not use this gate.
-This switch is memory-aware, not yet latency-aware: a highly selective scalar
-filter can still be faster on the native path because the native scalar index
-shrinks the distance candidate set, while cached cuVS brute-force remains near
-a full-matrix scan. Adaptive per-query routing is a separate follow-up.
+Auto mode also uses the eligible count returned by the native scalar index for
+latency-aware filtered-query routing. Filters with at most
+`auto_filter_native_threshold` candidates use native vector recall; path
+filters use the lower `auto_path_filter_native_threshold` because URI Trie and
+bitmap construction can dominate wider subtrees. The defaults are 2,000 and
+200 candidates respectively, and either value can be set to zero to disable
+that route. These crossover values are hardware- and workload-dependent.
+Explicit `backend: "cuvs"` continues to use cuVS for supported dense queries.
 
 ## GPU memory footprint
 
@@ -113,7 +119,10 @@ brute-force is exact over the retained float32 vectors. Small score or neighbor
 ordering differences are expected. Benchmarks must report the two data types
 and include Recall@K instead of presenting the comparison as equal-dtype or
 equal-memory. This separation is intentional for the initial opt-in
-integration and leaves existing CPU behavior unchanged.
+integration and leaves existing CPU behavior unchanged. In auto mode, the
+filter candidate thresholds can select either representation per query, so
+applications that require one fixed numerical representation should use an
+explicit backend or disable the native-routing thresholds.
 
 Lower-precision GPU storage is a follow-up rather than an implicit cast. The
 first candidate is configurable float16 for both the cuVS dataset and queries,
@@ -123,7 +132,15 @@ brute-force does not accept that scaled-int8 representation. CAGRA int8 or PQ
 compression must likewise be evaluated as approximate modes with an explicit
 recall/latency/memory frontier.
 
-The initial integration rebuilds the GPU index lazily after an upsert or delete. Common scalar filters are translated to a cuVS bitset prefilter. `filter_cache_size` retains recently reused bitsets on the GPU and invalidates them on mutation; the first use of a new filter still evaluates the predicate against the host-side records. Sparse/hybrid queries and unsupported type-sensitive filters fall back to OpenViking's native local index when `fallback_to_native` is enabled. The canonical vectors remain in the local store and repopulate cuVS after restart.
+The integration rebuilds the GPU index lazily after an upsert or delete. On
+each rebuild it registers the cuVS label order with the native engine once.
+The first use of a scalar or URI filter then reuses OpenViking's native
+scalar/path index and projects its bitmap into cuVS row order; it does not scan
+all host-side records in Python. `filter_cache_size` retains the resulting
+device bitsets and routing decisions and invalidates them on mutation.
+Sparse/hybrid queries fall back to OpenViking's native local index when
+`fallback_to_native` is enabled. The canonical vectors remain in the local
+store and repopulate cuVS after restart.
 
 The `[ctk]` CuPy extra installs the CUDA toolkit headers required by the cuVS
 Python interop path, even when the host provides a CUDA driver but no toolkit.

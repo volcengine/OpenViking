@@ -253,6 +253,53 @@ Reusing OpenViking's scalar-index candidate labels is still worth evaluating
 for those cases. The cache's configured size is 16 prepared filters, and data
 mutation clears it before rebuilding the dense index.
 
+### Native bitmap bridge and auto-routing follow-up
+
+The next follow-up removes that Python predicate scan. Each GPU rebuild now
+registers its label order with the native engine once. A new filter is evaluated
+by OpenViking's existing scalar/path index and projected through the registered
+native-offset layout into a cuVS-row bitset. Repeated filters retain the device
+bitset; mutations invalidate both the layout and filter cache.
+
+Auto mode also caches a routing decision. The measured defaults send scalar
+filters with at most 2,000 candidates to native vector recall, keep wider scalar
+filters on cuVS, and use a lower 200-candidate threshold for URI filters. The
+lower URI threshold avoids repeatedly paying native Trie/subtree-bitmap work for
+medium-sized path scopes. Both thresholds are configurable and apply only to
+auto mode; explicit `backend=cuvs` continues to use the GPU dense path.
+
+The following values aggregate five independent processes over the same 100K x
+768D, 50-query collection workload. The URI rows add unique hierarchical paths
+whose prefixes select 10%, 1%, and 0.1% of records.
+
+| Scenario | First query (ms) | Auto warm p50 (ms) | Route |
+| --- | ---: | ---: | --- |
+| Unfiltered | 1,902.930 +/- 6.045 | 0.972 +/- 0.015 | cuVS; first query includes lazy GPU build |
+| Uniform scalar 10% | 2.984 +/- 0.034 | 1.119 +/- 0.029 | cuVS |
+| Uniform scalar 1% | 2.096 +/- 0.019 | 0.643 +/- 0.018 | native |
+| Uniform scalar 0.1% | 1.486 +/- 0.014 | 0.404 +/- 0.009 | native |
+| Clustered scalar 10% | 1.853 +/- 0.012 | 1.133 +/- 0.018 | cuVS |
+| Clustered scalar 1% | 1.994 +/- 0.061 | 0.578 +/- 0.006 | native |
+| Clustered scalar 0.1% | 1.384 +/- 0.020 | 0.399 +/- 0.002 | native |
+| URI path 10% | 12.860 +/- 0.569 | 1.126 +/- 0.024 | cuVS |
+| URI path 1% | 3.087 +/- 0.031 | 1.020 +/- 0.027 | cuVS |
+| URI path 0.1% | 1.635 +/- 0.014 | 0.455 +/- 0.010 | native |
+
+For the six scalar rows, first-use latency is now 1.38--2.98 ms instead of the
+previous 119--141 ms, a 47--86x reduction. Cached 10% filters retain the GPU
+advantage, while 1% and 0.1% scalar filters recover the native candidate-pruning
+advantage. URI first-use cost depends on subtree width: the 10% prefix still
+spends about 12.9 ms traversing and unioning the native path bitmaps, but that
+work is avoided after its cuVS bitset is cached. The 1% URI case remains on GPU
+because repeatedly rebuilding its native path bitmap was slower than cached
+cuVS search; only the 0.1% URI case crosses the more conservative path threshold.
+
+These auto-mode rows can execute over either the native int8 representation or
+the cuVS float32 representation. They are latency-routing results, not an
+equal-dtype comparison; applications requiring one fixed numerical
+representation should select an explicit backend or disable the native-routing
+thresholds.
+
 ### Ingestion, mutation, and restart
 
 | Operation | Native median | cuVS median |
