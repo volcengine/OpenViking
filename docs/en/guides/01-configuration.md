@@ -1209,7 +1209,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'cuvs' (local storage + GPU dense search), 'qdrant', or 'opengauss' | "local" |
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), 'cuvs' (local storage + GPU dense search), 'qdrant', 'milvus', or 'opengauss' | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1220,6 +1220,7 @@ Vector database storage configuration
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
 | `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend and the opt-in memory-aware auto mode on 'local'; see the [cuVS guide](./16-cuvs.md) | - |
 | `qdrant` | object | 'qdrant' type Qdrant configuration | - |
+| `milvus` | object | 'milvus' type Milvus or Zilliz Cloud configuration | - |
 | `opengauss` | object | 'opengauss' native vector backend configuration | - |
 
 Default local mode
@@ -1252,6 +1253,37 @@ Supports cloud-deployed VikingDB on Volcengine
   }
 }
 ```
+</details>
+
+<details>
+<summary><b>Milvus</b></summary>
+
+Install the `milvus` optional extra before using this backend. The default `uri`
+uses Milvus Lite and stores data in a local `milvus.db` file. Use an HTTP URI for
+self-hosted Milvus, or a cloud endpoint plus `token` for Zilliz Cloud.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "milvus",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "milvus": {
+        "uri": "./milvus.db",
+        "token": null,
+        "db_name": null,
+        "consistency_level": "Session"
+      }
+    }
+  }
+}
+```
+
+For a self-hosted server, set `"uri": "http://localhost:19530"`. For Zilliz Cloud,
+set `"uri"` to the cloud endpoint and provide `"token"`.
 </details>
 
 <details>
