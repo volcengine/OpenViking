@@ -90,7 +90,7 @@ ov health
 | `mcpServers` | Yes | Root node for MCP Server configuration |
 | `ov-mcp-server` | Yes | Service alias. It can be customized, but keeping this name is recommended for contextual recognition |
 | `url` | Yes | OpenViking MCP endpoint. For CN, use `https://api.vikingdb.cn-beijing.volces.com/openviking/mcp` |
-| `headers.Authorization` | Yes | Format: `Bearer <API Key>`. Source: see chapter 2 |
+| `headers.Authorization` | Yes | Format: `Bearer API Key`. Source: see chapter 2 |
 
 ---
 
