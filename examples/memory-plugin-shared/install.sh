@@ -751,6 +751,7 @@ migrate_codex_legacy_marketplace() {
     command codex plugin marketplace remove "$OLD_MARKETPLACE_NAME" >/dev/null 2>&1 || true
   fi
   [ -d "$CODEX_OLD_MARKETPLACE_ROOT" ] && rm -rf "$CODEX_OLD_MARKETPLACE_ROOT"
+  [ -d "$HOME/.codex/plugins/cache/$OLD_MARKETPLACE_NAME" ] && rm -rf "$HOME/.codex/plugins/cache/$OLD_MARKETPLACE_NAME"
   # Drop the old plugin id's config.toml section; the unified id gets its own.
   if [ -f "$CODEX_CONFIG" ] && grep -qF "plugins.\"$CODEX_OLD_ID\"" "$CODEX_CONFIG"; then
     node - "$CODEX_CONFIG" "$CODEX_OLD_ID" <<'NODE' || true
@@ -833,8 +834,17 @@ install_codex() {
   migrate_codex_legacy_marketplace
   case "$SOURCE_MODE" in
     remote)
-      codex_marketplace_sync "$REPO_URL" "$REPO_URL" --ref "$REPO_REF" --sparse examples/codex-memory-plugin || \
-        codex_marketplace_sync "$REPO_URL" "$REPO_URL" --ref "$REPO_REF" || return 1
+      # Codex doesn't expose which --ref a registered git marketplace is
+      # pinned to (`marketplace upgrade` silently refreshes the OLD ref), so
+      # a matching URL is not enough — re-register deterministically.
+      command codex plugin remove "$PLUGIN_ID" >/dev/null 2>&1 || true
+      command codex plugin marketplace remove "$MARKETPLACE_NAME" >/dev/null 2>&1 || true
+      info "codex plugin marketplace add $REPO_URL --ref $REPO_REF"
+      command codex plugin marketplace add "$REPO_URL" --ref "$REPO_REF" --sparse examples/codex-memory-plugin >/dev/null || \
+        command codex plugin marketplace add "$REPO_URL" --ref "$REPO_REF" >/dev/null || {
+          err 'codex plugin marketplace add failed'
+          return 1
+        }
       ;;
     archive|dev)
       codex_marketplace_sync "$MKT_DIR" "$MKT_DIR" || return 1
