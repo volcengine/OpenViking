@@ -69,7 +69,7 @@ openviking-server doctor
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-pro-260215"
+    "model"    : "doubao-seed-2-0-lite-260428"
   }
 }
 ```
@@ -540,7 +540,7 @@ openviking-server doctor
   "vlm": {
     "provider": "volcengine",
     "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-pro-260215",
+    "model": "doubao-seed-2-0-lite-260428",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "max_retries": 3
   }
@@ -570,7 +570,7 @@ openviking-server doctor
 
 | 模型 | 说明 |
 |------|------|
-| `doubao-seed-2-0-pro-260215` | 推荐用于语义提取 |
+| `doubao-seed-2-0-lite-260428` | 推荐用于语义提取 |
 | `doubao-pro-32k` | 用于更长上下文 |
 
 添加资源时，VLM 生成：
@@ -716,7 +716,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 | `max_rows_per_sheet` | int | 电子表格每个 sheet 最大导入行数（默认 `1000`） |
 | `max_records_per_table` | int | 多维表格每个表最大导入记录数（默认 `1000`） |
 
-**依赖**：`pip install 'openviking[bot-feishu]'`
+**依赖**：已默认包含在 `openviking[bot]` 安装中
 
 **Lark 国际版**：对于 Lark URL（`*.larksuite.com`），请将 `domain` 设为 `https://open.larksuite.com`。
 

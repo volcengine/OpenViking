@@ -43,7 +43,7 @@ class TestIsReasoningModel:
             "gpt-4o-mini",
             "gpt-4.1",
             "gpt-4.1-mini",
-            "doubao-seed-2-0-pro-260215",
+            "doubao-seed-2-0-lite-260428",
             "gpt-3.5-turbo",
             "",
             None,

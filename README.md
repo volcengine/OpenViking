@@ -123,7 +123,7 @@ Volcengine supports both model names and endpoint IDs. Using model names is reco
 {
   "vlm": {
     "provider": "volcengine",
-    "model": "doubao-seed-2-0-pro-260215",
+    "model": "doubao-seed-2-0-lite-260428",
     "api_key": "your-api-key",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
@@ -335,7 +335,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_base" : "<api-endpoint>",     // API endpoint address
     "api_key"  : "<your-api-key>",     // Model service API Key (optional for openai-codex)
     "provider" : "<provider-type>",    // Provider type (volcengine, openai, openai-codex, kimi, glm, etc.)
-    "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
+    "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-lite-260428 or gpt-4-vision-preview)
     "max_concurrent": 64              // Max concurrent LLM calls for semantic processing (default: 64)
   }
 }
@@ -377,7 +377,7 @@ If you prefer manual configuration, create `~/.openviking/ov.conf`, remove the c
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-2-0-pro-260215",
+    "model"    : "doubao-seed-2-0-lite-260428",
     "max_concurrent": 64
   }
 }

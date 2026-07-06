@@ -133,7 +133,7 @@ class TestModelAvailability:
 class TestConfigBuilding:
     def test_ollama_config_structure(self):
         embedding = EMBEDDING_PRESETS[0]  # qwen3-embedding:0.6b
-        vlm = VLM_PRESETS[0]  # qwen3.5:2b
+        vlm = VLM_PRESETS[0]  # qwen3.5:4b
 
         config = _build_ollama_config(embedding, vlm, "/tmp/ov_test")
 
@@ -147,9 +147,12 @@ class TestConfigBuilding:
 
         vlm_cfg = config["vlm"]
         assert vlm_cfg["provider"] == "litellm"
-        assert vlm_cfg["model"] == "ollama/qwen3.5:2b"
+        assert vlm_cfg["model"] == "ollama/qwen3.5:4b"
         assert vlm_cfg["api_key"] == "no-key"
         assert vlm_cfg["api_base"] == "http://localhost:11434"
+        # Ollama needs a larger context window (default 4096 truncates OV's
+        # ~5k-token extraction prompt) and thinking disabled.
+        assert vlm_cfg["extra_request_body"] == {"num_ctx": 16384, "think": False}
 
     def test_cloud_config_structure(self):
         provider = CLOUD_PROVIDERS[2]  # OpenAI
@@ -611,7 +614,7 @@ class TestRAMRecommendations:
     def test_low_ram(self):
         emb_idx, vlm_idx = _get_recommended_indices(4)
         assert EMBEDDING_PRESETS[emb_idx].model == "qwen3-embedding:0.6b"
-        assert VLM_PRESETS[vlm_idx].ollama_model == "qwen3.5:2b"
+        assert VLM_PRESETS[vlm_idx].ollama_model == "qwen3.5:4b"
 
     def test_medium_ram(self):
         emb_idx, vlm_idx = _get_recommended_indices(16)
@@ -769,7 +772,7 @@ class TestLocalConfigBuilding:
             workspace="/tmp/ov_test",
             vlm_config={
                 "provider": "litellm",
-                "model": "ollama/qwen3.5:2b",
+                "model": "ollama/qwen3.5:4b",
                 "api_key": "no-key",
                 "api_base": "http://localhost:11434",
             },
@@ -777,7 +780,7 @@ class TestLocalConfigBuilding:
 
         assert config["embedding"]["dense"]["provider"] == "local"
         assert config["vlm"]["provider"] == "litellm"
-        assert config["vlm"]["model"] == "ollama/qwen3.5:2b"
+        assert config["vlm"]["model"] == "ollama/qwen3.5:4b"
 
     def test_local_config_with_cloud_vlm(self):
         config = _build_local_config(

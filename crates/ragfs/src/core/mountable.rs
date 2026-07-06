@@ -21,7 +21,7 @@ const PATH_LOCK_FILE: &str = ".path.ovlock";
 
 use super::encryption_wrapper::EncryptionWrappedFS;
 use super::errors::{Error, Result};
-use super::filesystem::FileSystem;
+use super::filesystem::{sort_directory_entries, FileSystem};
 use super::multibackend_wrapper::MultiWriteWrappedFS;
 use super::plugin::ServicePlugin;
 use super::stats::{FilesystemStats, StatsCollector};
@@ -763,6 +763,7 @@ impl FileSystem for MountableFS {
         let (mount_info, rel_path) = self.find_mount(path).await?;
         let mut entries = mount_info.fs.read_dir(&rel_path).await?;
         entries.retain(|e| e.name != PATH_LOCK_FILE);
+        sort_directory_entries(&mut entries);
         Ok(entries)
     }
 
@@ -1020,7 +1021,11 @@ mod tests {
         }
 
         async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
-            Ok(vec![])
+            Ok(self
+                .tree_entries
+                .iter()
+                .map(|entry| entry.info.clone())
+                .collect())
         }
 
         async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -1715,6 +1720,32 @@ mod tests {
             },
             extra: HashMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn test_read_dir_sorts_dirs_first_then_name() {
+        let mfs = MountableFS::new();
+        let plugin = MockPlugin::with_tree_entries(
+            "sorted",
+            vec![
+                make_tree_entry("/b.txt", "b.txt", "b.txt", false),
+                make_tree_entry("/A.txt", "A.txt", "A.txt", false),
+                make_tree_entry("/c", "c", "c", true),
+                make_tree_entry("/B", "B", "B", true),
+            ],
+        );
+        mfs.register_plugin(plugin).await;
+        mfs.mount(test_config("sorted", "/sorted")).await.unwrap();
+
+        let names: Vec<String> = mfs
+            .read_dir("/sorted")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+
+        assert_eq!(names, vec!["B", "c", "A.txt", "b.txt"]);
     }
 
     #[tokio::test]

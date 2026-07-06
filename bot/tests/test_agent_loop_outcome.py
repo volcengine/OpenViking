@@ -1,9 +1,14 @@
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from vikingbot.agent import loop as loop_module
+from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
@@ -93,6 +98,41 @@ def test_agents_config_temperature_schema_caps_at_two():
     assert temperature["default"] == 0.7
     assert temperature["minimum"] == 0.0
     assert temperature["maximum"] == 2.0
+
+
+def test_agents_config_enables_subagents_by_default():
+    assert AgentsConfig().subagent_enabled is True
+
+
+def test_agent_loop_omits_spawn_tool_when_subagents_disabled(temp_dir: Path, monkeypatch):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    bus = MessageBus()
+    provider = _RecordingProvider()
+    config = Config(storage_workspace=str(temp_dir), agents={"subagent_enabled": False})
+    monkeypatch.setattr("vikingbot.agent.tools.factory.load_config", lambda: config)
+
+    loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=temp_dir / "workspace",
+        model=config.agents.model,
+        temperature=config.agents.temperature,
+        config=config,
+    )
+
+    assert "spawn" not in loop.tools.tool_names
+
+
+@pytest.mark.asyncio
+async def test_context_prompt_omits_subagent_capability_when_disabled(temp_dir: Path):
+    context = ContextBuilder(workspace=temp_dir / "workspace", enable_subagents=False)
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
+
+    prompt = await context._get_identity(session_key)
+
+    assert "Spawn subagents" not in prompt
 
 
 @pytest.mark.asyncio

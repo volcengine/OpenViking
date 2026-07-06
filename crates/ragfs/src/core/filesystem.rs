@@ -7,6 +7,7 @@
 use async_trait::async_trait;
 use regex::Regex;
 use std::any::Any;
+use std::cmp::Ordering;
 
 use super::errors::{Error, Result};
 use super::types::{FileInfo, GrepResult, TreeEntry, WriteFlag};
@@ -21,6 +22,22 @@ pub(crate) fn normalize_prefix_path(path: &str) -> String {
     } else {
         path.trim_end_matches('/').to_string()
     }
+}
+
+/// Compare listing names case-insensitively, with the original name as tie-breaker.
+pub(crate) fn compare_listing_names(a: &str, b: &str) -> Ordering {
+    a.to_lowercase()
+        .cmp(&b.to_lowercase())
+        .then_with(|| a.cmp(b))
+}
+
+/// Sort listing entries with directories first, then case-insensitive name.
+pub(crate) fn sort_directory_entries(entries: &mut [FileInfo]) {
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| compare_listing_names(&a.name, &b.name))
+    });
 }
 
 /// Check whether `path` is under `exclude_path` (including itself).
@@ -487,7 +504,8 @@ pub trait FileSystem: Send + Sync + Any {
             }
         }
 
-        let entries = self.read_dir(current_path).await?;
+        let mut entries = self.read_dir(current_path).await?;
+        sort_directory_entries(&mut entries);
 
         for entry in entries {
             if node_limit.is_some_and(|limit| result.len() >= limit) {
@@ -853,22 +871,25 @@ mod tests {
     #[tokio::test]
     async fn test_tree_nested_dfs_order() {
         let fs = TreeFS::default()
-            .with_dir_entries("/root", vec![("a.txt", false), ("sub", true)])
-            .with_dir_entries("/root/sub", vec![("b.txt", false)]);
+            .with_dir_entries("/root", vec![("a.txt", false), ("Sub", true), ("b", true)])
+            .with_dir_entries("/root/Sub", vec![("b.txt", false)])
+            .with_dir_entries("/root/b", vec![]);
 
         let entries = root_tree(&fs, false, None, None).await;
 
-        assert_eq!(entries.len(), 3);
-        assert_tree_names(&entries, &["a.txt", "sub", "b.txt"]);
-        assert_tree_rel_paths(&entries, &["a.txt", "sub", "sub/b.txt"]);
+        assert_eq!(entries.len(), 4);
+        assert_tree_names(&entries, &["b", "Sub", "b.txt", "a.txt"]);
+        assert_tree_rel_paths(&entries, &["b", "Sub", "Sub/b.txt", "a.txt"]);
         assert_eq!(
             tree_paths(&entries),
-            vec!["/root/a.txt", "/root/sub", "/root/sub/b.txt"]
+            vec!["/root/b", "/root/Sub", "/root/Sub/b.txt", "/root/a.txt"]
         );
-        assert_eq!(entries[0].info.mode, 0o644);
-        assert!(!entries[0].info.is_dir);
+        assert_eq!(entries[0].info.mode, 0o755);
+        assert!(entries[0].info.is_dir);
         assert_eq!(entries[1].info.mode, 0o755);
         assert!(entries[1].info.is_dir);
+        assert_eq!(entries[2].info.mode, 0o644);
+        assert!(!entries[2].info.is_dir);
         assert!(entries.iter().all(|entry| entry.extra.is_empty()));
     }
 
@@ -877,11 +898,11 @@ mod tests {
         let fs = TreeFS::default().with_dir_entries(
             "/root",
             vec![
-                ("a.txt", false),
-                ("b.txt", false),
-                ("c.txt", false),
-                ("d.txt", false),
                 ("e.txt", false),
+                ("c.txt", false),
+                ("a.txt", false),
+                ("d.txt", false),
+                ("b.txt", false),
             ],
         );
 

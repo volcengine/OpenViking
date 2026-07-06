@@ -134,7 +134,6 @@ async def create_collection(request: CollectionCreateRequest, req: Request):
     project_name = request.ProjectName or "default"
     description = request.Description or ""
     fields = data_utils.convert_dict(request.Fields)
-    vectorize = data_utils.convert_dict(request.Vectorize)
 
     project = get_project(project_name)
 
@@ -146,7 +145,6 @@ async def create_collection(request: CollectionCreateRequest, req: Request):
         "CollectionName": collection_name,
         "Description": description,
         "Fields": fields,
-        "Vectorize": vectorize,
     }
 
     logger.info(f"Creating collection: {collection_name} in project: {project_name}")

@@ -9,47 +9,46 @@ Verifies fix for https://github.com/volcengine/OpenViking/issues/251:
 
 import pytest
 
-from openviking.parse.accessors.http_accessor import HTTPAccessor
-from openviking.parse.parsers.html import HTMLParser, URLType, URLTypeDetector
+from openviking.parse.accessors.http_accessor import HTTPAccessor, URLType, URLTypeDetector
 
 
 class TestExtractFilenameFromUrl:
-    """Test HTMLParser._extract_filename_from_url."""
+    """Test HTTPAccessor._extract_filename_from_url."""
 
     def test_simple_filename(self):
         url = "https://example.com/path/to/schemas.py"
-        assert HTMLParser._extract_filename_from_url(url) == "schemas.py"
+        assert HTTPAccessor._extract_filename_from_url(url) == "schemas.py"
 
     def test_url_encoded_path(self):
         url = "https://example.com/%E7%99%BE%E5%BA%A64/src/baidu_search/schemas.py"
-        assert HTMLParser._extract_filename_from_url(url) == "schemas.py"
+        assert HTTPAccessor._extract_filename_from_url(url) == "schemas.py"
 
     def test_url_encoded_filename(self):
         url = "https://example.com/path/%E6%96%87%E4%BB%B6.py"
-        assert HTMLParser._extract_filename_from_url(url) == "\u6587\u4ef6.py"
+        assert HTTPAccessor._extract_filename_from_url(url) == "\u6587\u4ef6.py"
 
     def test_query_params_ignored(self):
         url = "https://example.com/file.py?version=2&token=abc"
-        assert HTMLParser._extract_filename_from_url(url) == "file.py"
+        assert HTTPAccessor._extract_filename_from_url(url) == "file.py"
 
     def test_no_filename_fallback(self):
         url = "https://example.com/"
-        assert HTMLParser._extract_filename_from_url(url) == "download"
+        assert HTTPAccessor._extract_filename_from_url(url) == "download"
 
     def test_cos_url(self):
         url = (
             "https://cos.ap-beijing.myqcloud.com/bucket/"
             "%E7%99%BE%E5%BA%A64/src/baidu_search/schemas.py"
         )
-        assert HTMLParser._extract_filename_from_url(url) == "schemas.py"
+        assert HTTPAccessor._extract_filename_from_url(url) == "schemas.py"
 
     def test_markdown_extension(self):
         url = "https://example.com/docs/README.md"
-        assert HTMLParser._extract_filename_from_url(url) == "README.md"
+        assert HTTPAccessor._extract_filename_from_url(url) == "README.md"
 
     def test_no_extension(self):
         url = "https://example.com/path/Makefile"
-        assert HTMLParser._extract_filename_from_url(url) == "Makefile"
+        assert HTTPAccessor._extract_filename_from_url(url) == "Makefile"
 
 
 class TestURLTypeDetectorCodeExtensions:

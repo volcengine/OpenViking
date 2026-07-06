@@ -155,6 +155,31 @@ export function resolveInitialApiKey({
   return envApiKey || storedApiKey || defaultApiKey
 }
 
+export function resolveConnectionRoleProbeState({
+  apiKey,
+  baseUrl,
+  serverMode,
+}: {
+  apiKey: string
+  baseUrl: string
+  serverMode: ServerMode
+}): {
+  isLoading: boolean
+  role: ConnectionRole
+  shouldProbe: boolean
+} {
+  if (!baseUrl) {
+    return { isLoading: false, role: 'unknown', shouldProbe: false }
+  }
+  if (serverMode === 'dev') {
+    return { isLoading: false, role: 'root', shouldProbe: false }
+  }
+  if (!apiKey) {
+    return { isLoading: false, role: 'unknown', shouldProbe: false }
+  }
+  return { isLoading: true, role: 'unknown', shouldProbe: true }
+}
+
 function applyConnection(
   connection: ConnectionDraft,
   serverMode: ServerMode,
@@ -183,6 +208,14 @@ async function detectConnectionIdentity(
   const apiKey = connection.adminApiKey || connection.apiKey
   if (apiKey) {
     headers['X-API-Key'] = apiKey
+  }
+  // Identity headers are required for trusted-mode identity resolution.
+  // In api_key mode the server strips them, so they are always safe to send.
+  if (connection.accountId) {
+    headers['X-OpenViking-Account'] = connection.accountId
+  }
+  if (connection.userId) {
+    headers['X-OpenViking-User'] = connection.userId
   }
 
   const response = await fetch(
@@ -331,10 +364,15 @@ export function AppConnectionProvider({
   React.useEffect(() => {
     let cancelled = false
     const apiKey = connection.adminApiKey || connection.apiKey
+    const roleProbe = resolveConnectionRoleProbeState({
+      apiKey,
+      baseUrl: connection.baseUrl,
+      serverMode,
+    })
 
-    setConnectionRole('unknown')
-    setConnectionRoleLoading(Boolean(connection.baseUrl && apiKey))
-    if (!connection.baseUrl || !apiKey) {
+    setConnectionRole(roleProbe.role)
+    setConnectionRoleLoading(roleProbe.isLoading)
+    if (!roleProbe.shouldProbe) {
       return () => {
         cancelled = true
       }
@@ -374,6 +412,7 @@ export function AppConnectionProvider({
     connection.apiKey,
     connection.baseUrl,
     connection.userId,
+    serverMode,
   ])
 
   React.useEffect(() => {

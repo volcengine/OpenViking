@@ -72,10 +72,11 @@ async def test_health_endpoint(client: httpx.AsyncClient):
     assert body["status"] == "ok"
 
 
-async def test_health_endpoint_never_resolves_identity(caplog):
+async def test_health_endpoint_resolves_identity_with_api_key(caplog):
+    """When an API key is provided, /health should return identity information."""
     app = create_app(
         config=ServerConfig(
-            auth_mode="trusted",
+            auth_mode="api_key",
             host="127.0.0.1",
             root_api_key="test-root-key",
         ),
@@ -90,11 +91,35 @@ async def test_health_endpoint_never_resolves_identity(caplog):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["auth_mode"] == "trusted"
+    assert body["auth_mode"] == "api_key"
+    assert "account_id" in body
+    assert "user_id" in body
+    assert "role" in body
+    assert body["role"] == "root"
+    assert "Failed to resolve identity" not in caplog.text
+
+
+async def test_health_endpoint_without_api_key():
+    """Without an API key, /health should not return identity information."""
+    app = create_app(
+        config=ServerConfig(
+            auth_mode="api_key",
+            host="127.0.0.1",
+            root_api_key="test-root-key",
+        ),
+        service=SimpleNamespace(),
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/health")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
     assert "account_id" not in body
     assert "user_id" not in body
     assert "role" not in body
-    assert "Failed to resolve identity" not in caplog.text
 
 
 async def test_system_status(client: httpx.AsyncClient):
