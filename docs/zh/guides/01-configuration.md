@@ -1181,7 +1181,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'qdrant' 或 'opengauss' | "local" |
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'qdrant', 'opengauss' 或 'pgvector' | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1192,6 +1192,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
 | `qdrant` | object | 'qdrant' 类型的 Qdrant 配置 | - |
 | `opengauss` | object | 'opengauss' 原生向量后端配置 | - |
+| `pgvector` | object | 'pgvector' PostgreSQL + pgvector 后端配置 | - |
 
 默认使用本地模式
 ```
@@ -1256,6 +1257,47 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 ```
 
 分布式 openGauss 部署可将 `mode` 设为 `"distributed"`；OpenViking 会尝试把元数据表标记为 reference table，并按 `id` 分布集合表。
+</details>
+
+<details>
+<summary><b>pgvector (PostgreSQL)</b></summary>
+
+需要安装了 [pgvector](https://github.com/pgvector/pgvector) 扩展的 PostgreSQL（HNSW 需 >= 0.5.0；>= 0.8.0 可启用选择性过滤下的 iterative-scan 召回修复）。可通过 `pip install "openviking[pgvector]"` 安装可选驱动。本地最快的方式是 `docker compose up -d pgvector`（见 `docker-compose.yml`）。
+
+可**二选一**：提供 `url` DSN（优先级更高），或提供离散的 `host`/`port`/`user`/`password`/`db_name` 字段。
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "pgvector",
+      "project": "default",
+      "distance_metric": "cosine",
+      "dimension": 1024,
+      "pgvector": {
+        "url": "postgresql://user:password@127.0.0.1:5432/postgres",
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "postgres",
+        "password": "your-password",
+        "db_name": "postgres",
+        "schema": "public",
+        "sslmode": "prefer",
+        "index_type": "hnsw",
+        "index_params": {"m": 16, "ef_construction": 64},
+        "pool_size": 1,
+        "create_extension": true
+      }
+    }
+  }
+}
+```
+
+- `distance_metric` 支持 `cosine`、`l2`、`ip`（对应 pgvector 的 `<=>` / `<->` / `<#>` 运算符）。
+- `index_type` 为 `hnsw`（v1 索引）；`index_params` 调节构建（`m`、`ef_construction`）与查询（`ef_search`）。
+- `create_extension` 会在连接时通过 advisory lock 执行 `CREATE EXTENSION IF NOT EXISTS vector`。对于已预置扩展的托管 PostgreSQL（RDS / Cloud SQL），可将其设为 `false`。
+- `sslmode` 透传给 libpq（`prefer`、`require`、`disable` 等）。`pool_size > 1` 时使用线程连接池。
 </details>
 
 

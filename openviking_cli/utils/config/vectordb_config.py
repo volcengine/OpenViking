@@ -126,6 +126,83 @@ class OpenGaussConfig(BaseModel):
         return self
 
 
+class PgVectorConfig(BaseModel):
+    """Configuration for PostgreSQL + pgvector native vector backend."""
+
+    url: Optional[str] = Field(
+        default=None,
+        description="PostgreSQL DSN (e.g. 'postgresql://user:pass@host:5432/db'). "
+        "Takes priority over discrete host/port/user/password fields when set.",
+    )
+    host: Optional[str] = Field(
+        default="127.0.0.1",
+        description="PostgreSQL host address.",
+    )
+    port: int = Field(default=5432, description="PostgreSQL port")
+    user: str = Field(default="postgres", description="Database user")
+    password: str = Field(default="", description="Database password")
+    db_name: str = Field(default="postgres", description="Database name")
+    schema_name: str = Field(
+        default="public",
+        alias="schema",
+        description="Database schema for OpenViking tables",
+    )
+    sslmode: str = Field(
+        default="prefer",
+        description="libpq sslmode ('prefer', 'require', 'disable', ...).",
+    )
+    connect_timeout: int = Field(default=10, description="Database connection timeout in seconds")
+    pool_size: int = Field(
+        default=1,
+        description="Connection pool size. 1 uses a single lock-serialized connection; "
+        ">1 uses a ThreadedConnectionPool.",
+    )
+    create_extension: bool = Field(
+        default=True,
+        description="Run 'CREATE EXTENSION IF NOT EXISTS vector' on connect. "
+        "Set false for pre-provisioned managed PostgreSQL (RDS/Cloud SQL).",
+    )
+    index_type: str = Field(default="hnsw", description="Vector index type ('hnsw').")
+    index_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extra index build parameters (e.g. {'m': 16, 'ef_construction': 64}).",
+    )
+    dense_vector_name: str = Field(default="vector", description="Dense vector column name")
+    sparse_vector_name: str = Field(
+        default="sparse_vector", description="Sparse vector JSON column name"
+    )
+
+    model_config = {"extra": "forbid", "populate_by_name": True}
+
+    @model_validator(mode="after")
+    def validate_pgvector(self):
+        self.schema_name = (self.schema_name or "public").strip()
+        if not self.schema_name:
+            raise ValueError("pgvector schema must not be empty")
+        # Normalize then re-check: a whitespace-only name is truthy so the
+        # `or "vector"` fallback never fires, yet strips to "" — an empty SQL
+        # identifier. Reject it here with a clear error instead of failing later
+        # with an opaque SQL error.
+        self.dense_vector_name = (self.dense_vector_name or "vector").strip()
+        if not self.dense_vector_name:
+            raise ValueError("pgvector dense_vector_name must not be empty")
+        self.sparse_vector_name = (self.sparse_vector_name or "sparse_vector").strip()
+        if not self.sparse_vector_name:
+            raise ValueError("pgvector sparse_vector_name must not be empty")
+        # Fail fast on non-integer numeric index params so misconfiguration
+        # surfaces at config load, not deep in collection creation.
+        for key in ("m", "ef_construction", "ef_search", "max_scan_tuples"):
+            if key in self.index_params and self.index_params[key] is not None:
+                try:
+                    self.index_params[key] = int(self.index_params[key])
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        f"pgvector index_params[{key!r}] must be an integer, "
+                        f"got {self.index_params[key]!r}"
+                    )
+        return self
+
+
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
@@ -139,7 +216,7 @@ class VectorDBBackendConfig(BaseModel):
         description=(
             "VectorDB backend type: 'local', 'http', "
             "'volcengine' (AK/SK signed or API key data-plane only), "
-            "'vikingdb' (private deployment), 'qdrant', or 'opengauss'"
+            "'vikingdb' (private deployment), 'qdrant', 'opengauss', or 'pgvector'"
         ),
     )
 
@@ -203,6 +280,11 @@ class VectorDBBackendConfig(BaseModel):
         description="openGauss configuration for 'opengauss' type",
     )
 
+    pgvector: Optional[PgVectorConfig] = Field(
+        default_factory=PgVectorConfig,
+        description="PostgreSQL + pgvector configuration for 'pgvector' type",
+    )
+
     custom_params: Dict[str, Any] = Field(
         default_factory=dict,
         description="Custom parameters for custom backend adapters",
@@ -213,7 +295,15 @@ class VectorDBBackendConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        standard_backends = ["local", "http", "volcengine", "vikingdb", "qdrant", "opengauss"]
+        standard_backends = [
+            "local",
+            "http",
+            "volcengine",
+            "vikingdb",
+            "qdrant",
+            "opengauss",
+            "pgvector",
+        ]
 
         # Allow custom backend classes (containing dot) without standard validation
         if "." in self.backend:
@@ -282,5 +372,15 @@ class VectorDBBackendConfig(BaseModel):
             if not self.opengauss.host:
                 raise ValueError("VectorDB opengauss backend requires 'opengauss.host' to be set")
             self.opengauss.host = self.opengauss.host.strip()
+
+        elif self.backend == "pgvector":
+            if self.pgvector is None:
+                self.pgvector = PgVectorConfig()
+            # Priority chain (mem0-style): url wins over discrete host/port fields.
+            # Normalize whitespace to None first so a blank value never masks a real one.
+            self.pgvector.url = (self.pgvector.url or "").strip() or None
+            self.pgvector.host = (self.pgvector.host or "").strip() or None
+            if not (self.pgvector.url or self.pgvector.host):
+                raise ValueError("VectorDB pgvector backend requires 'url' or 'host' to be set")
 
         return self
