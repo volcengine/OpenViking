@@ -395,6 +395,36 @@ async def test_offline_policy_optimization_pipeline_supports_train_and_eval():
 
 
 @pytest.mark.asyncio
+async def test_offline_policy_optimization_pipeline_allows_zero_train_epochs():
+    executor = DummyExecutor()
+    snapshotter = DummySnapshotter()
+    pipeline = OfflinePolicyOptimizationPipeline(
+        snapshotter=snapshotter,
+        rollout_executor=executor,
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+    )
+
+    result = await pipeline.train(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=_policy_set(),
+        context=PipelineContext(max_epochs=0),
+    )
+
+    assert result.epochs == []
+    assert result.analyses == []
+    assert result.gradients == []
+    assert result.evaluation_passes == []
+    assert result.metadata["max_epochs"] == 0
+    assert result.metadata["completed_epochs"] == 0
+    assert result.apply_result.updated_policy_set.policies[0].version == 1
+    assert executor.calls == 0
+    assert snapshotter.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_train_trials_expands_training_cases_per_epoch():
     class RecordingExecutor(DummyExecutor):
         def __init__(self):
