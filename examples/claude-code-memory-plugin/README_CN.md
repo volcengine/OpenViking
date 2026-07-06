@@ -9,10 +9,10 @@
 ### 一行安装（推荐）
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness claude
 ```
 
-仅支持 macOS 和 Linux。脚本是共享 OpenViking memory installer 的薄入口：会校验依赖、配置 `~/.openviking/ovcli.conf`、安装 `openviking-memory`、清理旧的本地插件 id，并通过 stdio MCP 代理读取配置，所以不再需要 shell wrapper 或 `.mcp.json` 渲染。重复执行安全。
+仅支持 macOS 和 Linux。Claude Code 和 Codex 共用这一个安装脚本（去掉 `--harness claude` 可交互勾选）：它会依次询问界面语言（English/中文）、下载源（GitHub，或 GitHub 受限地区用 TOS 镜像——传 `--dist tos`）和 OpenViking 凭据，然后从远程 marketplace 安装 `openviking-memory`。stdio MCP 代理运行时读取 `ovcli.conf`，不再需要 shell wrapper 或 `.mcp.json` 渲染。重复执行安全。
 
 如果你更喜欢手动操作，按下面四步走。
 

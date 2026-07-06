@@ -6,25 +6,21 @@ Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenV
 
 ## Install
 
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
-```
-
-The installer checks dependencies, configures your OpenViking connection, and installs the plugin. Every step is idempotent—re-running it is entirely safe.
-
-In regions where GitHub is hard to reach, use the equivalent command below:
+Claude Code and Codex share one installer. It asks for your language (English/中文), which harnesses to install, the download source, and your OpenViking credentials; every step is idempotent—re-running it is entirely safe.
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/claude-code-memory-plugin/tos-install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
 ```
 
-After installation, activate the `claude` wrapper in your current terminal (or simply open a new terminal window):
+In regions where GitHub is hard to reach, run the same installer from the Volcengine TOS mirror (or pick "TOS mirror" at the download-source prompt):
 
 ```bash
-source ~/.openviking/openviking-repo/examples/claude-code-memory-plugin/setup-helper/wrapper.sh
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
 ```
 
-> Launch Claude Code through a custom command? A wrapper script like `cc-custom`, or a multi-word launcher (a base command plus a sub-command) — list it at the installer's "Extra launch commands" step (or pass `OPENVIKING_CC_WRAP_EXTRA='cc-custom'`) to inject credentials there too.
+> **TOS caveat for Claude Code**: the TOS channel registers a local directory marketplace, which cannot auto-update — re-run the installer to update. (Codex on TOS installs from a TOS-hosted git repo and keeps remote updates.)
+
+No shell wrapper is needed anymore: the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` (or `OPENVIKING_*` env vars) at runtime, same as the hooks.
 
 After using it for a while, try starting a new conversation and asking about something you mentioned earlier—it will remember.
 
@@ -33,41 +29,30 @@ After using it for a while, try starting a new conversation and asking about som
 
 If you prefer to set it up manually:
 
-1. **Wrap `claude`**: Add these two lines to the end of your `~/.zshrc` (for zsh) or `~/.bashrc` (for bash), replacing `<repo-path>` with the absolute path to your local repository. This ensures each `claude` invocation injects `OPENVIKING_URL` and `OPENVIKING_API_KEY` from `~/.openviking/ovcli.conf`, keeping the API key scoped to the `claude` process tree:
+1. **Configure the connection** — write `~/.openviking/ovcli.conf` (`url`, `api_key`, optional `account`/`user`), or run the bundled wizard `node <plugin-dir>/scripts/setup.mjs` after installing.
+
+2. **Install the plugin** from the remote marketplace (no clone needed):
 
    ```bash
-   _ov_wrapper="<repo-path>/examples/claude-code-memory-plugin/setup-helper/wrapper.sh"
-   [ -f "$_ov_wrapper" ] && source "$_ov_wrapper"
+   claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
+   claude plugin install openviking-memory@openviking
    ```
 
-   For details on the function implementation and why a global `export` is not used, see the [plugin README → Configuring MCP](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuring-mcp).
+   Or, for development, register a local checkout: `claude plugin marketplace add "<repo>/examples"` then install the same plugin id.
 
-2. **Install the plugin** from the OpenViking repository root:
-
-   ```bash
-   claude plugin marketplace add "$(pwd)/examples"
-   claude plugin install claude-code-memory-plugin@openviking-plugins-local
-   ```
-
-3. **Start Claude Code** and run `/mcp` to verify that the OpenViking entry displays your server URL.
+3. **Start Claude Code** and run `/mcp` to verify that the OpenViking entry is connected.
 
 > Don't have `ovcli.conf` yet? See the [Deployment Guide → CLI](../guides/03-deployment.md#cli).
 >
 > Using pure local mode (`http://127.0.0.1:1933`, no authentication)? Skip step 1—the plugin automatically defaults to the local setup.
 >
-> Running Claude Code < 2.0? See the [Legacy mode section in the plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#legacy-mode-claude-code--20).
+> Running Claude Code < 2.0? The installer detects it and falls back to `claude mcp add` + a hooks merge automatically; see the [Legacy mode section in the plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#legacy-mode-claude-code--20).
 
 </details>
 
 ## Verify
 
-```bash
-type claude        # expect: claude is a shell function
-```
-
-> If the previous command printed a path instead of `shell function`, the wrapper isn't active yet. Re-source it (or open a new terminal) before launching `claude`, otherwise it silently connects to `127.0.0.1` with no auth.
-
-Launch `claude` from the terminal where `type claude` reports a shell function, then:
+Launch `claude`, then:
 
 - `/plugins` → Verify that **openviking-memory** is listed under "Installed", with the **openviking** MCP connected below it.
 - `/mcp` → Ensure the OpenViking entry displays your server URL along with valid authentication.
@@ -117,9 +102,8 @@ The plugin renders an OpenViking status indicator beneath your Claude Code input
 |---------|-------|-----|
 | Plugin is not activating | Missing `ov.conf` or `ovcli.conf` | Run the [installer](#install), or set `OPENVIKING_MEMORY_ENABLED=1` along with the URL/API_KEY environment variables |
 | Hooks fire but recall is empty | Server is not running or the URL is incorrect | Check server health: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| MCP tools hit `127.0.0.1` instead of the remote server | Missing function wrapper | Ensure `type claude` outputs "shell function"; see [Manual setup](#install) |
-| `type claude` shows a path instead of a shell function (wrapper inactive) | The rc wasn't `source`d after install, or you launched from a terminal that didn't load it | Run `source ~/.zshrc` (or `~/.bashrc` on bash), or open a new terminal |
-| Launching via an alias (e.g. `cc`) injects no credentials | The alias *name* was listed in `OPENVIKING_CC_WRAP_EXTRA` (alias names are skipped), or the alias's target command isn't wrapped | Wrap the command the alias points to, not the alias: `alias cc=claude` needs nothing; for `alias cc=claude-custom`, add `claude-custom` |
+| MCP tools hit `127.0.0.1` instead of the remote server | `~/.openviking/ovcli.conf` has no `url` (the proxy falls back to the local default) | Fix `ovcli.conf` (or run `node <plugin-dir>/scripts/setup.mjs`), then restart Claude Code |
+| MCP tool calls fail with an auth error | The active ovcli config has no valid `api_key` for an authenticated server | Update the `api_key` in `ovcli.conf`; the stdio proxy re-reads it after auth failures |
 | Remote auth 401 / 403 | Incorrect API key or missing tenant headers | Verify `OPENVIKING_API_KEY`; for multi-tenant setups, also check `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
 
 ## See also

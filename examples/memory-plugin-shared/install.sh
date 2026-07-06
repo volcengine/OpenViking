@@ -4,17 +4,29 @@
 #
 # One-liner (GitHub):
 #   bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
+# One-liner (TOS mirror, for regions where GitHub is unreachable):
+#   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
 # Non-interactive:
-#   bash install.sh --harness claude,codex --source remote --url http://127.0.0.1:1933 --api-key ''
+#   bash install.sh --harness claude,codex --dist github --lang en --url http://127.0.0.1:1933 --api-key ''
 # Fork / branch verification:
 #   OPENVIKING_REPO_URL=https://github.com/you/OpenViking.git \
 #   OPENVIKING_REPO_REF=my-branch bash install.sh --source remote
 #
-# Source modes (--source, auto-detected when omitted):
-#   remote   Register remote marketplaces (git-subdir for Claude Code, git for
-#            Codex). No repo clone. Default.
-#   archive  Download the marketplace archive (TOS / GitHub-free) and register
-#            it as a local directory marketplace for both harnesses.
+# Distribution channels (--dist, prompted interactively):
+#   github  Remote marketplaces straight from GitHub (default). Claude Code
+#           uses a synthesized git-subdir manifest; Codex adds the repo as a
+#           git marketplace. No repo clone, updates via plugin/marketplace
+#           update commands.
+#   tos     Volcengine TOS mirror, zero GitHub access. Codex adds a TOS-hosted
+#           git repo (dumb HTTP) and CAN update remotely; Claude Code uses a
+#           downloaded archive as a local directory marketplace and must
+#           re-run this installer to update (git dumb HTTP can't serve Claude
+#           Code's shallow clones).
+#
+# Source modes (--source, advanced override; auto-detected when omitted):
+#   remote   Remote marketplaces (see --dist). Default.
+#   archive  Download the marketplace archive and register it as a local
+#            directory marketplace for both harnesses.
 #   dev      Register this checkout's examples/ directory as the marketplace.
 #            Auto-selected when running from a repo checkout.
 #
@@ -33,12 +45,15 @@ REPO_DIR="${OPENVIKING_REPO_DIR:-$OV_HOME/openviking-repo}"
 REPO_REF="${OPENVIKING_REPO_REF:-${OPENVIKING_REPO_BRANCH:-main}}"
 REPO_ARCHIVE_URL="${OPENVIKING_REPO_ARCHIVE_URL:-}"
 MKT_ARCHIVE_URL="${OPENVIKING_MARKETPLACE_ARCHIVE_URL:-}"
+TOS_BASE="${OPENVIKING_TOS_BASE:-https://ovrelease.tos-cn-beijing.volces.com}"
+TOS_BASE="${TOS_BASE%/}"
+CODEX_TOS_GIT_URL="${OPENVIKING_CODEX_TOS_GIT_URL:-$TOS_BASE/plugins/memory-plugins.git}"
 ARCHIVE_MARKER='.openviking-archive-source'
 OVCLI_CONF="${OPENVIKING_CLI_CONFIG_FILE:-$OV_HOME/ovcli.conf}"
 
 # One marketplace name everywhere. Claude Code and Codex keep separate
-# registries, and within one harness the three source modes are alternative
-# channels for the same plugin — a single name keeps the plugin id
+# registries, and within one harness the source modes are alternative channels
+# for the same plugin — a single name keeps the plugin id
 # (openviking-memory@openviking) and its per-id config stable across modes.
 MARKETPLACE_NAME="${OPENVIKING_MARKETPLACE_NAME:-openviking}"
 PLUGIN_NAME="openviking-memory"
@@ -61,6 +76,8 @@ CC_REMOTE_MANIFEST="$CC_REMOTE_MKT_DIR/.claude-plugin/marketplace.json"
 
 REQUESTED_HARNESSES=""
 SOURCE_ARG=""
+DIST_ARG=""
+LANG_ARG=""
 URL_ARG=""
 API_KEY_ARG="__OPENVIKING_UNSET__"
 ACCOUNT_ARG="__OPENVIKING_UNSET__"
@@ -72,6 +89,8 @@ CHECKOUT_DIR=""     # repo checkout the script itself lives in, when applicable
 SRC_ROOT=""         # local source root once ensured (checkout or $REPO_DIR)
 MKT_DIR=""          # directory marketplace root for archive/dev modes
 SOURCE_MODE=""
+DIST="github"
+UI_LANG="en"
 
 if [ -t 1 ]; then
   CYAN=$'\033[0;36m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; RED=$'\033[0;31m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
@@ -84,13 +103,18 @@ err()     { printf '%sxx%s  %s\n' "$RED" "$RESET" "$*" >&2; }
 ask()     { printf '%s??%s  %s' "$CYAN" "$RESET" "$*"; }
 heading() { printf '\n%s%s%s\n' "$BOLD" "$*" "$RESET"; }
 
+# t <english> <chinese> — pick the UI language variant.
+t() { if [ "$UI_LANG" = "zh" ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+
 usage() {
   cat <<EOF
 Usage: install.sh [options]
 
 Options:
   --harness LIST     Comma-separated harnesses: claude, codex, or both.
-  --source MODE      remote | archive | dev (default: auto-detect).
+  --dist CHANNEL     github (default) | tos (mirror for GitHub-blocked regions).
+  --lang LANG        en | zh (interactive prompts language; auto-detected).
+  --source MODE      Advanced: remote | archive | dev (default: auto-detect).
   --url URL          OpenViking server base URL.
   --api-key KEY      OpenViking API key. Pass '' for unauthenticated local mode.
   --account ID       Optional OpenViking account.
@@ -104,6 +128,8 @@ EOF
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --harness) REQUESTED_HARNESSES="${2:-}"; shift 2 ;;
+    --dist) DIST_ARG="${2:-}"; shift 2 ;;
+    --lang) LANG_ARG="${2:-}"; shift 2 ;;
     --source) SOURCE_ARG="${2:-}"; shift 2 ;;
     --url) URL_ARG="${2:-}"; shift 2 ;;
     --api-key) API_KEY_ARG="${2-}"; shift 2 ;;
@@ -136,6 +162,44 @@ read_tty() { # read_tty <varname> [-s]
   eval "$__var=\$__val"
 }
 
+# ---------------------------------------------------------------------------
+# UI language
+# ---------------------------------------------------------------------------
+
+detect_lang_default() {
+  case "${OPENVIKING_LANG:-${LC_ALL:-${LANG:-}}}" in
+    zh*|*zh_CN*|*zh_TW*|*zh_HK*) printf 'zh' ;;
+    *) printf 'en' ;;
+  esac
+}
+
+select_language() {
+  local detected reply
+  detected="$(detect_lang_default)"
+  if [ -n "$LANG_ARG" ]; then
+    UI_LANG="$LANG_ARG"
+  elif [ "$INTERACTIVE" -eq 1 ]; then
+    printf '%sLanguage / 语言:%s  1) English  2) 中文\n' "$BOLD" "$RESET"
+    if [ "$detected" = "zh" ]; then
+      ask '[1/2, default 2]: '
+    else
+      ask '[1/2, default 1]: '
+    fi
+    read_tty reply
+    case "$reply" in
+      1) UI_LANG="en" ;;
+      2) UI_LANG="zh" ;;
+      *) UI_LANG="$detected" ;;
+    esac
+  else
+    UI_LANG="$detected"
+  fi
+  case "$UI_LANG" in
+    en|zh) ;;
+    *) err "Invalid --lang: $UI_LANG (expected en or zh)"; exit 2 ;;
+  esac
+}
+
 split_harnesses() {
   printf '%s\n' "$1" | tr ',' '\n' | while IFS= read -r h; do
     h=$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
@@ -163,6 +227,13 @@ json_get() {
       if (v != null && v !== "") process.stdout.write(String(v));
     } catch {}
   ' "$file" "$key" 2>/dev/null || true
+}
+
+mask_secret() {
+  local s="$1"
+  if [ -z "$s" ]; then printf '%s' "$(t '(not set)' '（未设置）')"; return; fi
+  if [ "${#s}" -le 8 ]; then printf '****'; return; fi
+  printf '%s…%s (%s)' "$(printf '%s' "$s" | cut -c1-4)" "$(printf '%s' "$s" | tail -c 4)" "${#s}"
 }
 
 json_merge_ovcli() {
@@ -200,7 +271,11 @@ tui_item_line() { # tui_item_line <index> <selected> <label> <detected>
   local mark='[ ]' cur='  ' note=''
   [ "$2" -eq 1 ] && mark="[${GREEN}x${RESET}]"
   [ "$TUI_CURSOR" -eq "$1" ] && cur="${CYAN}>${RESET} "
-  [ "$4" -eq 1 ] && note="  ${GREEN}(detected)${RESET}" || note="  ${YELLOW}(not found in PATH)${RESET}"
+  if [ "$4" -eq 1 ]; then
+    note="  ${GREEN}$(t '(detected)' '（已检测到）')${RESET}"
+  else
+    note="  ${YELLOW}$(t '(not found in PATH)' '（PATH 中未找到）')${RESET}"
+  fi
   printf '\r\033[K %s%s %s%s\n' "$cur" "$mark" "$3" "$note" >/dev/tty
 }
 
@@ -208,7 +283,7 @@ tui_draw() {
   [ "$TUI_LINES" -gt 0 ] && printf '\033[%dA' "$TUI_LINES" >/dev/tty
   tui_item_line 0 "$SEL_CLAUDE" "Claude Code" "$HAVE_CLAUDE"
   tui_item_line 1 "$SEL_CODEX" "Codex" "$HAVE_CODEX"
-  printf '\r\033[K   %s↑/↓ move · space toggle · a all · enter confirm%s\n' "$CYAN" "$RESET" >/dev/tty
+  printf '\r\033[K   %s%s%s\n' "$CYAN" "$(t '↑/↓ move · space toggle · a all · enter confirm' '↑/↓ 移动 · 空格勾选 · a 全选 · 回车确认')" "$RESET" >/dev/tty
   TUI_LINES=3
 }
 
@@ -216,7 +291,7 @@ tui_select_harnesses() {
   local key rest
   SEL_CLAUDE=$HAVE_CLAUDE; SEL_CODEX=$HAVE_CODEX
   if [ "$SEL_CLAUDE$SEL_CODEX" = "00" ]; then SEL_CLAUDE=1; SEL_CODEX=1; fi
-  printf '%sSelect the harnesses to install for:%s\n' "$BOLD" "$RESET" >/dev/tty
+  printf '%s%s%s\n' "$BOLD" "$(t 'Select the harnesses to install for:' '选择要安装的 harness：')" "$RESET" >/dev/tty
   printf '\033[?25l' >/dev/tty
   trap 'printf "\033[?25h" >/dev/tty' EXIT
   TUI_LINES=0
@@ -267,8 +342,8 @@ select_harnesses() {
   if [ "$INTERACTIVE" -eq 1 ] && [ -w /dev/tty ]; then
     tui_select_harnesses
   elif [ "$INTERACTIVE" -eq 1 ]; then
-    info "Detected harnesses: ${detected:-none}"
-    ask "Install harnesses [${default}]: "
+    info "$(t 'Detected harnesses:' '检测到的 harness：') ${detected:-none}"
+    ask "$(t 'Install harnesses' '要安装的 harness') [${default}]: "
     read_tty reply
     SELECTED_HARNESSES="${reply:-$default}"
   else
@@ -290,16 +365,78 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Distribution channel (github vs tos mirror)
+# ---------------------------------------------------------------------------
+
+select_dist() {
+  local reply
+  if [ -n "$DIST_ARG" ]; then
+    DIST="$DIST_ARG"
+  elif [ "$INTERACTIVE" -eq 1 ] && [ -z "$SOURCE_ARG" ] && [ -z "$CHECKOUT_DIR" ]; then
+    printf '%s%s%s\n' "$BOLD" "$(t 'Where should the plugins be downloaded from?' '插件从哪里下载？')" "$RESET"
+    printf '  1) GitHub    %s\n' "$(t '(default; supports remote updates)' '（默认；支持远程更新）')"
+    printf '  2) %s\n' "$(t 'Volcengine TOS mirror (use when GitHub is unreachable)' '火山引擎 TOS 镜像（无法访问 GitHub 时使用）')"
+    ask '[1/2, default 1]: '
+    read_tty reply
+    case "$reply" in
+      2) DIST="tos" ;;
+      *) DIST="github" ;;
+    esac
+  fi
+  case "$DIST" in
+    github|tos) ;;
+    *) err "Invalid --dist: $DIST (expected github or tos)"; exit 2 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # ovcli.conf wizard
 # ---------------------------------------------------------------------------
 
+prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KEEP__)
+  local current_url="$1" current_key="$2" mode url_input reply
+  printf '%s%s%s\n' "$BOLD" "$(t 'Where do you connect to OpenViking?' '连接到哪个 OpenViking 服务？')"  "$RESET"
+  printf '  1) %s [http://127.0.0.1:1933]\n' "$(t 'Self-hosted / local' '自建 / 本地')"
+  printf '  2) %s [https://api.vikingdb.cn-beijing.volces.com/openviking]\n' "$(t 'Volcengine OpenViking Cloud' '火山引擎 OpenViking 云服务')"
+  printf '  3) %s [%s]\n' "$(t 'Custom URL / keep current' '自定义 URL / 保持当前')" "${current_url:-http://127.0.0.1:1933}"
+  ask '[1/2/3]: '
+  read_tty mode
+  case "$mode" in
+    1) WIZ_URL="http://127.0.0.1:1933" ;;
+    2) WIZ_URL="https://api.vikingdb.cn-beijing.volces.com/openviking" ;;
+    *)
+      ask "$(t 'Server URL' '服务地址') [${current_url:-http://127.0.0.1:1933}]: "
+      read_tty url_input
+      WIZ_URL="${url_input:-${current_url:-http://127.0.0.1:1933}}"
+      ;;
+  esac
+
+  if [ -n "$current_key" ]; then
+    ask "$(t "API key [enter = keep $(mask_secret "$current_key"), '-' = clear]: " "API key [回车 = 保留 $(mask_secret "$current_key")，输入 '-' 清空]: ")"
+  else
+    ask "$(t 'API key (leave empty for unauthenticated local mode): ' 'API key（本地免鉴权模式请直接回车）: ')"
+  fi
+  read_tty reply -s
+  if [ "$reply" = "-" ]; then
+    WIZ_KEY=""
+  elif [ -n "$reply" ]; then
+    WIZ_KEY="$reply"
+  else
+    WIZ_KEY="__OPENVIKING_KEEP__"
+    [ -z "$current_key" ] && WIZ_KEY=""
+  fi
+}
+
 configure_ovcli() {
-  local current_url url key account user reply mode url_input
-  heading "2. OpenViking client config ($OVCLI_CONF)"
+  local current_url current_key current_account current_user url key account user reply
+  heading "$(t '2. OpenViking credentials' '2. OpenViking 凭据配置') ($OVCLI_CONF)"
   mkdir -p "$OV_HOME"
   chmod 700 "$OV_HOME" 2>/dev/null || true
 
   current_url="$(json_get "$OVCLI_CONF" url)"
+  current_key="$(json_get "$OVCLI_CONF" api_key)"
+  current_account="$(json_get "$OVCLI_CONF" account)"
+  current_user="$(json_get "$OVCLI_CONF" user)"
 
   url="$current_url"
   key="__OPENVIKING_KEEP__"
@@ -311,35 +448,43 @@ configure_ovcli() {
   [ "$ACCOUNT_ARG" != "__OPENVIKING_UNSET__" ] && account="$ACCOUNT_ARG"
   [ "$USER_ARG" != "__OPENVIKING_UNSET__" ] && user="$USER_ARG"
 
-  if [ -z "$url" ] && [ "$INTERACTIVE" -eq 1 ]; then
-    printf '%sChoose where you will connect to OpenViking:%s\n' "$BOLD" "$RESET"
-    printf '  1) Self-hosted / local                          [default: http://127.0.0.1:1933]\n'
-    printf '  2) Volcengine OpenViking Cloud                  [https://api.vikingdb.cn-beijing.volces.com/openviking]\n'
-    ask '[1/2, default 1]: '
-    read_tty mode
-    case "$mode" in
-      2) url="https://api.vikingdb.cn-beijing.volces.com/openviking" ;;
-      *)
-        ask 'OpenViking server URL [http://127.0.0.1:1933]: '
-        read_tty url_input
-        url="${url_input:-http://127.0.0.1:1933}"
-        ;;
-    esac
+  # Show what is configured today, then offer to keep or reconfigure.
+  if [ -n "$current_url" ] || [ -n "$current_key" ]; then
+    info "$(t 'Current config:' '当前配置：')"
+    info "  url:     ${current_url:-$(t '(not set)' '（未设置）')}"
+    info "  api_key: $(mask_secret "$current_key")"
+    [ -n "$current_account" ] && info "  account: $current_account"
+    [ -n "$current_user" ] && info "  user:    $current_user"
+  else
+    info "$(t 'No existing config found.' '未找到已有配置。')"
+  fi
+
+  if [ "$INTERACTIVE" -eq 1 ] && [ -z "$URL_ARG" ] && [ "$API_KEY_ARG" = "__OPENVIKING_UNSET__" ]; then
+    if [ -n "$current_url" ] || [ -n "$current_key" ]; then
+      ask "$(t 'Keep current credentials? [Y/n] ' '沿用当前凭据？[Y/n] ')"
+      read_tty reply
+      case "$reply" in
+        n|N|no|No|NO)
+          prompt_connection "$current_url" "$current_key"
+          url="$WIZ_URL"; key="$WIZ_KEY"
+          ;;
+      esac
+    else
+      prompt_connection "" ""
+      url="$WIZ_URL"; key="$WIZ_KEY"
+    fi
   fi
   [ -z "$url" ] && url="${current_url:-http://127.0.0.1:1933}"
-
-  if [ "$key" = "__OPENVIKING_KEEP__" ] && [ -z "$current_url" ] && [ "$INTERACTIVE" -eq 1 ]; then
-    ask 'API key (leave empty for unauthenticated local mode): '
-    read_tty reply -s
-    key="$reply"
-  fi
 
   if [ -f "$OVCLI_CONF" ]; then
     cp "$OVCLI_CONF" "$OVCLI_CONF.bak.$(date +%s)"
   fi
   json_merge_ovcli "$OVCLI_CONF" "$url" "$key" "$account" "$user"
-  info "Config ready: $OVCLI_CONF"
-  info "Reconfigure later: node <plugin>/scripts/setup.mjs (or re-run this installer)"
+  if [ "$url" != "$current_url" ] || { [ "$key" != "__OPENVIKING_KEEP__" ] && [ "$key" != "$current_key" ]; }; then
+    info "$(t 'Updated:' '已更新：') url: ${current_url:-—} -> $url"
+  fi
+  info "$(t 'Credentials ready:' '凭据已就绪：') $OVCLI_CONF"
+  info "$(t 'Reconfigure later: node <plugin>/scripts/setup.mjs (or re-run this installer)' '之后可用 node <插件目录>/scripts/setup.mjs 或重跑本脚本重新配置')"
 }
 
 # ---------------------------------------------------------------------------
@@ -351,7 +496,7 @@ fetch_archive() { # fetch_archive <url> <dest> <required-subpath>
   command -v unzip >/dev/null 2>&1 || { err 'unzip not found; required to install from an archive.'; exit 1; }
   tmp_zip=$(mktemp "${TMPDIR:-/tmp}/ov-src.XXXXXX") || { err 'mktemp failed'; exit 1; }
   tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/ov-src.XXXXXX") || { err 'mktemp failed'; rm -f "$tmp_zip"; exit 1; }
-  info "Downloading archive"
+  info "$(t 'Downloading archive' '下载归档')"
   info "  $url"
   curl -fsSL -o "$tmp_zip" "$url" || { rm -rf "$tmp_zip" "$tmp_dir"; return 1; }
   unzip -q "$tmp_zip" -d "$tmp_dir" || { err 'unzip failed'; rm -rf "$tmp_zip" "$tmp_dir"; exit 1; }
@@ -391,6 +536,8 @@ resolve_self_checkout() {
 resolve_source_mode() {
   if [ -n "$SOURCE_ARG" ]; then
     SOURCE_MODE="$SOURCE_ARG"
+  elif [ "$DIST" = "tos" ]; then
+    SOURCE_MODE="archive"
   elif [ -n "$MKT_ARCHIVE_URL" ] || [ -n "$REPO_ARCHIVE_URL" ]; then
     SOURCE_MODE="archive"
   elif [ -n "$CHECKOUT_DIR" ]; then
@@ -402,7 +549,7 @@ resolve_source_mode() {
     remote|archive|dev) ;;
     *) err "Invalid --source: $SOURCE_MODE (expected remote, archive, or dev)"; exit 2 ;;
   esac
-  info "Source mode: $SOURCE_MODE"
+  info "$(t 'Source mode:' '安装源模式：') $SOURCE_MODE ($(t 'channel' '渠道'): $DIST)"
 }
 
 # Ensure a local copy of the plugin sources exists (legacy Claude Code and the
@@ -411,7 +558,7 @@ ensure_checkout() {
   [ -n "$SRC_ROOT" ] && return 0
   if [ -n "$CHECKOUT_DIR" ]; then
     SRC_ROOT="$CHECKOUT_DIR"
-    info "Using current checkout: $SRC_ROOT"
+    info "$(t 'Using current checkout:' '使用当前 checkout：') $SRC_ROOT"
     return 0
   fi
   if [ "$SOURCE_MODE" = "archive" ] && [ -n "$MKT_DIR" ]; then
@@ -422,7 +569,7 @@ ensure_checkout() {
   if [ -n "$REPO_ARCHIVE_URL" ]; then
     fetch_archive "$REPO_ARCHIVE_URL" "$REPO_DIR" "examples" || { err "source archive download failed"; exit 1; }
   elif [ -d "$REPO_DIR/.git" ]; then
-    info "Refreshing checkout ($REPO_REF)"
+    info "$(t 'Refreshing checkout' '刷新 checkout') ($REPO_REF)"
     git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_REF"
     git -C "$REPO_DIR" reset --hard FETCH_HEAD
   else
@@ -431,7 +578,7 @@ ensure_checkout() {
       exit 1
     fi
     command -v git >/dev/null 2>&1 || { err "git not found (needed to fetch sources)."; exit 1; }
-    info "Cloning $REPO_URL (ref $REPO_REF)"
+    info "$(t 'Cloning' '克隆') $REPO_URL (ref $REPO_REF)"
     rm -rf "$REPO_DIR"
     mkdir -p "$(dirname "$REPO_DIR")"
     git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$REPO_DIR"
@@ -461,11 +608,13 @@ prepare_marketplace_dir() {
       MKT_DIR="$CHECKOUT_DIR/examples"
       ;;
     archive)
-      heading "3. Marketplace archive"
+      heading "$(t '3. Marketplace archive' '3. Marketplace 归档')"
+      [ -z "$MKT_ARCHIVE_URL" ] && [ "$DIST" = "tos" ] && MKT_ARCHIVE_URL="$TOS_BASE/releases/latest/memory-plugin-marketplace.zip"
+      [ -z "$REPO_ARCHIVE_URL" ] && [ "$DIST" = "tos" ] && REPO_ARCHIVE_URL="$TOS_BASE/releases/latest/openviking-source.zip"
       if [ -n "$MKT_ARCHIVE_URL" ] && fetch_archive "$MKT_ARCHIVE_URL" "$MKT_DIR_ARCHIVE" ".claude-plugin/marketplace.json"; then
         MKT_DIR="$MKT_DIR_ARCHIVE"
       elif [ -n "$REPO_ARCHIVE_URL" ]; then
-        [ -n "$MKT_ARCHIVE_URL" ] && warn "marketplace archive unavailable; falling back to the full source archive"
+        [ -n "$MKT_ARCHIVE_URL" ] && warn "$(t 'marketplace archive unavailable; falling back to the full source archive' 'marketplace 归档不可用，回退到完整源码归档')"
         fetch_archive "$REPO_ARCHIVE_URL" "$REPO_DIR" "examples" || { err "source archive download failed"; exit 1; }
         SRC_ROOT="$REPO_DIR"
         MKT_DIR="$REPO_DIR/examples"
@@ -498,7 +647,7 @@ strip_rc_block() {
     $0 == e {skip=0; next}
     !skip
   ' "$rc" > "$rc.tmp" && mv "$rc.tmp" "$rc"
-  info "Removed legacy rc block from $rc"
+  info "$(t 'Removed legacy rc block from' '已移除旧的 rc 注入块：') $rc"
 }
 
 cleanup_rc_wrappers() {
@@ -532,12 +681,12 @@ migrate_claude_legacy_marketplace() {
   local id
   for id in $CC_OLD_IDS; do
     if command claude plugin list 2>/dev/null | grep -qF "$id"; then
-      info "Removing pre-unification plugin install ($id)"
+      info "$(t 'Removing pre-unification plugin install' '移除旧命名的插件安装') ($id)"
       command claude plugin uninstall "$id" >/dev/null 2>&1 || true
     fi
   done
   if command claude plugin marketplace list 2>/dev/null | grep -qF "$OLD_MARKETPLACE_NAME"; then
-    info "Removing pre-unification marketplace ($OLD_MARKETPLACE_NAME)"
+    info "$(t 'Removing pre-unification marketplace' '移除旧命名的 marketplace') ($OLD_MARKETPLACE_NAME)"
     command claude plugin marketplace remove "$OLD_MARKETPLACE_NAME" >/dev/null 2>&1 || true
   fi
 }
@@ -577,7 +726,7 @@ claude_marketplace_sync() { # claude_marketplace_sync <add-target> <expected-sou
     return 0
   fi
   if [ -n "$current" ]; then
-    info "Marketplace $MARKETPLACE_NAME points elsewhere ($current); re-registering"
+    info "$(t 'Marketplace points elsewhere; re-registering' 'marketplace 指向其他来源，重新注册') ($current)"
     command claude plugin uninstall "$PLUGIN_ID" >/dev/null 2>&1 || true
     command claude plugin marketplace remove "$MARKETPLACE_NAME" >/dev/null 2>&1 || true
   fi
@@ -606,7 +755,10 @@ install_claude_modern() {
     command claude plugin install "$PLUGIN_ID" || { err 'claude plugin install failed'; return 1; }
   fi
   command claude plugin enable "$PLUGIN_ID" >/dev/null 2>&1 || true
-  info "Claude plugin installed: $PLUGIN_ID"
+  info "$(t 'Claude plugin installed:' 'Claude 插件已安装：') $PLUGIN_ID"
+  if [ "$SOURCE_MODE" = "archive" ]; then
+    warn "$(t 'TOS/archive installs cannot auto-update Claude Code (local directory marketplace). Re-run this installer to update.' 'TOS/归档方式安装的 Claude Code 插件无法自动更新（本地目录 marketplace）。更新请重跑本安装脚本。')"
+  fi
 }
 
 install_claude_legacy() {
@@ -649,17 +801,17 @@ NODE
 
 register_statusline() {
   [ "$STATUSLINE_ARG" = "no" ] && return 0
-  local plugin_dir cmd existing reply ts tmp
+  local plugin_dir cmd existing reply ts
   if [ "$STATUSLINE_ARG" != "yes" ]; then
     [ "$INTERACTIVE" -eq 1 ] || return 0
-    heading 'Statusline (optional)'
-    info 'OpenViking can show a one-line server/recall status under the input box.'
+    heading "$(t 'Statusline (optional)' 'Statusline 状态栏（可选）')"
+    info "$(t 'OpenViking can show a one-line server/recall status under the input box.' 'OpenViking 可以在输入框下方显示一行服务/召回状态。')"
     info 'Sample: "OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms │ ✎ 573/20k · 2 arch │ +3 today"'
-    ask 'Enable OpenViking statusline? [y/N] '
+    ask "$(t 'Enable OpenViking statusline? [y/N] ' '启用 OpenViking statusline？[y/N] ')"
     read_tty reply
     case "$reply" in
       y|Y|yes|Yes|YES) ;;
-      *) info 'Skipped statusline registration. Re-run the installer to enable it later.'; return 0 ;;
+      *) info "$(t 'Skipped statusline registration. Re-run the installer to enable it later.' '跳过 statusline 注册，之后重跑安装脚本可启用。')"; return 0 ;;
     esac
   fi
   plugin_dir="$(plugin_dir_on_disk claude-code-memory-plugin)" || {
@@ -676,16 +828,16 @@ register_statusline() {
     } catch {}
   ' "$CC_SETTINGS" 2>/dev/null || true)
   if [ "$existing" = "$cmd" ]; then
-    info 'Statusline already registered.'
+    info "$(t 'Statusline already registered.' 'Statusline 已注册。')"
     return 0
   fi
   if [ -n "$existing" ] && [ "$STATUSLINE_ARG" != "yes" ]; then
-    warn "Existing statusline detected: $existing"
-    ask 'Replace it with OpenViking statusline? [y/N] '
+    warn "$(t 'Existing statusline detected:' '检测到已有 statusline：') $existing"
+    ask "$(t 'Replace it with OpenViking statusline? [y/N] ' '替换为 OpenViking statusline？[y/N] ')"
     read_tty reply
     case "$reply" in
       y|Y|yes|Yes|YES) ;;
-      *) info 'Kept the existing statusline.'; return 0 ;;
+      *) info "$(t 'Kept the existing statusline.' '保留了已有 statusline。')"; return 0 ;;
     esac
   fi
   ts=$(date +%Y%m%d-%H%M%S)
@@ -702,24 +854,24 @@ NODE
 }
 
 install_claude() {
-  heading "4. Claude Code plugin"
+  heading "$(t '4. Claude Code plugin' '4. Claude Code 插件')"
   if [ "$HAVE_CLAUDE" -ne 1 ]; then
-    warn "claude CLI not found; skipping Claude Code install."
+    warn "$(t 'claude CLI not found; skipping Claude Code install.' '未找到 claude 命令，跳过 Claude Code 安装。')"
     return 0
   fi
   if has_plugin_subcommand; then
     migrate_claude_legacy_marketplace
     install_claude_modern || return 1
   else
-    warn "This Claude Code build doesn't expose 'claude plugin' (introduced in 2.0)."
+    warn "$(t "This Claude Code build doesn't expose 'claude plugin' (introduced in 2.0)." '当前 Claude Code 版本没有 claude plugin 子命令（2.0 引入）。')"
     local reply="y"
     if [ "$INTERACTIVE" -eq 1 ]; then
-      ask 'Use legacy compatibility mode (claude mcp add + settings.json merge)? [Y/n] '
+      ask "$(t 'Use legacy compatibility mode (claude mcp add + settings.json merge)? [Y/n] ' '使用旧版兼容模式（claude mcp add + settings.json 合并）？[Y/n] ')"
       read_tty reply
       reply="${reply:-y}"
     fi
     case "$reply" in
-      n|N|no|No|NO) info 'Skipped Claude Code install.'; return 0 ;;
+      n|N|no|No|NO) info "$(t 'Skipped Claude Code install.' '跳过 Claude Code 安装。')"; return 0 ;;
     esac
     install_claude_legacy || return 1
   fi
@@ -747,7 +899,7 @@ codex_marketplace_current_source() {
 migrate_codex_legacy_marketplace() {
   command codex plugin remove "$CODEX_OLD_ID" >/dev/null 2>&1 || true
   if command codex plugin marketplace list 2>/dev/null | grep -qF "$OLD_MARKETPLACE_NAME"; then
-    info "Removing pre-unification marketplace ($OLD_MARKETPLACE_NAME)"
+    info "$(t 'Removing pre-unification marketplace' '移除旧命名的 marketplace') ($OLD_MARKETPLACE_NAME)"
     command codex plugin marketplace remove "$OLD_MARKETPLACE_NAME" >/dev/null 2>&1 || true
   fi
   [ -d "$CODEX_OLD_MARKETPLACE_ROOT" ] && rm -rf "$CODEX_OLD_MARKETPLACE_ROOT"
@@ -781,7 +933,7 @@ codex_marketplace_sync() { # codex_marketplace_sync <expected-source> <add-args.
     return 0
   fi
   if [ -n "$current" ]; then
-    info "Marketplace $MARKETPLACE_NAME points elsewhere ($current); re-registering"
+    info "$(t 'Marketplace points elsewhere; re-registering' 'marketplace 指向其他来源，重新注册') ($current)"
     command codex plugin remove "$PLUGIN_ID" >/dev/null 2>&1 || true
     command codex plugin marketplace remove "$MARKETPLACE_NAME" >/dev/null 2>&1 || true
   fi
@@ -826,9 +978,9 @@ NODE
 }
 
 install_codex() {
-  heading "4. Codex plugin"
+  heading "$(t '4. Codex plugin' '4. Codex 插件')"
   if [ "$HAVE_CODEX" -ne 1 ]; then
-    warn "codex CLI not found; skipping Codex install."
+    warn "$(t 'codex CLI not found; skipping Codex install.' '未找到 codex 命令，跳过 Codex 安装。')"
     return 0
   fi
   migrate_codex_legacy_marketplace
@@ -849,7 +1001,14 @@ install_codex() {
           return 1
         }
       ;;
-    archive|dev)
+    archive)
+      if [ "$DIST" = "tos" ] && install_codex_tos_git; then
+        :
+      else
+        codex_marketplace_sync "$MKT_DIR" "$MKT_DIR" || return 1
+      fi
+      ;;
+    dev)
       codex_marketplace_sync "$MKT_DIR" "$MKT_DIR" || return 1
       ;;
   esac
@@ -858,7 +1017,28 @@ install_codex() {
       warn "codex plugin add/install returned non-zero for $PLUGIN_ID; config was still updated"
   fi
   ensure_codex_config
-  info "Codex plugin enabled in $CODEX_CONFIG"
+  info "$(t 'Codex plugin enabled in' 'Codex 插件已在配置中启用：') $CODEX_CONFIG"
+}
+
+# Codex can clone git repos served over dumb HTTP from static hosting, so the
+# TOS mirror hosts a slim marketplace git repo — unlike Claude Code, Codex
+# keeps remote update support (`codex plugin marketplace upgrade`) on TOS.
+install_codex_tos_git() {
+  info "codex plugin marketplace add $CODEX_TOS_GIT_URL"
+  local current
+  current="$(codex_marketplace_current_source)"
+  if [ -n "$current" ] && [ "$current" = "$CODEX_TOS_GIT_URL" ]; then
+    command codex plugin marketplace upgrade "$MARKETPLACE_NAME" >/dev/null 2>&1 || true
+    return 0
+  fi
+  if [ -n "$current" ]; then
+    command codex plugin remove "$PLUGIN_ID" >/dev/null 2>&1 || true
+    command codex plugin marketplace remove "$MARKETPLACE_NAME" >/dev/null 2>&1 || true
+  fi
+  if ! command codex plugin marketplace add "$CODEX_TOS_GIT_URL" >/dev/null 2>&1; then
+    warn "$(t 'TOS git marketplace unavailable; falling back to the archive directory.' 'TOS git marketplace 不可用，回退到归档目录方式。')"
+    return 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -866,26 +1046,26 @@ install_codex() {
 # ---------------------------------------------------------------------------
 
 validate_install() {
-  heading "5. Validation"
+  heading "$(t '5. Validation' '5. 安装校验')"
   local ok=1 cached
   if contains_harness claude && [ "$HAVE_CLAUDE" -eq 1 ] && has_plugin_subcommand; then
     if command claude plugin list 2>/dev/null | grep -qF "$PLUGIN_NAME"; then
-      info "claude: $PLUGIN_NAME visible in plugin list"
+      info "claude: $PLUGIN_NAME $(t 'visible in plugin list' '已出现在插件列表')"
     else
-      warn "claude: $PLUGIN_NAME not visible in plugin list"
+      warn "claude: $PLUGIN_NAME $(t 'not visible in plugin list' '未出现在插件列表')"
       ok=0
     fi
   fi
   if contains_harness codex && [ "$HAVE_CODEX" -eq 1 ]; then
     if command codex plugin list 2>/dev/null | grep -qiF "$PLUGIN_NAME"; then
-      info "codex: $PLUGIN_NAME visible in plugin list"
+      info "codex: $PLUGIN_NAME $(t 'visible in plugin list' '已出现在插件列表')"
     else
-      warn "codex: $PLUGIN_NAME not visible in plugin list"
+      warn "codex: $PLUGIN_NAME $(t 'not visible in plugin list' '未出现在插件列表')"
       ok=0
     fi
     cached=$(find "$HOME/.codex/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME" -name 'mcp-proxy.mjs' -path '*/servers/*' 2>/dev/null | sort | tail -n 1)
     if [ -n "$cached" ]; then
-      node --check "$cached" && info "codex: cached stdio proxy parses ($cached)" || ok=0
+      node --check "$cached" && info "codex: $(t 'cached stdio proxy parses' '缓存中的 stdio 代理语法正常') ($cached)" || ok=0
     fi
   fi
   if [ -n "$MKT_DIR" ] && [ -f "$MKT_DIR/claude-code-memory-plugin/scripts/marketplace.test.mjs" ] && [ -d "$MKT_DIR/../.git" ]; then
@@ -893,7 +1073,7 @@ validate_install() {
       "$MKT_DIR/codex-memory-plugin/scripts/marketplace.test.mjs" || ok=0
   fi
   if [ "$ok" -ne 1 ]; then
-    warn "Validation reported issues — the install may still work; check the messages above."
+    warn "$(t 'Validation reported issues — the install may still work; check the messages above.' '校验发现问题——安装可能仍然可用，请检查上方输出。')"
   fi
 }
 
@@ -901,12 +1081,14 @@ validate_install() {
 # Main
 # ---------------------------------------------------------------------------
 
-heading "1. Environment check"
+select_language
+
+heading "$(t '1. Environment check' '1. 环境检查')"
 case "$(uname -s)" in
   Darwin|Linux) info "OS: $(uname -s)" ;;
   *) err "Unsupported OS: $(uname -s). Only macOS and Linux are supported."; exit 1 ;;
 esac
-command -v node >/dev/null 2>&1 || { err "node not found. Install Node.js 18+."; exit 1; }
+command -v node >/dev/null 2>&1 || { err "$(t 'node not found. Install Node.js 18+.' '未找到 node，请先安装 Node.js 18+。')"; exit 1; }
 NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
 [ "$NODE_MAJOR" -ge 18 ] || { err "Node.js 18+ required; found $(node --version)."; exit 1; }
 command -v curl >/dev/null 2>&1 || warn "curl not found; archive installs may fail."
@@ -914,7 +1096,8 @@ command -v curl >/dev/null 2>&1 || warn "curl not found; archive installs may fa
 resolve_self_checkout
 select_harnesses
 validate_selected_harnesses
-info "Selected harnesses: $(printf '%s' "$SELECTED_HARNESSES" | tr ',' ' ')"
+info "$(t 'Selected harnesses:' '已选择：') $(printf '%s' "$SELECTED_HARNESSES" | tr ',' ' ')"
+select_dist
 
 configure_ovcli
 resolve_source_mode
@@ -925,12 +1108,12 @@ if contains_harness claude; then install_claude; fi
 if contains_harness codex; then install_codex; fi
 validate_install
 
-heading "Done"
-info "Config: $OVCLI_CONF"
-info "MCP: stdio proxy reads ovcli.conf/env at runtime"
+heading "$(t 'Done' '完成')"
+info "$(t 'Credentials:' '凭据：') $OVCLI_CONF"
+info "$(t 'MCP: stdio proxy reads ovcli.conf/env at runtime' 'MCP：stdio 代理运行时读取 ovcli.conf/环境变量')"
 case "$SOURCE_MODE" in
   remote) info "Marketplace: remote ($REPO_URL @ $REPO_REF)" ;;
-  *) info "Marketplace: $MKT_DIR" ;;
+  *) info "Marketplace: ${MKT_DIR:-$CODEX_TOS_GIT_URL}" ;;
 esac
 if contains_harness claude; then info "Claude: $PLUGIN_ID"; fi
 if contains_harness codex; then info "Codex:  $PLUGIN_ID"; fi

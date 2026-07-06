@@ -6,49 +6,45 @@
 
 ## 安装
 
+Claude Code 和 Codex 共用同一个安装脚本。它会依次询问界面语言（English/中文）、要安装的 harness、下载源和 OpenViking 凭据；所有步骤幂等，可安全地重复执行。
+
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
 ```
 
-脚本将自动检查依赖项、配置 OpenViking 连接并注册插件。安装过程的每一步均支持幂等操作，可安全地重复执行。
-
-GitHub 访问受限的地区，可改用以下等价命令：
+GitHub 访问受限的地区，从火山引擎 TOS 镜像运行同一个安装脚本（或在下载源提问时选择「TOS 镜像」）。Codex 走 TOS 时安装自 TOS 托管的 git 仓库，保留远程更新能力：
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/codex-memory-plugin/tos-install.sh)
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
 ```
 
-安装完成后，请在当前终端激活 `codex` 的封装函数（或新开一个终端窗口）：
+现在不再需要任何 shell wrapper——插件自带的 stdio MCP 代理会在运行时读取 `~/.openviking/ovcli.conf`（或 `OPENVIKING_*` 环境变量），与 hooks 使用同一套配置链。安装完成后：
 
 ```bash
-source ~/.openviking/openviking-repo/examples/codex-memory-plugin/setup-helper/wrapper.sh
 codex              # 首次启动需进入 /hooks 完成一次审批
 ```
-
-> 通过自定义命令启动 Codex？例如包装脚本 `codex-custom`，或“基础命令 + 子命令”形式的多词启动器——在安装时的“Extra launch commands”一步填入（或运行脚本时传入 `OPENVIKING_CODEX_WRAP_EXTRA='codex-custom'`），即可让它们一并注入凭据。
 
 <details>
 <summary><b>手动安装</b></summary>
 
-前置条件：需安装 Node.js >= 22、Codex >= 0.130.0，并启用 `codex_hooks` 特性。
+前置条件：需安装 Node.js >= 22、Codex >= 0.130.0，并启用 `plugin_hooks` 特性。
 
-1. **Shell 函数封装** — 在 shell 的配置文件（如 rc 文件）中 source 插件 wrapper，确保 Codex 使用当前激活的 `ovcli.conf` 凭据，同时刷新 MCP 配置并清掉继承来的过期凭据环境变量。代码片段请参考 [插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md)。
+1. **配置连接** — 手写 `~/.openviking/ovcli.conf`（`url`、`api_key`，可选 `account`/`user`），或装完后运行插件自带向导 `node <插件目录>/scripts/setup.mjs`。
 
-2. **插件安装** — 注册本地 marketplace 并启用插件。具体执行命令请参见 `setup-helper/install.sh`。
+2. **从远程 marketplace 安装插件**：
 
-3. **占位符渲染** — 在将 `.mcp.json` 和 `hooks.json` 复制到 Codex 缓存目录时，需将其中的占位符替换为绝对路径或具体数值。自动化安装脚本会自动完成此操作。
+   ```bash
+   codex plugin marketplace add volcengine/OpenViking
+   codex plugin add openviking-memory@openviking
+   ```
+
+   若你的 Codex 版本未默认启用 plugin hooks，在 `~/.codex/config.toml` 中加上 `[features]` → `plugin_hooks = true`。之后可用 `codex plugin marketplace upgrade openviking` 更新。
 
 </details>
 
 ## 验证
 
-```bash
-type codex         # 期望输出：codex is a shell function
-```
-
-> 若上一步输出的是一个路径而非 `shell function`，说明 wrapper 尚未生效，请先 `source` 那行 wrapper（或新开一个终端）再启动；否则 Codex 可能拿不到 MCP 所需凭据。
-
-进入 Codex 后，插件将在每次用户输入前自动召回记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
+启动 `codex` 后，插件将在每次用户输入前自动召回记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
 
 ## 工作原理
 
@@ -59,7 +55,7 @@ type codex         # 期望输出：codex is a shell function
 <details>
 <summary><b>配置</b></summary>
 
-凭据来源：默认使用当前激活的 `ovcli.conf`（`OPENVIKING_CLI_CONFIG_FILE` 或 `~/.openviking/ovcli.conf`），因此 `ov config switch <name>` 会在下次启动时同时影响 hook、MCP 和 Codex 内部运行的 `ov` 命令。只有明确希望环境变量覆盖 CLI 配置时，才设置 `OPENVIKING_CREDENTIAL_SOURCE=env`；此时 wrapper 会在 `~/.openviking/codex-plugin-state/` 下写入 mode 0600 的运行时 ovcli 配置，让内部 `ov` 命令仍然使用同一套凭据。若没有 ovcli 配置，则依次回退到环境变量、`ov.conf` 和内置默认值。
+凭据来源：默认使用当前激活的 `ovcli.conf`（`OPENVIKING_CLI_CONFIG_FILE` 或 `~/.openviking/ovcli.conf`），因此 `ov config switch <name>` 会在下次启动时同时影响 hook、MCP 代理和 Codex 内部运行的 `ov` 命令。只有明确希望环境变量覆盖 CLI 配置时，才设置 `OPENVIKING_CREDENTIAL_SOURCE=env`。若没有 ovcli 配置，则依次回退到环境变量、`ov.conf` 和内置默认值。
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
@@ -79,13 +75,11 @@ type codex         # 期望输出：codex is a shell function
 
 | 现象 | 可能原因 | 修复方法 |
 |------|------|------|
-| `MCP server is not logged in` | Codex 启动时未注入凭据，或当前 ovcli 配置没有 authenticated server 所需的 `api_key` | 确认已 source `codex()` 函数，且 `ovcli.conf` 中配置了 `api_key` |
-| `type codex` 显示的是路径而非 shell function（wrapper 未生效） | 安装后未 `source` rc，或在未加载该 rc 的终端里启动 | 执行 `source ~/.zshrc`（bash 用 `~/.bashrc`），或新开一个终端窗口 |
-| 通过别名（如 `cx`）启动，凭据未注入 | 把别名名填进了 `OPENVIKING_CODEX_WRAP_EXTRA`（别名会被跳过），或别名指向的命令未被封装 | 封装别名指向的真实命令而非别名本身：`alias cx=codex` 无需配置；`alias cx=codex-custom` 则把 `codex-custom` 填入 |
+| MCP 工具调用报认证错误 | 当前 ovcli 配置没有 authenticated server 所需的有效 `api_key` | 修正 `~/.openviking/ovcli.conf`（或运行 `node <插件目录>/scripts/setup.mjs`）后重启 Codex；stdio 代理会在启动时和认证失败后重新读取配置 |
+| MCP 工具调用报连接错误 | 服务器不可达或 URL 配置错误 | 执行 `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` 检查服务器状态 |
 | `4 hooks need review` | 首次启动需要进行安全审批 | 在 Codex 终端内输入 `/hooks` 完成审批 |
-| 审批后仍提示 `hook (failed) exited with code 1` | 缓存文件中的占位符未被正确渲染 | 重新执行一次一键安装脚本 |
-| 召回结果为空 | 服务器不可达或 URL 配置错误 | 执行 `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` 检查服务器状态 |
-| Hook 报 401 但 MCP 正常可用，或反之 | MCP 缓存配置或启动环境已过期 | 通过 wrapper 重启 Codex。若确实要使用环境变量凭据，设置 `OPENVIKING_CREDENTIAL_SOURCE=env`；否则使用 `ov config switch <name>` 或 `OPENVIKING_CLI_CONFIG_FILE`。 |
+| `ov config switch` 后插件仍指向旧服务器 | 上个会话的代理进程仍在运行 | 重启 Codex；代理在启动时解析凭据 |
+| Hook 与 MCP 指向不同服务器 | 某一侧设置了 `OPENVIKING_CREDENTIAL_SOURCE=env` 且环境变量过期 | 取消该设置（让 ovcli.conf 同时驱动两者），或保证环境变量一致 |
 
 ## 参见
 
