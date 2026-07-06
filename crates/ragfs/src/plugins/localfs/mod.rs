@@ -88,25 +88,8 @@ impl LocalFileSystem {
         }
     }
 
-    /// Run blocking grep work on a dedicated thread and normalize join errors.
-    async fn run_blocking_grep<T, F>(job: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce() -> Result<T> + Send + 'static,
-    {
-        tokio::task::spawn_blocking(job)
-            .await
-            .map_err(|e| Error::Internal(format!("spawn_blocking failed: {}", e)))?
-    }
-
-    /// Run local glob traversal on a blocking thread to avoid stalling the async runtime.
-    ///
-    /// Args:
-    /// - `job`: The blocking task that performs the actual glob traversal and pagination.
-    ///
-    /// Returns:
-    /// - The blocking task result, or `Error::Internal` if the thread join fails.
-    async fn run_blocking_glob<T, F>(job: F) -> Result<T>
+    /// Run blocking local filesystem work on a dedicated thread.
+    async fn run_blocking_fs<T, F>(job: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce() -> Result<T> + Send + 'static,
@@ -849,68 +832,77 @@ impl FileSystem for LocalFileSystem {
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
         let local_path = self.resolve_path(path);
+        let path = path.to_string();
 
-        // Check if directory exists
-        if !local_path.exists() {
-            return Err(Error::NotFound(path.to_string()));
-        }
+        Self::run_blocking_fs(move || {
+            // Check if directory exists
+            if !local_path.exists() {
+                return Err(Error::NotFound(path.clone()));
+            }
 
-        if !local_path.is_dir() {
-            return Err(Error::plugin(format!("not a directory: {}", path)));
-        }
+            if !local_path.is_dir() {
+                return Err(Error::plugin(format!("not a directory: {}", path)));
+            }
 
-        // Read directory
-        let entries = fs::read_dir(&local_path)
-            .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
+            // Read directory
+            let entries = fs::read_dir(&local_path)
+                .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
 
-        let mut files = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
-            let metadata = entry
-                .metadata()
-                .map_err(|e| Error::plugin(format!("failed to get metadata: {}", e)))?;
+            let mut files = Vec::new();
+            for entry in entries {
+                let entry =
+                    entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
+                let metadata = entry
+                    .metadata()
+                    .map_err(|e| Error::plugin(format!("failed to get metadata: {}", e)))?;
 
-            let name = entry.file_name().to_string_lossy().to_string();
+                let name = entry.file_name().to_string_lossy().to_string();
+                let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
+                let mod_time = metadata
+                    .modified()
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+                files.push(FileInfo::new(
+                    name,
+                    metadata.len(),
+                    mode,
+                    mod_time,
+                    metadata.is_dir(),
+                ));
+            }
+
+            Ok(files)
+        })
+        .await
+    }
+
+    async fn stat(&self, path: &str) -> Result<FileInfo> {
+        let local_path = self.resolve_path(path);
+        let path = path.to_string();
+
+        Self::run_blocking_fs(move || {
+            // Get file metadata
+            let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.clone()))?;
+
+            let name = Path::new(&path)
+                .file_name()
+                .unwrap_or(path.as_ref())
+                .to_string_lossy()
+                .to_string();
             let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
             let mod_time = metadata
                 .modified()
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
-            files.push(FileInfo::new(
+            Ok(FileInfo::new(
                 name,
                 metadata.len(),
                 mode,
                 mod_time,
                 metadata.is_dir(),
-            ));
-        }
-
-        Ok(files)
-    }
-
-    async fn stat(&self, path: &str) -> Result<FileInfo> {
-        let local_path = self.resolve_path(path);
-
-        // Get file metadata
-        let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
-
-        let name = Path::new(path)
-            .file_name()
-            .unwrap_or(path.as_ref())
-            .to_string_lossy()
-            .to_string();
-        let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
-        let mod_time = metadata
-            .modified()
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-        Ok(FileInfo::new(
-            name,
-            metadata.len(),
-            mode,
-            mod_time,
-            metadata.is_dir(),
-        ))
+            ))
+        })
+        .await
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
@@ -1072,7 +1064,7 @@ impl FileSystem for LocalFileSystem {
             let rg_pattern = pattern_owned.clone();
             let rg_base_path = base_path.clone();
             let rg_exclude = exclude_owned.clone();
-            let rg_res = Self::run_blocking_grep(move || {
+            let rg_res = Self::run_blocking_fs(move || {
                 LocalFileSystem::grep_via_rg(
                     rg_base_path.as_path(),
                     local.as_path(),
@@ -1092,7 +1084,7 @@ impl FileSystem for LocalFileSystem {
         }
 
         // Fallback: also run in a blocking thread (dir walking + file reads are blocking IO).
-        Self::run_blocking_grep(move || {
+        Self::run_blocking_fs(move || {
             LocalFileSystem::grep_via_libs(
                 base_path.as_path(),
                 &path_owned,
@@ -1132,7 +1124,7 @@ impl FileSystem for LocalFileSystem {
         let path_owned = path.to_string();
         let pattern_owned = pattern.to_string();
 
-        Self::run_blocking_glob(move || {
+        Self::run_blocking_fs(move || {
             LocalFileSystem::glob_via_walk(
                 base_path.as_path(),
                 &path_owned,
