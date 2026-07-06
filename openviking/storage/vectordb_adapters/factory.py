@@ -9,6 +9,7 @@ import importlib
 from .base import CollectionAdapter
 from .http_adapter import HttpCollectionAdapter
 from .local_adapter import CuVSCollectionAdapter, LocalCollectionAdapter
+from .milvus_adapter import MilvusCollectionAdapter
 from .opengauss_adapter import OpenGaussCollectionAdapter
 from .qdrant_adapter import QdrantCollectionAdapter
 from .vikingdb_private_adapter import VikingDBPrivateCollectionAdapter
@@ -18,6 +19,7 @@ _ADAPTER_REGISTRY: dict[str, type[CollectionAdapter]] = {
     "local": LocalCollectionAdapter,
     "cuvs": CuVSCollectionAdapter,
     "http": HttpCollectionAdapter,
+    "milvus": MilvusCollectionAdapter,
     "opengauss": OpenGaussCollectionAdapter,
     "qdrant": QdrantCollectionAdapter,
     "volcengine": VolcengineCollectionAdapter,
