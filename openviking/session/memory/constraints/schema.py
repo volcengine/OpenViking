@@ -10,20 +10,10 @@ call, not against full runtime objects.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 TriggerContext = dict[str, Any]
-
-_TRIGGER_SECTION_RE = re.compile(
-    r"(?:^|\n)#\s+Experience Trigger\s*\n(?P<body>.*?)(?=\n#(?!#)|\Z)",
-    re.DOTALL | re.IGNORECASE,
-)
-_TRIGGER_CODE_RE = re.compile(
-    r"-\s*trigger_code\s*:\s*\n```(?:python|py)?\s*(?P<code>.*?)\s*```",
-    re.DOTALL | re.IGNORECASE,
-)
 
 
 @dataclass(slots=True)
@@ -58,7 +48,7 @@ class ConstraintExperience:
             or getattr(policy, "name", "")
             or uri.rstrip("/").rsplit("/", 1)[-1].removesuffix(".md")
         )
-        constraint = str(getattr(policy, "content", "") or metadata.get("content") or "").strip()
+        constraint = str(metadata.get("content") or getattr(policy, "content", "") or "").strip()
         if not constraint:
             return None
         return cls(
@@ -77,16 +67,18 @@ class ConstraintExperience:
         uri = str(getattr(memory_file, "uri", "") or fields.get("uri") or "")
         if not uri:
             return None
-        plain = getattr(memory_file, "plain_content", None)
-        if callable(plain):
-            raw_constraint = str(plain() or "").strip()
-        else:
-            raw_constraint = str(getattr(memory_file, "content", "") or "").strip()
-        rendered_metadata, constraint = _extract_rendered_constraint_metadata(raw_constraint)
-        metadata = {**rendered_metadata, **fields}
+        metadata = dict(fields)
         trigger_code = str(metadata.get("trigger_code") or "").strip()
         if not trigger_code:
             return None
+        if fields.get("content"):
+            constraint = str(fields.get("content") or "").strip()
+        else:
+            plain = getattr(memory_file, "plain_content", None)
+            if callable(plain):
+                constraint = str(plain() or "").strip()
+            else:
+                constraint = str(getattr(memory_file, "content", "") or "").strip()
         name = str(
             metadata.get("experience_name")
             or metadata.get("name")
@@ -111,20 +103,14 @@ class ConstraintExperience:
         fallback_name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> "ConstraintExperience | None":
-        """Build from OV client rendered markdown.
-
-        VikingBot should use this path because it sees rendered/read content
-        from the OV client, not raw memory files or MEMORY_FIELDS comments.
-        """
+        """Build from OV client content plus structured memory metadata."""
 
         uri = str(uri or "").strip()
         if not uri:
             return None
-        rendered_metadata, constraint = _extract_rendered_constraint_metadata(
-            str(content or "").strip()
-        )
-        merged_metadata = {**rendered_metadata, **_mapping(metadata)}
+        merged_metadata = _mapping(metadata)
         trigger_code = str(merged_metadata.get("trigger_code") or "").strip()
+        constraint = str(merged_metadata.get("content") or content or "").strip()
         if not trigger_code or not constraint:
             return None
         name = str(
@@ -224,26 +210,3 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
     return str(value)
-
-
-def _extract_rendered_constraint_metadata(content: str) -> tuple[dict[str, Any], str]:
-    """Parse and remove the rendered markdown trigger section from experience content."""
-
-    text = str(content or "")
-    matches = list(_TRIGGER_SECTION_RE.finditer(text))
-    if not matches:
-        return {}, text.strip()
-
-    metadata: dict[str, Any] = {}
-    for match in matches:
-        body = match.group("body") or ""
-        for line in body.splitlines():
-            item = re.match(r"\s*-\s*(experience_name)\s*:\s*(.*?)\s*$", line)
-            if item:
-                metadata[item.group(1)] = item.group(2).strip()
-        code_match = _TRIGGER_CODE_RE.search(body)
-        if code_match:
-            metadata["trigger_code"] = code_match.group("code").strip()
-
-    stripped = _TRIGGER_SECTION_RE.sub("\n", text).strip()
-    return metadata, stripped

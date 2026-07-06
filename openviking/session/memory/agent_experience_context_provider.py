@@ -93,6 +93,8 @@ Before outputting any experience, decide which case applies:
 - Existing experience is misleading, over-broad, or caused the bad path → update it to narrow the trigger and repair wording.
 - No relevant experience exists and the failure has a reusable pre-tool repair → create a new experience.
 - The failure is case-specific, random, already solved by tool facts, or not preventable by a pre-tool reminder → skip.
+- For failed or partially failed trajectories, inspect the failure independently; do not treat a trajectory
+  `Experience Repair Signal.Action=skip` as a reason to skip when a reusable repair can be created or updated.
 
 ## Rules
 

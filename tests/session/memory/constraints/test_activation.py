@@ -164,7 +164,7 @@ def test_policy_like_experience_can_be_used():
     assert result.experience_name == "cancel"
 
 
-def test_rendered_markdown_trigger_section_is_parsed_and_removed_from_reminder():
+def test_memory_file_ignores_template_rendered_metadata_without_structured_fields():
     memory_file = SimpleNamespace(
         uri="viking://user/u/memories/experiences/refund.md",
         extra_fields={},
@@ -181,12 +181,28 @@ def test_rendered_markdown_trigger_section_is_parsed_and_removed_from_reminder()
         ),
     )
 
+    assert ConstraintExperience.from_memory_file(memory_file) is None
+
+
+def test_memory_file_uses_structured_content_and_trigger_metadata_for_reminder():
+    memory_file = SimpleNamespace(
+        uri="viking://user/u/memories/experiences/refund.md",
+        extra_fields={
+            "experience_name": "refund_check",
+            "content": "## Situation\n- Refund request\n",
+            "trigger_code": (
+                'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "refund_order"\n'
+            ),
+        },
+        plain_content=lambda: "Rendered body should not be used.",
+    )
+
     exp = ConstraintExperience.from_memory_file(memory_file)
 
     assert exp is not None
     assert exp.name == "refund_check"
+    assert exp.constraint == "## Situation\n- Refund request"
     assert "should_trigger" in exp.trigger_code
-    assert "# Experience Trigger" not in exp.constraint
 
     result = apply_experience_constraint_reminder(
         ConstraintActivationInput(

@@ -1,9 +1,4 @@
-"""VikingBot-local runtime for conditional experience constraints.
-
-VikingBot consumes rendered OpenViking memory content through the OV client.  It
-must not depend on server-side memory-file internals to parse or execute
-experience constraints.
-"""
+"""VikingBot-local runtime for conditional experience constraints."""
 
 from __future__ import annotations
 
@@ -14,15 +9,6 @@ import time
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
-
-_TRIGGER_SECTION_RE = re.compile(
-    r"(?:^|\n)#\s+Experience Trigger\s*\n(?P<body>.*?)(?=\n#(?!#)|\Z)",
-    re.DOTALL | re.IGNORECASE,
-)
-_TRIGGER_CODE_RE = re.compile(
-    r"-\s*trigger_code\s*:\s*\n```(?:python|py)?\s*(?P<code>.*?)\s*```",
-    re.DOTALL | re.IGNORECASE,
-)
 
 
 @dataclass(slots=True)
@@ -45,9 +31,9 @@ class ConstraintExperience:
         uri = str(uri or "").strip()
         if not uri:
             return None
-        rendered_metadata, constraint = _extract_rendered_trigger_section(str(content or ""))
-        merged_metadata = {**rendered_metadata, **_mapping(metadata)}
+        merged_metadata = _mapping(metadata)
         trigger_code = str(merged_metadata.get("trigger_code") or "").strip()
+        constraint = str(merged_metadata.get("content") or content or "").strip()
         if not trigger_code or not constraint:
             return None
         name = str(
@@ -63,27 +49,6 @@ class ConstraintExperience:
             trigger_code=trigger_code,
             metadata=merged_metadata,
         )
-
-
-def _extract_rendered_trigger_section(content: str) -> tuple[dict[str, Any], str]:
-    text = str(content or "")
-    matches = list(_TRIGGER_SECTION_RE.finditer(text))
-    if not matches:
-        return {}, text.strip()
-
-    metadata: dict[str, Any] = {}
-    for match in matches:
-        body = match.group("body") or ""
-        for line in body.splitlines():
-            item = re.match(r"\s*-\s*(experience_name)\s*:\s*(.*?)\s*$", line)
-            if item:
-                metadata[item.group(1)] = item.group(2).strip()
-        code_match = _TRIGGER_CODE_RE.search(body)
-        if code_match:
-            metadata["trigger_code"] = code_match.group("code").strip()
-
-    stripped = _TRIGGER_SECTION_RE.sub("\n", text).strip()
-    return metadata, stripped
 
 
 @dataclass(slots=True)

@@ -14,6 +14,7 @@ from benchmark.tau2.train._rollout_helpers import (
 )
 from benchmark.tau2.train.rollout_executor_native import NativeTau2RolloutExecutor
 from benchmark.tau2.train.rollout_executor_vikingbot import (  # re-export vikingbot-only helpers for tests
+    DEFAULT_SYSTEM_PROMPT_PROFILE,
     DEFAULT_TAU2_EXPERIENCE_LOADER_MODE,
     _append_final_answer_for_tau2_evaluation,
     _build_rollout_messages,
@@ -59,7 +60,7 @@ def make_tau2_rollout_executor(
                 opts.get("loader_mode") or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
             ),
             system_prompt_profile=normalize_system_prompt_profile(
-                opts.get("system_prompt_profile") or "full"
+                opts.get("system_prompt_profile") or DEFAULT_SYSTEM_PROMPT_PROFILE
             ),
         )
     return NativeTau2RolloutExecutor(

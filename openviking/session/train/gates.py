@@ -15,7 +15,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
-from openviking.session.memory.constraints.schema import _extract_rendered_constraint_metadata
 from openviking.session.memory.constraints.trigger_sandbox import (
     TriggerSandboxError,
     smoke_test_trigger_code,
@@ -251,12 +250,16 @@ def default_experience_gate_contract() -> str:
 Your experience output will be rejected unless every experience satisfies these gates:
 
 1. Causal eligibility
-- Output experiences only for trajectories whose Experience Repair Signal.Action is create/update.
-- Do not output experiences for Outcome=success, Action=skip, First Wrong Tool Call.Tool=none, or Trigger boundary=none.
+- Non-success trajectories are eligible for experience learning by default,
+  including creating new experiences.
+- Treat Experience Repair Signal.Action as advisory context, not as an authorization gate:
+  Action=skip or Trigger boundary=none must not suppress a reusable repair for a failed
+  or partially failed trajectory.
+- Do not output experiences for Outcome=success.
 
 2. Content format
 - Use exactly these headings in this order: ## Failure Pattern, ## Repair Procedure, ## Guardrails.
-- Provide a valid trigger_code either in the rendered # Experience Trigger section or in schema metadata. The body may contain only the three required sections if trigger_code is stored separately.
+- Provide a valid trigger_code in schema metadata. The content body may contain only the three required sections.
 
 3. Tool boundary alignment
 - trigger_code must bind exactly one candidate_tool.
@@ -301,15 +304,10 @@ class ExperienceContentFormatGate:
             for heading in ("## Failure Pattern", "## Repair Procedure", "## Guardrails")
             if heading not in content
         ]
-        trigger_section_count = len(re.findall(r"(?m)^#\s+Experience Trigger\s*$", content))
         _, trigger_code = _experience_constraint_and_trigger(content, target)
         reasons: list[str] = []
         if missing:
             reasons.append("missing required headings: " + ", ".join(missing))
-        if trigger_section_count > 1 or (trigger_section_count == 0 and not trigger_code):
-            reasons.append(
-                f"expected exactly one Experience Trigger section or trigger_code metadata, got section_count={trigger_section_count}"
-            )
         if not trigger_code:
             reasons.append("missing trigger_code")
         if trigger_code:
@@ -328,7 +326,7 @@ class ExperienceContentFormatGate:
             retriable=True,
             repair_prompt=(
                 "Rewrite the experience content with exactly the required headings and provide "
-                "valid trigger_code either in the Experience Trigger section or schema metadata."
+                "valid trigger_code in schema metadata."
             ),
         )
 
@@ -359,7 +357,7 @@ class ExperienceCausalSignalGate:
         return GateDecision(
             gate_name=self.name,
             action="reject",
-            reason="no source trajectory authorizes an experience update",
+            reason="no non-success source trajectory supports experience learning",
             evidence={
                 "target_name": target.target_name,
                 "signals": [signal.to_dict() for signal in signals],
@@ -386,9 +384,15 @@ class ExperienceToolAlignmentGate:
         eligible_signals = [
             s for s in _source_signals(target) if _signal_allows_experience_update(s)
         ]
-        if not eligible_signals:
+        alignable_signals = [
+            s
+            for s in eligible_signals
+            if s.first_wrong_tool not in {"", "none", "无"}
+            or s.trigger_boundary not in {"", "none", "无"}
+        ]
+        if not alignable_signals:
             return None
-        if any(_tool_matches_signal(trigger_tool, signal) for signal in eligible_signals):
+        if any(_tool_matches_signal(trigger_tool, signal) for signal in alignable_signals):
             return None
         return GateDecision(
             gate_name=self.name,
@@ -397,7 +401,7 @@ class ExperienceToolAlignmentGate:
             evidence={
                 "target_name": target.target_name,
                 "trigger_tool": trigger_tool,
-                "signals": [signal.to_dict() for signal in eligible_signals],
+                "signals": [signal.to_dict() for signal in alignable_signals],
             },
             retriable=True,
             repair_prompt=(
@@ -1067,14 +1071,10 @@ def parse_trajectory_repair_signal(trajectory: Trajectory) -> TrajectoryRepairSi
 def _signal_allows_experience_update(signal: TrajectoryRepairSignal) -> bool:
     if signal.outcome == "success":
         return False
-    if signal.repair_action.startswith("skip") or signal.repair_action in {"", "none", "无"}:
-        return False
-    if not (signal.repair_action.startswith("create") or signal.repair_action.startswith("update")):
-        return False
-    if signal.first_wrong_tool in {"", "none", "无"}:
-        return False
-    if signal.trigger_boundary in {"", "none", "无"}:
-        return False
+    # Non-success trajectories are learning candidates by default.  The analyzer's
+    # Experience Repair Signal.Action is only advisory: failed trajectories may still
+    # need a brand-new experience even when the trajectory writer emitted
+    # Action=skip or Trigger boundary=none.
     return True
 
 
@@ -1091,19 +1091,16 @@ def _experience_constraint_and_trigger(
     content: str,
     target: GateTarget,
 ) -> tuple[str, str]:
-    metadata, constraint = _extract_rendered_constraint_metadata(str(content or ""))
-    trigger = str(metadata.get("trigger_code") or "").strip()
-    if not trigger:
-        fields: dict[str, Any] = {}
-        if target.gradient is not None:
-            fields = dict(getattr(target.gradient.after_file, "extra_fields", {}) or {})
-        elif target.plan_item is not None and isinstance(target.plan_item.metadata, dict):
-            for key in ("merge_memory_fields", "patch_metadata"):
-                value = target.plan_item.metadata.get(key)
-                if isinstance(value, dict):
-                    fields.update(value)
-        trigger = str(fields.get("trigger_code") or "").strip()
-    return constraint, trigger
+    fields: dict[str, Any] = {}
+    if target.gradient is not None:
+        fields = dict(getattr(target.gradient.after_file, "extra_fields", {}) or {})
+    elif target.plan_item is not None and isinstance(target.plan_item.metadata, dict):
+        for key in ("merge_memory_fields", "patch_metadata"):
+            value = target.plan_item.metadata.get(key)
+            if isinstance(value, dict):
+                fields.update(value)
+    trigger = str(fields.get("trigger_code") or "").strip()
+    return str(content or "").strip(), trigger
 
 
 def _gradient_memory_type(gradient: SemanticGradient) -> str:

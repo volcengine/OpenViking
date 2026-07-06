@@ -15,7 +15,9 @@ from openviking.session.train.domain import (
     Trajectory,
 )
 from openviking.session.train.gates import (
+    ExperienceCausalSignalGate,
     ExperienceCounterfactualReflectionGate,
+    ExperienceToolAlignmentGate,
     GateTarget,
     default_experience_gate_contract,
     default_policy_gate_runner,
@@ -49,6 +51,33 @@ def _trajectory() -> Trajectory:
             "  - Tool: communicate_with_user\n"
             "- First Material Divergence:\n"
             "  - Kind: missing_communication\n"
+        ),
+    )
+
+
+def _trajectory_with_repair_signal(
+    *,
+    outcome: str = "failure",
+    action: str = "skip",
+    first_wrong_tool: str = "communicate_with_user",
+    trigger_boundary: str = "none",
+) -> Trajectory:
+    return Trajectory(
+        name="missing_total",
+        uri="viking://user/u/memories/trajectories/missing_total.md",
+        outcome=outcome,
+        retrieval_anchor="Stage: final_response",
+        content=(
+            "# Missing total\n"
+            f"- Outcome: {outcome}\n"
+            "- Runtime Facts:\n"
+            "  - communicate_checks failed: missing required total\n"
+            "- First Wrong Tool Call:\n"
+            f"  - Tool: {first_wrong_tool}\n"
+            "  - Error type: missing_communication\n"
+            "- Experience Repair Signal:\n"
+            f"  - Action: {action}\n"
+            f"  - Trigger boundary: {trigger_boundary}\n"
         ),
     )
 
@@ -107,7 +136,9 @@ def _plan_item() -> PolicyPlanItem:
     )
 
 
-def _target(vlm_response: str | Exception) -> tuple[GateTarget, ExperienceCounterfactualReflectionGate]:
+def _target(
+    vlm_response: str | Exception,
+) -> tuple[GateTarget, ExperienceCounterfactualReflectionGate]:
     analysis = _analysis()
     item = _plan_item()
     gate = ExperienceCounterfactualReflectionGate(vlm=FakeVLM(vlm_response))
@@ -132,8 +163,74 @@ def test_default_policy_gate_runner_uses_reflection_not_shape_or_narrowing_gate(
 
     contract = default_experience_gate_contract()
     assert "Counterfactual reflection" in contract
+    assert "eligible for experience learning by default" in contract
+    assert "Action=skip or Trigger boundary=none must not suppress" in contract
+    assert "Action is create/update" not in contract
     assert "Candidate-shape trigger" not in contract
     assert "Update safety" not in contract
+
+
+@pytest.mark.asyncio
+async def test_causal_signal_gate_allows_failed_skip_signal_for_new_experience():
+    trajectory = _trajectory_with_repair_signal(action="skip", trigger_boundary="none")
+    item = _plan_item()
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=trajectory,
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceCausalSignalGate().evaluate(target)
+
+    assert decision is None
+
+
+@pytest.mark.asyncio
+async def test_tool_alignment_uses_first_wrong_tool_even_when_trigger_boundary_none():
+    trajectory = _trajectory_with_repair_signal(
+        action="skip",
+        first_wrong_tool="communicate_with_user",
+        trigger_boundary="none",
+    )
+    item = _plan_item()
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=trajectory,
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceToolAlignmentGate().evaluate(target)
+
+    assert decision is None
+
+
+@pytest.mark.asyncio
+async def test_causal_signal_gate_still_rejects_success_trajectory():
+    trajectory = _trajectory_with_repair_signal(outcome="success", action="skip")
+    item = _plan_item()
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=trajectory,
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceCausalSignalGate().evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert "non-success" in decision.reason
 
 
 @pytest.mark.asyncio
