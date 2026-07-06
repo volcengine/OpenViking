@@ -953,10 +953,19 @@ class AsyncHTTPClient:
         response = await self._http.post("/api/v1/search/grep", json=request_json)
         return self._handle_response(response)
 
-    async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
+    async def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: int = 256,
+    ) -> Dict[str, Any]:
         response = await self._http.post(
             "/api/v1/search/glob",
-            json={"pattern": pattern, "uri": VikingURI.normalize(uri)},
+            json={
+                "pattern": pattern,
+                "uri": VikingURI.normalize(uri),
+                "node_limit": node_limit,
+            },
         )
         return self._handle_response(response)
 
@@ -1617,9 +1626,7 @@ class SyncHTTPClient:
         skill_name: str,
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.delete_skill(skill_name, target_uri=target_uri)
-        )
+        return run_async(self._async_client.delete_skill(skill_name, target_uri=target_uri))
 
     def list_watches(
         self,
@@ -1859,8 +1866,13 @@ class SyncHTTPClient:
             )
         )
 
-    def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
-        return run_async(self._async_client.glob(pattern, uri=uri))
+    def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: int = 256,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.glob(pattern, uri=uri, node_limit=node_limit))
 
     def relations(self, uri: str) -> List[Any]:
         return run_async(self._async_client.relations(uri))

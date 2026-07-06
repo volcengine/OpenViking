@@ -998,7 +998,7 @@ openviking grep "authentication" --uri viking://resources/ [--ignore-case]
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`） |
 | uri | str | 否 | "viking://" | 起始 URI |
-| node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；显式传 `null` 时会透传为 `None` |
+| node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -1017,7 +1017,9 @@ print(f"Found {results['count']} Python files")
 **Go SDK**
 
 ```go
-result, err := client.Glob(ctx, "**/*.md", "viking://resources/")
+result, err := client.Glob(ctx, "**/*.md", "viking://resources/", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+})
 if err != nil {
     return err
 }

@@ -913,7 +913,7 @@ Search content by pattern.
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
-| node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; explicitly sending `null` passes through `None` |
+| node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
 | level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
 
 **Python SDK (Embedded / HTTP)**
@@ -1016,7 +1016,9 @@ print(f"Found {results['count']} Python files")
 **Go SDK**
 
 ```go
-result, err := client.Glob(ctx, "**/*.md", "viking://resources/")
+result, err := client.Glob(ctx, "**/*.md", "viking://resources/", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+})
 if err != nil {
     return err
 }

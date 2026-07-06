@@ -637,7 +637,7 @@ openviking grep "TODO" --uri viking://resources --level-limit 3
 - `[]` 匹配字符范围
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.glob()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.glob()` - Python SDK 入口（HTTP）
 - `openviking/server/routers/search.py:glob()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:glob()` - Rust CLI 命令
 
@@ -649,7 +649,7 @@ openviking grep "TODO" --uri viking://resources --level-limit 3
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`）|
 | uri | str | 否 | "viking://" | 起始 URI |
-| node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；显式传 `null` 时会透传为 `None` |
+| node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 
 #### 3. 使用示例
 
@@ -677,21 +677,23 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-# 查找所有 markdown 文件
+# 查找所有 markdown 文件（默认最多返回 256 条）
 results = client.glob("**/*.md", "viking://resources")
 print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# 查找所有 Python 文件
-results = client.glob("**/*.py", "viking://resources")
+# 查找所有 Python 文件，并显式放宽返回上限
+results = client.glob("**/*.py", "viking://resources", node_limit=1024)
 print(f"Found {results['count']} Python files")
 ```
 
 **Go SDK**
 
 ```go
-result, err := client.Glob(ctx, "**/*.md", "viking://resources")
+result, err := client.Glob(ctx, "**/*.md", "viking://resources", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+})
 if err != nil {
     return err
 }

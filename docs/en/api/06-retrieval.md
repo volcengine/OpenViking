@@ -635,7 +635,7 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 - `[]` matches character range
 
 **Code Entry Points**:
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.glob()` - Python SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.glob()` - Python SDK entry (HTTP)
 - `openviking/server/routers/search.py:glob()` - HTTP router
 - `crates/ov_cli/src/commands/search.rs:glob()` - Rust CLI command
 
@@ -647,7 +647,7 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
-| node_limit | int | No | 256 | Maximum number of matches to return. Omitted requests default to 256; explicitly sending `null` passes through `None` |
+| node_limit | int | No | 256 | Maximum number of matches to return. Omitted requests default to 256; pass a larger integer when you need more results |
 
 #### 3. Usage Examples
 
@@ -675,21 +675,23 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-# Find all markdown files
+# Find all markdown files (defaults to returning at most 256 matches)
 results = client.glob("**/*.md", "viking://resources")
 print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# Find all Python files
-results = client.glob("**/*.py", "viking://resources")
+# Find all Python files with a higher explicit cap
+results = client.glob("**/*.py", "viking://resources", node_limit=1024)
 print(f"Found {results['count']} Python files")
 ```
 
 **Go SDK**
 
 ```go
-result, err := client.Glob(ctx, "**/*.md", "viking://resources")
+result, err := client.Glob(ctx, "**/*.md", "viking://resources", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+})
 if err != nil {
     return err
 }
