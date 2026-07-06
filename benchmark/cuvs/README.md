@@ -69,10 +69,20 @@ measuring cold storage reads.
 
 ## Backend interpretation
 
-- `native` is OpenViking's C++ flat index and is exact.
-- `cuvs_brute_force` is GPU exact search.
+- `native` is OpenViking's C++ flat index and is exact within its configured
+  representation.
+- `cuvs_brute_force` is GPU exact search over its retained representation.
 - `cuvs_cagra` is approximate; the result reports Recall@K against an exact
   backend from the same run.
+
+The index-only harness constructs the native index without an explicit
+`Quant`, so both native and cuVS brute-force use float32 there. The collection
+and async service harnesses deliberately retain normal application behavior:
+the native CPU index uses its default per-vector-scale int8 quantization while
+the cuVS GPU shadow uses float32. Enabling cuVS does not mutate the native
+index metadata. Collection/service results are therefore application-path
+comparisons, not equal-dtype or equal-memory comparisons, and must be reported
+with Recall@K and the dtype caveat.
 
 The native measurement uses the current OpenViking single-query call path; it
 is not a claim about the maximum throughput of a separately tuned,

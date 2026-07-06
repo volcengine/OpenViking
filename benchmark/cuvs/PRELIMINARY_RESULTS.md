@@ -26,6 +26,13 @@ GPU. It does not mean CAGRA. CAGRA is the approximate GPU index and uses
 results. Each public-dataset process times all 10,000 queries after ten
 warm-up batches.
 
+The index-only harness uses float32 for both native and cuVS exact search. The
+collection and service sections intentionally preserve normal application
+behavior instead: native keeps its default per-vector-scale int8 index and
+cuVS keeps a float32 GPU shadow. Opting into cuVS does not rewrite the native
+index. Those later sections are therefore not equal-dtype or equal-memory
+comparisons and report native Recall@K against cuVS brute-force.
+
 ## Batch size 1
 
 This is the closest index-level approximation of the current OpenViking

@@ -762,7 +762,16 @@
           </tbody>
         </table>
 
-        <h3>5.2 过滤与能力矩阵</h3>
+        <h3>5.2 Dtype 与非侵入性边界</h3>
+        <div class="callout">
+          <strong>保留 CPU 默认行为：</strong>
+          启用 cuVS 不修改默认 backend，也不迁移或重写 native index。native CPU 继续使用
+          <code>VectorIndex.Quant=int8</code>（逐向量 scale），cuVS GPU shadow 当前使用
+          <code>float32</code>。因此两条 dense 路径不是等 dtype、等内存或完全相同数值语义的比较；
+          native fallback 始终走原有 int8 index，benchmark 需要显式报告 dtype 与 Recall@K。
+        </div>
+
+        <h3>5.3 过滤与能力矩阵</h3>
         <table>
           <thead><tr><th>能力</th><th>执行路径</th><th>说明</th></tr></thead>
           <tbody>
@@ -907,6 +916,8 @@ pip install cuvs-cu13 'cupy-cuda13x[ctk]' --extra-index-url=https://pypi.nvidia.
             <tr><td>Python/CuPy 数据面</td><td>存在对象、复制与 GIL 管理开销。</td><td>基准证明必要后，下沉到 C++ cuVS C API。</td></tr>
             <tr><td>恢复需要全量扫描 Store</td><td>大集合启动/首查成本增加。</td><td>版本化派生 cache、后台预热、受控序列化。</td></tr>
             <tr><td>native dense 仍并存</td><td>消耗 CPU 内存和写入成本。</td><td>等 cuVS 覆盖率、稳定性和回退策略明确后再评估裁剪。</td></tr>
+            <tr><td>CPU int8 / GPU float32</td><td>显存、精度和 score 不属于等 dtype 对比，少量 top-k 顺序可能不同。</td><td>保留非侵入式默认；结果报告 dtype、Recall@K 与两侧内存。</td></tr>
+            <tr><td>GPU shadow 固定 float32</td><td>大规模 collection 的显存容量受限。</td><td>先评估 float16；再评估 CAGRA int8/VPQ。native scaled-int8 兼容需要专门的 distance/rerank 路径。</td></tr>
           </tbody>
         </table>
         <p>
@@ -966,7 +977,7 @@ pip install cuvs-cu13 'cupy-cuda13x[ctk]' --extra-index-url=https://pypi.nvidia.
         <h3>功能验收</h3>
         <ul class="checklist">
           <li><code>examples/cuvs_smoke.py</code> 在真实 cuVS runtime 上通过。</li>
-          <li>brute-force 与 native 在 cosine/IP/L2 的 top-k label 和 score 容差内一致。</li>
+          <li>brute-force 与 float32 ground truth 在 cosine/IP/L2 下对齐；对 native int8 单独报告 Recall@K 和 score 差异。</li>
           <li><code>account_id</code>、path、range、contains、and/or/must_not 过滤不越权且结果一致。</li>
           <li>date_time/geo_point 确认进入 native fallback；关闭 fallback 时返回清晰错误。</li>
           <li>upsert 后可搜到新值、delete 后不可搜到，连续多次变更后结果正确。</li>
@@ -1018,6 +1029,7 @@ pip install cuvs-cu13 'cupy-cuda13x[ctk]' --extra-index-url=https://pypi.nvidia.
           <tbody>
             <tr><td>把 cuVS 做成完整独立 VectorDB backend</td><td><span class="pill risk">不采用</span></td><td>cuVS 不提供完整 CRUD、标量、稀疏、事务和数据库持久化，会复制大量 OpenViking 逻辑。</td></tr>
             <tr><td>在 <code>LocalIndex</code> 内替换 pure dense executor</td><td><span class="pill done">当前方案</span></td><td>边界最小，能复用 Store、恢复、回表与 native 能力补集。</td></tr>
+            <tr><td>为 cuVS 改写 native 默认量化</td><td><span class="pill risk">拒绝</span></td><td>会改变既有 CPU 行为；当前保留 native int8，并让 GPU 独立维护 float32 shadow。</td></tr>
             <tr><td>直接在 native C++ engine 链接 cuVS C API</td><td><span class="pill later">后续评估</span></td><td>数据面更短，但 CUDA 工具链、wheel/ABI、构建矩阵和维护成本更高，应由 benchmark 证明必要性。</td></tr>
             <tr><td>未过滤 top-k 后做 post-filter</td><td><span class="pill risk">拒绝</span></td><td>无法保证过滤后 top-k 完整性，尤其对高选择性租户过滤不安全。</td></tr>
             <tr><td>持久化 cuVS index 作为权威数据</td><td><span class="pill risk">拒绝</span></td><td>恢复能力会被 GPU、CUDA/cuVS 版本和格式兼容性绑定；可做 cache，但不能做事实来源。</td></tr>
