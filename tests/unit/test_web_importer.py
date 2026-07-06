@@ -250,9 +250,9 @@ class TestWebImporter:
                 options=WebImportOptions(),
             )
         message = str(exc_info.value)
-        assert "robots.txt" in message
         assert "Forbidden by robots.txt" not in message
-        assert "Cannot crawl this page" in message
+        assert "compliance" in message
+        assert "local file" in message
 
     async def test_import_to_directory_downloads_child_links(self, monkeypatch, tmp_path):
         class FakeCrawler:

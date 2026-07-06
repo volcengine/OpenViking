@@ -228,13 +228,13 @@ def _entry_failure_message(root_url: str, detail: str) -> str:
 
     The most common cause is the site's robots.txt disallowing crawlers, which
     Scrapy reports with the terse "Forbidden by robots.txt". Turn that into a
-    plain-language explanation instead.
+    short compliance-oriented hint instead.
     """
     if detail and "robots.txt" in detail.lower():
         return (
-            f"Cannot crawl this page: {root_url}\n"
-            "Reason: the site's robots.txt disallows crawlers for this URL, and "
-            "OpenViking honors robots.txt by default, so the crawl was stopped."
+            "This URL cannot be imported for compliance reasons "
+            "(the site disallows crawlers). Please save the page and import it "
+            "as a local file instead."
         )
     message = f"Failed to fetch entry page: {root_url}"
     if detail:
