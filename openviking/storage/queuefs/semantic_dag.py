@@ -679,7 +679,9 @@ class SemanticDagExecutor:
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
         try:
-            if need_vectorize:
+            # Skip vectorization of non-substantive files (issue #3028); media
+            # and code summaries default True. Keep the existing code-repo logic.
+            if need_vectorize and summary_dict.get("has_substantive_content", True):
                 use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
                 task = VectorizeTask(
                     task_type="file",
@@ -738,7 +740,13 @@ class SemanticDagExecutor:
         for idx, file_path in enumerate(node.file_paths):
             item = node.file_summaries[idx]
             if item is None:
-                summaries.append({"name": file_path.split("/")[-1], "summary": ""})
+                summaries.append(
+                    {
+                        "name": file_path.split("/")[-1],
+                        "summary": "",
+                        "has_substantive_content": False,
+                    }
+                )
             else:
                 summaries.append(item)
         return summaries
@@ -813,6 +821,13 @@ class SemanticDagExecutor:
                         dir_uri, file_summaries, children_abstracts
                     )
                 overview, abstract = self._processor._normalize_overview_generation(overview)
+
+            # Neutral (no-substantive-content) overview: write the sidecar but do
+            # not embed it, matching _is_not_ready_sentinel (issue #3028 / #2434).
+            from openviking.storage.queuefs.semantic_processor import is_neutral_overview
+
+            if is_neutral_overview(overview):
+                need_vectorize = False
 
             # Write directly, protected by the outer semantic lock.
             try:

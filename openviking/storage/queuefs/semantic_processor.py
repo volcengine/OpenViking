@@ -157,6 +157,51 @@ def has_substantive_content(
     return weighted >= min_chars, int(weighted)
 
 
+# Directory placeholder markers, all shaped like reindex_executor's sentinels
+# (single `#` header + suffix) so _is_not_ready_sentinel refuses to embed them.
+#   not-ready = VikingFS transient placeholder (the .overview.md/.abstract.md
+#               file is missing / not yet generated).
+#   no-substantive-content = our PERMANENT marker for an empty / title-only
+#               directory that will never have a real summary (issue #3028).
+_OVERVIEW_NOT_READY_MARKER = "[Directory overview is not ready]"
+_ABSTRACT_NOT_READY_MARKER = "[Directory abstract is not ready]"
+_OVERVIEW_NO_CONTENT_MARKER = "[Directory has no substantive content]"
+
+
+def _neutral_directory_overview(dir_name: str) -> str:
+    """Deterministic directory overview when there is no substantive content — no VLM."""
+    return f"# {dir_name}\n\n{_OVERVIEW_NO_CONTENT_MARKER}"
+
+
+def is_neutral_overview(text: str) -> bool:
+    """True if *text* is the no-substantive-content directory overview.
+
+    Same shape test as ``reindex_executor._is_not_ready_sentinel`` (a single
+    ``#`` header followed only by the marker) so the write-time vectorization
+    skip and the reindex embedding guard agree.
+    """
+    if not text:
+        return False
+    head = text.rstrip()
+    if not head.endswith(_OVERVIEW_NO_CONTENT_MARKER):
+        return False
+    head = head[: -len(_OVERVIEW_NO_CONTENT_MARKER)].strip()
+    return head.startswith("#") and "\n" not in head
+
+
+def _is_placeholder_abstract(text: Optional[str]) -> bool:
+    """True if *text* is empty or a placeholder directory abstract (transient
+    not-ready or permanent no-substantive-content)."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    return (
+        t.endswith(_OVERVIEW_NO_CONTENT_MARKER)
+        or t.endswith(_OVERVIEW_NOT_READY_MARKER)
+        or t.endswith(_ABSTRACT_NOT_READY_MARKER)
+    )
+
+
 @dataclass
 class DiffResult:
     """Directory diff result for sync operations."""
@@ -759,6 +804,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 dir_uri, completed_summaries, [], llm_sem=llm_sem
             )
             overview, abstract = self._normalize_overview_generation(generated_content)
+            # Neutral (no-substantive-content) overview: write the sidecar but do
+            # not embed it, matching _is_not_ready_sentinel (issue #3028 / #2434).
+            skip_directory_vectorization = is_neutral_overview(overview)
 
             try:
                 wrote_semantics = await self._write_memory_directory_semantics(
@@ -790,7 +838,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 tracker = EmbeddingTaskTracker.get_instance()
                 await tracker.register(
                     semantic_msg_id=msg.id,
-                    total_count=2 + len(file_vectorize_items),
+                    total_count=(0 if skip_directory_vectorization else 2)
+                    + len(file_vectorize_items),
                     on_complete=_on_complete,
                     metadata={"uri": dir_uri},
                 )
@@ -804,15 +853,18 @@ class SemanticProcessor(DequeueHandlerBase):
                     semantic_msg_id=msg.id,
                     preserve_existing_created_at=True,
                 )
-            await self._vectorize_directory(
-                uri=dir_uri,
-                context_type="memory",
-                abstract=abstract,
-                overview=overview,
-                ctx=ctx,
-                semantic_msg_id=msg.id,
-            )
-            logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
+            if skip_directory_vectorization:
+                logger.info(f"Skipping directory vectorization for neutral overview: {dir_uri}")
+            else:
+                await self._vectorize_directory(
+                    uri=dir_uri,
+                    context_type="memory",
+                    abstract=abstract,
+                    overview=overview,
+                    ctx=ctx,
+                    semantic_msg_id=msg.id,
+                )
+                logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
         finally:
             await lock.close()
 
@@ -1146,8 +1198,24 @@ class SemanticProcessor(DequeueHandlerBase):
 
         full_content = content or ""
 
-        def result(summary: str) -> Dict[str, Any]:
-            return {"name": file_name, "summary": summary, "content": full_content}
+        def result(summary: str, has_substantive: bool = True) -> Dict[str, Any]:
+            return {
+                "name": file_name,
+                "summary": summary,
+                "content": full_content,
+                "has_substantive_content": has_substantive,
+            }
+
+        # Substantive-content gate (issue #3028): skip the VLM for empty /
+        # title-only docs so it cannot hallucinate a summary. Run on the
+        # untruncated content; never gate code (code is always substantive).
+        file_type = self._detect_file_type(file_name)
+        if file_type != FILE_TYPE_CODE:
+            min_chars = get_openviking_config().semantic.min_substantive_chars
+            is_substantive, _residual = has_substantive_content(full_content, min_chars=min_chars)
+            if not is_substantive:
+                logger.info("Skipping VLM for non-substantive file: %s", file_path)
+                return result("", has_substantive=False)
 
         # Limit content length
         max_chars = get_openviking_config().semantic.max_file_content_chars
@@ -1163,9 +1231,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         output_language = resolve_output_language(content)
 
-        # Detect file type and select appropriate prompt
-        file_type = self._detect_file_type(file_name)
-
+        # File type already detected above for the substantive-content gate.
         if file_type == FILE_TYPE_CODE:
             code_mode = get_openviking_config().code.code_summary_mode
 
@@ -1407,9 +1473,20 @@ class SemanticProcessor(DequeueHandlerBase):
         vlm = config.vlm
         semantic = config.semantic
 
+        # Substantive-content gate (issue #3028): drop non-substantive files (and
+        # placeholder child abstracts) from the overview prompt; if nothing
+        # substantive remains, write the deterministic neutral overview without
+        # the VLM so it cannot hallucinate over near-empty input.
+        file_summaries = [s for s in file_summaries if s.get("has_substantive_content", True)]
+        children_abstracts = [
+            c for c in children_abstracts if not _is_placeholder_abstract(c.get("abstract"))
+        ]
+        if not file_summaries and not children_abstracts:
+            return _neutral_directory_overview(dir_uri.split("/")[-1])
+
         if not vlm.is_available():
             logger.warning("VLM not available, using default overview")
-            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not ready]"
+            return _neutral_directory_overview(dir_uri.split("/")[-1])
 
         from openviking.session.memory.utils.language import resolve_output_language
 
