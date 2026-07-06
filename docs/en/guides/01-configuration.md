@@ -745,7 +745,7 @@ Configuration for Feishu/Lark cloud document parsing. See [Resources](../api/02-
 | `max_rows_per_sheet` | int | Maximum rows to import per spreadsheet sheet (default: `1000`) |
 | `max_records_per_table` | int | Maximum records to import per bitable table (default: `1000`) |
 
-**Dependency**: `pip install 'openviking[bot-feishu]'`
+**Dependency**: Included by default in `openviking[bot]` installation
 
 **Lark international**: For Lark URLs (`*.larksuite.com`), set `domain` to `https://open.larksuite.com`.
 

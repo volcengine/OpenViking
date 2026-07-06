@@ -41,7 +41,7 @@ class LangfuseClient:
 
         if Langfuse is None:
             logger.warning(
-                'Langfuse not installed. Install with: uv pip install openviking[bot-langfuse] (or uv pip install -e ".[bot-langfuse]" for local dev). Configure in ~/.openviking/ov.conf under bot.langfuse'
+                'Langfuse not installed. Install with: uv pip install langfuse>=3.0.0. Configure in ~/.openviking/ov.conf under bot.langfuse'
             )
             self.enabled = False
             return

@@ -14,12 +14,12 @@ Vikingbot is deeply integrated with OpenViking, providing powerful knowledge man
 
 ## 📦 Install
 
-**Option 1: Install from PyPI (Simplest)**
+### Option 1: Install from PyPI (Simplest)**
 ```bash
 pip install "openviking[bot]"
 ```
 
-**Option 2: Install from source (for development)**
+### Option 2: Install from source (for development)**
 
 **Prerequisites**
 
@@ -46,38 +46,8 @@ uv venv --python 3.11
 source .venv/bin/activate  # macOS/Linux
 # .venv\Scripts\activate   # Windows
 
-# Install dependencies (minimal)
+# Install (all features included)
 uv pip install -e ".[bot]"
-
-# Or install with optional features
-uv pip install -e ".[bot,bot-langfuse,bot-telegram]"
-```
-
-### Optional Dependencies
-
-Install only the features you need:
-
-| Feature Group | Install Command | Description |
-|---------------|-----------------|-------------|
-| **Full** | `uv pip install -e ".[bot-full]"` | All features included |
-| **Langfuse** | `uv pip install -e ".[bot-langfuse]"` | LLM observability and tracing |
-| **FUSE** | `uv pip install -e ".[bot-fuse]"` | OpenViking filesystem mount |
-| **Sandbox** | `uv pip install -e ".[bot-sandbox]"` | Code execution sandbox |
-| **OpenCode** | `uv pip install -e ".[bot-opencode]"` | OpenCode AI integration |
-
-#### Channels (chat apps)
-
-| Channel | Install Command |
-|---------|-----------------|
-| **Telegram** | `uv pip install -e ".[bot-telegram]"` |
-| **Feishu/Lark** | `uv pip install -e ".[bot-feishu]"` |
-| **DingTalk** | `uv pip install -e ".[bot-dingtalk]"` |
-| **Slack** | `uv pip install -e ".[bot-slack]"` |
-| **QQ** | `uv pip install -e ".[bot-qq]"` |
-
-Multiple features can be combined:
-```bash
-uv pip install -e ".[bot,bot-langfuse,bot-telegram]"
 ```
 
 ## 🚀 Quick Start
@@ -464,11 +434,6 @@ Add to `~/.openviking/ov.conf`:
 ```
 
 For Langfuse Cloud, use `https://cloud.langfuse.com` as the `base_url`.
-
-**Install Langfuse support:**
-```bash
-uv pip install -e ".[bot-langfuse]"
-```
 
 **Restart vikingbot:**
 ```bash
