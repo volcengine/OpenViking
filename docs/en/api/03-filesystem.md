@@ -913,7 +913,7 @@ Search content by pattern.
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; explicitly sending `null` passes through `None` |
 | level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
 
 **Python SDK (Embedded / HTTP)**
