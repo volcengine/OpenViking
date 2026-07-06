@@ -1,22 +1,36 @@
 {
   "name": "openviking-opencode",
-  "version": "0.3.3",
-  "description": "OpenCode plugin for OpenViking — injects indexed repo context into the AI assistant and auto-installs the openviking skill",
+  "version": "1.0.0",
+  "author": "volcengine",
+  "description": "OpenCode plugin for OpenViking — exposes native tools for memory, search, and code retrieval",
   "type": "module",
   "main": "index.mjs",
   "exports": {
     ".": "./index.mjs"
   },
+  "files": [
+    "index.mjs",
+    "lib/",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node --check index.mjs && node --check lib/runtime.mjs && node --check lib/repo-context.mjs && node --check lib/memory-session.mjs && node --check lib/memadd-local.mjs && node --check lib/memory-tools.mjs && node --check lib/code-tools.mjs && node --check lib/memory-recall.mjs && node --check lib/utils.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.14.37"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/volcengine/OpenViking"
+  },
   "keywords": [
     "opencode",
     "opencode-plugin",
     "openviking",
+    "memory",
     "rag",
     "code-search"
   ],
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/volcengine/OpenViking"
-  }
+  "license": "Apache-2.0"
 }
