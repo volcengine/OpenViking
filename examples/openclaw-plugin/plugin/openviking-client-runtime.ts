@@ -1,5 +1,6 @@
 import { OpenVikingClient } from "../client.js";
 import type { HttpTransport } from "../adapters/http-transport.js";
+import { resolveOpenVikingRequestHeaders } from "../request-headers.js";
 
 type Logger = {
   info: (message: string) => void;
@@ -13,6 +14,7 @@ type ClientRuntimeConfig = {
   timeoutMs: number;
   accountId?: string;
   userId?: string;
+  headers?: Record<string, string>;
   logFindRequests: boolean;
 };
 
@@ -61,7 +63,12 @@ export function createOpenVikingClientRuntime(options: {
       cfg.accountId,
       cfg.userId,
       routingDebugLog,
-      { transport: options.transport },
+      {
+        transport: options.transport,
+        headers: resolveOpenVikingRequestHeaders({
+          headers: cfg.headers,
+        }),
+      },
     ),
   );
 
