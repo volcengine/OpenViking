@@ -840,7 +840,10 @@ install_codex() {
       command codex plugin remove "$PLUGIN_ID" >/dev/null 2>&1 || true
       command codex plugin marketplace remove "$MARKETPLACE_NAME" >/dev/null 2>&1 || true
       info "codex plugin marketplace add $REPO_URL --ref $REPO_REF"
-      command codex plugin marketplace add "$REPO_URL" --ref "$REPO_REF" --sparse examples/codex-memory-plugin >/dev/null || \
+      # Sparse must include .agents/ — the marketplace manifest lives there,
+      # and a plugin-dir-only sparse checkout fails manifest resolution.
+      command codex plugin marketplace add "$REPO_URL" --ref "$REPO_REF" \
+        --sparse examples/codex-memory-plugin --sparse .agents >/dev/null 2>&1 || \
         command codex plugin marketplace add "$REPO_URL" --ref "$REPO_REF" >/dev/null || {
           err 'codex plugin marketplace add failed'
           return 1
