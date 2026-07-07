@@ -93,30 +93,36 @@ Use the `.js` wrapper for source installs; OpenCode's local plugin scanner disco
 
 ### Configure
 
-Create `~/.config/opencode/openviking-config.json`:
+Credentials are shared with the Claude Code and Codex memory plugins. Run the setup wizard once, or set `OPENVIKING_*` environment variables:
+
+```bash
+node examples/opencode-plugin/scripts/setup.mjs
+```
+
+`~/.config/opencode/openviking-config.json` is now for behavior knobs only:
 
 ```json
 {
-  "endpoint": "http://localhost:1933",
-  "apiKey": "",
-  "account": "",
-  "user": "",
-  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
     "enabled": true,
     "limit": 6,
-    "scoreThreshold": 0.15,
+    "scoreThreshold": 0.35,
     "maxContentChars": 500,
     "preferAbstract": true,
-    "tokenBudget": 2000
-  }
+    "tokenBudget": 2000,
+    "minQueryLength": 3
+  },
+  "commitTokenThreshold": 20000,
+  "commitKeepRecentCount": 10,
+  "profileTokenBudget": 10000,
+  "resumeContextBudget": 32000
 }
 ```
 
-Prefer environment variables for secrets:
+Environment variables override `ovcli.conf`:
 
 ```bash
 export OPENVIKING_API_KEY="your-api-key-here"
@@ -125,7 +131,7 @@ export OPENVIKING_USER="opencode"     # optional, trusted-mode deployments only
 export OPENVIKING_PEER_ID="opencode"  # optional, peer-scoped memory routing
 ```
 
-Environment variables override `openviking-config.json`. `apiKey` is sent as `X-API-Key`; `account` and `user` are trusted-mode headers; `peerId` is sent as request-level `peer_id` for recall, search, and captured session messages.
+API keys are sent as `Authorization: Bearer ...`. `account` and `user` are trusted-mode headers; `peerId` is sent as `X-OpenViking-Actor-Peer` and as `peer_id` on captured session messages. Existing `openviking-config.json` credential fields are still read as a migration fallback, but new installs should use `ovcli.conf` or env vars.
 
 ### Verify
 
@@ -141,7 +147,7 @@ Ask OpenCode to search or browse OpenViking memory, or request a manual session 
 
 ```bash
 ~/.config/opencode/openviking/openviking-memory.log
-~/.config/opencode/openviking/openviking-session-map.json
+~/.config/opencode/openviking/openviking-session-state.json
 ```
 
 ### Troubleshooting
@@ -155,3 +161,19 @@ Ask OpenCode to search or browse OpenViking memory, or request a manual session 
 | Local `memadd` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |
 
 For all available tools, configuration fields, and runtime file details, see the [plugin README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin).
+
+## pi coding agent extension
+
+OpenViking also ships a native pi extension.
+
+Source: [examples/pi-coding-agent-extension](https://github.com/volcengine/OpenViking/tree/main/examples/pi-coding-agent-extension)
+
+The extension uses pi lifecycle events for session-start profile injection, current-prompt recall, turn capture, threshold commit, pre-compact commit, and shutdown commit. It keeps pi's native tool surface (`viking_search`, `viking_read`, `viking_browse`, `viking_remember`, `viking_forget`, `viking_add_resource`, `viking_archive_expand`) rather than MCP.
+
+Install through the shared installer:
+
+```bash
+bash examples/memory-plugin-shared/install.sh --harness pi
+```
+
+Credentials are resolved from env vars, `~/.openviking/ovcli.conf`, then `~/.openviking/ov.conf`. The extension-local `config.json` only contains behavior knobs such as `recallTokenBudget`, `scoreThreshold`, `profileTokenBudget`, `resumeContextBudget`, and `commitTokenThreshold`.

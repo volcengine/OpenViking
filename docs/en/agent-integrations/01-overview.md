@@ -12,7 +12,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **Hermes Agent** | [Hermes Agent](./05-hermes.md) — built-in OpenViking memory provider, no plugin install needed |
 | **LangChain / LangGraph** | [LangChain and LangGraph](./07-langchain-langgraph.md) — retriever, tools, context backend, store, and middleware |
 | **Cursor / Trae / Manus / Claude Desktop / ChatGPT / …** | [MCP Clients](./06-mcp-clients.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
-| **AstrBot / OpenCode / …** | [Community Plugins](./08-community-plugins.md) — community-maintained integrations for various runtimes |
+| **AstrBot / OpenCode / pi / …** | [Community Plugins](./08-community-plugins.md) — community-maintained integrations for various runtimes |
 
 ## Integration depths
 

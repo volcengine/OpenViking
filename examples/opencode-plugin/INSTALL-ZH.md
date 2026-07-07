@@ -92,22 +92,22 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 
 ```json
 {
-  "endpoint": "http://localhost:1933",
-  "apiKey": "",
-  "account": "",
-  "user": "",
-  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
     "enabled": true,
     "limit": 6,
-    "scoreThreshold": 0.15,
+    "scoreThreshold": 0.35,
     "maxContentChars": 500,
     "preferAbstract": true,
-    "tokenBudget": 2000
-  }
+    "tokenBudget": 2000,
+    "minQueryLength": 3
+  },
+  "commitTokenThreshold": 20000,
+  "commitKeepRecentCount": 10,
+  "profileTokenBudget": 10000,
+  "resumeContextBudget": 32000
 }
 ```
 
@@ -117,7 +117,7 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
-`apiKey` 会作为 `X-API-Key` 发送。`account` 和 `user` 是 trusted mode
+API key 会从环境变量或 `~/.openviking/ovcli.conf` 读取，并作为 `Authorization: Bearer ...` 发送。`account` 和 `user` 是 trusted mode
 身份头，会作为 `X-OpenViking-Account`、`X-OpenViking-User` 发送；使用
 user/admin API key 的 API_KEY mode 时应留空。
 `peerId` 会作为 `X-OpenViking-Actor-Peer` 用于数据面的 memory/resource 请求；捕获 session message 时仍写入 body `peer_id`。需要 peer 维度路由时请显式配置。
@@ -208,7 +208,7 @@ memadd path="file:///home/alice/project/notes.md" reason="project notes"
 可能包含：
 
 - `openviking-memory.log`
-- `openviking-session-map.json`
+- `openviking-session-state.json`
 
 可以通过配置里的 `runtime.dataDir` 修改这个目录。
 

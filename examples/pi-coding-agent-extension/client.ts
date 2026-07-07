@@ -66,7 +66,7 @@ export class OVClient {
   private apiKey: string;
   private account: string;
   private user: string;
-  private agent: string;
+  private peerId: string;
   connected: boolean = false;
 
   private resolvedSpaces: Map<string, string> = new Map();
@@ -83,7 +83,7 @@ export class OVClient {
     this.apiKey = config.apiKey;
     this.account = config.account;
     this.user = config.user;
-    this.agent = config.agentId;
+    this.peerId = config.peerId;
   }
 
   private headers(): Record<string, string> {
@@ -91,12 +91,12 @@ export class OVClient {
     if (this.apiKey) h["Authorization"] = `Bearer ${this.apiKey}`;
     if (this.account) h["X-OpenViking-Account"] = this.account;
     if (this.user) h["X-OpenViking-User"] = this.user;
-    if (this.agent) h["X-OpenViking-Agent"] = this.agent;
+    if (this.peerId) h["X-OpenViking-Actor-Peer"] = this.peerId;
     return h;
   }
 
   /** Core fetch wrapper. Returns { ok, result } after parsing OV's { status, result } envelope. */
-  private async fetchJSON<T>(path: string, init?: RequestInit, timeoutMs = 10000): Promise<{ ok: boolean; result: T | null; error?: any }> {
+  async fetchJSON<T>(path: string, init?: RequestInit, timeoutMs = 10000): Promise<{ ok: boolean; result: T | null; error?: any; status?: number }> {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -108,11 +108,11 @@ export class OVClient {
       clearTimeout(timer);
       const body = await resp.json().catch(() => ({}));
       if (!resp.ok || body.status === "error") {
-        return { ok: false, result: null, error: body.error || { message: `HTTP ${resp.status}` } };
+        return { ok: false, result: null, status: resp.status, error: body.error || { message: `HTTP ${resp.status}` } };
       }
       return { ok: true, result: (body.result ?? body) as T };
     } catch (err: any) {
-      return { ok: false, result: null, error: { message: err?.message || String(err) } };
+      return { ok: false, result: null, status: 0, error: { message: err?.message || String(err) } };
     }
   }
 
@@ -174,11 +174,20 @@ export class OVClient {
     return res.ok;
   }
 
+  async addMessagePayload(sessionId: string, payload: any): Promise<boolean> {
+    const res = await this.fetchJSON<any>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+      { method: "POST", body: JSON.stringify(payload) },
+      10000,
+    );
+    return res.ok;
+  }
+
   /** POST /api/v1/sessions/{id}/commit — commit session for archiving + extraction */
   async commitSession(sessionId: string): Promise<{ task_id: string; archive_uri: string } | null> {
     const res = await this.fetchJSON<{ task_id: string; archive_uri: string }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
-      { method: "POST", body: JSON.stringify({}) },
+      { method: "POST", body: JSON.stringify({ keep_recent_count: this.cfg.commitKeepRecentCount }) },
       30000,
     );
     return res.ok ? res.result : null;
@@ -219,7 +228,7 @@ export class OVClient {
         for (const m of items) {
           all.push({
             uri: m.uri ?? "",
-            context_type: m.context_type ?? bucket === "memories" ? "memory" : bucket === "skills" ? "skill" : "resource",
+            context_type: m.context_type ?? (bucket === "memories" ? "memory" : bucket === "skills" ? "skill" : "resource"),
             score: m.score ?? 0,
             abstract: m.abstract ?? "",
             overview: m.overview ?? null,

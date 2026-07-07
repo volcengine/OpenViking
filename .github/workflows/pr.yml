@@ -39,7 +39,10 @@ jobs:
             examples/claude-code-memory-plugin/scripts/marketplace.test.mjs \
             examples/claude-code-memory-plugin/scripts/skill-experience.test.mjs \
             examples/claude-code-memory-plugin/scripts/lib/pending-queue.test.mjs \
-            examples/memory-plugin-shared/sync.test.mjs
+            examples/memory-plugin-shared/sync.test.mjs \
+            examples/memory-plugin-shared/recall-core.test.mjs \
+            examples/opencode-plugin/tests/*.test.mjs \
+            examples/pi-coding-agent-extension/tests/*.test.mjs
 
       - name: Check installer scripts parse
         run: |

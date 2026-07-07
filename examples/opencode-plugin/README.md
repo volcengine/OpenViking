@@ -111,26 +111,26 @@ Create `~/.config/opencode/openviking-config.json`:
 
 ```json
 {
-  "endpoint": "http://localhost:1933",
-  "apiKey": "",
-  "account": "",
-  "user": "",
-  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
     "enabled": true,
     "limit": 6,
-    "scoreThreshold": 0.15,
+    "scoreThreshold": 0.35,
     "maxContentChars": 500,
     "preferAbstract": true,
-    "tokenBudget": 2000
-  }
+    "tokenBudget": 2000,
+    "minQueryLength": 3
+  },
+  "commitTokenThreshold": 20000,
+  "commitKeepRecentCount": 10,
+  "profileTokenBudget": 10000,
+  "resumeContextBudget": 32000
 }
 ```
 
-`apiKey` is sent as `X-API-Key`. `account` and `user` are trusted-mode identity
+API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...`. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty
 when using API-key mode with user/admin API keys.
 `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource
@@ -256,6 +256,6 @@ Use this after `codeoutline` or other evidence shows the symbol exists in that f
 The plugin writes runtime files to `~/.config/opencode/openviking/` by default:
 
 - `openviking-memory.log`
-- `openviking-session-map.json`
+- `openviking-session-state.json`
 
 Set `runtime.dataDir` in config to override this directory.

@@ -396,7 +396,7 @@ export async function replayPending(fetchJSON, log) {
       } else if (entry.type === "commitSession") {
         res = await fetchJSON(`/api/v1/sessions/${encodedSid}/commit`, {
           method: "POST",
-          body: JSON.stringify({}),
+          body: JSON.stringify(entry.payload || {}),
         });
       } else {
         await dequeue(claimedFilename);

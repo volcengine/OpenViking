@@ -12,7 +12,7 @@ async function tempJson(prefix, value) {
   return { dir, path };
 }
 
-test("active ovcli config wins over stale credential env by default", async () => {
+test("credential env wins over ovcli config by default", async () => {
   const { dir, path } = await tempJson("ov-creds-cli-", {
     url: "https://ov.example.com",
     api_key: "cli-key",
@@ -31,13 +31,13 @@ test("active ovcli config wins over stale credential env by default", async () =
       OPENVIKING_PEER_ID: "stale-peer",
     });
 
-    assert.equal(creds.credentialSource, "ovcli");
-    assert.equal(creds.baseUrl, "https://ov.example.com");
-    assert.equal(creds.mcpUrl, "https://ov.example.com/mcp");
-    assert.equal(creds.apiKey, "cli-key");
-    assert.equal(creds.account, "default");
-    assert.equal(creds.user, "zeus");
-    assert.equal(creds.peerId, "peer-a");
+    assert.equal(creds.credentialSource, "env");
+    assert.equal(creds.baseUrl, "https://stale.example.com");
+    assert.equal(creds.mcpUrl, "https://stale.example.com/mcp");
+    assert.equal(creds.apiKey, "stale-key");
+    assert.equal(creds.account, "stale-account");
+    assert.equal(creds.user, "stale-user");
+    assert.equal(creds.peerId, "stale-peer");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -73,13 +73,14 @@ test("env source can be forced explicitly", async () => {
   }
 });
 
-test("ovcli config without api_key does not inherit stale env key", async () => {
+test("ovcli source can be forced explicitly without inheriting env key", async () => {
   const { dir, path } = await tempJson("ov-creds-noauth-", {
     url: "http://127.0.0.1:1933",
   });
   try {
     const creds = resolveOpenVikingCredentials({
       OPENVIKING_CLI_CONFIG_FILE: path,
+      OPENVIKING_CREDENTIAL_SOURCE: "ovcli",
       OPENVIKING_API_KEY: "stale-key",
     });
 

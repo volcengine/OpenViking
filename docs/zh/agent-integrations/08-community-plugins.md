@@ -93,30 +93,36 @@ npm install
 
 ### 配置
 
-创建 `~/.config/opencode/openviking-config.json`：
+凭据与 Claude Code / Codex 记忆插件共用。可以先运行 setup 向导，或使用 `OPENVIKING_*` 环境变量：
+
+```bash
+node examples/opencode-plugin/scripts/setup.mjs
+```
+
+`~/.config/opencode/openviking-config.json` 现在只放行为旋钮：
 
 ```json
 {
-  "endpoint": "http://localhost:1933",
-  "apiKey": "",
-  "account": "",
-  "user": "",
-  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
     "enabled": true,
     "limit": 6,
-    "scoreThreshold": 0.15,
+    "scoreThreshold": 0.35,
     "maxContentChars": 500,
     "preferAbstract": true,
-    "tokenBudget": 2000
-  }
+    "tokenBudget": 2000,
+    "minQueryLength": 3
+  },
+  "commitTokenThreshold": 20000,
+  "commitKeepRecentCount": 10,
+  "profileTokenBudget": 10000,
+  "resumeContextBudget": 32000
 }
 ```
 
-敏感信息建议用环境变量提供：
+环境变量优先级高于 `ovcli.conf`：
 
 ```bash
 export OPENVIKING_API_KEY="your-api-key-here"
@@ -125,7 +131,7 @@ export OPENVIKING_USER="opencode"     # 可选，仅 trusted-mode 部署需要
 export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
 ```
 
-环境变量优先级高于 `openviking-config.json`。`apiKey` 会作为 `X-API-Key` 发送；`account` 和 `user` 是 trusted-mode headers；`peerId` 会作为请求级 `peer_id` 用于 recall、search 和 session message 写入。
+API key 会作为 `Authorization: Bearer ...` 发送；`account` 和 `user` 是 trusted-mode headers；`peerId` 会作为 `X-OpenViking-Actor-Peer` 和捕获 session message 的 `peer_id` 使用。旧版 `openviking-config.json` 里的凭据字段仍会作为迁移 fallback 读取，但新安装建议使用 `ovcli.conf` 或环境变量。
 
 ### 验证
 
@@ -141,7 +147,7 @@ export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
 
 ```bash
 ~/.config/opencode/openviking/openviking-memory.log
-~/.config/opencode/openviking/openviking-session-map.json
+~/.config/opencode/openviking/openviking-session-state.json
 ```
 
 ### 故障排查
@@ -155,3 +161,19 @@ export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
 | 本地 `memadd` 失败 | 传入文件路径而不是目录；目前还不支持自动上传本地目录 |
 
 完整 tools、配置字段和运行时文件说明见 [插件 README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)。
+
+## pi coding agent 扩展
+
+OpenViking 也提供原生 pi 扩展。
+
+源码：[examples/pi-coding-agent-extension](https://github.com/volcengine/OpenViking/tree/main/examples/pi-coding-agent-extension)
+
+扩展使用 pi 生命周期事件完成 session-start profile 注入、当前 prompt recall、turn capture、阈值 commit、compact 前 commit 和 shutdown commit。它保留 pi 原生工具面（`viking_search`、`viking_read`、`viking_browse`、`viking_remember`、`viking_forget`、`viking_add_resource`、`viking_archive_expand`），不走 MCP。
+
+通过统一安装器安装：
+
+```bash
+bash examples/memory-plugin-shared/install.sh --harness pi
+```
+
+凭据解析顺序是环境变量、`~/.openviking/ovcli.conf`、`~/.openviking/ov.conf`。扩展目录内的 `config.json` 只保留行为旋钮，例如 `recallTokenBudget`、`scoreThreshold`、`profileTokenBudget`、`resumeContextBudget` 和 `commitTokenThreshold`。

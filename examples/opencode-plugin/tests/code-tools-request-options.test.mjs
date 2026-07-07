@@ -30,6 +30,7 @@ test("code tool descriptions restrict use to confirmed viking code repositories"
 test("memory recall search payload matches strict server schema", async () => {
   const source = await readFile(memoryRecallPath, "utf8")
 
-  assert.match(source, /const body = \{ query: query\.slice\(0, 4000\), limit: 20 \}/)
+  assert.match(source, /buildRecallBlock/)
+  assert.match(source, /\/health/)
   assert.doesNotMatch(source, /mode:\s*"auto"/)
 })

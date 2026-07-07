@@ -84,6 +84,7 @@ jobs:
           mkdir -p "${STAGE}"
           cp -R examples/.claude-plugin examples/.agents \
             examples/claude-code-memory-plugin examples/codex-memory-plugin \
+            examples/opencode-plugin examples/pi-coding-agent-extension \
             examples/memory-plugin-shared "${STAGE}/"
           (cd /tmp && zip -rq "memory-plugin-marketplace-${RELEASE_TAG}.zip" memory-plugin-marketplace)
 

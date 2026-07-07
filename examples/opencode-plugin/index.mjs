@@ -6,8 +6,10 @@ import { createMemorySessionManager } from "./lib/memory-session.mjs"
 import { createCodeTools } from "./lib/code-tools.mjs"
 import { createMemoryTools } from "./lib/memory-tools.mjs"
 import { createMemoryRecall } from "./lib/memory-recall.mjs"
+import { createSessionInject } from "./lib/session-inject.mjs"
 import { createVikingUriGuard } from "./lib/viking-uri-guard.mjs"
-import { initLogger, loadConfig, log, resolveDataDir } from "./lib/utils.mjs"
+import { loadConfig, resolveDataDir } from "./lib/config.mjs"
+import { initLogger, log, makeToast } from "./lib/utils.mjs"
 
 const pluginRoot = dirname(fileURLToPath(import.meta.url))
 
@@ -27,11 +29,19 @@ export async function OpenVikingPlugin({ client, directory }) {
   const repoContext = createRepoContext({ config })
   const sessionManager = createMemorySessionManager({ config, pluginRoot: dataDir })
   const recall = createMemoryRecall({ config })
+  const sessionInject = createSessionInject({ config, sessionManager })
   const vikingUriGuard = createVikingUriGuard()
   const tools = createMemoryTools({ config, sessionManager, projectDirectory: directory })
   const codeTools = createCodeTools({ config })
 
   await sessionManager.init()
+  const toast = makeToast(client)
+  if (config.legacyCredentialsUsed) {
+    log("WARN", "config", "Legacy OpenCode credential fields are still in use; run node scripts/setup.mjs to migrate to ovcli.conf", {
+      configPath: config.configPath,
+    })
+    await toast("OpenViking credentials in openviking-config.json are deprecated. Run node scripts/setup.mjs to migrate.", "warning")
+  }
 
   Promise.resolve().then(async () => {
     const ready = await initializeRuntime(config, client)
@@ -57,11 +67,19 @@ export async function OpenVikingPlugin({ client, directory }) {
 
     "chat.message": async (input, output) => {
       try {
+        await sessionInject.injectSessionContext(input, output)
         if (!config.autoRecall?.enabled) return
         await recall.injectRelevantMemories(input, output)
       } catch (error) {
         log("WARN", "recall", "Auto recall failed", { error: error?.message ?? String(error) })
       }
+    },
+
+    "session.idle": async (input) => {
+      await sessionManager.flushSession(input.sessionID ?? input.sessionId, {
+        commit: false,
+        reason: "session.idle",
+      })
     },
 
     "experimental.session.compacting": async (input) => {
