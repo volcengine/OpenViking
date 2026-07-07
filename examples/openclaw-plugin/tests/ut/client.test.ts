@@ -410,6 +410,50 @@ describe("OpenVikingClient tenant headers (advanced accountId / userId overrides
     expect(headers.get("X-OpenViking-User")).toBe("user-456");
   });
 
+  it("applies configured headers after explicit API and tenant headers", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
+
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "sk-explicit", "agent", 5000,
+      "acct-explicit", "user-explicit", undefined, false, true,
+      {
+        transport,
+        headers: {
+          "X-API-Key": "sk-from-config",
+          "X-OpenViking-Account": "acct-from-config",
+          "X-OpenViking-User": "user-from-config",
+          openviking: "i18n-instance",
+          token: "root-token",
+        },
+      },
+    );
+    await client.healthCheck();
+
+    const [, init] = transport.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-API-Key")).toBe("sk-from-config");
+    expect(headers.get("X-OpenViking-Account")).toBe("acct-from-config");
+    expect(headers.get("X-OpenViking-User")).toBe("user-from-config");
+    expect(headers.get("openviking")).toBe("i18n-instance");
+    expect(headers.get("token")).toBe("root-token");
+  });
+
+  it("can use explicit configured headers as the only API key source", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
+
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "agent", 5000,
+      "", "", undefined, false, true,
+      { transport, headers: { "X-API-Key": "sk-from-config", token: "root-token" } },
+    );
+    await client.healthCheck();
+
+    const [, init] = transport.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-API-Key")).toBe("sk-from-config");
+    expect(headers.get("token")).toBe("root-token");
+  });
+
   it("does not synthesize tenant headers when apiKey is missing", async () => {
     const transport = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
 
