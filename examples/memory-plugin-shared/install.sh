@@ -1696,6 +1696,11 @@ opencode_install_file_plugin() {
   if [ ! -d "$dest/node_modules" ] && command -v npm >/dev/null 2>&1; then
     (cd "$dest" && npm install --omit=dev) || warn "$(t 'npm install failed for OpenCode plugin; continuing.' 'OpenCode 插件 npm install 失败，继续。')"
   fi
+  if [ -f "$plugin_dir/wrappers/openviking.js" ]; then
+    cp "$plugin_dir/wrappers/openviking.js" "$HOME/.config/opencode/plugins/openviking.js"
+  else
+    printf '%s\n' 'export { OpenVikingPlugin, default } from "./openviking/index.mjs"' > "$HOME/.config/opencode/plugins/openviking.js"
+  fi
   info "$(t 'OpenCode file plugin installed:' 'OpenCode 文件插件已安装：') $dest"
 }
 
@@ -1780,11 +1785,14 @@ EOF
   if contains_harness opencode; then
     local ocfg="$HOME/.config/opencode/opencode.json"
     local ocfgc="$HOME/.config/opencode/opencode.jsonc"
-    if grep -q '@openviking/opencode-plugin' "$ocfg" "$ocfgc" 2>/dev/null || [ -f "$HOME/.config/opencode/plugins/openviking/index.mjs" ]; then
+    if grep -q '@openviking/opencode-plugin' "$ocfg" "$ocfgc" 2>/dev/null || { [ -f "$HOME/.config/opencode/plugins/openviking.js" ] && [ -f "$HOME/.config/opencode/plugins/openviking/index.mjs" ]; }; then
       info "opencode: $PLUGIN_NAME $(t 'appears installed' '看起来已安装')"
     else
       warn "opencode: $PLUGIN_NAME $(t 'not found in config/plugin dir' '未在配置或插件目录中找到')"
       ok=0
+    fi
+    if [ -f "$HOME/.config/opencode/plugins/openviking.js" ]; then
+      node --check "$HOME/.config/opencode/plugins/openviking.js" || ok=0
     fi
     if [ -f "$HOME/.config/opencode/plugins/openviking/index.mjs" ]; then
       node --check "$HOME/.config/opencode/plugins/openviking/index.mjs" || ok=0
