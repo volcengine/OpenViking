@@ -300,6 +300,33 @@ equal-dtype comparison; applications requiring one fixed numerical
 representation should select an explicit backend or disable the native-routing
 thresholds.
 
+### Dirty-index selective-first follow-up
+
+Review of the auto-routing path found that the first implementation decided
+`route_native` only after `_rebuild_if_needed()`. Results remained correct, but
+a selective filtered query could still pay the full GPU rebuild before falling
+back to native. Revision `d2a74c1af026da0a482955ed2498c03f5f44654c`
+moves native filter resolution and the candidate-count decision before GPU
+memory admission and rebuild.
+
+A targeted follow-up runs a 0.1% scalar filter as the first query while the
+100K x 768D auto index is dirty. Five independent clean processes produced:
+
+| Metric | Median +/- MAD |
+| --- | ---: |
+| Selective-first query latency | 11.670 +/- 0.156 ms |
+| Selective-first GPU-memory delta | 0 +/- 0 bytes |
+| Subsequent unfiltered first query | 1,889.281 +/- 11.155 ms |
+| Unfiltered query after a one-record mutation | 1,632.840 +/- 81.424 ms |
+
+All five selective-first runs recorded exactly zero GPU-memory delta. The
+following unfiltered query still paid the lazy build, demonstrating that the
+native route neither allocated the GPU dataset nor accidentally cleared dirty
+state. The 11.7 ms selective-first value is higher than a new filter on an
+already-built index because it includes one-time registration of the current
+100K-label native-to-cuVS layout. It nevertheless avoids roughly 1.9 seconds
+of unnecessary GPU construction for this query shape.
+
 ### Ingestion, mutation, and restart
 
 | Operation | Native median | cuVS median |
