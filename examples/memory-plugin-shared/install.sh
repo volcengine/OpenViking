@@ -350,6 +350,7 @@ refresh_available_harnesses() {
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   command -v opencode >/dev/null 2>&1 && HAVE_OPENCODE=1
   command -v pi >/dev/null 2>&1 && HAVE_PI=1
+  return 0
 }
 
 bin_basename() {
