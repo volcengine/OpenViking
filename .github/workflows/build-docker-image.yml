@@ -135,6 +135,11 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          # Volcengine CR (staging) does not accept the SLSA provenance/SBOM
+          # attestation manifest that buildx attaches by default, which stalls
+          # the "exporting to image" push. Push a plain single-manifest image.
+          provenance: false
+          sbom: false
           outputs: |
             type=image,name=${{ secrets.VOLCENGINE_CR_REGISTRY }}/${{ secrets.VOLCENGINE_CR_NAMESPACE }}/openviking,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
