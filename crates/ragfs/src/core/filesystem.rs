@@ -10,7 +10,10 @@ use std::any::Any;
 use std::cmp::Ordering;
 
 use super::errors::{Error, Result};
-use super::types::{FileInfo, GrepResult, TreeEntry, WriteFlag};
+use super::glob::{
+    compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob,
+};
+use super::types::{FileInfo, GlobEntry, GlobPage, GrepResult, TreeEntry, WriteFlag};
 
 /// Normalize a path for prefix comparisons.
 ///
@@ -468,6 +471,65 @@ pub trait FileSystem: Send + Sync + Any {
         .await?;
 
         Ok(result)
+    }
+
+    /// Return one page of flat glob results under `path`.
+    ///
+    /// The default implementation preserves the current Python behavior by
+    /// reusing `tree_directory()` and matching against the returned `rel_path`
+    /// values, then slicing matches with an opaque continuation token.
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let matcher = PreparedGlob::new(pattern)?;
+        if matches!(page_size, Some(0)) {
+            return Err(Error::invalid_operation("page_size must be positive"));
+        }
+
+        let entries = self
+            .tree_directory(path, show_hidden, None, level_limit)
+            .await?;
+
+        let mut matched = Vec::new();
+        for entry in entries {
+            if matcher.is_match(&entry.rel_path) {
+                matched.push(GlobEntry {
+                    path: entry.path,
+                    rel_path: entry.rel_path,
+                    name: entry.info.name,
+                    is_dir: entry.info.is_dir,
+                });
+            }
+        }
+        matched.sort_by(|left, right| compare_rel_paths(&left.rel_path, &right.rel_path));
+
+        let start = decode_offset_token(
+            continuation_token.as_deref(),
+            path,
+            pattern,
+            show_hidden,
+            level_limit,
+        )?;
+        if start > matched.len() {
+            return Err(Error::invalid_operation("continuation token out of range"));
+        }
+        let end = page_size
+            .map(|limit| start.saturating_add(limit))
+            .unwrap_or(matched.len())
+            .min(matched.len());
+        let next_token = (end < matched.len())
+            .then(|| encode_offset_token(end, path, pattern, show_hidden, level_limit));
+
+        Ok(GlobPage {
+            entries: matched[start..end].to_vec(),
+            next_token,
+        })
     }
 
     /// Internal recursive helper for tree_directory.
@@ -1062,5 +1124,140 @@ mod tests {
         assert!(names.contains(&".hidden_dir".to_string()));
         assert!(names.contains(&"secret.txt".to_string()));
         assert!(!names.contains(&".hidden_file".to_string()));
+    }
+
+    /// Test helper that calls `glob_directory` with a fixed `/root` query root.
+    ///
+    /// Args:
+    /// - `fs`: The `TreeFS` instance under test.
+    /// - `pattern`: The glob pattern to match.
+    /// - `page_size`: The requested page size.
+    /// - `continuation_token`: The pagination token for the next page.
+    ///
+    /// Returns:
+    /// - A `GlobPage` on success. In tests this helper uses `unwrap()`, so any
+    ///   error fails the test immediately.
+    async fn root_glob(
+        fs: &TreeFS,
+        pattern: &str,
+        page_size: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> crate::core::GlobPage {
+        fs.glob_directory("/root", pattern, false, page_size, None, continuation_token)
+            .await
+            .unwrap()
+    }
+
+    /// Test helper that extracts each entry's `rel_path` from a `GlobPage`.
+    ///
+    /// Args:
+    /// - `page`: The glob page whose relative paths should be collected.
+    ///
+    /// Returns:
+    /// - A list of `rel_path` values in their original order, suitable for
+    ///   result-content and ordering assertions.
+    fn glob_rel_paths(page: &crate::core::GlobPage) -> Vec<String> {
+        page.entries
+            .iter()
+            .map(|entry| entry.rel_path.clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_matches_full_relative_path_semantics() {
+        let fs = TreeFS::default()
+            .with_dir_entries("/root", vec![("sub", true), ("top.md", false)])
+            .with_dir_entries(
+                "/root/sub",
+                vec![("nested.md", false), ("nested.txt", false)],
+            );
+
+        let page = root_glob(&fs, "**/*.md", None, None).await;
+
+        assert_eq!(glob_rel_paths(&page), vec!["sub/nested.md", "top.md"]);
+        assert!(page.next_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_anchors_multi_segment_patterns_at_root() {
+        let fs = TreeFS::default()
+            .with_dir_entries("/root", vec![("a", true), ("x", true)])
+            .with_dir_entries("/root/a", vec![("b", true)])
+            .with_dir_entries("/root/a/b", vec![("c.md", false)])
+            .with_dir_entries("/root/x", vec![("a", true)])
+            .with_dir_entries("/root/x/a", vec![("b", true)])
+            .with_dir_entries("/root/x/a/b", vec![("c.md", false)]);
+
+        let page = root_glob(&fs, "a/**/*.md", None, None).await;
+
+        assert_eq!(glob_rel_paths(&page), vec!["a/b/c.md"]);
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_paginates_with_opaque_offset_tokens() {
+        let fs = TreeFS::default().with_dir_entries(
+            "/root",
+            vec![("a.md", false), ("b.md", false), ("c.md", false)],
+        );
+
+        let first = root_glob(&fs, "*.md", Some(2), None).await;
+        assert_eq!(glob_rel_paths(&first), vec!["a.md", "b.md"]);
+        assert!(first.next_token.is_some());
+
+        let second = root_glob(&fs, "*.md", Some(2), first.next_token).await;
+        assert_eq!(glob_rel_paths(&second), vec!["c.md"]);
+        assert!(second.next_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_rejects_token_from_different_query_scope() {
+        let fs = TreeFS::default().with_dir_entries(
+            "/root",
+            vec![("a.md", false), ("b.md", false), ("c.md", false)],
+        );
+
+        let first = root_glob(&fs, "*.md", Some(2), None).await;
+        let err = fs
+            .glob_directory("/root", "*.txt", false, Some(2), None, first.next_token)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_empty_pattern_is_invalid() {
+        let fs = TreeFS::default().with_dir_entries("/root", vec![("a.md", false)]);
+
+        let err = fs
+            .glob_directory("/root", "", false, None, None, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_empty_pattern_is_invalid_for_empty_directory() {
+        let fs = TreeFS::default().with_dir_entries("/root", vec![]);
+
+        let err = fs
+            .glob_directory("/root", "", false, None, None, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_glob_directory_zero_page_size_is_invalid() {
+        let fs = TreeFS::default().with_dir_entries("/root", vec![("a.md", false)]);
+
+        let err = fs
+            .glob_directory("/root", "*.md", false, Some(0), None, None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidOperation(_)));
     }
 }

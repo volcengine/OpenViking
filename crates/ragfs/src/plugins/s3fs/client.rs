@@ -252,7 +252,7 @@ impl DirectoryMarkerMode {
 }
 
 /// Object metadata from HeadObject
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ObjectMeta {
     /// Object key
     pub key: String,
@@ -262,6 +262,13 @@ pub struct ObjectMeta {
     pub last_modified: SystemTime,
     /// Whether this is a directory marker
     pub is_dir_marker: bool,
+}
+
+/// One flat `ListObjectsV2` page used by S3-backed tree/glob traversal.
+#[derive(Debug, Clone)]
+pub struct ListTreePage {
+    pub objects: Vec<ObjectMeta>,
+    pub next_continuation_token: Option<String>,
 }
 
 /// Result of a ListObjects operation
@@ -798,6 +805,59 @@ impl S3Client {
         }
 
         Ok(objects)
+    }
+
+    /// List one flat object page under a prefix (no delimiter).
+    pub async fn list_tree_objects_page(
+        &self,
+        prefix: &str,
+        continuation_token: Option<&str>,
+        max_keys: usize,
+    ) -> Result<ListTreePage> {
+        let mut req = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .prefix(prefix)
+            .max_keys(max_keys.min(1000) as i32);
+
+        if let Some(token) = continuation_token {
+            req = req.continuation_token(token);
+        }
+
+        let resp = req.send().await.map_err(|e| {
+            format_sdk_s3_error(
+                "ListObjectsV2",
+                &format!("bucket={} prefix={prefix}", self.bucket),
+                &e,
+            )
+        })?;
+
+        let mut objects = Vec::new();
+        for obj in resp.contents() {
+            let key = obj.key().unwrap_or("");
+            if key == prefix {
+                continue;
+            }
+
+            let size = obj.size.unwrap_or(0);
+            let last_modified = obj
+                .last_modified()
+                .map(aws_datetime_to_systemtime)
+                .unwrap_or(UNIX_EPOCH);
+
+            objects.push(ObjectMeta {
+                key: key.to_string(),
+                size,
+                last_modified,
+                is_dir_marker: key.ends_with('/'),
+            });
+        }
+
+        Ok(ListTreePage {
+            objects,
+            next_continuation_token: resp.next_continuation_token().map(|s| s.to_string()),
+        })
     }
 
     /// Copy an object

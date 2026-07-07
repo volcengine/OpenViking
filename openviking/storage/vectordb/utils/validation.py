@@ -60,54 +60,6 @@ class FieldTypeEnum(str, Enum):
     GEO_POINT = "geo_point"
 
 
-class DenseVectorize(BaseModel):
-    model_config = ConfigDict()
-
-    ModelName: str
-    ModelVersion: Optional[str] = None
-    TextField: Optional[str] = None
-    ImageField: Optional[str] = None
-    VideoField: Optional[str] = None
-    Dim: Optional[int] = None
-    Dimension: Optional[int] = None
-
-    @field_validator("TextField", "ImageField", "VideoField")
-    @classmethod
-    def check_fields(cls, v):
-        # We enforce presence logic in model_validator if needed,
-        # but the original code had strict checks inside validate_dense_vectorize
-        # Original: "TextField" is required
-        return v
-
-    @model_validator(mode="after")
-    def check_required(self):
-        if self.TextField is None and self.ImageField is None and self.VideoField is None:
-            # Original logic: if "text_field" not in vectorize["dense"]
-            # The old code strictly required "TextField" (or "text_field" in logic, but schema used "TextField")
-            # Actually, old code: if "text_field" not in vectorize["dense"]: return False
-            # But ALLOWED keys used "TextField". It seems there's a case sensitivity issue in old code or intended.
-            # The old code check keys: 'ModelName', 'TextField' against ALLOWED_COLLECTION_DENSE_VECTORIZE_CHECK
-            # Let's assume PascalCase as per ALLOWED dictionary keys.
-            if not self.TextField:
-                raise ValueError("vectorize dense must contain TextField")
-        return self
-
-
-class SparseVectorize(BaseModel):
-    model_config = ConfigDict()
-
-    ModelName: str
-    ModelVersion: Optional[str] = None
-    TextField: Optional[str] = None
-
-
-class VectorizeConfig(BaseModel):
-    model_config = ConfigDict()
-
-    Dense: Optional[DenseVectorize] = None
-    Sparse: Optional[SparseVectorize] = None
-
-
 class CollectionField(BaseModel):
     model_config = ConfigDict()
 
@@ -151,7 +103,6 @@ class CollectionMetaConfig(BaseModel):
     Fields: List[CollectionField]
     ProjectName: Optional[str] = None
     Description: Optional[str] = Field(None, max_length=65535)
-    Vectorize: Optional[VectorizeConfig] = None
     FullText: Optional[List[dict]] = (
         None  # e.g. [{"Field": "content", "Analyzer": {"Tokenizer": "standard"}}]
     )
@@ -272,7 +223,6 @@ class CollectionMetaUpdateConfig(BaseModel):
     Fields: Optional[List[CollectionField]] = None
     ProjectName: Optional[str] = None
     Description: Optional[str] = Field(None, max_length=65535)
-    Vectorize: Optional[VectorizeConfig] = None
 
     @field_validator("CollectionName", "ProjectName")
     @classmethod

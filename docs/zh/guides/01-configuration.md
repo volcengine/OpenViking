@@ -716,7 +716,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 | `max_rows_per_sheet` | int | 电子表格每个 sheet 最大导入行数（默认 `1000`） |
 | `max_records_per_table` | int | 多维表格每个表最大导入记录数（默认 `1000`） |
 
-**依赖**：`pip install 'openviking[bot-feishu]'`
+**依赖**：已默认包含在 `openviking[bot]` 安装中
 
 **Lark 国际版**：对于 Lark URL（`*.larksuite.com`），请将 `domain` 设为 `https://open.larksuite.com`。
 
@@ -1181,7 +1181,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'qdrant' 或 'opengauss' | "local" |
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'cuvs'（本地存储 + GPU dense search）, 'qdrant' 或 'opengauss' | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1190,6 +1190,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `sparse_weight` | float | 混合向量搜索的稀疏权重，仅在使用混合索引时生效 | 0.0 |
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
+| `cuvs` | object | NVIDIA cuVS 配置，也用于在 'local' 下显式开启显存感知自动模式，参见 [cuVS 使用指南](./16-cuvs.md) | - |
 | `qdrant` | object | 'qdrant' 类型的 Qdrant 配置 | - |
 | `opengauss` | object | 'opengauss' 原生向量后端配置 | - |
 

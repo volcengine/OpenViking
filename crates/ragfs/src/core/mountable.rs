@@ -26,7 +26,9 @@ use super::multibackend_wrapper::MultiWriteWrappedFS;
 use super::plugin::ServicePlugin;
 use super::stats::{FilesystemStats, StatsCollector};
 use super::stats_wrapper::StatsWrappedFS;
-use super::types::{BackendsConfig, FileInfo, GrepResult, PluginConfig, TreeEntry, WriteFlag};
+use super::types::{
+    BackendsConfig, FileInfo, GlobPage, GrepResult, PluginConfig, TreeEntry, WriteFlag,
+};
 #[cfg(feature = "cache")]
 use crate::cache::{
     CacheNamespace, CachePolicy, CacheProvider, CacheTraversalMode, CachedFileSystem,
@@ -908,6 +910,56 @@ impl FileSystem for MountableFS {
         });
 
         Ok(entries)
+    }
+
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let (mount_info, rel_path) = self.find_mount(path).await?;
+
+        let mount_prefix = if mount_info.path == "/" {
+            String::new()
+        } else {
+            mount_info.path.clone()
+        };
+
+        let mut page = mount_info
+            .fs
+            .glob_directory(
+                &rel_path,
+                pattern,
+                show_hidden,
+                page_size,
+                level_limit,
+                continuation_token,
+            )
+            .await?;
+
+        for entry in &mut page.entries {
+            if !mount_prefix.is_empty() {
+                entry.path = if entry.path == "/" {
+                    mount_prefix.clone()
+                } else {
+                    format!("{}{}", mount_prefix, entry.path)
+                };
+            }
+        }
+
+        page.entries.retain(|entry| {
+            entry
+                .path
+                .rsplit('/')
+                .next()
+                .map_or(true, |name| name != PATH_LOCK_FILE)
+        });
+
+        Ok(page)
     }
 }
 

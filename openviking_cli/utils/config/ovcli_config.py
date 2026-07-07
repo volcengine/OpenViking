@@ -34,6 +34,7 @@ class OVCLIConfig(BaseModel):
     agent_id: Optional[str] = None
     timeout: float = 60.0
     profile: bool = False
+    echo_command: Optional[bool] = None
     upload: Optional[OVCLIUploadConfig] = None
     extra_headers: Optional[Dict[str, str]] = None
 

@@ -1,0 +1,396 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
+from openviking.storage.vectordb.collection.local_collection import (
+    get_or_create_local_collection,
+)
+from openviking.storage.vectordb.index import cuvs_index
+
+
+class FakeCuVSRuntime:
+    def __init__(self, metric):
+        self.metric = metric
+        self.search_count = 0
+
+    def build(self, dataset):
+        return [list(vector) for vector in dataset]
+
+    def search(self, index, query, limit, mask):
+        self.search_count += 1
+        rows = []
+        for offset, vector in enumerate(index):
+            if mask is not None and not mask[offset]:
+                continue
+            if self.metric == "sqeuclidean":
+                distance = sum(
+                    (left - right) ** 2 for left, right in zip(query, vector, strict=True)
+                )
+                key = distance
+            else:
+                distance = sum(left * right for left, right in zip(query, vector, strict=True))
+                key = -distance
+            rows.append((key, offset, distance))
+        rows.sort()
+        rows = rows[:limit]
+        return [row[1] for row in rows], [row[2] for row in rows]
+
+    def close(self):
+        pass
+
+
+class MemoryAwareFakeCuVSRuntime(FakeCuVSRuntime):
+    def __init__(self, metric, free_memory_bytes):
+        super().__init__(metric)
+        self.free_memory_bytes = free_memory_bytes
+        self.build_count = 0
+
+    def build(self, dataset):
+        self.build_count += 1
+        return super().build(dataset)
+
+    def memory_info(self):
+        return self.free_memory_bytes, 1 << 40
+
+    def release_index(self):
+        pass
+
+    @staticmethod
+    def is_out_of_memory(_exc):
+        return False
+
+
+def patch_cuvs_runtime(monkeypatch):
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda algorithm, metric, build_params, search_params: FakeCuVSRuntime(metric),
+    )
+
+
+def test_local_collection_routes_dense_search_to_cuvs(monkeypatch):
+    patch_cuvs_runtime(monkeypatch)
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "cuvs_integration",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+                {"FieldName": "account_id", "FieldType": "string"},
+                {"FieldName": "rank", "FieldType": "int64"},
+                {"FieldName": "created_at", "FieldType": "date_time"},
+                {"FieldName": "uri", "FieldType": "path"},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "cuvs",
+                "algorithm": "brute_force",
+            }
+        },
+    )
+    try:
+        collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+                "ScalarIndex": ["account_id", "rank", "created_at", "uri"],
+            },
+        )
+        collection.upsert_data(
+            [
+                {
+                    "id": "first",
+                    "vector": [1, 0, 0, 0],
+                    "account_id": "a",
+                    "rank": 3,
+                    "created_at": "2026-07-02T00:00:00Z",
+                    "uri": "/docs/one",
+                },
+                {
+                    "id": "second",
+                    "vector": [0, 1, 0, 0],
+                    "account_id": "a",
+                    "rank": 2,
+                    "created_at": "2026-07-01T00:00:00Z",
+                    "uri": "/docs/deep/two",
+                },
+                {
+                    "id": "hidden",
+                    "vector": [1, 0, 0, 0],
+                    "account_id": "b",
+                    "rank": 1,
+                    "created_at": "2026-06-01T00:00:00Z",
+                    "uri": "/other/hidden",
+                },
+            ]
+        )
+
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1, 0, 0, 0],
+            limit=3,
+            filters={"op": "must", "field": "account_id", "conds": ["a"]},
+        )
+        assert [item.id for item in result.data] == ["first", "second"]
+
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1, 0, 0, 0],
+            limit=3,
+            filters={
+                "op": "must",
+                "field": "uri",
+                "conds": ["/docs"],
+                "para": "-d=-1",
+            },
+        )
+        assert [item.id for item in result.data] == ["first", "second"]
+
+        # date_time conversion is deliberately delegated to the native engine.
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1, 0, 0, 0],
+            limit=3,
+            filters={
+                "op": "and",
+                "conds": [
+                    {"op": "must", "field": "account_id", "conds": ["a"]},
+                    {
+                        "op": "range",
+                        "field": "created_at",
+                        "gte": "2026-07-02T00:00:00Z",
+                    },
+                ],
+            },
+        )
+        assert [item.id for item in result.data] == ["first"]
+        assert len(collection.search_by_scalar("default", "rank", limit=3).data) == 3
+
+        collection.update_data(
+            [
+                {
+                    "id": "second",
+                    "vector": [2, 0, 0, 0],
+                    "account_id": "a",
+                    "rank": 2,
+                }
+            ]
+        )
+        collection.delete_data(["first"])
+        result = collection.search_by_vector("default", dense_vector=[1, 0, 0, 0], limit=3)
+        assert [item.id for item in result.data] == ["second", "hidden"]
+    finally:
+        collection.close()
+
+
+def test_persistent_collection_rehydrates_cuvs_from_local_store(monkeypatch, tmp_path):
+    patch_cuvs_runtime(monkeypatch)
+    path = str(tmp_path / "cuvs-persistent")
+    config = {"dense_search": {"backend": "cuvs", "algorithm": "brute_force"}}
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "cuvs_persistent",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+                {"FieldName": "account_id", "FieldType": "string"},
+            ],
+        },
+        path=path,
+        config=config,
+    )
+    collection.create_index(
+        "default",
+        {
+            "IndexName": "default",
+            "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            "ScalarIndex": ["account_id"],
+        },
+    )
+    collection.upsert_data([{"id": "persisted", "vector": [1, 0, 0, 0], "account_id": "a"}])
+    collection.close()
+
+    reopened = get_or_create_local_collection(path=path, config=config)
+    try:
+        result = reopened.search_by_vector("default", dense_vector=[1, 0, 0, 0], limit=1)
+        assert [item.id for item in result.data] == ["persisted"]
+    finally:
+        reopened.close()
+
+
+def test_auto_cuvs_falls_back_then_retries_when_memory_is_available(monkeypatch):
+    runtimes = []
+
+    def make_runtime(_algorithm, metric, _build_params, _search_params):
+        runtime = MemoryAwareFakeCuVSRuntime(metric, free_memory_bytes=31)
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr(cuvs_index, "_CuVSRuntime", make_runtime)
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_integration",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+                {"FieldName": "account_id", "FieldType": "string"},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+            }
+        },
+    )
+    try:
+        collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+                "ScalarIndex": ["account_id"],
+            },
+        )
+        collection.upsert_data(
+            [
+                {
+                    "id": "first",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "account_id": "a",
+                },
+                {
+                    "id": "second",
+                    "vector": [0.0, 1.0, 0.0, 0.0],
+                    "account_id": "b",
+                },
+            ]
+        )
+
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+        assert [item.id for item in result.data] == ["first"]
+        assert runtimes[0].build_count == 0
+
+        runtimes[0].free_memory_bytes = 32
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+        assert [item.id for item in result.data] == ["first"]
+        assert runtimes[0].build_count == 1
+
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=1,
+            filters={"op": "must", "field": "account_id", "conds": ["a"]},
+        )
+        assert [item.id for item in result.data] == ["first"]
+        # The selective filtered query uses native search in auto mode.
+        assert runtimes[0].search_count == 1
+    finally:
+        collection.close()
+
+
+def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
+    runtimes = []
+
+    def make_runtime(_algorithm, metric, _build_params, _search_params):
+        runtime = MemoryAwareFakeCuVSRuntime(metric, free_memory_bytes=32)
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr(cuvs_index, "_CuVSRuntime", make_runtime)
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_selective_first",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+                {"FieldName": "account_id", "FieldType": "string"},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_filter_native_threshold": 1,
+            }
+        },
+    )
+    try:
+        collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+                "ScalarIndex": ["account_id"],
+            },
+        )
+        collection.upsert_data(
+            [
+                {
+                    "id": "first",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "account_id": "a",
+                },
+                {
+                    "id": "second",
+                    "vector": [0.0, 1.0, 0.0, 0.0],
+                    "account_id": "b",
+                },
+            ]
+        )
+
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=1,
+            filters={"op": "must", "field": "account_id", "conds": ["a"]},
+        )
+        assert [item.id for item in result.data] == ["first"]
+        assert runtimes[0].build_count == 0
+        assert runtimes[0].search_count == 0
+
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+        assert [item.id for item in result.data] == ["first"]
+        assert runtimes[0].build_count == 1
+        assert runtimes[0].search_count == 1
+    finally:
+        collection.close()
+
+
+def test_auto_cuvs_keeps_native_when_runtime_is_unavailable(monkeypatch):
+    def unavailable_runtime(*_args, **_kwargs):
+        raise cuvs_index.CuVSUnavailableError("unavailable for test")
+
+    monkeypatch.setattr(cuvs_index, "_CuVSRuntime", unavailable_runtime)
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_unavailable",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={"dense_search": {"backend": "auto_cuvs"}},
+    )
+    try:
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        assert index.dense_search is None
+
+        collection.upsert_data([{"id": "native", "vector": [1.0, 0.0, 0.0, 0.0]}])
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+        assert [item.id for item in result.data] == ["native"]
+    finally:
+        collection.close()

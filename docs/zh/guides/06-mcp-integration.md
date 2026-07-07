@@ -22,7 +22,7 @@ MCP 端点位于 `http://<server>:1933/mcp`，与 REST API 同进程、同端口
 | **Trae** | 标准 MCP 配置 |
 | **Cursor** | 标准 MCP 配置 |
 | **ChatGPT & Codex** | 标准 MCP 配置 |
-| **OpenCode** | 标准 MCP 配置 |
+| **OpenCode** | OpenCode 原生 `mcp` 配置 |
 | **Manus** | 标准 MCP 配置 |
 | **Claude.ai / Claude Desktop** | 原生 OAuth 2.1（见 [11-oauth](11-oauth.md)） |
 
@@ -81,6 +81,26 @@ claude mcp add --transport http openviking \
 ```
 
 加 `--scope user` 可将配置设为全局（所有项目共享）。
+
+### OpenCode
+
+在 `~/.config/opencode/opencode.json` 中配置：
+
+```json
+{
+  "mcp": {
+    "openviking": {
+      "type": "remote",
+      "url": "https://your-server.com/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
+      }
+    }
+  }
+}
+```
 
 ### Claude.ai / Claude Desktop（OAuth）
 

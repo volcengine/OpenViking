@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { resolveInitialApiKey } from './use-app-connection'
+import {
+  resolveConnectionRoleProbeState,
+  resolveInitialApiKey,
+} from './use-app-connection'
 
 describe('resolveInitialApiKey', () => {
   it('keeps the stored connection key paired with the stored account and user', () => {
@@ -31,5 +34,49 @@ describe('resolveInitialApiKey', () => {
         storedApiKey: 'stored-selected-user-key',
       }),
     ).toBe('env-key')
+  })
+})
+
+describe('resolveConnectionRoleProbeState', () => {
+  it('treats dev mode as root without requiring an API key', () => {
+    expect(
+      resolveConnectionRoleProbeState({
+        apiKey: '',
+        baseUrl: 'http://localhost:3000',
+        serverMode: 'dev',
+      }),
+    ).toEqual({
+      isLoading: false,
+      role: 'root',
+      shouldProbe: false,
+    })
+  })
+
+  it('keeps non-dev no-key connections unknown without probing', () => {
+    expect(
+      resolveConnectionRoleProbeState({
+        apiKey: '',
+        baseUrl: 'http://localhost:3000',
+        serverMode: 'api_key',
+      }),
+    ).toEqual({
+      isLoading: false,
+      role: 'unknown',
+      shouldProbe: false,
+    })
+  })
+
+  it('probes non-dev keyed connections through /health', () => {
+    expect(
+      resolveConnectionRoleProbeState({
+        apiKey: 'root-key',
+        baseUrl: 'http://localhost:3000',
+        serverMode: 'api_key',
+      }),
+    ).toEqual({
+      isLoading: true,
+      role: 'unknown',
+      shouldProbe: true,
+    })
   })
 })

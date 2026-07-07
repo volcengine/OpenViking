@@ -3886,6 +3886,7 @@ dependencies = [
  "gix-features",
  "gix-hash",
  "gix-object",
+ "globset",
  "grep",
  "grep-matcher",
  "grep-regex",

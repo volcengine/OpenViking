@@ -140,7 +140,7 @@ class GrepRequest(BaseModel):
     exclude_uri: Optional[str] = None
     pattern: str
     case_insensitive: bool = False
-    node_limit: Optional[int] = None
+    node_limit: Optional[int] = 256
     level_limit: int = 10
 
 
@@ -149,7 +149,7 @@ class GlobRequest(BaseModel):
 
     pattern: str
     uri: str = "viking://"
-    node_limit: Optional[int] = None
+    node_limit: Optional[int] = 256
 
 
 @router.post("/find")

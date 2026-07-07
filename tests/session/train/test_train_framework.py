@@ -352,6 +352,34 @@ async def test_default_policy_optimization_pipeline_runs_one_batch():
 
 
 @pytest.mark.asyncio
+async def test_policy_optimization_pipeline_allows_zero_epochs_without_training():
+    snapshotter = DummySnapshotter()
+    pipeline = OfflinePolicyOptimizationPipeline(
+        snapshotter=snapshotter,
+        rollout_executor=DummyExecutor(),
+        rollout_analyzer=DummyAnalyzer(),
+        gradient_estimator=DummyEstimator(),
+        policy_optimizer=DummyOptimizer(),
+        policy_updater=DummyUpdater(),
+    )
+
+    initial_policy_set = _policy_set()
+    result = await pipeline.train(
+        case_loader=ListCaseLoader([_case()]),
+        policy_set=initial_policy_set,
+        context=PipelineContext(max_epochs=0),
+    )
+
+    assert result.analyses == []
+    assert result.gradients == []
+    assert result.epochs == []
+    assert result.evaluation_passes == []
+    assert result.apply_result.updated_policy_set is initial_policy_set
+    assert result.metadata["max_epochs"] == 0
+    assert result.metadata["completed_epochs"] == 0
+
+
+@pytest.mark.asyncio
 async def test_offline_policy_optimization_pipeline_supports_train_and_eval():
     snapshotter = DummySnapshotter()
     pipeline = OfflinePolicyOptimizationPipeline(

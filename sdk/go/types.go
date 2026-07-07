@@ -225,6 +225,11 @@ type GrepOptions struct {
 	ExcludeURI      string
 }
 
+// GlobOptions controls Glob.
+type GlobOptions struct {
+	NodeLimit *int
+}
+
 // CreateSessionOptions controls CreateSession.
 type CreateSessionOptions struct {
 	SessionID    string

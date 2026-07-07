@@ -3,6 +3,7 @@
 #include "index_engine.h"
 #include "index/detail/index_manager_impl.h"
 #include "index/detail/fields_dict.h"
+#include <stdexcept>
 #include <unistd.h>
 
 namespace vectordb {
@@ -14,6 +15,20 @@ SearchResult IndexEngine::search(const SearchRequest& req) {
   SearchResult result;
   impl_->search(req, result);
   result.result_num = result.labels.size();
+  return result;
+}
+
+int IndexEngine::set_filter_layout(
+    const std::vector<uint64_t>& ordered_labels) {
+  return impl_->set_filter_layout(ordered_labels);
+}
+
+FilterResult IndexEngine::evaluate_filter(const std::string& dsl) {
+  FilterResult result;
+  const int ret = impl_->evaluate_filter(dsl, result);
+  if (ret != 0) {
+    throw std::runtime_error("Failed to evaluate native scalar filter");
+  }
   return result;
 }
 

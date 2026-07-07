@@ -347,6 +347,26 @@ class SearchResult:
         )
 
 
+class FilterResult:
+    __slots__ = ("eligible_count", "bitset_words")
+
+    def __init__(
+        self,
+        *,
+        eligible_count: int = 0,
+        bitset_words: list[int] | None = None,
+    ):
+        self.eligible_count = eligible_count
+        self.bitset_words = bitset_words or []
+
+    @classmethod
+    def from_backend(cls, payload: dict[str, Any]) -> "FilterResult":
+        return cls(
+            eligible_count=int(payload.get("eligible_count", 0)),
+            bitset_words=[int(word) for word in payload.get("bitset_words", [])],
+        )
+
+
 class StateResult:
     __slots__ = ("update_timestamp", "element_count")
 
@@ -439,6 +459,14 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         def search(self, req: SearchRequest) -> SearchResult:
             return SearchResult.from_backend(self._backend._index_engine_search(self._handle, req))
 
+        def set_filter_layout(self, ordered_labels: list[int]) -> int:
+            return int(self._backend._index_engine_set_filter_layout(self._handle, ordered_labels))
+
+        def evaluate_filter(self, dsl: str) -> FilterResult:
+            return FilterResult.from_backend(
+                self._backend._index_engine_evaluate_filter(self._handle, dsl)
+            )
+
         def dump(self, path: str) -> int:
             return int(self._backend._index_engine_dump(self._handle, path))
 
@@ -490,6 +518,7 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         "DeleteDataRequest": DeleteDataRequest,
         "SearchRequest": SearchRequest,
         "SearchResult": SearchResult,
+        "FilterResult": FilterResult,
         "StateResult": StateResult,
         "StorageOp": StorageOp,
         "IndexEngine": IndexEngine,

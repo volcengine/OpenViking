@@ -22,8 +22,6 @@ class CrawlConfig:
     retry_times: int = 2
     max_links_per_page: int = 500
     max_html_bytes: int = 10 * 1024 * 1024
-    fallback_playwright: bool = True
-    playwright_timeout: float = 30.0
     request_validator: Optional[Callable[[str], None]] = None
 
     def __post_init__(self) -> None:
@@ -43,5 +41,3 @@ class CrawlConfig:
             raise ValueError("max_links_per_page must be >= 1.")
         if self.max_html_bytes < 1:
             raise ValueError("max_html_bytes must be >= 1.")
-        if self.playwright_timeout <= 0:
-            raise ValueError("playwright_timeout must be > 0 for recursive web crawling.")

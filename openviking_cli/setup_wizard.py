@@ -655,7 +655,6 @@ EMBEDDING_PRESETS: list[EmbeddingPreset] = [
 ]
 
 VLM_PRESETS: list[VLMPreset] = [
-    VLMPreset("Qwen 3.5 2B", "qwen3.5:2b", "ollama/qwen3.5:2b", "~2.7 GB", 4),
     VLMPreset("Qwen 3.5 4B", "qwen3.5:4b", "ollama/qwen3.5:4b", "~3.4 GB", 8),
     VLMPreset("Qwen 3.5 9B", "qwen3.5:9b", "ollama/qwen3.5:9b", "~6.6 GB", 16),
     VLMPreset("Qwen 3.6 27B", "qwen3.6:27b", "ollama/qwen3.6:27b", "~17 GB, 256K ctx", 32),
@@ -689,16 +688,18 @@ QUERY_PLANNER_PRESETS: list[QueryPlannerPreset] = [
 # carries the parameter count, not the artifact size).
 _QUERY_PLANNER_DOWNLOAD_GB = 0.9
 
-# Recommended defaults indexed by RAM tier
+# Recommended defaults indexed by RAM tier. qwen3.5:4b is the smallest VLM we
+# recommend — smaller models fail OV's memory extraction (they copy the prompt's
+# few-shot examples into fabricated memories), so there is no sub-4B tier.
 _RAM_TIERS: list[tuple[int, int, int]] = [
     # (max_ram_gb, embedding_preset_index, vlm_preset_index)
-    (8, 0, 0),  # ≤8 GB: qwen3-embedding:0.6b + qwen3.5:2b
-    (16, 0, 1),  # 8-16 GB: qwen3-embedding:0.6b + qwen3.5:4b
-    (32, 2, 2),  # 16-32 GB: qwen3-embedding:8b + qwen3.5:9b
-    (64, 2, 7),  # 32-64 GB: qwen3-embedding:8b + gemma4:e4b
+    (8, 0, 0),  # ≤8 GB: qwen3-embedding:0.6b + qwen3.5:4b
+    (16, 0, 0),  # 8-16 GB: qwen3-embedding:0.6b + qwen3.5:4b
+    (32, 2, 1),  # 16-32 GB: qwen3-embedding:8b + qwen3.5:9b
+    (64, 2, 6),  # 32-64 GB: qwen3-embedding:8b + gemma4:e4b
 ]
 _RAM_DEFAULT_EMBED = 2  # ≥64 GB: qwen3-embedding:8b
-_RAM_DEFAULT_VLM = 3  # ≥64 GB: qwen3.6:27b
+_RAM_DEFAULT_VLM = 2  # ≥64 GB: qwen3.6:27b
 
 
 def _get_recommended_indices(ram_gb: int) -> tuple[int, int]:
@@ -864,7 +865,13 @@ def _ollama_dense_config(embedding: EmbeddingPreset) -> dict[str, Any]:
 
 
 def _ollama_vlm_config(vlm: VLMPreset) -> dict[str, Any]:
-    """Build the VLM config block for an Ollama-served model."""
+    """Build the VLM config block for an Ollama-served model.
+
+    ``extra_request_body`` raises Ollama's context window past its 4096-token
+    default (OV's memory-extraction prompt alone is ~5k tokens, so the default
+    silently truncates the conversation) and disables thinking, which otherwise
+    makes thinking models emit only reasoning and stall.
+    """
     return {
         "provider": "litellm",
         "model": vlm.litellm_model,
@@ -872,6 +879,7 @@ def _ollama_vlm_config(vlm: VLMPreset) -> dict[str, Any]:
         "api_base": "http://localhost:11434",
         "temperature": 0.0,
         "max_retries": 2,
+        "extra_request_body": {"num_ctx": 16384, "think": False},
     }
 
 

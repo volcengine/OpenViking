@@ -667,7 +667,7 @@ async def test_grep_case_insensitive(service):
 
 
 async def test_glob_no_matches(service):
-    result = await glob(pattern="zzz_nonexistent_*.xyz")
+    result = await glob(pattern="**/zzz_nonexistent_*.xyz")
     assert "No files found" in result
 
 
@@ -678,7 +678,7 @@ async def test_glob_match_all_md(service, client_with_resource):
 
 
 async def test_glob_with_uri_scope(service):
-    result = await glob(pattern="*", uri="viking://resources")
+    result = await glob(pattern="**/*", uri="viking://resources")
     assert isinstance(result, str)
 
 

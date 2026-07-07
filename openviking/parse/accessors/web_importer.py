@@ -13,10 +13,6 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 
 from openviking.parse.accessors.http_accessor import HTTPAccessor
 from openviking.parse.accessors.web_crawler import CrawlConfig, ScrapyWebCrawler
-from openviking.parse.accessors.web_crawler.playwright_renderer import (
-    PLAYWRIGHT_CHROMIUM_INSTALL_HINT,
-    PLAYWRIGHT_PACKAGE_INSTALL_HINT,
-)
 from openviking.parse.accessors.web_feed_accessor import (
     FeedEntry,
     _dedup_relpath,
@@ -25,23 +21,9 @@ from openviking.parse.accessors.web_feed_accessor import (
     url_to_relpath,
 )
 from openviking_cli.exceptions import InvalidArgumentError
-from openviking_cli.utils.logger import get_logger
-
-logger = get_logger(__name__)
 
 DEPTH_UNLIMITED = -1
 MAX_PAGES_UNLIMITED = -1
-
-# Actionable install hints the renderer records on CrawledPage.error when the
-# Playwright fallback is needed but unavailable. These are surfaced to the user
-# even for non-entry pages, which would otherwise only show up as a failure
-# count.
-_RENDER_INSTALL_HINTS = frozenset(
-    {
-        PLAYWRIGHT_PACKAGE_INSTALL_HINT,
-        PLAYWRIGHT_CHROMIUM_INSTALL_HINT,
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -111,19 +93,7 @@ class WebImporter:
         success_pages = self._dedupe_success_pages(crawl_result.pages)
         if not any(page.depth == 0 for page in success_pages):
             detail = self._entry_failure_detail(crawl_result.pages)
-            message = f"Failed to fetch entry page: {root_url}"
-            if detail:
-                message = f"{message} ({detail})"
-            raise RuntimeError(message)
-
-        render_hints = self._render_install_hints(crawl_result.pages)
-        if render_hints:
-            logger.warning(
-                "Some pages could not be rendered during web import of %s and were "
-                "skipped: %s",
-                root_url,
-                " ".join(render_hints),
-            )
+            raise RuntimeError(_entry_failure_message(root_url, detail))
 
         temp_root = Path(tempfile.mkdtemp(prefix="ov_web_"))
         temp_dir = temp_root / _host_name(root_url)
@@ -155,35 +125,16 @@ class WebImporter:
                 "page_count": len(success_pages),
                 "download_count": len(downloaded_files),
                 "crawl_result": _crawl_summary(crawl_result),
-                "render_hints": render_hints,
                 "original_filename": _host_name(root_url),
             },
         )
 
     @staticmethod
-    def _render_install_hints(pages) -> list[str]:
-        """Collect actionable render-install hints from failed pages (any depth).
-
-        Child SPA pages that fail because Playwright is unavailable only record
-        the hint on ``CrawledPage.error``; the entry page still succeeds, so the
-        caller would otherwise see the hint nowhere. Surface each distinct hint
-        once so the user can act on it.
-        """
-        hints: list[str] = []
-        for page in pages:
-            if page.status == "success" or not page.error:
-                continue
-            if page.error in _RENDER_INSTALL_HINTS and page.error not in hints:
-                hints.append(page.error)
-        return hints
-
-    @staticmethod
     def _entry_failure_detail(pages) -> str:
         """Return the failure reason of the entry page, if one was recorded.
 
-        The renderer surfaces actionable hints (e.g. missing Playwright
-        install) via ``CrawledPage.error``; without this the caller only sees
-        the generic "Failed to fetch entry page" message.
+        Without this the caller only sees the generic "Failed to fetch entry
+        page" message instead of the underlying error (e.g. an SSRF rejection).
         """
         for page in pages:
             if page.depth == 0 and page.status != "success" and page.error:
@@ -269,8 +220,26 @@ def _crawl_summary(crawl_result: Any) -> Dict[str, Any]:
         "total_downloads": getattr(crawl_result, "total_downloads", 0),
         "total_failed": crawl_result.total_failed,
         "total_skipped": crawl_result.total_skipped,
-        "fallback_rendered": crawl_result.fallback_rendered,
     }
+
+
+def _entry_failure_message(root_url: str, detail: str) -> str:
+    """Build a human-readable error for an entry page that could not be fetched.
+
+    The most common cause is the site's robots.txt disallowing crawlers, which
+    Scrapy reports with the terse "Forbidden by robots.txt". Turn that into a
+    short compliance-oriented hint instead.
+    """
+    if detail and "robots.txt" in detail.lower():
+        return (
+            "This URL cannot be imported for compliance reasons "
+            "(the site disallows crawlers). Please save the page and import it "
+            "as a local file instead."
+        )
+    message = f"Failed to fetch entry page: {root_url}"
+    if detail:
+        message = f"{message} ({detail})"
+    return message
 
 
 def _normalize_page_url(url: str) -> str:

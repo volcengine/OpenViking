@@ -22,8 +22,12 @@ use super::context::{FsContext, FS_CTX};
 use super::errors::{Error, Result};
 use super::filesystem::{normalize_prefix_path, relative_match_file, FileSystem};
 use super::types::{
-    BackendRole, BackendSyncState, FileInfo, GrepResult, OperationItemConfig, RedirectEntry,
-    RedirectPolicy, SyncLogEntry, SyncOp, SyncType, TreeEntry, WriteFlag,
+    BackendRole, BackendSyncState, FileInfo, GlobEntry, GlobPage, GrepResult,
+    OperationItemConfig, RedirectEntry, RedirectPolicy, SyncLogEntry, SyncOp, SyncType, TreeEntry,
+    WriteFlag,
+};
+use crate::core::glob::{
+    compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob,
 };
 use crate::multibackend::meta::{
     current_required_ctx, file_name, parent_dir, DefaultFsContextResolver, FsContextResolver,
@@ -1599,6 +1603,76 @@ impl FileSystem for MultiWriteWrappedFS {
         }
 
         Ok(result)
+    }
+
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        if self.inner.redirects.is_empty() {
+            return self
+                .inner
+                .primary()
+                .backend
+                .glob_directory(
+                    path,
+                    pattern,
+                    show_hidden,
+                    page_size,
+                    level_limit,
+                    continuation_token,
+                )
+                .await;
+        }
+
+        let matcher = PreparedGlob::new(pattern)?;
+        if matches!(page_size, Some(0)) {
+            return Err(Error::invalid_operation("page_size must be positive"));
+        }
+
+        let entries = self
+            .tree_directory(path, show_hidden, None, level_limit)
+            .await?;
+
+        let mut matched = Vec::new();
+        for entry in entries {
+            if matcher.is_match(&entry.rel_path) {
+                matched.push(GlobEntry {
+                    path: entry.path,
+                    rel_path: entry.rel_path,
+                    name: entry.info.name,
+                    is_dir: entry.info.is_dir,
+                });
+            }
+        }
+        matched.sort_by(|left, right| compare_rel_paths(&left.rel_path, &right.rel_path));
+
+        let start = decode_offset_token(
+            continuation_token.as_deref(),
+            path,
+            pattern,
+            show_hidden,
+            level_limit,
+        )?;
+        if start > matched.len() {
+            return Err(Error::invalid_operation("continuation token out of range"));
+        }
+        let end = page_size
+            .map(|limit| start.saturating_add(limit))
+            .unwrap_or(matched.len())
+            .min(matched.len());
+        let next_token = (end < matched.len())
+            .then(|| encode_offset_token(end, path, pattern, show_hidden, level_limit));
+
+        Ok(GlobPage {
+            entries: matched[start..end].to_vec(),
+            next_token,
+        })
     }
 
     async fn tree_directory(

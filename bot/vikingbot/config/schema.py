@@ -456,6 +456,10 @@ class AgentsConfig(BaseModel):
     )
     max_tool_iterations: int = 50
     memory_window: int = 50
+    subagent_enabled: bool = Field(
+        default=True,
+        description="Enable the spawn tool so the main agent can start background subagents.",
+    )
     session_context_enabled: bool = False
     session_context_token_budget: int = 3000
     commit_token_threshold: int = 200000

@@ -18,21 +18,23 @@ pub mod client;
 mod tree;
 
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use cache::{S3ListDirCache, S3StatCache};
-use client::S3Client;
+use client::{ListTreePage, S3Client};
 use futures::stream::{self, StreamExt};
 use regex::Regex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::core::filesystem::{relative_depth, relative_match_file, sort_directory_entries};
+use crate::core::glob::{PreparedGlob, validate_pattern};
 use crate::core::{
-    ConfigParameter, Error, FileInfo, FileSystem, GrepMatch, GrepResult, PluginConfig, Result,
-    ServicePlugin, TreeEntry, WriteFlag,
+    ConfigParameter, Error, FileInfo, FileSystem, GlobEntry, GlobPage, GrepMatch, GrepResult,
+    PluginConfig, Result, ServicePlugin, TreeEntry, WriteFlag,
 };
-use tree::build_tree_entries_from_flat_listing;
+use tree::{build_tree_entries_from_flat_listing, build_tree_entries_from_listing_page, rel_parts};
 
 /// Check whether `path` is under `exclude_path` (including itself).
 fn s3_is_excluded_path(path: &str, exclude_path: &str) -> bool {
@@ -57,6 +59,15 @@ trait ChunkReader: Send {
 struct S3ChunkReader<'a> {
     client: &'a S3Client,
     key: &'a str,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct S3GlobToken {
+    scope: String,
+    scan_token: Option<String>,
+    page_entries: Vec<GlobEntry>,
+    page_offset: usize,
+    last_rel_parts: Vec<String>,
 }
 
 #[async_trait]
@@ -236,6 +247,95 @@ impl S3FileSystem {
 
         result
     }
+
+    fn decode_glob_token(
+        token: Option<&str>,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        level_limit: Option<usize>,
+    ) -> Result<S3GlobToken> {
+        let scope = Self::glob_token_scope(path, pattern, show_hidden, level_limit);
+        match token {
+            None => Ok(S3GlobToken {
+                scope,
+                scan_token: None,
+                page_entries: Vec::new(),
+                page_offset: 0,
+                last_rel_parts: Vec::new(),
+            }),
+            Some(raw) if raw.is_empty() => Err(Error::invalid_operation("empty continuation token")),
+            Some(raw) => {
+                let state: S3GlobToken = serde_json::from_str(raw)
+                    .map_err(|_| Error::invalid_operation("invalid continuation token"))?;
+                if state.scope != scope {
+                    return Err(Error::invalid_operation("continuation token scope mismatch"));
+                }
+                Ok(state)
+            }
+        }
+    }
+
+    fn encode_glob_token(state: &S3GlobToken) -> Result<String> {
+        // ponytail: the token carries the remaining entries from the current
+        // page directly to avoid extra state storage; the ceiling is bounded
+        // by `page_size` and the S3 single-page limit of 1000 keys.
+        serde_json::to_string(state).map_err(|err| Error::Serialization(err.to_string()))
+    }
+
+    fn glob_token_scope(
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        level_limit: Option<usize>,
+    ) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(path.as_bytes());
+        hasher.update([0]);
+        hasher.update(pattern.as_bytes());
+        hasher.update([0, show_hidden as u8, 0]);
+        hasher.update(level_limit.unwrap_or(usize::MAX).to_string().as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
+    fn glob_entries_from_listing_page(
+        &self,
+        query_root: &str,
+        page: &ListTreePage,
+        matcher: &PreparedGlob,
+        show_hidden: bool,
+        level_limit: Option<usize>,
+        last_rel_parts: &[String],
+    ) -> Result<(Vec<GlobEntry>, Vec<String>)> {
+        let ordered = build_tree_entries_from_listing_page(
+            query_root,
+            &page.objects,
+            show_hidden,
+            level_limit,
+            last_rel_parts,
+            |key| self.client.strip_prefix(key),
+        )?;
+
+        let mut matched = Vec::new();
+        let next_last_rel_parts = ordered
+            .last()
+            .map(|entry| rel_parts(&entry.rel_path))
+            .unwrap_or_else(|| last_rel_parts.to_vec());
+
+        for entry in ordered {
+            if matcher.is_match(&entry.rel_path) {
+                matched.push(GlobEntry {
+                    path: entry.path,
+                    rel_path: entry.rel_path,
+                    name: entry.info.name,
+                    is_dir: entry.info.is_dir,
+                });
+            }
+        }
+
+        Ok((matched, next_last_rel_parts))
+    }
+
 
     /// Get file name from path
     fn file_name(path: &str) -> String {
@@ -864,6 +964,98 @@ impl FileSystem for S3FileSystem {
 
         Ok(result)
     }
+
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let matcher = PreparedGlob::new(pattern)?;
+        if matches!(page_size, Some(0)) {
+            return Err(Error::invalid_operation("page_size must be positive"));
+        }
+
+        let normalized = Self::normalize_path(path);
+        let info = self.stat(&normalized).await?;
+        if !info.is_dir {
+            return Err(Error::NotADirectory(normalized));
+        }
+
+        let prefix = if normalized == "/" {
+            self.client.build_key("")
+        } else {
+            format!("{}/", self.client.build_key(&normalized))
+        };
+        let mut state = Self::decode_glob_token(
+            continuation_token.as_deref(),
+            path,
+            pattern,
+            show_hidden,
+            level_limit,
+        )?;
+        let target_limit = page_size.unwrap_or(usize::MAX);
+        let fetch_size = 1000;
+        let mut matched = Vec::new();
+
+        loop {
+            while state.page_offset < state.page_entries.len() {
+                let entry = state.page_entries[state.page_offset].clone();
+                state.page_offset += 1;
+                matched.push(entry);
+                if matched.len() >= target_limit {
+                    let next_token = if state.page_offset < state.page_entries.len()
+                        || state.scan_token.is_some()
+                    {
+                        Some(Self::encode_glob_token(&state)?)
+                    } else {
+                        None
+                    };
+                    return Ok(GlobPage {
+                        entries: matched,
+                        next_token,
+                    });
+                }
+            }
+
+            state.page_entries.clear();
+            state.page_offset = 0;
+
+            if state.scan_token.is_none() && !state.last_rel_parts.is_empty() {
+                break;
+            }
+
+            let page = self
+                .client
+                .list_tree_objects_page(&prefix, state.scan_token.as_deref(), fetch_size)
+                .await?;
+            state.scan_token = page.next_continuation_token.clone();
+            let (entries, next_last_rel_parts) = self.glob_entries_from_listing_page(
+                &normalized,
+                &page,
+                &matcher,
+                show_hidden,
+                level_limit,
+                &state.last_rel_parts,
+            )?;
+            state.last_rel_parts = next_last_rel_parts;
+            if entries.is_empty() {
+                if state.scan_token.is_none() {
+                    break;
+                }
+                continue;
+            }
+            state.page_entries = entries;
+        }
+
+        Ok(GlobPage {
+            entries: matched,
+            next_token: None,
+        })
+    }
 }
 
 /// S3FS Plugin
@@ -1428,7 +1620,7 @@ mod tests {
         .await
     }
 
-    // ── Case  3: 正则无效 ──
+    // ── Case  3: invalid regex ──
 
     #[test]
     fn test_grep_invalid_regex() {
@@ -1442,7 +1634,7 @@ mod tests {
         );
     }
 
-    // ── Case 17: case_insensitive 正则构建 ──
+    // ── Case 17: case-insensitive regex construction ──
 
     #[test]
     fn test_case_insensitive_regex() {
@@ -1456,7 +1648,8 @@ mod tests {
         assert!(re2.is_match("world"), "uppercase pattern matches lowercase");
     }
 
-    // ── Case  9: 文件大小恰好为 CHUNK_SIZE（单 chunk，is_last 靠 offset+size>=file_size） ──
+    // ── Case  9: file size exactly equals CHUNK_SIZE (single chunk, with
+    // `is_last` determined by `offset + size >= file_size`) ──
 
     #[tokio::test]
     async fn test_grep_stream_exact_chunk_single() {
@@ -1472,7 +1665,8 @@ mod tests {
         assert_eq!(matches[1].content, "world");
     }
 
-    // ── Case 10: 最后 chunk 恰好等于 CHUNK_SIZE（多 chunk 场景） ──
+    // ── Case 10: last chunk size exactly equals CHUNK_SIZE (multi-chunk
+    // scenario) ──
 
     #[tokio::test]
     async fn test_grep_stream_last_chunk_exact_size() {
@@ -1483,7 +1677,7 @@ mod tests {
         assert_eq!(matches[3].content, "line4");
     }
 
-    // ── Case 11: 跨 chunk 边界行的拼接 ──
+    // ── Case 11: line stitching across chunk boundaries ──
 
     #[tokio::test]
     async fn test_grep_stream_cross_chunk_line() {
@@ -1495,7 +1689,7 @@ mod tests {
         assert_eq!(matches[0].content, "lo wo", "stitched across boundary");
     }
 
-    // ── Case 12: 连续多 chunk 无换行符 ──
+    // ── Case 12: multiple consecutive chunks with no newline ──
 
     #[tokio::test]
     async fn test_grep_stream_multi_chunk_no_newline() {
@@ -1511,7 +1705,7 @@ mod tests {
         );
     }
 
-    // ── Case 13: 超长行 > GREP_MAX_PARTIAL_SIZE ──
+    // ── Case 13: oversized line > GREP_MAX_PARTIAL_SIZE ──
 
     #[tokio::test]
     async fn test_grep_stream_line_exceeds_max_partial() {
@@ -1524,7 +1718,7 @@ mod tests {
         );
     }
 
-    // ── Case 14: 二进制内容（含无效 UTF-8） ──
+    // ── Case 14: binary content (including invalid UTF-8) ──
 
     #[tokio::test]
     async fn test_grep_stream_binary_content() {

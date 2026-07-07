@@ -444,7 +444,14 @@ def validate_openviking_auth(config: Config) -> None:
 
     auth_mode = _ov_server_auth_mode(ov_server)
 
-    health = _request_openviking_json(server_url, "/health")
+    # Build headers with API key if configured
+    # Public gateways like Volcengine VikingDB require X-API-Key on every request
+    headers: dict[str, str] = {}
+    api_key = getattr(ov_server, "api_key", None)
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    health = _request_openviking_json(server_url, "/health", headers=headers)
     if not health.ok:
         _server_unavailable_warning(server_url, health)
         return

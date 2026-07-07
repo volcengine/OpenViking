@@ -36,6 +36,12 @@ def parse_args() -> argparse.Namespace:
         default=200,
         help="Concurrent OpenViking session.commit submissions during train (default: 200)",
     )
+    parser.add_argument(
+        "--commit-timeout-seconds",
+        type=float,
+        default=None,
+        help="Max seconds to wait for each OpenViking session.commit task. Default waits indefinitely.",
+    )
     parser.add_argument("--config", default=None, help="ov.conf path (optional)")
     parser.add_argument("--server-url", default=None, help="OpenViking server URL. Defaults to ov.conf/ovcli.conf")
     parser.add_argument("--api-key", default=None, help="OpenViking API key. Defaults to ov.conf/ovcli.conf")
@@ -188,6 +194,7 @@ async def main_async() -> int:
             batch_size=args.batch_size,
             concurrency=args.concurrency,
             commit_concurrency=args.commit_concurrency,
+            commit_timeout_seconds=args.commit_timeout_seconds,
             config_path=str(Path(args.config).expanduser()) if args.config else None,
             server_url=args.server_url,
             api_key=args.api_key,

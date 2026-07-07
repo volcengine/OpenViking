@@ -48,15 +48,22 @@ curl http://localhost:1933/health
 
 ### 安装
 
-已发布的 npm 包是 `@openviking/opencode-plugin`，可以用 `npm view @openviking/opencode-plugin version` 验证当前可用版本。使用 package 安装时，把插件加入 `~/.config/opencode/opencode.json`。如果当前环境还不能通过 package 安装，请使用下面的源码安装路径。
+已发布的 npm 包是 `@openviking/opencode-plugin`。首次配置 OpenCode 时：
 
-```json
+```bash
+mkdir -p ~/.config/opencode
+cat > ~/.config/opencode/opencode.json <<'JSON'
 {
+  "$schema": "https://opencode.ai/config.json",
   "plugin": ["@openviking/opencode-plugin"]
 }
+JSON
+opencode
 ```
 
-开发、调试或 PR 测试时，可以从本仓库源码安装：
+已有 `~/.config/opencode/opencode.json` 时，不要覆盖原文件；只把 `"@openviking/opencode-plugin"` 合并到已有的 `plugin` 数组。OpenCode 启动时会自动下载这个 npm 包。
+
+如果当前环境不能通过 package 安装，请使用下面的源码安装路径。
 
 ```bash
 git clone https://github.com/volcengine/OpenViking.git

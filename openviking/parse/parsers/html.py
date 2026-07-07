@@ -24,14 +24,6 @@ from openviking_cli.utils.config.parser_config import HTMLConfig
 
 logger = __import__("openviking_cli.utils.logger").utils.logger.get_logger(__name__)
 
-_SPA_EMPTY_PATTERNS = (
-    "You need to enable JavaScript to run this app.",
-    "This app works best with JavaScript enabled.",
-    "Please enable JavaScript to continue.",
-    "JavaScript is required to use this application.",
-    "Enable JavaScript to view this page.",
-)
-
 
 class HTMLParser(BaseParser):
     """
@@ -133,9 +125,32 @@ class HTMLParser(BaseParser):
         content = self._extract_markdown(html, base_url or "")
         title = self._extract_title(html, base_url or "")
         content = self._clean_markdown(content)
+        if not content:
+            content = self._extract_noscript_notice(html)
         if title and title not in content:
             content = f"# {title}\n\n{content}" if content else f"# {title}"
         return content
+
+    @staticmethod
+    def _extract_noscript_notice(html: str) -> str:
+        """Return the <noscript> text when the page has no extractable body.
+
+        SPA shells (e.g. React apps) render their real content via JavaScript
+        and only ship a static ``<noscript>You need to enable JavaScript...``
+        placeholder. trafilatura ignores <noscript>, so such pages otherwise
+        extract to an empty string. Surfacing the notice keeps at least a hint
+        of why the page looks empty instead of writing a blank file.
+        """
+        try:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(html, "html.parser")
+            texts = [
+                node.get_text(" ", strip=True) for node in soup.find_all("noscript")
+            ]
+            return "\n\n".join(text for text in texts if text)
+        except Exception:
+            return ""
 
     @staticmethod
     def _extract_markdown(html: str, url: str) -> str:
@@ -182,8 +197,6 @@ class HTMLParser(BaseParser):
             flags=re.IGNORECASE,
         )
         markdown = re.sub(r"<(span|a)\s+(?:id|name)=['\"][^'\"]*['\"]\s*>\s*</\1>", "", markdown)
-        for pattern in _SPA_EMPTY_PATTERNS:
-            markdown = markdown.replace(pattern, "")
         markdown = re.sub(r"\n{3,}", "\n\n", markdown)
         return markdown.strip()
 

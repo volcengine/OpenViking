@@ -48,15 +48,22 @@ curl http://localhost:1933/health
 
 ### Install
 
-The published npm package is `@openviking/opencode-plugin`; verify availability with `npm view @openviking/opencode-plugin version`. For package installs, add the plugin to `~/.config/opencode/opencode.json`. If package installation is not available in your environment yet, use the source install path below.
+The published npm package is `@openviking/opencode-plugin`. For a first-time OpenCode config:
 
-```json
+```bash
+mkdir -p ~/.config/opencode
+cat > ~/.config/opencode/opencode.json <<'JSON'
 {
+  "$schema": "https://opencode.ai/config.json",
   "plugin": ["@openviking/opencode-plugin"]
 }
+JSON
+opencode
 ```
 
-For development, debugging, or PR testing, install the plugin from this repository instead:
+If `~/.config/opencode/opencode.json` already exists, do not overwrite it; only merge `"@openviking/opencode-plugin"` into the existing `plugin` array. OpenCode downloads the npm package at startup.
+
+If package installation is not available in your environment, use the source install path below.
 
 ```bash
 git clone https://github.com/volcengine/OpenViking.git

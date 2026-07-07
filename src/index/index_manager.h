@@ -14,6 +14,12 @@ class IndexManager {
 
   virtual int search(const SearchRequest& req, SearchResult& result) = 0;
 
+  virtual int set_filter_layout(
+      const std::vector<uint64_t>& ordered_labels) = 0;
+
+  virtual int evaluate_filter(const std::string& dsl,
+                              FilterResult& result) = 0;
+
   virtual int add_data(const std::vector<AddDataRequest>& data_list) = 0;
 
   virtual int delete_data(const std::vector<DeleteDataRequest>& data_list) = 0;

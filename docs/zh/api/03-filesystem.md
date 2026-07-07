@@ -914,7 +914,7 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 | pattern | str | 是 | - | 搜索模式（正则表达式） |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | exclude_uri | str | 否 | None | 搜索时要排除的 URI 前缀 |
-| node_limit | int | 否 | None | 最大返回节点数 |
+| node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
 
 **Python SDK (Embedded / HTTP)**
@@ -923,7 +923,8 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 results = client.grep(
     "viking://resources/",
     "authentication",
-    case_insensitive=True
+    case_insensitive=True,
+    node_limit=1024,
 )
 
 print(f"Found {results['count']} matches")
@@ -935,8 +936,10 @@ for match in results['matches']:
 **Go SDK**
 
 ```go
+nodeLimit := 1024
 result, err := client.Grep(ctx, "viking://resources/", "authentication", &openviking.GrepOptions{
     CaseInsensitive: true,
+    NodeLimit:       &nodeLimit,
 })
 if err != nil {
     return err
@@ -998,7 +1001,7 @@ openviking grep "authentication" --uri viking://resources/ [--ignore-case]
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`） |
 | uri | str | 否 | "viking://" | 起始 URI |
-| node_limit | int | 否 | None | 最大返回匹配数 |
+| node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -1017,7 +1020,9 @@ print(f"Found {results['count']} Python files")
 **Go SDK**
 
 ```go
-result, err := client.Glob(ctx, "**/*.md", "viking://resources/")
+result, err := client.Glob(ctx, "**/*.md", "viking://resources/", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+})
 if err != nil {
     return err
 }
