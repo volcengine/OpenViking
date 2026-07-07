@@ -1029,13 +1029,13 @@ class SessionCompressorV2:
                     [lock_path],
                     lock_mode="exact",
                     handle=lock_handle,
-                ):
+                ) as active_lock_handle:
                     await self._append_trajectory_metadata(
                         exp_uri,
                         normalized_traj_uris,
                         ctx,
                         viking_fs,
-                        lock_handle=lock_handle,
+                        lock_handle=active_lock_handle,
                     )
             except Exception as e:
                 logger.warning(f"Failed to append source trajectories to {exp_uri}: {e}")

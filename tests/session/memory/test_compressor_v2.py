@@ -164,7 +164,11 @@ class MockVikingFS:
                 content = entry.get("content", "")
                 if query_lower in name.lower() or query_lower in content.lower():
                     memories.append(
-                        {"uri": uri, "name": name, "abstract": content[:200] if content else ""}
+                        {
+                            "uri": uri,
+                            "name": name,
+                            "abstract": content[:200] if content else "",
+                        }
                     )
 
         return {
@@ -739,7 +743,7 @@ class TestCompressorV2:
                 events.append("read")
                 return self.files.get(uri, "")
 
-            async def write_file(self, uri: str, content: str, ctx=None):
+            async def write_file(self, uri: str, content: str, ctx=None, lock_handle=None):
                 events.append("write")
                 self.files[uri] = content
 
@@ -875,7 +879,9 @@ class TestExtractLoopPatchRepair:
                 ]
                 self.messages = []
 
-            async def get_completion_async(self, messages, tools=None, tool_choice=None, thinking=False):
+            async def get_completion_async(
+                self, messages, tools=None, tool_choice=None, thinking=False
+            ):
                 self.messages.append(list(messages))
                 return self.responses.pop(0)
 
@@ -975,7 +981,9 @@ class TestExtractLoopPatchRepair:
                 ]
                 self.messages = []
 
-            async def get_completion_async(self, messages, tools=None, tool_choice=None, thinking=False):
+            async def get_completion_async(
+                self, messages, tools=None, tool_choice=None, thinking=False
+            ):
                 self.messages.append(list(messages))
                 return self.responses.pop(0)
 
@@ -1073,7 +1081,9 @@ class TestExtractLoopPatchRepair:
                 ]
                 self.messages = []
 
-            async def get_completion_async(self, messages, tools=None, tool_choice=None, thinking=False):
+            async def get_completion_async(
+                self, messages, tools=None, tool_choice=None, thinking=False
+            ):
                 self.messages.append(list(messages))
                 return self.responses.pop(0)
 

@@ -729,7 +729,7 @@ class VikingFS:
             )
         )
 
-        async with lock_context:
+        async with lock_context as active_lock_handle:
             uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
             uris_to_move.append(target_uri)
 
@@ -746,6 +746,7 @@ class VikingFS:
                     is_dir=is_dir,
                     is_temp=is_temp,
                     ctx=ctx,
+                    lock_handle=active_lock_handle,
                 )
             except Exception as e:
                 if "not found" in str(e).lower():
@@ -811,6 +812,7 @@ class VikingFS:
         is_dir: bool,
         is_temp: bool,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Copy source to destination for mv without deleting source."""
         if is_temp:
@@ -823,15 +825,23 @@ class VikingFS:
             return
 
         if is_dir:
-            await self._copy_dir_through_vikingfs(old_uri, new_uri, ctx=ctx)
+            await self._copy_dir_through_vikingfs(
+                old_uri, new_uri, ctx=ctx, lock_handle=lock_handle
+            )
         else:
-            await self._copy_file_through_vikingfs(old_uri, new_uri, ctx=ctx)
+            await self._copy_file_through_vikingfs(
+                old_uri,
+                new_uri,
+                ctx=ctx,
+                lock_handle=lock_handle,
+            )
 
     async def _copy_dir_through_vikingfs(
         self,
         old_uri: str,
         new_uri: str,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Recursively copy a directory through VikingFS read/write hooks."""
         await self.mkdir(new_uri, exist_ok=True, ctx=ctx)
@@ -844,19 +854,30 @@ class VikingFS:
             old_child_uri = f"{old_uri.rstrip('/')}/{name}"
             new_child_uri = f"{new_uri.rstrip('/')}/{name}"
             if entry.get("isDir"):
-                await self._copy_dir_through_vikingfs(old_child_uri, new_child_uri, ctx=ctx)
+                await self._copy_dir_through_vikingfs(
+                    old_child_uri,
+                    new_child_uri,
+                    ctx=ctx,
+                    lock_handle=lock_handle,
+                )
             else:
-                await self._copy_file_through_vikingfs(old_child_uri, new_child_uri, ctx=ctx)
+                await self._copy_file_through_vikingfs(
+                    old_child_uri,
+                    new_child_uri,
+                    ctx=ctx,
+                    lock_handle=lock_handle,
+                )
 
     async def _copy_file_through_vikingfs(
         self,
         from_uri: str,
         to_uri: str,
         ctx: Optional[RequestContext] = None,
+        lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Copy one file through VikingFS read/write hooks without deleting source."""
         content_bytes = await self.read_file_bytes(from_uri, ctx=ctx)
-        await self.write_file_bytes(to_uri, content_bytes, ctx=ctx)
+        await self.write_file_bytes(to_uri, content_bytes, ctx=ctx, lock_handle=lock_handle)
 
     async def grep(
         self,
