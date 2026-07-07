@@ -6,7 +6,7 @@ VikingDB collection already has the `content` text field and FullText configured
 
 ## What It Does
 
-- Enumerates source data from Local AGFS.
+- Enumerates source data from each account root in Local AGFS.
 - Computes the deterministic OpenViking vector record ID for each expected
   L0/L1/L2 record.
 - Fetches existing VikingDB records by ID.
@@ -60,6 +60,20 @@ Where:
 
 It also assumes the current `Vectorize.full_text -> content` write semantics.
 
+
+## Enumeration Scope
+
+For each account directory under `/local`, the script traverses `viking://` with
+`node_limit=None`, `level_limit=None`, and `show_all_hidden=True`. It no longer
+maintains a hard-coded list such as `resources`, `agent/skills`, or user
+`resources` / `memories` / `skills`, because that list can miss newer
+namespaces such as peer-scoped content.
+
+Directories generate L0/L1 candidates; files generate L2 candidates. Hidden
+L0/L1 marker files (`.abstract.md` and `.overview.md`) are not emitted again as
+L2 candidates. Existing VikingDB records are then checked by deterministic ID;
+missing IDs are simply skipped.
+
 ## Recommended Usage
 
 Start with a dry run:
@@ -98,7 +112,7 @@ The repository `.gitignore` already ignores `result/`, so run outputs should not
 be committed.
 
 - `summary.json`: final counters for the run.
-- `progress.json`: latest counters, written after candidate enumeration and
+- `progress.json`: latest counters, written after the initial root traversal and
   refreshed after each processed candidate.
 - `updated.jsonl`: records actually updated by the script.
 - `failed.jsonl`: records that failed to update.

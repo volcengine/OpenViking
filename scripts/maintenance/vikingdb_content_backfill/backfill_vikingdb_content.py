@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from openviking.core.namespace import context_type_for_uri, owner_fields_for_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking.storage.vectordb_adapters.base import _truncate_text_field
@@ -199,48 +200,14 @@ class ContentBackfillEnumerator:
             if account_id.startswith("_"):
                 print(f"skip internal account directory: {account_id}", flush=True)
                 continue
-            print(f"enumerating account={account_id} owner=default root=viking://resources", flush=True)
-            default_ctx = self._ctx(account_id, "default")
+            print(f"enumerating account={account_id} root=viking://", flush=True)
             async for candidate in self._iter_tree_candidates(
                 account_id=account_id,
-                owner_user_id="default",
-                root_uri="viking://resources",
-                context_type="resource",
-                ctx=default_ctx,
+                root_uri="viking://",
+                ctx=self._ctx(account_id, "default"),
                 node_limit=self._node_limit,
             ):
                 yield candidate
-            print(f"enumerating account={account_id} owner=default root=viking://agent/skills", flush=True)
-            async for candidate in self._iter_tree_candidates(
-                account_id=account_id,
-                owner_user_id="default",
-                root_uri="viking://agent/skills",
-                context_type="skill",
-                ctx=default_ctx,
-                node_limit=self._node_limit,
-            ):
-                yield candidate
-
-            for user_id in self._list_dir_names(f"/local/{account_id}/user"):
-                user_ctx = self._ctx(account_id, user_id)
-                for root_uri, context_type in (
-                    (f"viking://user/{user_id}/resources", "resource"),
-                    (f"viking://user/{user_id}/memories", "memory"),
-                    (f"viking://user/{user_id}/skills", "skill"),
-                ):
-                    print(
-                        f"enumerating account={account_id} owner={user_id} root={root_uri}",
-                        flush=True,
-                    )
-                    async for candidate in self._iter_tree_candidates(
-                        account_id=account_id,
-                        owner_user_id=user_id,
-                        root_uri=root_uri,
-                        context_type=context_type,
-                        ctx=user_ctx,
-                        node_limit=self._node_limit,
-                    ):
-                        yield candidate
 
     def _list_dir_names(self, path: str) -> list[str]:
         try:
@@ -257,9 +224,7 @@ class ContentBackfillEnumerator:
         self,
         *,
         account_id: str,
-        owner_user_id: str,
         root_uri: str,
-        context_type: str,
         ctx: RequestContext,
         node_limit: int | None,
     ):
@@ -281,32 +246,30 @@ class ContentBackfillEnumerator:
             is_dir = bool(entry.get("isDir", entry.get("is_dir", False)))
             if is_dir:
                 for level in (0, 1):
-                    yield self._candidate(account_id, owner_user_id, uri, level, context_type)
+                    yield self._candidate(account_id, uri, level)
                 continue
             if self._is_hidden_meta_file(uri):
                 continue
-            yield self._candidate(account_id, owner_user_id, uri, 2, context_type)
+            yield self._candidate(account_id, uri, 2)
 
-    def _candidate(
-        self,
-        account_id: str,
-        owner_user_id: str,
-        uri: str,
-        level: int,
-        context_type: str,
-    ) -> BackfillCandidate:
+    def _candidate(self, account_id: str, uri: str, level: int) -> BackfillCandidate:
         return BackfillCandidate(
             account_id=account_id,
-            owner_user_id=owner_user_id,
+            owner_user_id=self._owner_user_id(account_id, uri),
             uri=uri,
             level=level,
-            context_type=context_type,
+            context_type=context_type_for_uri(uri),
             expected_record_id=vector_record_id(account_id, uri, level),
         )
 
     @staticmethod
     def _is_hidden_meta_file(uri: str) -> bool:
         return uri.endswith("/.abstract.md") or uri.endswith("/.overview.md")
+
+    @staticmethod
+    def _owner_user_id(account_id: str, uri: str) -> str:
+        owner_fields = owner_fields_for_uri(uri, account_id=account_id)
+        return owner_fields.get("owner_user_id") or "default"
 
     @staticmethod
     def _ctx(account_id: str, user_id: str) -> RequestContext:
@@ -424,22 +387,33 @@ class ContentBackfillRunner:
 
     async def run(self) -> BackfillSummary:
         self._options.run_dir.mkdir(parents=True, exist_ok=True)
-        candidates = []
-        async for candidate in self._enumerator.iter_candidates():
-            candidates.append(candidate)
-            if self._options.limit is not None and len(candidates) >= self._options.limit:
-                break
-        self._summary.candidate_count = len(candidates)
+        await self._count_candidates()
         self._write_progress()
-        if self._options.record_candidates:
-            self._write_jsonl("candidates.jsonl", [candidate.__dict__ for candidate in candidates])
 
-        for candidate in candidates:
+        seen = 0
+        async for candidate in self._enumerator.iter_candidates():
+            if self._options.limit is not None and seen >= self._options.limit:
+                break
+            seen += 1
             await self._process_candidate(candidate)
             self._write_progress()
 
         self._write_summary()
         return self._summary
+
+    async def _count_candidates(self) -> None:
+        if self._options.record_candidates:
+            candidate_path = self._options.run_dir / "candidates.jsonl"
+            candidate_path.write_text("", encoding="utf-8")
+
+        seen = 0
+        async for candidate in self._enumerator.iter_candidates():
+            if self._options.limit is not None and seen >= self._options.limit:
+                break
+            seen += 1
+            if self._options.record_candidates:
+                self._append_jsonl("candidates.jsonl", candidate.__dict__)
+        self._summary.candidate_count = seen
 
     async def _process_candidate(self, candidate: BackfillCandidate) -> None:
         record = self._fetch_record(candidate.expected_record_id)
