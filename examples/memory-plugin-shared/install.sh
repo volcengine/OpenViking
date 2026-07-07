@@ -1732,6 +1732,7 @@ install_pi() {
   rm -rf "$dest"
   mkdir -p "$(dirname "$dest")"
   mv "$tmp" "$dest"
+  pi install "$dest" || warn "$(t 'pi extension copied but pi install registration failed; run pi install manually.' 'pi 扩展文件已复制，但 pi install 注册失败；请手动运行 pi install。')"
   info "$(t 'pi extension installed:' 'pi 扩展已安装：') $dest"
 }
 
@@ -1804,6 +1805,14 @@ EOF
     else
       warn "pi: $PLUGIN_NAME $(t 'extension files not found' '未找到扩展文件')"
       ok=0
+    fi
+    if command -v pi >/dev/null 2>&1; then
+      if pi list 2>/dev/null | grep -q 'extensions/openviking'; then
+        info "pi: $PLUGIN_NAME $(t 'registered in pi settings' '已注册到 pi settings')"
+      else
+        warn "pi: $PLUGIN_NAME $(t 'not registered in pi settings' '未注册到 pi settings')"
+        ok=0
+      fi
     fi
     if [ -f "$HOME/.pi/agent/extensions/openviking/shared/recall-core.mjs" ]; then
       node --check "$HOME/.pi/agent/extensions/openviking/shared/recall-core.mjs" || ok=0
