@@ -29,7 +29,7 @@ fields:
       Must be written in {{ language }}.
       {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
       Do not create near-duplicate names for the same boundary.
-      Good: "cancel_refund_distinction", "final_cost_communication", "取消退款区分".
+      Good: "wrong_target_update", "missing_aggregate_scope", "final_summary_omission", "范围汇总遗漏".
       Prefer the first material decision/repair boundary over the broad opening request.
     merge_op: immutable
 
@@ -92,97 +92,77 @@ fields:
 
       # <trajectory_name>
       - Outcome: <success|failure|partial|unfinished|unknown>
-      - Domain: <task domain, tool family, or execution area>
-      - User Goal: <generalized user goal in one sentence>
+      - Domain: <task/tool domain>
+      - User Goal: <generalized user goal>
       - Loaded Experiences:
-        - <none OR E1: <experience memory filename/short name> — <triggered before tool if known; relevant|irrelevant|over-broad|misleading|ignored|helpful; brief reason>>
+        - <none OR E1: <experience name> — <trigger boundary>; <helpful|weak|misleading|irrelevant|ignored>; <brief reason>>
       - Runtime Facts:
-        - Evaluation: <db/action/communication checks or equivalent success/failure facts, generalized; explicitly list any matched expected action that is a near-miss for the suspected failure>
-        - Decisive tool facts: <fresh tool outputs, policy facts, user confirmations, candidate args, or final response facts that determine correctness>
+        - Evaluation: <state/action/tool/communication results; include correct near-miss actions/tools>
+        - Decisive tool facts: <tool outputs, confirmations, candidate args/content, policy facts, or calculations that decide correctness>
       - Actual Execution Path:
-        A1. <actual business-relevant read/tool/user-confirmation/policy-branch/write/final-communication step; include generalized decisive args and output facts>
-        A2. <next actual step>
-        A3. <continue compactly; omit memory-loading plumbing, hidden retries, and chitchat>
+        A1. <reward-relevant read/tool/user confirmation/write/final communication>
+        A2. <next reward-relevant step>
       - Expected Path:
-        R1. <expected reward/policy/user-confirmed step at the same abstraction level as Actual Execution Path>
-        R2. <next expected step>
-        R3. <continue only for reward-critical requirements>
+        R1. <required step/fact at same abstraction level>
+        R2. <next required step/fact>
       - Alignment:
-        - R1 -> A1: <matched|missing_expected_call|wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|extra_unexpected_call|ambiguous|not_applicable>; <brief evidence>
-        - R2 -> <Ax or ∅>: <status>; <brief evidence>
+        - R1 -> <Ax or ∅>: <matched|missing_expected_call|wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|extra_unexpected_call|ambiguous|not_applicable>; <evidence>
       - First Wrong Tool Call:
-        - Step: <exact Ax for one actual wrong call, final_response for a final communication omission, or none for missing expected call with no wrong actual call>
-        - Tool: <ONE exact actual tool name only, or communicate_with_user, or none; do not write multiple tools, prose, "done", "A and B", or explanations in this field>
-        - Candidate shape: <candidate_tool=<tool>; decisive_field=<exact top-level or nested arg/content field path, e.g. flights[*].flight_number, payment_methods[*].amount, destination, content, or none>; wrong_value_source=<stale tool result|unconfirmed user statement|incorrect calculation|copied object|wrong payment allocation|wrong date|wrong object id|object-cardinality change|missing content|none>; expected_value_source=<runtime fact/user confirmation/policy gate/evaluation requirement>; candidate_args_or_content=<generalized risky shape plus any sibling fields that must be preserved unchanged>>
+        - Step: <Ax, final_response, none, or expected_missing_tool>
+        - Tool: <one raw tool name, communicate_with_user, or none>
+        - Candidate shape: <candidate_tool=...; decisive_field=...; wrong_value_source=...; expected_value_source=...; candidate_args_or_content=...>
         - Error type: <none|wrong_tool|wrong_arguments|wrong_object|wrong_policy_branch|missing_read_before_tool|missing_confirmation_before_tool|missing_communication|premature_write|extra_write|tool_error|unrecoverable>
-        - Expected at call: <the exact expected tool/args/target object/policy branch/confirmation/content at this boundary; when repairing one argument field, explicitly preserve unchanged sibling fields, especially schema fields with similar names; if Tool is none, name the missing expected tool boundary here>
-        - Why this call is first: <why no earlier actual tool call materially changed reward or recoverability>
+        - Expected at call: <expected tool/args/content or missing call>
+        - Why this call is first: <why earlier steps were not material>
       - First Material Divergence:
-        - Step: <same as First Wrong Tool Call.Step when an actual wrong tool call exists; final_response for final communication omission; expected_missing_tool when the failure is only an omitted expected tool call; or none>
+        - Step: <same boundary, final_response, expected_missing_tool, or none>
         - Kind: <none|wrong_tool|wrong_arguments|wrong_object|wrong_policy_branch|missing_read|missing_confirmation|missing_communication|missing_expected_tool|premature_write|extra_write|tool_error|unrecoverable>
-        - Expected: <what should have happened at that boundary>
-        - Actual: <what happened instead; if missing_expected_tool, say no actual call occurred>
-        - Impact: <why this changed reward, database state, required communication, or recoverability>
+        - Expected: <what should have happened>
+        - Actual: <what happened instead>
+        - Impact: <reward/state/communication/recoverability impact>
       - Causal Analysis:
-        - Root cause: <concise causal diagnosis grounded in visible evidence; name the missed runtime fact, policy distinction, object binding, field provenance, user confirmation, or communication obligation>
-        - Evidence: <tool output, user confirmation, candidate args, final response, or evaluation feedback proving the diagnosis>
-        - Ruled out: <what was not the primary cause, such as successful db writes, correct earlier checks, or unrelated reminders>
-        - Memory effect: <missing|irrelevant|over-broad|misleading|ignored|too_weak|helpful_but_not_sufficient|necessary|not_needed>; <name the concrete experience/rule type when visible>
+        - Root cause: <evidence-backed missed fact/binding/scope/provenance/policy/communication obligation>
+        - Evidence: <specific visible evidence>
+        - Ruled out: <correct actions/tools or non-causal factors>
+        - Memory effect: <missing|irrelevant|over-broad|misleading|ignored|too_weak|helpful_but_not_sufficient|necessary|not_needed>; <experience/rule type>
         - Misleading loaded experience: <Ei/name or none>
-        - How memory affected the wrong call: <if a loaded experience was over-broad/misleading/too_weak, state how it affected or failed to prevent First Wrong Tool Call; otherwise none>
+        - How memory affected the wrong call: <brief or none>
       - Experience Repair Signal:
         - Recommended operation: <create|update|skip>
         - Existing experience action: <update|none>
-        - Existing target experience: <existing loaded experience name when updating an over-broad/misleading/too_weak memory; none when no existing experience should be modified>
+        - Existing target experience: <name or none>
         - New experience action: <create|skip>
-        - New experience candidate: <new concise name when creating; none when no new experience should be created>
-        - Trigger boundary: <MUST equal First Wrong Tool Call.Tool when Recommended operation is create/update; use none only when skip or no actual/preventable tool boundary exists>
-        - Repair principle: <one sentence with the minimal reusable repair; if skip, explain why neither update nor create is needed>
-        - Do not learn: <nearby broad workflow, success path, object-shape change, or non-causal lesson that must not be turned into experience>
+        - New experience candidate: <name or none>
+        - Trigger boundary: <First Wrong Tool Call.Tool, or none when skipping>
+        - Repair principle: <minimal reusable repair>
+        - Do not learn: <nearby broad/non-causal lesson to avoid>
       - Counterfactual Ideal Experience:
         - Would fix source rollout: <true|false>
-        - Experience name: <new or existing concise experience name, or none>
-        - Injection boundary: <the exact tool boundary where the ideal experience would be injected; normally First Wrong Tool Call.Tool, or none>
-        - Situation: <positive reusable condition where this experience should apply>
-        - Repair rule: <the minimal instruction that would have changed the source rollout from the first wrong boundary toward the expected result>
-        - Source binding: <which already-visible runtime fact, user confirmation, evaluation requirement, row set, calculation source, or policy gate supplies the required value/decision; say none if not reusable>
-        - Applicability: <the narrow applies-when condition, including object role, scope, or candidate shape needed to avoid over-broad triggering>
-        - Anti-pattern: <the tempting but wrong generalized behavior this experience must prevent>
-        - Case evidence: <diagnostic source-case evidence only; may include concrete literals/ids/amounts as evidence, but mark them as not to be hardcoded into the reusable experience>
+        - Experience name: <name or none>
+        - Injection boundary: <tool boundary or none>
+        - Situation: <reusable applies-when condition>
+        - Repair rule: <minimal pre-tool instruction>
+        - Source binding: <semantic source and derivation of required value/decision>
+        - Applicability: <narrow boundary/object role/scope/candidate shape>
+        - Anti-pattern: <closest tempting wrong behavior>
+        - Case evidence: <diagnostic literals/ids/values only; not hardcoded>
       - Applicability:
-        - Applies when: <positive reusable condition for this audit>
-        - Does not apply when: <nearby intent/object/policy state where this audit must not be used>
-      - Result: <final outcome and important side effects in one generalized sentence>
+        - Applies when: <positive reusable condition>
+        - Does not apply when: <nearest non-applicable condition>
+      - Result: <final outcome and side effects>
 
       Rules:
-      - AUDIT FIRST: The record must primarily explain actual execution vs expected requirements. Do not write a polished SOP that hides the mistake.
-      - ALWAYS INCLUDE ALL SECTIONS: Include every label above, even for success. For success, set First Wrong Tool Call Step/Tool to `none`, First Material Divergence Step to `none`, Kind to `none`, Experience Repair Signal Recommended operation to `skip`, Existing experience action to `none`, New experience action to `skip`, Counterfactual Ideal Experience Would fix source rollout to `false`, and explain what preserved success. If no experience reminder was injected, set Loaded Experiences to `none` and set the separate `experience_effects` field to the required empty JSON object.
-      - COMPLETE BUT COMPACT ACTUAL PATH: Include all reward-relevant business reads, decisive tool outputs, confirmations, writes, policy branches, and final required communication. Omit memory loading, duplicated retries with no new state, and casual conversation.
-      - EXPECTED PATH IS REWARD/POLICY GROUNDED: Build Expected Path from evaluation feedback, rubric requirements, explicit user confirmations, tool facts, and visible policy gates. Do not invent requirements not supported by runtime evidence.
-      - FIRST WRONG TOOL CALL ONLY: Output exactly one First Wrong Tool Call. Choose the earliest actual candidate tool call whose tool name, args, target object, policy branch, missing precondition, or user-visible content materially caused the reward failure. If all database/action calls passed and only final communication failed, the First Wrong Tool Call is the final `communicate_with_user` call. If the failure is only a missing expected call with no wrong actual call, set Step to `none`, Tool to `none`, and put the expected missing tool in Expected at call and First Material Divergence.Step=`expected_missing_tool`.
-      - TOOL FIELD MUST BE ATOMIC: The `Tool` field must be exactly one raw tool name from the actual trace, `communicate_with_user`, or `none`. Never write prose, uncertainty, slash-separated alternatives, comma-separated tools, `done`, `final_response`, or multiple tool names in `Tool`. Put explanations in Candidate shape, Expected at call, or Causal Analysis instead.
-      - MISSING EXPECTED WRITE IS NOT A WRONG TOOL: If reward failed because an expected write/read was omitted and there was no wrong actual candidate call, do not label `done` or the last successful tool as wrong. Use First Wrong Tool Call.Tool=`none`, First Material Divergence.Kind=`missing_expected_tool`, Expected=<missing tool and generalized args>, Actual=<no actual call occurred>, and Experience Repair Signal Recommended operation=`skip` unless the omission can be prevented at a concrete earlier communication/tool boundary.
-      - EVALUATION ACTIONS ARE GROUND TRUTH: Treat evaluation `action_checks` / expected-action facts as the highest-priority evidence for tool correctness. If an actual tool call matches an expected action (`action_match=true`, equivalent passed action check, or an explicitly required expected call), do NOT label that call, its target object, or its generalized candidate shape as the First Wrong Tool Call even if domain intuition suggests a different policy. Put such calls in Runtime Facts/Ruled out as correct near-misses that any future experience must preserve.
-      - DB FAILURE WITH MATCHED EXPECTED ACTIONS: If `db_check` fails while one or more write `action_checks` are matched, first look for extra unexpected writes, wrong object expansion, wrong object lifecycle/cardinality, or later writes that corrupted otherwise-correct earlier state. Do not infer that a matched expected write was policy-invalid. If the first material problem is an extra write to an unrequested/unconfirmed object, label that extra write as First Wrong Tool Call.
-      - SAME-TOOL DISAMBIGUATION: When the same `candidate_tool` appears in both correct and wrong calls, identify the decisive discriminator in Candidate shape: object role, target membership, confirmation scope, argument provenance, lifecycle/cardinality change, or required communication content. Do not collapse the failure into tool-level, intent-keyword-level, or policy-domain language that would also match the correct call.
-      - OBJECT-ROLE ABSTRACTION: Generalize identifiers into stable semantic roles instead of deleting their distinctions. Preserve roles such as originally requested object, user-confirmed target, discovered informational object, source object, copied extra object, expected matched object, and extra unexpected object. A learned repair must distinguish these roles when they determine reward.
-      - NO POLICY HALLUCINATION OVER EVAL: Do not invent a business-policy repair, prohibition, or expected denial that contradicts evaluation action checks, rubric facts, explicit expected path, or passed tool/action requirements. If policy text is absent or ambiguous, prefer the benchmark/evaluation facts.
-      - CANDIDATE SHAPE MUST BE STRUCTURED: Candidate shape must include candidate_tool, decisive_field, wrong_value_source, expected_value_source, and generalized candidate_args_or_content. For write-argument failures, `decisive_field` MUST be the exact top-level or nested tool argument field path that was wrong, not a broad object such as "route", "flight sequence and baggage", or "payment". Use paths like `flights[*].flight_number`, `payment_methods[*].amount`, `payment_methods[*].payment_id`, `destination`, or `total_baggages`. Also state in candidate_args_or_content which nearby sibling fields and correct near-miss object roles must NOT be changed. For final communication omissions, decisive_field=content and wrong_value_source=missing content. For missing expected tool with Tool=none, candidate_tool=none and candidate_args_or_content=missing expected call.
-      - FIRST DIVERGENCE ONLY: First Material Divergence must point to the earliest boundary that materially changed reward or recoverability and should match First Wrong Tool Call when an actual wrong tool call exists. If all database/actions passed and only final communication failed, the divergence is `final_response`, not the earlier successful tool calls.
-      - CAUSAL ANALYSIS, NOT HIDDEN THOUGHTS: Provide a concise evidence-backed causal diagnosis. Do not output hidden chain-of-thought, private reasoning transcripts, or unverifiable speculation.
-      - EXPERIENCE HANDOFF: Experience Repair Signal is the only section that should recommend experience creation/update. It has two independent decisions: whether to update an existing loaded experience, and whether to create a brand-new experience. `Existing target experience: none` ONLY means no existing loaded experience should be modified; it must NOT be interpreted as no new experience should be created. For partial/failure outcomes with an actual First Wrong Tool Call.Tool, default to `Recommended operation: create`, `Existing experience action: none`, and `New experience action: create` when a narrow reminder before that tool call could prevent the same failure in future. Use `Recommended operation: update` only when an existing loaded experience was causal, over-broad, misleading, or too weak. Use `Recommended operation: skip` only for success, failures already covered correctly, or failures not preventable by a pre-tool reminder. Do not skip merely because the missing value is case-specific; generalize the missing value into its semantic role (for example required total cost, required identifier, required policy explanation, or required next step). When Recommended operation is create/update, Trigger boundary must be exactly the single tool name in First Wrong Tool Call.Tool; do not choose a broader, earlier, later, or multi-tool boundary. If First Wrong Tool Call.Tool is `none`, use skip unless there is a concrete preventable communication boundary.
-      - COUNTERFACTUAL IDEAL EXPERIENCE: For every non-success trajectory, explicitly describe the one ideal pre-tool experience that would likely have fixed the source rollout if injected immediately before the First Wrong Tool Call. This is a repair target for later experience extraction, not a polished final experience. It must preserve the causal source binding, scope, object roles, and anti-pattern needed to make the original rollout correct. Set Would fix source rollout=false only when no reusable pre-tool experience could have helped, and explain why in Repair rule/Source binding.
-      - COUNTERFACTUAL SOURCE BINDING: Do not let the ideal experience collapse into vague advice such as "include all required information" or "check the policy." Name the semantic source of the required value/decision, such as a frozen user-request scope, row-level tool facts to sum, selected candidate source, confirmed target object, policy gate, or evaluation-required communication role. Concrete literals from the case may appear only in Case evidence and must be labeled diagnostic/not hardcoded.
-      - BAD EXPERIENCE SELF-CORRECTION: If a loaded experience was over-broad, misleading, or too weak and it contributed to or failed to prevent the First Wrong Tool Call, set `Memory effect` accordingly, set `Misleading loaded experience` to that Ei/name, set `Recommended operation` to `update`, `Existing experience action` to `update`, `Existing target experience` to that existing loaded experience, and `New experience action` to `skip`. Do not create a new experience when an existing loaded experience is the causal memory problem.
-      - IGNORE NON-CAUSAL REMINDERS: If a loaded experience triggered but did not affect the First Wrong Tool Call, mark it as irrelevant in Loaded Experiences or Ruled out. Do not update it merely because it appeared in context.
-      - SUCCESS DOES NOT TRAIN EXPERIENCE: Successful trajectories are useful references, but they normally must not propose experience updates. Use Recommended operation: skip unless the outcome is partial/failure and the repair is reusable.
-      - DO NOT LEARN FULL WORKFLOWS: Do not turn a successful path into a broad workflow memory. The trajectory may record success, but the repair signal must stay focused on failure prevention.
-      - PRESERVE POLICY DISTINCTIONS: Explicitly separate cancellation permission from refund eligibility, changing one existing object from creating replacements, one booking from multiple bookings, final required communication from database success, and confirmed user targets from inferred targets.
-      - PRESERVE OBJECT BOUNDARIES: Do not imply changing object cardinality, lifecycle shape, passenger/object membership, or target object unless the user explicitly requested and confirmed that exact change and tool/policy facts support it.
-      - COMMUNICATION FAILURES ARE FIRST-CLASS: If the only failed check is missing required user-visible information, the audit and repair signal must target `communicate_with_user` or final response content, not unrelated tool workflows. When no existing causal experience exists, normally set New experience action=create for a reusable communication-boundary reminder rather than skip.
-      - WRITE ARGUMENT FAILURES NEED PROVENANCE: If a write tool failed because arguments were wrong, identify in First Wrong Tool Call.Candidate shape the exact decisive field path and exact wrong source category: stale tool result, unconfirmed user statement, incorrect calculation, copied source object, wrong payment allocation, wrong date, wrong object id, or object-cardinality change. Do not write a generic "wrong_arguments" candidate shape without field provenance. Do not let repair implications spill into sibling schema fields that were correct.
-      - EXPERIENCE ALIGNMENT: Loaded Experiences must list only experience memories actually read/injected. Give each injected experience a stable short alias (`E1`, `E2`, ...), include the tool boundary where it triggered when visible, and use the same aliases as the separate `experience_effects` field. Do not list case memory, trajectory memory, or the current case as loaded experiences. If none were loaded, write `none`.
-      - EXPERIENCE EFFECTS FIELD: Judge experience effects in the separate `experience_effects` field only from visible execution evidence: injected reminder text, the candidate tool it preceded, actual tool args/content, user confirmations, policy/tool facts, evaluation feedback, and First Wrong Tool Call. Do not mark an experience negative merely because the rollout failed; mark it negative only when there is evidence that its trigger/content was over-broad or misleading for the actual wrong step.
-      - GENERALIZE AGGRESSIVELY BUT PRESERVE ROLES: Remove raw identifiers, personal names, contact values, exact dates, exact amounts, exact counts, exact locations/paths, and raw tool payloads, but keep reward-relevant semantic roles distinct. Use placeholders such as originally requested reservation, additional informational reservation, confirmed target, expected matched write, extra unexpected write, requested amount, confirmed payment method, final required amount, source object, target object, or applicable policy.
-      - MACHINE-PARSEABLE STYLE: Use exactly the labels and marker prefixes above (`A1.`, `R1.`, `R1 -> A1:`). Use concise markdown bullets. No extra headings, free paragraphs, code fences, or closing remarks.
+      - FIXED SHAPE: Output every section above in order. For success, set wrong/divergence fields to `none`, Repair Signal to `skip`, and Ideal Experience Would fix source rollout to `false`.
+      - AUDIT ONLY: Compare actual vs required behavior, identify the first material divergence, and propose the smallest reusable repair. Do not write a broad SOP or success playbook.
+      - EVIDENCE ONLY: Ground Expected Path in visible evaluator/rubric facts, user requests/confirmations, tool outputs, policy/tool constraints, or task requirements. Do not invent rules or contradict matched/expected tool actions.
+      - FIRST BOUNDARY: Pick exactly one earliest material boundary. `Tool` must be one raw tool name, `communicate_with_user`, or `none`; never use prose, `done`, multiple tools, or alternatives. For communication-only failures, use `communicate_with_user`; for omitted expected calls with no wrong actual call, use Tool=`none` and Kind=`missing_expected_tool`.
+      - PRESERVE DISCRIMINATORS: Do not learn a rule that blocks matched/correct near-miss actions. When the same tool is both right and wrong, name the discriminator: object role, membership, confirmation scope, argument provenance, source selection, calculation scope, or content coverage.
+      - CANDIDATE SHAPE: Always include `candidate_tool`, `decisive_field`, `wrong_value_source`, `expected_value_source`, and `candidate_args_or_content`. Use concrete schema paths such as `items[*].id`, `allocations[*].value`, `target_id`, or `content`.
+      - EXPERIENCE HANDOFF: Create/update an experience only if a narrow pre-tool reminder could prevent the first material failure. Trigger boundary must equal First Wrong Tool Call.Tool. Update only causal misleading/over-broad/weak loaded experiences; otherwise create one narrow new experience or skip.
+      - IDEAL EXPERIENCE: For each non-success trajectory, write the counterfactual ideal pre-tool experience in content. It must include reusable situation, repair rule, source binding, applicability boundary, anti-pattern, and diagnostic case evidence. Set false only when no reusable pre-tool repair exists.
+      - SOURCE BINDING: Avoid vague repairs like “include required info” or “check policy.” Bind the repair to the semantic source and derivation: user-request scope, confirmed target, selected source object, row/set membership, field to read, calculation, policy gate, or communication obligation. Concrete literals belong only in Case evidence and must not be hardcoded.
+      - AGGREGATE/LIST SCOPE: For totals, counts, summaries, balances, or lists, specify freeze point, included/excluded records, source field, derivation, and whether later writes change the requested scope. Name the closest wrong aggregation/list as the anti-pattern.
+      - DOMAIN-NEUTRAL: Generalize identifiers, names, timestamps, exact values, and dataset-specific wording into roles that determine correctness. Do not copy benchmark-specific prompt text into reusable lessons.
+      - STYLE: Concise markdown bullets only. No extra headings, code fences, free-form paragraphs, hidden reasoning, or closing remarks. Judge loaded experience effects only from visible evidence.
+
     merge_op: patch
