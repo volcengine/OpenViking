@@ -1,0 +1,23 @@
+README.md
+  s_f271a51846cdf7::t_8e0a3df8a6fdb4 64-80
+README_CN.md
+  s_f271a51846cdf7::t_606c27da89bdeb 64-80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "a14336814febdfc40cac3e9de7640cd1f1ca3ee4",
+  "prompts": {},
+  "sessions": {
+    "s_f271a51846cdf7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b93-5055-71d0-8440-4fed6090d609",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
