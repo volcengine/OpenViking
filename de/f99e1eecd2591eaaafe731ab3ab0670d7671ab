@@ -1,0 +1,23 @@
+openviking/server/error_mapping.py
+  s_7747e94dc59b85::t_1b28c7ff6add36 39-40,44,60,293-295,303-340,408
+openviking/utils/feishu_errors.py
+  s_7747e94dc59b85::t_049aa11f56ad3a 10-11,65-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "def99e1eecd2591eaaafe731ab3ab0670d7671ab",
+  "prompts": {},
+  "sessions": {
+    "s_7747e94dc59b85": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3bd3-cb60-7a03-b07b-9d1c4d192b8c",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
