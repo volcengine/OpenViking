@@ -430,8 +430,11 @@ class SemanticProcessor(DequeueHandlerBase):
                                         f"deleted_files={len(diff.deleted_files)}, "
                                         f"updated_files={len(diff.updated_files)}, "
                                         f"added_dirs={len(diff.added_dirs)}, "
-                                        f"deleted_dirs={len(diff.deleted_dirs)}"
+                                        f"deleted_dirs={len(diff.deleted_dirs)}, "
+                                        f"warnings={len(diff.warnings)}"
                                     )
+                                    for _w in diff.warnings:
+                                        logger.warning("[SyncDiff] %s", _w)
                                     changes = diff.to_changes()
                                     is_incremental = True
                                     target_uri = msg.target_uri
@@ -803,6 +806,7 @@ class SemanticProcessor(DequeueHandlerBase):
         # are never recorded, so a future resync cannot mistake them for ours.
         new_files: List[ManifestFile] = []
         new_dirs: List[str] = []
+        our_uris: Dict[str, str] = {}  # rel -> target uri, for post-rewrite re-hash (#3029)
 
         async def read_bytes(uri: str) -> bytes:
             data = await viking_fs.read_file(uri, ctx=ctx)
@@ -817,6 +821,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.error(f"[SyncDiff] Failed to hash {uri} for manifest: {e}")
                 return
             new_files.append(manifest_entry(rel, data))
+            our_uris[rel] = uri
 
         async def can_delete(rel: str, uri: str) -> bool:
             """Four-condition guarded delete (§3.3).
@@ -1117,6 +1122,23 @@ class SemanticProcessor(DequeueHandlerBase):
                         new_dirs.append(rel)
                     await sync_dir(root_subdir, target_subdir, rel)
 
+        async def refresh_fingerprints() -> None:
+            # Re-hash our generated files AFTER _rewrite_target_image_uris has
+            # mutated them in place, so the manifest records the FINAL on-disk
+            # bytes. Otherwise the next resync sees the rewritten content as
+            # "user-modified" (spurious .remote sidecar + skipped update). The
+            # fresh-target path collects after the rewrite already; this brings
+            # the pre-existing-target path to the same ordering. #3029
+            for i, mf in enumerate(new_files):
+                uri = our_uris.get(mf.relpath)
+                if not uri:
+                    continue
+                try:
+                    data = await read_bytes(uri)
+                except Exception:
+                    continue
+                new_files[i] = manifest_entry(mf.relpath, data)
+
         async def flush_manifest() -> None:
             manifest = Manifest(
                 # ponytail: source.kind hardcoded — Feishu is the only
@@ -1162,7 +1184,9 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.error(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
         # #3029: write the manifest LAST, under the same lock, only after the
         # tree sync succeeded — a crash leaves the OLD manifest (fail-safe).
+        # Re-hash after the image rewrite so fingerprints match final on-disk bytes.
         if guarded:
+            await refresh_fingerprints()
             await flush_manifest()
         return diff
 
