@@ -1,0 +1,37 @@
+openviking/service/resource_service.py
+  s_b1ef123960986a::t_b6b2efd1410a0b 19,58,659-676,1152-1358
+openviking/connector/client.py
+  s_b1ef123960986a::t_180c735f6e11de 1-68
+openviking_cli/utils/config/open_viking_config.py
+  s_b1ef123960986a::t_e4e4e039e3ce28 57-60,63-73,78,81-88,237-241
+  h_35f000fc27e979 61-62,74-77,79-80
+openviking/server/identity.py
+  s_b1ef123960986a::t_8efb11e0ff3732 108-110
+openviking/server/auth/__init__.py
+  s_b1ef123960986a::t_6617c00c3308e6 139-140,151-152,162
+openviking/connector/__init__.py
+  s_b1ef123960986a::t_12057cde194a0c 1-2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "11f8a04c7f5f0e654e99924dfb83dcecfe3eaeda",
+  "prompts": {},
+  "humans": {
+    "h_35f000fc27e979": {
+      "author": "李子恒 <ziheng.li@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_b1ef123960986a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1f172121-1318-42b9-b1c1-65050c318504",
+        "model": "unknown"
+      },
+      "human_author": "李子恒 <ziheng.li@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
