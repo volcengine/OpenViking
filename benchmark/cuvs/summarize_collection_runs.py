@@ -23,6 +23,11 @@ BACKEND_METRICS = {
     "rss_ingest_delta_bytes": ("rss_ingest_delta_bytes",),
     "gpu_search_delta_bytes": ("gpu_search_delta_bytes",),
 }
+PREBUILD_SELECTIVE_METRICS = {
+    "latency_ms": ("latency_ms",),
+    "result_count": ("result_count",),
+    "gpu_delta_bytes": ("gpu_delta_bytes",),
+}
 SEARCH_METRICS = {
     "first_query_ms": ("first_query_ms",),
     "warm_p50_ms": ("search", "latency_ms", "p50"),
@@ -93,6 +98,35 @@ def summarize_metrics(
 
 
 def summarize_backend(backend: str, variants: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    prebuild_entries = [variant.get("prebuild_selective_query") for variant in variants]
+    prebuild_selective_query = None
+    if any(entry is not None for entry in prebuild_entries):
+        if any(entry is None for entry in prebuild_entries):
+            raise ValueError(f"Prebuild selective-query coverage differs for backend {backend}")
+        entries = [entry for entry in prebuild_entries if entry is not None]
+        reference = entries[0]
+        metadata = {
+            "name": reference.get("name"),
+            "filter": reference.get("filter"),
+            "distribution": reference.get("distribution"),
+            "target_selectivity": reference.get("target_selectivity"),
+        }
+        if any(
+            {
+                "name": entry.get("name"),
+                "filter": entry.get("filter"),
+                "distribution": entry.get("distribution"),
+                "target_selectivity": entry.get("target_selectivity"),
+            }
+            != metadata
+            for entry in entries[1:]
+        ):
+            raise ValueError(f"Prebuild selective-query metadata differs for backend {backend}")
+        prebuild_selective_query = {
+            **metadata,
+            "metrics": summarize_metrics(entries, PREBUILD_SELECTIVE_METRICS),
+        }
+
     search_maps = [{item["name"]: item for item in variant["searches"]} for variant in variants]
     search_names = list(search_maps[0])
     for search_map in search_maps[1:]:
@@ -141,6 +175,7 @@ def summarize_backend(backend: str, variants: Sequence[dict[str, Any]]) -> dict[
     return {
         "backend": backend,
         "metrics": summarize_metrics(variants, BACKEND_METRICS),
+        "prebuild_selective_query": prebuild_selective_query,
         "searches": searches,
         "lifecycle": {
             "updates": updates,
@@ -235,6 +270,15 @@ def format_median_mad(metric: dict[str, Any], precision: int) -> str:
 
 def print_summary(summary: dict[str, Any]) -> None:
     print(f"Independent runs: {summary['run_count']}")
+    for result in summary["results"]:
+        prebuild = result.get("prebuild_selective_query")
+        if prebuild is not None:
+            metrics = prebuild["metrics"]
+            print(
+                f"\n{result['backend']} prebuild selective query: "
+                f"latency {format_median_mad(metrics['latency_ms'], 3)} ms, "
+                f"GPU delta {format_median_mad(metrics['gpu_delta_bytes'], 0)} bytes"
+            )
     print("\nbackend                 scenario              p50_ms med+/-MAD       qps med+/-MAD")
     print("----------------------  --------------------  ------------------  -----------------")
     for result in summary["results"]:

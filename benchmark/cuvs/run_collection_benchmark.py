@@ -103,6 +103,20 @@ def filter_scenarios() -> list[FilterScenario]:
     return scenarios
 
 
+def prebuild_selective_scenario(vector_count: int, native_threshold: int) -> FilterScenario | None:
+    """Return a filter that should route native before the first GPU build."""
+
+    eligible_count = (vector_count + 999) // 1000
+    if native_threshold <= 0 or eligible_count > native_threshold:
+        return None
+    return FilterScenario(
+        name="prebuild_selective_0_1pct",
+        filter={"op": "must", "field": "uniform_bucket", "conds": [0]},
+        distribution="uniform",
+        selectivity=eligible_count / vector_count,
+    )
+
+
 def scalar_fields(row_index: int, vector_count: int) -> tuple[int, int]:
     uniform_bucket = row_index % 1000
     cluster_bucket = min(999, (row_index * 1000) // vector_count)
@@ -264,6 +278,38 @@ def run_search_scenario(
         "first_result_count": len(first_records),
         "neighbors": neighbors,
         "search": summarize_latency(latencies_ms, len(query_lists)),
+    }
+
+
+def run_single_query_scenario(
+    adapter: Any,
+    query: Sequence[float],
+    *,
+    scenario: FilterScenario,
+    k: int,
+) -> dict[str, Any]:
+    gpu_before = gpu_memory_used_bytes()
+    started = time.perf_counter()
+    records = adapter.query(
+        query_vector=list(query),
+        filter=scenario.filter,
+        limit=k,
+        output_fields=["id"],
+    )
+    latency_ms = (time.perf_counter() - started) * 1000.0
+    gpu_after = gpu_memory_used_bytes()
+    return {
+        "name": scenario.name,
+        "filter": scenario.filter,
+        "distribution": scenario.distribution,
+        "target_selectivity": scenario.selectivity,
+        "latency_ms": latency_ms,
+        "result_count": len(records),
+        "gpu_before_bytes": gpu_before,
+        "gpu_after_bytes": gpu_after,
+        "gpu_delta_bytes": (
+            gpu_after - gpu_before if gpu_before is not None and gpu_after is not None else None
+        ),
     }
 
 
@@ -434,6 +480,17 @@ def run_backend(
         rss_after_ingest = current_rss_bytes()
         gpu_after_ingest = gpu_memory_used_bytes()
 
+        prebuild_selective_query = None
+        if backend == "auto_cuvs":
+            scenario = prebuild_selective_scenario(dataset.shape[0], auto_filter_native_threshold)
+            if scenario is not None:
+                prebuild_selective_query = run_single_query_scenario(
+                    adapter,
+                    queries[0],
+                    scenario=scenario,
+                    k=k,
+                )
+
         searches = [
             run_search_scenario(
                 adapter,
@@ -502,6 +559,7 @@ def run_backend(
                 if gpu_before is not None and gpu_after_search is not None
                 else None
             ),
+            "prebuild_selective_query": prebuild_selective_query,
             "searches": searches,
             "lifecycle": lifecycle,
         }

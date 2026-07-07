@@ -88,10 +88,24 @@ def write_result(path, document):
 
 
 def test_summarize_collection_runs_reports_process_median_and_mad(tmp_path):
+    documents = [
+        result_document(qps=100, p50=1.0, timestamp="run-1"),
+        result_document(qps=110, p50=1.2, timestamp="run-2"),
+        result_document(qps=300, p50=1.1, timestamp="run-3"),
+    ]
+    for document, latency_ms in zip(documents, (2.0, 2.4, 8.0), strict=True):
+        document["results"][0]["prebuild_selective_query"] = {
+            "name": "prebuild_selective_0_1pct",
+            "filter": {"op": "must", "field": "uniform_bucket", "conds": [0]},
+            "distribution": "uniform",
+            "target_selectivity": 0.001,
+            "latency_ms": latency_ms,
+            "result_count": 10,
+            "gpu_delta_bytes": 0,
+        }
     paths = [
-        write_result(tmp_path / "run-1.json", result_document(qps=100, p50=1.0, timestamp="run-1")),
-        write_result(tmp_path / "run-2.json", result_document(qps=110, p50=1.2, timestamp="run-2")),
-        write_result(tmp_path / "run-3.json", result_document(qps=300, p50=1.1, timestamp="run-3")),
+        write_result(tmp_path / f"run-{index}.json", document)
+        for index, document in enumerate(documents, start=1)
     ]
 
     summary = summary_module.summarize_files(paths)
@@ -100,6 +114,8 @@ def test_summarize_collection_runs_reports_process_median_and_mad(tmp_path):
     assert str(tmp_path) not in json.dumps(summary)
     result = summary["results"][0]
     assert result["backend"] == "cuvs_brute_force"
+    assert result["prebuild_selective_query"]["metrics"]["latency_ms"]["median"] == 2.4
+    assert result["prebuild_selective_query"]["metrics"]["latency_ms"]["mad"] == pytest.approx(0.4)
     assert result["searches"][0]["metrics"]["qps"]["median"] == 110
     assert result["searches"][0]["metrics"]["qps"]["mad"] == 10
     assert result["searches"][0]["metrics"]["warm_p50_ms"]["median"] == pytest.approx(1.1)

@@ -326,7 +326,125 @@ def test_auto_mode_caches_native_route_for_selective_filter():
             index.search([1.0, 0.0], 1, filter_a, resolve, register)
 
     assert calls == [("register", [10, 20]), ("resolve", filter_a)]
+    # Selectivity is decided before GPU admission/build, even while dirty.
+    assert runtime.build_count == 0
+    assert runtime.release_count == 0
     assert runtime.prepare_filter_count == 0
+
+
+def test_auto_mode_selective_filter_skips_rebuild_after_mutation():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={
+            "auto_filter_native_threshold": 1,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates(
+        [
+            candidate(10, [1.0, 0.0], account_id="a"),
+            candidate(20, [0.0, 1.0], account_id="b"),
+        ]
+    )
+    registered_layouts = []
+
+    def register(ordered_labels):
+        registered_layouts.append(list(ordered_labels))
+
+    assert index.search([1.0, 0.0], 1, None, None, register)[0] == [10]
+    assert runtime.build_count == 1
+
+    index.upsert([delta(20, [2.0, 0.0], account_id="b")])
+
+    def resolve(_filters):
+        return [0b10], 1
+
+    filter_b = {"op": "must", "field": "account_id", "conds": ["b"]}
+    with pytest.raises(CuVSNativeRouteError, match="1 candidates"):
+        index.search([1.0, 0.0], 1, filter_b, resolve, register)
+
+    # The stale GPU snapshot is not rebuilt for a query routed to native.
+    assert runtime.build_count == 1
+    assert registered_layouts == [[10, 20], [10, 20]]
+
+    # The next GPU-routed query still observes dirty state and rebuilds once.
+    assert index.search([1.0, 0.0], 1, None, None, register)[0] == [20]
+    assert runtime.build_count == 2
+
+
+def test_auto_mode_empty_filter_result_skips_initial_gpu_build():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={
+            "auto_filter_native_threshold": 1,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(10, [1.0, 0.0], account_id="a")])
+
+    assert index.search(
+        [1.0, 0.0],
+        1,
+        {"op": "must", "field": "account_id", "conds": ["missing"]},
+        lambda _filters: ([0], 0),
+        lambda _labels: None,
+    ) == ([], [])
+    assert runtime.build_count == 0
+    assert runtime.release_count == 0
+
+
+def test_auto_mode_wide_filter_reuses_preflight_bitmap_after_build():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={
+            "auto_filter_native_threshold": 1,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates(
+        [
+            candidate(10, [1.0, 0.0], account_id="a"),
+            candidate(20, [0.0, 1.0], account_id="a"),
+        ]
+    )
+    resolve_count = 0
+
+    def resolve(_filters):
+        nonlocal resolve_count
+        resolve_count += 1
+        return [0b11], 2
+
+    labels, _ = index.search(
+        [1.0, 0.0],
+        2,
+        {"op": "must", "field": "account_id", "conds": ["a"]},
+        resolve,
+        lambda _labels: None,
+    )
+    assert labels == [10, 20]
+    assert resolve_count == 1
+    assert runtime.build_count == 1
 
 
 def test_auto_mode_uses_lower_native_threshold_for_path_filters():

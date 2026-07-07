@@ -396,6 +396,14 @@ class _CachedFilter:
     native_threshold: int = 0
 
 
+@dataclass(frozen=True)
+class _ResolvedNativeFilter:
+    bitset_words: Tuple[int, ...]
+    eligible_count: int
+    route_native: bool
+    native_threshold: int
+
+
 class CuVSDenseIndex:
     """Mutable OpenViking label space backed by a lazily rebuilt cuVS index."""
 
@@ -544,39 +552,71 @@ class CuVSDenseIndex:
         except (TypeError, ValueError):
             return None
 
+    def _get_cached_filter(self, cache_key: Optional[str]) -> Optional[_CachedFilter]:
+        if cache_key is None:
+            return None
+        cached = self._filter_cache.pop(cache_key, None)
+        if cached is not None:
+            self._filter_cache[cache_key] = cached
+        return cached
+
+    def _cache_filter(self, cache_key: Optional[str], cached: _CachedFilter) -> None:
+        if cache_key is None or self.filter_cache_size <= 0:
+            return
+        self._filter_cache[cache_key] = cached
+        while len(self._filter_cache) > self.filter_cache_size:
+            self._filter_cache.popitem(last=False)
+
+    def _resolve_native_filter(
+        self,
+        filters: Mapping[str, Any],
+        native_filter_resolver: Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]],
+    ) -> _ResolvedNativeFilter:
+        words, eligible_count = native_filter_resolver(filters)
+        native_threshold = (
+            self.auto_path_filter_native_threshold
+            if _filter_uses_field_type(filters, self.field_types, "path")
+            else self.auto_filter_native_threshold
+        )
+        route_native = (
+            self.auto_memory and native_threshold > 0 and eligible_count <= native_threshold
+        )
+        return _ResolvedNativeFilter(
+            bitset_words=tuple(int(word) for word in words),
+            eligible_count=int(eligible_count),
+            route_native=route_native,
+            native_threshold=native_threshold,
+        )
+
     def _prepare_filter(
         self,
         filters: Mapping[str, Any],
         native_filter_resolver: Optional[
             Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]]
         ] = None,
+        resolved_native_filter: Optional[_ResolvedNativeFilter] = None,
     ) -> _CachedFilter:
         cache_key = self._filter_cache_key(filters)
-        if cache_key is not None:
-            cached = self._filter_cache.pop(cache_key, None)
-            if cached is not None:
-                self._filter_cache[cache_key] = cached
-                return cached
+        cached = self._get_cached_filter(cache_key)
+        if cached is not None:
+            return cached
 
         if native_filter_resolver is not None:
-            words, eligible_count = native_filter_resolver(filters)
-            native_threshold = (
-                self.auto_path_filter_native_threshold
-                if _filter_uses_field_type(filters, self.field_types, "path")
-                else self.auto_filter_native_threshold
+            resolved = resolved_native_filter or self._resolve_native_filter(
+                filters, native_filter_resolver
             )
-            route_native = (
-                self.auto_memory and native_threshold > 0 and eligible_count <= native_threshold
-            )
+            eligible_count = resolved.eligible_count
+            native_threshold = resolved.native_threshold
+            route_native = resolved.route_native
             if route_native:
                 prepared = None
             else:
                 prepare_filter_words = getattr(self._runtime, "prepare_filter_words", None)
                 if prepare_filter_words is not None:
-                    prepared = prepare_filter_words(words)
+                    prepared = prepare_filter_words(resolved.bitset_words)
                 else:
                     prepared = tuple(
-                        bool(words[row // 32] & (1 << (row % 32)))
+                        bool(resolved.bitset_words[row // 32] & (1 << (row % 32)))
                         for row in range(len(self._labels))
                     )
         else:
@@ -595,15 +635,14 @@ class CuVSDenseIndex:
             route_native=route_native,
             native_threshold=native_threshold,
         )
-        if cache_key is not None and self.filter_cache_size > 0:
-            self._filter_cache[cache_key] = cached
-            while len(self._filter_cache) > self.filter_cache_size:
-                self._filter_cache.popitem(last=False)
+        self._cache_filter(cache_key, cached)
         return cached
 
     def _rebuild_if_needed(
         self,
         native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
+        *,
+        filter_layout_is_current: bool = False,
     ) -> None:
         if not self._dirty:
             return
@@ -652,7 +691,7 @@ class CuVSDenseIndex:
                     "cuVS auto mode fell back to native search after a GPU allocation failure"
                 ) from exc
             raise
-        if native_filter_layout_registrar is not None:
+        if native_filter_layout_registrar is not None and not filter_layout_is_current:
             native_filter_layout_registrar(self._labels)
         self._dirty = False
         logger.info("Built cuVS %s index with %d vectors", self.algorithm, len(self._labels))
@@ -671,13 +710,60 @@ class CuVSDenseIndex:
             return [], []
         query = self._prepare_vector(query_vector)
         with self._lock:
-            self._rebuild_if_needed(native_filter_layout_registrar)
+            cached_filter: Optional[_CachedFilter] = None
+            resolved_native_filter: Optional[_ResolvedNativeFilter] = None
+            filter_layout_is_current = False
+
+            # Auto mode decides whether a selective filter should remain native
+            # before paying GPU admission or rebuild costs. A dirty native
+            # layout is refreshed against the pending cuVS row order only; the
+            # live GPU row mapping is not changed until a build actually runs.
+            if filters and self.auto_memory and native_filter_resolver is not None:
+                cache_key = self._filter_cache_key(filters)
+                cached_filter = self._get_cached_filter(cache_key)
+                if cached_filter is None:
+                    if self._dirty and native_filter_layout_registrar is not None:
+                        native_filter_layout_registrar(list(self._records))
+                        filter_layout_is_current = True
+                    resolved_native_filter = self._resolve_native_filter(
+                        filters, native_filter_resolver
+                    )
+                    if (
+                        resolved_native_filter.route_native
+                        or resolved_native_filter.eligible_count == 0
+                    ):
+                        cached_filter = _CachedFilter(
+                            prepared=None,
+                            eligible_count=resolved_native_filter.eligible_count,
+                            route_native=resolved_native_filter.route_native,
+                            native_threshold=resolved_native_filter.native_threshold,
+                        )
+                        self._cache_filter(cache_key, cached_filter)
+
+                if cached_filter is not None:
+                    if cached_filter.eligible_count == 0:
+                        return [], []
+                    if cached_filter.route_native:
+                        raise CuVSNativeRouteError(
+                            "cuVS auto mode routed a selective filter to native search "
+                            f"({cached_filter.eligible_count} candidates <= "
+                            f"{cached_filter.native_threshold})"
+                        )
+
+            self._rebuild_if_needed(
+                native_filter_layout_registrar,
+                filter_layout_is_current=filter_layout_is_current,
+            )
             if self._index is None:
                 return [], []
 
             mask: Optional[Any] = None
             if filters:
-                cached_filter = self._prepare_filter(filters, native_filter_resolver)
+                cached_filter = cached_filter or self._prepare_filter(
+                    filters,
+                    native_filter_resolver,
+                    resolved_native_filter,
+                )
                 mask = cached_filter.prepared
                 eligible_count = cached_filter.eligible_count
                 if eligible_count == 0:

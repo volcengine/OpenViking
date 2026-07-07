@@ -215,6 +215,11 @@ uncached path.
 It keeps unfiltered and wider filters on cuVS while routing small scalar and
 path candidate sets to native recall according to the two configurable
 thresholds. Set a threshold to zero to disable that part of the policy.
+Before the normal scenario matrix, the auto backend also records
+`prebuild_selective_query` with a 0.1% scalar filter. This query runs while the
+GPU index is still dirty, so its latency and GPU-memory delta verify that
+native routing happens before GPU admission and rebuild. The subsequent
+unfiltered scenario remains responsible for measuring the lazy GPU build.
 
 Aggregate independent process runs with median and median absolute deviation:
 
