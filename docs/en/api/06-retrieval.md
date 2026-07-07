@@ -532,7 +532,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
 | level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
 
 #### 3. Usage Examples
@@ -565,7 +565,8 @@ client.initialize()
 results = client.grep(
     "viking://resources",
     "authentication",
-    case_insensitive=True
+    case_insensitive=True,
+    node_limit=1024,
 )
 
 print(f"Found {results['count']} matches")
@@ -577,8 +578,10 @@ for match in results['matches']:
 **Go SDK**
 
 ```go
+nodeLimit := 1024
 result, err := client.Grep(ctx, "viking://resources", "authentication", &openviking.GrepOptions{
     CaseInsensitive: true,
+    NodeLimit:       &nodeLimit,
 })
 if err != nil {
     return err
@@ -635,7 +638,7 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 - `[]` matches character range
 
 **Code Entry Points**:
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.glob()` - Python SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.glob()` - Python SDK entry (HTTP)
 - `openviking/server/routers/search.py:glob()` - HTTP router
 - `crates/ov_cli/src/commands/search.rs:glob()` - Rust CLI command
 
@@ -647,7 +650,7 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
-| node_limit | int | No | None | Maximum number of matches to return |
+| node_limit | int | No | 256 | Maximum number of matches to return. Omitted requests default to 256; pass a larger integer when you need more results |
 
 #### 3. Usage Examples
 
@@ -675,21 +678,23 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-# Find all markdown files
+# Find all markdown files (defaults to returning at most 256 matches)
 results = client.glob("**/*.md", "viking://resources")
 print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# Find all Python files
-results = client.glob("**/*.py", "viking://resources")
+# Find all Python files with a higher explicit cap
+results = client.glob("**/*.py", "viking://resources", node_limit=1024)
 print(f"Found {results['count']} Python files")
 ```
 
 **Go SDK**
 
 ```go
-result, err := client.Glob(ctx, "**/*.md", "viking://resources")
+result, err := client.Glob(ctx, "**/*.md", "viking://resources", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+})
 if err != nil {
     return err
 }

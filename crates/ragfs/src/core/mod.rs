@@ -12,6 +12,7 @@ pub mod context;
 pub mod encryption_wrapper;
 pub mod errors;
 pub mod filesystem;
+pub mod glob;
 pub mod mountable;
 pub mod multibackend_wrapper;
 pub mod plugin;
@@ -36,7 +37,7 @@ pub use stats::{FilesystemStats, FsOperation, OperationStats, OperationTimer, St
 pub use stats_wrapper::StatsWrappedFS;
 pub use types::{
     BackendItemConfig, BackendRole, BackendSyncState, BackendsConfig, ConfigParameter, ConfigValue,
-    EncryptionConfig, FileInfo, GrepMatch, GrepResult, OperationItemConfig, PluginConfig,
-    RedirectEntry, RedirectMeta, RedirectPolicy, SyncLogEntry, SyncLogMeta, SyncOp, SyncType,
-    TreeEntry, WriteFlag,
+    EncryptionConfig, FileInfo, GlobEntry, GlobPage, GrepMatch, GrepResult,
+    OperationItemConfig, PluginConfig, RedirectEntry, RedirectMeta, RedirectPolicy,
+    SyncLogEntry, SyncLogMeta, SyncOp, SyncType, TreeEntry, WriteFlag,
 };

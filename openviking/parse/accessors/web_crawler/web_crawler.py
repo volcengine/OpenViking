@@ -146,6 +146,4 @@ class ScrapyWebCrawler:
                 result.total_skipped += 1
             else:
                 result.total_failed += 1
-            if page.source == "playwright":
-                result.fallback_rendered += 1
         return result

@@ -38,6 +38,15 @@ struct SearchResult {
   std::string extra_json;
 };
 
+// A filter bitmap projected into an external row order. Bit i in
+// bitset_words corresponds to ordered_labels[i] supplied by the caller.
+// This keeps native logical offsets private while allowing an external dense
+// index (for example, cuVS) to reuse the native scalar-index semantics.
+struct FilterResult {
+  uint64_t eligible_count = 0;
+  std::vector<uint32_t> bitset_words;
+};
+
 struct StateResult {
   uint64_t update_timestamp = 0;
   uint64_t element_count = 0;

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """CLI search operation tests (find, search, grep, glob)."""
 
+import time
+
 import pytest
 from conftest import ov, skip_if_auth_error
 
@@ -115,7 +117,7 @@ class TestSearchGlob:
     def test_glob_with_uri(self, test_dir_uri):
         r = None
         for _attempt in range(5):
-            r = ov(["glob", "*.md", "-u", test_dir_uri, "-o", "json"])
+            r = ov(["glob", "**/*.md", "-u", test_dir_uri, "-o", "json"])
             if r["exit_code"] == 0:
                 break
             time.sleep(10)

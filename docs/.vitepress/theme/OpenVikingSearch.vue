@@ -22,7 +22,7 @@ type RemoteSearchResponse =
   | { ok: true; results: DocsSearchResult[] }
   | { ok: false; reason: RemoteSearchFailureReason }
 
-const PRODUCTION_SEARCH_URL = 'https://openviking.ai/studio/gateway/docs/search'
+const PRODUCTION_SEARCH_URL = 'https://openviking.net/studio/gateway/docs/search'
 const SEARCH_LIMIT = 8
 const REMOTE_SEARCH_DEBOUNCE_MS = 1000
 const REMOTE_SEARCH_TIMEOUT_MS = 15000

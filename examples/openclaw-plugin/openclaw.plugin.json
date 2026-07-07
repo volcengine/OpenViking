@@ -98,6 +98,11 @@
       "placeholder": "${OPENVIKING_API_KEY}",
       "help": "Optional API key for OpenViking server"
     },
+    "headers": {
+      "label": "Headers",
+      "advanced": true,
+      "help": "Optional HTTP headers merged into every OpenViking request."
+    },
     "accountId": {
       "label": "Account ID",
       "placeholder": "(derived from API key)",
@@ -286,6 +291,12 @@
       },
       "apiKey": {
         "type": "string"
+      },
+      "headers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
       },
       "accountId": {
         "type": "string"

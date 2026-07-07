@@ -1,7 +1,12 @@
 {
   "mcpServers": {
     "openviking-memory": {
-      "url": "http://127.0.0.1:1933/mcp"
+      "command": "node",
+      "args": [
+        "servers/mcp-proxy.mjs"
+      ],
+      "cwd": ".",
+      "startup_timeout_sec": 30
     }
   }
 }

@@ -8,6 +8,8 @@ export type MemoryOpenVikingConfig = {
   peer_role?: "none" | "assistant" | "person";
   peer_prefix?: string;
   apiKey?: string;
+  /** Optional HTTP headers merged into every OpenViking request. */
+  headers?: Record<string, string>;
   /** Advanced option. Only needed when explicitly sending tenant identity headers. With a user key the server derives identity from the key. */
   accountId?: string;
   /** Advanced option. Only needed when explicitly sending tenant identity headers. */
@@ -288,6 +290,24 @@ function toRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function toStringRecord(value: unknown, label: string): Record<string, string> {
+  if (value === undefined || value === null) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(record)) {
+    if (typeof val !== "string") {
+      throw new Error(`${label}.${key} must be a string`);
+    }
+    out[key] = val;
+  }
+  return out;
+}
+
 function expandToolSelectors(value: unknown, fallback: string[], label: string): OpenVikingToolName[] {
   const entries = toStringArray(value, fallback);
   const seen = new Set<OpenVikingToolName>();
@@ -385,6 +405,7 @@ export const memoryOpenVikingConfigSchema = {
         "peer_prefix",
         "serverAuthMode",
         "apiKey",
+        "headers",
         "accountId",
         "userId",
         "targetUri",
@@ -488,6 +509,7 @@ export const memoryOpenVikingConfigSchema = {
       peer_role: peerRole,
       peer_prefix: peerPrefix,
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
+      headers: toStringRecord(cfg.headers, "openviking config headers"),
       accountId,
       userId,
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
@@ -657,6 +679,11 @@ export const memoryOpenVikingConfigSchema = {
       sensitive: true,
       placeholder: "${OPENVIKING_API_KEY}",
       help: "Optional API key for OpenViking server",
+    },
+    headers: {
+      label: "Headers",
+      advanced: true,
+      help: "Optional HTTP headers merged into every OpenViking request.",
     },
     accountId: {
       label: "Account ID",

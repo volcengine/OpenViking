@@ -2,24 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Scrapy spider for recursive web resource import."""
 
-import asyncio
 import os
 from collections.abc import Iterator
 from urllib.parse import urljoin, urlparse
 
 import scrapy
 from parsel import Selector
-from scrapy import signals
 from scrapy.exceptions import CloseSpider
 
 from openviking.parse.accessors.http_accessor import URLType, URLTypeDetector
 from openviking.parse.accessors.web_crawler.config import CrawlConfig
 from openviking.parse.accessors.web_crawler.models import CrawledDownload, CrawledPage
-from openviking.parse.accessors.web_crawler.playwright_renderer import PlaywrightRenderer
-from openviking.parse.accessors.web_crawler.render_heuristics import (
-    looks_like_unrendered_page,
-    should_render_with_playwright,
-)
 
 
 _DOWNLOAD_URL_TYPES = frozenset(
@@ -78,23 +71,9 @@ class OpenVikingWebSpider(scrapy.Spider):
         self.config = config
         self.collector = collector
         self.download_collector = download_collector
-        self.renderer = PlaywrightRenderer(config.request_validator)
         self.root_host = urlparse(root_url).netloc.lower()
         self._success_count = 0
         self._seen_download_urls: set[str] = set()
-        self._render_semaphore: asyncio.Semaphore | None = None
-
-    @classmethod
-    def from_crawler(cls, crawler, *args, **kwargs):
-        spider = super().from_crawler(crawler, *args, **kwargs)
-        crawler.signals.connect(spider._on_spider_closed, signal=signals.spider_closed)
-        return spider
-
-    async def _on_spider_closed(self, spider, reason):
-        try:
-            await asyncio.wait_for(self.renderer.close(), timeout=5.0)
-        except Exception:
-            pass
 
     def _success_at_limit(self) -> bool:
         return 0 < self.config.max_pages <= self._success_count
@@ -128,39 +107,6 @@ class OpenVikingWebSpider(scrapy.Spider):
             return
 
         page_html = response.text
-        page_source = "scrapy_static"
-        needs_render = self.config.fallback_playwright and should_render_with_playwright(
-            response.text
-        )
-        try:
-            if needs_render:
-                if self._render_semaphore is None:
-                    self._render_semaphore = asyncio.Semaphore(self.config.concurrency)
-                async with self._render_semaphore:
-                    if self._success_at_limit():
-                        return
-                    rendered = await self.renderer.render(
-                        final_url, self.config.playwright_timeout
-                    )
-                if rendered.is_success and rendered.html:
-                    final_url = rendered.final_url or final_url
-                    page_html = rendered.html
-                    page_source = "playwright"
-                elif rendered.error:
-                    self._add_failed(response.url, final_url, depth, rendered.error)
-                    return
-        except Exception as exc:
-            self._add_failed(response.url, final_url, depth, str(exc))
-            return
-
-        if needs_render and looks_like_unrendered_page(page_html):
-            self._add_failed(
-                response.url,
-                final_url,
-                depth,
-                "page did not render real content (empty shell or anti-bot challenge page)",
-            )
-            return
 
         if self._stop_if_success_at_limit():
             return
@@ -170,7 +116,7 @@ class OpenVikingWebSpider(scrapy.Spider):
                 final_url=final_url,
                 depth=depth,
                 html=page_html,
-                source=page_source,
+                source="scrapy_static",
             )
         )
         self._success_count += 1

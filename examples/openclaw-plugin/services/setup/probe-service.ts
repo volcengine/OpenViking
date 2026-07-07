@@ -1,3 +1,8 @@
+import {
+  resolveOpenVikingRequestHeaders,
+  type OpenVikingRequestHeaders,
+} from "../../request-headers.js";
+
 export type SetupNetworkTransport = (url: string, init: RequestInit) => Promise<Response>;
 
 export type SetupVersionCompatibility = "compatible" | "server_too_old" | "server_too_new" | "unknown";
@@ -27,8 +32,16 @@ export type SetupNetworkProbeOptions = {
 };
 
 export type SetupNetworkProbes = {
-  probeApiKeyType: (baseUrl: string, apiKey?: string) => Promise<SetupApiKeyProbeResult>;
-  checkServiceHealth: (baseUrl: string, apiKey?: string) => Promise<SetupHealthResult>;
+  probeApiKeyType: (
+    baseUrl: string,
+    apiKey?: string,
+    headers?: OpenVikingRequestHeaders,
+  ) => Promise<SetupApiKeyProbeResult>;
+  checkServiceHealth: (
+    baseUrl: string,
+    apiKey?: string,
+    headers?: OpenVikingRequestHeaders,
+  ) => Promise<SetupHealthResult>;
 };
 
 export const defaultSetupNetworkTransport: SetupNetworkTransport = (url, init) => fetch(url, init);
@@ -41,7 +54,11 @@ export function createSetupNetworkProbes({
   timeoutMs = 10_000,
 }: SetupNetworkProbeOptions): SetupNetworkProbes {
   return {
-    async probeApiKeyType(baseUrl: string, apiKey?: string): Promise<SetupApiKeyProbeResult> {
+    async probeApiKeyType(
+      baseUrl: string,
+      apiKey?: string,
+      configuredHeaders?: OpenVikingRequestHeaders,
+    ): Promise<SetupApiKeyProbeResult> {
       if (!apiKey) {
         return { keyType: "no_key", needsAccountId: false, needsUserId: false, detail: "No API key configured" };
       }
@@ -50,7 +67,10 @@ export function createSetupNetworkProbes({
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       const sessionsUrl = `${baseUrl.replace(/\/+$/, "")}/api/v1/sessions?limit=1`;
       try {
-        const headers: Record<string, string> = { "X-API-Key": apiKey };
+        const configuredRequestHeaders = resolveOpenVikingRequestHeaders({ headers: configuredHeaders });
+        const headers: Record<string, string> = {};
+        headers["X-API-Key"] = apiKey;
+        Object.assign(headers, configuredRequestHeaders);
         const response = await transport(sessionsUrl, {
           headers,
           signal: controller.signal,
@@ -82,6 +102,7 @@ export function createSetupNetworkProbes({
               "X-API-Key": apiKey,
               "X-OpenViking-Account": "__probe__",
               "X-OpenViking-User": "__probe__",
+              ...configuredRequestHeaders,
             };
             const probe2 = await transport(sessionsUrl, {
               headers: probeHeaders,
@@ -111,12 +132,20 @@ export function createSetupNetworkProbes({
       }
     },
 
-    async checkServiceHealth(baseUrl: string, apiKey?: string): Promise<SetupHealthResult> {
+    async checkServiceHealth(
+      baseUrl: string,
+      apiKey?: string,
+      configuredHeaders?: OpenVikingRequestHeaders,
+    ): Promise<SetupHealthResult> {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
+        const configuredRequestHeaders = resolveOpenVikingRequestHeaders({ headers: configuredHeaders });
         const headers: Record<string, string> = {};
-        if (apiKey) headers["X-API-Key"] = apiKey;
+        if (apiKey) {
+          headers["X-API-Key"] = apiKey;
+        }
+        Object.assign(headers, configuredRequestHeaders);
         const response = await transport(`${baseUrl.replace(/\/+$/, "")}/health`, {
           headers,
           signal: controller.signal,

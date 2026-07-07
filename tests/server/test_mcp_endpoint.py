@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
+from openviking.server.auth.plugins import DevAuthPlugin
 from openviking.server.dependencies import set_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.mcp_endpoint import (
@@ -31,6 +32,7 @@ from openviking.server.mcp_endpoint import (
     health,
     list_watches,
     read,
+    recall,
     remember,
     search,
 )
@@ -187,6 +189,38 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["score_threshold"] == 0.1
 
 
+async def test_recall_tool_returns_type_quota_memory_groups(service, monkeypatch):
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"].endswith("/events"):
+            return SimpleNamespace(
+                memories=[
+                    SimpleNamespace(
+                        uri="viking://user/test_user/memories/events/e.md",
+                        score=0.9,
+                        abstract="event abstract",
+                    )
+                ]
+            )
+        return SimpleNamespace(memories=[])
+
+    async def fake_read(uri, **kwargs):
+        del uri, kwargs
+        return "Summary: MCP recall event.\n2026-07-06 ChatLog: details"
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read", fake_read)
+
+    result = await recall(
+        query="what happened",
+        quotas={"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
+        max_chars=200,
+        min_score=0.1,
+    )
+
+    assert '<memory_group type="events"' in result
+    assert "MCP recall event." in result
+
+
 async def test_mcp_middleware_sets_actor_peer_context():
     async def downstream(scope, receive, send):
         ctx = _get_ctx()
@@ -203,6 +237,7 @@ async def test_mcp_middleware_sets_actor_peer_context():
 
     app = FastAPI()
     app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
     app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
 
     transport = httpx.ASGITransport(app=app)
@@ -222,6 +257,7 @@ async def test_mcp_middleware_rejects_invalid_actor_peer_header():
 
     app = FastAPI()
     app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
     app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
 
     transport = httpx.ASGITransport(app=app)
@@ -667,7 +703,7 @@ async def test_grep_case_insensitive(service):
 
 
 async def test_glob_no_matches(service):
-    result = await glob(pattern="zzz_nonexistent_*.xyz")
+    result = await glob(pattern="**/zzz_nonexistent_*.xyz")
     assert "No files found" in result
 
 
@@ -678,7 +714,7 @@ async def test_glob_match_all_md(service, client_with_resource):
 
 
 async def test_glob_with_uri_scope(service):
-    result = await glob(pattern="*", uri="viking://resources")
+    result = await glob(pattern="**/*", uri="viking://resources")
     assert isinstance(result, str)
 
 

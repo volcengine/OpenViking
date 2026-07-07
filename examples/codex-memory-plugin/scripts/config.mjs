@@ -9,10 +9,9 @@
  *
  * Tuning resolution remains env vars > ov.conf codex.* > built-in defaults.
  *
- * Mirrors the credential fields that Codex's streamable-HTTP MCP entry
- * receives from the shell wrapper. Aligning the resolver prevents identity
- * drift between auto-capture/auto-recall hooks, MCP calls, and child `ov`
- * commands launched from inside Codex.
+ * The stdio MCP proxy calls the same resolver directly. Aligning the resolver
+ * prevents identity drift between auto-capture/auto-recall hooks, MCP calls,
+ * and child `ov` commands launched from inside Codex.
  *
  * File-path env vars:
  *   OPENVIKING_CLI_CONFIG_FILE  alternate ovcli.conf path  (preferred)
@@ -197,6 +196,14 @@ export function loadConfig() {
     // user-only behavior can set OPENVIKING_CAPTURE_ASSISTANT_TURNS=0 or codex.captureAssistantTurns=false.
     captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cx.captureAssistantTurns !== false),
     captureLastAssistantOnStop: envBool("OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP") ?? (cx.captureLastAssistantOnStop !== false),
+    commitTokenThreshold: Math.max(1000, Math.floor(num(
+      process.env.OPENVIKING_COMMIT_TOKEN_THRESHOLD,
+      num(cx.commitTokenThreshold, 20000),
+    ))),
+    commitKeepRecentCount: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_COMMIT_KEEP_RECENT_COUNT,
+      num(cx.commitKeepRecentCount, 10),
+    ))),
 
     autoCommitOnCompact: envBool("OPENVIKING_AUTO_COMMIT_ON_COMPACT") ?? (cx.autoCommitOnCompact !== false),
     resumeArchiveInject: envBool("OPENVIKING_RESUME_ARCHIVE_INJECT") ?? (cx.resumeArchiveInject !== false),

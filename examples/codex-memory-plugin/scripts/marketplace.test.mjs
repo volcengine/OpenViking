@@ -5,12 +5,13 @@
  * These checks guard the `codex plugin marketplace add <owner>/OpenViking`
  * install path: the catalog must exist, be valid JSON, point at this plugin,
  * and the plugin's manifest / hooks / mcp wiring must stay consistent with the
- * marketplace-install assumptions (native ${PLUGIN_ROOT}, local-default url,
+ * marketplace-install assumptions (native ${PLUGIN_ROOT}, stdio MCP proxy,
  * no stale tool names).
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,7 +23,7 @@ const catalogPath = join(repoRoot, ".agents", "plugins", "marketplace.json");
 const manifestPath = join(pluginDir, ".codex-plugin", "plugin.json");
 
 const PLUGIN_NAME = "openviking-memory";
-const REAL_MCP_TOOLS = ["search", "store", "read", "list", "grep", "glob", "forget", "add_resource", "health"];
+const REAL_MCP_TOOLS = ["recall", "search", "store", "read", "list", "grep", "glob", "forget", "add_resource", "health"];
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
 
 function readJson(path) {
@@ -92,6 +93,21 @@ test("catalog source is local to the marketplace snapshot", () => {
   }
 });
 
+test("examples/.agents catalog backs the directory-marketplace install path", () => {
+  // The shared installer registers examples/ itself as a local marketplace in
+  // dev/archive mode, so a Codex catalog must exist there too and stay
+  // consistent with the repo-root one (same marketplace name -> same plugin id
+  // openviking-memory@openviking across all install modes).
+  const localCatalogPath = join(repoRoot, "examples", ".agents", "plugins", "marketplace.json");
+  assert.ok(existsSync(localCatalogPath), `missing catalog at ${localCatalogPath}`);
+  const localCatalog = readJson(localCatalogPath);
+  const rootCatalog = readJson(catalogPath);
+  assert.equal(localCatalog.name, rootCatalog.name, "examples/.agents catalog must keep the same marketplace name as the repo root");
+  const entry = localCatalog.plugins.find((p) => p && p.name === PLUGIN_NAME);
+  assert.ok(entry, `examples/.agents catalog must contain "${PLUGIN_NAME}"`);
+  assert.equal(resolve(repoRoot, "examples", sourcePath(entry.source)), pluginDir, "examples/.agents catalog source must resolve to this plugin directory");
+});
+
 test("required plugin files are present", () => {
   for (const rel of [".codex-plugin/plugin.json", ".mcp.json", "hooks/hooks.json"]) {
     assert.ok(existsSync(join(pluginDir, rel)), `missing required plugin file: ${rel}`);
@@ -104,7 +120,7 @@ test("plugin.json describes the real MCP tools, not the legacy names", () => {
   for (const legacy of LEGACY_TOOL_NAMES) {
     assert.ok(!longDesc.includes(legacy), `longDescription must not reference legacy tool name "${legacy}"`);
   }
-  for (const tool of ["search", "add_resource", "health"]) {
+  for (const tool of ["recall", "search", "add_resource", "health"]) {
     assert.ok(longDesc.includes(tool), `longDescription should mention real tool "${tool}"`);
   }
 });
@@ -125,18 +141,21 @@ test("hooks.json uses Codex's native ${PLUGIN_ROOT}, not the legacy placeholder"
   }
 });
 
-test(".mcp.json ships a concrete local-default url and omits bearer by default", () => {
+test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {
   const mcp = readJson(join(pluginDir, ".mcp.json"));
   const server = mcp.mcpServers?.[PLUGIN_NAME];
   assert.ok(server, `.mcp.json must define mcpServers["${PLUGIN_NAME}"]`);
-  assert.ok(/^https?:\/\//.test(server.url || ""), `.mcp.json url must be a concrete http(s) endpoint, got "${server.url}"`);
-  assert.ok(!String(server.url).includes("__OPENVIKING_MCP_URL__"), ".mcp.json must not keep the legacy url placeholder");
-  // Codex hard-fails MCP startup if bearer_token_env_var points at an unset var,
-  // so the checked-in (marketplace-default, unauthenticated) file must omit it.
-  assert.ok(!("bearer_token_env_var" in server), "checked-in .mcp.json should omit bearer_token_env_var for the local-default install");
+  assert.equal(server.command, "node");
+  assert.deepEqual(server.args, ["servers/mcp-proxy.mjs"]);
+  assert.equal(server.cwd, ".");
+  assert.equal(server.startup_timeout_sec, 30);
+  assert.ok(!("url" in server), ".mcp.json should not keep streamable-HTTP url wiring");
+  assert.ok(!("bearer_token_env_var" in server), ".mcp.json should not require Codex env-var bearer wiring");
+
+  execFileSync("node", ["--check", join(pluginDir, "servers", "mcp-proxy.mjs")], { stdio: "pipe" });
 });
 
 test("plugin.json keeps the canonical tool list available for reference", () => {
   // Sanity: the documented tool set is the one we assert against above.
-  assert.equal(REAL_MCP_TOOLS.length, 9);
+  assert.equal(REAL_MCP_TOOLS.length, 10);
 });

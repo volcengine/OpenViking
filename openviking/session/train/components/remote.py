@@ -213,6 +213,7 @@ class RemoteRolloutExecutor:
         transient_errors = 0
         missing_execution_errors = 0
         last_transient_error: BaseException | None = None
+        last_transient_response: httpx.Response | None = None
         while True:
             try:
                 response = await client.get(f"/v1/rollouts/executions/{execution_id}")
@@ -244,6 +245,17 @@ class RemoteRolloutExecutor:
                     min(self.poll_interval_seconds * missing_execution_errors, 10.0)
                 )
                 continue
+            if _is_retryable_poll_response(response):
+                transient_errors += 1
+                last_transient_response = response
+                if loop.time() >= deadline:
+                    raise TimeoutError(
+                        f"rollout execution {execution_id} polling timed out for case {case.name} "
+                        f"after {self.execution_timeout_seconds}s; last polling response: "
+                        f"{response.status_code} {_response_text(response)}"
+                    )
+                await asyncio.sleep(min(self.poll_interval_seconds * transient_errors, 10.0))
+                continue
             response.raise_for_status()
             data = response.json()
             status = data.get("status")
@@ -262,7 +274,12 @@ class RemoteRolloutExecutor:
                     f"; last polling error: {type(last_transient_error).__name__}: "
                     f"{last_transient_error}"
                     if last_transient_error is not None
-                    else ""
+                    else (
+                        f"; last polling response: {last_transient_response.status_code} "
+                        f"{_response_text(last_transient_response)}"
+                        if last_transient_response is not None
+                        else ""
+                    )
                 )
                 raise TimeoutError(
                     f"rollout execution {execution_id} timed out for case {case.name} "
@@ -301,6 +318,10 @@ def _require_execution_id(data: dict[str, Any], *, case: Case) -> str:
     if not isinstance(execution_id, str) or not execution_id:
         raise RuntimeError(f"rollout service did not return execution_id for case {case.name}")
     return execution_id
+
+
+def _is_retryable_poll_response(response: httpx.Response) -> bool:
+    return response.status_code == 408 or response.status_code == 429 or response.status_code >= 500
 
 
 def _response_text(response: httpx.Response, *, max_chars: int = 500) -> str:

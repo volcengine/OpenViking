@@ -73,18 +73,12 @@ docker-compose -f bot/deploy/docker/langfuse/docker-compose.yml ps
 
 ## 5. Install Langfuse Python Support
 
-`vikingbot` only sends Langfuse traces when the optional Langfuse dependency is installed.
+Langfuse support is already included by default in the `[bot]` installation.
 
-From the repository root, install it with:
-
-```bash
-uv pip install -e ".[bot,bot-langfuse]"
-```
-
-If your environment already has the main bot dependencies installed, the smaller install also works:
+If for some reason it's not installed, you can install it with:
 
 ```bash
-uv pip install -e ".[bot-langfuse]"
+uv pip install langfuse>=3.0.0
 ```
 
 ---
@@ -216,7 +210,7 @@ If you use `docker-compose`, replace the command accordingly.
 
 Check the following first:
 
-1. `uv pip install -e ".[bot-langfuse]"` or `uv pip install -e ".[bot,bot-langfuse]"` has been run in the active environment
+1. Langfuse is installed in the active environment (`langfuse>=3.0.0` required, already included by default with `[bot]`)
 2. `bot.langfuse.enabled` is `true` in `~/.openviking/ov.conf`
 3. `secret_key`, `public_key`, and `base_url` match the local deployment values
 4. `openviking-server --with-bot` was restarted after the config change

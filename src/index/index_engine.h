@@ -24,6 +24,10 @@ class IndexEngine {
 
   SearchResult search(const SearchRequest& req);
 
+  int set_filter_layout(const std::vector<uint64_t>& ordered_labels);
+
+  FilterResult evaluate_filter(const std::string& dsl);
+
   int64_t dump(const std::string& dir);
 
   StateResult get_state();

@@ -226,7 +226,7 @@ class HierarchicalRetriever:
             # Step 3: Pick recursive entry points from directory hits and explicit roots.
             directory_scores = [self._finite_score(r.get("_score", 0.0)) for r in global_results]
             if self._rerank_client and mode == RetrieverMode.THINKING:
-                directory_scores = self._rerank_scores(
+                directory_scores = await self._rerank_scores(
                     query.query,
                     [str(r.get("abstract", "")) for r in global_results],
                     directory_scores,
@@ -318,7 +318,7 @@ class HierarchicalRetriever:
             return score >= threshold
         return score > threshold
 
-    def _rerank_scores(
+    async def _rerank_scores(
         self,
         query: str,
         documents: List[str],
@@ -329,7 +329,7 @@ class HierarchicalRetriever:
             return fallback_scores
 
         try:
-            scores = self._rerank_client.rerank_batch(query, documents)
+            scores = await asyncio.to_thread(self._rerank_client.rerank_batch, query, documents)
         except Exception as e:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
@@ -453,7 +453,7 @@ class HierarchicalRetriever:
                 query_scores = [self._finite_score(r.get("_score", 0.0)) for r in results]
                 if self._rerank_client and mode == RetrieverMode.THINKING:
                     documents = [str(r.get("abstract", "")) for r in results]
-                    query_scores = self._rerank_scores(query, documents, query_scores)
+                    query_scores = await self._rerank_scores(query, documents, query_scores)
 
                 for r, score in zip(results, query_scores, strict=True):
                     uri = r.get("uri", "")

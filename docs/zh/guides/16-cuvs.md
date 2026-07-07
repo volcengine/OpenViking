@@ -1,0 +1,229 @@
+# 使用 NVIDIA cuVS 进行本地向量检索
+
+OpenViking 的 `cuvs` 后端保留本地后端的记录持久化、标量索引、稀疏检索和故障恢复，只把 dense vector search 交给 NVIDIA cuVS。这样可以先验证 GPU 检索链路，而不需要重新实现一个完整的向量数据库。
+
+## 环境要求
+
+- Linux x86_64 或 aarch64
+- 可见的 NVIDIA GPU；cuVS 26.06 预编译包要求 Ampere 或更新架构
+- CUDA 12.2+；安装与本机 CUDA 大版本匹配的 Python 包
+- Python 3.11+（cuVS 26.06 的 Python wheel 要求）
+
+CUDA 12：
+
+```bash
+pip install -e .
+pip install cuvs-cu12 'cupy-cuda12x[ctk]' --extra-index-url=https://pypi.nvidia.com
+```
+
+CUDA 13：
+
+```bash
+pip install -e .
+pip install cuvs-cu13 'cupy-cuda13x[ctk]' --extra-index-url=https://pypi.nvidia.com
+```
+
+CuPy 的 `[ctk]` extra 会安装 cuVS Python 互操作路径所需的 CUDA toolkit
+headers；即使宿主机已有 CUDA driver、但没有完整 toolkit，也建议保留该 extra。
+
+## 配置
+
+先用 `brute_force` 跑通精确检索：
+
+```json
+{
+  "storage": {
+    "workspace": "/data/openviking",
+    "vectordb": {
+      "backend": "cuvs",
+      "distance_metric": "cosine",
+      "cuvs": {
+        "algorithm": "brute_force",
+        "fallback_to_native": true,
+        "filter_cache_size": 16
+      }
+    }
+  }
+}
+```
+
+数据量增大后可以切换到 CAGRA，并直接传入 cuVS 的构建与查询参数：
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "cuvs",
+      "cuvs": {
+        "algorithm": "cagra",
+        "build_params": {
+          "graph_degree": 64,
+          "intermediate_graph_degree": 128,
+          "build_algo": "nn_descent"
+        },
+        "search_params": {
+          "itopk_size": 64,
+          "search_width": 1
+        }
+      }
+    }
+  }
+}
+```
+
+### 显存感知自动模式
+
+如果希望保留 `local` 为默认 backend、只在 GPU 有足够空闲显存时自动启用 cuVS，
+可以打开以下开关：
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "local",
+      "cuvs": {
+        "auto_enable": true,
+        "algorithm": "brute_force",
+        "auto_memory_reserve_mb": 1024,
+        "auto_memory_safety_factor": 2.0,
+        "auto_filter_native_threshold": 2000,
+        "auto_path_filter_native_threshold": 200
+      }
+    }
+  }
+}
+```
+
+每次 lazy build/rebuild 前，auto 模式会读取当前空闲显存，并估算 float32 vector
+payload、CAGRA graph/intermediate graph（如适用）和 filter-bitset cache，再乘以
+`auto_memory_safety_factor`，同时保留 `auto_memory_reserve_mb`。如果预算不足，
+或者 cuVS/GPU 不可用，本次查询继续使用未改变的 native index；cuVS index 保持
+dirty，后续查询会在显存释放后重新尝试。通过 admission 后若仍遇到 GPU allocation
+failure，也会回退 native。显式配置 `backend: "cuvs"` 时仍保持 fail-fast，不经过
+这层自动判断。
+
+auto 模式还会使用 native scalar index 返回的候选数做 filtered query 延迟路由：
+候选数不超过 `auto_filter_native_threshold` 时使用 native vector recall；路径过滤
+采用更低的 `auto_path_filter_native_threshold`，因为宽 URI 子树的 Trie 遍历和
+bitmap union 本身可能占主要开销。默认阈值分别为 2,000 和 200，设为 0 可关闭
+对应路由。阈值与硬件、维度和工作负载有关。显式 `backend: "cuvs"` 对支持的
+dense query 仍固定使用 cuVS。
+
+## GPU 显存占用
+
+当前 GPU shadow 是 float32，因此 brute-force 的主要常驻 payload 为
+`N * dimension * 4` bytes。CAGRA 还需要约 `N * graph_degree * 4` bytes
+保存 graph，构建期间可能需要 `N * intermediate_graph_degree * 4` bytes 的
+intermediate graph。每个缓存 filter bitset 约占 `ceil(N / 32) * 4` bytes。
+
+之前的 index-only 测试使用 `cudaMemGetInfo` 记录 build 前后的显存增量；下表每项
+均为 5 个干净进程的中位数：
+
+| 数据集 | cuVS 算法 | 实测 GPU 增量 |
+| --- | --- | ---: |
+| 100K x 768D | brute-force | 294 MiB |
+| 1M x 768D | brute-force | 2.9 GiB |
+| 100K x 1024D | brute-force | 392 MiB |
+| 1M x 1024D | brute-force | 3.9 GiB |
+| 1,183,514 x 100D | brute-force | 452 MiB |
+| 1,183,514 x 100D | CAGRA | 872 MiB |
+
+这些数值是 build 完成后的常驻增量，不是采样得到的 peak VRAM。allocator 状态、
+cuVS 版本、CAGRA 参数、query batch 和并行 GPU workload 都可能进一步提高峰值；
+它们也不包含这些进程在 build 前观测到的约 327 MiB CUDA runtime/context 基线。
+因此 auto 模式会先初始化 runtime、读取剩余空闲显存，再应用保守 safety factor
+和独立 reserve，而不会只按 vector payload 准入。
+
+距离语义与原本的 OpenViking 本地后端保持一致：cosine 会先做 L2 归一化再执行 inner product；L2 的返回分数仍为 `1 - squared_l2`，分数越大越相似。
+
+## 数据类型与原生索引行为
+
+启用 cuVS 不会改变 OpenViking 的默认后端，也不会重写原生 CPU 索引。正常的
+collection metadata 仍为 `VectorIndex.Quant=int8`，因此 native fallback
+继续使用现有的、带逐向量 scale 的 int8 量化。与此同时，当前 cuVS runtime
+在 GPU 上保留 float32 shadow，因为 cuVS Python brute-force API 支持
+float32/float16，但不能直接表示 OpenViking 的 scaled-int8 record 格式。
+
+所以两条 dense search 路径不是等内存、等数值语义的比较：native 是在 CPU
+量化表示上的精确检索，cuVS brute-force 是在保留的 float32 向量上的精确检索，
+两者可能出现少量 score 或 neighbor ordering 差异。Benchmark 必须同时报告
+两边的数据类型和 Recall@K，不能将结果描述为 equal-dtype 或 equal-memory。
+这是首版 opt-in 集成的有意边界，现有 CPU 行为保持不变。auto 模式会根据 filter
+候选阈值在两种表示之间选择；要求固定数值表示的应用应使用显式 backend，或将
+native 路由阈值设为 0。
+
+GPU 低精度存储作为后续显式能力实现，不做隐式 cast。第一步可以让 cuVS dataset
+与 query 可配置为 float16，并以 float32 为 ground truth 测 Recall@K。与 native
+兼容的 int8 需要单独设计，因为 OpenViking 使用逐向量 scale，而 cuVS
+brute-force 不能直接接收这种 scaled-int8 表示。CAGRA int8 或 PQ compression
+也应作为近似模式，单独报告 recall/latency/memory frontier。
+
+## 最小功能验证
+
+仓库提供的 smoke test 不依赖 embedding 或 VLM 服务：
+
+```bash
+python examples/cuvs_smoke.py
+
+# 验证 CAGRA 图索引
+python examples/cuvs_smoke.py --algorithm cagra
+```
+
+核心调用方式如下：
+
+```python
+from openviking.storage.vectordb.collection.local_collection import (
+    get_or_create_local_collection,
+)
+
+collection = get_or_create_local_collection(
+    meta_data={
+        "CollectionName": "cuvs_smoke",
+        "Fields": [
+            {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+            {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            {"FieldName": "account_id", "FieldType": "string"},
+            {"FieldName": "uri", "FieldType": "path"},
+        ],
+    },
+    config={
+        "dense_search": {
+            "backend": "cuvs",
+            "algorithm": "brute_force",
+            "fallback_to_native": True,
+        }
+    },
+)
+collection.create_index(
+    "default",
+    {
+        "IndexName": "default",
+        "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+        "ScalarIndex": ["account_id", "uri"],
+    },
+)
+collection.upsert_data(
+    [
+        {"id": "a", "vector": [1, 0, 0, 0], "account_id": "demo", "uri": "/docs/a"},
+        {"id": "b", "vector": [0, 1, 0, 0], "account_id": "demo", "uri": "/docs/b"},
+    ]
+)
+result = collection.search_by_vector(
+    "default",
+    dense_vector=[1, 0, 0, 0],
+    limit=2,
+    filters={"op": "must", "field": "account_id", "conds": ["demo"]},
+)
+assert [item.id for item in result.data] == ["a", "b"]
+collection.close()
+```
+
+## 当前阶段的限制
+
+- cuVS 只接管 pure dense search；sparse/hybrid query 在 `fallback_to_native=true` 时走原生本地索引。
+- local 集成通过 native scalar/path index 生成 prefilter，因此继承原生 DSL、`date_time`、`geo_point` 和 path depth 的过滤语义，而不是在 Python 重复实现。
+- 每次 GPU rebuild 会向 native engine 注册一次 cuVS label 顺序。新过滤条件直接复用 native scalar/path index 的 bitmap，再投影为 cuVS row bitset，不再用 Python 扫描所有 host-side records。
+- `filter_cache_size` 会保留最近使用的 GPU bitset 或 native 路由决策，并在数据更新时失效。
+- 每次 upsert/delete 后会在下一次查询时重建 GPU 索引。这保证了首版更新语义正确，但不适合写密集负载。
+- cuVS 索引不作为权威持久化数据；进程重启时会从 OpenViking 本地 store 重建，因此不受 cuVS 跨版本序列化格式变化影响。
+- `brute_force` 适合功能对齐和 ground truth；CAGRA 的 graph/search 参数需要在后续结合召回率、QPS、延迟和显存进行调优。

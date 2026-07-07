@@ -136,13 +136,21 @@ machine, no sweep ever runs and the OV session stays open server-side
 forever. Accepted. Future work could add an MCP tool
 `openviking_commit_pending` so the model can commit explicitly.
 
-## Stop hook — append only, no commit
+## Stop hook — append + threshold commit
 
 Every `Stop` reads `transcript_path`, slices to `[capturedTurnCount, end)`,
 and appends each new user/assistant turn to the OV session for this codex
 `session_id` (the `/messages` endpoint auto-creates it on first append).
 State is updated:
-`{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`. Never commits.
+`{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`.
+
+After a successful append, Stop reads session meta and commits when
+`pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default 20000).
+The threshold commit passes
+`keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default 10) so
+the newest turns stay live after archive/extract. This keeps long-running
+sessions from waiting until PreCompact/SessionStart while still avoiding
+commit-on-every-turn fragmentation.
 
 ## Injected context boundary
 

@@ -6,49 +6,45 @@ Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/
 
 ## Install
 
+Claude Code and Codex share one installer. It asks for your language (English/中文), which harnesses to install, the download source, and your OpenViking credentials; every step is idempotent.
+
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/codex-memory-plugin/setup-helper/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
 ```
 
-The installer checks dependencies, configures the OpenViking connection, and registers the plugin. Every step is idempotent.
-
-In regions where GitHub is hard to reach, use the equivalent command below:
+In regions where GitHub is hard to reach, run the same installer from the Volcengine TOS mirror (or pick "TOS mirror" at the download-source prompt). Codex installs from a TOS-hosted git repo and keeps remote update support:
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/codex-memory-plugin/tos-install.sh)
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
 ```
 
-After installation, activate the `codex` wrapper in your current terminal (or open a new terminal window):
+No shell wrapper is needed anymore — the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` (or `OPENVIKING_*` env vars) at runtime, same as the hooks. After installing:
 
 ```bash
-source ~/.openviking/openviking-repo/examples/codex-memory-plugin/setup-helper/wrapper.sh
 codex              # First run: approve hooks once when prompted via /hooks
 ```
-
-> Launch Codex through a custom command? A wrapper script like `codex-custom`, or a multi-word launcher (a base command plus a sub-command) — list it at the installer's "Extra launch commands" step (or pass `OPENVIKING_CODEX_WRAP_EXTRA='codex-custom'`) to inject credentials there too.
 
 <details>
 <summary><b>Manual setup</b></summary>
 
-Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `codex_hooks` feature enabled.
+Prerequisites: Node.js >= 22, Codex >= 0.130.0, and the `plugin_hooks` feature enabled.
 
-1. **Shell function wrapper** — Source the plugin wrapper from your shell profile (e.g., `.bashrc` or `.zshrc`) so Codex receives the active `ovcli.conf` credentials, MCP is re-rendered, and stale inherited credential env vars are stripped. See the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) for the snippet.
+1. **Configure the connection** — write `~/.openviking/ovcli.conf` (`url`, `api_key`, optional `account`/`user`), or run the bundled wizard `node <plugin-dir>/scripts/setup.mjs` after installing.
 
-2. **Plugin installation** — Register a local marketplace and enable the plugin. See `setup-helper/install.sh` for the exact commands.
+2. **Install the plugin** from the remote marketplace:
 
-3. **Placeholder rendering** — The provided `.mcp.json` and `hooks.json` files contain placeholders that must be substituted when copied to Codex's plugin cache. The automated installer handles this for you.
+   ```bash
+   codex plugin marketplace add volcengine/OpenViking
+   codex plugin add openviking-memory@openviking
+   ```
+
+   Then enable plugin hooks in `~/.codex/config.toml` if your build doesn't already: `[features]` → `plugin_hooks = true`. Update later with `codex plugin marketplace upgrade openviking`.
 
 </details>
 
 ## Verify
 
-```bash
-type codex         # Expectation: codex is a shell function
-```
-
-> If the previous command printed a path instead of `shell function`, the wrapper isn't active yet. Re-source it (or open a new terminal) before launching, otherwise Codex may start without the credentials needed by MCP.
-
-Once inside Codex, the plugin should seamlessly recall memories on every prompt. Set `OPENVIKING_DEBUG=1` to write events to `~/.openviking/logs/codex-hooks.log`.
+Launch `codex`; the plugin should seamlessly recall memories on every prompt. Set `OPENVIKING_DEBUG=1` to write events to `~/.openviking/logs/codex-hooks.log`.
 
 ## How it works
 
@@ -59,7 +55,7 @@ The plugin integrates with Codex's lifecycle by hooking into key events. It sear
 <details>
 <summary><b>Configuration</b></summary>
 
-Credential source: active `ovcli.conf` wins by default (`OPENVIKING_CLI_CONFIG_FILE` or `~/.openviking/ovcli.conf`), so `ov config switch <name>` changes hooks, MCP, and child `ov` commands together on the next launch. Set `OPENVIKING_CREDENTIAL_SOURCE=env` only when you intentionally want env vars to override the CLI config; the wrapper then writes a mode-0600 runtime ovcli config under `~/.openviking/codex-plugin-state/` so child `ov` commands still match. Without an ovcli config, env vars then `ov.conf` then built-in defaults are used.
+Credential source: active `ovcli.conf` wins by default (`OPENVIKING_CLI_CONFIG_FILE` or `~/.openviking/ovcli.conf`), so `ov config switch <name>` changes hooks, MCP proxy, and child `ov` commands together on the next launch. Set `OPENVIKING_CREDENTIAL_SOURCE=env` only when you intentionally want env vars to override the CLI config. Without an ovcli config, env vars then `ov.conf` then built-in defaults are used.
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
@@ -79,13 +75,11 @@ Additional tuning options (e.g., `OPENVIKING_RECALL_LIMIT`, `OPENVIKING_CAPTURE_
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `MCP server is not logged in` | Credentials were not injected at Codex launch, or the active ovcli config has no `api_key` for an authenticated server | Ensure the `codex()` shell function is sourced and `ovcli.conf` contains a valid `api_key`. |
-| `type codex` shows a path instead of a shell function (wrapper inactive) | The rc wasn't `source`d after install, or you launched from a terminal that didn't load it | Run `source ~/.zshrc` (or `~/.bashrc` on bash), or open a new terminal |
-| Launching via an alias (e.g. `cx`) injects no credentials | The alias *name* was listed in `OPENVIKING_CODEX_WRAP_EXTRA` (alias names are skipped), or the alias's target command isn't wrapped | Wrap the command the alias points to, not the alias: `alias cx=codex` needs nothing; for `alias cx=codex-custom`, add `codex-custom` |
+| MCP tool calls fail with an auth error | The active ovcli config has no valid `api_key` for an authenticated server | Fix `~/.openviking/ovcli.conf` (or run `node <plugin-dir>/scripts/setup.mjs`) and restart Codex; the stdio proxy re-reads it on launch and after auth failures. |
+| MCP tool calls fail with a connection error | Server unreachable or the URL is wrong | Check the endpoint: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
 | `4 hooks need review` | Security review on first launch | Run `/hooks` within Codex and approve the hooks. |
-| `hook (failed) exited with code 1` | Stale placeholders in the plugin cache | Re-run the one-line installer. |
-| Recall returns nothing | Server is unreachable or the URL is incorrect | Check the endpoint: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| Hook 401 but MCP works (or vice versa) | Cached MCP config or launch env is stale | Restart Codex through the wrapper. If you intentionally use env credentials, set `OPENVIKING_CREDENTIAL_SOURCE=env`; otherwise use `ov config switch <name>` or `OPENVIKING_CLI_CONFIG_FILE`. |
+| Plugin still targets an old server after `ov config switch` | Codex keeps the proxy process from the previous session | Restart Codex; the proxy resolves credentials at startup. |
+| Hooks use one server, MCP another | `OPENVIKING_CREDENTIAL_SOURCE=env` set with stale env vars in one context | Unset it (ovcli.conf then drives both), or make the env vars consistent. |
 
 ## See also
 

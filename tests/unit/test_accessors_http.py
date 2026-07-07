@@ -16,6 +16,7 @@ def _mock_config():
         code=SimpleNamespace(
             github_domains=["github.com", "www.github.com"],
             gitlab_domains=["gitlab.com", "www.gitlab.com"],
+            github_raw_domain="raw.githubusercontent.com",
             azure_devops_domains=[
                 "dev.azure.com",
                 "ssh.dev.azure.com",
@@ -288,3 +289,63 @@ class TestHTTPAccessorPriorityRouting:
         assert len(accessors) == 2
         assert accessors[0].__class__.__name__ == "GitAccessor"
         assert accessors[1].__class__.__name__ == "HTTPAccessor"
+
+
+class TestHTTPAccessorRawUrlConversion:
+    """Tests for HTTPAccessor._convert_to_raw_url (GitHub/GitLab blob -> raw)."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_config(self):
+        with patch(
+            "openviking_cli.utils.config.open_viking_config.OpenVikingConfigSingleton.get_instance",
+            side_effect=_mock_config,
+        ):
+            yield
+
+    @pytest.fixture
+    def accessor(self) -> HTTPAccessor:
+        return HTTPAccessor()
+
+    def test_github_blob_conversion(self, accessor: HTTPAccessor) -> None:
+        blob_url = "https://github.com/volcengine/OpenViking/blob/main/docs/design.md"
+        expected = "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/design.md"
+        assert accessor._convert_to_raw_url(blob_url) == expected
+
+        blob_deep = "https://github.com/user/repo/blob/feature/branch/src/components/Button.tsx"
+        expected_deep = (
+            "https://raw.githubusercontent.com/user/repo/feature/branch/src/components/Button.tsx"
+        )
+        assert accessor._convert_to_raw_url(blob_deep) == expected_deep
+
+    def test_github_non_blob_urls(self, accessor: HTTPAccessor) -> None:
+        repo_root = "https://github.com/volcengine/OpenViking"
+        assert accessor._convert_to_raw_url(repo_root) == repo_root
+
+        issue_url = "https://github.com/volcengine/OpenViking/issues/1"
+        assert accessor._convert_to_raw_url(issue_url) == issue_url
+
+        raw_url = "https://raw.githubusercontent.com/volcengine/OpenViking/main/README.md"
+        assert accessor._convert_to_raw_url(raw_url) == raw_url
+
+    def test_gitlab_blob_conversion(self, accessor: HTTPAccessor) -> None:
+        blob_url = "https://gitlab.com/gitlab-org/gitlab/-/blob/master/README.md"
+        expected = "https://gitlab.com/gitlab-org/gitlab/-/raw/master/README.md"
+        assert accessor._convert_to_raw_url(blob_url) == expected
+
+        blob_deep = "https://gitlab.com/group/project/-/blob/dev/src/main.rs"
+        expected_deep = "https://gitlab.com/group/project/-/raw/dev/src/main.rs"
+        assert accessor._convert_to_raw_url(blob_deep) == expected_deep
+
+    def test_gitlab_non_blob_urls(self, accessor: HTTPAccessor) -> None:
+        root = "https://gitlab.com/gitlab-org/gitlab"
+        assert accessor._convert_to_raw_url(root) == root
+
+        issue = "https://gitlab.com/gitlab-org/gitlab/-/issues/123"
+        assert accessor._convert_to_raw_url(issue) == issue
+
+    def test_other_domains(self, accessor: HTTPAccessor) -> None:
+        url = "https://example.com/blob/main/file.txt"
+        assert accessor._convert_to_raw_url(url) == url
+
+        bitbucket = "https://bitbucket.org/user/repo/src/master/README.md"
+        assert accessor._convert_to_raw_url(bitbucket) == bitbucket

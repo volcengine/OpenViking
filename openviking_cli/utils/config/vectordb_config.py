@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -76,6 +76,81 @@ class QdrantConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class CuVSConfig(BaseModel):
+    """Configuration for GPU dense-vector search through NVIDIA cuVS."""
+
+    algorithm: Literal["brute_force", "cagra"] = Field(
+        default="brute_force",
+        description=(
+            "cuVS index algorithm. Start with brute_force for functional validation; "
+            "use cagra for approximate search at larger scale."
+        ),
+    )
+    build_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional keyword arguments passed to cuVS CAGRA IndexParams.",
+    )
+    search_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional keyword arguments passed to cuVS CAGRA SearchParams.",
+    )
+    fallback_to_native: bool = Field(
+        default=True,
+        description=(
+            "Use OpenViking's native local index for sparse/hybrid search or other "
+            "operations outside cuVS dense top-k."
+        ),
+    )
+    auto_enable: bool = Field(
+        default=False,
+        description=(
+            "When the VectorDB backend is 'local', automatically use cuVS dense search "
+            "only when a visible GPU has enough free memory. The default is disabled."
+        ),
+    )
+    auto_memory_reserve_mb: int = Field(
+        default=1024,
+        ge=0,
+        description=("Free GPU memory kept outside the cuVS auto-admission budget, in MiB."),
+    )
+    auto_memory_safety_factor: float = Field(
+        default=2.0,
+        ge=1.0,
+        description=(
+            "Multiplier applied to the estimated cuVS vector, graph, build, and filter "
+            "memory before auto-enabling GPU search."
+        ),
+    )
+    auto_filter_native_threshold: int = Field(
+        default=2000,
+        ge=0,
+        description=(
+            "In cuVS auto mode, route filtered queries with at most this many "
+            "eligible vectors to the native index. Set to zero to disable "
+            "latency-aware filter routing."
+        ),
+    )
+    auto_path_filter_native_threshold: int = Field(
+        default=200,
+        ge=0,
+        description=(
+            "In cuVS auto mode, use this lower native-routing threshold for path "
+            "filters, whose native Trie/bitmap construction cost can dominate wider "
+            "subtree queries. Set to zero to keep all path filters on cuVS."
+        ),
+    )
+    filter_cache_size: int = Field(
+        default=16,
+        ge=0,
+        description=(
+            "Maximum number of repeated scalar-filter bitsets retained on the GPU. "
+            "Set to zero to disable caching."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 _OPENGAUSS_MODES = {"standalone", "distributed"}
 
 
@@ -137,7 +212,7 @@ class VectorDBBackendConfig(BaseModel):
     backend: str = Field(
         default="local",
         description=(
-            "VectorDB backend type: 'local', 'http', "
+            "VectorDB backend type: 'local', 'cuvs', 'http', "
             "'volcengine' (AK/SK signed or API key data-plane only), "
             "'vikingdb' (private deployment), 'qdrant', or 'opengauss'"
         ),
@@ -198,6 +273,11 @@ class VectorDBBackendConfig(BaseModel):
         description="Qdrant configuration for 'qdrant' type",
     )
 
+    cuvs: Optional[CuVSConfig] = Field(
+        default_factory=CuVSConfig,
+        description="NVIDIA cuVS dense-vector search configuration for the 'cuvs' backend",
+    )
+
     opengauss: Optional[OpenGaussConfig] = Field(
         default_factory=OpenGaussConfig,
         description="openGauss configuration for 'opengauss' type",
@@ -213,7 +293,15 @@ class VectorDBBackendConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        standard_backends = ["local", "http", "volcengine", "vikingdb", "qdrant", "opengauss"]
+        standard_backends = [
+            "local",
+            "cuvs",
+            "http",
+            "volcengine",
+            "vikingdb",
+            "qdrant",
+            "opengauss",
+        ]
 
         # Allow custom backend classes (containing dot) without standard validation
         if "." in self.backend:
@@ -226,7 +314,7 @@ class VectorDBBackendConfig(BaseModel):
                 "or a valid Python class path."
             )
 
-        if self.backend == "local":
+        if self.backend in {"local", "cuvs"}:
             pass
 
         elif self.backend == "http":

@@ -183,7 +183,7 @@ _RICH_HTML = (
 
 class TestParseGate:
     async def test_early_return_when_limit_reached(self):
-        spider = _make_spider(CrawlConfig(max_pages=10, fallback_playwright=False))
+        spider = _make_spider(CrawlConfig(max_pages=10))
         spider._success_count = 10
         resp = _make_response(body=_RICH_HTML)
         items = await _drive_parse(spider, resp)
@@ -192,7 +192,7 @@ class TestParseGate:
         assert spider.collector == []
 
     async def test_appends_success_and_increments_count(self):
-        spider = _make_spider(CrawlConfig(max_pages=10, fallback_playwright=False))
+        spider = _make_spider(CrawlConfig(max_pages=10))
         resp = _make_response(body=_RICH_HTML)
         await _drive_parse(spider, resp)
         assert spider._success_count == 1
@@ -207,7 +207,6 @@ class TestParseGate:
                 depth=1,
                 max_pages=2,
                 skip_download_links=False,
-                fallback_playwright=False,
             )
         )
         body = (
@@ -225,7 +224,7 @@ class TestParseGate:
         assert items == []
 
     async def test_second_call_blocked_after_reaching_max(self):
-        spider = _make_spider(CrawlConfig(max_pages=1, fallback_playwright=False))
+        spider = _make_spider(CrawlConfig(max_pages=1))
         resp = _make_response(body=_RICH_HTML)
         await _drive_parse(spider, resp)
         assert spider._success_count == 1
@@ -235,7 +234,7 @@ class TestParseGate:
         assert len(success) == 1
 
     async def test_reaching_limit_closes_scrapy_engine(self):
-        spider = _make_spider(CrawlConfig(max_pages=1, fallback_playwright=False))
+        spider = _make_spider(CrawlConfig(max_pages=1))
         spider.crawler = MagicMock()
         spider.crawler.engine = MagicMock()
         resp = _make_response(body=_RICH_HTML)
@@ -248,7 +247,7 @@ class TestParseGate:
         assert len(spider.collector) == 1
 
     async def test_skipped_on_non_html_response(self):
-        spider = _make_spider(CrawlConfig(fallback_playwright=False))
+        spider = _make_spider(CrawlConfig())
         resp = _make_response(
             body=b"binary",
             headers={"content-type": b"application/octet-stream"},
@@ -261,7 +260,7 @@ class TestParseGate:
     async def test_failed_on_validator_rejecting_entry(self):
         def blocker(_):
             raise ValueError("blocked by SSRF")
-        spider = _make_spider(CrawlConfig(request_validator=blocker, fallback_playwright=False))
+        spider = _make_spider(CrawlConfig(request_validator=blocker))
         resp = _make_response(body=_RICH_HTML)
         await _drive_parse(spider, resp)
         assert spider._success_count == 0

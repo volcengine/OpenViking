@@ -18,6 +18,37 @@ on:
       - '.editorconfig'
 
 jobs:
+  plugin-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Run memory plugin tests
+        run: |
+          node --test \
+            examples/codex-memory-plugin/servers/mcp-proxy.test.mjs \
+            examples/codex-memory-plugin/scripts/auto-capture.test.mjs \
+            examples/codex-memory-plugin/scripts/marketplace.test.mjs \
+            examples/codex-memory-plugin/scripts/ov-credentials.test.mjs \
+            examples/codex-memory-plugin/scripts/recall-compressor-profile.test.mjs \
+            examples/codex-memory-plugin/scripts/auto-recall.test.mjs \
+            examples/claude-code-memory-plugin/scripts/marketplace.test.mjs \
+            examples/claude-code-memory-plugin/scripts/skill-experience.test.mjs \
+            examples/claude-code-memory-plugin/scripts/lib/pending-queue.test.mjs \
+            examples/memory-plugin-shared/sync.test.mjs
+
+      - name: Check installer scripts parse
+        run: |
+          bash -n examples/memory-plugin-shared/install.sh
+          bash -n examples/claude-code-memory-plugin/setup-helper/install.sh
+          bash -n examples/claude-code-memory-plugin/setup-helper/tos-install.sh
+          bash -n examples/codex-memory-plugin/setup-helper/install.sh
+          bash -n examples/codex-memory-plugin/setup-helper/tos-install.sh
+
   check-deps:
     runs-on: ubuntu-24.04
     outputs:

@@ -6,25 +6,21 @@
 
 ## 安装
 
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
-```
-
-该脚本将自动检查依赖项、配置 OpenViking 连接并完成插件安装，支持重复运行（幂等操作）。
-
-GitHub 访问受限的地区，可改用以下等价命令：
+Claude Code 和 Codex 共用同一个安装脚本。它会依次询问界面语言（English/中文）、要安装的 harness、下载源和 OpenViking 凭据；所有步骤幂等，重复运行安全。
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/claude-code-memory-plugin/tos-install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
 ```
 
-安装完成后，需在当前终端激活 `claude` 的封装函数（wrapper），或者直接打开一个新的终端窗口：
+GitHub 访问受限的地区，从火山引擎 TOS 镜像运行同一个安装脚本（或在下载源提问时选择「TOS 镜像」）：
 
 ```bash
-source ~/.openviking/openviking-repo/examples/claude-code-memory-plugin/setup-helper/wrapper.sh
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
 ```
 
-> 通过自定义命令启动 Claude Code？例如包装脚本 `cc-custom`，或“基础命令 + 子命令”形式的多词启动器——在安装时的“Extra launch commands”一步填入（或运行脚本时传入 `OPENVIKING_CC_WRAP_EXTRA='cc-custom'`），即可让它们一并注入凭据。
+> **Claude Code 走 TOS 的注意事项**：TOS 渠道注册的是本地目录 marketplace，**无法自动更新**——更新请重跑安装脚本。（Codex 走 TOS 时安装自 TOS 托管的 git 仓库，保留远程更新能力。）
+
+现在不再需要任何 shell wrapper：插件自带的 stdio MCP 代理会在运行时读取 `~/.openviking/ovcli.conf`（或 `OPENVIKING_*` 环境变量），与 hooks 使用同一套配置链。
 
 使用一段时间后，即便在全新的对话中提及过往的话题，Claude Code 也能准确回忆起来。
 
@@ -33,41 +29,30 @@ source ~/.openviking/openviking-repo/examples/claude-code-memory-plugin/setup-he
 
 如果您倾向于手动安装：
 
-1. **封装 `claude` 命令** — 在 `~/.zshrc`（zsh）或 `~/.bashrc`（bash）文件末尾追加以下代码，并将 `<仓库路径>` 替换为您本地克隆仓库的绝对路径。此操作可确保每次调用 `claude` 时，系统都会从 `~/.openviking/ovcli.conf` 动态注入 `OPENVIKING_URL` 和 `OPENVIKING_API_KEY`，且 API Key 仅在 `claude` 的进程树内有效：
+1. **配置连接** — 手写 `~/.openviking/ovcli.conf`（`url`、`api_key`，可选 `account`/`user`），或装完后运行插件自带向导 `node <插件目录>/scripts/setup.mjs`。
+
+2. **从远程 marketplace 安装插件**（无需 clone 仓库）：
 
    ```bash
-   _ov_wrapper="<仓库路径>/examples/claude-code-memory-plugin/setup-helper/wrapper.sh"
-   [ -f "$_ov_wrapper" ] && source "$_ov_wrapper"
+   claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
+   claude plugin install openviking-memory@openviking
    ```
 
-   关于该函数的具体实现以及“为何不使用全局 `export`”的详细说明，请参阅 [插件 README → Configuring MCP](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuring-mcp)。
+   开发场景也可注册本地 checkout：`claude plugin marketplace add "<仓库路径>/examples"`，插件 id 相同。
 
-2. **安装插件** — 在 OpenViking 仓库根目录下执行：
-
-   ```bash
-   claude plugin marketplace add "$(pwd)/examples"
-   claude plugin install claude-code-memory-plugin@openviking-plugins-local
-   ```
-
-3. **启动 Claude Code** — 运行后输入 `/mcp` 命令，确认 OpenViking 对应的服务器 URL 配置正确。
+3. **启动 Claude Code** — 运行后输入 `/mcp` 命令，确认 OpenViking 条目已连接。
 
 > 尚未创建 `ovcli.conf`？请先按照 [部署指南 → CLI](../guides/03-deployment.md#cli) 的说明进行配置。
 >
 > 使用纯本地模式（`http://127.0.0.1:1933`，无鉴权）？您可以跳过第 1 步，插件将直接使用本地默认值。
 >
-> 使用 Claude Code < 2.0 版本？请参考 [插件 README 的兼容模式章节](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#兼容模式claude-code--20)。
+> 使用 Claude Code < 2.0 版本？安装脚本会自动识别并回退到 `claude mcp add` + hooks 合并；详见 [插件 README 的兼容模式章节](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#兼容模式claude-code--20)。
 
 </details>
 
 ## 验证
 
-```bash
-type claude        # 期望输出：claude is a shell function
-```
-
-> 若上一步输出的是一个路径而非 `shell function`，说明 wrapper 尚未生效，请先 `source` 那行 wrapper（或新开一个终端）再启动；否则 `claude` 会静默连到本地 `127.0.0.1` 且不带鉴权。
-
-在 `type claude` 显示为 shell function 的终端中运行 `claude` 启动，随后：
+启动 `claude`，随后：
 
 - 输入 `/plugins` → 在 Installed 列表中应能找到 **openviking-memory**（其子项 **openviking** MCP 应显示为已连接状态）。
 - 输入 `/mcp` → OpenViking 对应的条目应显示您的服务器 URL 及有效的认证信息。
@@ -117,9 +102,8 @@ type claude        # 期望输出：claude is a shell function
 |------|------|------|
 | 插件未激活 | 未找到 `ov.conf` 或 `ovcli.conf` 配置文件 | 运行 [安装脚本](#安装)，或手动设置 `OPENVIKING_MEMORY_ENABLED=1` 配合 URL/API_KEY 使用。 |
 | Hook 已触发但召回结果为空 | 服务器未启动或 URL 配置错误 | 执行命令测试连通性：`curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| MCP 工具连接到了 `127.0.0.1` 而非远程服务器 | 缺少 `claude` 函数封装 | 检查 `type claude` 的输出是否包含 "shell function"；详情见 [手动安装](#安装) |
-| `type claude` 显示的是路径而非 shell function（wrapper 未生效） | 安装后未 `source` rc，或在未加载该 rc 的终端里启动 | 执行 `source ~/.zshrc`（bash 用 `~/.bashrc`），或新开一个终端窗口 |
-| 通过别名（如 `cc`）启动，凭据未注入 | 把别名名填进了 `OPENVIKING_CC_WRAP_EXTRA`（别名会被跳过），或别名指向的命令未被封装 | 封装别名指向的真实命令而非别名本身：`alias cc=claude` 无需配置；`alias cc=claude-custom` 则把 `claude-custom` 填入 |
+| MCP 工具连接到了 `127.0.0.1` 而非远程服务器 | `~/.openviking/ovcli.conf` 中没有 `url`（代理回退到本地默认值） | 修正 `ovcli.conf`（或运行 `node <插件目录>/scripts/setup.mjs`）后重启 Claude Code |
+| MCP 工具调用报认证错误 | 当前 ovcli 配置没有 authenticated server 所需的有效 `api_key` | 更新 `ovcli.conf` 中的 `api_key`；stdio 代理在认证失败后会重新读取配置 |
 | 远程认证失败 (401 / 403) | API Key 错误或缺少租户 Header | 检查 `OPENVIKING_API_KEY` 是否正确；多租户环境下还需核对 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
 
 ## 参见

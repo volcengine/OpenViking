@@ -31,4 +31,3 @@ class CrawlResult:
     total_downloads: int = 0
     total_skipped: int = 0
     total_failed: int = 0
-    fallback_rendered: int = 0

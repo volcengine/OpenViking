@@ -291,6 +291,36 @@ async function buildInjectionBlock(items) {
   return { block: lines.join("\n"), contentCount, hintCount, budgetUsed };
 }
 
+async function recallViaTypeQuotaEndpoint(query) {
+  const res = await fetchJSON("/api/v1/search/recall", {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      quotas: {
+        events: Math.max(cfg.recallLimit, 1),
+        entities: Math.max(cfg.recallLimit, 1),
+        preferences: Math.max(1, Math.min(cfg.recallLimit, 3)),
+        experiences: 0,
+      },
+      max_chars: Math.max(cfg.recallMaxContentChars * Math.max(cfg.recallLimit, 1), 1000),
+      min_score: cfg.scoreThreshold,
+      render: true,
+    }),
+  }, { actorPeerId: cfg.peerId });
+  if (!res.ok) {
+    log("recall_endpoint_fallback", { status: res.status || 0 });
+    return null;
+  }
+  const rendered = String(res.result?.rendered || "").trim();
+  if (!rendered) return "";
+  return [
+    "<openviking-context>",
+    "Relevant memory from OpenViking. Use the recall/read MCP tools to expand URIs.",
+    rendered,
+    "</openviking-context>",
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -358,6 +388,28 @@ async function main() {
     logError("health_check", "server unreachable");
     writeRecallState({ count: 0, reason: "offline", cc_session_id: sessionId });
     approve();
+    return;
+  }
+
+  const endpointBlock = await recallViaTypeQuotaEndpoint(userPrompt);
+  if (endpointBlock !== null) {
+    if (!endpointBlock) {
+      log("skip", { reason: "recall_endpoint_no_results" });
+      writeRecallState({ count: 0, reason: "no_results", cc_session_id: sessionId });
+      approve();
+      return;
+    }
+    writeRecallState({
+      count: 1,
+      content_items: 1,
+      hint_items: 0,
+      tokens_used: estimateTokens(endpointBlock),
+      tokens_budget: cfg.recallTokenBudget,
+      top_score: 0,
+      cc_session_id: sessionId,
+      reason: "ok",
+    });
+    approve(endpointBlock);
     return;
   }
 

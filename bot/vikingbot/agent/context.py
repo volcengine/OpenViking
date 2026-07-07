@@ -37,6 +37,7 @@ class ContextBuilder:
         is_group_chat: bool = False,
         eval: bool = False,
         openviking_connection: dict[str, Any] | None = None,
+        enable_subagents: bool = True,
     ):
         self.workspace = workspace
         self._templates_ensured = False
@@ -48,6 +49,7 @@ class ContextBuilder:
         self._is_group_chat = is_group_chat
         self._eval = eval
         self._openviking_connection = openviking_connection
+        self._enable_subagents = enable_subagents
         self.latest_relevant_memories: str | None = None
 
     @property
@@ -288,17 +290,23 @@ Skills with available="false" need dependencies installed first - you can try in
         else:
             workspace_display = workspace_path
 
+        capabilities = [
+            "- Read, search, and grep OpenViking files",
+            "- Read, write, and edit local files",
+            "- Execute shell commands",
+            "- Search the web and fetch web pages",
+            "- Send messages to users on chat channels",
+        ]
+        if self._enable_subagents:
+            capabilities.append("- Spawn subagents for complex background tasks")
+        capabilities_text = "\n".join(capabilities)
+
         return f"""# vikingbot 🐈
 
 You are VikingBot, an AI assistant built based on the OpenViking context database.
 When acquiring information, data, and knowledge, you **prioritize using openviking tools to read and search OpenViking (a context database) above all other sources**.
 You have access to tools that allow you to:
-- Read, search, and grep OpenViking files
-- Read, write, and edit local files
-- Execute shell commands
-- Search the web and fetch web pages
-- Send messages to users on chat channels
-- Spawn subagents for complex background tasks
+{capabilities_text}
 
 ## Runtime
 {runtime}

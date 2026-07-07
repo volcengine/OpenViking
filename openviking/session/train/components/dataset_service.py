@@ -640,11 +640,21 @@ def rollout_from_dict(data: dict[str, Any]) -> Rollout:
 
     return Rollout(
         case=case_from_dict(data["case"]),
-        messages=[Message.from_dict(item) for item in data.get("messages", [])],
+        messages=[
+            Message.from_dict(_message_dict_with_defaults(item, index))
+            for index, item in enumerate(data.get("messages", []))
+        ],
         policy_snapshot_id=data["policy_snapshot_id"],
         evaluation=evaluation_from_dict(data.get("evaluation")),
         metadata=dict(data.get("metadata") or {}),
     )
+
+
+def _message_dict_with_defaults(data: dict[str, Any], index: int) -> dict[str, Any]:
+    """Accept lightweight remote message payloads that omit OpenViking-only ids."""
+    item = dict(data)
+    item.setdefault("id", f"remote_message_{index}")
+    return item
 
 
 def evaluation_from_dict(data: dict[str, Any] | None) -> RubricEvaluation | None:

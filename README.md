@@ -61,6 +61,23 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 
 > 💡 **Want to see it in action first?** Try [OpenViking Studio](https://openviking.ai/studio) — a live hosted instance with a context playground, semantic search, and a multi-agent hub. No installation required.
 
+### OpenViking Helper for macOS (Beta)
+
+**OpenViking Helper** is a macOS desktop app for OpenViking users. It brings local agent setup, session traces, memories, and skills into a visual console, making it easier to verify setup and sync local context into OpenViking.
+
+Highlights:
+
+- **Visual local Agent setup**: Detect OpenViking CLI, Claude Code, Codex, Cursor, Trae, and OpenCode, then configure supported plugin, MCP, Hook, and CLI integrations.
+- **Session trace inspection**: Parse Claude Code, Codex, and Trae sessions to show OpenViking recall, prompt injection, MCP calls, capture, and commit events.
+- **Local memory and skill management**: View local memory / rule files and `SKILL.md` skills, then sync them to OpenViking.
+
+> OpenViking Helper is currently in beta and supports macOS only.
+
+Download:
+
+- [macOS Apple Silicon (arm64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/418715779/0.0.18/darwin-arm64/openviking-helper-0.0.18-arm64.dmg)
+- [macOS Intel (x64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/418715779/0.0.18/darwin-x64/openviking-helper-0.0.18-x64.dmg)
+
 ### Local Deployment
 
 #### Prerequisites

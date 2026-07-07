@@ -221,7 +221,7 @@ class FeishuParser(BaseParser):
             except ImportError:
                 raise ImportError(
                     "lark-oapi is required for Feishu document parsing. "
-                    "Install it with: pip install 'openviking[bot-feishu]'"
+                    "Install it with: pip install lark-oapi>=1.0.0"
                 )
             config = self._get_config()
             app_id = config.app_id or os.getenv("FEISHU_APP_ID", "")

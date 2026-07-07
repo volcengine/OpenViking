@@ -19,9 +19,9 @@ class TestHTMLParserMarkdownCleaning:
         assert "<span" not in cleaned
         assert "<a name" not in cleaned
 
-    def test_strips_spa_empty_pattern(self):
-        md = "real content. You need to enable JavaScript to run this app."
-        assert "JavaScript" not in self.parser._clean_markdown(md)
+    def test_keeps_spa_notice_text(self):
+        md = "You need to enable JavaScript to run this app."
+        assert self.parser._clean_markdown(md) == md
 
     def test_collapses_blank_lines(self):
         cleaned = self.parser._clean_markdown("a\n\n\n\n\nb")
@@ -29,6 +29,31 @@ class TestHTMLParserMarkdownCleaning:
 
     def test_trims_leading_trailing_whitespace(self):
         assert self.parser._clean_markdown("   \n\nhello\n  ") == "hello"
+
+
+class TestHTMLParserNoscriptFallback:
+    def setup_method(self):
+        self.parser = HTMLParser()
+
+    def test_spa_shell_keeps_noscript_notice(self):
+        html = (
+            "<html><head><title></title></head><body>"
+            "<noscript>You need to enable JavaScript to run this app.</noscript>"
+            '<div id="root"></div></body></html>'
+        )
+        md = self.parser._html_to_markdown(html, base_url="https://example.com/")
+        assert "You need to enable JavaScript to run this app." in md
+
+    def test_noscript_fallback_skipped_when_body_extractable(self):
+        html = (
+            "<html><head><title>Doc</title></head><body><article>"
+            "<p>" + ("Real body content that trafilatura can extract. " * 20) + "</p>"
+            "</article>"
+            "<noscript>enable javascript</noscript></body></html>"
+        )
+        md = self.parser._html_to_markdown(html, base_url="https://example.com/")
+        assert "Real body content" in md
+        assert "enable javascript" not in md
 
 
 class TestHTMLParserTitleExtraction:

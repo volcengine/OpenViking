@@ -20,6 +20,7 @@
       "tool-call-id.ts",
       "session-transcript-repair.ts",
       "runtime-utils.ts",
+      "request-headers.ts",
       "recall-trace.ts",
       "query-config.ts",
       "adapters/",

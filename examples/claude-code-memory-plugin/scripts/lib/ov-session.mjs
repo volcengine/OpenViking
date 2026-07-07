@@ -20,45 +20,16 @@
  *   - GET    /api/v1/sessions/{id}/context?token_budget=N
  */
 
-const OV_SESSION_PREFIX = "cc-";
-
-/**
- * Glob → RegExp. Minimal implementation: supports `*` (any chars except /),
- * `**` (any chars including /), and literal text. Sufficient for the few
- * bypass patterns users are likely to configure.
- */
-function globToRe(glob) {
-  let re = "^";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
-    if (c === "*") {
-      if (glob[i + 1] === "*") { re += ".*"; i++; }
-      else re += "[^/]*";
-    } else if (/[.+?^${}()|[\]\\]/.test(c)) {
-      re += "\\" + c;
-    } else {
-      re += c;
-    }
-  }
-  re += "$";
-  return new RegExp(re);
-}
+import {
+  deriveHarnessSessionId,
+  isBypassed,
+} from "../shared/session-model.mjs";
 
 /**
  * Check whether a CC session_id or cwd matches any bypass pattern.
  * Also honours OPENVIKING_BYPASS_SESSION env var (via cfg.bypassSession).
  */
-export function isBypassed(cfg, { sessionId, cwd } = {}) {
-  if (cfg.bypassSession) return true;
-  const patterns = cfg.bypassSessionPatterns || [];
-  if (patterns.length === 0) return false;
-  const haystacks = [sessionId, cwd].filter(Boolean);
-  for (const pat of patterns) {
-    const re = globToRe(pat);
-    if (haystacks.some((h) => re.test(h))) return true;
-  }
-  return false;
-}
+export { isBypassed };
 
 /**
  * Derive a stable OV session ID from a CC session_id.
@@ -68,13 +39,7 @@ export function isBypassed(cfg, { sessionId, cwd } = {}) {
  * characters outside [A-Za-z0-9._-] become `-`. Result: `cc-<uuid>__<suffix>`.
  */
 export function deriveOvSessionId(ccSessionId, suffix = "") {
-  if (!ccSessionId || typeof ccSessionId !== "string") {
-    throw new Error("deriveOvSessionId requires a non-empty ccSessionId");
-  }
-  const base = `${OV_SESSION_PREFIX}${ccSessionId}`;
-  if (!suffix) return base;
-  const normalized = String(suffix).replace(/:/g, "-").replace(/[^A-Za-z0-9._-]/g, "-");
-  return `${base}__${normalized}`;
+  return deriveHarnessSessionId("cc-", ccSessionId, suffix);
 }
 
 /**
@@ -161,10 +126,10 @@ export async function addMessage(fetchJSON, sessionId, payload) {
  * Commit the persistent OV session (archive + background extract). Safe to
  * call repeatedly: if there are no pending messages the server is a no-op.
  */
-export async function commitSession(fetchJSON, sessionId) {
+export async function commitSession(fetchJSON, sessionId, payload = {}) {
   const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify(payload || {}),
   });
   if (!res.ok) {
     if (isRetryableFailure(res)) {

@@ -40,6 +40,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(cfg.traceRecallIncludeContentByDefault).toBe(false);
     expect(cfg.traceRecallIncludeRawUserPreview).toBe(false);
     expect(cfg.recallTargetTypes).toEqual(["user", "agent"]);
+    expect(cfg.headers).toEqual({});
     expect(cfg.enableAddResourceTool).toBe(false);
     expect(cfg.enabledTools).toContain("ov_search");
     expect(cfg.enabledTools).toContain("ov_read");
@@ -178,6 +179,30 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     expect(() =>
       memoryOpenVikingConfigSchema.parse({ foo: 1 }),
     ).toThrow("unknown keys");
+  });
+
+  it("parses string-valued configured headers", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      headers: {
+        openviking: "i18n-instance",
+        token: "root-token",
+      },
+    });
+
+    expect(cfg.headers).toEqual({
+      openviking: "i18n-instance",
+      token: "root-token",
+    });
+  });
+
+  it("throws on non-string configured header values", () => {
+    expect(() =>
+      memoryOpenVikingConfigSchema.parse({
+        headers: {
+          openviking: 123,
+        },
+      }),
+    ).toThrow("openviking config headers.openviking must be a string");
   });
 
   it("throws on unknown agentExperience keys", () => {
