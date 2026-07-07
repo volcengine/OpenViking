@@ -5,12 +5,12 @@ Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenV
 ## Step 1: Install
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness claude --dist tos
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
 ```
 
-Claude Code and Codex share this one installer. It asks for your language (English/中文) and OpenViking credentials; each step is idempotent, so it is safe to rerun. No shell wrapper is needed anymore — the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` at runtime.
+Claude Code and Codex share this one installer. It asks which tools to install, which source to use (GitHub or the TOS mirror), your language (English/中文), and OpenViking credentials; each step is idempotent, so it is safe to rerun. No shell wrapper is needed anymore — the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` at runtime.
 
-> The TOS channel registers a local directory marketplace, which cannot auto-update — re-run the command above to update.
+> If you choose the TOS channel for Claude Code, the installer registers a local directory marketplace that cannot auto-update — re-run the command above to update.
 
 After using it for a while, start a new conversation and ask about something you mentioned earlier. It should remember.
 
