@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 import openviking as ov
+
 try:
     from openviking_live_auth import API_KEY_HELP, resolve_api_key
 except ModuleNotFoundError:  # pytest/package import path
@@ -25,14 +26,21 @@ DEFAULT_URL = "http://localhost:1934"
 PANEL_WIDTH = 78
 DEFAULT_API_KEY = None
 DEFAULT_SESSION_ID = "xiaomei-demo"
+XIAOMEI_PEER_ID = "xiaomei"
 
 
 console = Console()
 
-# ── 对话数据 (10 轮 user + assistant 模拟) ─────────────────────────────────
-# user 消息取自原始 demo，assistant 消息为模拟回复（用于填充 session 上下文）
+# ── 对话数据 (12 轮 user + assistant 模拟) ─────────────────────────────────
+# 默认 user 消息归属 peer=xiaomei；peer_id=None 的 user 消息归属当前账号 self。
+# assistant 消息不带 peer_id，只用于填充 session 上下文。
 
 CONVERSATION = [
+    {
+        "peer_id": None,
+        "user": "我是这个账号的主人阿杰，在上海做产品经理。平时喜欢摄影和骑行，周末常去滨江拍照。今天我想测试一下同一个 session 里同时记录我自己和朋友小美的信息。",
+        "assistant": "好的阿杰，我会区分记录你自己的信息和小美的信息。",
+    },
     {
         "user": "嗨！我是小美，刚毕业不久，现在在一家互联网公司做运营。我想找个能帮我记录日常生活的小助手，比如记一下每天发生的事情、我的想法、还有想做的事情。你能帮帮我吗？",
         "assistant": "你好小美！当然可以，我很乐意当你的生活小助手。你可以随时跟我聊天，我会帮你记住重要的事情。",
@@ -52,6 +60,11 @@ CONVERSATION = [
     {
         "user": "这个周末你有什么建议吗？我想跟我男朋友一起出去。我们之前想过去看樱花，但好像花期快过了。要不看电影？最近有什么好看的电影吗？或者去探店？我知道有一家咖啡馆好像很不错。",
         "assistant": "花期快过了的话可以抓紧最后的机会去看。也可以先去那家咖啡馆探店，下午再看场电影，安排一个轻松的约会日。",
+    },
+    {
+        "peer_id": None,
+        "user": "我这边也补充一下：我最近在准备一个产品发布会，负责梳理需求清单和演示稿。下周三前要把第一版 demo 讲稿整理出来，有点担心时间不够。",
+        "assistant": "阿杰，我记住了。你最近在准备产品发布会，需要在下周三前整理第一版 demo 讲稿。",
     },
     {
         "user": "说起来，我平时喜欢追剧，尤其是那种甜宠剧，最近在看《归路》，太甜了！我还喜欢画画，虽然画得不太好，但挺解压的。偶尔也会看看书，最近在看《被讨厌的勇气》，挺有启发的。",
@@ -78,6 +91,10 @@ CONVERSATION = [
 # ── 验证查询 ──────────────────────────────────────────────────────────────
 
 VERIFY_QUERIES = [
+    {
+        "query": "账号主人阿杰自己的情况",
+        "expected_keywords": ["阿杰", "产品经理", "摄影", "骑行"],
+    },
     {
         "query": "小美的工作情况",
         "expected_keywords": ["618", "文案", "运营", "小丽"],
@@ -122,12 +139,15 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     # 逐轮添加消息
     total = len(CONVERSATION)
     for i, turn in enumerate(CONVERSATION, 1):
-        console.print(f"  [dim][{i}/{total}][/dim] 添加 user + assistant 消息...")
+        peer_id = turn.get("peer_id", XIAOMEI_PEER_ID)
+        peer_label = f"peer_id={peer_id}" if peer_id else "self"
+        console.print(f"  [dim][{i}/{total}][/dim] 添加 user({peer_label}) + assistant 消息...")
         client.add_message(
             session_id,
             role="user",
             parts=[{"type": "text", "text": turn["user"]}],
             created_at=session_time_str,
+            peer_id=peer_id,
         )
         client.add_message(
             session_id,
