@@ -1,0 +1,38 @@
+openviking/core/directories.py
+  s_6f68568e9d9230::t_19fe728db6b995 141-152,182-191,230-236
+openviking/core/namespace.py
+  s_6f68568e9d9230::t_91d1e1a93f32dc 118-119
+openviking/service/core.py
+  s_6f68568e9d9230::t_25eefb4047f925 552
+tests/misc/test_vikingfs_uri_guard.py
+  s_6f68568e9d9230::t_54a435989d6ce0 156-165
+tests/server/test_admin_rebuild_api.py
+  s_6f68568e9d9230::t_852b0d6473b0d0 248,253
+tests/unit/test_directory_initializer.py
+  s_6f68568e9d9230::t_15f19730fd74d6 59-104
+tests/unit/test_namespace_uri_classification.py
+  s_6f68568e9d9230::t_633a18b5adf7ed 30-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "4ebc59c830dce095d96c066e26737d26d25e2f13",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_6f68568e9d9230": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3a8f-a88f-7103-b527-a4ceecdb26ab",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
