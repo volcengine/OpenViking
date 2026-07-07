@@ -81,7 +81,8 @@ class OfflinePolicyOptimizationPipeline:
         context: PipelineContext | Any,
     ) -> PipelineResult:
         ctx = context if isinstance(context, PipelineContext) else PipelineContext()
-        max_epochs = max(1, int(ctx.max_epochs or 1))
+        requested_epochs = ctx.max_epochs if ctx.max_epochs is not None else 1
+        max_epochs = max(0, int(requested_epochs))
         case_loader = _train_case_loader(case_loader, ctx)
         current_policy_set = policy_set
         epoch_results: list[PipelineEpochResult] = []

@@ -59,6 +59,7 @@ reports/
 test-results.xml
 test-reports/
 report.html
+temp/
 
 # Virtual environments
 .env
