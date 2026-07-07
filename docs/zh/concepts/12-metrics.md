@@ -186,8 +186,12 @@ scrape_configs:
 | `openviking_vector_passed_total` | Counter | `operation` | 向量候选通过数量累计 |
 | `openviking_vector_returned_total` | Counter | `operation` | 向量候选返回数量累计 |
 | `openviking_vector_scanned_total` | Counter | `operation` | 向量候选扫描数量累计 |
+| `openviking_rerank_docs_truncated_total` | Counter | `operation` | 精排前被 `rerank.max_chars_per_doc` 截断的文档数；仅在实际发生截断时才上报，因此未启用或无超长文档时该时序**不存在**（而非为 `0`） |
+| `openviking_rerank_chars_trimmed_total` | Counter | `operation` | 被 `rerank.max_chars_per_doc` 截断的字符总数；持续偏高说明上限设置过紧。仅在实际发生截断时才上报，因此其余情况下该时序**不存在**（而非为 `0`） |
 | `openviking_memory_extracted_total` | Counter | `operation` | memory extracted 数量累计 |
 | `openviking_semantic_nodes_total` | Counter | `status` | semantic nodes 数量累计 |
+
+> **注意：** 精排截断计数器（`openviking_rerank_docs_truncated_total`、`openviking_rerank_chars_trimmed_total`）仅在发生截断后才会创建。在此之前时序并不存在，因此 PromQL 查询与告警必须将"缺失"归零处理，而不能假定存在 `0` 采样点，例如：`sum(increase(openviking_rerank_docs_truncated_total[5m])) or vector(0)`。
 
 ### 模型调用与 Token
 
