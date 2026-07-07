@@ -88,7 +88,8 @@ fields:
       Natural-language content must be written in {{ language }}. Keep fixed section labels,
       tool names, schema fields, trace step IDs, Python/DSL identifiers, and quoted runtime values unchanged.
 
-      Write an execution-audit record in EXACTLY this format and label order:
+      Write a minimal repair-to-experience record in EXACTLY this format and label order.
+      The main purpose is to say what reusable experience should be added or updated:
 
       # <trajectory_name>
       - Outcome: <success|failure|partial|unfinished|unknown>
@@ -97,45 +98,20 @@ fields:
       - Loaded Experiences:
         - <none OR E1: <experience name> — <trigger boundary>; <helpful|weak|misleading|irrelevant|ignored>; <brief reason>>
       - Runtime Facts:
-        - Evaluation: <state/action/tool/communication results; include correct near-miss actions/tools>
-        - Decisive tool facts: <tool outputs, confirmations, candidate args/content, policy facts, or calculations that decide correctness>
-      - Actual Execution Path:
-        A1. <reward-relevant read/tool/user confirmation/write/final communication>
-        A2. <next reward-relevant step>
-      - Expected Path:
-        R1. <required step/fact at same abstraction level>
-        R2. <next required step/fact>
-      - Alignment:
-        - R1 -> <Ax or ∅>: <matched|missing_expected_call|wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|extra_unexpected_call|ambiguous|not_applicable>; <evidence>
+        - Failed requirement: <failed state/action/tool/communication requirement>
+        - Preserve: <correct matched actions/tools/content that the new experience must not block>
+        - Source facts: <visible user/tool/policy/calculation facts needed to derive the repair>
       - First Wrong Tool Call:
         - Step: <Ax, final_response, none, or expected_missing_tool>
         - Tool: <one raw tool name, communicate_with_user, or none>
         - Candidate shape: <candidate_tool=...; decisive_field=...; wrong_value_source=...; expected_value_source=...; candidate_args_or_content=...>
         - Error type: <none|wrong_tool|wrong_arguments|wrong_object|wrong_policy_branch|missing_read_before_tool|missing_confirmation_before_tool|missing_communication|premature_write|extra_write|tool_error|unrecoverable>
         - Expected at call: <expected tool/args/content or missing call>
-        - Why this call is first: <why earlier steps were not material>
       - First Material Divergence:
         - Step: <same boundary, final_response, expected_missing_tool, or none>
         - Kind: <none|wrong_tool|wrong_arguments|wrong_object|wrong_policy_branch|missing_read|missing_confirmation|missing_communication|missing_expected_tool|premature_write|extra_write|tool_error|unrecoverable>
-        - Expected: <what should have happened>
-        - Actual: <what happened instead>
-        - Impact: <reward/state/communication/recoverability impact>
-      - Causal Analysis:
-        - Root cause: <evidence-backed missed fact/binding/scope/provenance/policy/communication obligation>
-        - Evidence: <specific visible evidence>
-        - Ruled out: <correct actions/tools or non-causal factors>
-        - Memory effect: <missing|irrelevant|over-broad|misleading|ignored|too_weak|helpful_but_not_sufficient|necessary|not_needed>; <experience/rule type>
-        - Misleading loaded experience: <Ei/name or none>
-        - How memory affected the wrong call: <brief or none>
-      - Experience Repair Signal:
-        - Recommended operation: <create|update|skip>
-        - Existing experience action: <update|none>
-        - Existing target experience: <name or none>
-        - New experience action: <create|skip>
-        - New experience candidate: <name or none>
-        - Trigger boundary: <First Wrong Tool Call.Tool, or none when skipping>
-        - Repair principle: <minimal reusable repair>
-        - Do not learn: <nearby broad/non-causal lesson to avoid>
+        - Cause: <missed fact/binding/scope/provenance/policy/communication obligation>
+        - Impact: <why this changed reward/goal/state/communication>
       - Counterfactual Ideal Experience:
         - Would fix source rollout: <true|false>
         - Experience name: <name or none>
@@ -146,23 +122,25 @@ fields:
         - Applicability: <narrow boundary/object role/scope/candidate shape>
         - Anti-pattern: <closest tempting wrong behavior>
         - Case evidence: <diagnostic literals/ids/values only; not hardcoded>
-      - Applicability:
-        - Applies when: <positive reusable condition>
-        - Does not apply when: <nearest non-applicable condition>
+      - Experience Repair Signal:
+        - Recommended operation: <create|update|skip>
+        - Existing experience action: <update|none>
+        - Existing target experience: <name or none>
+        - New experience action: <create|skip>
+        - New experience candidate: <same as ideal experience name, or none>
+        - Trigger boundary: <same as ideal Injection boundary, or none>
+        - Repair principle: <one-line summary of ideal Repair rule + Source binding>
+        - Do not learn: <nearby broad/non-causal lesson to avoid>
       - Result: <final outcome and side effects>
 
       Rules:
-      - FIXED SHAPE: Output every section above in order. For success, set wrong/divergence fields to `none`, Repair Signal to `skip`, and Ideal Experience Would fix source rollout to `false`.
-      - AUDIT ONLY: Compare actual vs required behavior, identify the first material divergence, and propose the smallest reusable repair. Do not write a broad SOP or success playbook.
-      - EVIDENCE ONLY: Ground Expected Path in visible evaluator/rubric facts, user requests/confirmations, tool outputs, policy/tool constraints, or task requirements. Do not invent rules or contradict matched/expected tool actions.
-      - FIRST BOUNDARY: Pick exactly one earliest material boundary. `Tool` must be one raw tool name, `communicate_with_user`, or `none`; never use prose, `done`, multiple tools, or alternatives. For communication-only failures, use `communicate_with_user`; for omitted expected calls with no wrong actual call, use Tool=`none` and Kind=`missing_expected_tool`.
-      - PRESERVE DISCRIMINATORS: Do not learn a rule that blocks matched/correct near-miss actions. When the same tool is both right and wrong, name the discriminator: object role, membership, confirmation scope, argument provenance, source selection, calculation scope, or content coverage.
-      - CANDIDATE SHAPE: Always include `candidate_tool`, `decisive_field`, `wrong_value_source`, `expected_value_source`, and `candidate_args_or_content`. Use concrete schema paths such as `items[*].id`, `allocations[*].value`, `target_id`, or `content`.
-      - EXPERIENCE HANDOFF: Create/update an experience only if a narrow pre-tool reminder could prevent the first material failure. Trigger boundary must equal First Wrong Tool Call.Tool. Update only causal misleading/over-broad/weak loaded experiences; otherwise create one narrow new experience or skip.
-      - IDEAL EXPERIENCE: For each non-success trajectory, write the counterfactual ideal pre-tool experience in content. It must include reusable situation, repair rule, source binding, applicability boundary, anti-pattern, and diagnostic case evidence. Set false only when no reusable pre-tool repair exists.
-      - SOURCE BINDING: Avoid vague repairs like “include required info” or “check policy.” Bind the repair to the semantic source and derivation: user-request scope, confirmed target, selected source object, row/set membership, field to read, calculation, policy gate, or communication obligation. Concrete literals belong only in Case evidence and must not be hardcoded.
-      - AGGREGATE/LIST SCOPE: For totals, counts, summaries, balances, or lists, specify freeze point, included/excluded records, source field, derivation, and whether later writes change the requested scope. Name the closest wrong aggregation/list as the anti-pattern.
-      - DOMAIN-NEUTRAL: Generalize identifiers, names, timestamps, exact values, and dataset-specific wording into roles that determine correctness. Do not copy benchmark-specific prompt text into reusable lessons.
-      - STYLE: Concise markdown bullets only. No extra headings, code fences, free-form paragraphs, hidden reasoning, or closing remarks. Judge loaded experience effects only from visible evidence.
+      - PRIMARY OUTPUT: `Counterfactual Ideal Experience` is the main output. `Experience Repair Signal` is only a routing summary derived from it.
+      - FIXED SHAPE: Output every section above in order. For success, set wrong/divergence fields to `none`, Ideal Experience Would fix source rollout to `false`, and Repair Signal to `skip`.
+      - DEFAULT LEARN: For non-success, set Would fix source rollout=`true` and Recommended operation=`create` or `update` when a narrow pre-tool reminder could have prevented the first material failure. Use `false/skip` only when no reusable pre-tool repair exists.
+      - FIRST BOUNDARY: Pick one earliest material boundary. `Tool` must be one raw tool name, `communicate_with_user`, or `none`; never prose, `done`, multiple tools, or alternatives. Communication-only failures target `communicate_with_user`.
+      - SOURCE BINDING: Do not write vague repairs like “include required info” or “check policy.” Bind the repair to runtime semantic sources: user-request scope, confirmed target, selected source object, row/set membership, field to read, calculation, policy gate, or communication obligation. Do not put evaluator/control-plane field names in reusable Situation/Repair rule/Source binding.
+      - AGGREGATE/LIST SCOPE: For totals, counts, summaries, balances, or lists, specify freeze point, included/excluded records, source field, derivation, and whether later writes change the requested scope. Name the closest wrong aggregate/list as Anti-pattern.
+      - PRESERVE CORRECT WORK: List matched/correct actions in Preserve and do not learn a rule that blocks them. When same tool can be right or wrong, distinguish by object role, membership, confirmation scope, provenance, source selection, calculation scope, or content coverage.
+      - DOMAIN-NEUTRAL STYLE: Generalize identifiers, names, timestamps, exact values, and dataset-specific wording into roles. Concrete literals only in Case evidence as diagnostic/not hardcoded. Concise bullets only; no extra headings, code fences, hidden reasoning, or closing remarks.
 
     merge_op: patch
