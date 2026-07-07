@@ -874,9 +874,17 @@ class SemanticProcessor(DequeueHandlerBase):
         async def list_children(dir_uri: str) -> Tuple[Dict[str, str], Dict[str, str]]:
             files: Dict[str, str] = {}
             dirs: Dict[str, str] = {}
-            entries = await viking_fs.ls(
-                dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
-            )
+            try:
+                entries = await viking_fs.ls(
+                    dir_uri, show_all_hidden=True, node_limit=LS_ALL_NODES, ctx=ctx
+                )
+            except Exception as e:
+                # Fail open to "empty" by design: the guarded-prune intentionally
+                # lists a source path that does not exist (dir removed upstream),
+                # so this is expected control flow — debug, not error, to avoid
+                # masking real listing failures with routine noise. #3029
+                logger.debug(f"[SyncDiff] list {dir_uri} treated as empty: {e}")
+                return files, dirs
 
             for entry in entries:
                 name = entry.get("name", "")
@@ -943,6 +951,13 @@ class SemanticProcessor(DequeueHandlerBase):
                             logger.error(
                                 f"[SyncDiff] Failed to delete file for dir conflict: {target_file}, error={e}"
                             )
+                    else:
+                        # Preserved user file blocks a same-named source dir: it
+                        # cannot be placed here. Don't drop it silently — warn.
+                        diff.warnings.append(
+                            f"Preserved user file '{target_file}'; source directory "
+                            f"'{name}' with the same name was not imported (name conflict)."
+                        )
                     continue
 
                 # Target file absent from source: gated delete (§3.3).
@@ -1058,6 +1073,11 @@ class SemanticProcessor(DequeueHandlerBase):
                             )
                         target_subdir = None
                     else:
+                        # Preserved user file blocks a same-named source subtree.
+                        diff.warnings.append(
+                            f"Preserved user file '{target_dir}/{name}'; source subtree "
+                            f"'{name}/' with the same name was not imported (name conflict)."
+                        )
                         continue  # preserve user file; cannot place source dir here
 
                 if target_subdir and not root_subdir:

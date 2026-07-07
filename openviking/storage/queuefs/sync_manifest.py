@@ -34,9 +34,13 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from openviking.storage.internal_names import SYNC_MANIFEST_FILE
 from openviking.storage.ovpack.format import sha256_hex
 
-SYNC_MANIFEST_FILENAME = ".viking_sync_manifest.json"
+# Single source of truth for the filename lives in internal_names (so the hidden-
+# listing / prune lists and this module can never drift). Kept aliased here for
+# the module's existing callers/tests.
+SYNC_MANIFEST_FILENAME = SYNC_MANIFEST_FILE
 SUPPORTED_SCHEMA_VERSION = 1
 
 
