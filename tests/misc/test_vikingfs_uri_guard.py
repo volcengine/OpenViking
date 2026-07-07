@@ -153,6 +153,16 @@ class TestVikingFSURITraversalGuard:
 
         fs.agfs.stat.assert_called_once_with("/local/acct1/user/alice/sessions")
 
+    def test_agent_shared_write_guard_allows_shared_content_roots_only(self) -> None:
+        fs = _make_viking_fs()
+
+        fs._ensure_supported_write_namespace("viking://agent/skills")
+
+        with pytest.raises(PermissionDeniedError, match="Writing to viking://agent root"):
+            fs._ensure_supported_write_namespace("viking://agent")
+        with pytest.raises(PermissionDeniedError, match="viking://agent/\\{agent_id\\}"):
+            fs._ensure_supported_write_namespace("viking://agent/code-agent")
+
     @pytest.mark.asyncio
     async def test_rm_rejects_temp_root_for_non_root_before_side_effects(self) -> None:
         fs = _make_viking_fs()

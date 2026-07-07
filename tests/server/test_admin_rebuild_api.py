@@ -245,12 +245,12 @@ async def test_reindex_executor_infers_user_namespace_root():
 
 
 @pytest.mark.asyncio
-async def test_reindex_executor_rejects_deprecated_agent_namespace_root():
+async def test_reindex_executor_rejects_agent_namespace_root():
     from openviking.service.reindex_executor import ReindexExecutor
 
     service = ReindexExecutor()
 
-    with pytest.raises(OpenVikingError, match="viking://agent is deprecated"):
+    with pytest.raises(OpenVikingError, match="viking://agent/\\{agent_id\\}"):
         service._infer_target_type("viking://agent/")
 
 
