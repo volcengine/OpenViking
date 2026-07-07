@@ -53,6 +53,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
+      cuvs_changed: ${{ steps.check.outputs.cuvs_changed }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -78,7 +79,29 @@ jobs:
             echo "deps_changed=false" >> $GITHUB_OUTPUT
           fi
 
+          # Run the CPU-only cuVS regression suite when the optional backend,
+          # its native filter bridge, or its focused tests are modified.
+          CUVS_PATTERN="openviking/storage/vectordb/|openviking/storage/vectordb_adapters/(factory|local_adapter)\.py|openviking_cli/utils/config/vectordb_config\.py|src/|tests/(vectordb/test_cuvs_|benchmark/test_cuvs_)|benchmark/cuvs/|examples/cuvs_smoke\.py|\.github/workflows/_test_lite\.yml"
+          CUVS_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$CUVS_PATTERN" || true)
+
+          if [ -n "$CUVS_CHANGED_FILES" ]; then
+            echo "cuVS-related changes detected:"
+            echo "$CUVS_CHANGED_FILES"
+            echo "cuvs_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No cuVS-related changes detected."
+            echo "cuvs_changed=false" >> $GITHUB_OUTPUT
+          fi
+
   build:
     needs: check-deps
     if: ${{ needs.check-deps.outputs.deps_changed == 'true' }}
     uses: ./.github/workflows/_build.yml
+
+  cuvs-tests:
+    needs: check-deps
+    if: ${{ needs.check-deps.outputs.cuvs_changed == 'true' }}
+    uses: ./.github/workflows/_test_lite.yml
+    with:
+      os_json: '["ubuntu-24.04"]'
+      python_json: '["3.11"]'
