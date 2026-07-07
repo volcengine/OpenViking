@@ -602,7 +602,10 @@ class VikingFS:
             uris_to_delete.append(target_uri)
             real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            if recursive:
+                await self._delete_uri_scope_from_vector_store(target_uri, depth=-1, ctx=ctx)
+            else:
+                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
             return {"estimated_deleted_count": estimated_count}
 
@@ -2916,6 +2919,24 @@ class VikingFS:
                 logger.debug(f"[VikingFS] Deleted from vector store: {uri}")
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
+
+    async def _delete_uri_scope_from_vector_store(
+        self,
+        uri: str,
+        depth: int,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Delete records in a URI scope from vector store."""
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return
+        real_ctx = self._ctx_or_default(ctx)
+
+        try:
+            await vector_store.delete_uri_scope(real_ctx, uri, depth=depth)
+            logger.debug(f"[VikingFS] Deleted vector scope: {uri} depth={depth}")
+        except Exception as e:
+            logger.warning(f"[VikingFS] Failed to delete vector scope: {e}")
 
     async def _update_vector_store_uris(
         self,
