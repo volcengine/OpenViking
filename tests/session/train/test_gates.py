@@ -18,6 +18,7 @@ from openviking.session.train.gates import (
     ExperienceCausalSignalGate,
     ExperienceCounterfactualReflectionGate,
     ExperienceToolAlignmentGate,
+    ExperienceTriggerRuntimeGate,
     GateTarget,
     default_experience_gate_contract,
     default_policy_gate_runner,
@@ -158,6 +159,7 @@ def test_default_policy_gate_runner_uses_reflection_not_shape_or_narrowing_gate(
     names = [gate.name for gate in default_policy_gate_runner().gates]
 
     assert "experience_counterfactual_reflection" in names
+    assert "experience_trigger_runtime" in names
     assert "experience_content_format" not in names
     assert "experience_trigger_shape" not in names
     assert "experience_update_narrowing" not in names
@@ -166,12 +168,116 @@ def test_default_policy_gate_runner_uses_reflection_not_shape_or_narrowing_gate(
     assert "Content format" not in contract
     assert "Use exactly these headings" not in contract
     assert "Counterfactual reflection" in contract
+    assert "Trigger runtime compatibility" in contract
     assert "eligible for experience learning by default" in contract
     assert "Recommended operation=skip" in contract
     assert "Existing target experience=none only means" in contract
     assert "Action is create/update" not in contract
     assert "Candidate-shape trigger" not in contract
     assert "Update safety" not in contract
+
+
+@pytest.mark.asyncio
+async def test_trigger_runtime_gate_rejects_vikingbot_incompatible_trigger():
+    trajectory = _trajectory_with_repair_signal(
+        action="create",
+        first_wrong_tool="communicate_with_user",
+        trigger_boundary="communicate_with_user",
+    )
+    item = _plan_item()
+    item.metadata = {
+        "merge_memory_fields": {
+            "trigger_code": (
+                "def should_trigger(ctx):\n"
+                "    import os\n"
+                "    return ctx.get('candidate_tool') == 'communicate_with_user'\n"
+            )
+        }
+    }
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=trajectory,
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceTriggerRuntimeGate().evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert decision.retriable is True
+    assert decision.gate_name == "experience_trigger_runtime"
+    assert "VikingBot constraint runtime" in decision.reason
+
+
+@pytest.mark.asyncio
+async def test_trigger_runtime_gate_allows_vikingbot_supported_negative_slice():
+    item = _plan_item()
+    item.metadata = {
+        "merge_memory_fields": {
+            "trigger_code": (
+                "def should_trigger(ctx):\n"
+                "    messages = ctx.get('messages', [])\n"
+                "    return bool(messages[-10:]) and ctx.get('candidate_tool') == 'communicate_with_user'\n"
+            )
+        }
+    }
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=_trajectory_with_repair_signal(
+            action="create",
+            first_wrong_tool="communicate_with_user",
+            trigger_boundary="communicate_with_user",
+        ),
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceTriggerRuntimeGate().evaluate(target)
+
+    assert decision is None
+
+
+@pytest.mark.asyncio
+async def test_trigger_runtime_gate_parses_rendered_experience_trigger_body():
+    item = _plan_item()
+    item.metadata = {}
+    item.after_content = (
+        "## Failure Pattern\n"
+        "- Missing required information.\n\n"
+        "# Experience Trigger\n"
+        "- experience_name: final_required_info\n"
+        "- trigger_code:\n"
+        "```python\n"
+        "def should_trigger(ctx):\n"
+        "    import os\n"
+        "    return True\n"
+        "```\n"
+    )
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=_trajectory_with_repair_signal(
+            action="create",
+            first_wrong_tool="communicate_with_user",
+            trigger_boundary="communicate_with_user",
+        ),
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceTriggerRuntimeGate().evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
 
 
 @pytest.mark.asyncio

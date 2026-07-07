@@ -97,6 +97,10 @@ Before outputting any experience, decide which case applies:
   `communicate_with_user`/final-response content as a valid pre-tool boundary. Do not skip merely
   because the literal missing value is case-specific; generalize it to the missing semantic role
   (for example required total cost, required identifier, required policy explanation, or next step).
+- If the new trajectory contains `Counterfactual Ideal Experience` and it says the ideal experience
+  would fix the source rollout, use that section as the repair target. Preserve its situation,
+  repair rule, source binding, applicability, and anti-pattern in generalized form instead of
+  degrading it into a broad reminder such as "include all required information."
 - For failed or partially failed trajectories, inspect the failure independently; do not treat a legacy
   `Experience Repair Signal.Action=skip` as a reason to skip when a reusable repair can be created or updated.
 - In the split `Experience Repair Signal` format, `Existing target experience: none` only means

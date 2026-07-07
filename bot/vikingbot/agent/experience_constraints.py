@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import ast
+import logging
 import re
 import sys
 import time
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -148,6 +151,16 @@ def select_triggered_experiences(
     for exp in experiences or []:
         if not isinstance(exp, ConstraintExperience) or exp.uri in reminded:
             continue
+        try:
+            validate_trigger_code(exp.trigger_code)
+        except Exception as exc:
+            logger.warning(
+                "[EXP_CONSTRAINT_TRIGGER]: invalid trigger uri=%s name=%s error=%s",
+                exp.uri,
+                exp.name,
+                exc,
+            )
+            continue
         if evaluate_trigger_code(exp.trigger_code, ctx, timeout_seconds=timeout_seconds):
             triggered.append(exp)
     return triggered
@@ -238,6 +251,31 @@ def evaluate_trigger_code(
     except Exception:
         return False
     return result if isinstance(result, bool) else False
+
+
+def validate_trigger_code(code: str) -> None:
+    """Validate trigger code against VikingBot's constraint runtime contract."""
+
+    _compile_trigger(code)
+
+
+def smoke_test_trigger_code(
+    code: str,
+    *,
+    smoke_contexts: Iterable[dict[str, Any]] | None = None,
+    timeout_seconds: float = 0.05,
+) -> None:
+    """Validate that trigger code returns bool on representative read-only contexts."""
+
+    compiled = _compile_trigger(code)
+    contexts = list(smoke_contexts or _default_smoke_contexts())
+    for ctx in contexts:
+        try:
+            result = _run_trigger(compiled.function, ctx, timeout_seconds=timeout_seconds)
+        except Exception as exc:
+            raise _TriggerValidationError(f"trigger smoke test failed: {exc}") from exc
+        if not isinstance(result, bool):
+            raise _TriggerValidationError("trigger smoke test must return bool")
 
 
 @dataclass(slots=True)
@@ -333,64 +371,11 @@ _FORBIDDEN_NODE_TYPES = (
     ast.Nonlocal,
     ast.Raise,
     ast.Try,
+    ast.TryStar,
     ast.While,
     ast.With,
     ast.Yield,
     ast.YieldFrom,
-)
-_ALLOWED_NODE_TYPES = (
-    ast.Module,
-    ast.FunctionDef,
-    ast.arguments,
-    ast.arg,
-    ast.Return,
-    ast.Expr,
-    ast.Assign,
-    ast.AnnAssign,
-    ast.If,
-    ast.For,
-    ast.Break,
-    ast.Continue,
-    ast.Pass,
-    ast.BoolOp,
-    ast.BinOp,
-    ast.UnaryOp,
-    ast.Compare,
-    ast.Call,
-    ast.Name,
-    ast.Load,
-    ast.Store,
-    ast.Constant,
-    ast.List,
-    ast.Tuple,
-    ast.Set,
-    ast.Dict,
-    ast.Subscript,
-    ast.Slice,
-    ast.IfExp,
-    ast.ListComp,
-    ast.SetComp,
-    ast.DictComp,
-    ast.GeneratorExp,
-    ast.comprehension,
-    ast.Attribute,
-    ast.JoinedStr,
-    ast.FormattedValue,
-    ast.And,
-    ast.Or,
-    ast.Not,
-    ast.Eq,
-    ast.NotEq,
-    ast.Lt,
-    ast.LtE,
-    ast.Gt,
-    ast.GtE,
-    ast.Is,
-    ast.IsNot,
-    ast.In,
-    ast.NotIn,
-    ast.Add,
-    ast.Mod,
 )
 
 
@@ -402,8 +387,6 @@ class _TriggerValidator(ast.NodeVisitor):
     def visit(self, node: ast.AST) -> Any:  # noqa: ANN401
         if isinstance(node, _FORBIDDEN_NODE_TYPES):
             raise _TriggerValidationError(f"forbidden syntax: {type(node).__name__}")
-        if not isinstance(node, _ALLOWED_NODE_TYPES):
-            raise _TriggerValidationError(f"unsupported syntax: {type(node).__name__}")
         return super().visit(node)
 
     def visit_Module(self, node: ast.Module) -> None:  # noqa: N802
@@ -427,6 +410,13 @@ class _TriggerValidator(ast.NodeVisitor):
             raise _TriggerValidationError("should_trigger signature must be should_trigger(ctx)")
         self.generic_visit(node)
         self._inside_function = False
+
+    def visit_Constant(self, node: ast.Constant) -> None:  # noqa: N802
+        if isinstance(node.value, int) and abs(node.value) > 100000:
+            raise _TriggerValidationError("integer constants are too large")
+        if isinstance(node.value, str) and len(node.value) > 10000:
+            raise _TriggerValidationError("string constants are too large")
+        self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
         if node.id.startswith("__") or node.id in _FORBIDDEN_NAMES:
@@ -464,6 +454,21 @@ def _compile_trigger(code: str) -> _CompiledTrigger:
     if not callable(function):
         raise _TriggerValidationError("should_trigger is not callable")
     return _CompiledTrigger(function=function)
+
+
+def _default_smoke_contexts() -> list[dict[str, Any]]:
+    return [
+        {
+            "messages": [],
+            "candidate_tool": "",
+            "candidate_tool_args": {},
+        },
+        {
+            "messages": [{"role": "user", "content": "smoke test message"}],
+            "candidate_tool": "communicate_with_user",
+            "candidate_tool_args": {"content": "smoke test content"},
+        },
+    ]
 
 
 def _run_trigger(

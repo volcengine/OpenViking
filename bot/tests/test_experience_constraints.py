@@ -5,6 +5,7 @@ from vikingbot.agent.experience_constraints import (
     ConstraintActivationInput,
     ConstraintExperience,
     apply_experience_constraint_reminder,
+    validate_trigger_code,
 )
 from vikingbot.agent.memory import MemoryStore
 
@@ -118,6 +119,34 @@ def test_trigger_context_messages_remain_dict_like_and_read_only():
             messages=[{"role": "user", "content": "upgrade then cancel it"}],
             candidate_tool="update_reservation_flights",
             candidate_tool_args={"cabin": "business"},
+            experiences=[exp],
+            reminded_exp_uris=set(),
+        )
+    )
+
+    assert result.reminded is True
+
+
+def test_vikingbot_trigger_runtime_allows_negative_slice_for_recent_messages():
+    trigger_code = (
+        "def should_trigger(ctx):\n"
+        "    messages = ctx.get('messages', [])\n"
+        "    return bool(messages[-10:]) and ctx.get('candidate_tool') == 'communicate_with_user'\n"
+    )
+    validate_trigger_code(trigger_code)
+
+    exp = ConstraintExperience(
+        uri="viking://user/u/memories/experiences/final_info.md",
+        name="final_info",
+        constraint="Check final required info.",
+        trigger_code=trigger_code,
+    )
+
+    result = apply_experience_constraint_reminder(
+        ConstraintActivationInput(
+            messages=[{"role": "user", "content": "cancel reservation"}],
+            candidate_tool="communicate_with_user",
+            candidate_tool_args={"content": "completed"},
             experiences=[exp],
             reminded_exp_uris=set(),
         )

@@ -232,6 +232,7 @@ def default_policy_gate_runner() -> GateRunner:
         gates=[
             ExperienceCausalSignalGate(mode="enforce"),
             ExperienceToolAlignmentGate(mode="enforce"),
+            ExperienceTriggerRuntimeGate(mode="enforce"),
             ExperienceCounterfactualReflectionGate(mode="enforce"),
         ]
     )
@@ -260,7 +261,11 @@ Your experience output will be rejected unless every experience satisfies these 
 - The candidate_tool must match the trajectory's First Wrong Tool Call.Tool or Trigger boundary.
 - Do not choose earlier setup tools, later recovery tools, or multi-tool workflow triggers.
 
-3. Counterfactual reflection
+3. Trigger runtime compatibility
+- trigger_code must compile under the VikingBot constraint runtime used by tau2 constraint mode.
+- Do not use imports, file/network/process access, mutation of ctx/messages, or other forbidden syntax.
+
+4. Counterfactual reflection
 - Reflect on whether injecting this experience before the original First Wrong Tool Call would likely improve the source rollout.
 - Reject experiences that would not address the first reward-changing mistake, only summarize a successful workflow, require unavailable information, or likely make the original rollout worse.
 
@@ -359,6 +364,46 @@ class ExperienceToolAlignmentGate:
             repair_prompt=(
                 "Change trigger_code to use exactly one candidate_tool matching First Wrong "
                 "Tool Call.Tool or Trigger boundary; otherwise output no changes."
+            ),
+        )
+
+
+@dataclass(slots=True)
+class ExperienceTriggerRuntimeGate:
+    """Reject trigger_code that cannot run in VikingBot constraint mode.
+
+    This is deliberately narrower than the removed trigger-shape gate: it does
+    not judge whether a trigger is semantically broad/narrow, only whether the
+    proposed trigger can compile under the same restricted Python runtime used
+    by VikingBot before constraint reminders are injected.
+    """
+
+    mode: GateMode = "enforce"
+    name: str = "experience_trigger_runtime"
+
+    def applies_to(self, target: GateTarget) -> bool:
+        return target.memory_type == "experiences" and target.after_content.strip() != ""
+
+    async def evaluate(self, target: GateTarget) -> GateDecision | None:
+        _, trigger_code = _experience_constraint_and_trigger(target.after_content, target)
+        error = _vikingbot_trigger_runtime_error(trigger_code)
+        if not error:
+            return None
+        return GateDecision(
+            gate_name=self.name,
+            action="reject",
+            reason=f"trigger_code is not accepted by VikingBot constraint runtime: {error}",
+            evidence={
+                "target_name": target.target_name,
+                "trigger_code_preview": _preview_text(trigger_code, limit=500),
+            },
+            retriable=True,
+            repair_prompt=(
+                "Rewrite trigger_code so `def should_trigger(ctx): ...` compiles under "
+                "the VikingBot constraint runtime. Avoid forbidden syntax such as imports, "
+                "exec/eval/open, context mutation, classes/lambdas/async/try/with/while, "
+                "and return a strict bool. If no compatible trigger can be written, output "
+                "no experience changes."
             ),
         )
 
@@ -1067,8 +1112,50 @@ def _experience_constraint_and_trigger(
             value = target.plan_item.metadata.get(key)
             if isinstance(value, dict):
                 fields.update(value)
+    rendered_fields = _rendered_experience_trigger_fields(content)
+    for key, value in rendered_fields.items():
+        fields.setdefault(key, value)
     trigger = str(fields.get("trigger_code") or "").strip()
     return str(fields.get("constraint") or fields.get("content") or content or "").strip(), trigger
+
+
+def _rendered_experience_trigger_fields(content: str) -> dict[str, str]:
+    """Parse trigger fields from rendered experience markdown as VikingBot does."""
+
+    text = str(content or "")
+    section_match = re.search(
+        r"(?ims)^#{1,6}\s*Experience\s+Trigger\s*\n(?P<section>.*?)(?=^#{1,6}\s+|\Z)",
+        text,
+    )
+    if not section_match:
+        return {}
+    section = section_match.group("section")
+    parsed: dict[str, str] = {}
+    name_match = re.search(r"(?im)^\s*-?\s*experience_name\s*:\s*(?P<name>[^\n]+)", section)
+    if name_match:
+        parsed["experience_name"] = name_match.group("name").strip().strip("` ")
+    trigger_match = re.search(
+        r"(?is)trigger_code\s*:\s*```(?:python)?\s*(?P<code>.*?)\s*```",
+        section,
+    )
+    if trigger_match:
+        parsed["trigger_code"] = trigger_match.group("code").strip()
+    constraint = (text[: section_match.start()] + text[section_match.end() :]).strip()
+    if constraint:
+        parsed["constraint"] = constraint
+    return parsed
+
+
+def _vikingbot_trigger_runtime_error(trigger_code: str) -> str:
+    if not str(trigger_code or "").strip():
+        return "empty trigger_code"
+    try:
+        from vikingbot.agent.experience_constraints import smoke_test_trigger_code
+
+        smoke_test_trigger_code(trigger_code)
+    except Exception as exc:
+        return str(exc) or type(exc).__name__
+    return ""
 
 
 def _gradient_memory_type(gradient: SemanticGradient) -> str:
