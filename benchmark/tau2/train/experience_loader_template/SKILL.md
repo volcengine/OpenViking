@@ -31,5 +31,5 @@ Refusal, no-option, policy-ineligible, missing-input, and `transfer_to_human_age
 
 ## Tools
 
-- `search_experience(query, limit=10)`: searches OpenViking `memories/cases` under the current user, reads each matched case's `## Linked Experiences` section, and returns JSON candidates with case score, case URI, task signature, input summary, and linked experience entries (each with `name`, `uri`, and a `situation` snippet from the experience's `## Situation` section).
+- `search_experience(query, limit=1)`: searches OpenViking `memories/cases` under the current user, reads each matched case's `## Linked Experiences` section, and returns JSON candidates with case score, case URI, task signature, input summary, and linked experience entries (each with `name`, `uri`, and a `situation` snippet from the experience's `## Situation` section).
 - `read_experience(experience_uri)`: reads one OpenViking experience memory by full URI and returns Markdown.
