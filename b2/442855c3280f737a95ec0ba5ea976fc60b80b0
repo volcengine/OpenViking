@@ -1,0 +1,14 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b2442855c3280f737a95ec0ba5ea976fc60b80b0",
+  "prompts": {},
+  "humans": {
+    "h_00ee841e13c84a": {
+      "author": "sponge225 <1670519171@qq.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

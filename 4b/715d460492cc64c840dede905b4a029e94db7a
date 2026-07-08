@@ -1,0 +1,26 @@
+crates/ov_cli/src/output.rs
+  s_55b7e3a615807c::t_50478722c60ac7 197-199,202-203,225-226,235,426-428,431,450,456,1110-1130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "4b715d460492cc64c840dede905b4a029e94db7a",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_55b7e3a615807c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3bc3-8fba-7982-90e1-1aeb7456b81f",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

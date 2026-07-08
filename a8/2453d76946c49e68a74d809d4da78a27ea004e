@@ -1,0 +1,31 @@
+openviking/service/resource_service.py
+  s_fa055cabd01f3d::t_0101b20de3ba18 441
+openviking/utils/resource_processor.py
+  s_fa055cabd01f3d::t_d1e8637fa3d253 294,299-300,303,403-404,421
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "a82453d76946c49e68a74d809d4da78a27ea004e",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "h_b23a6a8439c0dd": {
+      "author": "unknown"
+    }
+  },
+  "sessions": {
+    "s_fa055cabd01f3d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f22c6-d17e-77e2-be06-954d1db3d964",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

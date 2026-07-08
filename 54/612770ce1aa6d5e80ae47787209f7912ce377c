@@ -1,0 +1,31 @@
+openviking/utils/feishu_errors.py
+  s_7747e94dc59b85::t_8f875d89e2fb9c 3,23,50,52,55-56,58,68-69,73,75,77-83,86,88
+tests/parse/test_feishu_errors.py
+  s_0ccaf34431cbde::t_e5a861d235f9ce 41,43-45,55,58-66,69-80,83-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "54612770ce1aa6d5e80ae47787209f7912ce377c",
+  "prompts": {},
+  "sessions": {
+    "s_0ccaf34431cbde": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3bd3-cbef-72d2-840a-1cdcea6c550e",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_7747e94dc59b85": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3bd3-cb60-7a03-b07b-9d1c4d192b8c",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
