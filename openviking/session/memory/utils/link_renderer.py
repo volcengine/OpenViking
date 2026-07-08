@@ -23,15 +23,29 @@ class LinkRenderer:
     @staticmethod
     def _find_match_span(content: str, match_text: str) -> Optional[tuple[int, int]]:
         escaped = re.escape(match_text)
+        # Character spans already covered by an existing [text](target) link. A match
+        # inside one is already linked, so wrapping it again would produce a broken
+        # nested link like "[[Frank](..) Ocean](..)"; skip those candidates.
+        linked_spans = [
+            (m.start(), m.end()) for m in LinkRenderer._RELATIVE_LINK_RE.finditer(content)
+        ]
+
+        def _inside_existing_link(start: int, end: int) -> bool:
+            return any(ls <= start and end <= le for ls, le in linked_spans)
+
         if LinkRenderer._contains_cjk(match_text):
-            match = re.search(escaped, content)
-            if not match:
-                return None
-            return match.start(), match.end()
+            for match in re.finditer(escaped, content):
+                start, end = match.start(), match.end()
+                if _inside_existing_link(start, end):
+                    continue
+                return start, end
+            return None
 
         pattern = re.compile(escaped, re.IGNORECASE)
         for match in pattern.finditer(content):
             start, end = match.start(), match.end()
+            if _inside_existing_link(start, end):
+                continue
             left_char = content[start - 1] if start > 0 else ""
             right_char = content[end] if end < len(content) else ""
             if LinkRenderer._is_ascii_word_char(left_char) or LinkRenderer._is_ascii_word_char(

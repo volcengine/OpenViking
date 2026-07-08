@@ -292,6 +292,43 @@ class TestRenderLinks:
         )
         assert result == "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"
 
+    def test_skip_match_inside_existing_link(self):
+        content = "Worked with [Frank Ocean](../../../../entities/personal/frank.md)."
+        links = [
+            {
+                "from_uri": "viking://user/Calvin/memories/profile.md",
+                "to_uri": "viking://user/Calvin/memories/entities/personal/frank.md",
+                "weight": 1.0,
+                "match_text": "Frank",
+            }
+        ]
+        result = LinkRenderer.render_links(
+            content,
+            "viking://user/Calvin/memories/profile.md",
+            links,
+        )
+        assert result == content
+
+    def test_use_later_unlinked_match_when_first_match_is_already_linked(self):
+        content = "[Frank Ocean](../../../../entities/personal/frank.md) performed. Frank stayed."
+        links = [
+            {
+                "from_uri": "viking://user/Calvin/memories/profile.md",
+                "to_uri": "viking://user/Calvin/memories/entities/personal/frank.md",
+                "weight": 1.0,
+                "match_text": "Frank",
+            }
+        ]
+        result = LinkRenderer.render_links(
+            content,
+            "viking://user/Calvin/memories/profile.md",
+            links,
+        )
+        assert (
+            result == "[Frank Ocean](../../../../entities/personal/frank.md) performed. "
+            "[Frank](entities/personal/frank.md) stayed."
+        )
+
 
 class TestStripLinks:
     def test_strip_relative_link(self):
