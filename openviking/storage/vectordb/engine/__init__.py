@@ -51,8 +51,7 @@ def _module_exists(module_name: str) -> bool:
             return False
         try:
             for fn in os.listdir(str(module_path)):
-                name, dot, ext = fn.rpartition(".")
-                if dot == "." and ext == "pyd" and name == module_name:
+                if fn in (f"{module_name}.pyd", f"{module_name}.abi3.pyd"):
                     return True
         except OSError:
             return False
