@@ -1,0 +1,26 @@
+tests/api_test/filesystem/test_link_relations.py
+  s_142ada8574d0a1::t_7899192bb20b07 2,7-9,11-12,14,20-23,25-27,65-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "656cdc6abb755d803e4dbbfbd10648927a7d8a20",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_142ada8574d0a1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f37a9-96d9-7620-a530-8ab52ba2160a",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
