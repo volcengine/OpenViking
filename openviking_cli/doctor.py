@@ -454,6 +454,13 @@ def _probe_vlm_function_calling(vlm_config: VLMConfig) -> tuple[CheckStatus, str
 
     try:
         asyncio.run(_run_probe())
+    except TimeoutError:
+        # str(TimeoutError()) is "" — catch explicitly (mirrors _probe_embedding_provider:239).
+        return (
+            "warn",
+            f"{label} (function-calling probe timed out)",
+            "Check the VLM provider is reachable and the model/API key are correct",
+        )
     except Exception as exc:
         text = str(exc).lower()
         # ponytail: substring match on the provider 400 body (e.g. code 20037); widen

@@ -727,7 +727,7 @@ class TestProbeVlmFunctionCalling:
         with _patch_completion(raise_timeout):
             status, detail, fix = _probe_vlm_function_calling(_fc_probe_config())
         assert status == "warn"
-        assert "could not complete" in detail
+        assert "timed out" in detail
 
     def test_other_error_warns(self):
         async def raise_conn(self, *args, **kwargs):
