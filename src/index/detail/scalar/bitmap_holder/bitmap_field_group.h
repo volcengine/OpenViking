@@ -468,7 +468,11 @@ class FieldBitmapGroupSet {
   }
 
   const Bitmap* get_bitmap(const std::string& field, const std::string key) {
-    return get_editable_bitmap(field, key);
+    auto itr = field_bitmap_groups_map_.find(field);
+    if (itr == field_bitmap_groups_map_.end()) {
+      return nullptr;
+    }
+    return itr->second->get_bitmap(key);
   }
 
   Bitmap* get_editable_bitmap(const std::string& field, const std::string key) {

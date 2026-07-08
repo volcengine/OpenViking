@@ -49,7 +49,11 @@ bool BitmapGroupBase::exist_bitmap(const std::string& key) {
 }
 
 const Bitmap* BitmapGroupBase::get_bitmap(const std::string& key) {
-  return get_editable_bitmap(key);
+  auto it = bitmap_group_.find(key);
+  if (it == bitmap_group_.end()) {
+    return nullptr;
+  }
+  return it->second.get();
 }
 
 Bitmap* BitmapGroupBase::get_editable_bitmap(const std::string& key) {
