@@ -15,7 +15,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 GitHub 访问受限的地区，从火山引擎 TOS 镜像运行同一个安装脚本（或在下载源提问时选择「TOS 镜像」）：
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
 ```
 
 > **Claude Code 走 TOS 的注意事项**：TOS 渠道注册的是本地目录 marketplace，**无法自动更新**——更新请重跑安装脚本。（Codex 走 TOS 时安装自 TOS 托管的 git 仓库，保留远程更新能力。）
