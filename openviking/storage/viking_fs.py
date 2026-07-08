@@ -2999,28 +2999,42 @@ class VikingFS:
 
     # ========== Relation Table Internal Methods ==========
 
+    async def _relation_table_path(
+        self, source_path: str, ctx: Optional[RequestContext] = None
+    ) -> str:
+        """Return the correct .relations.json location for dir or file source.
+
+        Dir sources: <dir>/.relations.json (byte-identical, zero migration).
+        File sources: <parent>/.relations/<name>/.relations.json (sidecar).
+        """
+        try:
+            info = await self._async_agfs.stat(source_path)
+            is_dir = info.get("isDir", info.get("is_dir", True))
+        except Exception:
+            is_dir = True  # fallback to legacy child path
+        if is_dir:
+            return f"{source_path}/.relations.json"
+        parent, _, name = source_path.rpartition("/")
+        return f"{parent}/.relations/{name}/.relations.json"
+
     async def _read_relation_table(
         self, dir_path: str, ctx: Optional[RequestContext] = None
     ) -> List[RelationEntry]:
-        """Read .relations.json."""
-        table_path = f"{dir_path}/.relations.json"
+        """Read .relations.json (routed through _relation_table_path)."""
+        table_path = await self._relation_table_path(dir_path, ctx=ctx)
         try:
             content = self._handle_agfs_read(await self._async_agfs.read(table_path))
             data = json.loads(content.decode("utf-8"))
         except FileNotFoundError:
             return []
         except Exception:
-            # logger.warning(f"[VikingFS] Failed to read relation table {table_path}: {e}")
             return []
 
         entries = []
-        # Compatible with old format (nested) and new format (flat)
         if isinstance(data, list):
-            # New format: flat list
             for entry_data in data:
                 entries.append(RelationEntry.from_dict(entry_data))
         elif isinstance(data, dict):
-            # Old format: nested {namespace: {user: [entries]}}
             for _namespace, user_dict in data.items():
                 for _user, entry_list in user_dict.items():
                     for entry_data in entry_list:
@@ -3030,15 +3044,14 @@ class VikingFS:
     async def _write_relation_table(
         self, dir_path: str, entries: List[RelationEntry], ctx: Optional[RequestContext] = None
     ) -> None:
-        """Write .relations.json."""
-        # Use flat list format
+        """Write .relations.json (routed through _relation_table_path + ensure parents for sidecars)."""
+        table_path = await self._relation_table_path(dir_path, ctx=ctx)
         data = [entry.to_dict() for entry in entries]
-
         content = json.dumps(data, ensure_ascii=False, indent=2)
-        table_path = f"{dir_path}/.relations.json"
         if isinstance(content, str):
             content = content.encode("utf-8")
-
+        if "/.relations/" in table_path:
+            await self._ensure_parent_dirs(table_path, ctx=ctx)
         await self._async_agfs.write(table_path, content)
 
     # ========== Batch Read (backward compatible) ==========
