@@ -99,6 +99,26 @@ class TestTEIRerankClient:
         client = TEIRerankClient(api_base="http://tei.local:8080")
         assert client.rerank_batch("query", []) == []
 
+    @patch("openviking.models.rerank.tei_rerank.requests.post")
+    def test_rerank_batch_chunks_documents(self, mock_post):
+        first_response = MagicMock()
+        first_response.json.return_value = [
+            {"index": 1, "score": 0.2},
+            {"index": 0, "score": 0.1},
+        ]
+        first_response.raise_for_status = MagicMock()
+        second_response = MagicMock()
+        second_response.json.return_value = [{"index": 0, "score": 0.3}]
+        second_response.raise_for_status = MagicMock()
+        mock_post.side_effect = [first_response, second_response]
+
+        client = TEIRerankClient(api_base="http://tei.local:8080", batch_size=2)
+
+        assert client.rerank_batch("q", ["a", "b", "c"]) == [0.1, 0.2, 0.3]
+        assert mock_post.call_count == 2
+        assert mock_post.call_args_list[0].kwargs["json"]["texts"] == ["a", "b"]
+        assert mock_post.call_args_list[1].kwargs["json"]["texts"] == ["c"]
+
 
 class TestTEIRerankConfig:
     """Test TEI rerank config parsing and dispatch."""
@@ -135,6 +155,7 @@ class TestTEIRerankConfig:
             api_key="key",
             model="BAAI/bge-reranker-v2-m3",
             extra_headers={"X-Test": "1"},
+            batch_size=16,
         )
 
         client = RerankClient.from_config(config)
@@ -144,3 +165,9 @@ class TestTEIRerankConfig:
         assert client.api_key == "key"
         assert client.model_name == "BAAI/bge-reranker-v2-m3"
         assert client.extra_headers == {"X-Test": "1"}
+        assert client.batch_size == 16
+
+    def test_config_default_batch_size_is_tei_safe(self):
+        config = RerankConfig(provider="tei", api_base="http://tei.local:8080")
+
+        assert config.batch_size == 32

@@ -44,6 +44,15 @@ class RerankConfig(BaseModel):
         ),
     )
 
+    batch_size: int = Field(
+        default=32,
+        ge=1,
+        description=(
+            "Maximum number of documents to send in a single rerank provider call. "
+            "TEI deployments commonly cap this at 32; larger candidate sets are chunked."
+        ),
+    )
+
     threshold: float = Field(
         default=0.1, description="Relevance threshold (score > threshold is relevant)"
     )

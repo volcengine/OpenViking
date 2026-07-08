@@ -33,6 +33,7 @@ class TEIRerankClient(RerankBase):
         api_key: Optional[str] = None,
         model_name: Optional[str] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        batch_size: int = 32,
     ) -> None:
         """
         Initialize TEI rerank client.
@@ -42,12 +43,14 @@ class TEIRerankClient(RerankBase):
             api_key: Optional Bearer token for TEI deployments that enforce auth.
             model_name: Optional model name used for usage tracking.
             extra_headers: Optional extra headers for API requests.
+            batch_size: Maximum number of documents to send per TEI request.
         """
         super().__init__()
         self.api_base = api_base
         self.api_key = api_key
         self.model_name = model_name
         self.extra_headers = extra_headers or {}
+        self.batch_size = max(1, int(batch_size))
         self.provider = "tei"
 
     @property
@@ -72,6 +75,24 @@ class TEIRerankClient(RerankBase):
         """
         if not documents:
             return []
+
+        scores = [0.0] * len(documents)
+        for start in range(0, len(documents), self.batch_size):
+            chunk = documents[start : start + self.batch_size]
+            chunk_scores = self._rerank_chunk(query, chunk)
+            if chunk_scores is None:
+                return None
+            scores[start : start + len(chunk_scores)] = chunk_scores
+
+        logger.debug(
+            "[TEIRerankClient] Reranked %s documents in %s request(s)",
+            len(documents),
+            (len(documents) + self.batch_size - 1) // self.batch_size,
+        )
+        return scores
+
+    def _rerank_chunk(self, query: str, documents: List[str]) -> Optional[List[float]]:
+        """Rerank one TEI-sized chunk and return scores in chunk-local order."""
 
         req_body = {
             "query": query,
@@ -118,7 +139,6 @@ class TEIRerankClient(RerankBase):
                     return None
                 scores[idx] = float(item.get("score", item.get("relevance_score", 0.0)))
 
-            logger.debug(f"[TEIRerankClient] Reranked {len(documents)} documents")
             return scores
 
         except Exception as e:
@@ -154,4 +174,5 @@ class TEIRerankClient(RerankBase):
             api_key=config.api_key,
             model_name=config.model,
             extra_headers=config.extra_headers,
+            batch_size=config.batch_size,
         )
