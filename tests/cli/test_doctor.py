@@ -601,6 +601,30 @@ class TestCheckVlm:
         assert "Function Calling" in detail
         assert fix == "fix"
 
+    def test_check_vlm_drives_real_probe_20037(self, tmp_path: Path):
+        # Integration (§8b): exercise the real check_vlm -> _probe_vlm_function_calling
+        # -> VLMConfig.get_completion_async chain with ONLY the LLM boundary mocked.
+        # The probe is NOT stubbed, so a WARN here proves the live chain wires up.
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {"vlm": {"provider": "openai", "model": "gpt-4o-mini", "api_key": "sk-test"}}
+            )
+        )
+
+        async def raise_20037(self, *args, **kwargs):
+            raise Exception(
+                "Error code: 400 - {'code': 20037, 'message': "
+                "'Function call is not supported for this model.', 'data': None}"
+            )
+
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch.object(VLMConfig, "get_completion_async", raise_20037):
+                status, detail, fix = check_vlm()
+        assert status == "warn"
+        assert "does not support Function Calling" in detail
+        assert "Function-Calling-capable" in fix
+
     def test_config_fail_skips_probe(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(json.dumps({"vlm": {}}))
