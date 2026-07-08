@@ -94,3 +94,149 @@ async def test_relation_table_path_name_collision(vfs, monkeypatch):
     assert results["/local/test_account/resources/project/x"].endswith("x/.relations.json")
     assert results["/local/test_account/resources/project/x.md"].endswith("x.md/.relations.json")
     assert results["/local/test_account/resources/project/x"] != results["/local/test_account/resources/project/x.md"]
+
+
+# ---------------------------------------------------------------------------
+# Real end-to-end: drive the ACTUAL VikingFS.link -> persist -> relations
+# read-back -> unlink path (not just the path helper), through a backend that
+# faithfully models localfs ENOTDIR semantics (a file cannot hold children).
+# This both reproduces the #3067 bug (control assertion) and proves the fix
+# routes a file source's table to the sidecar so the write succeeds.
+# The entire fix lives in Python; the fake stands in only for the storage
+# syscalls below the fix (Rust is untouched by design).
+# ---------------------------------------------------------------------------
+
+from openviking.storage.internal_names import (  # noqa: E402
+    STORAGE_INTERNAL_ENTRY_NAMES,
+    WEBDAV_RESERVED_FILENAMES,
+)
+
+
+class _FakeBackendFs:
+    """In-memory fs that raises ENOTDIR when asked to create a child of a file."""
+
+    def __init__(self):
+        self.files = {}  # normalized path -> bytes
+        self.dirs = {"/"}
+
+    @staticmethod
+    def _norm(path):
+        return "/" + path.strip("/") if path.strip("/") else "/"
+
+    def _enotdir_if_file_ancestor(self, path):
+        # Mirrors localfs open(): open("a.md/child") fails because a.md is a file.
+        cur = ""
+        for part in [p for p in self._norm(path).strip("/").split("/") if p][:-1]:
+            cur = cur + "/" + part
+            if cur in self.files:
+                raise OSError("failed to open file: Not a directory (os error 20)")
+
+    async def stat(self, path):
+        p = self._norm(path)
+        if p in self.files:
+            return {"isDir": False, "is_dir": False}
+        return {"isDir": True, "is_dir": True}
+
+    async def read(self, path):
+        p = self._norm(path)
+        if p in self.files:
+            return self.files[p]
+        raise FileNotFoundError(path)
+
+    async def write(self, path, content):
+        p = self._norm(path)
+        self._enotdir_if_file_ancestor(p)
+        self.files[p] = content
+        return True
+
+    async def mkdir(self, path):
+        self.dirs.add(self._norm(path))
+        return True
+
+    async def ensure_parent_dirs(self, path):
+        parent = self._norm(path).rsplit("/", 1)[0] or "/"
+        self._enotdir_if_file_ancestor(parent + "/x")
+        cur = ""
+        for part in [p for p in parent.strip("/").split("/") if p]:
+            cur = cur + "/" + part
+            self.dirs.add(cur)
+        return True
+
+
+@pytest.fixture
+def e2e_vfs(monkeypatch):
+    backend = _FakeBackendFs()
+    # Pre-create the two file resources so stat() reports them as files.
+    backend.files["/local/test_account/resources/project/a.md"] = b"a"
+    backend.files["/local/test_account/resources/project/b.md"] = b"b"
+    backend.dirs.update(
+        {
+            "/local",
+            "/local/test_account",
+            "/local/test_account/resources",
+            "/local/test_account/resources/project",
+        }
+    )
+    vfs = VikingFS(agfs=backend)
+    # Drive the async backend directly (VikingFS wraps a *sync* agfs in a
+    # threadpool client; our fake is already async, matching the exact call
+    # surface the relation helpers use: stat/read/write/ensure_parent_dirs).
+    vfs._async_agfs = backend
+    # Focus on the relation-table routing (the fix), not access control.
+    monkeypatch.setattr(vfs, "_ensure_mutable_access", lambda *a, **k: None)
+    monkeypatch.setattr(vfs, "_ensure_access", lambda *a, **k: None)
+    monkeypatch.setattr(
+        vfs,
+        "_uri_to_path",
+        lambda uri, **k: uri.replace("viking://", "/local/test_account/").rstrip("/"),
+    )
+    return vfs, backend
+
+
+async def test_file_source_link_persist_readback_unlink_e2e(e2e_vfs):
+    """rows 3/4/5/6: real link -> persist -> relations -> unlink for a FILE source."""
+    vfs, backend = e2e_vfs
+    a = "viking://resources/project/a.md"
+    b = "viking://resources/project/b.md"
+
+    # Control: the pre-fix path (child of the file) genuinely raises ENOTDIR,
+    # proving the backend models the bug the fix must route around.
+    with pytest.raises(OSError, match="Not a directory"):
+        await backend.write("/local/test_account/resources/project/a.md/.relations.json", b"x")
+
+    # rows 3/4 file->file link now succeeds (was ENOTDIR).
+    await vfs.link(a, [b], reason="test")
+
+    sidecar = "/local/test_account/resources/project/.relations/a.md/.relations.json"
+    assert sidecar in backend.files, "file-source table must land in the sidecar"
+    assert "/local/test_account/resources/project/a.md/.relations.json" not in backend.files
+
+    # row 5: read-back routes to the same sidecar and returns the target + reason.
+    entries = await vfs.get_relation_table(a)
+    assert len(entries) == 1
+    assert entries[0].uris == [b]
+    assert entries[0].reason == "test"
+
+    # row 6: unlink removes the entry; table persists as empty.
+    await vfs.unlink(a, b)
+    assert await vfs.get_relation_table(a) == []
+
+
+async def test_dir_source_link_unchanged_e2e(e2e_vfs):
+    """rows 1/2 + row 10: dir source keeps writing to <dir>/.relations.json (byte-identical)."""
+    vfs, backend = e2e_vfs
+    d = "viking://resources/project/"  # existing dir source
+    target = "viking://resources/project/b.md"
+    await vfs.link(d, [target], reason="dir-test")
+
+    assert "/local/test_account/resources/project/.relations.json" in backend.files
+    # dir table is separate from any file sidecar (no collision).
+    assert "/local/test_account/resources/project/.relations" not in backend.files
+    entries = await vfs.get_relation_table(d)
+    assert entries[0].uris == [target]
+
+
+async def test_relations_container_registered_internal():
+    """rows 8/12: .relations dir is hidden from ls (storage) and WebDAV listings."""
+    assert ".relations" in STORAGE_INTERNAL_ENTRY_NAMES
+    assert ".relations" in WEBDAV_RESERVED_FILENAMES
