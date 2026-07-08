@@ -190,6 +190,13 @@ pub(crate) fn report_for_plain_help_error(
     )])
 }
 
+fn is_client_auth_error(status: Option<u16>, message: &str) -> bool {
+    if matches!(status, Some(code) if (500..600).contains(&code)) {
+        return false;
+    }
+    looks_like_auth_error(message)
+}
+
 pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error) -> ErrorReport {
     let language = Language::current();
     let command = command.into();
@@ -231,7 +238,7 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
             ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
             ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
         ]),
-        Error::Api { message, .. } if looks_like_auth_error(message) => ErrorReport::new(
+        Error::Api { message, status } if is_client_auth_error(*status, message) => ErrorReport::new(
             copy(language, "Authentication Error", "认证错误"),
             copy(language, "OpenViking rejected the API key for the active config.", "OpenViking 拒绝了当前配置的 API Key。"),
         )
@@ -1138,6 +1145,31 @@ Usage: ov config [OPTIONS] [COMMAND]
 
         assert!(verbose.contains("Detail:"));
         assert!(verbose.contains("Request ID"));
+    }
+
+    #[test]
+    fn remote_resource_auth_failure_wrapped_as_5xx_is_not_api_key_error() {
+        let error = Error::api_with_status(
+            "HTTP request failed: authentication error (401). Check your credentials or permissions. URL: https://example.com/private"
+                .to_string(),
+            500,
+        );
+        let report = report_for_runtime_error("ov add-resource https://example.com/private", &error);
+        let normal = strip_ansi(&render_report(&report, false));
+
+        assert!(normal.contains("OpenViking API Error"));
+        assert!(!normal.contains("Authentication Error"));
+        assert!(!normal.contains("OpenViking rejected the API key"));
+    }
+
+    #[test]
+    fn server_401_is_still_api_key_error() {
+        let error = Error::api_with_status("API key invalid".to_string(), 401);
+        let report = report_for_runtime_error("ov status", &error);
+        let normal = strip_ansi(&render_report(&report, false));
+
+        assert!(normal.contains("Authentication Error"));
+        assert!(normal.contains("OpenViking rejected the API key"));
     }
 
     #[test]
