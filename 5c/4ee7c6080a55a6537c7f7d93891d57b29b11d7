@@ -1,0 +1,58 @@
+benchmark/.gitignore
+  h_7bbfeebef9ffd2 2
+benchmark/vectordb_perf/README.md
+  h_7bbfeebef9ffd2 35-49,82,85-97,99-102,120,131-155,194-209,213-221,223-229,288,291-292,308-309,314-323
+  s_e53d696dd83dae::t_a36c3dee7a10fa 73,108,118
+  s_15921b11d49460::t_b2203b5d66c06e 110
+  s_142ada8574d0a1::t_9509080e93b131 1-34,50-72,74-81,83-84,98,103-107,109,111-117,119,121-130,156-193,210-212,222,230-287,289-290,293-307,310-313,324-331
+benchmark/vectordb_perf/__init__.py
+  s_142ada8574d0a1::t_382c53de37ba2d 1
+benchmark/vectordb_perf/run.py
+  s_142ada8574d0a1::t_25f339c8112b2c 1-1604
+src/index/detail/scalar/bitmap_holder/bitmap_field_group.cpp
+  s_142ada8574d0a1::t_92a2ff7dd0f67f 52-56
+src/index/detail/scalar/bitmap_holder/bitmap_field_group.h
+  s_142ada8574d0a1::t_dfdf6d2c666454 471-475
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "5c4ee7c6080a55a6537c7f7d93891d57b29b11d7",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "h_b23a6a8439c0dd": {
+      "author": "unknown"
+    }
+  },
+  "sessions": {
+    "s_142ada8574d0a1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f37a9-96d9-7620-a530-8ab52ba2160a",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_15921b11d49460": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-bcc8c9cf-7c72-4b56-95d3-eaec7212c748",
+        "model": "default"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_e53d696dd83dae": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-c8a2a9f5-ecc1-48af-920d-4c4b8471f672",
+        "model": "default"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
