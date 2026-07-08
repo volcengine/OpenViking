@@ -446,6 +446,9 @@ def test_tau2_final_answer_is_appended_for_native_evaluation(monkeypatch):
 
 def test_tau2_configure_tools_removes_only_openviking_tools():
     from benchmark.tau2.train.rollout_executor import _configure_tools
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        normalize_tau2_experience_loader_mode,
+    )
 
     class FakeTools:
         def __init__(self):
@@ -501,6 +504,7 @@ def test_tau2_configure_tools_removes_only_openviking_tools():
         "read_experience",
         "get_user_details",
     ]
+    assert normalize_tau2_experience_loader_mode("direct_experience") == "direct_experience"
 
 
 def test_tau2_rollout_backend_factory_defaults_to_native():
@@ -593,6 +597,9 @@ def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
         "rollout_language": "zh",
         "loader_mode": "constraint",
         "system_prompt_profile": "minimal",
+        "direct_experience_content": None,
+        "direct_experience_name": None,
+        "direct_experience_uri": None,
     }
 
     module.make_tau2_rollout_executor(
@@ -1132,6 +1139,69 @@ async def test_tau2_run_agent_constraint_mode_does_not_force_load_experience_loa
     tools_used = result[2]
     assert not any(tool.get("required_skill") == "experience_loader" for tool in tools_used)
     assert all("experience_loader" not in str(message) for message in observed["llm_messages"])
+
+
+@pytest.mark.asyncio
+async def test_tau2_run_agent_direct_experience_injects_reminder_without_skill():
+    import benchmark.tau2.train.rollout_executor_vikingbot as module
+
+    observed = {}
+
+    class FakeContextBuilder:
+        async def build_messages(self, **kwargs):
+            return [
+                {"role": "system", "content": "ctx system"},
+                {"role": "user", "content": kwargs["current_message"]},
+            ]
+
+    class FakeLoopResult:
+        def __init__(self, messages):
+            self.messages = list(messages)
+
+        def __iter__(self):
+            yield "final"
+            yield None
+            yield []
+            yield {}
+            yield 1
+
+    class FakeAgent:
+        context = FakeContextBuilder()
+        bus = None
+
+        async def _run_agent_loop(self, **kwargs):
+            observed["messages"] = list(kwargs["messages"])
+            return FakeLoopResult(kwargs["messages"])
+
+    result = await module._run_agent(
+        agent=FakeAgent(),
+        system_prompt="tau2 policy",
+        user_prompt="user query",
+        session_key=SimpleNamespace(safe_name=lambda: "session"),
+        sender_id="tau2_user",
+        keep_default_tools=True,
+        loader_mode="direct_experience",
+        direct_experience_content="When the user asks for an aggregate, freeze the object set.",
+        direct_experience_name="freeze_aggregate_request_scope",
+        case_lookup={"benchmark": "tau2", "strict": True, "case_name": "case"},
+    )
+
+    messages = observed["messages"]
+    reminder = next(
+        msg["content"]
+        for msg in messages
+        if msg.get("role") == "user" and "[Experience Reminder]" in msg.get("content", "")
+    )
+    assert messages[0] == {"role": "system", "content": "ctx system"}
+    assert messages[1] == {"role": "system", "content": "tau2 policy"}
+    assert messages[2]["content"] == reminder
+    assert "### freeze_aggregate_request_scope" in reminder
+    assert "direct://experience/freeze_aggregate_request_scope" in reminder
+    assert "freeze the object set" in reminder
+    assert result[5] is not None
+    assert "## Experience Memories" in result[5]
+    assert result[6] == reminder
+    assert result[7] is None
 
 
 def test_tau2_rollout_messages_preserve_runtime_user_constraint_reminder():

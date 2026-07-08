@@ -10,6 +10,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
@@ -35,7 +36,7 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-Tau2ExperienceLoaderMode = Literal["skill", "constraint"]
+Tau2ExperienceLoaderMode = Literal["skill", "constraint", "direct_experience"]
 VikingBotSystemPromptProfile = Literal["full", "minimal"]
 DEFAULT_TAU2_EXPERIENCE_LOADER_MODE: Tau2ExperienceLoaderMode = "constraint"
 DEFAULT_SYSTEM_PROMPT_PROFILE: VikingBotSystemPromptProfile = "minimal"
@@ -50,8 +51,8 @@ def normalize_system_prompt_profile(value: Any) -> VikingBotSystemPromptProfile:
 
 def normalize_tau2_experience_loader_mode(value: Any) -> Tau2ExperienceLoaderMode:
     mode = str(value or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE).strip().lower()
-    if mode not in {"skill", "constraint"}:
-        raise ValueError("loader_mode must be 'skill' or 'constraint'")
+    if mode not in {"skill", "constraint", "direct_experience"}:
+        raise ValueError("loader_mode must be 'skill', 'constraint', or 'direct_experience'")
     return mode  # type: ignore[return-value]
 
 
@@ -578,12 +579,22 @@ class VikingBotTau2RolloutExecutor:
     rollout_language: str = "default"
     loader_mode: Tau2ExperienceLoaderMode = DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
     system_prompt_profile: VikingBotSystemPromptProfile = DEFAULT_SYSTEM_PROMPT_PROFILE
+    direct_experience_content: str | None = None
+    direct_experience_name: str | None = None
+    direct_experience_uri: str | None = None
 
     def __post_init__(self) -> None:
         if self.rollout_language not in {"default", "zh"}:
             raise ValueError("rollout_language must be 'default' or 'zh'")
         self.loader_mode = normalize_tau2_experience_loader_mode(self.loader_mode)
         self.system_prompt_profile = normalize_system_prompt_profile(self.system_prompt_profile)
+        if (
+            self.loader_mode == "direct_experience"
+            and not str(self.direct_experience_content or "").strip()
+        ):
+            raise ValueError(
+                "direct_experience_content is required when loader_mode='direct_experience'"
+            )
 
     async def execute(
         self,
@@ -680,6 +691,9 @@ class VikingBotTau2RolloutExecutor:
             keep_default_tools=self.keep_default_tools,
             loader_mode=self.loader_mode,
             system_prompt_profile=self.system_prompt_profile,
+            direct_experience_content=self.direct_experience_content,
+            direct_experience_name=self.direct_experience_name,
+            direct_experience_uri=self.direct_experience_uri,
             timings=timings,
             case_lookup=_tau2_case_lookup(case),
         )
@@ -747,6 +761,12 @@ class VikingBotTau2RolloutExecutor:
                 "experience_loader_mode": self.loader_mode,
                 "system_prompt_profile": self.system_prompt_profile,
                 "experience_loader_skill": experience_loader_skill,
+                "direct_experience": _direct_experience_metadata(
+                    content=self.direct_experience_content,
+                    name=self.direct_experience_name,
+                    uri=self.direct_experience_uri,
+                    enabled=self.loader_mode == "direct_experience",
+                ),
                 "execution_metadata": dict(context.metadata),
             },
         )
@@ -1083,6 +1103,12 @@ def _build_system_prompt(
             "task; current policy, current tool results, and current user facts override prior "
             "experience."
         )
+    elif loader_mode == "direct_experience":
+        instructions.append(
+            "A direct experimental experience will be injected as an Experience Reminder before "
+            "the task. Treat it as prior-run guidance only when it matches the current situation; "
+            "current policy, current tool results, and current user facts override it."
+        )
     else:
         instructions.append(
             "Experience constraints may be injected automatically as reminder messages before "
@@ -1245,6 +1271,9 @@ async def _run_agent(
     keep_default_tools: bool,
     loader_mode: Tau2ExperienceLoaderMode = DEFAULT_TAU2_EXPERIENCE_LOADER_MODE,
     system_prompt_profile: VikingBotSystemPromptProfile = DEFAULT_SYSTEM_PROMPT_PROFILE,
+    direct_experience_content: str | None = None,
+    direct_experience_name: str | None = None,
+    direct_experience_uri: str | None = None,
     timings: "_RolloutTiming | None" = None,
     case_lookup: dict[str, Any] | None = None,
 ):
@@ -1279,6 +1308,14 @@ async def _run_agent(
         timings.record("build_messages", stage_started_at)
     if system_prompt:
         messages.insert(1, {"role": "system", "content": system_prompt})
+    direct_experience_reminder = None
+    if loader_mode == "direct_experience":
+        direct_experience_reminder = _build_direct_experience_reminder(
+            content=direct_experience_content,
+            name=direct_experience_name,
+            uri=direct_experience_uri,
+        )
+        _insert_experience_reminder_message(messages, direct_experience_reminder)
     _override_vikingbot_current_time_messages(
         messages,
         business_current_time=_tau2_policy_current_time_display(system_prompt),
@@ -1347,6 +1384,82 @@ async def _run_agent(
         experience_loader_skill,
         runtime_messages,
     )
+
+
+def _build_direct_experience_reminder(
+    *,
+    content: str | None,
+    name: str | None = None,
+    uri: str | None = None,
+) -> str:
+    """Render request-provided experience text as the standard reminder message."""
+
+    exp_content = str(content or "").strip()
+    if not exp_content:
+        raise ValueError(
+            "direct_experience_content is required when loader_mode='direct_experience'"
+        )
+    exp_name = _safe_direct_experience_name(name)
+    exp_uri = str(uri or "").strip() or (
+        f"direct://experience/{_slug_direct_experience_name(exp_name)}"
+    )
+    return "\n".join(
+        [
+            "[Experience Reminder]",
+            "## Relevant Agent Experience",
+            "",
+            f"### {exp_name}",
+            "",
+            f"Experience URI: `{exp_uri}`",
+            "",
+            exp_content,
+        ]
+    ).rstrip()
+
+
+def _insert_experience_reminder_message(
+    messages: list[dict[str, Any]],
+    reminder_content: str,
+) -> None:
+    """Insert a reminder after leading system messages and before the current user task."""
+
+    insert_at = 0
+    while insert_at < len(messages):
+        raw = messages[insert_at]
+        if not isinstance(raw, dict) or raw.get("role") != "system":
+            break
+        insert_at += 1
+    messages.insert(insert_at, {"role": "user", "content": reminder_content})
+
+
+def _safe_direct_experience_name(name: str | None) -> str:
+    text = re.sub(r"\s+", " ", str(name or "").strip())
+    return text or "direct_experience"
+
+
+def _slug_direct_experience_name(name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name or "").strip()).strip("_.-")
+    return slug[:80] or "direct_experience"
+
+
+def _direct_experience_metadata(
+    *,
+    content: str | None,
+    name: str | None,
+    uri: str | None,
+    enabled: bool,
+) -> dict[str, Any] | None:
+    if not enabled:
+        return None
+    content_text = str(content or "")
+    exp_name = _safe_direct_experience_name(name)
+    return {
+        "name": exp_name,
+        "uri": str(uri or "").strip()
+        or f"direct://experience/{_slug_direct_experience_name(exp_name)}",
+        "content_chars": len(content_text),
+        "content_sha256": sha256(content_text.encode("utf-8")).hexdigest(),
+    }
 
 
 def _override_vikingbot_current_time_messages(

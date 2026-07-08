@@ -75,7 +75,7 @@ Options:
                      Rollout response language. Use zh for Chinese user-facing replies.
   --rollout-backend native|vikingbot
                      Rollout implementation backend. Default: vikingbot.
-  --loader-mode skill|constraint
+  --loader-mode skill|constraint|direct_experience
                      VikingBot experience loading mode. Default: constraint.
   --native-thread-workers N
                      Default thread pool workers for native rollout. Default: 128.
@@ -107,8 +107,8 @@ if [[ "${ROLLOUT_BACKEND}" != "native" && "${ROLLOUT_BACKEND}" != "vikingbot" ]]
   exit 1
 fi
 
-if [[ "${LOADER_MODE}" != "skill" && "${LOADER_MODE}" != "constraint" ]]; then
-  echo "[tau2-service] invalid --loader-mode: ${LOADER_MODE}. Expected skill or constraint" >&2
+if [[ "${LOADER_MODE}" != "skill" && "${LOADER_MODE}" != "constraint" && "${LOADER_MODE}" != "direct_experience" ]]; then
+  echo "[tau2-service] invalid --loader-mode: ${LOADER_MODE}. Expected skill, constraint, or direct_experience" >&2
   exit 1
 fi
 

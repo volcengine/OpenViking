@@ -141,7 +141,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--loader-mode",
-        choices=["skill", "constraint"],
+        choices=["skill", "constraint", "direct_experience"],
         default=os.getenv("TAU2_EXPERIENCE_LOADER_MODE", DEFAULT_TAU2_EXPERIENCE_LOADER_MODE),
         help="Experience loading mode for vikingbot rollouts (default: constraint).",
     )

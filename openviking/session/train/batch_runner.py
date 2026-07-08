@@ -65,6 +65,9 @@ class BatchTrainEvalConfig:
     keep_default_tools: bool = True
     loader_mode: str = "constraint"
     max_iterations: int = 30
+    direct_experience_content: str | None = None
+    direct_experience_name: str | None = None
+    direct_experience_uri: str | None = None
     server_url: str | None = None
     api_key: str | None = None
     account_id: str = "default"
@@ -102,8 +105,20 @@ class BatchTrainEvalConfig:
         if self.concurrency <= 0:
             raise ValueError("concurrency must be > 0")
         self.loader_mode = str(self.loader_mode or "constraint").strip().lower()
-        if self.loader_mode not in {"skill", "constraint"}:
-            raise ValueError("loader_mode must be skill or constraint")
+        if self.loader_mode not in {"skill", "constraint", "direct_experience"}:
+            raise ValueError("loader_mode must be skill, constraint, or direct_experience")
+        if self.direct_experience_content is not None:
+            self.direct_experience_content = str(self.direct_experience_content).strip()
+            if not self.direct_experience_content:
+                self.direct_experience_content = None
+        if self.direct_experience_name is not None:
+            self.direct_experience_name = str(self.direct_experience_name).strip() or None
+        if self.direct_experience_uri is not None:
+            self.direct_experience_uri = str(self.direct_experience_uri).strip() or None
+        if self.loader_mode == "direct_experience" and not self.direct_experience_content:
+            raise ValueError(
+                "direct_experience_content is required when loader_mode is direct_experience"
+            )
         if self.max_iterations <= 0:
             raise ValueError("max_iterations must be > 0")
         if self.commit_poll_interval_seconds <= 0:
@@ -321,6 +336,7 @@ async def run_batch_train_eval(config: BatchTrainEvalConfig) -> BatchTrainEvalRe
                 if config.skip_baseline_eval or config.eval_split is None
                 else str(_baseline_cache_path(config))
             ),
+            direct_experience=_direct_experience_summary(config),
         )
         policy_trainer = SessionCommitPolicyTrainer(
             client=client,
@@ -688,6 +704,7 @@ def _write_baseline_cache(
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
         "loader_mode": config.loader_mode,
+        "direct_experience": _direct_experience_summary(config),
         "created_at": datetime.now().isoformat(),
         "report": report,
     }
@@ -757,6 +774,14 @@ def _build_pipeline(
         "loader_mode": config.loader_mode,
         "max_iterations": config.max_iterations,
     }
+    if config.loader_mode == "direct_experience":
+        rollout_options.update(
+            {
+                "direct_experience_content": config.direct_experience_content,
+                "direct_experience_name": config.direct_experience_name,
+                "direct_experience_uri": config.direct_experience_uri,
+            }
+        )
     rollout_executor: Any = RemoteRolloutExecutor(
         service_url=_require_benchmark_service_url(config),
         concurrency=config.concurrency,
@@ -1089,6 +1114,7 @@ def _train_rollout_cache_key_prefix(config: BatchTrainEvalConfig) -> str:
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
         "loader_mode": config.loader_mode,
+        "direct_experience": _direct_experience_summary(config),
     }
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
@@ -1107,12 +1133,25 @@ def _baseline_cache_key(config: BatchTrainEvalConfig) -> str:
         "max_iterations": config.max_iterations,
         "keep_default_tools": config.keep_default_tools,
         "loader_mode": config.loader_mode,
+        "direct_experience": _direct_experience_summary(config),
     }
     stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = sha256(stable.encode("utf-8")).hexdigest()[:16]
     index = _index_label(effective_eval_index)
     split = _cache_slug(str(config.eval_split or "none"))
     return f"{_cache_slug(config.domain)}_{split}_index-{index}_trials-{config.trials}_{digest}"
+
+
+def _direct_experience_summary(config: BatchTrainEvalConfig) -> dict[str, Any] | None:
+    if config.loader_mode != "direct_experience":
+        return None
+    content = str(config.direct_experience_content or "")
+    return {
+        "name": config.direct_experience_name,
+        "uri": config.direct_experience_uri,
+        "content_chars": len(content),
+        "content_sha256": sha256(content.encode("utf-8")).hexdigest(),
+    }
 
 
 def _index_payload(indices: list[int] | None) -> int | list[int] | None:

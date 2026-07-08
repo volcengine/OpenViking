@@ -73,9 +73,35 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--loader-mode",
-        choices=("skill", "constraint"),
+        choices=("skill", "constraint", "direct_experience"),
         default="constraint",
         help="Tau2 VikingBot experience loading mode (default: constraint).",
+    )
+    parser.add_argument(
+        "--direct-experience-content",
+        default=None,
+        help=(
+            "Experience text to inject directly as an Experience Reminder. "
+            "Requires --loader-mode direct_experience."
+        ),
+    )
+    parser.add_argument(
+        "--direct-experience-file",
+        default=None,
+        help=(
+            "Path to experience text to inject directly as an Experience Reminder. "
+            "Requires --loader-mode direct_experience."
+        ),
+    )
+    parser.add_argument(
+        "--direct-experience-name",
+        default=None,
+        help="Optional display name for --loader-mode direct_experience.",
+    )
+    parser.add_argument(
+        "--direct-experience-uri",
+        default=None,
+        help="Optional synthetic URI for --loader-mode direct_experience.",
     )
     parser.add_argument(
         "--train-index",
@@ -193,6 +219,19 @@ async def main_async() -> int:
         run_batch_train_eval,
     )
 
+    direct_experience_content = _resolve_direct_experience_content(
+        content=args.direct_experience_content,
+        file_path=args.direct_experience_file,
+    )
+    if args.loader_mode != "direct_experience" and direct_experience_content:
+        raise ValueError(
+            "--direct-experience-content/--direct-experience-file require "
+            "--loader-mode direct_experience"
+        )
+    if args.loader_mode != "direct_experience" and (
+        args.direct_experience_name or args.direct_experience_uri
+    ):
+        raise ValueError("--direct-experience-name/--direct-experience-uri require direct mode")
     report = await run_batch_train_eval(
         BatchTrainEvalConfig(
             dataset=args.dataset,
@@ -212,6 +251,9 @@ async def main_async() -> int:
             keep_default_tools=True,
             loader_mode=args.loader_mode,
             max_iterations=args.max_iterations,
+            direct_experience_content=direct_experience_content,
+            direct_experience_name=args.direct_experience_name,
+            direct_experience_uri=args.direct_experience_uri,
             train_index=_parse_indices_arg(args.train_index),
             eval_index=_parse_indices_arg(args.eval_index),
             benchmark_service_url=args.benchmark_service_url,
@@ -228,6 +270,18 @@ async def main_async() -> int:
         )
     )
     return 1 if any(epoch.get("errors") for epoch in report.train_epochs) else 0
+
+
+def _resolve_direct_experience_content(
+    *,
+    content: str | None,
+    file_path: str | None,
+) -> str | None:
+    if content and file_path:
+        raise ValueError("Use only one of --direct-experience-content or --direct-experience-file")
+    if file_path:
+        return Path(file_path).expanduser().read_text(encoding="utf-8")
+    return content
 
 
 def main() -> None:

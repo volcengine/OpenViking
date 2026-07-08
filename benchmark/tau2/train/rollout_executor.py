@@ -62,7 +62,15 @@ def make_tau2_rollout_executor(
             system_prompt_profile=normalize_system_prompt_profile(
                 opts.get("system_prompt_profile") or DEFAULT_SYSTEM_PROMPT_PROFILE
             ),
+            direct_experience_content=_optional_str(opts.get("direct_experience_content")),
+            direct_experience_name=_optional_str(opts.get("direct_experience_name")),
+            direct_experience_uri=_optional_str(opts.get("direct_experience_uri")),
         )
+    loader_mode = normalize_tau2_experience_loader_mode(
+        opts.get("loader_mode") or DEFAULT_TAU2_EXPERIENCE_LOADER_MODE
+    )
+    if loader_mode == "direct_experience":
+        raise ValueError("loader_mode='direct_experience' requires rollout backend 'vikingbot'")
     return NativeTau2RolloutExecutor(
         concurrency=concurrency,
         agent_llm=_optional_str(opts.get("agent_llm")),
