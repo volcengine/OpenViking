@@ -250,7 +250,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(openviking_http_requests_total[$__rate_interval]))",
+          "expr": "sum(rate(openviking_http_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "HTTP RPS",
           "range": true,
           "refId": "A"
@@ -324,7 +324,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(openviking_http_request_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(openviking_http_request_duration_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "HTTP P95",
           "range": true,
           "refId": "A"
@@ -402,7 +402,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(openviking_retrieval_requests_total[$__rate_interval]))",
+          "expr": "sum(rate(openviking_retrieval_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "Retrieval RPS",
           "range": true,
           "refId": "A"
@@ -480,7 +480,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(openviking_resource_stage_total[$__rate_interval]))",
+          "expr": "sum(rate(openviking_resource_stage_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "Resource RPS",
           "range": true,
           "refId": "A"
@@ -558,7 +558,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(openviking_vlm_calls_total[$__rate_interval]))",
+          "expr": "sum(rate(openviking_vlm_calls_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "VLM RPS",
           "range": true,
           "refId": "A"
@@ -636,7 +636,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(rate(openviking_embedding_requests_total[$__rate_interval]))",
+          "expr": "sum(rate(openviking_embedding_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "Embedding RPS",
           "range": true,
           "refId": "A"
@@ -1190,8 +1190,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "max by (collection) (openviking_vikingdb_collection_health{valid=\"1\"}) or on(collection) max by (collection) (openviking_vikingdb_collection_health{valid=\"0\"})",
-          "legendFormat": "{{collection}} health",
+          "expr": "max by (collection, account_id) (openviking_vikingdb_collection_health{account_id=~\"$account_id\", valid=\"1\"}) or on(collection, account_id) max by (collection, account_id) (openviking_vikingdb_collection_health{account_id=~\"$account_id\", valid=\"0\"})",
+          "legendFormat": "{{account_id}} {{collection}} health",
           "range": true,
           "refId": "A"
         }
@@ -1268,7 +1268,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "max by (collection) (openviking_vikingdb_collection_vectors{valid=\"1\"}) or on(collection) max by (collection) (openviking_vikingdb_collection_vectors{valid=\"0\"})",
+          "expr": "sum by (collection) (openviking_vikingdb_collection_vectors{account_id=~\"$account_id\", valid=\"1\"} or on(collection, account_id) openviking_vikingdb_collection_vectors{account_id=~\"$account_id\", valid=\"0\"})",
           "legendFormat": "{{collection}} vectors",
           "range": true,
           "refId": "A"
@@ -1384,7 +1384,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (route, status) (rate(openviking_http_requests_total[$__rate_interval]))",
+          "expr": "sum by (route, status) (rate(openviking_http_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "{{route}} / {{status}}",
           "range": true,
           "refId": "A"
@@ -1485,7 +1485,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (account_id) (rate(openviking_http_requests_total[$__rate_interval]))",
+          "expr": "sum by (account_id) (rate(openviking_http_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -1586,7 +1586,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(openviking_http_request_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(openviking_http_request_duration_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{route}}",
           "range": true,
           "refId": "A"
@@ -1687,7 +1687,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_http_request_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_http_request_duration_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -1788,7 +1788,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "max by (route) (openviking_http_inflight_requests)",
+          "expr": "max by (route) (openviking_http_inflight_requests{account_id=~\"$account_id\"})",
           "legendFormat": "{{route}}",
           "range": true,
           "refId": "A"
@@ -1889,7 +1889,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (account_id) (openviking_http_inflight_requests)",
+          "expr": "sum by (account_id) (openviking_http_inflight_requests{account_id=~\"$account_id\"})",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -2003,14 +2003,14 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (context_type) (rate(openviking_retrieval_requests_total[$__rate_interval]))",
+          "expr": "sum by (context_type) (rate(openviking_retrieval_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "requests {{context_type}}",
           "range": true,
           "refId": "A"
         },
         {
           "editorMode": "code",
-          "expr": "sum by (context_type) (rate(openviking_retrieval_results_total[$__rate_interval]))",
+          "expr": "sum by (context_type) (rate(openviking_retrieval_results_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "results {{context_type}}",
           "range": true,
           "refId": "B"
@@ -2111,14 +2111,14 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (account_id) (rate(openviking_retrieval_requests_total[$__rate_interval]))",
+          "expr": "sum by (account_id) (rate(openviking_retrieval_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "requests {{account_id}}",
           "range": true,
           "refId": "A"
         },
         {
           "editorMode": "code",
-          "expr": "sum by (account_id) (rate(openviking_retrieval_results_total[$__rate_interval]))",
+          "expr": "sum by (account_id) (rate(openviking_retrieval_results_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "results {{account_id}}",
           "range": true,
           "refId": "B"
@@ -2219,7 +2219,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, context_type) (rate(openviking_retrieval_latency_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, context_type) (rate(openviking_retrieval_latency_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{context_type}}",
           "range": true,
           "refId": "A"
@@ -2320,7 +2320,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_retrieval_latency_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_retrieval_latency_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -2421,7 +2421,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (operation, status) (rate(openviking_operation_requests_total[$__rate_interval]))",
+          "expr": "sum by (operation, status) (rate(openviking_operation_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "{{operation}} / {{status}}",
           "range": true,
           "refId": "A"
@@ -2522,7 +2522,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (account_id) (rate(openviking_operation_requests_total[$__rate_interval]))",
+          "expr": "sum by (account_id) (rate(openviking_operation_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -2623,7 +2623,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(openviking_operation_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(openviking_operation_duration_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{operation}}",
           "range": true,
           "refId": "A"
@@ -2724,7 +2724,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_operation_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_operation_duration_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -2838,7 +2838,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (stage, status) (rate(openviking_resource_stage_total[$__rate_interval]))",
+          "expr": "sum by (stage, status) (rate(openviking_resource_stage_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "{{stage}} / {{status}}",
           "range": true,
           "refId": "A"
@@ -2939,7 +2939,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (account_id) (rate(openviking_resource_stage_total[$__rate_interval]))",
+          "expr": "sum by (account_id) (rate(openviking_resource_stage_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -3041,7 +3041,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(openviking_resource_stage_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(openviking_resource_stage_duration_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{stage}}",
           "range": true,
           "refId": "A"
@@ -3142,7 +3142,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_resource_stage_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_resource_stage_duration_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -3440,7 +3440,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (provider, model_name) (rate(openviking_vlm_calls_total[$__rate_interval]))",
+          "expr": "sum by (provider, model_name) (rate(openviking_vlm_calls_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "{{provider}} / {{model_name}}",
           "range": true,
           "refId": "A"
@@ -3541,7 +3541,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (account_id) (rate(openviking_vlm_calls_total[$__rate_interval]))",
+          "expr": "sum by (account_id) (rate(openviking_vlm_calls_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -3642,21 +3642,21 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (provider, model_name) (rate(openviking_vlm_tokens_input_total[$__rate_interval]))",
+          "expr": "sum by (provider, model_name) (rate(openviking_vlm_tokens_input_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "input {{provider}} / {{model_name}}",
           "range": true,
           "refId": "A"
         },
         {
           "editorMode": "code",
-          "expr": "sum by (provider, model_name) (rate(openviking_vlm_tokens_output_total[$__rate_interval]))",
+          "expr": "sum by (provider, model_name) (rate(openviking_vlm_tokens_output_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "output {{provider}} / {{model_name}}",
           "range": true,
           "refId": "B"
         },
         {
           "editorMode": "code",
-          "expr": "sum by (provider, model_name) (rate(openviking_vlm_tokens_total[$__rate_interval]))",
+          "expr": "sum by (provider, model_name) (rate(openviking_vlm_tokens_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "total {{provider}} / {{model_name}}",
           "range": true,
           "refId": "C"
@@ -3757,7 +3757,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (account_id) (rate(openviking_vlm_tokens_total[$__rate_interval]))",
+          "expr": "sum by (account_id) (rate(openviking_vlm_tokens_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "total {{account_id}}",
           "range": true,
           "refId": "A"
@@ -3858,7 +3858,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, provider, model_name) (rate(openviking_vlm_call_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, provider, model_name) (rate(openviking_vlm_call_duration_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{provider}} / {{model_name}}",
           "range": true,
           "refId": "A"
@@ -3959,7 +3959,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_vlm_call_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_vlm_call_duration_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -4060,7 +4060,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (status) (rate(openviking_embedding_requests_total[$__rate_interval]))",
+          "expr": "sum by (status) (rate(openviking_embedding_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "{{status}}",
           "range": true,
           "refId": "A"
@@ -4161,7 +4161,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (account_id) (rate(openviking_embedding_requests_total[$__rate_interval]))",
+          "expr": "sum by (account_id) (rate(openviking_embedding_requests_total{account_id=~\"$account_id\"}[$__rate_interval]))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -4262,7 +4262,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, status) (rate(openviking_embedding_latency_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, status) (rate(openviking_embedding_latency_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{status}}",
           "range": true,
           "refId": "A"
@@ -4363,7 +4363,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_embedding_latency_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_embedding_latency_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "{{account_id}}",
           "range": true,
           "refId": "A"
@@ -4841,21 +4841,21 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "topk(10, sum by (account_id) (rate(openviking_http_requests_total[$__rate_interval])))",
+          "expr": "topk(10, sum by (account_id) (rate(openviking_http_requests_total{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "http {{account_id}}",
           "range": true,
           "refId": "A"
         },
         {
           "editorMode": "code",
-          "expr": "topk(10, sum by (account_id) (rate(openviking_retrieval_requests_total[$__rate_interval])))",
+          "expr": "topk(10, sum by (account_id) (rate(openviking_retrieval_requests_total{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "retrieval {{account_id}}",
           "range": true,
           "refId": "B"
         },
         {
           "editorMode": "code",
-          "expr": "topk(10, sum by (account_id) (rate(openviking_operation_requests_total[$__rate_interval])))",
+          "expr": "topk(10, sum by (account_id) (rate(openviking_operation_requests_total{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "operation {{account_id}}",
           "range": true,
           "refId": "C"
@@ -4932,28 +4932,28 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "topk(10, sum by (account_id) (rate(openviking_vlm_calls_total[$__rate_interval])))",
+          "expr": "topk(10, sum by (account_id) (rate(openviking_vlm_calls_total{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "vlm calls {{account_id}}",
           "range": true,
           "refId": "A"
         },
         {
           "editorMode": "code",
-          "expr": "topk(10, sum by (account_id) (rate(openviking_vlm_tokens_total[$__rate_interval])))",
+          "expr": "topk(10, sum by (account_id) (rate(openviking_vlm_tokens_total{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "vlm tokens {{account_id}}",
           "range": true,
           "refId": "B"
         },
         {
           "editorMode": "code",
-          "expr": "topk(10, sum by (account_id) (rate(openviking_embedding_requests_total[$__rate_interval])))",
+          "expr": "topk(10, sum by (account_id) (rate(openviking_embedding_requests_total{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "embedding req {{account_id}}",
           "range": true,
           "refId": "C"
         },
         {
           "editorMode": "code",
-          "expr": "topk(10, histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_embedding_latency_seconds_bucket[$__rate_interval]))))",
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, account_id) (rate(openviking_embedding_latency_seconds_bucket{account_id=~\"$account_id\"}[$__rate_interval]))))",
           "legendFormat": "embedding p95 {{account_id}}",
           "range": true,
           "refId": "D"
@@ -5030,14 +5030,14 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "topk(10, sum by (account_id) (rate(openviking_resource_stage_total[$__rate_interval])))",
+          "expr": "topk(10, sum by (account_id) (rate(openviking_resource_stage_total{account_id=~\"$account_id\"}[$__rate_interval])))",
           "legendFormat": "resource {{account_id}}",
           "range": true,
           "refId": "A"
         },
         {
           "editorMode": "code",
-          "expr": "topk(10, sum by (account_id) (openviking_http_inflight_requests))",
+          "expr": "topk(10, sum by (account_id) (openviking_http_inflight_requests{account_id=~\"$account_id\"}))",
           "legendFormat": "inflight {{account_id}}",
           "range": true,
           "refId": "B"
@@ -5086,14 +5086,14 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "label_values(openviking_http_requests_total, account_id)",
+        "definition": "label_values(openviking_vikingdb_collection_vectors, account_id)",
         "includeAll": true,
         "label": "account_id",
         "multi": true,
         "name": "account_id",
         "options": [],
         "query": {
-          "query": "label_values(openviking_http_requests_total, account_id)",
+          "query": "label_values(openviking_vikingdb_collection_vectors, account_id)",
           "refId": "account_id-var"
         },
         "refresh": 2,
