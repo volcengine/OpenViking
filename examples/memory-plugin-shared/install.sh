@@ -1650,30 +1650,365 @@ opencode_config_file() {
 }
 
 opencode_register_npm_plugin() {
-  local cfg
+  local cfg plugin_dir proxy_root proxy
   cfg="$(opencode_config_file)"
+  plugin_dir="$(plugin_dir_on_disk opencode-plugin)" || {
+    warn "$(t 'OpenCode plugin sources not found; registering npm package without MCP fallback.' '未找到 OpenCode 插件源码；仅注册 npm 包，不写 MCP fallback。')"
+    opencode_write_config "$cfg" "@openviking/opencode-plugin" ""
+    return 0
+  }
+  proxy_root="$OV_HOME/opencode-mcp-proxy/openviking"
+  proxy="$(opencode_install_mcp_proxy_snapshot "$plugin_dir" "$proxy_root")"
+  opencode_write_config "$cfg" "@openviking/opencode-plugin" "$proxy"
+  info "$(t 'OpenCode plugin registered in' 'OpenCode 插件已注册到：') $cfg"
+}
+
+opencode_install_mcp_proxy_snapshot() {
+  local plugin_dir="$1" dest="$2"
+  rm -rf "$dest.tmp"
+  mkdir -p "$dest.tmp"
+  (cd "$plugin_dir" && tar --exclude node_modules --exclude .git -cf - package.json lib servers) | (cd "$dest.tmp" && tar -xf -)
+  rm -rf "$dest"
+  mkdir -p "$(dirname "$dest")"
+  mv "$dest.tmp" "$dest"
+  printf '%s' "$dest/servers/mcp-proxy.mjs"
+}
+
+opencode_write_config() {
+  local cfg="$1" plugin_spec="$2" mcp_proxy="$3"
   mkdir -p "$(dirname "$cfg")"
-  [ -f "$cfg" ] || printf '{\n  "plugin": []\n}\n' > "$cfg"
+  [ -f "$cfg" ] || printf '{\n}\n' > "$cfg"
   cp "$cfg" "$cfg.bak.$(date +%Y%m%d-%H%M%S)"
-  node - "$cfg" <<'NODE'
+  node - "$cfg" "$plugin_spec" "$mcp_proxy" <<'NODE'
 const fs = require("node:fs");
 const file = process.argv[2];
+const pluginSpec = process.argv[3] || "";
+const mcpProxy = process.argv[4] || "";
 let raw = "";
 try { raw = fs.readFileSync(file, "utf8"); } catch {}
+
 function stripJsonc(s) {
-  return s
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1")
-    .replace(/,\s*([}\]])/g, "$1");
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    const next = s[i + 1];
+    if (ch === '"' || ch === "'") {
+      const end = readStringEnd(s, i);
+      out += s.slice(i, end);
+      i = end;
+    } else if (ch === "/" && next === "/") {
+      i += 2;
+      while (i < s.length && s[i] !== "\n") i++;
+    } else if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < s.length && !(s[i] === "*" && s[i + 1] === "/")) i++;
+      i = Math.min(s.length, i + 2);
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out.replace(/,\s*([}\]])/g, "$1");
 }
+
+function readStringEnd(s, start) {
+  const quote = s[start];
+  let i = start + 1;
+  while (i < s.length) {
+    if (s[i] === "\\") {
+      i += 2;
+    } else if (s[i] === quote) {
+      return i + 1;
+    } else {
+      i++;
+    }
+  }
+  return s.length;
+}
+
+function skipTrivia(s, i, end = s.length) {
+  while (i < end) {
+    if (/\s/.test(s[i])) {
+      i++;
+    } else if (s[i] === "/" && s[i + 1] === "/") {
+      i += 2;
+      while (i < end && s[i] !== "\n") i++;
+    } else if (s[i] === "/" && s[i + 1] === "*") {
+      i += 2;
+      while (i < end && !(s[i] === "*" && s[i + 1] === "/")) i++;
+      i = Math.min(end, i + 2);
+    } else {
+      break;
+    }
+  }
+  return i;
+}
+
+function parseStringLiteral(s, start) {
+  const end = readStringEnd(s, start);
+  try {
+    return { value: JSON.parse(s.slice(start, end)), end };
+  } catch {
+    return { value: "", end };
+  }
+}
+
+function findTopLevelObject(s) {
+  const start = skipTrivia(s, 0);
+  if (s[start] !== "{") return null;
+  let depth = 0;
+  let i = start;
+  while (i < s.length) {
+    if (s[i] === '"' || s[i] === "'") {
+      i = readStringEnd(s, i);
+      continue;
+    }
+    if (s[i] === "/" && (s[i + 1] === "/" || s[i + 1] === "*")) {
+      i = skipTrivia(s, i);
+      continue;
+    }
+    if (s[i] === "{" || s[i] === "[") depth++;
+    if (s[i] === "}" || s[i] === "]") {
+      depth--;
+      if (depth === 0 && s[i] === "}") return { start, end: i };
+    }
+    i++;
+  }
+  return null;
+}
+
+function findObjectRangeAt(s, start, end = s.length) {
+  const objectStart = skipTrivia(s, start, end);
+  if (s[objectStart] !== "{") return null;
+  let depth = 0;
+  let i = objectStart;
+  while (i < end) {
+    if (s[i] === '"' || s[i] === "'") {
+      i = readStringEnd(s, i);
+      continue;
+    }
+    if (s[i] === "/" && (s[i + 1] === "/" || s[i + 1] === "*")) {
+      i = skipTrivia(s, i, end);
+      continue;
+    }
+    if (s[i] === "{" || s[i] === "[") depth++;
+    if (s[i] === "}" || s[i] === "]") {
+      depth--;
+      if (depth === 0 && s[i] === "}") return { start: objectStart, end: i };
+    }
+    i++;
+  }
+  return null;
+}
+
+function findArrayRangeAt(s, start, end = s.length) {
+  const arrayStart = skipTrivia(s, start, end);
+  if (s[arrayStart] !== "[") return null;
+  let depth = 0;
+  let i = arrayStart;
+  while (i < end) {
+    if (s[i] === '"' || s[i] === "'") {
+      i = readStringEnd(s, i);
+      continue;
+    }
+    if (s[i] === "/" && (s[i + 1] === "/" || s[i + 1] === "*")) {
+      i = skipTrivia(s, i, end);
+      continue;
+    }
+    if (s[i] === "{" || s[i] === "[") depth++;
+    if (s[i] === "}" || s[i] === "]") {
+      depth--;
+      if (depth === 0 && s[i] === "]") return { start: arrayStart, end: i };
+    }
+    i++;
+  }
+  return null;
+}
+
+function findTopLevelProperty(s, objectRange, name) {
+  let depth = 1;
+  let i = objectRange.start + 1;
+  while (i < objectRange.end) {
+    if (s[i] === "/" && (s[i + 1] === "/" || s[i + 1] === "*")) {
+      i = skipTrivia(s, i, objectRange.end);
+      continue;
+    }
+    if (s[i] === '"' || s[i] === "'") {
+      const keyStart = i;
+      const parsed = parseStringLiteral(s, i);
+      i = parsed.end;
+      const afterKey = skipTrivia(s, i, objectRange.end);
+      if (depth === 1 && parsed.value === name && s[afterKey] === ":") {
+        const valueStart = skipTrivia(s, afterKey + 1, objectRange.end);
+        return {
+          keyStart,
+          valueStart,
+          replaceEnd: findPropertyReplaceEnd(s, valueStart, objectRange.end),
+        };
+      }
+      continue;
+    }
+    if (s[i] === "{" || s[i] === "[") depth++;
+    if (s[i] === "}" || s[i] === "]") depth--;
+    i++;
+  }
+  return null;
+}
+
+function findPropertyReplaceEnd(s, valueStart, objectEnd) {
+  let depth = 0;
+  let i = skipTrivia(s, valueStart, objectEnd);
+  let lastTokenEnd = i;
+  while (i < objectEnd) {
+    if (s[i] === '"' || s[i] === "'") {
+      i = readStringEnd(s, i);
+      lastTokenEnd = i;
+      continue;
+    }
+    if (s[i] === "/" && (s[i + 1] === "/" || s[i + 1] === "*")) {
+      i = skipTrivia(s, i, objectEnd);
+      continue;
+    }
+    if (depth === 0 && s[i] === ",") return lastTokenEnd;
+    if (s[i] === "{" || s[i] === "[") depth++;
+    if (s[i] === "}" || s[i] === "]") depth--;
+    if (!/\s/.test(s[i])) lastTokenEnd = i + 1;
+    i++;
+  }
+  return lastTokenEnd;
+}
+
+function findLineIndent(s, index) {
+  const lineStart = s.lastIndexOf("\n", index - 1) + 1;
+  const prefix = s.slice(lineStart, index);
+  return /^[ \t]*$/.test(prefix) ? prefix : "";
+}
+
+function detectPropertyIndent(s, objectRange) {
+  let i = objectRange.start + 1;
+  while (i < objectRange.end) {
+    i = skipTrivia(s, i, objectRange.end);
+    if (s[i] === '"' || s[i] === "'") return findLineIndent(s, i) || "  ";
+    if (s[i] === "{" || s[i] === "[") break;
+    i++;
+  }
+  const closeIndent = findLineIndent(s, objectRange.end);
+  return `${closeIndent}  `;
+}
+
+function hasTopLevelProperty(s, objectRange) {
+  let i = objectRange.start + 1;
+  while (i < objectRange.end) {
+    i = skipTrivia(s, i, objectRange.end);
+    if (s[i] === '"' || s[i] === "'") return true;
+    i++;
+  }
+  return false;
+}
+
+function objectEndsWithComma(s, objectRange) {
+  const body = s.slice(objectRange.start + 1, objectRange.end);
+  return body.trimEnd().endsWith(",");
+}
+
+function rangeHasValue(s, range) {
+  let i = range.start + 1;
+  while (i < range.end) {
+    i = skipTrivia(s, i, range.end);
+    if (i < range.end) return true;
+  }
+  return false;
+}
+
+function formatProperty(name, value, indent) {
+  const json = JSON.stringify(value, null, 2);
+  const formatted = json.split("\n").map((line, idx) => idx === 0 ? line : `${indent}${line}`).join("\n");
+  return `${JSON.stringify(name)}: ${formatted}`;
+}
+
+function setPropertyInObject(s, objectRange, name, value) {
+  const existing = findTopLevelProperty(s, objectRange, name);
+  if (existing) {
+    const indent = findLineIndent(s, existing.keyStart) || detectPropertyIndent(s, objectRange);
+    return `${s.slice(0, existing.keyStart)}${formatProperty(name, value, indent)}${s.slice(existing.replaceEnd)}`;
+  }
+
+  const indent = detectPropertyIndent(s, objectRange);
+  const closeIndent = findLineIndent(s, objectRange.end);
+  const needsComma = hasTopLevelProperty(s, objectRange) && !objectEndsWithComma(s, objectRange);
+  const prefix = needsComma ? "," : "";
+  const insertion = `${prefix}\n${indent}${formatProperty(name, value, indent)}\n${closeIndent}`;
+  return `${s.slice(0, objectRange.end)}${insertion}${s.slice(objectRange.end)}`;
+}
+
+function setTopLevelProperty(s, name, value) {
+  let objectRange = findTopLevelObject(s);
+  if (!objectRange) {
+    s = "{\n}\n";
+    objectRange = findTopLevelObject(s);
+  }
+  return setPropertyInObject(s, objectRange, name, value);
+}
+
+function setNestedObjectProperty(s, parentName, childName, childValue, fallbackParentValue) {
+  let objectRange = findTopLevelObject(s);
+  if (!objectRange) {
+    s = "{\n}\n";
+    objectRange = findTopLevelObject(s);
+  }
+  const parent = findTopLevelProperty(s, objectRange, parentName);
+  if (!parent) return setPropertyInObject(s, objectRange, parentName, fallbackParentValue);
+  const parentRange = findObjectRangeAt(s, parent.valueStart, parent.replaceEnd);
+  if (!parentRange) return setPropertyInObject(s, objectRange, parentName, fallbackParentValue);
+  return setPropertyInObject(s, parentRange, childName, childValue);
+}
+
+function appendStringToTopLevelArray(s, name, value) {
+  let objectRange = findTopLevelObject(s);
+  if (!objectRange) {
+    s = "{\n}\n";
+    objectRange = findTopLevelObject(s);
+  }
+  const prop = findTopLevelProperty(s, objectRange, name);
+  if (!prop) return setPropertyInObject(s, objectRange, name, [value]);
+  const arrayRange = findArrayRangeAt(s, prop.valueStart, prop.replaceEnd);
+  if (!arrayRange) return setPropertyInObject(s, objectRange, name, [value]);
+  const propIndent = findLineIndent(s, prop.keyStart) || detectPropertyIndent(s, objectRange);
+  const itemIndent = `${propIndent}  `;
+  const closeIndent = findLineIndent(s, arrayRange.end) || propIndent;
+  const needsComma = rangeHasValue(s, arrayRange) && !s.slice(arrayRange.start + 1, arrayRange.end).trimEnd().endsWith(",");
+  const prefix = needsComma ? "," : "";
+  const insertion = `${prefix}\n${itemIndent}${JSON.stringify(value)}\n${closeIndent}`;
+  return `${s.slice(0, arrayRange.end)}${insertion}${s.slice(arrayRange.end)}`;
+}
+
 let data = {};
 try { data = raw.trim() ? JSON.parse(stripJsonc(raw)) : {}; } catch { data = {}; }
-const next = Array.isArray(data.plugin) ? data.plugin.slice() : [];
-if (!next.includes("@openviking/opencode-plugin")) next.push("@openviking/opencode-plugin");
-data.plugin = next;
-fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n");
+let nextRaw = raw.trim() ? raw : "{\n}\n";
+if (pluginSpec) {
+  const next = Array.isArray(data.plugin) ? data.plugin.slice() : [];
+  if (!next.includes(pluginSpec)) {
+    next.push(pluginSpec);
+    nextRaw = appendStringToTopLevelArray(nextRaw, "plugin", pluginSpec);
+  }
+  data.plugin = next;
+}
+if (mcpProxy) {
+  data.mcp = data.mcp && typeof data.mcp === "object" && !Array.isArray(data.mcp) ? data.mcp : {};
+  if (!data.mcp.openviking || data.mcp.openviking.enabled !== false) {
+    data.mcp.openviking = {
+      type: "local",
+      command: ["node", mcpProxy],
+      enabled: true,
+      timeout: 15000,
+    };
+    nextRaw = setNestedObjectProperty(nextRaw, "mcp", "openviking", data.mcp.openviking, data.mcp);
+  }
+}
+if (!nextRaw.endsWith("\n")) nextRaw += "\n";
+fs.writeFileSync(file, nextRaw);
 NODE
-  info "$(t 'OpenCode plugin registered in' 'OpenCode 插件已注册到：') $cfg"
 }
 
 opencode_install_file_plugin() {
@@ -1693,14 +2028,12 @@ opencode_install_file_plugin() {
     (cd "$plugin_dir" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$dest.tmp" && tar -xf -)
     mv "$dest.tmp" "$dest"
   fi
-  if [ ! -d "$dest/node_modules" ] && command -v npm >/dev/null 2>&1; then
-    (cd "$dest" && npm install --omit=dev) || warn "$(t 'npm install failed for OpenCode plugin; continuing.' 'OpenCode 插件 npm install 失败，继续。')"
-  fi
   if [ -f "$plugin_dir/wrappers/openviking.js" ]; then
     cp "$plugin_dir/wrappers/openviking.js" "$HOME/.config/opencode/plugins/openviking.js"
   else
     printf '%s\n' 'export { OpenVikingPlugin, default } from "./openviking/index.mjs"' > "$HOME/.config/opencode/plugins/openviking.js"
   fi
+  opencode_write_config "$(opencode_config_file)" "" "$dest/servers/mcp-proxy.mjs"
   info "$(t 'OpenCode file plugin installed:' 'OpenCode 文件插件已安装：') $dest"
 }
 
@@ -1797,6 +2130,20 @@ EOF
     fi
     if [ -f "$HOME/.config/opencode/plugins/openviking/index.mjs" ]; then
       node --check "$HOME/.config/opencode/plugins/openviking/index.mjs" || ok=0
+    fi
+    if [ -f "$HOME/.config/opencode/plugins/openviking/servers/mcp-proxy.mjs" ]; then
+      node --check "$HOME/.config/opencode/plugins/openviking/servers/mcp-proxy.mjs" || ok=0
+    elif [ -f "$OV_HOME/opencode-mcp-proxy/openviking/servers/mcp-proxy.mjs" ]; then
+      node --check "$OV_HOME/opencode-mcp-proxy/openviking/servers/mcp-proxy.mjs" || ok=0
+    else
+      warn "opencode: $(t 'OpenViking MCP proxy not found' '未找到 OpenViking MCP proxy')"
+      ok=0
+    fi
+    if grep -q '"openviking"' "$ocfg" "$ocfgc" 2>/dev/null && grep -q '"mcp"' "$ocfg" "$ocfgc" 2>/dev/null; then
+      info "opencode: $(t 'MCP server registered' 'MCP server 已注册')"
+    else
+      warn "opencode: $(t 'MCP server not found in config' '配置中未找到 MCP server')"
+      ok=0
     fi
   fi
   if contains_harness pi; then

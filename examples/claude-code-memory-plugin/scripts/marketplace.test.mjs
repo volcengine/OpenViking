@@ -67,3 +67,16 @@ test("Claude hooks include optional skill experience PostToolUse Read hook", () 
   );
   execFileSync("node", ["--check", join(pluginDir, "scripts", "skill-experience.mjs")], { stdio: "pipe" });
 });
+
+test("Claude hooks include PreToolUse URI guard for filesystem tools", () => {
+  const hooks = readJson(join(pluginDir, "hooks", "hooks.json"));
+  const preToolUse = hooks.hooks?.PreToolUse;
+  assert.ok(Array.isArray(preToolUse), "hooks.json must define PreToolUse hooks");
+  const guardHook = preToolUse.find((entry) => entry?.matcher === "Read|Glob|Grep");
+  assert.ok(guardHook, "PreToolUse must guard Read|Glob|Grep");
+  assert.equal(
+    guardHook.hooks?.[0]?.command,
+    "node ${CLAUDE_PLUGIN_ROOT}/scripts/uri-guard.mjs",
+  );
+  execFileSync("node", ["--check", join(pluginDir, "scripts", "uri-guard.mjs")], { stdio: "pipe" });
+});

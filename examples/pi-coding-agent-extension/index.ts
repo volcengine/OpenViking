@@ -16,6 +16,7 @@ import { OVClient } from "./client.js";
 import { RecallManager } from "./recall.js";
 import { SyncManager } from "./sync.js";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
+import { guardVikingUriToolCall } from "./lib/uri-guard-adapter.mjs";
 import { registerTools } from "./tools.js";
 
 export default async function (pi: ExtensionAPI) {
@@ -123,6 +124,13 @@ export default async function (pi: ExtensionAPI) {
     if (!connected || bypassed) return;
     const messages = recall.injectRecall(event.messages);
     return { messages };
+  });
+
+  // --- tool_call ---
+  pi.on("tool_call", async (event, _ctx) => {
+    const decision = guardVikingUriToolCall(event);
+    if (!decision) return;
+    return decision;
   });
 
   // --- turn_end ---

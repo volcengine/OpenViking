@@ -25,12 +25,12 @@ OpenViking provides one unified OpenCode plugin for repository context and long-
 
 Source: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
-The plugin combines indexed repository context, OpenViking memory tools, session synchronization, lifecycle commit, and automatic recall through OpenCode plugin hooks. Use this plugin for both the former explicit-tool and context-injection use cases.
+The plugin combines indexed repository context, session synchronization, lifecycle commit, and automatic recall through OpenCode plugin hooks. Model-callable tools come from the same OpenViking stdio MCP proxy used by the Claude Code and Codex memory plugins.
 
 ### Prerequisites
 
 - [OpenCode](https://opencode.ai/)
-- Node.js and npm
+- Node.js 18+
 - An OpenViking HTTP server
 - An OpenViking API key when your server requires authentication
 
@@ -72,8 +72,7 @@ mkdir -p ~/.config/opencode/plugins/openviking
 cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
-cd ~/.config/opencode/plugins/openviking
-npm install
+cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
 
 This source install creates the layout OpenCode can discover:
@@ -85,7 +84,7 @@ This source install creates the layout OpenCode can discover:
     ├── index.mjs
     ├── package.json
     ├── lib/
-    └── node_modules/
+    └── servers/
 ```
 
 The top-level `openviking.js` is only a wrapper that forwards OpenCode's first-level plugin entry to the installed package directory.
@@ -131,19 +130,18 @@ export OPENVIKING_USER="opencode"     # optional, trusted-mode deployments only
 export OPENVIKING_PEER_ID="opencode"  # optional, peer-scoped memory routing
 ```
 
-API keys are sent as `Authorization: Bearer ...`. `account` and `user` are trusted-mode headers; `peerId` is sent as `X-OpenViking-Actor-Peer` and as `peer_id` on captured session messages. Existing `openviking-config.json` credential fields are still read as a migration fallback, but new installs should use `ovcli.conf` or env vars.
+API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode headers; `peerId` is sent as `X-OpenViking-Actor-Peer` and as `peer_id` on captured session messages. Existing `openviking-config.json` credential fields are still read as a migration fallback, but new installs should use `ovcli.conf` or env vars.
 
 ### Verify
 
-Restart OpenCode after installation. In an OpenCode session, the plugin should expose these tools:
+Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server. OpenCode namespaces MCP tools as `openviking_*`, for example:
 
-- `memsearch`, `memread`, `membrowse`
-- `memgrep`, `memglob`
-- `memadd`, `memwrite`, `memremove`, `memqueue`
-- `memcommit`
-- `codesearch`, `codeoutline`, `codeexpand`
+- `openviking_recall`, `openviking_search`, `openviking_find`
+- `openviking_read`, `openviking_list`, `openviking_grep`, `openviking_glob`
+- `openviking_remember`, `openviking_add_resource`, `openviking_forget`, `openviking_health`
+- `openviking_code_search`, `openviking_code_outline`, `openviking_code_expand`
 
-Ask OpenCode to search or browse OpenViking memory, or request a manual session commit. Runtime state and errors are written to:
+Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are written to:
 
 ```bash
 ~/.config/opencode/openviking/openviking-memory.log
@@ -155,10 +153,10 @@ Ask OpenCode to search or browse OpenViking memory, or request a manual session 
 | Issue | What to check |
 |-------|---------------|
 | Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
-| Tools call the wrong server | Check `endpoint` in `~/.config/opencode/openviking-config.json`, or set `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
+| MCP tools call the wrong server | Check `~/.openviking/ovcli.conf`, or set `OPENVIKING_*` env vars / `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
 | Recall is empty | Confirm the OpenViking server has indexed memories/resources and that `autoRecall.enabled` is `true` |
-| Local `memadd` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |
+| Local `openviking_add_resource` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |
 
 For all available tools, configuration fields, and runtime file details, see the [plugin README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin).
 

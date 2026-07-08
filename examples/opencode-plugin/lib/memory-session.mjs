@@ -135,6 +135,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       await handleSessionError(event)
     } else if (event.type === "session.compacted") {
       await handleSessionCompacted(event)
+    } else if (event.type === "session.idle") {
+      await handleSessionIdle(event)
     } else if (event.type === "message.updated") {
       await handleMessageUpdated(event)
     } else if (event.type === "message.part.updated") {
@@ -182,6 +184,12 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     await commitSessionBoundary(event, "session.compacted")
   }
 
+  async function handleSessionIdle(event) {
+    const sessionId = resolveEventSessionId(event)
+    if (!sessionId) return
+    await flushSession(sessionId, { commit: false, reason: "session.idle" })
+  }
+
   async function commitSessionBoundary(event, reason) {
     const sessionId = resolveEventSessionId(event)
     if (!sessionId) return
@@ -205,7 +213,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     const next = captured ?? createMessageState()
     if (role === "user") {
       next.role = role
-    } else if (role === "assistant" && finish === "stop") {
+    } else if (role === "assistant") {
       next.role = role
     }
     state.messages.set(messageId, next)
@@ -307,7 +315,14 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   function resolveEventSessionId(event) {
-    return event?.properties?.info?.id ?? event?.properties?.sessionID ?? event?.properties?.sessionId
+    return event?.properties?.info?.id ??
+      event?.properties?.info?.sessionID ??
+      event?.properties?.info?.sessionId ??
+      event?.properties?.sessionID ??
+      event?.properties?.sessionId ??
+      event?.sessionID ??
+      event?.sessionId ??
+      event?.id
   }
 
   function resolvePartRole(part, fallbackRole) {
