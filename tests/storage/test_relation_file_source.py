@@ -240,3 +240,59 @@ async def test_relations_container_registered_internal():
     """rows 8/12: .relations dir is hidden from ls (storage) and WebDAV listings."""
     assert ".relations" in STORAGE_INTERNAL_ENTRY_NAMES
     assert ".relations" in WEBDAV_RESERVED_FILENAMES
+
+
+# ---------------------------------------------------------------------------
+# Review round 2: the write path must decide "create sidecar parent dirs"
+# WITHOUT substring-matching an assumed-rooted path. It ensures parents only
+# when the table routed to a file sidecar, not for any dir whose own path
+# happens to contain a ".relations" segment. (refs #3067)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "source, is_dir, expect_ensure",
+    [
+        # dir source -> <dir>/.relations.json ; parent (the dir) exists, no ensure
+        ("/local/test_account/resources/project", True, False),
+        # file source -> sidecar under <parent>/.relations/<name>/ ; must ensure
+        ("/local/test_account/resources/project/a.md", False, True),
+        # dir whose path itself contains a ".relations" segment: the OLD
+        # substring guard ("/.relations/" in table_path) misfired here and
+        # ensured parents for a plain dir write; the exact-compare guard must not.
+        ("/local/test_account/resources/.relations/notes", True, False),
+    ],
+)
+async def test_write_ensures_parents_only_for_file_sidecar(
+    vfs, monkeypatch, source, is_dir, expect_ensure
+):
+    async def stat_fn(path):
+        return {"isDir": is_dir, "is_dir": is_dir}
+
+    monkeypatch.setattr(vfs._async_agfs, "stat", stat_fn)
+
+    calls = []
+
+    async def spy_ensure(path, ctx=None):
+        calls.append(path)
+
+    monkeypatch.setattr(vfs, "_ensure_parent_dirs", spy_ensure)
+
+    await vfs._write_relation_table(source, [], ctx=None)
+    assert bool(calls) is expect_ensure
+
+
+async def test_file_sidecar_is_rooted_no_relative_path(vfs, monkeypatch):
+    """Reject-evidence for the 'relative no-dirname' comment: callers derive
+    source_path via _uri_to_path, which always yields a rooted /local/... path,
+    so the sidecar is always well-formed (never a bare /.relations/... at root).
+    """
+    real = vfs._uri_to_path("viking://resources/project/a.md")
+    assert real.startswith("/local/") and "/" in real.rstrip("/")
+
+    async def file_stat(path):
+        return {"isDir": False, "is_dir": False}
+
+    monkeypatch.setattr(vfs._async_agfs, "stat", file_stat)
+    tbl = await vfs._relation_table_path(real)
+    assert tbl.startswith("/local/")
+    assert not tbl.startswith("/.relations/")
+    assert tbl.endswith("/.relations/a.md/.relations.json")

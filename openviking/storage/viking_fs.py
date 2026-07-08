@@ -3050,7 +3050,11 @@ class VikingFS:
         content = json.dumps(data, ensure_ascii=False, indent=2)
         if isinstance(content, str):
             content = content.encode("utf-8")
-        if "/.relations/" in table_path:
+        # File sources route to a sidecar (<parent>/.relations/<name>/.relations.json)
+        # whose intermediate dirs don't exist yet. Detect that by comparing to the
+        # legacy dir-source form rather than substring-matching an assumed-rooted
+        # path — correct even if source_path were ever relative. refs #3067
+        if table_path != f"{dir_path}/.relations.json":
             await self._ensure_parent_dirs(table_path, ctx=ctx)
         await self._async_agfs.write(table_path, content)
 
