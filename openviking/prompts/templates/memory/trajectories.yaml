@@ -113,33 +113,58 @@ fields:
         - Cause: <missed fact/binding/scope/provenance/policy/communication obligation>
         - Impact: <why this changed reward/goal/state/communication>
       - Counterfactual Ideal Experience:
-        - Would fix source rollout: <true|false>
-        - Experience name: <name or none>
-        - Injection boundary: <tool boundary or none>
-        - Situation: <reusable applies-when condition>
-        - Repair rule: <minimal pre-tool instruction>
-        - Source binding: <semantic source and derivation of required value/decision>
-        - Applicability: <narrow boundary/object role/scope/candidate shape>
-        - Anti-pattern: <closest tempting wrong behavior>
+        - Candidate C1:
+          - Would fix source rollout: <true|false>
+          - Experience name: <name or none>
+          - Injection boundary: <tool boundary or none>
+          - Situation: <reusable applies-when condition>
+          - Repair rule: <minimal pre-tool instruction>
+          - Source binding: <semantic source and derivation of required value/decision>
+          - Applicability: <narrow boundary/object role/scope/candidate shape>
+          - Anti-pattern: <closest tempting wrong behavior>
+          - Weakness: <why this candidate may be too broad, too narrow, or not causal>
+        - Candidate C2:
+          - Would fix source rollout: <true|false>
+          - Experience name: <name or none>
+          - Injection boundary: <tool boundary or none>
+          - Situation: <different reusable applies-when condition>
+          - Repair rule: <different minimal pre-tool instruction>
+          - Source binding: <different semantic source/derivation>
+          - Applicability: <narrow boundary/object role/scope/candidate shape>
+          - Anti-pattern: <closest tempting wrong behavior>
+          - Weakness: <why this candidate may be too broad, too narrow, or not causal>
+        - Candidate C3:
+          - Would fix source rollout: <true|false>
+          - Experience name: <name or none>
+          - Injection boundary: <tool boundary or none>
+          - Situation: <different reusable applies-when condition>
+          - Repair rule: <different minimal pre-tool instruction>
+          - Source binding: <different semantic source/derivation>
+          - Applicability: <narrow boundary/object role/scope/candidate shape>
+          - Anti-pattern: <closest tempting wrong behavior>
+          - Weakness: <why this candidate may be too broad, too narrow, or not causal>
+        - Selected candidate: <C1|C2|C3|none>
+        - Selection reason: <why selected candidate is the narrowest source-bound repair for the first material failure>
         - Case evidence: <diagnostic literals/ids/values only; not hardcoded>
       - Experience Repair Signal:
         - Recommended operation: <create|update|skip>
         - Existing experience action: <update|none>
         - Existing target experience: <name or none>
         - New experience action: <create|skip>
-        - New experience candidate: <same as ideal experience name, or none>
-        - Trigger boundary: <same as ideal Injection boundary, or none>
-        - Repair principle: <one-line summary of ideal Repair rule + Source binding>
-        - Do not learn: <nearby broad/non-causal lesson to avoid>
+        - New experience candidate: <selected candidate experience name, or none>
+        - Trigger boundary: <selected candidate Injection boundary, or none>
+        - Repair principle: <one-line summary of selected candidate Repair rule + Source binding>
+        - Do not learn: <nearby broad/non-causal candidate or lesson to avoid>
       - Result: <final outcome and side effects>
 
       Rules:
-      - PRIMARY OUTPUT: `Counterfactual Ideal Experience` is the main output. `Experience Repair Signal` is only a routing summary derived from it.
-      - FIXED SHAPE: Output every section above in order. For success, set wrong/divergence fields to `none`, Ideal Experience Would fix source rollout to `false`, and Repair Signal to `skip`.
-      - DEFAULT LEARN: For non-success, set Would fix source rollout=`true` and Recommended operation=`create` or `update` when a narrow pre-tool reminder could have prevented the first material failure. Use `false/skip` only when no reusable pre-tool repair exists.
+      - PRIMARY OUTPUT: `Counterfactual Ideal Experience` is the main output. Generate exactly three diverse candidates first, then select exactly one primary candidate. `Experience Repair Signal` is only a routing summary derived from the selected candidate.
+      - FIXED SHAPE: Output every section above in order. For success, set wrong/divergence fields to `none`, all candidates Would fix source rollout to `false`, Selected candidate to `none`, and Repair Signal to `skip`.
+      - DEFAULT LEARN: For non-success, at least one candidate should have Would fix source rollout=`true` when a narrow pre-tool reminder could have prevented the first material failure. Use Selected candidate=`none` only when no reusable pre-tool repair exists.
+      - CANDIDATE DIVERSITY: Make C1/C2/C3 meaningfully different. Include at least one narrow source-bound candidate, one tempting broad candidate if plausible, and one nearby non-causal or wrong-scope candidate when useful. Select the narrowest causal candidate; do not select a vague completeness reminder.
       - FIRST BOUNDARY: Pick one earliest material boundary. `Tool` must be one raw tool name, `communicate_with_user`, or `none`; never prose, `done`, multiple tools, or alternatives. Communication-only failures target `communicate_with_user`.
-      - SOURCE BINDING: Do not write vague repairs like “include required info” or “check policy.” Bind the repair to runtime semantic sources: user-request scope, confirmed target, selected source object, row/set membership, field to read, calculation, policy gate, or communication obligation. Do not put evaluator/control-plane field names in reusable Situation/Repair rule/Source binding.
-      - AGGREGATE/LIST SCOPE: For totals, counts, summaries, balances, or lists, specify freeze point, included/excluded records, source field, derivation, and whether later writes change the requested scope. Name the closest wrong aggregate/list as Anti-pattern.
+      - SOURCE BINDING: Do not select candidates whose reusable Situation/Repair rule/Source binding only says “include required info”, “check policy”, evaluator/control-plane fields, or similar vague obligations. Bind selected repair to runtime semantic sources: user-request scope, confirmed target, selected source object, row/set membership, field to read, calculation, policy gate, or communication obligation.
+      - AGGREGATE/LIST SCOPE: For totals, counts, summaries, balances, or lists, selected candidate must specify freeze point, included/excluded records, source field, derivation, and whether later writes change the requested scope. Name the closest wrong aggregate/list as Anti-pattern.
       - PRESERVE CORRECT WORK: List matched/correct actions in Preserve and do not learn a rule that blocks them. When same tool can be right or wrong, distinguish by object role, membership, confirmation scope, provenance, source selection, calculation scope, or content coverage.
       - DOMAIN-NEUTRAL STYLE: Generalize identifiers, names, timestamps, exact values, and dataset-specific wording into roles. Concrete literals only in Case evidence as diagnostic/not hardcoded. Concise bullets only; no extra headings, code fences, hidden reasoning, or closing remarks.
 
