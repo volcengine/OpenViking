@@ -1,0 +1,52 @@
+openviking_cli/utils/config/open_viking_config.py
+  s_b1ef123960986a::t_e4e4e039e3ce28 57-60,64-74,79,82-89,238-242
+  h_35f000fc27e979 61-63,75-78,80-81
+openviking/server/identity.py
+  s_b1ef123960986a::t_8efb11e0ff3732 108-110
+openviking/server/auth/__init__.py
+  s_b1ef123960986a::t_6617c00c3308e6 139-140,151-152,162
+openviking/connector/__init__.py
+  s_b1ef123960986a::t_12057cde194a0c 1-2
+openviking/connector/client.py
+  s_b1ef123960986a::t_180c735f6e11de 1-18,20-21,23-53,55-66,68-70
+  h_35f000fc27e979 19,22,54,67
+openviking/service/resource_service.py
+  s_b1ef123960986a::t_b6b2efd1410a0b 19,58,659-676,1152-1362
+tests/connector/test_client.py
+  s_b256f923a4bc41::t_d152ac6c43929f 1-144
+tests/service/test_resource_service_connector.py
+  s_b256f923a4bc41::t_666ad54bc34c00 1-346
+tests/unit/test_connector_config.py
+  s_b256f923a4bc41::t_8a7eab09fbf15f 1-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ea4dc917cd6ca9556a436f6ddd58eef027412aa0",
+  "prompts": {},
+  "humans": {
+    "h_35f000fc27e979": {
+      "author": "李子恒 <ziheng.li@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_b1ef123960986a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1f172121-1318-42b9-b1c1-65050c318504",
+        "model": "unknown"
+      },
+      "human_author": "李子恒 <ziheng.li@bytedance.com>"
+    },
+    "s_b256f923a4bc41": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fd8-848d-7f11-a49d-be7657e8f8d9",
+        "model": "unknown"
+      },
+      "human_author": "ziheng.li <ziheng.li@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
