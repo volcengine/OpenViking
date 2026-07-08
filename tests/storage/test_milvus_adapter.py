@@ -198,6 +198,13 @@ def test_scope_roots_encoding_is_token_safe():
     assert "\n/a/c\n" not in encoded
 
 
+def test_score_from_cosine_distance_is_higher_is_better():
+    from openviking.storage.vectordb_adapters.milvus_adapter import _score_from_hit
+
+    assert _score_from_hit({"distance": 0.0}, "cosine") == pytest.approx(1.0)
+    assert _score_from_hit({"distance": 1.0}, "cosine") == pytest.approx(0.0)
+
+
 class _FakeSchema:
     def __init__(self) -> None:
         self.fields = []
@@ -358,6 +365,7 @@ def test_milvus_lite_adapter_integration_smoke(tmp_path):
             output_fields=["id", "uri", "abstract", "level"],
         )
         assert [item["id"] for item in result] == ["doc-1"]
+        assert result[0]["_score"] == pytest.approx(1.0)
         assert adapter.count(Eq("account_id", "missing")) == 0
         assert adapter.count() == 2
         assert adapter.delete(ids=["doc-2"]) == 1
