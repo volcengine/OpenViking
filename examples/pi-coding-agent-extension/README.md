@@ -1,8 +1,8 @@
 # OpenViking Memory Extension for Pi Coding Agent
 
-Long-term semantic memory for [pi](https://github.com/earendil-works/pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and sessions are committed for persistent memory extraction — all via pi's native extension API.
+Long-term semantic memory and context takeover for [pi](https://github.com/earendil-works/pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and OpenViking can own long-term context by replacing committed history with an archive overview in pi's `context` hook.
 
-> Design informed by lessons from all three OpenViking agent plugins: synchronous recall from OpenClaw, production-hardened capture/ranking from Claude Code, and anti-patterns dodged from Hermes's stale prefetch approach. See [DESIGN.md](./DESIGN.md) for the full design spec with comparison tables and event flow diagrams.
+> Design informed by lessons from all three OpenViking agent plugins: synchronous recall from OpenClaw, production-hardened capture/ranking from Claude Code, and anti-patterns dodged from Hermes's stale prefetch approach. See [DESIGN.md](./DESIGN.md) for the base design and [TAKEOVER.md](./TAKEOVER.md) for the context-takeover layer.
 
 ## Quick Start
 
@@ -51,7 +51,15 @@ node ~/.pi/agent/extensions/openviking/scripts/setup.mjs
   "minQueryLength": 3,
   "profileTokenBudget": 10000,
   "resumeContextBudget": 32000,
-  "commitTokenThreshold": 20000
+  "commitTokenThreshold": 20000,
+  "takeover": {
+    "enabled": true,
+    "tokenThreshold": 30000,
+    "keepRecentTurns": 3,
+    "overviewBudget": 3000,
+    "overviewPollMs": 2000,
+    "overviewPollMax": 15
+  }
 }
 ```
 
@@ -109,6 +117,22 @@ All fields below live in `config.json`. Defaults are shown.
 | `commitTokenThreshold`   | `20000`    | Pending-token threshold for client-driven commit                         |
 | `commitKeepRecentCount`  | `10`       | Live tail kept after commit                                              |
 
+### Context takeover
+
+Takeover is enabled by default. OpenViking commits archived history, polls the
+session overview, then the `context` hook replaces covered conversation turns
+with a synthetic `[OpenViking Session Context]` user message while keeping the
+recent live tail.
+
+| Field                    | Default    | Description                                                              |
+|--------------------------|------------|--------------------------------------------------------------------------|
+| `takeover.enabled`       | `true`     | Let OpenViking own long-term context through the `context` hook           |
+| `takeover.tokenThreshold`| `30000`    | Synced-token pressure that triggers commit and boundary advance           |
+| `takeover.keepRecentTurns`| `3`       | Recent user turns retained in full fidelity                              |
+| `takeover.overviewBudget`| `3000`    | Token budget for the injected archive overview                           |
+| `takeover.overviewPollMs`| `2000`    | Delay between overview polling attempts after commit                     |
+| `takeover.overviewPollMax`| `15`     | Max overview polling attempts before fail-open                           |
+
 ### Injection tuning
 
 | Field                    | Default    | Description                                                              |
@@ -150,12 +174,12 @@ The extension is a single directory of TypeScript files loaded by pi's `jiti` tr
 
 | Pi Event               | Extension Action                                                                 |
 |------------------------|----------------------------------------------------------------------------------|
-| `session_start`        | Health check → derive OV session → build profile/archive context → register tools |
-| `before_agent_start`   | Fallback tool registration (for `pi -c` resume) + inject session context         |
-| `context`              | Search OV with current prompt → inject `<openviking-context>` block              |
-| `turn_end`             | Extract branch entries → write or pending-queue OV session messages              |
-| `session_before_compact`| Commit pending messages before pi rewrites the transcript                        |
-| `session_shutdown`     | Final commit so the last window is archived                                      |
+| `session_start`        | Health check → derive OV session → build profile context → restore takeover state |
+| `before_agent_start`   | Idempotent startup for `pi -c` + synchronous recall search                       |
+| `context`              | Takeover overview injection, then recall injection into the latest user turn      |
+| `turn_end`             | Extract branch entries → write or pending-queue OV messages → maybe advance boundary |
+| `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages |
+| `session_shutdown`     | Persist takeover state or final non-takeover commit                              |
 
 ### Recall: Synchronous, Not Stale
 
@@ -168,6 +192,11 @@ Unlike Hermes's stale prefetch (recall from previous turn's query, injected one 
 ### Memory Pollution Prevention
 
 Before pushing turns to OpenViking, shared capture sanitization strips injected context blocks such as `<openviking-context>` to prevent a self-referential pollution loop where recall context is captured back as user messages.
+
+In takeover mode the adapter uses faithful capture: acknowledgments and short
+turns are retained because they may later be represented only through the OV
+archive overview. Empty text, slash commands, and OpenViking status messages
+remain filtered.
 
 ### Tool Use Preservation
 
@@ -227,9 +256,11 @@ pi-coding-agent-extension/
 ├── client.ts            # OpenViking HTTP client (fetch + response envelope)
 ├── sync.ts              # Turn capture, write queue, session lifecycle
 ├── recall.ts            # Synchronous recall with ranking + budget
+├── takeover.ts          # Thin pi binding around lib/takeover-core.mjs
 ├── tools.ts             # 7 registered LLM tools + /viking command
-├── index-builder.ts     # Memory index builder (knowledge map)
+├── lib/takeover-core.mjs # Pure context-takeover state machine
 ├── index.ts             # Extension entry point (event handlers)
+├── TAKEOVER.md          # Context-takeover design
 └── README.md
 ```
 
@@ -244,6 +275,7 @@ All TypeScript files are loaded directly by pi's built-in `jiti` transpiler — 
 | Tools not showing after `pi -c` resume  | Known pi issue (tools not re-registered on resume)   | Workaround built in — tools register in `before_agent_start`|
 | Extension crashes on load               | Wrong OV server URL or network issue                 | Check `logLevel` and server accessibility                   |
 | No memories extracted                   | Wrong embedding/extraction model in OV config        | Check OV's `embedding` / `vlm` configuration                |
+| Takeover never advances                  | Pending addMessage replay, commit, or overview polling failed | Set `OV_DEBUG_LOG=/tmp/ov-pi.log` and retry `/viking commit` |
 
 ## License
 

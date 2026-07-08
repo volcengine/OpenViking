@@ -184,10 +184,13 @@ export class OVClient {
   }
 
   /** POST /api/v1/sessions/{id}/commit — commit session for archiving + extraction */
-  async commitSession(sessionId: string): Promise<{ task_id: string; archive_uri: string } | null> {
+  async commitSession(
+    sessionId: string,
+    keepRecentCount = this.cfg.commitKeepRecentCount,
+  ): Promise<{ task_id: string; archive_uri: string } | null> {
     const res = await this.fetchJSON<{ task_id: string; archive_uri: string }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
-      { method: "POST", body: JSON.stringify({ keep_recent_count: this.cfg.commitKeepRecentCount }) },
+      { method: "POST", body: JSON.stringify({ keep_recent_count: keepRecentCount }) },
       30000,
     );
     return res.ok ? res.result : null;

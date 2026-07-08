@@ -20,6 +20,12 @@ export interface OVConfig {
   resumeContextBudget: number;
   commitTokenThreshold: number;
   commitKeepRecentCount: number;
+  takeoverEnabled: boolean;
+  takeoverTokenThreshold: number;
+  takeoverKeepRecentTurns: number;
+  takeoverOverviewBudget: number;
+  takeoverOverviewPollMs: number;
+  takeoverOverviewPollMax: number;
   captureToolResults: boolean;
   captureMode: "semantic" | "keyword";
   captureMaxLength: number;
@@ -47,6 +53,12 @@ const DEFAULT_CONFIG: OVConfig = {
   resumeContextBudget: 32000,
   commitTokenThreshold: 20000,
   commitKeepRecentCount: 10,
+  takeoverEnabled: true,
+  takeoverTokenThreshold: 30000,
+  takeoverKeepRecentTurns: 3,
+  takeoverOverviewBudget: 3000,
+  takeoverOverviewPollMs: 2000,
+  takeoverOverviewPollMax: 15,
   captureToolResults: false,
   captureMode: "semantic",
   captureMaxLength: 24000,
@@ -65,6 +77,7 @@ export function loadConfig(extensionDir: string): OVConfig {
     file = {};
   }
 
+  const takeover = file.takeover && typeof file.takeover === "object" ? file.takeover : {};
   const creds = resolveOpenVikingCredentials();
   const config: OVConfig = {
     ...DEFAULT_CONFIG,
@@ -78,6 +91,12 @@ export function loadConfig(extensionDir: string): OVConfig {
     scoreThreshold: file.scoreThreshold ?? file.recallScoreThreshold ?? DEFAULT_CONFIG.scoreThreshold,
     minQueryLength: file.minQueryLength ?? file.recallMinQueryLength ?? DEFAULT_CONFIG.minQueryLength,
     profileTokenBudget: file.profileTokenBudget ?? file.profileBudget ?? DEFAULT_CONFIG.profileTokenBudget,
+    takeoverEnabled: takeover.enabled ?? file.takeoverEnabled ?? DEFAULT_CONFIG.takeoverEnabled,
+    takeoverTokenThreshold: takeover.tokenThreshold ?? file.takeoverTokenThreshold ?? DEFAULT_CONFIG.takeoverTokenThreshold,
+    takeoverKeepRecentTurns: takeover.keepRecentTurns ?? file.takeoverKeepRecentTurns ?? DEFAULT_CONFIG.takeoverKeepRecentTurns,
+    takeoverOverviewBudget: takeover.overviewBudget ?? file.takeoverOverviewBudget ?? DEFAULT_CONFIG.takeoverOverviewBudget,
+    takeoverOverviewPollMs: takeover.overviewPollMs ?? file.takeoverOverviewPollMs ?? DEFAULT_CONFIG.takeoverOverviewPollMs,
+    takeoverOverviewPollMax: takeover.overviewPollMax ?? file.takeoverOverviewPollMax ?? DEFAULT_CONFIG.takeoverOverviewPollMax,
   };
 
   if (process.env.OPENVIKING_URL || process.env.OPENVIKING_BASE_URL) config.endpoint = creds.baseUrl;
@@ -95,6 +114,12 @@ export function loadConfig(extensionDir: string): OVConfig {
   config.resumeContextBudget = clampInt(config.resumeContextBudget, 1024, 128000, DEFAULT_CONFIG.resumeContextBudget);
   config.commitTokenThreshold = clampInt(config.commitTokenThreshold, 1000, 1000000, DEFAULT_CONFIG.commitTokenThreshold);
   config.commitKeepRecentCount = clampInt(config.commitKeepRecentCount, 0, 1000, DEFAULT_CONFIG.commitKeepRecentCount);
+  config.takeoverEnabled = config.takeoverEnabled !== false;
+  config.takeoverTokenThreshold = clampInt(config.takeoverTokenThreshold, 1, 1000000, DEFAULT_CONFIG.takeoverTokenThreshold);
+  config.takeoverKeepRecentTurns = clampInt(config.takeoverKeepRecentTurns, 0, 100, DEFAULT_CONFIG.takeoverKeepRecentTurns);
+  config.takeoverOverviewBudget = clampInt(config.takeoverOverviewBudget, 100, 50000, DEFAULT_CONFIG.takeoverOverviewBudget);
+  config.takeoverOverviewPollMs = clampInt(config.takeoverOverviewPollMs, 0, 60000, DEFAULT_CONFIG.takeoverOverviewPollMs);
+  config.takeoverOverviewPollMax = clampInt(config.takeoverOverviewPollMax, 1, 120, DEFAULT_CONFIG.takeoverOverviewPollMax);
   config.captureMaxLength = clampInt(config.captureMaxLength, 200, 100000, DEFAULT_CONFIG.captureMaxLength);
   config.captureToolMaxChars = clampInt(config.captureToolMaxChars, 200, 20000, DEFAULT_CONFIG.captureToolMaxChars);
   config.captureMode = config.captureMode === "keyword" ? "keyword" : "semantic";

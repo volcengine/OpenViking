@@ -49,3 +49,26 @@ test("extractBranchCapturePayloads resets watermark when branch shrinks", () => 
   assert.equal(result.nextEntryCount, 1);
   assert.equal(result.payloads.length, 1);
 });
+
+test("extractBranchCapturePayloads faithful mode keeps ack, short, and punctuation turns", () => {
+  const branch = [
+    { type: "message", message: { role: "user", content: "ok" } },
+    { type: "message", message: { role: "user", content: "hi" } },
+    { type: "message", message: { role: "user", content: "!!!" } },
+  ];
+
+  assert.equal(extractBranchCapturePayloads(branch, 0, {}).payloads.length, 0);
+
+  const result = extractBranchCapturePayloads(branch, 0, { faithfulCapture: true });
+  assert.equal(result.payloads.length, 3);
+  assert.deepEqual(result.payloads.map((p) => p.parts[0].text), ["ok", "hi", "!!!"]);
+});
+
+test("extractBranchCapturePayloads faithful mode still skips commands and plugin status", () => {
+  const result = extractBranchCapturePayloads([
+    { type: "message", message: { role: "user", content: "/viking" } },
+    { type: "message", message: { role: "assistant", content: "[OpenViking-memory] synced" } },
+  ], 0, { takeoverEnabled: true });
+
+  assert.equal(result.payloads.length, 0);
+});

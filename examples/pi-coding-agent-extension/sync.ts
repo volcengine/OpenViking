@@ -1,10 +1,22 @@
 import type { OVClient } from "./client.js";
 import type { OVConfig } from "./config.js";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
-import { enqueue, replayPending } from "./shared/pending-queue.mjs";
+import { enqueue, listPending, replayPending } from "./shared/pending-queue.mjs";
 import { extractBranchCapturePayloads } from "./lib/capture-adapter.mjs";
+import { countUndeliveredForSession, estimatePayloadTokens } from "./lib/takeover-core.mjs";
 
 // --- SyncManager ---
+
+export interface AddPayloadResult {
+  accepted: boolean;
+  delivered: boolean;
+}
+
+export interface SyncBranchResult {
+  added: number;
+  tokens: number;
+  allDelivered: boolean;
+}
 
 export class SyncManager {
   private client: OVClient;
@@ -18,6 +30,12 @@ export class SyncManager {
   }
 
   get sessionId(): string | null { return this.ovSessionId; }
+  get syncedCount(): number { return this.syncedEntryCount; }
+
+  restoreWatermark(n: number): void {
+    const next = Math.max(0, Math.floor(Number(n) || 0));
+    this.syncedEntryCount = next;
+  }
 
   async ensureSession(piSessionId: string): Promise<boolean> {
     if (this.ovSessionId) return true;
@@ -35,32 +53,43 @@ export class SyncManager {
     );
   }
 
-  async syncBranch(branch: any[]): Promise<number> {
-    if (!this.ovSessionId) return 0;
+  async flushForTakeover(): Promise<boolean> {
+    if (!this.ovSessionId) return false;
+    await this.replayPending();
+    const pending = await listPending();
+    return countUndeliveredForSession(pending, this.ovSessionId) === 0;
+  }
+
+  async syncBranch(branch: any[]): Promise<SyncBranchResult> {
+    if (!this.ovSessionId) return { added: 0, tokens: 0, allDelivered: true };
 
     const extracted = extractBranchCapturePayloads(branch, this.syncedEntryCount, this.config);
     if (extracted.resetWatermark) this.syncedEntryCount = 0;
     let added = 0;
+    let tokens = 0;
+    let allDelivered = true;
     for (const payload of extracted.payloads) {
-      const ok = await this.addPayload(payload);
-      if (!ok) break;
+      const result = await this.addPayload(payload);
+      if (!result.accepted) break;
       added++;
+      tokens += estimatePayloadTokens(payload);
+      allDelivered = allDelivered && result.delivered;
     }
     if (added === extracted.payloads.length) {
       this.syncedEntryCount = extracted.nextEntryCount;
     }
-    if (added > 0) {
+    if (added > 0 && !this.config.takeoverEnabled) {
       await this.commitIfNeeded();
     }
-    return added;
+    return { added, tokens, allDelivered };
   }
 
-  async addPayload(payload: any): Promise<boolean> {
-    if (!this.ovSessionId) return false;
+  async addPayload(payload: any): Promise<AddPayloadResult> {
+    if (!this.ovSessionId) return { accepted: false, delivered: false };
     const ok = await this.client.addMessagePayload(this.ovSessionId, payload);
-    if (ok) return true;
+    if (ok) return { accepted: true, delivered: true };
     await enqueue("addMessage", this.ovSessionId, payload);
-    return true;
+    return { accepted: true, delivered: false };
   }
 
   async commitIfNeeded(): Promise<void> {
@@ -72,13 +101,18 @@ export class SyncManager {
     }
   }
 
-  async commit(): Promise<any | null> {
+  async commit(opts: { queueOnFailure?: boolean; keepRecentCount?: number } = {}): Promise<any | null> {
     if (!this.ovSessionId) return null;
-    const result = await this.client.commitSession(this.ovSessionId);
+    const result = await this.client.commitSession(
+      this.ovSessionId,
+      opts.keepRecentCount,
+    );
     if (!result) {
-      await enqueue("commitSession", this.ovSessionId, {
-        keep_recent_count: this.config.commitKeepRecentCount,
-      });
+      if (opts.queueOnFailure !== false) {
+        await enqueue("commitSession", this.ovSessionId, {
+          keep_recent_count: opts.keepRecentCount ?? this.config.commitKeepRecentCount,
+        });
+      }
       return null;
     }
     return result;
