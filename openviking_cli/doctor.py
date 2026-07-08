@@ -339,8 +339,8 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
     return _probe_embedding_provider(embedding, dense)
 
 
-def check_vlm() -> tuple[bool, str, Optional[str]]:
-    """Load VLM config and verify it's configured."""
+def check_vlm() -> CheckResult:
+    """Load VLM config and verify it's configured, then probe Function Calling support."""
     config_path = _find_config()
     if config_path is None:
         return False, "Cannot check (no config file)", None
@@ -393,7 +393,80 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
             "Set vlm.api_key in ov.conf",
         )
 
-    return True, f"{provider}/{model}", None
+    # Non-ollama litellm (ollama already early-returned above): best-effort registry
+    # short-circuit before spending a live request.
+    # ponytail: litellm registry lags new models — treat only an explicit False as a
+    # signal, unknown ⇒ live-probe.
+    if provider == "litellm":
+        try:
+            import litellm
+
+            if litellm.supports_function_calling(model) is False:
+                return _fc_unsupported_warn(f"{provider}/{model}")
+        except Exception:
+            pass
+
+    return _probe_vlm_function_calling(VLMConfig(**normalized_vlm))
+
+
+def _fc_unsupported_warn(label: str) -> tuple[CheckStatus, str, Optional[str]]:
+    """WARN tuple for a model detected (live or via registry) to lack Function Calling."""
+    return (
+        "warn",
+        f"{label} does not support Function Calling (tool use); "
+        "Agent (--with-bot) and session-memory features will fail",
+        "Configure a Function-Calling-capable vlm.model "
+        "(see .wiki/embedding-and-vlm-providers.md), "
+        "or don't use --with-bot / session memory",
+    )
+
+
+def _probe_vlm_function_calling(vlm_config: VLMConfig) -> tuple[CheckStatus, str, Optional[str]]:
+    """Send one trivial tool-call request to verify the model supports Function Calling.
+
+    Mirrors ``_probe_embedding_provider``'s mechanism but reports a WARN (not a hard
+    fail): Function Calling is required by Agent (``--with-bot``) mode and by session
+    working-memory/extraction, yet pure parse/retrieval deployments never use it, so a
+    missing/unverifiable capability must be visible and actionable but non-blocking.
+    """
+    _, provider = vlm_config.get_provider_config()
+    model = vlm_config.model or ""
+    label = f"{provider}/{model}"
+
+    probe_tool = {
+        "type": "function",
+        "function": {
+            "name": "ov_doctor_probe",
+            "description": "Return ok.",
+            "parameters": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
+        },
+    }
+
+    async def _run_probe():
+        return await asyncio.wait_for(
+            vlm_config.get_completion_async(
+                messages=[{"role": "user", "content": "ping"}],
+                tools=[probe_tool],
+                tool_choice="auto",
+            ),
+            timeout=10.0,
+        )
+
+    try:
+        asyncio.run(_run_probe())
+    except Exception as exc:
+        text = str(exc).lower()
+        # ponytail: substring match on the provider 400 body (e.g. code 20037); widen
+        # patterns if a provider phrases FC-unsupported differently.
+        if "20037" in text or ("function call" in text and "not supported" in text):
+            return _fc_unsupported_warn(label)
+        return (
+            "warn",
+            f"{label} (function-calling probe could not complete: {exc})",
+            "Check the VLM provider is reachable and the model/API key are correct",
+        )
+
+    return "pass", f"{label} function-calling ok", None
 
 
 def check_ollama() -> tuple[bool, str, Optional[str]]:
