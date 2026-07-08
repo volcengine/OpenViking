@@ -61,9 +61,9 @@
 
 > 💡 **想先看看实际效果？** 试试 [OpenViking Studio](https://openviking.net/studio)——在线托管实例，提供上下文实验场、语义检索和多智能体 Hub，无需安装。
 
-### OpenViking Helper macOS 桌面端（Beta）
+### OpenViking Helper 桌面端（Beta）
 
-**OpenViking Helper** 是面向 OpenViking 用户的 macOS 桌面应用，把本机 Agent 接入、会话轨迹、记忆和技能放到可视化界面里，方便用户确认接入状态，并把本地上下文同步到 OpenViking。
+**OpenViking Helper** 是面向 OpenViking 用户的桌面应用，把本机 Agent 接入、会话轨迹、记忆和技能放到可视化界面里，方便用户确认接入状态，并把本地上下文同步到 OpenViking。
 
 核心特性：
 
@@ -71,12 +71,13 @@
 - **回看会话生效过程**：解析 Claude Code、Codex、Trae 会话，展示 OpenViking 的召回、Prompt 注入、MCP 调用、捕获和提交事件。
 - **管理本地记忆与技能**：查看本地 memory / rule 文件和 `SKILL.md` 技能，并同步到 OpenViking。
 
-> OpenViking Helper 目前仍处于 Beta 阶段，暂时仅支持 macOS。
+> OpenViking Helper 目前仍处于 Beta 阶段，支持 macOS 和 Windows x64。
 
 下载：
 
-- [macOS Apple Silicon 版（arm64）](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/418715779/0.0.18/darwin-arm64/openviking-helper-0.0.18-arm64.dmg)
-- [macOS Intel 版（x64）](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/418715779/0.0.18/darwin-x64/openviking-helper-0.0.18-x64.dmg)
+- [macOS Apple Silicon 版（arm64）](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/darwin-arm64/openviking-helper-0.0.19-arm64.dmg)
+- [macOS Intel 版（x64）](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/darwin-x64/openviking-helper-0.0.19-x64.dmg)
+- [Windows 版（x64）](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/win32-x64/openviking-helper-0.0.19-x64.exe)
 
 ### 本地部署
 

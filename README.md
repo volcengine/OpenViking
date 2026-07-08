@@ -61,9 +61,9 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 
 > 💡 **Want to see it in action first?** Try [OpenViking Studio](https://openviking.ai/studio) — a live hosted instance with a context playground, semantic search, and a multi-agent hub. No installation required.
 
-### OpenViking Helper for macOS (Beta)
+### OpenViking Helper for macOS and Windows (Beta)
 
-**OpenViking Helper** is a macOS desktop app for OpenViking users. It brings local agent setup, session traces, memories, and skills into a visual console, making it easier to verify setup and sync local context into OpenViking.
+**OpenViking Helper** is a desktop app for OpenViking users. It brings local agent setup, session traces, memories, and skills into a visual console, making it easier to verify setup and sync local context into OpenViking.
 
 Highlights:
 
@@ -71,12 +71,13 @@ Highlights:
 - **Session trace inspection**: Parse Claude Code, Codex, and Trae sessions to show OpenViking recall, prompt injection, MCP calls, capture, and commit events.
 - **Local memory and skill management**: View local memory / rule files and `SKILL.md` skills, then sync them to OpenViking.
 
-> OpenViking Helper is currently in beta and supports macOS only.
+> OpenViking Helper is currently in beta and supports macOS and Windows x64.
 
 Download:
 
-- [macOS Apple Silicon (arm64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/418715779/0.0.18/darwin-arm64/openviking-helper-0.0.18-arm64.dmg)
-- [macOS Intel (x64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/418715779/0.0.18/darwin-x64/openviking-helper-0.0.18-x64.dmg)
+- [macOS Apple Silicon (arm64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/darwin-arm64/openviking-helper-0.0.19-arm64.dmg)
+- [macOS Intel (x64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/darwin-x64/openviking-helper-0.0.19-x64.dmg)
+- [Windows (x64)](https://lf3-cdn-tos.bytegoofy.com/obj/tron-demo/7654844610543360265/420238785/0.0.19/win32-x64/openviking-helper-0.0.19-x64.exe)
 
 ### Local Deployment
 
