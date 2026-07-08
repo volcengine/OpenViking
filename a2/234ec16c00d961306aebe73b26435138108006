@@ -1,0 +1,32 @@
+docs/en/api/01-overview.md
+  s_b52357829229c9::t_d8814eb4013471 422-423
+docs/zh/api/01-overview.md
+  s_b52357829229c9::t_b11d2803622cbb 418-419
+openviking/server/routers/pack.py
+  s_b52357829229c9::t_67ba8e826f12cf 15-19,22,74,166
+tests/server/ovpack_test_helpers.py
+  s_b52357829229c9::t_e93c64a12f6379 61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a2234ec16c00d961306aebe73b26435138108006",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_b52357829229c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fea-b5a1-7871-8f8c-53c32d33b8e5",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
