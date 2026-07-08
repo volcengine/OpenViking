@@ -17,6 +17,7 @@ from openviking.session.train.domain import (
 from openviking.session.train.gates import (
     ExperienceCausalSignalGate,
     ExperienceCounterfactualReflectionGate,
+    ExperienceRuntimeWordingGate,
     ExperienceToolAlignmentGate,
     ExperienceTriggerRuntimeGate,
     GateTarget,
@@ -113,6 +114,7 @@ def _plan_item() -> PolicyPlanItem:
         after_content=(
             "## Failure Pattern\n"
             "- Missing required total in final user-visible message.\n\n"
+            "- Task impact: final communication omitted the required total.\n\n"
             "## Repair Procedure\n"
             "- Before calling `communicate_with_user`, include the required total.\n\n"
             "## Guardrails\n"
@@ -159,6 +161,7 @@ def test_default_policy_gate_runner_uses_reflection_not_shape_or_narrowing_gate(
     names = [gate.name for gate in default_policy_gate_runner().gates]
 
     assert "experience_counterfactual_reflection" in names
+    assert "experience_runtime_wording" in names
     assert "experience_trigger_runtime" in names
     assert "experience_content_format" not in names
     assert "experience_trigger_shape" not in names
@@ -168,6 +171,7 @@ def test_default_policy_gate_runner_uses_reflection_not_shape_or_narrowing_gate(
     assert "Content format" not in contract
     assert "Use exactly these headings" not in contract
     assert "Counterfactual reflection" in contract
+    assert "Runtime wording hygiene" in contract
     assert "Trigger runtime compatibility" in contract
     assert "eligible for experience learning by default" in contract
     assert "Recommended operation=skip" in contract
@@ -175,6 +179,115 @@ def test_default_policy_gate_runner_uses_reflection_not_shape_or_narrowing_gate(
     assert "Action is create/update" not in contract
     assert "Candidate-shape trigger" not in contract
     assert "Update safety" not in contract
+
+
+@pytest.mark.asyncio
+async def test_runtime_wording_gate_rejects_evaluator_terms_in_experience_content():
+    trajectory = _trajectory_with_repair_signal(
+        action="create",
+        first_wrong_tool="communicate_with_user",
+        trigger_boundary="communicate_with_user",
+    )
+    item = _plan_item()
+    item.after_content = (
+        "## Failure Pattern\n"
+        "- Wrong boundary: communicate_with_user\n"
+        "- Missing check: communicate_checks required total from evaluator.\n\n"
+        "## Repair Procedure\n"
+        "- Before calling `communicate_with_user`, include the total required by the rubric.\n\n"
+        "## Guardrails\n"
+        "- Only applies to final summary communication.\n"
+    )
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=trajectory,
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceRuntimeWordingGate().evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert decision.gate_name == "experience_runtime_wording"
+    assert set(decision.evidence["terms"]) >= {"communicate_checks", "evaluator", "rubric"}
+
+
+@pytest.mark.asyncio
+async def test_causal_signal_gate_rejects_structured_selected_none():
+    trajectory = Trajectory(
+        name="missing_total",
+        uri="viking://user/u/memories/trajectories/missing_total.md",
+        outcome="failure",
+        retrieval_anchor="Stage: final_response",
+        content=(
+            "# Missing total\n"
+            "- Outcome: failure\n"
+            "- First Wrong Tool Call:\n"
+            "  - Tool: communicate_with_user\n"
+            "  - Error type: missing_communication\n"
+            "- Counterfactual Ideal Experience:\n"
+            "  - Selected candidate: none\n"
+            "- Experience Repair Signal:\n"
+            "  - Recommended operation: skip\n"
+            "  - Trigger boundary: none\n"
+        ),
+    )
+    item = _plan_item()
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=trajectory,
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceCausalSignalGate().evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert decision.evidence["signals"][0]["selected_candidate"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_causal_signal_gate_allows_structured_selected_c1():
+    trajectory = Trajectory(
+        name="missing_total",
+        uri="viking://user/u/memories/trajectories/missing_total.md",
+        outcome="failure",
+        retrieval_anchor="Stage: final_response",
+        content=(
+            "# Missing total\n"
+            "- Outcome: failure\n"
+            "- First Wrong Tool Call:\n"
+            "  - Tool: communicate_with_user\n"
+            "  - Error type: missing_communication\n"
+            "- Counterfactual Ideal Experience:\n"
+            "  - Selected candidate: C1\n"
+            "- Experience Repair Signal:\n"
+            "  - Recommended operation: create\n"
+            "  - Trigger boundary: communicate_with_user\n"
+        ),
+    )
+    item = _plan_item()
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=trajectory,
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceCausalSignalGate().evaluate(target)
+
+    assert decision is None
 
 
 @pytest.mark.asyncio

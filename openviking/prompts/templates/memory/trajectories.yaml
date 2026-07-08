@@ -114,38 +114,49 @@ fields:
         - Impact: <why this changed reward/goal/state/communication>
       - Counterfactual Ideal Experience:
         - Candidate C1:
+          - Candidate type: source_bound_runtime_repair
           - Would fix source rollout: <true|false>
           - Experience name: <name or none>
           - Injection boundary: <tool boundary or none>
-          - Situation: <reusable applies-when condition>
-          - Repair rule: <minimal pre-tool instruction>
-          - Source binding: <semantic source and derivation of required value/decision>
+          - Situation: <reusable runtime condition; no evaluator/control-plane wording>
+          - Repair rule: <minimal pre-tool instruction using runtime facts only>
+          - Source binding:
+            - User request that created obligation: <explicit user request/confirmation or none>
+            - Scope freeze point: <when the relevant object set/value scope becomes fixed, or none>
+            - Included records: <semantic roles included in the value/list/decision>
+            - Excluded records: <semantic roles excluded>
+            - Source field: <runtime field/content to read, e.g. price/status/id/content, or none>
+            - Derivation: <how to compute/select/verify the value from runtime facts>
+            - Later write effect: <whether later writes change the previously requested scope/value>
+            - Non-aggregate source: <confirmed target, selected source object, policy gate, or none>
           - Applicability: <narrow boundary/object role/scope/candidate shape>
           - Anti-pattern: <closest tempting wrong behavior>
-          - Weakness: <why this candidate may be too broad, too narrow, or not causal>
+          - Weakness: <remaining risk; write none if source-bound and causal>
         - Candidate C2:
+          - Candidate type: over_broad_reject
           - Would fix source rollout: <true|false>
           - Experience name: <name or none>
           - Injection boundary: <tool boundary or none>
-          - Situation: <different reusable applies-when condition>
-          - Repair rule: <different minimal pre-tool instruction>
-          - Source binding: <different semantic source/derivation>
-          - Applicability: <narrow boundary/object role/scope/candidate shape>
-          - Anti-pattern: <closest tempting wrong behavior>
-          - Weakness: <why this candidate may be too broad, too narrow, or not causal>
+          - Situation: <tempting broad condition>
+          - Repair rule: <tempting broad rule>
+          - Source binding: <why this lacks runtime semantic binding>
+          - Applicability: <why it would over-trigger>
+          - Anti-pattern: <broad/vague behavior to avoid>
+          - Weakness: <why this should not be selected>
         - Candidate C3:
+          - Candidate type: wrong_scope_or_noncausal_reject
           - Would fix source rollout: <true|false>
           - Experience name: <name or none>
           - Injection boundary: <tool boundary or none>
-          - Situation: <different reusable applies-when condition>
-          - Repair rule: <different minimal pre-tool instruction>
-          - Source binding: <different semantic source/derivation>
-          - Applicability: <narrow boundary/object role/scope/candidate shape>
-          - Anti-pattern: <closest tempting wrong behavior>
-          - Weakness: <why this candidate may be too broad, too narrow, or not causal>
-        - Selected candidate: <C1|C2|C3|none>
-        - Selection reason: <why selected candidate is the narrowest source-bound repair for the first material failure>
-        - Case evidence: <diagnostic literals/ids/values only; not hardcoded>
+          - Situation: <nearby but wrong-scope/non-causal condition>
+          - Repair rule: <nearby but wrong repair>
+          - Source binding: <why this binds to the wrong source/scope or non-causal factor>
+          - Applicability: <nearby condition where it may apply, or none>
+          - Anti-pattern: <wrong-scope/non-causal behavior to avoid>
+          - Weakness: <why this should not be selected>
+        - Selected candidate: <C1|none>
+        - Selection reason: <why C1 is source-bound and causal, or why no reusable pre-tool repair exists>
+        - Case evidence: <diagnostic literals/ids/values and evaluator facts only; not hardcoded>
       - Experience Repair Signal:
         - Recommended operation: <create|update|skip>
         - Existing experience action: <update|none>
@@ -158,13 +169,14 @@ fields:
       - Result: <final outcome and side effects>
 
       Rules:
-      - PRIMARY OUTPUT: `Counterfactual Ideal Experience` is the main output. Generate exactly three diverse candidates first, then select exactly one primary candidate. `Experience Repair Signal` is only a routing summary derived from the selected candidate.
+      - PRIMARY OUTPUT: `Counterfactual Ideal Experience` is the main output. Generate exactly three candidates: C1 must be the best source-bound runtime repair, C2 must be a tempting over-broad reject, and C3 must be a wrong-scope/non-causal reject. `Experience Repair Signal` is only a routing summary derived from C1 when selected.
       - FIXED SHAPE: Output every section above in order. For success, set wrong/divergence fields to `none`, all candidates Would fix source rollout to `false`, Selected candidate to `none`, and Repair Signal to `skip`.
-      - DEFAULT LEARN: For non-success, at least one candidate should have Would fix source rollout=`true` when a narrow pre-tool reminder could have prevented the first material failure. Use Selected candidate=`none` only when no reusable pre-tool repair exists.
-      - CANDIDATE DIVERSITY: Make C1/C2/C3 meaningfully different. Include at least one narrow source-bound candidate, one tempting broad candidate if plausible, and one nearby non-causal or wrong-scope candidate when useful. Select the narrowest causal candidate; do not select a vague completeness reminder.
+      - DEFAULT LEARN: For non-success, C1 should have Would fix source rollout=`true` when a narrow pre-tool reminder could have prevented the first material failure. Use Selected candidate=`none` only when no reusable pre-tool repair exists.
+      - SELECTION GATE: Select only C1 or none. Never select C2/C3. If C1's Situation, Repair rule, or Source binding uses only vague completeness wording or evaluator/control-plane terms, set Selected candidate=`none` and explain what runtime source binding is missing.
       - FIRST BOUNDARY: Pick one earliest material boundary. `Tool` must be one raw tool name, `communicate_with_user`, or `none`; never prose, `done`, multiple tools, or alternatives. Communication-only failures target `communicate_with_user`.
-      - SOURCE BINDING: Do not select candidates whose reusable Situation/Repair rule/Source binding only says “include required info”, “check policy”, evaluator/control-plane fields, or similar vague obligations. Bind selected repair to runtime semantic sources: user-request scope, confirmed target, selected source object, row/set membership, field to read, calculation, policy gate, or communication obligation.
-      - AGGREGATE/LIST SCOPE: For totals, counts, summaries, balances, or lists, selected candidate must specify freeze point, included/excluded records, source field, derivation, and whether later writes change the requested scope. Name the closest wrong aggregate/list as Anti-pattern.
+      - BANNED REUSABLE WORDING: C1 reusable fields (Experience name, Situation, Repair rule, Source binding, Applicability, Anti-pattern, Repair principle) must not contain evaluator/control-plane wording such as `evaluation`, `evaluator`, `communicate_checks`, `action_checks`, `db_check`, `reward`, `rubric`, `评估`, `奖励`, or vague phrases like “include/check all required info”. Those words may appear only in Case evidence.
+      - SOURCE BINDING: Bind C1 to runtime semantic sources: user-request scope, confirmed target, selected source object, row/set membership, field to read, calculation, policy gate, or communication obligation. If the missing value is only visible as an evaluator literal, reverse-map it to the user/tool facts that produce that literal.
+      - AGGREGATE/LIST SCOPE: For totals, counts, summaries, balances, or lists, C1 must fill Scope freeze point, Included records, Excluded records, Source field, Derivation, and Later write effect with non-`none` values. If any are missing, do not select C1. Name the closest wrong aggregate/list as Anti-pattern.
       - PRESERVE CORRECT WORK: List matched/correct actions in Preserve and do not learn a rule that blocks them. When same tool can be right or wrong, distinguish by object role, membership, confirmation scope, provenance, source selection, calculation scope, or content coverage.
       - DOMAIN-NEUTRAL STYLE: Generalize identifiers, names, timestamps, exact values, and dataset-specific wording into roles. Concrete literals only in Case evidence as diagnostic/not hardcoded. Concise bullets only; no extra headings, code fences, hidden reasoning, or closing remarks.
 

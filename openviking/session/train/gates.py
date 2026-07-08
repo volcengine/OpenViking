@@ -231,6 +231,7 @@ def default_policy_gate_runner() -> GateRunner:
     return GateRunner(
         gates=[
             ExperienceCausalSignalGate(mode="enforce"),
+            ExperienceRuntimeWordingGate(mode="enforce"),
             ExperienceToolAlignmentGate(mode="enforce"),
             ExperienceTriggerRuntimeGate(mode="enforce"),
             ExperienceCounterfactualReflectionGate(mode="enforce"),
@@ -261,11 +262,17 @@ Your experience output will be rejected unless every experience satisfies these 
 - The candidate_tool must match the trajectory's First Wrong Tool Call.Tool or Trigger boundary.
 - Do not choose earlier setup tools, later recovery tools, or multi-tool workflow triggers.
 
-3. Trigger runtime compatibility
+3. Runtime wording hygiene
+- Runtime-facing experience content must use task/runtime semantics, not evaluator or
+  control-plane terms.
+- Do not mention evaluation, evaluator, communicate_checks, action_checks, db_check,
+  reward, rubric, 评估, or 奖励 in the injected experience text.
+
+4. Trigger runtime compatibility
 - trigger_code must compile under the VikingBot constraint runtime used by tau2 constraint mode.
 - Do not use imports, file/network/process access, mutation of ctx/messages, or other forbidden syntax.
 
-4. Counterfactual reflection
+5. Counterfactual reflection
 - Reflect on whether injecting this experience before the original First Wrong Tool Call would likely improve the source rollout.
 - Reject experiences that would not address the first reward-changing mistake, only summarize a successful workflow, require unavailable information, or likely make the original rollout worse.
 
@@ -364,6 +371,41 @@ class ExperienceToolAlignmentGate:
             repair_prompt=(
                 "Change trigger_code to use exactly one candidate_tool matching First Wrong "
                 "Tool Call.Tool or Trigger boundary; otherwise output no changes."
+            ),
+        )
+
+
+@dataclass(slots=True)
+class ExperienceRuntimeWordingGate:
+    """Reject runtime-facing experiences that leak evaluator/control-plane wording."""
+
+    mode: GateMode = "enforce"
+    name: str = "experience_runtime_wording"
+
+    def applies_to(self, target: GateTarget) -> bool:
+        return target.memory_type == "experiences" and target.after_content.strip() != ""
+
+    async def evaluate(self, target: GateTarget) -> GateDecision | None:
+        constraint, _ = _experience_constraint_and_trigger(target.after_content, target)
+        terms = _runtime_control_plane_terms(constraint)
+        if not terms:
+            return None
+        return GateDecision(
+            gate_name=self.name,
+            action="reject",
+            reason="experience content leaks evaluator/control-plane wording",
+            evidence={
+                "target_name": target.target_name,
+                "terms": terms,
+                "content_preview": _preview_text(constraint, limit=500),
+            },
+            retriable=True,
+            repair_prompt=(
+                "Rewrite runtime-facing experience content using only runtime semantic sources "
+                "such as user request, confirmed target, retrieved record set, source field, "
+                "calculation, policy gate, or required user-visible message. Do not mention "
+                "evaluation/evaluator/communicate_checks/action_checks/db_check/reward/rubric/"
+                "评估/奖励. If no such rewrite is possible, output no changes."
             ),
         )
 
@@ -630,6 +672,7 @@ class TrajectoryRepairSignal:
     repair_action: str
     first_wrong_tool: str
     trigger_boundary: str
+    selected_candidate: str = ""
     first_wrong_step: str = ""
     failure_kind: str = ""
     db_check_passed: bool | None = None
@@ -643,6 +686,7 @@ class TrajectoryRepairSignal:
             "repair_action": self.repair_action,
             "first_wrong_tool": self.first_wrong_tool,
             "trigger_boundary": self.trigger_boundary,
+            "selected_candidate": self.selected_candidate,
             "first_wrong_step": self.first_wrong_step,
             "failure_kind": self.failure_kind,
             "db_check_passed": self.db_check_passed,
@@ -924,6 +968,27 @@ def _preview_text(text: str, *, limit: int) -> str:
     return value[: max(0, limit - 3)] + "..."
 
 
+_RUNTIME_CONTROL_PLANE_TERM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (term, re.compile(pattern, re.IGNORECASE))
+    for term, pattern in (
+        ("evaluation", r"\bevaluation\b"),
+        ("evaluator", r"\bevaluator\b"),
+        ("communicate_checks", r"\bcommunicate_checks?\b"),
+        ("action_checks", r"\baction_checks?\b"),
+        ("db_check", r"\bdb_checks?\b"),
+        ("reward", r"\breward\b"),
+        ("rubric", r"\brubric\b"),
+        ("评估", r"评估"),
+        ("奖励", r"奖励"),
+    )
+)
+
+
+def _runtime_control_plane_terms(text: str) -> list[str]:
+    value = str(text or "")
+    return [term for term, pattern in _RUNTIME_CONTROL_PLANE_TERM_PATTERNS if pattern.search(value)]
+
+
 def _effective_action(action: GateAction, mode: GateMode) -> GateAction:
     if action != "reject":
         return action
@@ -1057,6 +1122,9 @@ def parse_trajectory_repair_signal(trajectory: Trajectory) -> TrajectoryRepairSi
         repair_action=_repair_action_from_section(repair_section),
         first_wrong_tool=_norm_tool(first_tool),
         trigger_boundary=_norm_tool(_field_from_section(repair_section, "Trigger boundary")),
+        selected_candidate=_norm_candidate(
+            _first_match(content, r"(?mi)^\s*-\s*Selected candidate:\s*(.+)$")
+        ),
         first_wrong_step=_field_from_section(first_section, "Step"),
         failure_kind=_field_from_section(first_section, "Error type"),
         db_check_passed=_bool_from_runtime(runtime_section, "db"),
@@ -1083,6 +1151,8 @@ def _repair_action_from_section(repair_section: str) -> str:
 
 def _signal_allows_experience_update(signal: TrajectoryRepairSignal) -> bool:
     if signal.outcome == "success":
+        return False
+    if signal.selected_candidate and signal.selected_candidate not in {"c1"}:
         return False
     # Non-success trajectories are learning candidates by default.  The analyzer's
     # Experience Repair Signal.Action is only advisory: failed trajectories may still
@@ -1308,6 +1378,14 @@ def _norm_tool(value: str) -> str:
         return ""
     match = re.search(r"[a-zA-Z_][a-zA-Z0-9_]*", value)
     return match.group(0) if match else value.lower()
+
+
+def _norm_candidate(value: str) -> str:
+    value = str(value or "").strip().strip("` ").lower()
+    if value in {"c1", "c2", "c3", "none"}:
+        return value
+    match = re.match(r"^(c[123]|none)\b", value)
+    return match.group(1) if match else value
 
 
 def _extract_tool_names(value: str) -> set[str]:
