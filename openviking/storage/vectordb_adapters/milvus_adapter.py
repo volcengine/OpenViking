@@ -205,6 +205,8 @@ def _score_from_hit(hit: Dict[str, Any], distance_metric: str) -> float:
         return 0.0
     if not math.isfinite(score):
         return 0.0
+    if distance_metric == "cosine":
+        return 1.0 - score
     if distance_metric == "l2":
         return 1.0 / (1.0 + max(score, 0.0))
     return score
