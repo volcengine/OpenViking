@@ -36,7 +36,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 在 GitHub 访问困难的地区，可从火山引擎 TOS 镜像运行同一个安装器（或在下载源选择步骤选"TOS mirror"）：
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos --harness opencode
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
 ```
 
 安装器会注册 npm 插件（TOS 渠道则安装本地文件插件），把 `openviking` MCP server 条目写进 `~/.config/opencode/opencode.json`，并配置 `~/.openviking/ovcli.conf`。

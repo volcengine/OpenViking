@@ -18,3 +18,16 @@ Provides auto-capture of group/DM conversations, semantic recall before each LLM
 - Three isolation modes: `venue_user` (per-group/DM), `venue_user_fanout` (cross-venue sharing), `global_user` (single user)
 - Four auto-commit triggers: message count, token threshold, idle timeout, and process-exit flush
 - Backfills platform message history on first venue encounter
+
+## Open WebUI tool server
+
+[Open WebUI](https://github.com/open-webui/open-webui) is a self-hosted AI chat interface.
+
+Source: [examples/openwebui-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/openwebui-plugin)
+
+A standalone FastAPI server that exposes a curated subset of OpenViking endpoints as OpenAPI tools, so Open WebUI can call them as native tools. Setup and endpoint details are in the README.
+
+## More examples
+
+The [examples/](https://github.com/volcengine/OpenViking/tree/main/examples) directory also contains deployment and integration samples beyond agent plugins — Grafana dashboards, Kubernetes Helm charts, multi-tenant setups, snapshot workflows, and SDK snippets.
+

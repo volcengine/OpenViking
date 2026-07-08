@@ -5,7 +5,7 @@ Source: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree
 ## Step 1: Install
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness opencode
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
 ```
 
 OpenCode shares this one installer with Claude Code and Codex. It asks which tools to install, which source to use (GitHub or the TOS mirror), your language (English/中文), and OpenViking credentials; each step is idempotent, so it is safe to rerun. On the TOS channel the plugin is installed as local files — rerun the installer to update.

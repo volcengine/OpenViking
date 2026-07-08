@@ -5,7 +5,7 @@
 ## 步骤 1：安装
 
 ```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness opencode
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
 ```
 
 OpenCode 与 Claude Code、Codex 共用这一个安装器。它会询问要安装的工具、下载源（GitHub 或 TOS 镜像）、语言（English/中文）和 OpenViking 凭据；每一步都是幂等的，重复运行完全安全。TOS 渠道以本地文件方式安装插件——更新时重跑安装器即可。
