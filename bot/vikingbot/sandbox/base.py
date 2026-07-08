@@ -110,7 +110,15 @@ class SandboxBackend(ABC):
             IOError: If read fails
             PermissionError: If path outside workspace and restriction is enabled
         """
-        return (await self.read_file_bytes(path)).decode("utf-8")
+        data = await self.read_file_bytes(path)
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            # Some benchmark/tool artifacts may contain Windows-1252 smart quotes
+            # (e.g. byte 0x92) or other non-UTF-8 bytes.  read_file is a user-facing
+            # text tool; preserve progress by decoding lossily instead of failing
+            # the entire agent rollout.
+            return data.decode("utf-8", errors="replace")
 
     async def write_file(self, path: str, content: str) -> None:
         """Write file to sandbox (default implementation: host filesystem).

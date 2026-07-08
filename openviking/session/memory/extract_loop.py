@@ -8,11 +8,13 @@ Reference: bot/vikingbot/agent/loop.py AgentLoop structure
 
 import asyncio
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import (
+    DeleteId,
     MemoryFile,
     ResolvedOperation,
     ResolvedOperations,
@@ -38,6 +40,45 @@ from openviking_cli.utils.config import get_openviking_config
 logger = get_logger(__name__)
 
 
+_CANNED_REFUSAL_RE = re.compile(
+    r"(抱歉|不好意思|很遗憾|sorry).{0,20}"
+    r"(无法|不能|未能|不给|没有找到|未找到|can't|cannot|unable|won't|not able)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_canned_refusal(content: str) -> bool:
+    """Return whether a non-JSON LLM response looks like a generic refusal."""
+
+    text = " ".join(str(content or "").split())
+    if not text:
+        return False
+    if _CANNED_REFUSAL_RE.search(text):
+        return True
+    return any(
+        phrase in text
+        for phrase in (
+            "您的问题我无法回答",
+            "您的问题我无法识别",
+            "我无法回答这个问题",
+            "我无法给到相关内容",
+            "这个问题未找到相关结果",
+            "没有找到相关的结果",
+            "I can't answer that",
+            "I cannot answer that",
+            "I can't help with that",
+            "I cannot help with that",
+        )
+    )
+
+
+def _preview_text(content: str, *, limit: int = 240) -> str:
+    text = " ".join(str(content or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
 class ExtractLoop:
     """
     Simplified ReAct orchestrator for memory updates.
@@ -58,6 +99,7 @@ class ExtractLoop:
         ctx: Optional[RequestContext] = None,
         context_provider: Optional[Any] = None,  # ExtractContextProvider
         isolation_handler: MemoryIsolationHandler = None,
+        thinking: bool = False,
     ):
         """
         Initialize the ExtractLoop.
@@ -69,6 +111,7 @@ class ExtractLoop:
             max_iterations: Maximum number of ReAct iterations (default: 5)
             ctx: Request context
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
+            thinking: Whether to explicitly enable model thinking for this extraction loop.
         """
         self.vlm = vlm
         self.viking_fs = viking_fs or get_viking_fs()
@@ -76,10 +119,13 @@ class ExtractLoop:
         self.max_iterations = max_iterations
         self.ctx = ctx
         self.context_provider = context_provider
+        self.thinking = bool(thinking)
         # Use provided isolation_handler or create one in run()
         self._isolation_handler = isolation_handler
         # Track format error retry (max 1 retry)
         self._format_retry_count = 0
+        self._last_llm_failure_kind: Optional[str] = None
+        self._last_llm_failure_content: str = ""
 
         # Schema 生成器（在 run() 中初始化）
         self.schema_model_generator = None
@@ -134,7 +180,7 @@ class ExtractLoop:
         # 预计算 expected_fields
         config = get_openviking_config()
         self._link_enabled = config.memory.link_enabled if config.memory else False
-        self._expected_fields = ["delete_uris"]
+        self._expected_fields = []
         if self._link_enabled:
             self._expected_fields.append("links")
 
@@ -155,8 +201,6 @@ class ExtractLoop:
         json_schema = self._operations_model.model_json_schema()
 
         # Build initial messages from provider
-        import json
-
         schema_str = json.dumps(json_schema, ensure_ascii=False)
         messages = []
         page_id_rules = """
@@ -165,6 +209,8 @@ class ExtractLoop:
 - For existing items, use the page_id shown in read/search results.
 - For new items, assign a unique page_id >= 100.
 - When editing an existing item, reuse its existing page_id.
+- To delete an existing item, add an entry to `delete_ids` using its page_id.
+- For canonical merges, set `replacement_page_id` to the surviving page that should inherit the deleted page's existing links/backlinks; for pure deletes, set `replacement_page_id` to null.
 """
         link_rules = ""
         if self._link_enabled:
@@ -192,8 +238,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         """,
             }
         )
-
-        await self._mark_cache_breakpoint(messages)
 
         # Pre-fetch context via provider
         tool_call_messages = await self.context_provider.prefetch()
@@ -269,22 +313,41 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     continue
                 break
             # If no tool calls either, continue to next iteration (don't break!)
+            failure_kind = self._last_llm_failure_kind or "unknown"
+            failure_preview = _preview_text(self._last_llm_failure_content)
             tracer.error(
-                f"LLM returned neither tool calls nor operations (iteration {iteration}/{max_iterations})"
+                "LLM returned neither tool calls nor operations "
+                f"(iteration {iteration}/{max_iterations}) "
+                f"failure_kind={failure_kind} response_preview={failure_preview!r}"
             )
             # Add format error message if parse failed (max 1 retry)
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
-                tracer.info(f"Extended max_iterations to {max_iterations} for format retry")
+                retry_reason = (
+                    "refusal_text" if failure_kind == "refusal_text" else "format_retry"
+                )
+                tracer.info(f"Extended max_iterations to {max_iterations} for {retry_reason}")
                 self._add_format_error_message(messages)
 
-            # If it's the last iteration, fail instead of silently treating an
-            # unparseable final response as "no memory operations".
+            # If it's the last iteration, treat unparseable response as
+            # "no memory operations" rather than failing hard.
             if iteration >= max_iterations:
-                raise RuntimeError(
-                    "Memory extraction final response could not be parsed as JSON operations"
+                tracer.info(
+                    "Memory extraction final response could not be parsed as JSON operations "
+                    f"after {max_iterations} iterations — treating as no operations "
+                    f"failure_kind={failure_kind} response_preview={failure_preview!r}"
                 )
+                final_operations = ResolvedOperations(
+                    upsert_operations=[],
+                    delete_file_contents=[],
+                    errors=[
+                        "Final response could not be parsed as JSON operations "
+                        f"after {max_iterations} iterations "
+                        f"(failure_kind={failure_kind})"
+                    ],
+                )
+                break
 
             self._disable_tools_for_iteration = True
             continue
@@ -322,7 +385,23 @@ The final output of the model must strictly follow the JSON Schema format shown 
             for item in items:
                 item_dict = dict(item)
                 item_dict["memory_type"] = memory_type
-                self._isolation_handler.fill_identity_fields(item_dict, role_scope=role_scope)
+                try:
+                    self._isolation_handler.fill_identity_fields(
+                        item_dict,
+                        role_scope=role_scope,
+                        memory_type_schema=schema,
+                    )
+                except TypeError as exc:
+                    # Some tests and older custom isolation handlers implement
+                    # the pre-schema signature ``fill_identity_fields(item,
+                    # role_scope=None)``.  Keep that extension point working
+                    # while the real handler can still use schema peer settings.
+                    if "memory_type_schema" not in str(exc):
+                        raise
+                    self._isolation_handler.fill_identity_fields(
+                        item_dict,
+                        role_scope=role_scope,
+                    )
 
                 page_id = item_dict.pop("page_id", None)
                 resolved_op = ResolvedOperation(
@@ -365,20 +444,37 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
                 upsert_operations.append(resolved_op)
 
-        delete_uris_raw = getattr(operations, "delete_uris", []) or []
-        for uri_str in delete_uris_raw:
-            uri_str = uri_str.strip()
-            if not uri_str:
+        delete_ids = self._normalize_delete_ids(getattr(operations, "delete_ids", []) or [])
+        delete_replacements: dict[str, str] = {}
+        for delete_id in delete_ids:
+            if delete_id.delete_page_id is None or page_id_map is None:
                 continue
-            old_content = self.context_provider.read_file_contents.get(uri_str)
-            if old_content:
-                delete_file_contents.append(old_content)
+            delete_uri = page_id_map.resolve(delete_id.delete_page_id)
+            if not delete_uri:
+                continue
+            old_content = self.context_provider.read_file_contents.get(delete_uri)
+            if not old_content:
+                continue
+            delete_file_contents.append(old_content)
+
+            replacement_page_id = delete_id.replacement_page_id
+            if replacement_page_id is None:
+                continue
+            replacement_uri = page_id_map.resolve(replacement_page_id)
+            if not replacement_uri:
+                for op in upsert_operations:
+                    if op.page_id == replacement_page_id and op.uris:
+                        replacement_uri = op.uris[0]
+                        break
+            if replacement_uri and replacement_uri != delete_uri:
+                delete_replacements[delete_uri] = replacement_uri
 
         raw_links = getattr(operations, "links", None) or []
         resolved = ResolvedOperations(
             upsert_operations=upsert_operations,
             delete_file_contents=delete_file_contents,
             errors=errors,
+            delete_replacements=delete_replacements,
         )
 
         for op in upsert_operations:
@@ -389,6 +485,16 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     break
 
         return resolved, raw_links
+
+
+    def _normalize_delete_ids(self, raw_delete_ids: List[Any]) -> List[DeleteId]:
+        delete_ids: List[DeleteId] = []
+        for raw in raw_delete_ids:
+            try:
+                delete_ids.append(DeleteId.model_validate(raw))
+            except Exception as e:
+                tracer.info(f"Skipping invalid delete_ids item: {raw}, error={e}")
+        return delete_ids
 
     async def finalize_operations(self, operations: ResolvedOperations, raw_links: List) -> None:
         """Register new page_ids and resolve links after refetch is complete.
@@ -556,7 +662,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
         action_tasks = [
             execute_single_tool_call(idx, tool_call) for idx, tool_call in enumerate(tool_calls)
         ]
-        results = await self._execute_in_parallel(action_tasks)
+        results = await asyncio.gather(*action_tasks)
 
         has_unknown_tool = False
 
@@ -601,9 +707,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
         Returns:
             Tuple of (tool_calls, operations) - one will be None, the other set
         """
-        # 标记 cache breakpoint
-        await self._mark_cache_breakpoint(messages)
-
         # Call LLM with tools - use tools from strategy
         tools = None
         tool_choice = None
@@ -615,8 +718,11 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 messages=messages,
                 tools=tools,
                 tool_choice=tool_choice,
+                thinking=self.thinking,
             )
         tracer.info(f"llm_response={response}")
+        self._last_llm_failure_kind = None
+        self._last_llm_failure_content = ""
         # print(f'response={response}')
         # Log cache hit info
         if hasattr(response, "usage") and response.usage:
@@ -677,8 +783,16 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 )
 
                 if error is not None:
-                    print(f"content={content}")
-                    tracer.error(f"Failed to parse memory operations: {error}")
+                    failure_kind = (
+                        "refusal_text" if _looks_like_canned_refusal(content) else "parse_error"
+                    )
+                    self._last_llm_failure_kind = failure_kind
+                    self._last_llm_failure_content = content
+                    tracer.error(
+                        "Failed to parse memory operations "
+                        f"failure_kind={failure_kind} error={error} "
+                        f"response_preview={_preview_text(content)!r}"
+                    )
                     return (None, None)
 
                 return (None, operations)
@@ -686,15 +800,14 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 logger.exception(f"Error parsing operations: {e}")
 
         # Case 3: No tool calls and no parsable operations
-        tracer.error("No tool calls or operations parsed")
+        self._last_llm_failure_kind = "empty_response" if not content else "parse_error"
+        self._last_llm_failure_content = content or ""
+        tracer.error(
+            "No tool calls or operations parsed "
+            f"failure_kind={self._last_llm_failure_kind} "
+            f"response_preview={_preview_text(self._last_llm_failure_content)!r}"
+        )
         return (None, None)
-
-    async def _execute_in_parallel(
-        self,
-        tasks: List[Any],
-    ) -> List[Any]:
-        """Execute tasks in parallel, similar to AgentLoop."""
-        return await asyncio.gather(*tasks)
 
     async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
         refetch_uris = {}
@@ -731,7 +844,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
 
     def _build_final_operations_skeleton(self) -> Dict[str, List[Any]]:
         """Build an empty operations object matching the expected flat schema fields."""
-        fields = ["delete_uris", *(self._expected_fields or [])]
+        fields = ["delete_ids", *(self._expected_fields or [])]
         return {field: [] for field in dict.fromkeys(fields)}
 
     def _build_final_operations_instruction(self) -> str:
@@ -842,11 +955,3 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 "content": "Note: The files above were automatically read because they exist and you didn't read them before deciding to write. Please consider the existing content when making write decisions. You can now output updated operations.",
             }
         )
-
-    async def _mark_cache_breakpoint(self, messages):
-        # 支持 dict 消息和 object 消息
-        # last_msg = messages[-1]
-        # last_msg["cache_control"] = {"type": "ephemeral"}
-
-        # 暂时注释掉，不确定对所有模型的影响
-        pass

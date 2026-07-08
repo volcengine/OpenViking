@@ -1,5 +1,7 @@
 # Pi OpenViking Extension — Implementation Spec
 
+> Current implementation note: this historical design has been superseded by the Claude Code/Codex-aligned SPEC retrofit. Legacy sections below are retained as background, not as current behavior.
+
 ## Design Philosophy
 
 **Informed by all three existing OV plugins** — OpenClaw, Claude Code, and Hermes. The Claude Code plugin is the most mature and production-hardened; its patterns take precedence where they differ from OpenClaw. Key design ancestors:

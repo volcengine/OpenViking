@@ -38,6 +38,12 @@ from openviking.parse.parsers.code.ast.code_tools import (
     outline_file,
     search_symbols,
 )
+from openviking.retrieve.type_quota_recall import (
+    DEFAULT_MAX_CHARS,
+    DEFAULT_MIN_SCORE,
+    DEFAULT_QUOTAS,
+    search_type_quota_recall,
+)
 from openviking.server.auth import resolve_actor_peer_headers, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
@@ -45,6 +51,7 @@ from openviking.server.local_input_guard import (
     TEMP_FILE_ID_RE,
     is_remote_resource_source,
 )
+from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
 from openviking_cli.exceptions import (
@@ -292,6 +299,29 @@ def _format_search_result(result) -> str:
     )
 
 
+@mcp.tool()
+async def recall(
+    query: str,
+    quotas: Optional[dict[str, int]] = None,
+    max_chars: int = DEFAULT_MAX_CHARS,
+    min_score: float = DEFAULT_MIN_SCORE,
+) -> str:
+    """Type-quota memory recall. Searches events, entities, preferences, and experiences separately, then returns a bounded memory_group block."""
+    service = get_service()
+    result = await search_type_quota_recall(
+        service=service,
+        ctx=_get_ctx(),
+        query=query,
+        quotas=quotas or DEFAULT_QUOTAS,
+        max_chars=max(1, int(max_chars)),
+        min_score=min_score,
+        render=True,
+    )
+    if result.rendered.strip():
+        return result.rendered
+    return "No relevant memories found."
+
+
 # -- read ------------------------------------------------------------------
 
 
@@ -490,9 +520,9 @@ async def add_resource(
     RSS / Atom URL ingests the WHOLE site as one resource tree; pass ``args={"site": true}``
     to force whole-site ingestion from a bare domain.
 
-    Local file: pass ``path`` as a filesystem path (e.g. ``/tmp/foo.pdf``). The response is a
-    multi-step upload instruction — HTTP POST the file to the returned URL, read ``temp_file_id``
-    from the upload body, then re-call this tool with ``temp_file_id`` (omit ``path``) to ingest.
+    Local file: pass ``path`` as a filesystem path (e.g. ``/tmp/foo.pdf``). The response is an
+    upload instruction — HTTP POST the file to the returned URL and the server ingests it
+    automatically; you do NOT need to call this tool again.
 
     Args:
         path: Remote URL or local filesystem path. Required unless ``temp_file_id`` is set.
@@ -517,36 +547,32 @@ async def add_resource(
             "use a positive number of minutes (>=1440 recommended) to subscribe to auto-refresh."
         )
 
-    # Branch 1: ingest by temp_file_id (second leg of progressive upload, or REST-style)
+    # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
+    # signed upload now auto-ingests server-side, so agents no longer need this second leg.
     if temp_file_id:
         from openviking.server.config import ServerConfig
 
         server_config = get_server_config() or ServerConfig()
         store = TempUploadStore.build(server_config)
         try:
-            resolved = await store.resolve_for_consume(temp_file_id, ctx)
+            result = await ingest_temp_upload(
+                store, temp_file_id, ctx, to=to, reason=description, args=args
+            )
         except (PermissionDeniedError, InvalidArgumentError) as exc:
             return f"Error: {exc}"
-        try:
-            try:
-                result = await service.resources.add_resource(
-                    path=resolved.local_path,
-                    ctx=ctx,
-                    to=to or None,
-                    reason=description,
-                    source_name=resolved.original_filename,
-                    wait=False,
-                    allow_local_path_resolution=True,
-                    enforce_public_remote_targets=True,
-                    args=args,
-                )
-            except Exception as exc:
-                await store.mark_failed(resolved, ctx)
-                return f"Error adding resource: {exc}"
-            await store.mark_consumed(resolved, ctx)
-        finally:
-            await resolved.cleanup()
-        root_uri = result.get("root_uri", "")
+        except Exception as exc:
+            return f"Error adding resource: {exc}"
+        # add_resource returns a business-error dict (no raise) for parse/finalize failures;
+        # surface it instead of reporting a false success.
+        if isinstance(result, dict) and result.get("status") == "error":
+            errors = result.get("errors")
+            detail = (
+                result.get("message")
+                or (errors[0] if isinstance(errors, list) and errors else None)
+                or "resource processing failed"
+            )
+            return f"Error adding resource: {detail}"
+        root_uri = result.get("root_uri", "") if isinstance(result, dict) else ""
         return (
             f"Resource added: {root_uri}"
             if root_uri
@@ -609,24 +635,24 @@ async def add_resource(
         ctx.user.account_id,
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,
+        to=to,
+        reason=description,
+        actor_peer_id=ctx.actor_peer_id or "",
     )
     base_url, url_source = _resolve_public_base_url()
-    upload_url = f"{base_url}/api/v1/resources/temp_upload_signed?token={quote(token, safe='')}"
+    upload_url = f"{base_url}/api/v1/resources/temp_upload?token={quote(token, safe='')}"
     expires_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
     minutes = max(1, ttl_seconds // 60)
 
     prose = (
-        "Local file detected — upload required before this resource can be ingested.\n"
+        "Local file detected — upload it to ingest this resource.\n"
         "\n"
-        'Step 1. HTTP POST the file bytes (multipart/form-data, field name "file") to:\n'
+        'HTTP POST the file bytes (multipart/form-data, field name "file") to:\n'
         "\n"
         f"  {upload_url}\n"
         "\n"
-        '  The response will be JSON: {"temp_file_id": "<id>"}\n'
-        "\n"
-        "Step 2. Read `temp_file_id` from that response, then call this tool again:\n"
-        "\n"
-        '  add_resource(temp_file_id="<id from step 1>")\n'
+        "The URL's token authorizes the upload (no API key needed); the server ingests "
+        "the file automatically once received — you do NOT need to call add_resource again.\n"
         "\n"
         f"This upload URL expires in ~{minutes} minutes ({expires_iso})."
     )
@@ -636,7 +662,7 @@ async def add_resource(
             "\n\n"
             "Note for the user: this upload URL was auto-detected from the incoming "
             "request because OPENVIKING_PUBLIC_BASE_URL is not set on the server. "
-            "If Step 1 fails (connection refused, wrong host, TLS error), ask the "
+            "If the upload fails (connection refused, wrong host, TLS error), ask the "
             "server operator to set OPENVIKING_PUBLIC_BASE_URL to the agent-facing "
             "URL of the OpenViking server (e.g. via docker-compose `environment:` "
             "or systemd unit) and retry."

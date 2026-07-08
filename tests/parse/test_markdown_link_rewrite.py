@@ -245,8 +245,8 @@ class FakeVikingFS:
 
     async def glob(self, pattern, uri="", **kw):
         # Mirror VikingFS.glob enough for _ingest_local_images, which only ever asks
-        # for "*.md" under a root: list stored files matching the pattern's suffix.
-        suffix = pattern.lstrip("*")
+        # for recursive Markdown files under a root: list files matching the suffix.
+        suffix = pattern.rsplit("*", 1)[-1]
         prefix = uri.rstrip("/") + "/"
         matches = [u for u in self.files if u.startswith(prefix) and u.endswith(suffix)]
         return {"matches": matches}

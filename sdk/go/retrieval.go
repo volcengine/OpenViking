@@ -85,6 +85,9 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 	if opts.NodeLimit != nil {
 		payload["node_limit"] = *opts.NodeLimit
 	}
+	if opts.LevelLimit != nil {
+		payload["level_limit"] = *opts.LevelLimit
+	}
 	if opts.ExcludeURI != "" {
 		payload["exclude_uri"] = NormalizeURI(opts.ExcludeURI)
 	}
@@ -94,14 +97,21 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 }
 
 // Glob finds files by glob pattern.
-func (c *Client) Glob(ctx context.Context, pattern string, uri string) (map[string]any, error) {
+func (c *Client) Glob(ctx context.Context, pattern string, uri string, opts *GlobOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &GlobOptions{}
+	}
 	if uri == "" {
 		uri = "viking://"
 	}
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/glob", nil, map[string]any{
+	payload := map[string]any{
 		"pattern": pattern,
 		"uri":     NormalizeURI(uri),
-	}, &result)
+	}
+	if opts.NodeLimit != nil {
+		payload["node_limit"] = *opts.NodeLimit
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/glob", nil, payload, &result)
 	return result, err
 }

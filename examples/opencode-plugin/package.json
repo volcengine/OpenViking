@@ -1,6 +1,6 @@
 {
   "name": "@openviking/opencode-plugin",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "author": "@openviking",
   "description": "Unified OpenCode plugin for OpenViking repository retrieval and long-term memory",
   "type": "module",
@@ -10,22 +10,23 @@
     "tui"
   ],
   "exports": {
-    ".": "./index.mjs"
+    ".": "./index.mjs",
+    "./servers/mcp-proxy.mjs": "./servers/mcp-proxy.mjs"
   },
   "files": [
     "index.mjs",
     "lib/",
+    "servers/",
+    "scripts/",
     "README.md",
     "INSTALL.md",
     "INSTALL-ZH.md"
   ],
   "scripts": {
-    "check": "node --check index.mjs && node --check lib/runtime.mjs && node --check lib/repo-context.mjs && node --check lib/memory-session.mjs && node --check lib/memadd-local.mjs && node --check lib/memory-tools.mjs && node --check lib/code-tools.mjs && node --check lib/memory-recall.mjs && node --check lib/viking-uri-guard.mjs && node --check lib/utils.mjs && node --check tests/*.test.mjs",
-    "test": "node --test tests/*.test.mjs"
+    "check": "node --check index.mjs && node --check lib/config.mjs && node --check lib/mcp-config.mjs && node --check lib/runtime.mjs && node --check lib/repo-context.mjs && node --check lib/memory-session.mjs && node --check lib/memory-recall.mjs && node --check lib/session-inject.mjs && node --check lib/viking-uri-guard.mjs && node --check lib/utils.mjs && node --check lib/shared/*.mjs && node --check servers/mcp-proxy.mjs && node --check scripts/setup.mjs && node --check tests/*.test.mjs",
+    "test": "node --test tests/*.test.mjs servers/*.test.mjs"
   },
-  "dependencies": {
-    "@opencode-ai/plugin": "^1.14.37"
-  },
+  "dependencies": {},
   "publishConfig": {
     "access": "public"
   },

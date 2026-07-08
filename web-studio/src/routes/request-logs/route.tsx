@@ -1,9 +1,10 @@
 import * as React from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Navigate, createFileRoute } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 import { ActivityIcon, BarChart3Icon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { EmptyLogsState } from './-components/empty-logs-state'
 import { MetricCard } from './-components/metric-card'
 import { RequestLogPanel } from './-components/panel'
 import { DEFAULT_FILTERS, DEFAULT_PAGE_SIZE } from './-constants/audit'
@@ -93,51 +94,56 @@ function RequestLogsRoute() {
     setPage(1)
   }
 
-  if (!isConnectionRoleLoading && !canQueryAudit) {
-    return <Navigate replace to="/home" />
-  }
-
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
       <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
         {scopeLabel}
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <MetricCard
-          label={t('metrics.total')}
-          value={total >= 1000 ? '999+' : total}
-          icon={<ActivityIcon className="size-4" />}
+      {!isConnectionRoleLoading && !canQueryAudit ? (
+        <EmptyLogsState
+          title={t('accessRequired.title')}
+          description={t('accessRequired.description')}
         />
-        <MetricCard
-          label={t('metrics.successRate')}
-          value={formatPercent(zeroResult ? 0 : audit.data?.success_rate)}
-          icon={<BarChart3Icon className="size-4" />}
-        />
-      </div>
+      ) : (
+        <>
+          <div className="grid gap-3 md:grid-cols-2">
+            <MetricCard
+              label={t('metrics.total')}
+              value={total >= 1000 ? '999+' : total}
+              icon={<ActivityIcon className="size-4" />}
+            />
+            <MetricCard
+              label={t('metrics.successRate')}
+              value={formatPercent(zeroResult ? 0 : audit.data?.success_rate)}
+              icon={<BarChart3Icon className="size-4" />}
+            />
+          </div>
 
-      <RequestLogPanel
-        disabled={disabled}
-        disabledMessage={audit.data?.message}
-        draftFilters={draftFilters}
-        filters={filters}
-        isError={audit.isError}
-        isFetching={audit.isFetching}
-        isLoading={audit.isLoading}
-        logs={logs}
-        onDraftFiltersChange={setDraftFilters}
-        onLogTypeChange={handleLogTypeChange}
-        onPageChange={setPage}
-        onPageSizeChange={handlePageSizeChange}
-        onRefresh={handleRefresh}
-        onReset={handleReset}
-        onSearch={handleSearch}
-        page={page}
-        pageCount={pageCount}
-        pageSize={pageSize}
-        total={total}
-        zeroResult={zeroResult}
-      />
+          <RequestLogPanel
+            disabled={disabled}
+            disabledMessage={audit.data?.message}
+            draftFilters={draftFilters}
+            filters={filters}
+            isError={audit.isError}
+            isFetching={audit.isFetching}
+            isLoading={isConnectionRoleLoading || audit.isLoading}
+            logs={logs}
+            onDraftFiltersChange={setDraftFilters}
+            onLogTypeChange={handleLogTypeChange}
+            onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
+            onRefresh={handleRefresh}
+            onReset={handleReset}
+            onSearch={handleSearch}
+            page={page}
+            pageCount={pageCount}
+            pageSize={pageSize}
+            total={total}
+            zeroResult={zeroResult}
+          />
+        </>
+      )}
     </div>
   )
 }

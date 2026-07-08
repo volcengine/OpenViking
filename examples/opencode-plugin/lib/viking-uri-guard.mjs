@@ -1,17 +1,18 @@
 import { log } from "./utils.mjs"
+import { buildGuardMessage, findVikingUri, normalizeToolName } from "./shared/uri-guard.mjs"
 
 const FILESYSTEM_TOOL_HINTS = {
   read: {
-    replacement: "memread",
-    example: (uri) => `memread(uri="${uri}", level="auto")`,
+    tool: "openviking_read",
+    example: (uri) => `openviking_read(uri="${uri}")`,
   },
   glob: {
-    replacement: "membrowse",
-    example: (uri) => `membrowse(uri="${uri}", view="list", recursive=true)`,
+    tool: "openviking_glob",
+    example: (uri) => `openviking_glob(uri="${uri}", pattern="**/*")`,
   },
   grep: {
-    replacement: "memsearch",
-    example: (uri, args) => `memsearch(query="${String(args.pattern ?? "").replaceAll('"', '\\"')}", target_uri="${uri}")`,
+    tool: "openviking_search",
+    example: (uri, args = {}) => `openviking_search(query="${String(args.pattern ?? "").replaceAll('"', '\\"')}", target_uri="${uri}")`,
   },
 }
 
@@ -29,24 +30,8 @@ export function createVikingUriGuard() {
       tool: toolName,
       uri,
     })
-    throw new Error(
-      [
-        "viking:// URIs are OpenViking virtual paths, not local filesystem paths.",
-        `Use ${hint.replacement} instead.`,
-        `Example: ${hint.example(uri, args)}`,
-      ].join("\n"),
-    )
+    throw new Error(buildGuardMessage(uri, { ...hint, example: hint.example(uri, args) }))
   }
 }
 
-export function findVikingUri(args = {}) {
-  for (const key of ["filePath", "path", "uri"]) {
-    const value = args[key]
-    if (typeof value === "string" && value.startsWith("viking://")) return value
-  }
-  return null
-}
-
-function normalizeToolName(value) {
-  return String(value || "").trim().toLowerCase()
-}
+export { findVikingUri, normalizeToolName }

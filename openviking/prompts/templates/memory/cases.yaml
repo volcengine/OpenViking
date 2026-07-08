@@ -1,0 +1,99 @@
+memory_type: cases
+description: |
+  Language policy: generated natural-language text must use {{ language }}. If the source is multilingual, use the current task user's primary language as {{ language }}; if unclear, use the latest user message language. Preserve stable identifiers, code-like tokens, tool/API names, enum values, exact IDs, paths, dates, amounts, and other structured literals unchanged. When updating an existing case, prefer its existing name and language style to avoid translated duplicates.
+
+  A trainable/evaluable case extracted from a real session commit.
+
+  Extract ONLY when the conversation contains a concrete user task plus enough assistant execution,
+  tool-use evidence, or final result to define what a good future rollout should do.
+  Skip pure chit-chat, simple factual Q&A, or fragments with no observable task outcome.
+
+  The case is not an experience instruction. It defines the scenario and rubric used by the
+  training pipeline to learn better experience memories from this commit rollout.
+
+directory: "viking://user/{{ user_space }}/memories/cases"
+filename_template: "{{ case_name }}.md"
+enabled: true
+peer_enabled: false
+content_template: |
+  # {{ case_name }}
+
+  ## Task Signature
+  {{ task_signature }}
+
+  ## Input
+  {{ input }}
+
+  ## Rubric
+  {{ rubric }}
+
+  ## Evidence
+  {{ evidence }}
+
+  ## Linked Experiences
+  {%- for link in links or [] %}
+  {%- set target_uri = link.to_uri or "" %}
+  {%- if "/memories/experiences/" in target_uri %}
+  - [{{ uri_basename(target_uri) }}]({{ link_target(target_uri) }})
+  {%- endif %}
+  {%- endfor %}
+embedding_template: |-
+  {{ case_name }}
+
+  {{ task_signature }}
+
+  {{ input }}
+
+  {{ rubric }}
+overview_template: |-
+  # Cases Overview
+  {% for item in items %}
+  - [{{ item.file_content.case_name }}](./{{ item.file_name }}) — {{ item.file_content.task_signature }}
+  {% endfor %}
+
+fields:
+  - name: case_name
+    type: string
+    description: |
+      Short stable case name for this concrete training/evaluation sample.
+      Must be written in {{ language }}.
+      {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
+      Name the task boundary, not the whole conversation.
+    merge_op: immutable
+
+  - name: task_signature
+    type: string
+    description: |
+      Semantic task signature for retrieval and grouping.
+      Write generated natural-language text in {{ language }}.
+      Describe the reusable task intent, object/effect boundary, and success condition in one sentence.
+      Generalize private identifiers, exact IDs, names, amounts, dates, and paths.
+    merge_op: immutable
+
+  - name: input
+    type: string
+    description: |
+      Compact JSON object string describing the executable case input.
+      JSON keys must remain stable English identifiers; generated string values should use {{ language }} while preserving exact source literals needed for task matching.
+      Include the user request summary and any stable preconditions needed to reproduce/evaluate the task.
+      Example: {"summary":"用户要求处理重复预订并保留有效订单","preconditions":["存在两个相似订单候选"]}
+    merge_op: immutable
+
+  - name: rubric
+    type: string
+    description: |
+      Compact JSON object string defining what good means and how to check it.
+      JSON keys must remain stable English identifiers; generated string values should use {{ language }} while preserving exact tool names, required literals, and observable evaluation labels.
+      Required shape:
+      {"name":"...","description":"...","criteria":[{"name":"...","description":"observable success condition","required":true,"weight":1.0}]}
+      Criteria must be observable from rollout messages/tool results; include both success rate and execution efficiency when relevant.
+      Use 1-5 criteria. Weight values should be positive.
+    merge_op: immutable
+
+  - name: evidence
+    type: string
+    description: |
+      Brief generalized evidence from the commit conversation explaining why this case is useful.
+      Write generated natural-language text in {{ language }}.
+      Do not include private raw identifiers, exact IDs, personal contact values, or full tool payloads.
+    merge_op: immutable

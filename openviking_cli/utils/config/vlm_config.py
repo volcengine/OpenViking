@@ -64,7 +64,7 @@ class VLMConfig(BaseModel):
     temperature: float = Field(default=0.0, description="Generation temperature")
     max_retries: int = Field(default=3, description="Maximum retry attempts")
     timeout: float = Field(
-        default=60.0,
+        default=600.0,
         gt=0.0,
         description=(
             "Per-request HTTP timeout in seconds for VLM API calls. Applied to "

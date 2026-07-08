@@ -634,10 +634,17 @@ async function main() {
     totalMessageCount = Number(meta?.total_message_count || 0);
     log("pending_tokens", { ovSessionId, pending: pendingTokens, threshold: cfg.commitTokenThreshold });
     if (pendingTokens >= cfg.commitTokenThreshold) {
-      const commitRes = await commitSession(fetchJSON, ovSessionId);
+      const commitRes = await commitSession(fetchJSON, ovSessionId, {
+        keep_recent_count: cfg.commitKeepRecentCount,
+      });
       committed = commitRes.ok;
       if (committed) commitCount += 1;
-      log("commit", { ovSessionId, ok: commitRes.ok, pending: pendingTokens });
+      log("commit", {
+        ovSessionId,
+        ok: commitRes.ok,
+        pending: pendingTokens,
+        keepRecentCount: cfg.commitKeepRecentCount,
+      });
     }
   }
 

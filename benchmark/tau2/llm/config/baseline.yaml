@@ -40,8 +40,8 @@ eval:
     airline: ${TAU2_AIRLINE_FIXED_FIRST_USER_FILE:-}
 
 model:
-  agent_llm: ${TAU2_AGENT_LLM:-openai/doubao-seed-2-0-pro-260215}
-  user_llm: ${TAU2_USER_LLM:-openai/doubao-seed-2-0-pro-260215}
+  agent_llm: ${TAU2_AGENT_LLM:-openai/doubao-seed-2-0-code-preview-260215}
+  user_llm: ${TAU2_USER_LLM:-openai/doubao-seed-2-0-code-preview-260215}
   temperature: 0.0
 
 openviking:

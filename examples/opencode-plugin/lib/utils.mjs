@@ -1,122 +1,7 @@
 import fs from "fs"
 import path from "path"
-import { homedir } from "os"
-
-export const DEFAULT_CONFIG = {
-  endpoint: "http://localhost:1933",
-  apiKey: "",
-  account: "",
-  user: "",
-  peerId: "",
-  enabled: true,
-  timeoutMs: 30000,
-  runtime: {
-    dataDir: "",
-  },
-  repoContext: {
-    enabled: true,
-    cacheTtlMs: 60000,
-  },
-  autoRecall: {
-    enabled: true,
-    limit: 6,
-    scoreThreshold: 0.15,
-    maxContentChars: 500,
-    preferAbstract: true,
-    tokenBudget: 2000,
-  },
-}
 
 let logFilePath = null
-
-function cloneDefaultConfig() {
-  return JSON.parse(JSON.stringify(DEFAULT_CONFIG))
-}
-
-function mergeConfig(fileConfig = {}) {
-  const config = cloneDefaultConfig()
-  for (const key of ["endpoint", "apiKey", "account", "user", "peerId", "enabled", "timeoutMs"]) {
-    if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
-  }
-  config.runtime = {
-    ...DEFAULT_CONFIG.runtime,
-    dataDir: fileConfig.runtime?.dataDir ?? DEFAULT_CONFIG.runtime.dataDir,
-  }
-  config.repoContext = { ...DEFAULT_CONFIG.repoContext, ...(fileConfig.repoContext ?? {}) }
-  config.autoRecall = { ...DEFAULT_CONFIG.autoRecall, ...(fileConfig.autoRecall ?? {}) }
-
-  if (process.env.OPENVIKING_API_KEY) {
-    config.apiKey = process.env.OPENVIKING_API_KEY
-  }
-  if (process.env.OPENVIKING_ACCOUNT) {
-    config.account = process.env.OPENVIKING_ACCOUNT
-  }
-  if (process.env.OPENVIKING_USER) {
-    config.user = process.env.OPENVIKING_USER
-  }
-  if (process.env.OPENVIKING_PEER_ID) {
-    config.peerId = process.env.OPENVIKING_PEER_ID
-  }
-
-  config.timeoutMs = normalizeNumber(config.timeoutMs, DEFAULT_CONFIG.timeoutMs, 1000, 300000)
-  config.repoContext.cacheTtlMs = normalizeNumber(
-    config.repoContext.cacheTtlMs,
-    DEFAULT_CONFIG.repoContext.cacheTtlMs,
-    1000,
-    60 * 60 * 1000,
-  )
-  clampRecallConfig(config.autoRecall)
-  return config
-}
-
-function normalizeNumber(value, fallback, min, max) {
-  const next = Number(value)
-  if (!Number.isFinite(next)) return fallback
-  return Math.max(min, Math.min(max, next))
-}
-
-function clampRecallConfig(recall) {
-  recall.limit = Math.max(1, Math.min(50, Math.round(Number(recall.limit) || 6)))
-  recall.scoreThreshold = Math.max(0, Math.min(1, Number(recall.scoreThreshold) || 0))
-  recall.maxContentChars = Math.max(100, Math.min(5000, Math.round(Number(recall.maxContentChars) || 500)))
-  recall.tokenBudget = Math.max(100, Math.min(10000, Math.round(Number(recall.tokenBudget) || 2000)))
-}
-
-export function loadConfig(pluginRoot, projectDirectory) {
-  for (const configPath of getConfigPaths(pluginRoot, projectDirectory)) {
-    try {
-      if (fs.existsSync(configPath)) {
-        const fileConfig = JSON.parse(fs.readFileSync(configPath, "utf8"))
-        return mergeConfig(fileConfig)
-      }
-    } catch (error) {
-      console.warn(`Failed to load OpenViking config from ${configPath}:`, error)
-    }
-  }
-  return mergeConfig()
-}
-
-function getConfigPaths(pluginRoot, projectDirectory) {
-  const paths = []
-  if (process.env.OPENVIKING_PLUGIN_CONFIG) paths.push(expandHome(process.env.OPENVIKING_PLUGIN_CONFIG))
-  if (projectDirectory) paths.push(path.join(projectDirectory, ".opencode", "openviking-config.json"))
-  paths.push(path.join(homedir(), ".config", "opencode", "openviking-config.json"))
-  paths.push(path.join(pluginRoot, "openviking-config.json"))
-  return paths
-}
-
-export function resolveDataDir(pluginRoot, config) {
-  const configured = config.runtime?.dataDir
-  if (configured) return expandHome(configured)
-  return path.join(homedir(), ".config", "opencode", "openviking")
-}
-
-function expandHome(value) {
-  if (!value || typeof value !== "string") return value
-  if (value === "~") return homedir()
-  if (value.startsWith("~/") || value.startsWith("~\\")) return path.join(homedir(), value.slice(2))
-  return value
-}
 
 export function initLogger(dataDir) {
   fs.mkdirSync(dataDir, { recursive: true })
@@ -181,6 +66,38 @@ export function normalizeEndpoint(endpoint) {
 
 export function effectivePeerId(config) {
   return String(config.peerId || "").trim() || null
+}
+
+export async function fetchJSON(config, endpoint, init = {}, options = {}) {
+  const url = `${normalizeEndpoint(config.endpoint)}${endpoint}`
+  const headers = makeAuthHeaders(
+    config,
+    { "Content-Type": "application/json", ...(init.headers ?? {}) },
+    options.actorPeerId,
+  )
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
+  try {
+    const response = await fetch(url, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    })
+    const text = await response.text()
+    const payload = text ? parseJsonOrText(text) : {}
+    if (!response.ok || payload?.status === "error") {
+      return {
+        ok: false,
+        status: response.status,
+        error: payload?.error || payload?.message || { message: `HTTP ${response.status}` },
+      }
+    }
+    return { ok: true, status: response.status, result: payload?.result ?? payload }
+  } catch (error) {
+    return { ok: false, status: 0, error: { message: error?.message ?? String(error) } }
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 export async function makeRequest(config, options) {
@@ -291,7 +208,7 @@ export async function makeMultipartRequest(config, options) {
 
 function makeAuthHeaders(config, headers = {}, actorPeerId = "") {
   const result = { ...headers }
-  if (config.apiKey) result["X-API-Key"] = config.apiKey
+  if (config.apiKey) result["Authorization"] = `Bearer ${config.apiKey}`
   if (config.account) result["X-OpenViking-Account"] = config.account
   if (config.user) result["X-OpenViking-User"] = config.user
   const peerId = String(actorPeerId || "").trim()

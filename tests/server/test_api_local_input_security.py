@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import httpx
 import pytest
 
-from openviking.parse.parsers.html import URLTypeDetector
+from openviking.parse.accessors.http_accessor import URLTypeDetector
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
 from tests.server.ovpack_test_helpers import build_ovpack_bytes

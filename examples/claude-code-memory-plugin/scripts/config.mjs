@@ -30,6 +30,8 @@
  *     OPENVIKING_BYPASS_SESSION, OPENVIKING_BYPASS_SESSION_PATTERNS (CSV)
  *   Profile injection (session_start):
  *     OPENVIKING_NO_AUTO_INJECT, OPENVIKING_PROFILE_TOKEN_BUDGET
+ *   Skill experience injection (PostToolUse Read):
+ *     OPENVIKING_SKILL_EXPERIENCE, OPENVIKING_SKILL_EXPERIENCE_LIMIT
  *   Misc:
  *     OPENVIKING_MEMORY_ENABLED, OPENVIKING_DEBUG, OPENVIKING_DEBUG_LOG,
  *     OPENVIKING_CONFIG_FILE, OPENVIKING_CLI_CONFIG_FILE
@@ -255,6 +257,10 @@ export function loadConfig() {
       process.env.OPENVIKING_COMMIT_TOKEN_THRESHOLD,
       num(cc.commitTokenThreshold, 20000),
     ))),
+    commitKeepRecentCount: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_COMMIT_KEEP_RECENT_COUNT,
+      num(cc.commitKeepRecentCount, 10),
+    ))),
 
     // P0-3b: token budget for session-start archive-overview fetch
     resumeContextBudget: Math.max(1024, Math.floor(num(
@@ -270,6 +276,12 @@ export function loadConfig() {
     profileTokenBudget: Math.max(500, Math.floor(num(
       process.env.OPENVIKING_PROFILE_TOKEN_BUDGET,
       num(cc.profileTokenBudget, 10000),
+    ))),
+
+    skillExperience: envBool("OPENVIKING_SKILL_EXPERIENCE") ?? (cc.skillExperience === true),
+    skillExperienceLimit: Math.max(1, Math.floor(num(
+      process.env.OPENVIKING_SKILL_EXPERIENCE_LIMIT,
+      num(cc.skillExperienceLimit, 3),
     ))),
 
     // P1-15: bypass patterns (glob) — when the CC session_id or cwd matches,

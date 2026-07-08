@@ -131,7 +131,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | `api_key` | API Key | `null`（无认证） |
 | `account` | 租户级请求的默认账户请求头 | `null` |
 | `user` | 租户级请求的默认用户请求头 | `null` |
-| `timeout` | HTTP 请求超时时间（秒） | `60.0` |
+| `timeout` | HTTP 请求超时时间（秒） | `600.0` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
 详细内容请参见 [配置指南](../guides/01-configuration.md#ovcliconf)。
@@ -146,7 +146,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",          # 显式传入
     api_key="your-key",                    # 显式传入（默认情况下 api_key 已经能标识用户身份）
-    timeout=30.0,                          # 不要用默认值 60.0
+    timeout=30.0,                          # 不要用默认值 600.0
     extra_headers={}                       # 传空 dict 而不是 None，可用于某些场景的网关认证等
 )
 client.initialize()
@@ -155,7 +155,7 @@ client.initialize()
 ⚠️ **注意**：只要以下任一条件满足，客户端就会尝试加载配置文件：
 - `url` 为 `None`
 - `api_key` 为 `None`
-- `timeout` 等于 `60.0`（默认值）
+- `timeout` 等于 `600.0`（默认值）
 - `extra_headers` 为 `None`
 
 #### HTTP 调用示例
@@ -415,8 +415,8 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 | 权限 |
 |------|------|------|------|
-| POST | `/api/v1/pack/export` | 导出 .ovpack 文件 | ROOT/ADMIN |
-| POST | `/api/v1/pack/import` | 导入 .ovpack 文件 | ROOT/ADMIN |
+| POST | `/api/v1/pack/export` | 导出 .ovpack 文件 | ROOT/ADMIN/USER，受正常 URI ACL 限制 |
+| POST | `/api/v1/pack/import` | 导入 .ovpack 文件 | ROOT/ADMIN/USER，受正常 URI ACL 限制 |
 | POST | `/api/v1/pack/backup` | 备份公开 scope | ROOT/ADMIN |
 | POST | `/api/v1/pack/restore` | 恢复备份包 | ROOT/ADMIN |
 
@@ -427,6 +427,8 @@ JSON 输出 - 错误：
 | GET | `/api/v1/fs/ls` | 列出目录内容 |
 | GET | `/api/v1/fs/tree` | 获取目录树结构 |
 | GET | `/api/v1/fs/stat` | 获取资源状态 |
+| GET | `/api/v1/fs/attrs` | 获取逻辑扩展属性 |
+| POST | `/api/v1/fs/attrs/set_tags` | 设置检索标签 |
 | POST | `/api/v1/fs/mkdir` | 创建目录 |
 | DELETE | `/api/v1/fs` | 删除资源 |
 | POST | `/api/v1/fs/mv` | 移动/重命名资源 |

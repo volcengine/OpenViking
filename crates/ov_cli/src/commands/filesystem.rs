@@ -1,6 +1,6 @@
 use super::render_utils::{append_profile_lines, with_ascii_ellipsis, wrap_display_text};
 use crate::client::HttpClient;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
 use crate::theme;
 use chrono::{DateTime, Local};
@@ -432,6 +432,31 @@ pub async fn stat(
     let result = client.stat(uri).await?;
     output_success(&result, output_format, compact);
     Ok(())
+}
+
+pub async fn attrs(
+    client: &HttpClient,
+    uri: &str,
+    key: Option<&str>,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let mut result = client.attrs(uri).await?;
+    if let Some(key) = key {
+        result = select_attr_key(&result, key)
+            .cloned()
+            .ok_or_else(|| Error::Client(format!("Attribute not found: {key}")))?;
+    }
+    output_success(&result, output_format, compact);
+    Ok(())
+}
+
+fn select_attr_key<'a>(result: &'a Value, key: &str) -> Option<&'a Value> {
+    let mut current = result.get("attrs")?;
+    for part in key.strip_prefix("attrs.").unwrap_or(key).split('.') {
+        current = current.get(part)?;
+    }
+    Some(current)
 }
 
 fn output_message_result(

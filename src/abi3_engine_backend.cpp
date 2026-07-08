@@ -241,6 +241,31 @@ bool py_to_int64_vector(PyObject* obj, std::vector<int64_t>* out) {
   return true;
 }
 
+bool py_to_uint64_vector(PyObject* obj, std::vector<uint64_t>* out) {
+  const Py_ssize_t size = PySequence_Size(obj);
+  if (size < 0) {
+    raise_type_error("Expected a sequence of unsigned integers");
+    return false;
+  }
+
+  out->clear();
+  out->reserve(static_cast<size_t>(size));
+  for (Py_ssize_t i = 0; i < size; ++i) {
+    PyObject* item = PySequence_GetItem(obj, i);
+    if (item == nullptr) {
+      return false;
+    }
+    uint64_t value = 0;
+    const bool ok = py_to_uint64(item, &value);
+    Py_DECREF(item);
+    if (!ok) {
+      return false;
+    }
+    out->push_back(value);
+  }
+  return true;
+}
+
 PyObject* float_vector_to_py(const std::vector<float>& values) {
   PyObject* list = PyList_New(static_cast<Py_ssize_t>(values.size()));
   if (list == nullptr) {
@@ -283,6 +308,22 @@ PyObject* uint64_vector_to_py(const std::vector<uint64_t>& values) {
   for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(values.size()); ++i) {
     PyObject* item =
         PyLong_FromUnsignedLongLong(values[static_cast<size_t>(i)]);
+    if (item == nullptr) {
+      Py_DECREF(list);
+      return nullptr;
+    }
+    PyList_SetItem(list, i, item);
+  }
+  return list;
+}
+
+PyObject* uint32_vector_to_py(const std::vector<uint32_t>& values) {
+  PyObject* list = PyList_New(static_cast<Py_ssize_t>(values.size()));
+  if (list == nullptr) {
+    return nullptr;
+  }
+  for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(values.size()); ++i) {
+    PyObject* item = PyLong_FromUnsignedLong(values[static_cast<size_t>(i)]);
     if (item == nullptr) {
       Py_DECREF(list);
       return nullptr;
@@ -1109,6 +1150,29 @@ PyObject* build_search_result(const vdb::SearchResult& result) {
   return payload;
 }
 
+PyObject* build_filter_result(const vdb::FilterResult& result) {
+  PyObject* payload = PyDict_New();
+  if (payload == nullptr) {
+    return nullptr;
+  }
+
+  PyObject* eligible_count =
+      PyLong_FromUnsignedLongLong(result.eligible_count);
+  PyObject* bitset_words = uint32_vector_to_py(result.bitset_words);
+  if (eligible_count == nullptr || bitset_words == nullptr) {
+    Py_XDECREF(eligible_count);
+    Py_XDECREF(bitset_words);
+    Py_DECREF(payload);
+    return nullptr;
+  }
+
+  PyDict_SetItemString(payload, "eligible_count", eligible_count);
+  PyDict_SetItemString(payload, "bitset_words", bitset_words);
+  Py_DECREF(eligible_count);
+  Py_DECREF(bitset_words);
+  return payload;
+}
+
 PyObject* build_state_result(const vdb::StateResult& result) {
   PyObject* payload = PyDict_New();
   if (payload == nullptr) {
@@ -1244,6 +1308,55 @@ PyObject* py_index_engine_search(PyObject*, PyObject* args) {
     const vdb::SearchResult result =
         call_without_gil([&]() { return engine->search(request); });
     return build_search_result(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_set_filter_layout(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  PyObject* labels_obj = nullptr;
+  if (!PyArg_ParseTuple(args, "OO", &capsule, &labels_obj)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  std::vector<uint64_t> ordered_labels;
+  if (!py_to_uint64_vector(labels_obj, &ordered_labels)) {
+    return nullptr;
+  }
+
+  try {
+    const int result = call_without_gil(
+        [&]() { return engine->set_filter_layout(ordered_labels); });
+    return PyLong_FromLong(result);
+  } catch (const std::exception& exc) {
+    raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_evaluate_filter(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* dsl = nullptr;
+  if (!PyArg_ParseTuple(args, "Os", &capsule, &dsl)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    const vdb::FilterResult result =
+        call_without_gil([&]() { return engine->evaluate_filter(dsl); });
+    return build_filter_result(result);
   } catch (const std::exception& exc) {
     raise_runtime_error(exc.what());
     return nullptr;
@@ -1536,6 +1649,10 @@ PyMethodDef kModuleMethods[] = {
      "Delete data from the index engine."},
     {"_index_engine_search", py_index_engine_search, METH_VARARGS,
      "Search the index engine."},
+    {"_index_engine_set_filter_layout", py_index_engine_set_filter_layout,
+     METH_VARARGS, "Register an external label order for scalar filters."},
+    {"_index_engine_evaluate_filter", py_index_engine_evaluate_filter,
+     METH_VARARGS, "Evaluate a scalar filter in an external label order."},
     {"_index_engine_dump", py_index_engine_dump, METH_VARARGS,
      "Dump index state to disk."},
     {"_index_engine_get_state", py_index_engine_get_state, METH_VARARGS,

@@ -1,9 +1,8 @@
 name: Python SDK Release
 
 on:
-  push:
-    tags:
-      - "python-sdk@*"
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       target:
@@ -23,6 +22,7 @@ permissions:
 jobs:
   build-sdk:
     name: Build openviking-sdk
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'python-sdk@')
     runs-on: ubuntu-24.04
     outputs:
       sdk_version: ${{ steps.version.outputs.sdk_version }}
@@ -68,9 +68,9 @@ jobs:
           echo "Resolved SDK version: $SDK_VERSION"
 
       - name: Validate tag matches SDK version
-        if: github.event_name == 'push'
+        if: github.event_name == 'release'
         env:
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
           SDK_VERSION: ${{ steps.version.outputs.sdk_version }}
         run: |
           EXPECTED_TAG="python-sdk@${SDK_VERSION}"

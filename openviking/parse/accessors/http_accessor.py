@@ -29,6 +29,7 @@ from openviking.parse.parsers.media.constants import (
     IMAGE_EXTENSIONS,
     VIDEO_EXTENSIONS,
 )
+from openviking.utils import is_code_hosting_blob_url
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
@@ -429,14 +430,14 @@ class HTTPAccessor(DataAccessor):
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
-        Fetch the HTTP URL to a local file.
+        Fetch the HTTP URL to a local file or directory.
 
         Args:
             source: HTTP/HTTPS URL
             **kwargs: Additional arguments (request_validator, etc.)
 
         Returns:
-            LocalResource pointing to the downloaded file
+            LocalResource pointing to the downloaded file or crawled web directory
         """
         source_str = str(source)
         request_validator = kwargs.get("request_validator")
@@ -446,6 +447,49 @@ class HTTPAccessor(DataAccessor):
             source_str,
             request_validator=request_validator,
         )
+
+        # Both an extensionless text/html page (WEBPAGE) and an explicit
+        # ``.html``/``.htm`` URL (DOWNLOAD_HTML) are webpages the user may want
+        # to crawl: route both through WebImporter so ``depth``/``max_pages``
+        # apply. A plain single-page import is just the ``depth=0`` case.
+        #
+        # Exception: a code-hosting single-file URL (GitHub/GitLab ``blob`` or
+        # GitHub ``raw``) is semantically one file, not a site. ``_download_url``
+        # already rewrote it to raw and fetched the file, so keep it on the
+        # single-file path instead of crawling the hosting UI shell.
+        if url_type in (URLType.WEBPAGE, URLType.DOWNLOAD_HTML) and not is_code_hosting_blob_url(
+            source_str
+        ):
+            from openviking.parse.accessors.web_importer import (
+                WebImporter,
+                parse_web_import_options,
+            )
+
+            try:
+                options = parse_web_import_options(kwargs)
+                result = await WebImporter().import_to_directory(
+                    root_url=source_str,
+                    options=options,
+                    request_validator=request_validator,
+                )
+            finally:
+                Path(temp_path).unlink(missing_ok=True)
+
+            meta.update(result.meta)
+            meta.update(
+                {
+                    "url": source_str,
+                    "downloaded": True,
+                    "url_type": URLType.WEBPAGE.value,
+                }
+            )
+            return LocalResource(
+                path=result.path,
+                source_type=SourceType.HTTP,
+                original_source=source_str,
+                meta=meta,
+                is_temporary=True,
+            )
 
         # Build metadata
         meta.update(
@@ -534,8 +578,10 @@ class HTTPAccessor(DataAccessor):
                     raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
                 except httpx.HTTPStatusError as e:
                     status_code = e.response.status_code if e.response else "unknown"
-                    if status_code == 401 or status_code == 403:
+                    if status_code == 401:
                         user_msg = f"HTTP request failed: authentication error ({status_code}). Check your credentials or permissions."
+                    elif status_code == 403:
+                        user_msg = f"HTTP request failed: access denied ({status_code}). The site blocked the request (login or anti-bot may be required)."
                     elif status_code == 404:
                         user_msg = f"HTTP request failed: not found ({status_code}). The URL may be invalid or the resource was removed."
                     elif 500 <= status_code < 600:

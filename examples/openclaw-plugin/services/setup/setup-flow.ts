@@ -6,6 +6,10 @@ import {
   type SetupIO,
   type SlotActivationResult,
 } from "./config-writer.js";
+import {
+  cleanOpenVikingRequestHeaders,
+  type OpenVikingRequestHeaders,
+} from "../../request-headers.js";
 
 export type { SetupIO, SlotActivationResult };
 
@@ -38,6 +42,7 @@ export type SetupResult = {
     peer_prefix?: string;
     accountId?: string;
     userId?: string;
+    headers?: OpenVikingRequestHeaders;
     recallTargetTypes?: string[];
   };
   health?: HealthResult;
@@ -65,6 +70,7 @@ export type StatusResult = {
 export type SetupParams = {
   baseUrl: string;
   apiKey?: string;
+  headers?: OpenVikingRequestHeaders;
   peerRole?: "none" | "assistant" | "person";
   peerPrefix?: string;
   accountId?: string;
@@ -78,6 +84,7 @@ export type InteractiveRemoteConfigParams = {
   existing?: Record<string, unknown> | null;
   baseUrl: string;
   apiKey?: string;
+  headers?: OpenVikingRequestHeaders;
   peerRole?: "none" | "assistant" | "person";
   peerPrefix?: string;
   accountId?: string;
@@ -100,8 +107,16 @@ export type OpenVikingSetupService = {
 export type OpenVikingSetupServiceDependencies = {
   io: SetupIO;
   defaultRemoteUrl?: string;
-  checkServiceHealth: (baseUrl: string, apiKey?: string) => Promise<HealthResult>;
-  probeApiKeyType: (baseUrl: string, apiKey?: string) => Promise<ApiKeyProbeResult>;
+  checkServiceHealth: (
+    baseUrl: string,
+    apiKey?: string,
+    headers?: OpenVikingRequestHeaders,
+  ) => Promise<HealthResult>;
+  probeApiKeyType: (
+    baseUrl: string,
+    apiKey?: string,
+    headers?: OpenVikingRequestHeaders,
+  ) => Promise<ApiKeyProbeResult>;
 };
 
 export function maskKey(key: string): string {
@@ -114,10 +129,38 @@ export function isLegacyLocalMode(existing: Record<string, unknown>): boolean {
   return mode !== "remote";
 }
 
+function nonEmptyOpenVikingRequestHeaders(value: unknown): OpenVikingRequestHeaders | undefined {
+  const headers = cleanOpenVikingRequestHeaders(value);
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+function callHealthProbe(
+  checkServiceHealth: OpenVikingSetupServiceDependencies["checkServiceHealth"],
+  baseUrl: string,
+  apiKey: string | undefined,
+  headers: OpenVikingRequestHeaders | undefined,
+): Promise<HealthResult> {
+  return headers
+    ? checkServiceHealth(baseUrl, apiKey, headers)
+    : checkServiceHealth(baseUrl, apiKey);
+}
+
+function callApiKeyProbe(
+  probeApiKeyType: OpenVikingSetupServiceDependencies["probeApiKeyType"],
+  baseUrl: string,
+  apiKey: string | undefined,
+  headers: OpenVikingRequestHeaders | undefined,
+): Promise<ApiKeyProbeResult> {
+  return headers
+    ? probeApiKeyType(baseUrl, apiKey, headers)
+    : probeApiKeyType(baseUrl, apiKey);
+}
+
 export function buildInteractiveRemotePluginConfig({
   existing,
   baseUrl,
   apiKey,
+  headers,
   peerRole,
   peerPrefix,
   accountId,
@@ -138,6 +181,11 @@ export function buildInteractiveRemotePluginConfig({
   else delete pluginCfg.accountId;
   if (userId) pluginCfg.userId = userId;
   else delete pluginCfg.userId;
+  if (headers !== undefined) {
+    const cleanHeaders = nonEmptyOpenVikingRequestHeaders(headers);
+    if (cleanHeaders) pluginCfg.headers = cleanHeaders;
+    else delete pluginCfg.headers;
+  }
   delete pluginCfg.configPath;
   delete pluginCfg.port;
   return pluginCfg;
@@ -153,8 +201,9 @@ export function createOpenVikingSetupService({
     async setupNonInteractive(configPath: string, params: SetupParams): Promise<SetupResult> {
       try {
         const { baseUrl, apiKey, peerRole, peerPrefix, accountId, userId, recallTargetTypes, allowOffline, forceSlot } = params;
+        const headers = nonEmptyOpenVikingRequestHeaders(params.headers);
 
-        const health = await checkServiceHealth(baseUrl, apiKey);
+        const health = await callHealthProbe(checkServiceHealth, baseUrl, apiKey, headers);
 
         if (!health.ok && !allowOffline) {
           return {
@@ -167,7 +216,7 @@ export function createOpenVikingSetupService({
           };
         }
 
-        const keyProbe = health.ok ? await probeApiKeyType(baseUrl, apiKey) : undefined;
+        const keyProbe = health.ok ? await callApiKeyProbe(probeApiKeyType, baseUrl, apiKey, headers) : undefined;
 
         if (keyProbe?.keyType === "root_key" && (!accountId || !userId)) {
           const missing: string[] = [];
@@ -190,6 +239,7 @@ export function createOpenVikingSetupService({
 
         const pluginCfg: Record<string, unknown> = { mode: "remote", baseUrl };
         if (apiKey) pluginCfg.apiKey = apiKey;
+        if (headers && Object.keys(headers).length > 0) pluginCfg.headers = headers;
         if (peerRole) pluginCfg.peer_role = peerRole;
         if (peerPrefix) pluginCfg.peer_prefix = peerPrefix;
         if (accountId) pluginCfg.accountId = accountId;
@@ -203,6 +253,7 @@ export function createOpenVikingSetupService({
           mode: "remote",
           baseUrl,
           ...(apiKey ? { apiKey: maskKey(apiKey) } : {}),
+          ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
           ...(peerRole ? { peer_role: peerRole } : {}),
           ...(peerPrefix ? { peer_prefix: peerPrefix } : {}),
           ...(accountId ? { accountId } : {}),
@@ -253,7 +304,8 @@ export function createOpenVikingSetupService({
     async useExistingRemoteConfig(configPath: string, existing: Record<string, unknown>): Promise<SetupResult> {
       const baseUrl = String(existing.baseUrl ?? defaultRemoteUrl);
       const apiKey = existing.apiKey ? String(existing.apiKey) : undefined;
-      const health = await checkServiceHealth(baseUrl, apiKey);
+      const headers = nonEmptyOpenVikingRequestHeaders(existing.headers);
+      const health = await callHealthProbe(checkServiceHealth, baseUrl, apiKey, headers);
       const slot = activateContextEngineSlot(configPath, false, io);
       return {
         success: true,
@@ -262,6 +314,7 @@ export function createOpenVikingSetupService({
           mode: String(existing.mode ?? "remote"),
           baseUrl,
           ...(apiKey ? { apiKey: maskKey(apiKey) } : {}),
+          ...(headers ? { headers } : {}),
           ...(existing.peer_role ? { peer_role: String(existing.peer_role) as "none" | "assistant" | "person" } : {}),
           ...(existing.peer_prefix ? { peer_prefix: String(existing.peer_prefix) } : {}),
           ...(existing.accountId ? { accountId: String(existing.accountId) } : {}),
@@ -283,8 +336,9 @@ export function createOpenVikingSetupService({
 
       const baseUrl = String(existing.baseUrl ?? defaultRemoteUrl);
       const apiKey = existing.apiKey ? String(existing.apiKey) : undefined;
-      const health = await checkServiceHealth(baseUrl, apiKey);
-      const keyProbe = health.ok ? await probeApiKeyType(baseUrl, apiKey) : undefined;
+      const headers = nonEmptyOpenVikingRequestHeaders(existing.headers);
+      const health = await callHealthProbe(checkServiceHealth, baseUrl, apiKey, headers);
+      const keyProbe = health.ok ? await callApiKeyProbe(probeApiKeyType, baseUrl, apiKey, headers) : undefined;
 
       return {
         configured: true,

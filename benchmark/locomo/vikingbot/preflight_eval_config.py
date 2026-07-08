@@ -78,10 +78,11 @@ def _resolve_ov_conf_path() -> Path:
 
 def _warn_deprecated_or_conflicting_fields(ov_data: dict) -> None:
     ov_server = (ov_data.get("bot") or {}).get("ov_server") or {}
+    server_auth_mode = str((ov_data.get("server") or {}).get("auth_mode") or "").strip().lower()
     if str(ov_server.get("root_api_key") or "").strip():
         _log_warn("bot.ov_server.root_api_key 已废弃，评测不会再把它当作认证 key 使用。")
     api_key_type = str(ov_server.get("api_key_type") or "").strip().lower()
-    if api_key_type and api_key_type != "user":
+    if api_key_type and api_key_type != "user" and server_auth_mode != "trusted":
         _log_warn("bot.ov_server.api_key_type 不是 user；后续会在 User key 校验通过后同步为 user。")
 
 
@@ -99,7 +100,7 @@ def main() -> int:
             return 1
 
         _warn_deprecated_or_conflicting_fields(ov_data)
-        _log_ok("本地配置可读取；将继续连接 OpenViking 校验 User API key。")
+        _log_ok("本地配置可读取；将继续连接 OpenViking 校验 API key。")
         return 0
     except KeyboardInterrupt:
         _log_error("用户取消。")

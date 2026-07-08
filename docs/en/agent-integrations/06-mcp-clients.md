@@ -37,9 +37,29 @@ Add `--scope user` to make the config global across all projects.
 
 > For auto-recall and auto-capture without manual tool calls, use the [Claude Code Memory Plugin](./02-claude-code.md) instead.
 
-### Trae / Cursor / ChatGPT / Codex / OpenCode
+### Trae / Cursor / ChatGPT / Codex
 
 Standard `mcpServers` config as shown above — all verified with API key auth.
+
+### OpenCode
+
+Use OpenCode's native `mcp` config in `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "openviking": {
+      "type": "remote",
+      "url": "https://your-server.com/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
+      }
+    }
+  }
+}
+```
 
 ### Claude Desktop / Claude.ai (OAuth)
 

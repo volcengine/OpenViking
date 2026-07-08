@@ -21,11 +21,6 @@ content_template: |
   {{ introduction }}
 
 fields:
-  - name: name
-    type: string
-    description: Agent name
-    merge_op: immutable
-
   - name: creature
     type: string
     description: Creature type (AI, robot, familiar, etc.)

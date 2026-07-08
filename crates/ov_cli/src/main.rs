@@ -235,6 +235,33 @@ impl CliContext {
     }
 }
 
+#[derive(Subcommand)]
+enum AttrsCommands {
+    /// Get logical extended attributes
+    Get {
+        /// Viking URI to get attributes for
+        #[arg(value_name = "uri")]
+        uri: String,
+        /// Optional attrs key, for example tags, memory, or memory.tags
+        #[arg(value_name = "key")]
+        key: Option<String>,
+    },
+    /// Update explicit retrieval tags metadata for a file or directory
+    SetTags {
+        /// Viking URI
+        uri: String,
+        /// Comma-separated k=v tags, e.g. env=prod,team=search
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Tag update mode: replace or append (append replaces existing values by key)
+        #[arg(long, default_value = "replace")]
+        mode: String,
+        /// Recursively update descendant files and semantic nodes when target is a directory
+        #[arg(long, default_value = "false")]
+        recursive: bool,
+    },
+}
+
 // Commands are organized with category tags in their doc comments.
 //
 // # Command Tagging System
@@ -463,6 +490,11 @@ enum Commands {
         #[arg(value_name = "uri")]
         uri: String,
     },
+    /// [Data] Get logical extended attributes
+    Attrs {
+        #[command(subcommand)]
+        action: AttrsCommands,
+    },
     /// [Data] Read file content (Level 2)
     Read {
         /// Viking URI
@@ -521,6 +553,7 @@ enum Commands {
         timeout: Option<f64>,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
+    #[command(hide = true)]
     SetTags {
         /// Viking URI
         uri: String,
@@ -1076,6 +1109,19 @@ pub(crate) enum SnapshotCmd {
         #[arg(long, default_value_t = 20)]
         limit: u32,
     },
+    /// Get the account .ovgitignore content
+    IgnoreGet,
+    /// Set the account .ovgitignore content
+    IgnoreSet {
+        /// .ovgitignore content passed inline
+        #[arg(long = "content")]
+        content: Option<String>,
+        /// File to read the content from; takes precedence over --content
+        #[arg(long = "file")]
+        file: Option<std::path::PathBuf>,
+    },
+    /// Delete the account .ovgitignore
+    IgnoreDelete,
 }
 
 #[derive(Subcommand)]
@@ -1500,6 +1546,9 @@ enum AdminCommands {
         /// First admin user ID
         #[arg(long = "admin", value_name = "user-id")]
         admin_user_id: String,
+        /// Deterministic API key seed
+        #[arg(long, value_name = "seed")]
+        seed: Option<String>,
         /// Initial config for the first admin user as JSON
         #[arg(long = "user-config-json", value_name = "json")]
         user_config_json: Option<String>,
@@ -1529,6 +1578,9 @@ enum AdminCommands {
         /// Role: admin or user
         #[arg(long, default_value = "user", value_name = "role")]
         role: String,
+        /// Deterministic API key seed
+        #[arg(long, value_name = "seed")]
+        seed: Option<String>,
         /// Initial config for the new user as JSON
         #[arg(long = "user-config-json", value_name = "json")]
         user_config_json: Option<String>,
@@ -1577,6 +1629,9 @@ enum AdminCommands {
         /// User ID
         #[arg(value_name = "user-id")]
         user_id: String,
+        /// Deterministic API key seed
+        #[arg(long, value_name = "seed")]
+        seed: Option<String>,
     },
 }
 
@@ -2938,6 +2993,15 @@ async fn main() {
         } => handlers::handle_rm(uri, recursive, wait, timeout, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
+        Commands::Attrs { action } => match action {
+            AttrsCommands::Get { uri, key } => handlers::handle_attrs(uri, key, ctx).await,
+            AttrsCommands::SetTags {
+                uri,
+                tags,
+                mode,
+                recursive,
+            } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
+        },
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {

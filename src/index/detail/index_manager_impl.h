@@ -29,6 +29,12 @@ class IndexManagerImpl : public IndexManager {
 
   int search(const SearchRequest& req, SearchResult& result) override;
 
+  int set_filter_layout(
+      const std::vector<uint64_t>& ordered_labels) override;
+
+  int evaluate_filter(const std::string& dsl,
+                      FilterResult& result) override;
+
   int add_data(const std::vector<AddDataRequest>& data_list) override;
 
   int delete_data(const std::vector<DeleteDataRequest>& data_list) override;
@@ -59,6 +65,7 @@ class IndexManagerImpl : public IndexManager {
   std::shared_ptr<ManagerMeta> manager_meta_;
   std::shared_ptr<ScalarIndex> scalar_index_;
   std::shared_ptr<VectorIndexAdapter> vector_index_;
+  std::vector<uint32_t> filter_layout_offsets_;
 };
 
 }  // namespace vectordb

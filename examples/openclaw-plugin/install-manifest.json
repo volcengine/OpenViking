@@ -20,6 +20,7 @@
       "tool-call-id.ts",
       "session-transcript-repair.ts",
       "runtime-utils.ts",
+      "request-headers.ts",
       "recall-trace.ts",
       "query-config.ts",
       "adapters/",
@@ -52,7 +53,7 @@
     "pruneAfterBuild": true
   },
   "compatibility": {
-    "minOpenclawVersion": "2026.4.8",
+    "minOpenclawVersion": "2026.5.27",
     "recommendedOpenclawVersion": "2026.6.6",
     "minOpenvikingVersion": "0.4.1",
     "recommendedOpenvikingVersion": "0.4.1"

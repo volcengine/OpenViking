@@ -23,7 +23,8 @@ from openviking.storage.transaction import (
     LockLease,
     OwnedLockLease,
 )
-from openviking.storage.viking_fs import get_viking_fs
+from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import index_resource
 from openviking.utils.summarizer import Summarizer
@@ -296,8 +297,33 @@ class ResourceProcessor:
                                 ctx=ctx,
                             )
                             result["root_uri"] = root_uri
+                            if root_uri != candidate_uri:
+                                result.setdefault("warnings", []).append(
+                                    f"'{candidate_uri}' already exists. Creating '{root_uri}'. "
+                                    f"Tip: Use --to <path> to specify exact target."
+                                )
                     else:
                         target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
+                        if target_preexisting:
+                            try:
+                                stat = await viking_fs.stat(root_uri, ctx=ctx)
+                                if isinstance(stat, dict) and stat.get("isDir"):
+                                    entries = await viking_fs.ls(
+                                        root_uri,
+                                        show_all_hidden=True,
+                                        node_limit=LS_ALL_NODES,
+                                        ctx=ctx,
+                                    )
+                                    names: list[str] = []
+                                    for entry in entries:
+                                        name = entry.get("name", "")
+                                        if not name or name in {".", ".."}:
+                                            continue
+                                        names.append(str(name))
+                                    if all(name in STORAGE_INTERNAL_ENTRY_NAMES for name in names):
+                                        target_preexisting = False
+                            except Exception:
+                                pass
                         if not resource_lock.active:
                             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                             resource_lock = await self.acquire_resource_lock(

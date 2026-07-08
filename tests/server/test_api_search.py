@@ -82,7 +82,7 @@ async def test_find_with_target_uri_and_tags_after_set_tags(client_with_resource
     client, uri = client_with_resource
 
     set_tags_resp = await client.post(
-        "/api/v1/content/set_tags",
+        "/api/v1/fs/attrs/set_tags",
         json={"uri": uri, "tags": ["team=search"]},
     )
     assert set_tags_resp.status_code == 200
@@ -1007,7 +1007,7 @@ async def test_glob(client_with_resource):
     client, _ = client_with_resource
     resp = await client.post(
         "/api/v1/search/glob",
-        json={"pattern": "*.md"},
+        json={"pattern": "**/*.md"},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"

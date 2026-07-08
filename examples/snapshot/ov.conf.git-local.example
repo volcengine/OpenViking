@@ -13,7 +13,7 @@
         }
     },
     "vlm": {
-        "model": "doubao-seed-2-0-pro-260215",
+        "model": "doubao-seed-2-0-lite-260428",
         "api_key": "{your-api-key}",
         "api_base": "https://ark.cn-beijing.volces.com/api/v3",
         "temperature": 0.0,
@@ -24,14 +24,14 @@
     "server": {
         "host": "127.0.0.1"
     },
-    "git": {                                                                                                                                 
-        "enabled": true,                                                                                                                     
-        "backend": "local",                               
+    "git": {
+        "enabled": true,
+        "backend": "local",
         "default_branch": "main",
-        "author_name": "viking-bot",                                                                                                         
-        "author_email": "bot@viking.local",                                                                                                  
-        "local": {                                                                                                                           
-            "base_dir": ""                                                                                                                  
-        }                                                 
+        "author_name": "viking-bot",
+        "author_email": "bot@viking.local",
+        "local": {
+            "base_dir": ""
+        }
     }
 }

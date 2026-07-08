@@ -113,6 +113,8 @@ embedding_template: |
 directory: "viking://user/{{ user_space }}/memories/..."
 enabled: true
 operation_mode: "upsert"
+stage: "user"
+peer_enabled: true
 ```
 
 Field meanings:
@@ -135,6 +137,10 @@ Field meanings:
   - Whether this memory type is enabled
 - `operation_mode`
   - The update mode of the memory type, such as `upsert`
+- `stage`
+  - Extraction stage. The default is `user`, which participates in session user-memory extraction; `agent` is reserved for execution-derived schemas such as trajectories and experiences.
+- `peer_enabled`
+  - Whether this memory type is stored separately under peer directories when `peer_id` or message ranges identify a peer. The default is `true`; set `false` for memories that must stay under the current user space.
 
 When writing a memory schema, focus on:
 
@@ -249,7 +255,7 @@ These YAML files define the structure of different memory types. They are not si
   - Key fields: `tool_name`, `static_desc`, `call_count`, `success_time`, `when_to_use`, `optimal_params`
 
 - `trajectories`
-  - Effective stage: agent trajectory memory persistence stage (agent-only, add-only)
+  - Effective stage: agent trajectory memory persistence stage (`stage: agent`, add-only)
   - Affects: reusable operation contracts distilled from agent task trajectories — multi-step decisions, tool calls, and execution traces
   - Purpose: defines compact trajectory memory for "what reusable operation/contract emerged from a task trajectory"
   - Key fields: `trajectory_name`, `outcome`, `retrieval_anchor`, `content`

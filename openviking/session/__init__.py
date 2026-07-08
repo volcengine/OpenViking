@@ -11,31 +11,33 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from openviking.session.compressor_v2 import SessionCompressorV2
+    from openviking.session.compressor_v3 import SessionCompressorV3
 
 
 def create_session_compressor(
     vikingdb: VikingDBManager,
     memory_version: Optional[str] = None,
     skill_processor=None,
-) -> "SessionCompressorV2":
+) -> "SessionCompressorV3":
     """
-    Create the v2 session compressor.
+    Create the session compressor.
 
     Args:
         vikingdb: VikingDBManager instance
-        memory_version: Deprecated optional override. Only "v2" is supported.
+        memory_version: Deprecated and ignored; v3 is always used. Existing
+            configs that still set memory.version continue to load, but no
+            longer select the implementation.
 
     Returns:
-        SessionCompressorV2 instance
+        v3 session compressor instance
     """
-    if memory_version not in (None, "v2"):
-        raise ValueError("memory.version only supports 'v2'; legacy memory v1 has been removed")
+    if memory_version is not None:
+        logger.warning("memory.version is deprecated and ignored; using v3 memory compressor")
 
-    logger.info("Using v2 memory compressor (templating system)")
-    from openviking.session.compressor_v2 import SessionCompressorV2
+    logger.info("Using v3 memory compressor (v2 + commit streaming train)")
+    from openviking.session.compressor_v3 import SessionCompressorV3
 
-    return SessionCompressorV2(vikingdb=vikingdb, skill_processor=skill_processor)
+    return SessionCompressorV3(vikingdb=vikingdb, skill_processor=skill_processor)
 
 
 __all__ = [

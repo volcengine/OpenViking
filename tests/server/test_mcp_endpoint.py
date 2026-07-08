@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from starlette.routing import Route
 
 import openviking.server.mcp_endpoint as mcp_endpoint
+from openviking.server.auth.plugins import DevAuthPlugin
 from openviking.server.dependencies import set_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.mcp_endpoint import (
@@ -31,6 +32,7 @@ from openviking.server.mcp_endpoint import (
     health,
     list_watches,
     read,
+    recall,
     remember,
     search,
 )
@@ -187,6 +189,38 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["score_threshold"] == 0.1
 
 
+async def test_recall_tool_returns_type_quota_memory_groups(service, monkeypatch):
+    async def fake_find(**kwargs):
+        if kwargs["target_uri"].endswith("/events"):
+            return SimpleNamespace(
+                memories=[
+                    SimpleNamespace(
+                        uri="viking://user/test_user/memories/events/e.md",
+                        score=0.9,
+                        abstract="event abstract",
+                    )
+                ]
+            )
+        return SimpleNamespace(memories=[])
+
+    async def fake_read(uri, **kwargs):
+        del uri, kwargs
+        return "Summary: MCP recall event.\n2026-07-06 ChatLog: details"
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.fs, "read", fake_read)
+
+    result = await recall(
+        query="what happened",
+        quotas={"events": 1, "entities": 0, "preferences": 0, "experiences": 0},
+        max_chars=200,
+        min_score=0.1,
+    )
+
+    assert '<memory_group type="events"' in result
+    assert "MCP recall event." in result
+
+
 async def test_mcp_middleware_sets_actor_peer_context():
     async def downstream(scope, receive, send):
         ctx = _get_ctx()
@@ -203,6 +237,7 @@ async def test_mcp_middleware_sets_actor_peer_context():
 
     app = FastAPI()
     app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
     app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
 
     transport = httpx.ASGITransport(app=app)
@@ -222,6 +257,7 @@ async def test_mcp_middleware_rejects_invalid_actor_peer_header():
 
     app = FastAPI()
     app.state.config = SimpleNamespace(get_effective_auth_mode=lambda: AuthMode.DEV)
+    app.state.auth_plugin = DevAuthPlugin()
     app.routes.append(Route("/mcp", endpoint=_IdentityASGIMiddleware(downstream), methods=["POST"]))
 
     transport = httpx.ASGITransport(app=app)
@@ -363,15 +399,13 @@ async def test_add_resource_local_path_returns_upload_instruction(service):
 
     upload_token_store.clear()
     result = await add_resource(path="/tmp/sample_local_file_xyz.pdf")
-    assert "upload required" in result.lower()
-    assert "Step 1." in result
-    assert "Step 2." in result
-    assert "/api/v1/resources/temp_upload_signed" in result
-    assert "token=" in result
-    # The server now mints temp_file_id at upload time; the prose tells the agent
-    # to read it from the upload response.
-    assert "temp_file_id" in result
-    assert "<id from step 1>" in result
+    assert "local file detected" in result.lower()
+    # Single-step flow: POST the file and the server auto-ingests. No second call, no
+    # temp_file_id handshake exposed to the agent.
+    assert "/api/v1/resources/temp_upload?token=" in result
+    assert "temp_upload_signed" not in result
+    assert "automatically" in result.lower()
+    assert "temp_file_id" not in result
     # Default fixture sets neither env nor config.public_base_url → URL is auto-inferred
     # and the troubleshooting hint must appear.
     assert "OPENVIKING_PUBLIC_BASE_URL" in result
@@ -384,7 +418,7 @@ async def test_add_resource_local_path_uses_env_var_when_set(service, monkeypatc
     upload_token_store.clear()
     monkeypatch.setenv("OPENVIKING_PUBLIC_BASE_URL", "https://my-ov.example.com")
     result = await add_resource(path="/tmp/x.pdf")
-    assert "https://my-ov.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "https://my-ov.example.com/api/v1/resources/temp_upload?token=" in result
     # Explicit source → no troubleshooting hint
     assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
     upload_token_store.clear()
@@ -402,7 +436,7 @@ async def test_add_resource_local_path_uses_config_when_env_unset(service, monke
     )
 
     result = await add_resource(path="/tmp/x.pdf")
-    assert "https://configured.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "https://configured.example.com/api/v1/resources/temp_upload?token=" in result
     assert "OPENVIKING_PUBLIC_BASE_URL is not set" not in result
     upload_token_store.clear()
 
@@ -426,7 +460,7 @@ async def test_add_resource_local_path_infers_from_x_forwarded_headers(service, 
     finally:
         _request_url_ctx.reset(token)
 
-    assert "https://ov.public.example.com/api/v1/resources/temp_upload_signed" in result
+    assert "https://ov.public.example.com/api/v1/resources/temp_upload?token=" in result
     # Inferred → hint must appear
     assert "OPENVIKING_PUBLIC_BASE_URL" in result
     upload_token_store.clear()
@@ -486,6 +520,24 @@ async def test_add_resource_temp_file_id_branch_resolves_and_ingests(
     assert captured["path"] == str(target.resolve())
     assert captured["allow_local_path_resolution"] is True
     upload_token_store.clear()
+
+
+async def test_add_resource_temp_file_id_ingest_error_is_surfaced(
+    service, upload_temp_dir, monkeypatch
+):
+    """add_resource returns a business-error dict without raising; MCP must surface it."""
+    tfid = "upload_deadbeef.md"
+    (upload_temp_dir / tfid).write_text("junk")
+
+    async def failing_add_resource(*, path, ctx, **kwargs):
+        return {"status": "error", "errors": ["parse failed"]}
+
+    monkeypatch.setattr(service.resources, "add_resource", failing_add_resource)
+
+    result = await add_resource(temp_file_id=tfid)
+    assert "Error adding resource" in result
+    assert "parse failed" in result
+    assert "Resource added" not in result
 
 
 async def test_add_resource_watch_without_to_is_forwarded(service, monkeypatch):
@@ -651,7 +703,7 @@ async def test_grep_case_insensitive(service):
 
 
 async def test_glob_no_matches(service):
-    result = await glob(pattern="zzz_nonexistent_*.xyz")
+    result = await glob(pattern="**/zzz_nonexistent_*.xyz")
     assert "No files found" in result
 
 
@@ -662,7 +714,7 @@ async def test_glob_match_all_md(service, client_with_resource):
 
 
 async def test_glob_with_uri_scope(service):
-    result = await glob(pattern="*", uri="viking://resources")
+    result = await glob(pattern="**/*", uri="viking://resources")
     assert isinstance(result, str)
 
 

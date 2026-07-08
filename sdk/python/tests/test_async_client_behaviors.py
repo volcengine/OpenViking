@@ -387,6 +387,30 @@ async def test_admin_create_paths_accept_initial_user_config():
 
 
 @pytest.mark.asyncio
+async def test_admin_seed_payloads_are_sent():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: {"status": "ok"}
+
+    await client.admin_create_account("acct", "admin", seed="admin-seed")
+    await client.admin_register_user("acct", "alice", "admin", seed="alice-seed")
+    await client.admin_regenerate_key("acct", "alice", seed="new-seed")
+
+    assert fake_http.post.await_args_list[0].kwargs["json"] == {
+        "account_id": "acct",
+        "admin_user_id": "admin",
+        "seed": "admin-seed",
+    }
+    assert fake_http.post.await_args_list[1].kwargs["json"] == {
+        "user_id": "alice",
+        "role": "admin",
+        "seed": "alice-seed",
+    }
+    assert fake_http.post.await_args_list[2].kwargs["json"] == {"seed": "new-seed"}
+
+
+@pytest.mark.asyncio
 async def test_import_ovpack_uploads_local_file_even_when_url_is_localhost(tmp_path):
     pack_file = tmp_path / "demo.ovpack"
     pack_file.write_bytes(b"ovpack")
@@ -510,11 +534,11 @@ async def test_glob_normalizes_scope_uri():
         "matches": ["viking://resources/demo.md"],
     }
 
-    await client.glob("*.md", uri="/resources/")
+    await client.glob("**/*.md", uri="/resources/")
 
     fake_http.post.assert_awaited_once_with(
         "/api/v1/search/glob",
-        json={"pattern": "*.md", "uri": "viking://resources/"},
+        json={"pattern": "**/*.md", "uri": "viking://resources/"},
     )
 
 

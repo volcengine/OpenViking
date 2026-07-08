@@ -201,6 +201,88 @@ func TestAdminCreatePathsAcceptInitialUserConfig(t *testing.T) {
 	}
 }
 
+func TestAdminSeedPayloads(t *testing.T) {
+	var seen []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/admin/accounts",
+			"/api/v1/admin/accounts/acct/users",
+			"/api/v1/admin/accounts/acct/users/alice/key":
+		default:
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		body := readJSONBody(t, r)
+		seen = append(seen, body)
+		writeOK(t, w, body)
+	}))
+	defer closeServer()
+
+	adminSeed := "admin-seed"
+	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
+		Seed: &adminSeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	aliceSeed := "alice-seed"
+	if _, err := client.AdminRegisterUserWithOptions(context.Background(), "acct", "alice", "admin", &AdminRegisterUserOptions{
+		Seed: &aliceSeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	newSeed := "new-seed"
+	if _, err := client.AdminRegenerateKeyWithOptions(context.Background(), "acct", "alice", &AdminRegenerateKeyOptions{
+		Seed: &newSeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := seen[0]["seed"]; got != "admin-seed" {
+		t.Fatalf("create seed = %#v", got)
+	}
+	if got := seen[1]["seed"]; got != "alice-seed" {
+		t.Fatalf("register seed = %#v", got)
+	}
+	if got := seen[2]["seed"]; got != "new-seed" {
+		t.Fatalf("regenerate seed = %#v", got)
+	}
+}
+
+func TestAdminEmptySeedPayloadsAreSent(t *testing.T) {
+	var seen []map[string]any
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		seen = append(seen, body)
+		writeOK(t, w, body)
+	}))
+	defer closeServer()
+
+	emptySeed := ""
+	if _, err := client.AdminCreateAccountWithOptions(context.Background(), "acct", "admin", &AdminCreateAccountOptions{
+		Seed: &emptySeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AdminRegisterUserWithOptions(context.Background(), "acct", "alice", "admin", &AdminRegisterUserOptions{
+		Seed: &emptySeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AdminRegenerateKeyWithOptions(context.Background(), "acct", "alice", &AdminRegenerateKeyOptions{
+		Seed: &emptySeed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, body := range seen {
+		if got, ok := body["seed"]; !ok || got != "" {
+			t.Fatalf("request %d seed = %#v, present = %v", i, got, ok)
+		}
+	}
+}
+
 func TestSearchSendsSessionAndSearchFilters(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search/search" {
@@ -330,6 +412,10 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 			if body["directly_upload_media"] != true {
 				t.Fatalf("directly_upload_media = %#v", body["directly_upload_media"])
 			}
+			// args must be omitted when the caller does not pass any, so the
+			// request is accepted by pre-#2549 instances whose resources route
+			// uses model_config=ConfigDict(extra="forbid").
+			requireBodyKeysAbsent(t, body, "args")
 			writeOK(t, w, map[string]any{"uri": "viking://resources/note.md"})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
@@ -343,6 +429,78 @@ func TestAddResourceUploadsLocalFile(t *testing.T) {
 	}
 	if result["uri"] != "viking://resources/note.md" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestAddResourceSendsArgsWhenProvided(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "note.md")
+	if err := os.WriteFile(filePath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/resources/temp_upload":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			writeOK(t, w, map[string]any{"temp_file_id": "tmp-file"})
+		case "/api/v1/resources":
+			body := readJSONBody(t, r)
+			args, ok := body["args"].(map[string]any)
+			if !ok {
+				t.Fatalf("args = %#v, want map", body["args"])
+			}
+			if args["key"] != "value" {
+				t.Fatalf("args[key] = %#v", args["key"])
+			}
+			writeOK(t, w, map[string]any{"uri": "viking://resources/note.md"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(context.Background(), filePath, &AddResourceOptions{
+		Args: map[string]any{"key": "value"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An explicitly-provided but empty Args map is treated the same as no args: the
+// key is omitted so the request stays compatible with pre-#2549 instances. The
+// resources create route defaults args to {} server-side, so "absent" and
+// "present-but-empty" are equivalent here. Mirrors the Python SDK #2834.
+func TestAddResourceOmitsExplicitlyEmptyArgs(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "note.md")
+	if err := os.WriteFile(filePath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/resources/temp_upload":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			writeOK(t, w, map[string]any{"temp_file_id": "tmp-file"})
+		case "/api/v1/resources":
+			body := readJSONBody(t, r)
+			requireBodyKeysAbsent(t, body, "args")
+			writeOK(t, w, map[string]any{"uri": "viking://resources/note.md"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(context.Background(), filePath, &AddResourceOptions{
+		Args: map[string]any{},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -820,7 +978,7 @@ func TestHealth(t *testing.T) {
 
 func TestSetTagsSendsBody(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/content/set_tags" {
+		if r.URL.Path != "/api/v1/fs/attrs/set_tags" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		if r.Method != http.MethodPost {
@@ -862,7 +1020,7 @@ func TestSetTagsSendsBody(t *testing.T) {
 
 func TestSetTagsDefaultsModeAndOmitsTelemetry(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/content/set_tags" {
+		if r.URL.Path != "/api/v1/fs/attrs/set_tags" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
 		body := readJSONBody(t, r)
@@ -884,6 +1042,40 @@ func TestSetTagsDefaultsModeAndOmitsTelemetry(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.SetTags(context.Background(), "resources/docs/readme.md", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGrepForwardsLevelLimit(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method+" "+r.URL.Path != "POST /api/v1/search/grep" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		if got, ok := body["level_limit"]; !ok || got != float64(3) {
+			t.Fatalf("level_limit = %#v (ok=%v)", body["level_limit"], ok)
+		}
+		writeOK(t, w, map[string]any{"matches": []any{}})
+	}))
+	defer closeServer()
+
+	level := 3
+	if _, err := client.Grep(context.Background(), "viking://user", "pat", &GrepOptions{LevelLimit: &level}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGrepOmitsLevelLimitWhenUnset(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["level_limit"]; ok {
+			t.Fatalf("level_limit should be omitted when unset, got %#v", body["level_limit"])
+		}
+		writeOK(t, w, map[string]any{"matches": []any{}})
+	}))
+	defer closeServer()
+
+	if _, err := client.Grep(context.Background(), "viking://user", "pat", nil); err != nil {
 		t.Fatal(err)
 	}
 }

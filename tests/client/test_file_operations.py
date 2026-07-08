@@ -117,7 +117,7 @@ class TestGlob:
         client, uri = client_with_resource
         parent_uri = "/".join(uri.split("/")[:-1]) + "/"
 
-        result = await client.glob(pattern="*.md", uri=parent_uri)
+        result = await client.glob(pattern="**/*.md", uri=parent_uri)
         assert isinstance(result, dict)
         assert "matches" in result and result["count"] > 0
 

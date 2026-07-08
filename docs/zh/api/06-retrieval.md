@@ -533,7 +533,7 @@ openviking search "how to implement OAuth" -L 1,2
 | uri | str | 是 | - | 要搜索的 Viking URI |
 | pattern | str | 是 | - | 搜索模式（正则表达式）|
 | case_insensitive | bool | 否 | False | 忽略大小写 |
-| node_limit | int | 否 | None | 最大返回节点数 |
+| node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
 | level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
 
@@ -567,7 +567,8 @@ client.initialize()
 results = client.grep(
     "viking://resources",
     "authentication",
-    case_insensitive=True
+    case_insensitive=True,
+    node_limit=1024,
 )
 
 print(f"Found {results['count']} matches")
@@ -579,8 +580,10 @@ for match in results['matches']:
 **Go SDK**
 
 ```go
+nodeLimit := 1024
 result, err := client.Grep(ctx, "viking://resources", "authentication", &openviking.GrepOptions{
     CaseInsensitive: true,
+    NodeLimit:       &nodeLimit,
 })
 if err != nil {
     return err
@@ -637,7 +640,7 @@ openviking grep "TODO" --uri viking://resources --level-limit 3
 - `[]` 匹配字符范围
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.glob()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.glob()` - Python SDK 入口（HTTP）
 - `openviking/server/routers/search.py:glob()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:glob()` - Rust CLI 命令
 
@@ -649,7 +652,7 @@ openviking grep "TODO" --uri viking://resources --level-limit 3
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`）|
 | uri | str | 否 | "viking://" | 起始 URI |
-| node_limit | int | 否 | None | 最大返回匹配数 |
+| node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 
 #### 3. 使用示例
 
@@ -677,21 +680,23 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-# 查找所有 markdown 文件
+# 查找所有 markdown 文件（默认最多返回 256 条）
 results = client.glob("**/*.md", "viking://resources")
 print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# 查找所有 Python 文件
-results = client.glob("**/*.py", "viking://resources")
+# 查找所有 Python 文件，并显式放宽返回上限
+results = client.glob("**/*.py", "viking://resources", node_limit=1024)
 print(f"Found {results['count']} Python files")
 ```
 
 **Go SDK**
 
 ```go
-result, err := client.Glob(ctx, "**/*.md", "viking://resources")
+result, err := client.Glob(ctx, "**/*.md", "viking://resources", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+})
 if err != nil {
     return err
 }

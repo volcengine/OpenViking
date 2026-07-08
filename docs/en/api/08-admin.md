@@ -84,10 +84,12 @@ Create a new workspace with its first admin user.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | admin_user_id | str | Yes | - | First admin user ID |
+| seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 | user_config | object | No | `null` | Initial config for the first admin user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
+- Omit `seed` for the default random API key. Treat seed values as secret material; short seeds can make the key guessable.
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
 - `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://user/resources` or `viking://user/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
 - `user_config.add_targets.skill_uri` must be `viking://user/skills` or `viking://agent/skills`. Explicit `viking://user/{user_id}/skills` is not accepted in v1.
@@ -106,7 +108,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: <root-key>" \
   -d '{
     "account_id": "acme",
-    "admin_user_id": "alice"
+    "admin_user_id": "alice",
+    "seed": "alice-seed"
   }'
 ```
 
@@ -160,7 +163,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
-result = client.admin_create_account("acme", "alice")
+result = client.admin_create_account("acme", "alice", seed="alice-seed")
 print(f"Account created: {result['account_id']}")
 print(f"Admin user: {result['admin_user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
@@ -186,7 +189,9 @@ if err != nil {
 }
 fmt.Println(result["account_id"])
 
+seed := "alice-seed"
 result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice", &openviking.AdminCreateAccountOptions{
+    Seed: &seed,
     UserConfig: map[string]any{
         "add_targets": map[string]any{
             "resource_uri": "viking://user/resources",
@@ -201,6 +206,7 @@ result, err = client.AdminCreateAccountWithOptions(ctx, "acme-private", "alice",
 ```bash
 # Requires ROOT privileges, use --sudo
 ov --sudo admin create-account acme --admin alice
+ov --sudo admin create-account acme --admin alice --seed alice-seed
 
 ov --sudo admin create-account acme-private --admin alice \
   --user-config-json '{"add_targets":{"resource_uri":"viking://user/resources","skill_uri":"viking://user/skills"}}'
@@ -414,10 +420,12 @@ Register a new user in a workspace.
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
 | role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`. `"root"` must be assigned through the dedicated role-change endpoint. |
+| seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 | user_config | object | No | `null` | Initial config for the new user. Currently supports `add_targets.resource_uri` and `add_targets.skill_uri` |
 
 **Notes:**
 - In `trusted` mode, `user_key` is omitted from the response
+- Omit `seed` for the default random API key. Treat seed values as secret material; short seeds can make the key guessable.
 - ADMIN can only register users in their own account
 - The `"root"` role cannot be minted through user registration
 - `user_config.add_targets.resource_uri` must be a writable resource directory URI: `viking://resources` or `viking://resources/...`, `viking://user/resources` or `viking://user/resources/...`, `viking://user/{user_id}/resources` or `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources` or `viking://user/{user_id}/peers/{peer_id}/resources/...`.
@@ -437,7 +445,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
   -H "X-API-Key: <root-or-admin-key>" \
   -d '{
     "user_id": "bob",
-    "role": "user"
+    "role": "user",
+    "seed": "bob-seed"
   }'
 ```
 
@@ -449,7 +458,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-result = client.admin_register_user("acme", "bob", role="user")
+result = client.admin_register_user("acme", "bob", role="user", seed="bob-seed")
 print(f"User registered: {result['user_id']}")
 print(f"User key: {result.get('user_key', '(not exposed in trusted mode)')}")
 
@@ -470,7 +479,9 @@ if err != nil {
 }
 fmt.Println(result["user_id"])
 
+seed := "bob-seed"
 result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "user", &openviking.AdminRegisterUserOptions{
+    Seed: &seed,
     UserConfig: map[string]any{
         "add_targets": map[string]any{"resource_uri": "viking://user/resources/project-a"},
     },
@@ -483,6 +494,7 @@ result, err = client.AdminRegisterUserWithOptions(ctx, "acme", "bob-private", "u
 # Either ROOT or account ADMIN can execute
 # If using regular user's api_key who is an ADMIN of acme:
 ov admin register-user acme bob --role user
+ov admin register-user acme bob --role user --seed bob-seed
 # If using root_api_key (--sudo):
 ov --sudo admin register-user acme bob --role user
 
@@ -808,10 +820,12 @@ Regenerate a user's API key. The old key is immediately invalidated.
 |-----------|------|----------|---------|-------------|
 | account_id | str | Yes | - | Workspace ID |
 | user_id | str | Yes | - | User ID |
+| seed | str | No | `null` | Optional deterministic API key seed in the JSON request body. When set, the key secret is `sha256(user_id + "\0" + seed)` |
 
 **Notes:**
 - ADMIN can only regenerate keys for users in their own account
 - Old key is immediately invalidated, clients using it need to be updated
+- Omit `seed` for the default random regenerated key.
 
 #### 3. Usage Examples
 
@@ -824,7 +838,8 @@ POST /api/v1/admin/accounts/{account_id}/users/{user_id}/key
 ```bash
 curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users/bob/key \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: <root-or-admin-key>"
+  -H "X-API-Key: <root-or-admin-key>" \
+  -d '{"seed": "bob-new-seed"}'
 ```
 
 **Python SDK**
@@ -835,7 +850,7 @@ import openviking as ov
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
 
-result = client.admin_regenerate_key("acme", "bob")
+result = client.admin_regenerate_key("acme", "bob", seed="bob-new-seed")
 print(f"New user key: {result['user_key']}")
 ```
 
@@ -847,6 +862,11 @@ if err != nil {
     return err
 }
 fmt.Println(result["user_key"])
+
+seed := "bob-new-seed"
+result, err = client.AdminRegenerateKeyWithOptions(ctx, "acme", "bob", &openviking.AdminRegenerateKeyOptions{
+    Seed: &seed,
+})
 ```
 
 **CLI**
@@ -855,6 +875,7 @@ fmt.Println(result["user_key"])
 # Either ROOT or account ADMIN can execute
 # If using regular user's api_key who is an ADMIN of acme:
 ov admin regenerate-key acme bob
+ov admin regenerate-key acme bob --seed bob-new-seed
 # If using root_api_key (--sudo):
 ov --sudo admin regenerate-key acme bob
 ```

@@ -1,8 +1,10 @@
 import { h } from 'vue'
 import DefaultTheme from 'vitepress/theme'
+import type { EnhanceAppContext } from 'vitepress'
 import CopyMarkdownButton from './CopyMarkdownButton.vue'
 import LlmsTxtLink from './LlmsTxtLink.vue'
 import OpenVikingSearch from './OpenVikingSearch.vue'
+import { trackPageView } from './track'
 import './custom.css'
 
 type OpenVikingPreference = {
@@ -304,5 +306,16 @@ export default {
       'doc-footer-before': () => h(LlmsTxtLink),
       'nav-bar-content-before': () => h(OpenVikingSearch)
     })
+  },
+  enhanceApp({ router }: EnhanceAppContext) {
+    if (import.meta.env.SSR || typeof window === 'undefined') return
+
+    trackPageView(window.location.pathname)
+
+    const previousHook = router.onAfterRouteChanged
+    router.onAfterRouteChanged = (to: string) => {
+      previousHook?.(to)
+      trackPageView(to.split('?')[0].split('#')[0])
+    }
   }
 }

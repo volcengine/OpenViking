@@ -356,6 +356,22 @@ def resolve_with_override(config, detect: Callable[[], str]) -> str:
     return detect()
 
 
+def resolve_output_language_from_text(
+    text: str,
+    config=None,
+    *,
+    fallback_language: str = "en",
+) -> str:
+    """Resolve output language from text with an explicit fallback language.
+
+    Unlike ``resolve_output_language``, this helper does not consult locale or
+    timezone. Use it when an empty or low-signal text should not inherit the
+    runtime environment language.
+    """
+    fallback = (fallback_language or "en").strip() or "en"
+    return resolve_with_override(config, lambda: _detect_language_from_text(text, fallback))
+
+
 def strip_language_detection_noise(text: str) -> str:
     """Remove URI-like machine tokens that should not affect output language."""
     return _URI_LANGUAGE_NOISE_RE.sub(" ", text or "")
@@ -364,7 +380,7 @@ def strip_language_detection_noise(text: str) -> str:
 def resolve_output_language(text: str, config=None) -> str:
     """Resolve output language from text, honoring config override before detection."""
     fallback = _resolve_system_fallback_language("en")
-    return resolve_with_override(config, lambda: _detect_language_from_text(text, fallback))
+    return resolve_output_language_from_text(text, config=config, fallback_language=fallback)
 
 
 def resolve_output_language_from_conversation(conversation: str, config=None) -> str:

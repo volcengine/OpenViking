@@ -113,6 +113,8 @@ class TestVikingFSURITraversalGuard:
             "viking://user/",
             "/user",
             "user",
+            "viking://agent",
+            "viking://agent/",
         ],
     )
     async def test_rm_rejects_protected_namespace_roots_before_side_effects(

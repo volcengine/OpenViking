@@ -579,7 +579,7 @@ async fn s3_e2e_commit_noop_when_unchanged() {
         .await
         .expect("commit second")
     {
-        CommitResponse::Noop { commit_oid } => {
+        CommitResponse::Noop { commit_oid, .. } => {
             assert_eq!(commit_oid, first_oid, "Noop must report the unchanged HEAD oid");
         }
         other => panic!("expected Noop, got {other:?}"),

@@ -324,6 +324,20 @@ class TestPartFromDict:
         # The entire dict is converted to string
         assert "unknown" in part.text
 
+    def test_unknown_type_with_text_preserves_text(self):
+        """Unknown part types with text degrade to TextPart text."""
+        data = {
+            "type": "control",
+            "control_type": "batch_training_case_spec",
+            "payload": {"protocol": "v1"},
+            "text": "control text",
+        }
+
+        part = part_from_dict(data)
+
+        assert isinstance(part, TextPart)
+        assert part.text == "control text"
+
     def test_missing_type_defaults_to_text(self):
         """Test missing type defaults to TextPart."""
         data = {"text": "Hello"}
@@ -587,6 +601,43 @@ class TestMessageFromDict:
         assert len(msg.parts) == 1
         assert isinstance(msg.parts[0], TextPart)
         assert msg.parts[0].text == "Hello"
+
+    def test_from_dict_unknown_type_with_text_preserves_text(self):
+        """Unknown serialized part types with text degrade to TextPart."""
+        d = {
+            "id": "msg-control",
+            "role": "system",
+            "parts": [
+                {
+                    "type": "control",
+                    "control_type": "batch_training_case_spec",
+                    "payload": {"protocol": "v1"},
+                    "text": "# OpenViking Batch Training CaseSpec v1",
+                }
+            ],
+            "created_at": "2026-03-26T10:30:00Z",
+        }
+
+        msg = Message.from_dict(d)
+
+        assert len(msg.parts) == 1
+        assert isinstance(msg.parts[0], TextPart)
+        assert msg.parts[0].text == "# OpenViking Batch Training CaseSpec v1"
+
+    def test_from_dict_missing_part_type_defaults_to_text(self):
+        """Serialized dict parts without type should default to TextPart."""
+        d = {
+            "id": "msg-missing-type",
+            "role": "user",
+            "parts": [{"text": "hello"}],
+            "created_at": "2026-03-26T10:30:00Z",
+        }
+
+        msg = Message.from_dict(d)
+
+        assert len(msg.parts) == 1
+        assert isinstance(msg.parts[0], TextPart)
+        assert msg.parts[0].text == "hello"
 
     def test_from_dict_with_context_part(self):
         """Test from_dict with ContextPart."""

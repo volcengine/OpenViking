@@ -1,6 +1,6 @@
 # OpenViking Memory Extension for Pi Coding Agent
 
-Long-term semantic memory for [Pi](https://github.com/mariozechner/pi-coding-agent) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and sessions are committed for persistent memory extraction — all via pi's native extension API.
+Long-term semantic memory for [pi](https://github.com/earendil-works/pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and sessions are committed for persistent memory extraction — all via pi's native extension API.
 
 > Design informed by lessons from all three OpenViking agent plugins: synchronous recall from OpenClaw, production-hardened capture/ranking from Claude Code, and anti-patterns dodged from Hermes's stale prefetch approach. See [DESIGN.md](./DESIGN.md) for the full design spec with comparison tables and event flow diagrams.
 
@@ -8,7 +8,7 @@ Long-term semantic memory for [Pi](https://github.com/mariozechner/pi-coding-age
 
 ### Prerequisites
 
-- **Pi coding agent** installed (`npm i -g @mariozechner/pi-coding-agent`)
+- **pi coding agent** installed (`npm i -g @earendil-works/pi-coding-agent`)
 - **Node.js 18+** (for the extension's TypeScript runtime)
 - **An OpenViking server** reachable — local or remote
 
@@ -24,41 +24,48 @@ curl http://localhost:1933/health   # or your remote URL
 
 ### 2. Install the extension
 
-Copy the extension directory into pi's extension folder:
+Use the shared installer:
 
 ```bash
-mkdir -p ~/.pi/agent/extensions
-cp -r examples/pi-coding-agent-extension ~/.pi/agent/extensions/openviking
+bash examples/memory-plugin-shared/install.sh --harness pi
 ```
 
-Pi auto-discovers extensions in `~/.pi/agent/extensions/` — no explicit registration needed. The extension loads on next `pi` invocation.
+The installer copies the extension to `~/.pi/agent/extensions/openviking` and registers it with `pi install`. The extension loads on next `pi` invocation.
 
 ### 3. Configure (optional)
 
-The extension ships with defaults that work out-of-the-box for a local OpenViking server (`http://127.0.0.1:1933`, no auth). To connect to a remote server or tune behavior, edit `~/.pi/agent/extensions/openviking/config.json`:
+Credentials are resolved from `OPENVIKING_*` environment variables, `~/.openviking/ovcli.conf`, then `~/.openviking/ov.conf`. Run the setup wizard when you need to configure a remote server:
+
+```bash
+node ~/.pi/agent/extensions/openviking/scripts/setup.mjs
+```
+
+`~/.pi/agent/extensions/openviking/config.json` is for behavior knobs only:
 
 ```json
 {
   "enabled": true,
-  "endpoint": "https://your-openviking-server.example.com",
-  "apiKey": "<your-api-key>",
-  "account": "my-team",
-  "user": "alice",
-  "agentId": "pi"
+  "syncTurns": true,
+  "recallTokenBudget": 2000,
+  "scoreThreshold": 0.35,
+  "minQueryLength": 3,
+  "profileTokenBudget": 10000,
+  "resumeContextBudget": 32000,
+  "commitTokenThreshold": 20000
 }
 ```
 
-All config fields can also be overridden via environment variables:
+Credential environment variables:
 
-| Env Var                  | Config field     | Default                       |
-|--------------------------|------------------|-------------------------------|
-| `OPENVIKING_URL`         | `endpoint`       | `http://127.0.0.1:1933`       |
-| `OPENVIKING_API_KEY`     | `apiKey`         | `""` (no auth)                |
-| `OPENVIKING_ACCOUNT`     | `account`        | `""`                          |
-| `OPENVIKING_USER`        | `user`           | `""`                          |
-| `OPENVIKING_AGENT_ID`    | `agentId`        | `"pi"`                        |
+| Env Var | Meaning |
+|---------|---------|
+| `OPENVIKING_URL` | OpenViking server URL |
+| `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | Bearer token |
+| `OPENVIKING_ACCOUNT` | Trusted-mode account |
+| `OPENVIKING_USER` | Trusted-mode user |
+| `OPENVIKING_PEER_ID` | Actor peer id |
 
-Env vars take priority over `config.json`.
+API keys are sent as `Authorization: Bearer ...`. `OPENVIKING_PEER_ID` is sent as `X-OpenViking-Actor-Peer` and stored as `peer_id` on captured session messages.
 
 ### 4. Start Pi
 
@@ -77,50 +84,42 @@ All fields below live in `config.json`. Defaults are shown.
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
 | `enabled`                | `true`     | Set `false` to disable the extension entirely                            |
-| `endpoint`               | (local)    | OpenViking server URL                                                    |
-| `apiKey`                 | `""`       | API key for remote servers                                               |
-| `account`                | `""`       | Multi-tenant account (`X-OpenViking-Account`)                            |
-| `user`                   | `""`       | Multi-tenant user (`X-OpenViking-User`)                                  |
-| `agentId`                | `"pi"`     | Agent identity (`X-OpenViking-Agent`)                                    |
+| `syncTurns`              | `true`     | Enable auto-capture of conversation turns                                |
 
 ### Recall tuning
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `recallBudget`           | `2000`     | Token budget for inline recall content                                   |
+| `recallTokenBudget`      | `2000`     | Token budget for inline recall content                                   |
 | `recallMaxContentChars`  | `500`      | Per-item content cap for search results                                  |
 | `recallPreferAbstract`   | `true`     | Prefer L0 abstract over L2 full body when available                      |
 | `recallLimit`            | `6`        | Max memories to inject per prompt                                        |
-| `recallScoreThreshold`   | `0.35`     | Min relevance score (0–1)                                                |
-| `recallMinQueryLength`   | `3`        | Skip recall for queries shorter than N characters                        |
+| `scoreThreshold`         | `0.35`     | Min relevance score (0–1)                                                |
+| `minQueryLength`         | `3`        | Skip recall for queries shorter than N characters                        |
 
 ### Capture tuning
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `syncTurns`              | `true`     | Enable auto-capture of conversation turns                                |
 | `captureMode`            | `"semantic"` | `"semantic"` (always capture) or `"keyword"` (trigger-based)           |
 | `captureMaxLength`       | `24000`    | Max sanitized text length for the capture decision                       |
 | `captureAssistantTurns`  | `true`     | Include assistant turns (text + tool USE inputs)                         |
 | `captureToolResults`     | `false`    | Include tool result output (noisy — off by default)                      |
+| `captureToolMaxChars`    | `2000`     | Max captured output chars for one tool part                              |
 | `commitTokenThreshold`   | `20000`    | Pending-token threshold for client-driven commit                         |
-| `commitOnShutdown`       | `true`     | Auto-commit session on exit                                              |
+| `commitKeepRecentCount`  | `10`       | Live tail kept after commit                                              |
 
 ### Injection tuning
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `profileBudget`          | `10000`    | Token budget for user profile block                                      |
-| `resumeContextBudget`    | `2000`     | Token budget for archive overview on session resume                      |
-| `indexBudget`            | `2000`     | Token budget for the knowledge index (map of what OV knows)              |
+| `profileTokenBudget`     | `10000`    | Token budget for user profile block                                      |
+| `resumeContextBudget`    | `32000`    | Token budget for archive overview on session resume                      |
 
 ### Misc
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `mirrorMemoryWrites`     | `true`     | Mirror built-in memory writes into the OV session                        |
-| `writeQueueFlushInterval`| `5000`     | Write queue flush interval (ms)                                          |
-| `writeQueueFlushThreshold`| `5`       | Write queue flush after N turns                                          |
 | `bypassPatterns`         | `[]`       | Glob patterns to skip extension processing                               |
 | `logLevel`               | `"error"`  | `"silent"`, `"error"`, or `"info"`                                      |
 
@@ -151,16 +150,16 @@ The extension is a single directory of TypeScript files loaded by pi's `jiti` tr
 
 | Pi Event               | Extension Action                                                                 |
 |------------------------|----------------------------------------------------------------------------------|
-| `session_start`        | Health check → create/find OV session → build profile block → build memory index → register tools |
-| `before_agent_start`   | Fallback tool registration (for `pi -c` resume) + inject archive overview        |
-| `context`              | Search OV with current prompt → inject `<relevant-memories>` block               |
-| `turn_end`             | Extract user + assistant turns → queue writes to OV session                      |
+| `session_start`        | Health check → derive OV session → build profile/archive context → register tools |
+| `before_agent_start`   | Fallback tool registration (for `pi -c` resume) + inject session context         |
+| `context`              | Search OV with current prompt → inject `<openviking-context>` block              |
+| `turn_end`             | Extract branch entries → write or pending-queue OV session messages              |
 | `session_before_compact`| Commit pending messages before pi rewrites the transcript                        |
 | `session_shutdown`     | Final commit so the last window is archived                                      |
 
 ### Recall: Synchronous, Not Stale
 
-Unlike Hermes's stale prefetch (recall from previous turn's query, injected one turn late), this extension searches OpenViking with the **current** user prompt via pi's `context` event. Results are injected into the same turn as `<relevant-memories>` blocks. This means:
+Unlike Hermes's stale prefetch (recall from previous turn's query, injected one turn late), this extension searches OpenViking with the **current** user prompt via pi's `context` event. Results are injected into the same turn as `<openviking-context>` blocks. This means:
 
 - **First turn** of a session gets relevant context immediately
 - **Topic switches** within a session get correct recall
@@ -168,11 +167,11 @@ Unlike Hermes's stale prefetch (recall from previous turn's query, injected one 
 
 ### Memory Pollution Prevention
 
-Before pushing turns to OpenViking, the extension strips injected context blocks (`<openviking-context>`, `<relevant-memories>`, `<system-reminder>`) to prevent a self-referential pollution loop where recall context is captured back as user messages.
+Before pushing turns to OpenViking, shared capture sanitization strips injected context blocks such as `<openviking-context>` to prevent a self-referential pollution loop where recall context is captured back as user messages.
 
 ### Tool Use Preservation
 
-Tool capture preserves agent-authored inputs (`[tool: read]\n<path>`) and drops raw tool results by default. The memory extractor sees what the agent *did*, not megabytes of raw output.
+Tool capture preserves structured tool parts with bounded inputs and outputs. The memory extractor sees what the agent did without indexing unbounded raw output.
 
 ## LLM Tools
 

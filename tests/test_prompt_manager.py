@@ -69,7 +69,7 @@ def teardown_function() -> None:
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_profile_memory_template_keeps_profile_minimal_and_migrates_preferences():
+def test_profile_memory_template_includes_stable_identity_work_style_and_preferences():
     template_path = PromptManager._get_bundled_templates_dir() / "memory" / "profile.yaml"
     schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
     text = "\n".join(
@@ -79,19 +79,16 @@ def test_profile_memory_template_keeps_profile_minimal_and_migrates_preferences(
         ]
     )
 
-    assert "identity summary" in text
-    assert "5-8" in text
-    assert "Complete but minimal" in text
-    assert "Rewrite the full profile" in text
-    assert "Do not append" in text
-    assert "migrate" in text
-    assert "preferences" in text
-    assert "Do not keep concrete preference examples" in text
-    assert "patch" in text
-    assert "rewrite the whole profile" in text
+    assert '"who the user is"' in text
+    assert "identity, work style, and preferences" in text
+    assert "profession, experience level, technical background" in text
+    assert "communication style, work habits" in text
+    assert "Do NOT include transient conversation content" in text
+    assert "Each item: self-contained" in text
+    assert "Only record objective statuses" in text
 
 
-def test_preferences_memory_template_limits_topics_and_splits_when_too_large():
+def test_preferences_memory_template_keeps_topic_specific_preferences():
     template_path = PromptManager._get_bundled_templates_dir() / "memory" / "preferences.yaml"
     schema = yaml.safe_load(template_path.read_text(encoding="utf-8"))
     text = "\n".join(
@@ -102,14 +99,12 @@ def test_preferences_memory_template_limits_topics_and_splits_when_too_large():
         ]
     )
 
-    assert "Complete but minimal" in text
-    assert "3-8" in text
-    assert "800" in text
-    assert "split" in text
-    assert "semantic subtopics" in text
-    assert "evidenced by" in text
-    assert "as of" in text
-    assert "not become a second profile" in text
+    assert "what the user likes/dislikes or is accustomed to" in text
+    assert "specific preferences" in text
+    assert "specific topic" in text
+    assert "code style, communication style, tools, workflow" in text
+    assert "Store different topics as separate memory files" in text
+    assert "do not mix unrelated preferences" in text
 
 
 def test_prompt_manager_prefers_env_templates_dir_over_config(tmp_path, monkeypatch):

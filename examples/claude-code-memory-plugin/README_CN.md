@@ -2,17 +2,17 @@
 
 为 Claude Code 提供长期语义记忆，由 [OpenViking](https://github.com/volcengine/OpenViking) 驱动。每次用户输入前自动召回相关记忆，每轮对话结束后自动捕获上下文——模型不需要主动调用任何 MCP 工具。
 
-> 公开的 Claude Code 插件 marketplace 正在规划，暂未上线。当前请从本地源码安装（见下文）。
+> 插件可直接从仓库自带的 marketplace catalog 安装，无需单独的分发仓库。两条命令的远程安装方式见下文[手动安装](#手动安装)。
 
 ## 快速开始
 
 ### 一行安装（推荐）
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/claude-code-memory-plugin/setup-helper/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness claude
 ```
 
-仅支持 macOS 和 Linux。脚本会校验依赖、询问你接入**自托管**服务器还是**火山引擎 OpenViking Cloud**（`https://api.vikingdb.cn-beijing.volces.com/openviking`）、按需配置 `~/.openviking/ovcli.conf`（已存在则复用）、把仓库 clone 到 `~/.openviking/openviking-repo`、把 `claude` shell function 包装写进 rc，最后跑 `claude plugin install`。重复执行安全。
+仅支持 macOS 和 Linux。Claude Code 和 Codex 共用这一个安装脚本（去掉 `--harness claude` 可交互勾选）：它会依次询问界面语言（English/中文）、下载源（GitHub，或 GitHub 受限地区用 TOS 镜像——传 `--dist tos`）和 OpenViking 凭据，然后从远程 marketplace 安装 `openviking-memory`。stdio MCP 代理运行时读取 `ovcli.conf`，不再需要 shell wrapper 或 `.mcp.json` 渲染。重复执行安全。
 
 如果你更喜欢手动操作，按下面四步走。
 
@@ -47,16 +47,27 @@ curl http://localhost:1933/health   # 或者你的远程 URL
 
 #### 3. 安装插件
 
-仓库的 `examples/.claude-plugin/marketplace.json` 把本插件暴露为一个本地 marketplace 条目。在 OpenViking 仓库根目录：
+**远程 marketplace（推荐）** —— 无需 clone 仓库。仓库根目录自带 `.claude-plugin/marketplace.json`，其条目通过 `git-subdir` 拉取本插件：
+
+```bash
+claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
+claude plugin install openviking-memory@openviking
+```
+
+（`claude plugin marketplace add volcengine/OpenViking` 也可以，但会把整个仓库 clone 下来作为 marketplace。）
+
+如果跳过了第 2 步，装完后再配置连接：手写 `~/.openviking/ovcli.conf`、运行插件自带的交互向导 `node <插件目录>/scripts/setup.mjs`，或直接跑一行安装脚本。
+
+**本地目录（开发用）** —— 注册当前 checkout，`scripts/`、`hooks/` 的修改下次 hook 触发即生效、无需重装。在 OpenViking 仓库根目录：
 
 ```bash
 claude plugin marketplace add "$(pwd)/examples"
-claude plugin install claude-code-memory-plugin@openviking-plugins-local
+claude plugin install openviking-memory@openviking
 ```
 
-> 两条命令默认都装在 user scope —— 插件在任何目录下都生效。这里**不显式传 `--scope user`**，因为老的 Claude Code 2.0.x（比如 2.0.76）不识别这个 flag 会直接报错。在支持 `--scope` 的新版本上，如果装完发现落到了 local scope，可以跑一次 `claude plugin enable claude-code-memory-plugin@openviking-plugins-local --scope user` 提升到 user scope。
+> 两条命令默认都装在 user scope —— 插件在任何目录下都生效。这里**不显式传 `--scope user`**，因为老的 Claude Code 2.0.x（比如 2.0.76）不识别这个 flag 会直接报错。在支持 `--scope` 的新版本上，如果装完发现落到了 local scope，可以跑一次 `claude plugin enable openviking-memory@openviking --scope user` 提升到 user scope。
 >
-> marketplace 条目让 Claude Code 直接引用源码目录,对 `scripts/`、`hooks/`、配置文件的修改下次 hook 触发即生效,无需重装。但移动 / 重命名 / 删除源码目录,或 `git checkout` 到不含这些文件的分支,会立刻让插件失效。后续会发布公开 marketplace 以支持一键安装。
+> 目录模式注意：移动 / 重命名 / 删除源码目录，或 `git checkout` 到不含这些文件的分支，会立刻让插件失效。两种模式注册的 marketplace 都叫 `openviking`，插件 id 恒为 `openviking-memory@openviking`；切换模式时先移除 marketplace 再添加另一个来源（安装脚本会自动处理）。
 
 ##### 兼容模式（Claude Code < 2.0）
 
@@ -65,12 +76,9 @@ claude plugin install claude-code-memory-plugin@openviking-plugins-local
 ```bash
 PLUGIN_DIR="$(pwd)/examples/claude-code-memory-plugin"
 
+# stdio MCP 代理 —— 自己读 ovcli.conf / OPENVIKING_*，不再需要拼 header。
 claude mcp remove openviking -s user 2>/dev/null
-claude mcp add --scope user --transport http openviking \
-  '${OPENVIKING_URL:-http://127.0.0.1:1933}/mcp' \
-  --header 'Authorization: Bearer ${OPENVIKING_API_KEY:-}' \
-  --header 'X-OpenViking-Account: ${OPENVIKING_ACCOUNT:-}' \
-  --header 'X-OpenViking-User: ${OPENVIKING_USER:-}'
+claude mcp add --scope user openviking -- node "$PLUGIN_DIR/servers/mcp-proxy.mjs"
 
 # 把插件 hooks 合并进 ~/.claude/settings.json（自动备份）
 mkdir -p ~/.claude && [ -f ~/.claude/settings.json ] || echo '{}' > ~/.claude/settings.json
@@ -82,7 +90,7 @@ jq -e . /tmp/ov-settings.json >/dev/null && mv /tmp/ov-settings.json ~/.claude/s
 rm -f /tmp/ov-hooks.json
 ```
 
-`claude mcp add` 的所有参数**必须用单引号**保留 `${VAR}` 字面量 —— Claude Code 在启动 MCP server 时才展开它们，用的就是 shell wrapper 注入的环境变量。换成双引号 shell 会提前把它们展开成空串，配置就废了。一键安装脚本会自动做这一切，并在改 `~/.claude/settings.json` 前提示你。
+一行安装脚本在检测到 2.0 之前的版本时会自动执行以上流程（并在 `~/.openviking/openviking-repo` 保留一份源码 checkout 供上面的绝对路径引用）。
 
 #### 4. 启动 Claude Code
 
@@ -94,51 +102,11 @@ claude
 
 ## 配置 MCP
 
-插件的 hook 会自动读 `ovcli.conf` / `ov.conf`，但**自带的 MCP 服务器条目不会**——Claude Code 自己解析 `.mcp.json` 且只支持 `${VAR}` 替换，所以插件无法把配置文件里的值透明地注入 MCP URL 和认证头。
+插件的 hook 和 MCP 条目现在使用同一条配置链。仓库里的 `.mcp.json` 会把 `servers/mcp-proxy.mjs` 作为本地 stdio MCP server 启动；这个代理读取 `OPENVIKING_*`、`~/.openviking/ovcli.conf` 和 `~/.openviking/ov.conf`，再把 JSON-RPC 转发到 OpenViking 服务端原生 `/mcp` endpoint，并补齐认证与身份头。
 
-**判断树——你需要做点什么吗？**
+正常插件安装不需要额外 export，也不需要渲染 `.mcp.json`。更新 `ovcli.conf` 或相关 `OPENVIKING_*` 环境变量后重启 Claude Code，代理会和 hook 脚本命中同一个 OpenViking 目标。
 
-```
-你的 OpenViking 服务器在哪？
-├─ 本地 (127.0.0.1, 无鉴权)
-│    └─ ✅ 什么都不用做——自带 .mcp.json 已经能跑。
-└─ 远程
-     └─ ✅ 在 shell rc 里加下面这段 function 包装。
-```
-
-**推荐路径——用 function 包装 `claude`，调用时从 `ovcli.conf` 注入 env：**
-
-```bash
-# ~/.zshrc 或 ~/.bashrc
-claude() {
-  local _ov_conf="${OPENVIKING_CLI_CONFIG_FILE:-$HOME/.openviking/ovcli.conf}"
-  if [ -f "$_ov_conf" ] && command -v jq >/dev/null 2>&1; then
-    local _ov_url _ov_key
-    _ov_url=$(jq -r '.url // empty'     "$_ov_conf" 2>/dev/null)
-    _ov_key=$(jq -r '.api_key // empty' "$_ov_conf" 2>/dev/null)
-    OPENVIKING_URL="${OPENVIKING_URL:-$_ov_url}" \
-    OPENVIKING_API_KEY="${OPENVIKING_API_KEY:-$_ov_key}" \
-      command claude "$@"
-  else
-    command claude "$@"
-  fi
-}
-```
-
-重新 source rc（`source ~/.zshrc`，bash 用户改成 `source ~/.bashrc`）后重启 `claude`——`/mcp` 应该显示远程 URL 且认证有效。
-
-**封装其他启动命令。** 如果你通过别的命令启动 Claude Code——比如自定义包装脚本 `cc-custom`，或“基础命令 + 子命令”形式的多词启动器——安装脚本也能一并封装：在它的“Extra launch commands”提示里填写，或运行时传入 `OPENVIKING_CC_WRAP_EXTRA='cc-custom'`。该列表存在同一段 rc 标记块里（wrapper 读取为 `$OPENVIKING_CC_WRAP_EXTRA`）；对多词条目，只有前导参数匹配该子命令的调用才会注入凭据，该命令的其他用法原样放行。**填的是真实命令名，绝不是它的 shell 别名**：别名会在 wrapper 运行前先展开成目标命令，所以封装它指向的那个——`alias cc=claude` 本就走 base `claude` 封装（无需配置），而 `alias cc=claude-custom` 则把 `claude-custom` 填进去即可；别名名若被填入会被跳过。
-
-> **为什么用 function 而不是 `export`？** 全局 export 的 API Key 会被该 shell 派生的所有子进程继承——npm 脚本、构建工具、崩溃 dump、`/proc/<pid>/environ` 都会带上。函数包装把秘钥限定在 `claude` 进程树内。
->
-> 还没有 `ovcli.conf`？先按 [部署指南 → CLI 章节](../../docs/zh/guides/03-deployment.md#cli) 创建一份。
-
-**如果 function 包装不方便：**
-
-- **直接编辑插件的 `.mcp.json`**，把值硬编码进去。插件未来更新可能覆盖。
-- **在项目 `.mcp.json` 或 `~/.claude.json` 里另起一个 MCP 条目**。参考 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
-
-**配错的症状**：hook（auto-recall、auto-capture）正常工作，因为它们直接通过 Node 读配置文件；但按需 MCP 工具（`search`、`read`、`store`…）会静默连到 `http://127.0.0.1:1933`、认证头为空，且 `/mcp` 显示错误的 URL。
+代理要求 Node.js 18+。只有在 `OPENVIKING_DEBUG=1` 或 `claude_code.debug=true` 时才写 debug log；stdout 严格保留给 MCP 协议输出。
 
 ## 配置
 
@@ -151,11 +119,11 @@ claude() {
 3. **`ov.conf`** — 服务器配置（`~/.openviking/ov.conf` 或 `OPENVIKING_CONFIG_FILE`）；插件读 `server.url`、`server.root_api_key`，以及可选的遗留 `claude_code` 块（见 [遗留 `claude_code` 块](#遗留-claude_code-块在-ovconf-里)）
 4. **内置默认值**（`http://127.0.0.1:1933`，无鉴权）
 
-> ⚠️ **仅适用于 hooks。** 这条优先级链由 `scripts/config.mjs` 实现，hook 脚本消费。它**不适用**于 MCP 服务器注册——见 [配置 MCP](#配置-mcp)。
+同一组连接与身份字段也会被 stdio MCP 代理使用。
 
 ### 环境变量
 
-插件全部行为均可通过 env vars 配置。连接 / 身份变量同时影响 hook 和（通过 shell rc）MCP 服务器；调优变量仅影响 hook。
+插件全部行为均可通过 env vars 配置。连接 / 身份变量同时影响 hook 和 MCP 代理；调优变量仅影响 hook。
 
 #### 连接 / 身份
 
@@ -267,13 +235,15 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 示例：
 
 ```text
-OV ✓ │ ↩ 6 mem (0.92) · 50ms              本轮注入 6 条记忆，最高分 0.92
+OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem (0.92) · 50ms   注入 6 条记忆；模型 + 上下文占比
 OV ⚠ slow                                  探针超过 1s 预算（服务器可能在抽风）
 OV ✗ offline                               服务器不可达
-OV ⚡ bypass                                命中 OPENVIKING_BYPASS_SESSION*
+OV ⚡ bypass │ Fable 5 · ctx 42%            命中 OPENVIKING_BYPASS_SESSION*
 OV ✓ │ ✎ 573/20k · 2 arch                  待提交进度 + 本 session 已归档 2 次
 OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；今日累计归档 3 次
 ```
+
+`ctx` 百分比复刻 Claude Code 原生上下文指示器（自定义 statusLine 会替换掉原生那条），配色阈值与原生一致：`<70%` 灰、`70–89%` 黄、`≥90%` 红。不想显示可设 `OPENVIKING_STATUSLINE_CTX=off`。
 
 完整段位说明 + 个性化 recipe（隐藏段位、改色、与已有 statusline 组合、自定义段位），见 [`STATUSLINE.md`](./STATUSLINE.md)。
 
@@ -343,14 +313,14 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
      │   └───────────────────────┘   │           │     │  Server      │
      │                               │           │     │  (Python)    │
      │                  ┌────────────▼───────────▼───►│              │
-     │                  │  MCP tools (HTTP /mcp)      │              │
+     │                  │  MCP tools (stdio proxy→/mcp)              │
      │                  │  search / read / store / …  │              │
      └─────────────────►│                             │              │
         OV session      └─────────────────────────────►              │
         context inject                                └──────────────┘
 ```
 
-没有内置 MCP server，没有 TypeScript 编译步骤，也没有运行时 npm 引导。Hook 都是直接走 HTTP 调 OpenViking 的 `.mjs` 文件；MCP 来自 OpenViking 服务器自身的 `/mcp` endpoint。
+没有 TypeScript 编译步骤，也没有运行时 npm 引导。Hook 都是直接走 HTTP 调 OpenViking 的 `.mjs` 文件；MCP 使用 `servers/mcp-proxy.mjs` 作为零依赖 stdio 桥接，转发到 OpenViking 服务器自身的 `/mcp` endpoint。
 
 首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<sha256(cc_session_id)>`，所以 resume / compact / 多 hook 事件都打到同一个 session，OV 的 `auto_commit_threshold` 自然驱动归档与记忆抽取。
 
@@ -378,7 +348,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 
 ### 服务器暴露的 MCP 工具
 
-插件的 `.mcp.json` 连到 OpenViking 服务器原生 HTTP MCP endpoint `/mcp`，服务器暴露 9 个 Claude 可按需调用的工具：
+插件的 `.mcp.json` 启动本地 stdio 代理，代理再连到 OpenViking 服务器原生 HTTP MCP endpoint `/mcp`。服务器暴露 9 个 Claude 可按需调用的工具：
 
 | 工具           | 说明                                                |
 |----------------|----------------------------------------------------|
@@ -402,6 +372,8 @@ claude-code-memory-plugin/
 │   └── plugin.json          # plugin manifest
 ├── hooks/
 │   └── hooks.json           # 7 个 hook 注册
+├── servers/
+│   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp 桥接
 ├── scripts/
 │   ├── config.mjs           # 共享配置加载（env > ovcli.conf > ov.conf）
 │   ├── debug-log.mjs        # 写 ~/.openviking/logs/cc-hooks.log
@@ -417,7 +389,7 @@ claude-code-memory-plugin/
 │   └── lib/
 │       ├── ov-session.mjs   # OV HTTP 客户端 + session 帮助 + bypass 检查
 │       └── async-writer.mjs # 写路径 detach-worker 帮助
-├── .mcp.json                # MCP 配置（HTTP /mcp on OpenViking）
+├── .mcp.json                # MCP 配置（本地 stdio 代理）
 ├── package.json             # 仅 type:module 标记，无运行时依赖
 └── README.md
 ```

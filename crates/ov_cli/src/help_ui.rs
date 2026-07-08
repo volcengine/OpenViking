@@ -68,9 +68,11 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "read",
     "write",
     "add-memory",
+    "set-tags",
 ];
 
-const FILESYSTEM: &[HelpCommand] = help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "get"];
+const FILESYSTEM: &[HelpCommand] =
+    help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "attrs", "get"];
 
 const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
     "find", "search", "grep", "glob", "abstract", "overview", "read"
@@ -322,6 +324,30 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
     },
     CommandHelpSpec {
+        path: &["attrs"],
+        purpose: "Get or update logical extended attributes for a resource.",
+        examples: &[
+            HelpItem {
+                label: "ov attrs get viking://projects/acme/spec.md",
+                description: "Show all logical attributes for a resource.",
+            },
+            HelpItem {
+                label: "ov attrs set-tags viking://projects/acme/spec.md --tags team=search",
+                description: "Set retrieval tags on a resource.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov stat <uri>",
+                description: "Inspect resource metadata.",
+            },
+            HelpItem {
+                label: "ov find \"query\" -u <uri>",
+                description: "Search with updated context.",
+            },
+        ],
+    },
+    CommandHelpSpec {
         path: &["read"],
         purpose: "Read exact Level 2 file content from a Viking URI.",
         examples: &[HelpItem {
@@ -386,6 +412,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Inspect processing if not using --wait.",
             },
         ],
+    },
+    CommandHelpSpec {
+        path: &["set-tags"],
+        purpose: "Update explicit retrieval tags for a file or directory.",
+        examples: &[
+            HelpItem {
+                label: "ov set-tags viking://resources/proj --tags env=prod,team=search",
+                description: "Replace tags on a directory.",
+            },
+            HelpItem {
+                label: "ov set-tags viking://resources/proj --tags env=staging --mode append",
+                description: "Append (merge) tags without dropping existing keys.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov find \"query\" -u <uri>",
+            description: "Verify the tags influence retrieval.",
+        }],
     },
     CommandHelpSpec {
         path: &["get"],
@@ -575,6 +619,54 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov snapshot show <commit>",
             description: "Inspect a commit from the log.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "ignore-get"],
+        purpose: "Show the account-level .ovgitignore content.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot ignore-get",
+                description: "Print the .ovgitignore content to stdout.",
+            },
+            HelpItem {
+                label: "ov snapshot ignore-get -o json",
+                description: "Return the content wrapped in the standard JSON envelope.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot ignore-set --content \"*.log\"",
+            description: "Update the ignore rules.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "ignore-set"],
+        purpose: "Set the account-level .ovgitignore content (overwrites).",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot ignore-set --content \"*.log\"",
+                description: "Ignore all .log files from future commits.",
+            },
+            HelpItem {
+                label: "ov snapshot ignore-set --file ./my-rules",
+                description: "Read the content from a file (--file takes precedence over --content).",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot commit -m \"with ignore\"",
+            description: "Commit; matching files are excluded (see the `ignored` count).",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "ignore-delete"],
+        purpose: "Delete the account-level .ovgitignore file (idempotent).",
+        examples: &[HelpItem {
+            label: "ov snapshot ignore-delete",
+            description: "Remove the ignore rules; missing is success.",
+        }],
+        next_steps: &[HelpItem {
+            label: "ov snapshot ignore-get",
+            description: "Confirm the rules are gone (returns an empty string).",
         }],
     },
     CommandHelpSpec {
@@ -1150,6 +1242,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov admin register-user <account> <user>",
                 description: "Register a user in an account.",
+            },
+            HelpItem {
+                label: "ov admin regenerate-key <account> <user> --seed <seed>",
+                description: "Regenerate a predictable API key from a seed.",
             },
             HelpItem {
                 label: "ov admin migrate --sudo",

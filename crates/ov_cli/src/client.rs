@@ -279,7 +279,7 @@ impl HttpClient {
             "mode": mode,
             "recursive": recursive,
         });
-        self.post("/api/v1/content/set_tags", &body).await
+        self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
     fn build_write_body(
@@ -462,6 +462,11 @@ impl HttpClient {
     pub async fn stat(&self, uri: &str) -> Result<serde_json::Value> {
         let params = vec![("uri".to_string(), uri.to_string())];
         self.get("/api/v1/fs/stat", &params).await
+    }
+
+    pub async fn attrs(&self, uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/fs/attrs", &params).await
     }
 
     // ============ Search Methods ============
@@ -1246,6 +1251,7 @@ impl HttpClient {
         &self,
         account_id: &str,
         admin_user_id: &str,
+        seed: Option<&str>,
         user_config: Option<&Value>,
     ) -> Result<Value> {
         let mut body = Map::new();
@@ -1259,6 +1265,9 @@ impl HttpClient {
         );
         if let Some(config) = user_config {
             body.insert("user_config".to_string(), config.clone());
+        }
+        if let Some(seed) = seed {
+            body.insert("seed".to_string(), Value::String(seed.to_string()));
         }
         self.post("/api/v1/admin/accounts", &Value::Object(body))
             .await
@@ -1278,6 +1287,7 @@ impl HttpClient {
         account_id: &str,
         user_id: &str,
         role: &str,
+        seed: Option<&str>,
         user_config: Option<&Value>,
     ) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/users", account_id);
@@ -1286,6 +1296,9 @@ impl HttpClient {
         body.insert("role".to_string(), Value::String(role.to_string()));
         if let Some(config) = user_config {
             body.insert("user_config".to_string(), config.clone());
+        }
+        if let Some(seed) = seed {
+            body.insert("seed".to_string(), Value::String(seed.to_string()));
         }
         self.post(&path, &Value::Object(body)).await
     }
@@ -1327,12 +1340,21 @@ impl HttpClient {
         self.put(&path, &body).await
     }
 
-    pub async fn admin_regenerate_key(&self, account_id: &str, user_id: &str) -> Result<Value> {
+    pub async fn admin_regenerate_key(
+        &self,
+        account_id: &str,
+        user_id: &str,
+        seed: Option<&str>,
+    ) -> Result<Value> {
         let path = format!(
             "/api/v1/admin/accounts/{}/users/{}/key",
             account_id, user_id
         );
-        self.post(&path, &serde_json::json!({})).await
+        let body = match seed {
+            Some(seed) => serde_json::json!({ "seed": seed }),
+            None => serde_json::json!({}),
+        };
+        self.post(&path, &body).await
     }
 
     pub async fn admin_migrate(&self, cleanup: bool) -> Result<Value> {
@@ -1544,12 +1566,24 @@ impl HttpClient {
         self.get("/api/v1/snapshot/log", &params).await
     }
 
+    pub async fn snapshot_ignore_get(&self) -> Result<Value> {
+        self.get("/api/v1/snapshot/ignore", &[]).await
+    }
+
+    pub async fn snapshot_ignore_set(&self, content: &str) -> Result<Value> {
+        self.put("/api/v1/snapshot/ignore", &serde_json::json!({ "content": content }))
+            .await
+    }
+
+    pub async fn snapshot_ignore_delete(&self) -> Result<Value> {
+        self.delete("/api/v1/snapshot/ignore", &[]).await
+    }
+
     pub async fn snapshot_show(
         &self,
         target_ref: &str,
         path: Option<&str>,
-    ) -> Result<SnapshotShowResult> {
-        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
+    ) -> Result<SnapshotShowResult> {        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
         let mut query: Vec<(String, String)> = vec![("target_ref".to_string(), target_ref.to_string())];
         if let Some(p) = path {
             query.push(("path".to_string(), p.to_string()));
@@ -1791,6 +1825,39 @@ mod tests {
         assert!(request.starts_with("GET /api/v1/fs/tree?"));
         assert!(!request.contains("tz="));
         assert!(!request.contains("include_mod_time_iso="));
+    }
+
+    #[tokio::test]
+    async fn admin_seed_payloads_are_sent() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .admin_create_account("acct", "admin", Some("admin-seed"), None)
+            .await
+            .expect("create account should succeed");
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/admin/accounts "));
+        assert!(request.contains(r#""seed":"admin-seed""#));
+
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .admin_register_user("acct", "alice", "admin", Some("alice-seed"), None)
+            .await
+            .expect("register user should succeed");
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/admin/accounts/acct/users "));
+        assert!(request.contains(r#""seed":"alice-seed""#));
+
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .admin_regenerate_key("acct", "alice", Some("new-seed"))
+            .await
+            .expect("regenerate key should succeed");
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/admin/accounts/acct/users/alice/key "));
+        assert!(request.contains(r#""seed":"new-seed""#));
     }
 
     #[test]

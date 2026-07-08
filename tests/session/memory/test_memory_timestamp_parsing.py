@@ -88,8 +88,30 @@ def test_message_range_uses_peer_id_when_present():
         ]
     )
 
-    assert "[web-visitor-alice]: invoice follow-up" in msg_range.pretty_print()
-    assert "[default]: invoice follow-up" not in msg_range.pretty_print()
+    assert "**web-visitor-alice**: invoice follow-up" in msg_range.pretty_print()
+    assert "**default**: invoice follow-up" not in msg_range.pretty_print()
+
+
+def test_message_range_renders_markdown_visible_speakers():
+    msg_range = MessageRange(
+        [
+            [
+                Message(
+                    id="msg-self",
+                    role="user",
+                    parts=[TextPart(text="我今天去了趟北京")],
+                ),
+                Message(
+                    id="msg-peer",
+                    role="user",
+                    parts=[TextPart(text="我今天去了趟北京")],
+                    peer_id="xiaomei",
+                ),
+            ]
+        ]
+    )
+
+    assert msg_range.pretty_print() == ("**user**: 我今天去了趟北京\n**xiaomei**: 我今天去了趟北京")
 
 
 def test_extraction_context_chunks_long_text_and_preserves_decimal_numbers(stub_provider_config):
@@ -154,7 +176,7 @@ def test_message_range_merges_adjacent_chunks_for_same_speaker():
         },
     )
 
-    assert msg_range.pretty_print() == "[web-visitor-alice]: first chunk. second chunk."
+    assert msg_range.pretty_print() == "**web-visitor-alice**: first chunk. second chunk."
 
 
 def test_message_range_keeps_regular_same_speaker_messages_separate():
@@ -178,7 +200,7 @@ def test_message_range_keeps_regular_same_speaker_messages_separate():
     )
 
     assert msg_range.pretty_print() == (
-        "[web-visitor-alice]: first message\n[web-visitor-alice]: second message"
+        "**web-visitor-alice**: first message\n**web-visitor-alice**: second message"
     )
 
 
@@ -212,7 +234,7 @@ def test_message_range_keeps_different_source_chunks_separate():
     )
 
     assert msg_range.pretty_print() == (
-        "[web-visitor-alice]: first source chunk...\n[web-visitor-alice]: second source chunk..."
+        "**web-visitor-alice**: first source chunk...\n**web-visitor-alice**: second source chunk..."
     )
 
 
@@ -231,7 +253,7 @@ def test_message_range_does_not_treat_original_chunk_like_id_as_chunk():
     )
 
     assert msg_range.pretty_print() == (
-        "[web-visitor-alice]: original message id contains chunk marker"
+        "**web-visitor-alice**: original message id contains chunk marker"
     )
 
 
@@ -253,7 +275,7 @@ def test_message_range_marks_middle_chunk_as_abbreviated():
         },
     )
 
-    assert msg_range.pretty_print() == "[web-visitor-alice]: ...middle chunk..."
+    assert msg_range.pretty_print() == "**web-visitor-alice**: ...middle chunk..."
 
 
 def test_peer_id_routes_peer_memory_for_all_role_selected_types(stub_provider_config):

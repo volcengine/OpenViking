@@ -1143,23 +1143,6 @@ class ReindexExecutor:
                     counters.failed_records += 1
                     counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
                     continue
-                for chunk_uri, chunk_text in self._chunk_memory_body(file_uri, body):
-                    counters.scanned_records += 1
-                    try:
-                        await self._upsert_context(
-                            uri=chunk_uri,
-                            parent_uri=file_uri,
-                            abstract=detail_abstract,
-                            vector_text=chunk_text,
-                            is_leaf=True,
-                            context_type=ContextType.MEMORY.value,
-                            level=ContextLevel.DETAIL,
-                            ctx=ctx,
-                        )
-                        counters.rebuilt_records += 1
-                    except Exception as exc:
-                        counters.failed_records += 1
-                        counters.warnings.append(f"Failed to reindex {chunk_uri} vector: {exc}")
                 continue
 
             try:
@@ -1426,28 +1409,6 @@ class ReindexExecutor:
             return str(content or "")
         except Exception:
             return ""
-
-    def _chunk_memory_body(self, uri: str, body: str) -> Iterable[tuple[str, str]]:
-        semantic = get_openviking_config().semantic
-        chunk_chars = semantic.memory_chunk_chars
-        overlap = semantic.memory_chunk_overlap
-        if len(body) <= chunk_chars:
-            return []
-
-        chunks: list[str] = []
-        start = 0
-        while start < len(body):
-            end = start + chunk_chars
-            if end < len(body):
-                boundary = body.rfind("\n\n", start, end)
-                if boundary > start + chunk_chars // 2:
-                    end = boundary + 2
-            chunks.append(body[start:end].strip())
-            start = end - overlap
-            if start >= len(body):
-                break
-
-        return [(f"{uri}#chunk_{idx:04d}", chunk) for idx, chunk in enumerate(chunks) if chunk]
 
     def _best_non_empty(self, *values: str) -> str:
         for value in values:
