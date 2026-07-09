@@ -162,8 +162,17 @@ def build_alfworld_env(
         config["env"]["type"] = "AlfredTWEnv"
         config["env"]["task_types"] = _task_type_ids_from_gamefiles(specific_gamefiles)
         train_eval = "train" if is_train else normalize_alfworld_split(eval_dataset)
-        env = get_environment("AlfredTWEnv")(config, train_eval=train_eval)
         resolved_gamefiles = _resolve_alfworld_gamefiles(specific_gamefiles)
+        if resolved_gamefiles:
+            _validate_alfworld_gamefiles(resolved_gamefiles)
+            env = _instantiate_alfworld_env_with_gamefiles(
+                get_environment("AlfredTWEnv"),
+                config,
+                train_eval=train_eval,
+                gamefiles=resolved_gamefiles,
+            )
+        else:
+            env = get_environment("AlfredTWEnv")(config, train_eval=train_eval)
         if resolved_gamefiles:
             env.game_files = resolved_gamefiles
             env.num_games = len(resolved_gamefiles)
@@ -175,6 +184,35 @@ def build_alfworld_env(
                 f"(current: {data_root or '<unset>'}) or pass explicit gamefiles."
             )
         return env.init_env(batch_size=env_num)
+
+
+def _instantiate_alfworld_env_with_gamefiles(
+    env_cls: Any,
+    config: dict[str, Any],
+    *,
+    train_eval: str,
+    gamefiles: list[str],
+) -> Any:
+    """Instantiate AlfredTWEnv without scanning the whole split.
+
+    Official ALFWorld's ``AlfredTWEnv.__init__`` always walks the complete
+    train/eval split and loads every ``traj_data.json`` before callers can
+    override ``env.game_files``. OpenViking cases already resolve to explicit
+    ``game.tw-pddl`` files, so scanning the whole split is unnecessary and can
+    make a good case fail because of an unrelated partial/corrupt dataset file.
+    """
+
+    class ExplicitGamefileAlfredTWEnv(env_cls):  # type: ignore[misc, valid-type]
+        def collect_game_files(self, verbose: bool = False) -> None:  # noqa: ARG002
+            self.game_files = list(gamefiles)
+            self.num_games = len(self.game_files)
+            mode = "Training" if self.train_eval == "train" else "Evaluating"
+            print(
+                f"{mode} with {len(self.game_files)} explicit ALFWorld "
+                f"game{'s' if len(self.game_files) != 1 else ''}"
+            )
+
+    return ExplicitGamefileAlfredTWEnv(config, train_eval=train_eval)
 
 
 def _patch_textworld_alfworld_compat() -> None:
@@ -531,6 +569,22 @@ def _resolve_alfworld_gamefiles(gamefiles: list[str] | None) -> list[str] | None
     if gamefiles is None:
         return None
     return [_resolve_alfworld_gamefile(gamefile) for gamefile in gamefiles]
+
+
+def _validate_alfworld_gamefiles(gamefiles: list[str]) -> None:
+    for gamefile in gamefiles:
+        path = Path(gamefile)
+        if not path.exists():
+            raise FileNotFoundError(f"ALFWorld gamefile does not exist: {path}")
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                gamedata = json.load(fh)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid ALFWorld gamefile JSON: {path}: {exc}") from exc
+        if not isinstance(gamedata, dict):
+            raise RuntimeError(f"Invalid ALFWorld gamefile JSON object: {path}")
+        if gamedata.get("solvable") is False:
+            raise RuntimeError(f"ALFWorld gamefile is marked unsolvable: {path}")
 
 
 def _task_type_ids_from_gamefiles(gamefiles: list[str] | None) -> list[int]:

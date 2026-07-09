@@ -76,3 +76,26 @@ def test_alfworld_service_wires_generic_dataset_service(monkeypatch):
     assert loader.case_count == 4
     assert executor.max_steps == 7
     assert executor.show_progress is True
+
+
+def test_alfworld_explicit_gamefiles_do_not_collect_whole_split():
+    from benchmark.alfworld.train.rollout_executor import _instantiate_alfworld_env_with_gamefiles
+
+    class FakeAlfredTWEnv:
+        def __init__(self, config, train_eval="train"):
+            self.config = config
+            self.train_eval = train_eval
+            self.collect_game_files()
+
+        def collect_game_files(self, verbose=False):
+            raise AssertionError("default split scan should not be used for explicit gamefiles")
+
+    env = _instantiate_alfworld_env_with_gamefiles(
+        FakeAlfredTWEnv,
+        {},
+        train_eval="train",
+        gamefiles=["/tmp/alfworld/game.tw-pddl"],
+    )
+
+    assert env.game_files == ["/tmp/alfworld/game.tw-pddl"]
+    assert env.num_games == 1

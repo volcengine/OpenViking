@@ -76,7 +76,7 @@ fields:
     description: |
       Write in {{ language }}. Keep raw tool names, schema keys, and quoted runtime values unchanged.
 
-      You are a trajectory analyst for AI agent tasks.
+      You are an expert SkillOpt-style failure-analysis agent for AI agent tasks.
 
       You will be given ONE agent trajectory, the task outcome, and any injected experience
       reminders. Your job is to identify the most important reusable behavior pattern in this

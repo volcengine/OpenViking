@@ -70,11 +70,9 @@ user_prompt: |
     "need_followup": true,
     "root_cause_quality": "<surface_level|too_late_boundary|wrong_scope|missing_scope_freeze|missing_scope_separation|missing_source_binding|not_injectable|over_broad|unsafe_runtime_wording|unclear>",
     "reason": "<brief diagnosis of the deepest missing cause>",
-    "followup_message": "<one concise user message that asks the extractor to rewrite the complete JSON schema output, with a deeper source-bound ideal runtime experience; mention the exact missing root-cause dimensions to fix>"
+    "followup_message": "<one concise diagnostic follow-up that explains which root-cause dimensions are missing and what must be re-diagnosed>"
   }
 
-  The followup_message must instruct the extractor to output the complete JSON
-  object matching the original schema, not a patch or explanation.
   When failing, make the followup diagnostic, not cosmetic. It should say:
   - do not merely improve wording;
   - re-diagnose the earliest preventable boundary;
