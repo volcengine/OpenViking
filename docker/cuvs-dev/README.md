@@ -2,9 +2,9 @@
 
 This lightweight image contains cuVS, CuPy, the OpenViking local VectorDB
 native engine, and the minimal Python dependencies needed by the cuVS smoke
-and integration tests. It deliberately excludes the server, bot, Web UI, and
-unrelated ingestion dependencies. It does not encode any cluster-specific
-configuration.
+and vector benchmark harnesses. It deliberately excludes the full server,
+bot, Web UI, and unrelated ingestion dependencies. It does not encode any
+cluster-specific configuration.
 
 Build it from the repository root:
 
