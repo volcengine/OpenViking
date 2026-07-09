@@ -71,6 +71,7 @@ class CuVSSearchTelemetry:
     algorithm: str
     auto_mode: bool
     dtype: str = "float32"
+    max_concurrent_gpu_searches: int = 1
     route_reason: str = "pending"
     filter_kind: str = "none"
     filter_cache_hit: bool = False
@@ -95,6 +96,7 @@ class CuVSSearchTelemetry:
             "algorithm": self.algorithm,
             "auto_mode": self.auto_mode,
             "dtype": self.dtype,
+            "max_concurrent_gpu_searches": self.max_concurrent_gpu_searches,
             "route_reason": self.route_reason,
             "filter_kind": self.filter_kind,
             "filter_cache_hit": self.filter_cache_hit,
@@ -390,6 +392,10 @@ class _CuVSRuntime:
         self.build_params = dict(build_params)
         self.search_params = dict(search_params)
         self._thread_resources = threading.local()
+        self._use_explicit_resources = False
+
+    def set_max_concurrent_searches(self, value: int) -> None:
+        self._use_explicit_resources = int(value) > 1
 
     def memory_info(self) -> Tuple[int, int]:
         free_bytes, total_bytes = self.cp.cuda.runtime.memGetInfo()
@@ -452,7 +458,8 @@ class _CuVSRuntime:
         mask: Optional[Any],
     ) -> Tuple[List[int], List[float]]:
         index = runtime_index.index
-        resources = self._resources()
+        resources = self._resources() if self._use_explicit_resources else None
+        resource_kwargs = {"resources": resources} if resources is not None else {}
         queries = self.cp.asarray([query], dtype=self.device_dtype)
         if mask is None:
             prefilter = None
@@ -465,8 +472,8 @@ class _CuVSRuntime:
                 index,
                 queries,
                 limit,
-                resources=resources,
                 prefilter=prefilter,
+                **resource_kwargs,
             )
         else:
             search_params = dict(self.search_params)
@@ -479,10 +486,11 @@ class _CuVSRuntime:
                 index,
                 queries,
                 limit,
-                resources=resources,
                 filter=prefilter,
+                **resource_kwargs,
             )
-        resources.sync()
+        if resources is not None:
+            resources.sync()
         host_neighbors = self.cp.asnumpy(neighbors)[0].tolist()
         host_distances = self.cp.asnumpy(distances)[0].tolist()
         return [int(item) for item in host_neighbors], [float(item) for item in host_distances]
@@ -574,6 +582,9 @@ class CuVSDenseIndex:
         self.filter_cache_size = int(config.get("filter_cache_size", 16))
         if self.filter_cache_size < 0:
             raise ValueError("cuVS filter_cache_size cannot be negative")
+        self.max_concurrent_gpu_searches = int(config.get("max_concurrent_gpu_searches", 1))
+        if self.max_concurrent_gpu_searches < 1:
+            raise ValueError("cuVS max_concurrent_gpu_searches must be at least 1")
         self.auto_memory_reserve_bytes = (
             int(config.get("auto_memory_reserve_mb", 1024)) * 1024 * 1024
         )
@@ -608,6 +619,11 @@ class CuVSDenseIndex:
             search_params,
             self.dtype,
         )
+        set_max_concurrent_searches = getattr(
+            self._runtime, "set_max_concurrent_searches", None
+        )
+        if set_max_concurrent_searches is not None:
+            set_max_concurrent_searches(self.max_concurrent_gpu_searches)
         self._records: Dict[int, _Record] = {}
         self._snapshot: Optional[_CuVSIndexSnapshot] = None
         self._dirty = True
@@ -616,6 +632,7 @@ class CuVSDenseIndex:
         self._lock = threading.RLock()
         self._idle_condition = threading.Condition(self._lock)
         self._active_searches = 0
+        self._gpu_search_gate = threading.BoundedSemaphore(self.max_concurrent_gpu_searches)
         self._filter_layout_lock = threading.Lock()
         self._records_generation = 0
         self._filter_layout_generation = -1
@@ -1053,6 +1070,31 @@ class CuVSDenseIndex:
     ) -> Tuple[List[int], List[float]]:
         if limit <= 0:
             return [], []
+        queue_started = time.perf_counter()
+        self._gpu_search_gate.acquire()
+        if telemetry is not None:
+            telemetry.queue_ms += (time.perf_counter() - queue_started) * 1000.0
+        try:
+            return self._search_admitted(
+                query_vector,
+                limit,
+                filters,
+                native_filter_resolver,
+                native_filter_layout_registrar,
+                telemetry,
+            )
+        finally:
+            self._gpu_search_gate.release()
+
+    def _search_admitted(
+        self,
+        query_vector: Sequence[float],
+        limit: int,
+        filters: Optional[Mapping[str, Any]],
+        native_filter_resolver: Optional[NativeFilterResolver] = None,
+        native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
+        telemetry: Optional[CuVSSearchTelemetry] = None,
+    ) -> Tuple[List[int], List[float]]:
         query = self._prepare_vector(query_vector)
         if self.auto_memory and native_filter_layout_registrar is not None:
             self._ensure_native_filter_layout(native_filter_layout_registrar)

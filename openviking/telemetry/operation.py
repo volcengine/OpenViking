@@ -230,6 +230,9 @@ class TelemetrySummaryBuilder:
                 summary["vector"]["cuvs"] = {
                     "algorithm": gauges.get("vector.cuvs.algorithm", ""),
                     "dtype": gauges.get("vector.cuvs.dtype", "float32"),
+                    "max_concurrent_gpu_searches": cls._i(
+                        gauges.get("vector.cuvs.max_concurrent_gpu_searches"), 1
+                    ),
                     "auto_mode": cls._bool(gauges.get("vector.cuvs.auto_mode"), False),
                     "route_reason": gauges.get("vector.cuvs.route_reason", ""),
                     "filter_kind": gauges.get("vector.cuvs.filter_kind", "none"),

@@ -154,6 +154,14 @@ class CuVSConfig(BaseModel):
             "Set to zero to disable caching."
         ),
     )
+    max_concurrent_gpu_searches: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Maximum in-flight cuVS GPU search calls per index. Host-side filter and "
+            "snapshot work remains concurrent; increase only after hardware-specific tuning."
+        ),
+    )
     auto_background_rebuild: bool = Field(
         default=False,
         description=(

@@ -183,6 +183,7 @@ summary 顶层这 3 个基础字段总会存在：
 | --- | --- |
 | `summary.vector.cuvs.algorithm` | cuVS 算法，例如 `brute_force` 或 `cagra` |
 | `summary.vector.cuvs.dtype` | GPU dataset 和 query dtype：`float32` 或 `float16` |
+| `summary.vector.cuvs.max_concurrent_gpu_searches` | 单 index 配置的 in-flight GPU search 上限 |
 | `summary.vector.cuvs.auto_mode` | 是否启用了自动 CPU/GPU 路由 |
 | `summary.vector.cuvs.route_reason` | 最终路由，例如 `cuvs`、`native_filter_threshold`、`native_rebuild_pending` 或 `native_memory_budget` |
 | `summary.vector.cuvs.filter_kind` | 低基数 filter 类型：`none`、`scalar` 或 `path` |
@@ -195,7 +196,7 @@ summary 顶层这 3 个基础字段总会存在：
 | `summary.vector.cuvs.memory_usable_bytes` | 扣除配置 reserve 后可用于 build 的显存 |
 | `summary.vector.cuvs.total_ms` | dense 路由与检索总耗时 |
 | `summary.vector.cuvs.preflight_ms` | native filter preflight 耗时 |
-| `summary.vector.cuvs.queue_ms` | 等待当前 cuVS search lock 的耗时 |
+| `summary.vector.cuvs.queue_ms` | 等待单 index GPU search gate 的耗时 |
 | `summary.vector.cuvs.build_ms` | 发生 build 时的 GPU 准入与建索引耗时 |
 | `summary.vector.cuvs.filter_prepare_ms` | 准备或读取 device filter 的耗时 |
 | `summary.vector.cuvs.gpu_search_ms` | cuVS search 耗时 |

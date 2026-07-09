@@ -184,6 +184,7 @@ values, or URI contents.
 | --- | --- |
 | `summary.vector.cuvs.algorithm` | cuVS algorithm, such as `brute_force` or `cagra` |
 | `summary.vector.cuvs.dtype` | GPU dataset and query dtype, `float32` or `float16` |
+| `summary.vector.cuvs.max_concurrent_gpu_searches` | Configured per-index in-flight GPU search limit |
 | `summary.vector.cuvs.auto_mode` | Whether automatic CPU/GPU routing was enabled |
 | `summary.vector.cuvs.route_reason` | Selected route, such as `cuvs`, `native_filter_threshold`, `native_rebuild_pending`, or `native_memory_budget` |
 | `summary.vector.cuvs.filter_kind` | Low-cardinality filter class: `none`, `scalar`, or `path` |
@@ -196,7 +197,7 @@ values, or URI contents.
 | `summary.vector.cuvs.memory_usable_bytes` | Free bytes left after applying the configured reserve |
 | `summary.vector.cuvs.total_ms` | Total dense routing and search time |
 | `summary.vector.cuvs.preflight_ms` | Native filter preflight time |
-| `summary.vector.cuvs.queue_ms` | Time waiting for the current cuVS search lock |
+| `summary.vector.cuvs.queue_ms` | Time waiting for the per-index GPU search gate |
 | `summary.vector.cuvs.build_ms` | GPU admission and index build time, when a build occurred |
 | `summary.vector.cuvs.filter_prepare_ms` | Time preparing or retrieving the device filter |
 | `summary.vector.cuvs.gpu_search_ms` | cuVS search time |

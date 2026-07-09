@@ -26,6 +26,7 @@ Start with exact brute-force search:
       "cuvs": {
         "algorithm": "brute_force",
         "dtype": "float32",
+        "max_concurrent_gpu_searches": 1,
         "fallback_to_native": true,
         "filter_cache_size": 16
       }
@@ -151,10 +152,14 @@ as approximate modes with an explicit recall/latency/memory frontier.
 
 The integration uses immutable GPU snapshots. Warmed searches use per-thread
 cuVS resources/CUDA streams, while mutation and snapshot commit use a
-cross-backend writer lock. By default, the first query after an upsert or
-delete rebuilds synchronously; optional background rebuild changes dirty
-queries to native fallback until the new snapshot is ready. On each rebuild it
-registers the cuVS label order with the native engine once.
+cross-backend writer lock. Host-side filter and snapshot work can proceed in
+parallel, but `max_concurrent_gpu_searches` defaults to 1 because concurrent
+single-query brute-force kernels can contend for memory bandwidth and reduce
+throughput. Increase it only after measuring the target GPU and workload. By
+default, the first query after an upsert or delete rebuilds synchronously;
+optional background rebuild changes dirty queries to native fallback until the
+new snapshot is ready. On each rebuild it registers the cuVS label order with
+the native engine once.
 The first use of a scalar or URI filter then reuses OpenViking's native
 scalar/path index and projects its bitmap into cuVS row order; it does not scan
 all host-side records in Python. `filter_cache_size` retains the resulting

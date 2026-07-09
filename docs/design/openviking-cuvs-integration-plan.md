@@ -270,6 +270,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
       "cuvs": {
         "algorithm": "brute_force",
         "dtype": "float32",
+        "max_concurrent_gpu_searches": 1,
         "fallback_to_native": true
       }
     }
@@ -331,6 +332,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 | --- | --- | --- |
 | `algorithm` | `brute_force` | `brute_force` exact 或 `cagra` ANN |
 | `dtype` | `float32` | GPU dataset/query dtype；可显式设为 `float16`，不改变 native CPU dtype |
+| `max_concurrent_gpu_searches` | `1` | 单 index 同时进入 GPU search 的上限；host preflight/filter 仍可并行 |
 | `build_params` | `{}` | 传给 CAGRA `IndexParams` |
 | `search_params` | `{}` | 传给 CAGRA `SearchParams` |
 | `fallback_to_native` | `true` | sparse/hybrid 等非 cuVS dense top-k 能力使用 native |

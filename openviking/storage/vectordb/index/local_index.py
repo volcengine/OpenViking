@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import json
+import logging
 import math
 import os
 import shutil
@@ -498,20 +499,24 @@ class LocalIndex(IIndex):
             cuvs_telemetry: Optional[CuVSSearchTelemetry] = None
             telemetry_started = 0.0
             native_filter_token = 0
-            if self.dense_search and query_vector:
+            if self.dense_search and query_vector and self._cuvs_telemetry_enabled():
                 cuvs_telemetry = CuVSSearchTelemetry(
                     algorithm=self.dense_search.algorithm,
                     auto_mode=self._auto_cuvs,
                     dtype=self.dense_search.dtype,
+                    max_concurrent_gpu_searches=(
+                        self.dense_search.max_concurrent_gpu_searches
+                    ),
                 )
                 telemetry_started = time.perf_counter()
 
             try:
-                if self.dense_search and query_vector and cuvs_telemetry is not None:
+                if self.dense_search and query_vector:
                     if not sparse_raw_terms and not sparse_values:
                         if self._auto_background_rebuild and self.dense_search.needs_rebuild:
                             self._schedule_dense_rebuild()
-                            cuvs_telemetry.route_reason = "native_rebuild_pending"
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "native_rebuild_pending"
                             return self._search_native(
                                 query_vector,
                                 limit,
@@ -524,9 +529,10 @@ class LocalIndex(IIndex):
                         if self._auto_cuvs and filters:
                             queue_started = time.perf_counter()
                             with self._dense_search_lock.read():
-                                cuvs_telemetry.queue_ms += (
-                                    time.perf_counter() - queue_started
-                                ) * 1000.0
+                                if cuvs_telemetry is not None:
+                                    cuvs_telemetry.queue_ms += (
+                                        time.perf_counter() - queue_started
+                                    ) * 1000.0
                                 native_count = self.dense_search.preflight_native_count(
                                     filters,
                                     self._evaluate_cuvs_filter,
@@ -534,10 +540,12 @@ class LocalIndex(IIndex):
                                     telemetry=cuvs_telemetry,
                                 )
                                 if native_count == 0:
-                                    cuvs_telemetry.route_reason = "empty_filter"
+                                    if cuvs_telemetry is not None:
+                                        cuvs_telemetry.route_reason = "empty_filter"
                                     return [], []
                                 if native_count is not None:
-                                    cuvs_telemetry.route_reason = "native_filter_threshold"
+                                    if cuvs_telemetry is not None:
+                                        cuvs_telemetry.route_reason = "native_filter_threshold"
                                     native_filter_token = self.dense_search.native_filter_token(
                                         filters
                                     )
@@ -562,29 +570,35 @@ class LocalIndex(IIndex):
                                 filters,
                                 cuvs_telemetry,
                             )
-                            cuvs_telemetry.route_reason = "cuvs"
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "cuvs"
                             return result
                         except CuVSMemoryBudgetError as exc:
-                            cuvs_telemetry.route_reason = "native_memory_budget"
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "native_memory_budget"
                             if not self._auto_cuvs:
                                 raise
                             logger.debug("cuVS auto mode kept native dense search: %s", exc)
                         except CuVSNativeRouteError as exc:
-                            cuvs_telemetry.route_reason = "native_filter_threshold"
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "native_filter_threshold"
                             native_filter_token = self.dense_search.native_filter_token(filters)
                             logger.debug("cuVS auto mode selected native dense search: %s", exc)
                         except UnsupportedCuVSFilterError as exc:
-                            cuvs_telemetry.route_reason = "native_unsupported_filter"
+                            if cuvs_telemetry is not None:
+                                cuvs_telemetry.route_reason = "native_unsupported_filter"
                             if not self.dense_search.fallback_to_native:
                                 raise
                             logger.debug("Falling back to native dense search: %s", exc)
                     elif not self.dense_search.fallback_to_native:
-                        cuvs_telemetry.route_reason = "unsupported_sparse_hybrid"
+                        if cuvs_telemetry is not None:
+                            cuvs_telemetry.route_reason = "unsupported_sparse_hybrid"
                         raise ValueError(
                             "cuVS dense search does not support OpenViking sparse/hybrid queries"
                         )
                     else:
-                        cuvs_telemetry.route_reason = "native_sparse_hybrid"
+                        if cuvs_telemetry is not None:
+                            cuvs_telemetry.route_reason = "native_sparse_hybrid"
 
                 return self._search_native(
                     query_vector,
@@ -610,14 +624,15 @@ class LocalIndex(IIndex):
         query_vector: List[float],
         limit: int,
         filters: Dict[str, Any],
-        telemetry: CuVSSearchTelemetry,
+        telemetry: Optional[CuVSSearchTelemetry],
     ) -> Tuple[List[int], List[float]]:
         if self.dense_search is None or self.engine_proxy is None:
             raise RuntimeError("cuVS search requires an initialized index")
         while True:
             queue_started = time.perf_counter()
             with self._dense_search_lock.read():
-                telemetry.queue_ms += (time.perf_counter() - queue_started) * 1000.0
+                if telemetry is not None:
+                    telemetry.queue_ms += (time.perf_counter() - queue_started) * 1000.0
                 if not self.dense_search.needs_rebuild:
                     return self.dense_search.search(
                         query_vector,
@@ -630,7 +645,8 @@ class LocalIndex(IIndex):
 
             queue_started = time.perf_counter()
             with self._dense_search_lock.write():
-                telemetry.queue_ms += (time.perf_counter() - queue_started) * 1000.0
+                if telemetry is not None:
+                    telemetry.queue_ms += (time.perf_counter() - queue_started) * 1000.0
                 if self.dense_search.needs_rebuild:
                     return self.dense_search.search(
                         query_vector,
@@ -687,13 +703,27 @@ class LocalIndex(IIndex):
         )
 
     @staticmethod
+    def _cuvs_telemetry_enabled() -> bool:
+        if logger.isEnabledFor(logging.DEBUG):
+            return True
+        try:
+            from openviking.telemetry import get_current_telemetry
+
+            return bool(get_current_telemetry().enabled)
+        except Exception:
+            return False
+
+    @staticmethod
     def _record_cuvs_telemetry(telemetry: CuVSSearchTelemetry) -> None:
         payload = telemetry.as_dict()
-        logger.debug("cuVS search telemetry: %s", json.dumps(payload, sort_keys=True))
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("cuVS search telemetry: %s", json.dumps(payload, sort_keys=True))
         try:
             from openviking.telemetry import get_current_telemetry
 
             operation_telemetry = get_current_telemetry()
+            if not operation_telemetry.enabled:
+                return
             for key, value in payload.items():
                 operation_telemetry.set(f"vector.cuvs.{key}", value)
         except Exception:

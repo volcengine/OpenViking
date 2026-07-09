@@ -14,6 +14,7 @@ from openviking_cli.utils.config.vectordb_config import CuVSConfig, VectorDBBack
 def test_cuvs_filter_cache_defaults_and_disable_value():
     assert CuVSConfig().dtype == "float32"
     assert CuVSConfig(dtype="float16").dtype == "float16"
+    assert CuVSConfig().max_concurrent_gpu_searches == 1
     assert CuVSConfig().filter_cache_size == 16
     assert CuVSConfig(filter_cache_size=0).filter_cache_size == 0
 
@@ -23,6 +24,8 @@ def test_cuvs_filter_cache_rejects_negative_size():
         CuVSConfig(dtype="int8")
     with pytest.raises(ValidationError, match="filter_cache_size"):
         CuVSConfig(filter_cache_size=-1)
+    with pytest.raises(ValidationError, match="max_concurrent_gpu_searches"):
+        CuVSConfig(max_concurrent_gpu_searches=0)
 
 
 def test_cuvs_auto_mode_is_opt_in_and_validates_memory_guardrails():

@@ -221,6 +221,7 @@ def test_local_collection_records_cuvs_route_telemetry(monkeypatch):
         cuvs = telemetry.finish().summary["vector"]["cuvs"]
         assert cuvs["algorithm"] == "brute_force"
         assert cuvs["dtype"] == "float32"
+        assert cuvs["max_concurrent_gpu_searches"] == 1
         assert cuvs["route_reason"] == "cuvs"
         assert cuvs["filter_kind"] == "none"
         assert cuvs["build_performed"] is True
@@ -263,7 +264,13 @@ def test_local_collection_allows_concurrent_warmed_cuvs_searches(monkeypatch):
                 {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
             ],
         },
-        config={"dense_search": {"backend": "cuvs", "algorithm": "brute_force"}},
+        config={
+            "dense_search": {
+                "backend": "cuvs",
+                "algorithm": "brute_force",
+                "max_concurrent_gpu_searches": 4,
+            }
+        },
     )
     try:
         collection.create_index(

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -192,7 +193,7 @@ def test_warmed_cuvs_searches_run_concurrently():
         distance="ip",
         normalize_vectors=False,
         field_types={},
-        config={},
+        config={"max_concurrent_gpu_searches": 4},
         runtime=runtime,
     )
     index.add_candidates([candidate(1, [1.0, 0.0])])
@@ -206,6 +207,49 @@ def test_warmed_cuvs_searches_run_concurrently():
         assert [future.result(timeout=5)[0] for future in futures] == [[1]] * 4
 
     assert runtime.peak_active == 4
+
+
+def test_cuvs_gpu_search_gate_serializes_kernels_by_default():
+    class SerialRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.active_lock = threading.Lock()
+            self.active = 0
+            self.peak_active = 0
+
+        def search(self, index, query, limit, mask):
+            with self.active_lock:
+                self.active += 1
+                self.peak_active = max(self.peak_active, self.active)
+            try:
+                time.sleep(0.01)
+                return super().search(index, query, limit, mask)
+            finally:
+                with self.active_lock:
+                    self.active -= 1
+
+    runtime = SerialRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0])])
+    assert index.search([1.0, 0.0], 1, None)[0] == [1]
+
+    telemetry = [CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False) for _ in range(4)]
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [
+            executor.submit(index.search, [1.0, 0.0], 1, None, None, None, item)
+            for item in telemetry
+        ]
+        assert [future.result(timeout=5)[0] for future in futures] == [[1]] * 4
+
+    assert runtime.peak_active == 1
+    assert max(item.queue_ms for item in telemetry) > 0
 
 
 def test_inflight_search_keeps_immutable_snapshot_during_rebuild():
@@ -229,7 +273,7 @@ def test_inflight_search_keeps_immutable_snapshot_during_rebuild():
         distance="ip",
         normalize_vectors=False,
         field_types={},
-        config={},
+        config={"max_concurrent_gpu_searches": 2},
         runtime=runtime,
     )
     index.add_candidates([candidate(1, [1.0, 0.0])])
