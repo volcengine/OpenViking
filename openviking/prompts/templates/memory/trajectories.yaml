@@ -76,47 +76,46 @@ fields:
     description: |
       Write in {{ language }}. Keep raw tool names, schema keys, and quoted runtime values unchanged.
 
-      PRIMARY GOAL: produce a SkillOpt-style analyst record for ONE trajectory, plus the OV parser
-      fields required by downstream experience gates. Analyze the trajectory like a bounded skill
-      patch:
-      1. Identify the earliest material boundary where the outcome diverged.
-      2. Classify the failure/success pattern.
-      3. Decide whether one generalizable, source-bound runtime experience could change that boundary.
-      4. Propose at most one candidate: Candidate C1, or choose `Selected candidate: none`.
-      5. Do not learn full workflows, task-specific answers, IDs, dates, exact amounts, hidden grading
-         terms, or broad "check everything" advice.
-      6. Only fill C1 with directly injectable, runtime-facing guidance. Put raw literals only in
-         `Case Evidence`.
+      You are a trajectory analyst for AI agent tasks.
 
-      Candidate C1's `Runtime experience content` block must look like a production experience,
-      not an audit log:
+      You will be given ONE agent trajectory, the task outcome, and any injected experience
+      reminders. Your job is to identify the most important reusable behavior pattern in this
+      trajectory and propose a concise bounded "experience patch" for future runs.
 
-      # <experience_name>
+      ## Analysis Process
+      1. Read the whole trajectory before writing.
+      2. Decide whether the trajectory is a failure, partial failure, unfinished run, success, or
+         unknown.
+      3. For failures, locate the earliest material boundary that changed the final outcome:
+         a tool call, missing tool call, confirmation point, calculation, policy branch, write
+         action, final response, or handoff.
+      4. Classify the failure type and write a one-line reusable pattern.
+      5. Propose at most ONE candidate repair: `Candidate C1`.
+      6. The candidate must be generalizable, source-bound, runtime-actionable, and safe to inject
+         before a future boundary. Do not hardcode task-specific values.
+      7. Do not learn a full workflow. Patch only the missing rule/check/communication that would
+         change the earliest material boundary.
+      8. Do not duplicate existing experience reminders. If an injected reminder was helpful,
+         weak, or misleading, reflect that in the `experience_effects` field and choose
+         validate/update/none accordingly.
+      9. If no bounded reusable candidate is warranted, set `Selected candidate: none` and
+         `Recommended operation: skip`.
 
-      当 <reusable runtime situation> 时，必须 <core strategy>。
-
-      ## 规则
-      1. <actionable rule bound to runtime facts>
-      2. <actionable rule bound to runtime facts>
-      ...
-
-      目标是避免 <closest tempting wrong behavior>。
-
-      Output EXACTLY this markdown shape and label order:
+      ## Output Format
+      Output exactly ONE markdown record with the labels below. Do not add extra top-level sections.
 
       # <trajectory_name>
       - Outcome: <success|failure|partial|unfinished|unknown>
       - Domain: <task/tool domain>
-      - User Goal: <generalized goal, no task id>
-      - Trigger Boundary: <when this experience should be injected>
+      - User Goal: <generalized user goal, no task id>
       - Failure Summary:
         - Failure type: <wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|premature_write|extra_write|premature_done|tool_error|success_pattern|none>
         - Count: 1
         - Description: <one-line reusable pattern, not case-specific>
       - Runtime Facts:
-        - User obligation: <user request/confirmation that creates the obligation, or none>
-        - Tool/policy facts: <visible facts needed for the rule, or none>
-        - Correct work to preserve: <actions/reads/communications this lesson must not block, or none>
+        - User obligation: <request/confirmation that creates the obligation, or none>
+        - Tool/policy facts: <visible runtime facts needed for the rule, or none>
+        - Correct work to preserve: <correct actions/reads/messages this lesson must not block, or none>
         - db_check: <passed|failed|unknown>
         - action_checks: <passed|failed|unknown>
         - communicate_checks: <passed|failed|unknown>
@@ -125,7 +124,7 @@ fields:
         - Tool: <one raw tool name, communicate_with_user, or none>
         - Error type: <missing_expected_tool|missing_communication|wrong_arguments|wrong_object|wrong_policy_branch|premature_write|extra_write|premature_done|tool_error|none>
         - Candidate shape: <generalized risky candidate_tool_args/content shape, or none>
-        - Missing check: <single missing runtime fact/policy gate/object binding/calculation/confirmation/communication, or none>
+        - Missing check: <single missing runtime fact, policy gate, object binding, calculation, confirmation, or communication, or none>
         - Expected behavior: <what should have happened at that boundary>
       - Counterfactual Ideal Experience:
         - Candidate C1:
@@ -144,7 +143,7 @@ fields:
             - Later write effect: <whether later writes change a previously requested value/scope, or none>
             - Confirmation binding: <which user confirmation authorizes which write objects, or none>
           - Applicability: <exact runtime shape where C1 applies>
-          - Anti-pattern: <tempting broad/wrong-scope lesson not to learn>
+          - Anti-pattern: <tempting broad or wrong-scope lesson not to learn>
           - Preserve: <specific correct behavior this experience must preserve>
           - Why this would help: <one sentence, runtime-causal>
         - Selected candidate: <C1|none>
@@ -152,7 +151,7 @@ fields:
         - Recommended operation: <create|update|validate|skip>
         - Existing target experience: <name or none>
         - New experience action: <create|none>
-        - Trigger boundary: <same tool/boundary as First Wrong Tool Call.Tool or final_response/none>
+        - Trigger boundary: <same tool/boundary as First Wrong Tool Call.Tool, final_response, or none>
         - Repair principle: <C1 repair in one sentence, or none>
         - Reject over-broad lesson: <tempting broad rule that should not be learned>
         - Reject wrong-scope lesson: <nearby non-causal or wrong-scope rule that should not be learned>
@@ -162,59 +161,58 @@ fields:
         - Observed correct behavior: <what worked, or none>
       - Result: <final outcome and side effects>
 
-      OV compatibility requirements:
-      - Keep the exact section labels `Runtime Facts`, `First Wrong Tool Call`,
-        `Counterfactual Ideal Experience`, and `Experience Repair Signal`.
-      - Use exactly `Candidate C1` and `Selected candidate: C1|none`; do not output C2/C3.
+      ## Runtime Experience Content
+      When `Selected candidate: C1` and the recommended operation is create/update/validate,
+      `Runtime experience content` must be a directly injectable production reminder, not an
+      explanation. Use this shape:
+
+      # <experience_name>
+
+      当 <reusable runtime situation> 时，必须 <core strategy>。
+
+      ## 规则
+      1. <actionable rule bound to visible runtime facts>
+      2. <actionable rule bound to visible runtime facts>
+      ...
+
+      目标是避免 <closest tempting wrong behavior>。
+
+      If {{ language }} is English, write the same structure in English. If no candidate is
+      selected, write `Runtime experience content: none`.
+
+      ## Selection Rules
+      - Failure-driven candidates take priority. For failure/partial/unfinished trajectories,
+        choose create or update when a narrow runtime reminder could have prevented the earliest
+        material failure.
+      - Success-driven candidates are conservative. For success trajectories, choose validate only
+        when the trajectory demonstrates a reusable strategy not already covered; otherwise skip.
+      - Candidate C1 must not include task IDs, exact dates, exact amounts, raw entity names, hidden
+        answers, dataset names, evaluator terms, or diagnostic-only literals.
+      - Put exact identifiers, amounts, dates, and raw payload snippets only under `Case Evidence`.
+      - Avoid vague lessons such as "check all requirements" or "include all required information".
+        Bind each rule to user wording, confirmation, object membership, selected tool output,
+        source field, calculation, policy gate, payment/source field, or communication obligation.
+      - Preserve correct near-miss behavior. If the same tool had both correct and wrong calls,
+        Candidate C1 must name the discriminator that makes the wrong call different.
+
+      ## OV Gate Compatibility
+      These labels are required by downstream OV parsers and gates; keep them exact:
+      `Runtime Facts`, `First Wrong Tool Call`, `Counterfactual Ideal Experience`,
+      `Candidate C1`, `Selected candidate`, and `Experience Repair Signal`.
+
+      - Use exactly `Selected candidate: C1` or `Selected candidate: none`.
+      - Do not output Candidate C2 or Candidate C3.
       - If `Selected candidate: C1`, fill `First Wrong Tool Call.Tool`,
         `First Wrong Tool Call.Error type`, `Experience Repair Signal.Recommended operation`,
         `Experience Repair Signal.Trigger boundary`, and all C1 `Source binding` fields.
-      - For totals/counts/lists/summaries, C1 must fill non-empty `Scope freeze point`,
-        `Included records`, `Excluded records`, `Source field`, `Derivation`, and
-        `Later write effect`. Freeze the scope at the time the user asks for the aggregate/list;
-        later writes must explicitly say whether they change that already-requested scope.
-      - If a valid C1 cannot be written, set `Selected candidate: none`,
-        `Recommended operation: skip`, and use `Runtime experience content: none`.
-      - `Runtime Facts` may contain `db_check`, `action_checks`, and `communicate_checks` so OV
-        gates can parse rollout components. Do NOT put these control-plane terms inside C1,
-        `Repair principle`, or `Runtime experience content`.
+      - For totals/counts/lists/summaries, Candidate C1 must fill non-empty
+        `Scope freeze point`, `Included records`, `Excluded records`, `Source field`,
+        `Derivation`, and `Later write effect`. The freeze point must be when the user asked
+        for the aggregate/list/summary, not after later writes.
+      - `Runtime Facts` may contain `db_check`, `action_checks`, and `communicate_checks` for OV
+        parsing. Do not put those control-plane terms inside Candidate C1, `Repair principle`, or
+        `Runtime experience content`.
+      - If a source-bound C1 cannot be written, choose `Selected candidate: none`,
+        `Recommended operation: skip`, and `Runtime experience content: none`.
 
-      SkillOpt-style selection rules:
-      - Failure-driven candidates take priority. For failure/partial/unfinished, choose
-        create or update only when a narrow runtime reminder could have prevented the earliest
-        material failure. Use skip when no reusable pre-tool or pre-response reminder exists.
-      - Success is conservative. For success, use validate only when the trajectory demonstrates
-        a reusable strategy worth reinforcing and not already covered; otherwise skip.
-      - C1 must be generalizable and actionable. It must not hardcode task-specific values,
-        exact identifiers, exact amounts, exact dates, hidden answer markers, or dataset/control
-        terms.
-      - Put exact identifiers, exact amounts, exact dates, and tool payload snippets only under
-        `Case Evidence`.
-      - Do not duplicate existing injected experience reminders. Use `experience_effects` to mark
-        helpful, weak, or misleading reminders; if an injected reminder was over-broad/misleading,
-        make C1 an update that narrows that existing target.
-
-      Good C1 candidates usually capture:
-      - Aggregate/list scope: freeze the query scope; distinguish all-current vs excluded/remaining.
-      - Named object scope: mutate only explicitly requested/confirmed objects; do not substitute
-        discovered alternatives.
-      - Independent obligations: do not drop baggage, payment, communication, or follow-up duties
-        just because another branch failed.
-      - Payment ledger: respect per-reservation limits, global balances, selected card, and do not
-        reuse balances or assume refunds are immediately available unless visible state proves it.
-      - Staged workflows: after a first write, communicate and wait when the next user instruction is
-        expected; do not finish before second-stage obligations are handled.
-      - Policy distinctions: separate permission to perform an action from refund/price/eligibility
-        side effects.
-      - Execution linearity: once a confirmed plan exists, do each write once, then continue to the
-        next required write; do not repeat successful writes or transfer prematurely.
-
-      Safety rules:
-      - No hidden grading/control-plane wording, internal checker names, hidden-answer markers,
-        or dataset/control-plane terminology in C1 or `Runtime experience content`.
-      - Avoid vague advice such as "check all requirements". Bind every rule to a visible runtime
-        source: user wording, confirmation, object membership, selected tool result, policy gate,
-        calculation, communication obligation, or payment/source field.
-      - Keep the memory concise. Prefer 4-8 runtime rules inside C1's experience block. Do not add
-        extra headings, code fences, hidden reasoning, or closing remarks.
     merge_op: patch
