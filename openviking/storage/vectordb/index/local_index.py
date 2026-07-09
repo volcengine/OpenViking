@@ -334,13 +334,20 @@ class LocalIndex(IIndex):
 
             if self.dense_search and query_vector:
                 if not sparse_raw_terms and not sparse_values:
-                    cached_native_route = (
-                        self._auto_cuvs
-                        and bool(filters)
-                        and self.dense_search.has_cached_native_route(filters)
-                    )
-                    if cached_native_route:
-                        logger.debug("cuVS auto mode reused a cached native filter route")
+                    native_count = None
+                    if self._auto_cuvs and filters:
+                        native_count = self.dense_search.preflight_native_count(
+                            filters,
+                            self.engine_proxy.evaluate_filter,
+                            self.engine_proxy.set_filter_layout,
+                        )
+                    if native_count == 0:
+                        return [], []
+                    if native_count is not None:
+                        logger.debug(
+                            "cuVS auto mode selected native filtered search (%d candidates)",
+                            native_count,
+                        )
                     else:
                         with self._dense_search_lock:
                             try:

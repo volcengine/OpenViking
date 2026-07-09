@@ -477,6 +477,9 @@ class CuVSDenseIndex:
         self._dirty = True
         self._filter_cache: OrderedDict[str, _CachedFilter] = OrderedDict()
         self._lock = threading.RLock()
+        self._filter_layout_lock = threading.Lock()
+        self._records_generation = 0
+        self._filter_layout_generation = -1
         logger.info(
             "Initialized cuVS dense index: algorithm=%s metric=%s dimension=%d",
             self.algorithm,
@@ -542,6 +545,7 @@ class CuVSDenseIndex:
                 self._invalidate()
 
     def _invalidate(self) -> None:
+        self._records_generation += 1
         self._dirty = True
         self._filter_cache.clear()
 
@@ -567,15 +571,69 @@ class CuVSDenseIndex:
         while len(self._filter_cache) > self.filter_cache_size:
             self._filter_cache.popitem(last=False)
 
-    def has_cached_native_route(self, filters: Mapping[str, Any]) -> bool:
-        """Return whether auto mode already routed this filter to native search."""
+    def _ensure_native_filter_layout(
+        self,
+        native_filter_layout_registrar: Callable[[Sequence[int]], None],
+    ) -> Optional[int]:
+        with self._filter_layout_lock:
+            with self._lock:
+                generation = self._records_generation
+                if self._filter_layout_generation == generation:
+                    return generation
+                ordered_labels = list(self._records)
+
+            native_filter_layout_registrar(ordered_labels)
+
+            with self._lock:
+                if self._records_generation != generation:
+                    return None
+                self._filter_layout_generation = generation
+                return generation
+
+    def preflight_native_count(
+        self,
+        filters: Mapping[str, Any],
+        native_filter_resolver: Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]],
+        native_filter_layout_registrar: Callable[[Sequence[int]], None],
+    ) -> Optional[int]:
+        """Return the native-route candidate count, or None for the cuVS path."""
 
         if not self.auto_memory or not filters:
-            return False
+            return None
         cache_key = self._filter_cache_key(filters)
         with self._lock:
             cached = self._get_cached_filter(cache_key)
-            return cached is not None and cached.route_native
+            if cached is not None:
+                return cached.eligible_count if cached.route_native else None
+            native_threshold = (
+                self.auto_path_filter_native_threshold
+                if _filter_uses_field_type(filters, self.field_types, "path")
+                else self.auto_filter_native_threshold
+            )
+            if native_threshold <= 0:
+                return None
+
+        generation = self._ensure_native_filter_layout(native_filter_layout_registrar)
+        if generation is None:
+            return None
+        resolved = self._resolve_native_filter(filters, native_filter_resolver)
+
+        with self._lock:
+            if self._records_generation != generation:
+                return None
+            cached = self._get_cached_filter(cache_key)
+            if cached is not None:
+                return cached.eligible_count if cached.route_native else None
+            if not resolved.route_native and resolved.eligible_count != 0:
+                return None
+            cached = _CachedFilter(
+                prepared=None,
+                eligible_count=resolved.eligible_count,
+                route_native=resolved.route_native,
+                native_threshold=resolved.native_threshold,
+            )
+            self._cache_filter(cache_key, cached)
+            return cached.eligible_count if cached.route_native else None
 
     def _resolve_native_filter(
         self,
@@ -703,6 +761,7 @@ class CuVSDenseIndex:
             raise
         if native_filter_layout_registrar is not None and not filter_layout_is_current:
             native_filter_layout_registrar(self._labels)
+            self._filter_layout_generation = self._records_generation
         self._dirty = False
         logger.info("Built cuVS %s index with %d vectors", self.algorithm, len(self._labels))
 
@@ -719,10 +778,14 @@ class CuVSDenseIndex:
         if limit <= 0:
             return [], []
         query = self._prepare_vector(query_vector)
+        if self.auto_memory and native_filter_layout_registrar is not None:
+            self._ensure_native_filter_layout(native_filter_layout_registrar)
         with self._lock:
             cached_filter: Optional[_CachedFilter] = None
             resolved_native_filter: Optional[_ResolvedNativeFilter] = None
-            filter_layout_is_current = False
+            filter_layout_is_current = (
+                self._filter_layout_generation == self._records_generation
+            )
 
             # Auto mode decides whether a selective filter should remain native
             # before paying GPU admission or rebuild costs. A dirty native
@@ -732,9 +795,14 @@ class CuVSDenseIndex:
                 cache_key = self._filter_cache_key(filters)
                 cached_filter = self._get_cached_filter(cache_key)
                 if cached_filter is None:
-                    if self._dirty and native_filter_layout_registrar is not None:
+                    if (
+                        self._dirty
+                        and native_filter_layout_registrar is not None
+                        and not filter_layout_is_current
+                    ):
                         native_filter_layout_registrar(list(self._records))
                         filter_layout_is_current = True
+                        self._filter_layout_generation = self._records_generation
                     resolved_native_filter = self._resolve_native_filter(
                         filters, native_filter_resolver
                     )

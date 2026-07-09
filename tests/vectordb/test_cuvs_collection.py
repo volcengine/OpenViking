@@ -362,7 +362,7 @@ def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
             filters={"op": "must", "field": "account_id", "conds": ["a"]},
         )
         assert [item.id for item in result.data] == ["first"]
-        assert dense_search_calls == 1
+        assert dense_search_calls == 0
         assert runtimes[0].build_count == 0
         assert runtimes[0].search_count == 0
 
@@ -373,11 +373,11 @@ def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
             filters={"op": "must", "field": "account_id", "conds": ["a"]},
         )
         assert [item.id for item in result.data] == ["first"]
-        assert dense_search_calls == 1
+        assert dense_search_calls == 0
 
         result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
         assert [item.id for item in result.data] == ["first"]
-        assert dense_search_calls == 2
+        assert dense_search_calls == 1
         assert runtimes[0].build_count == 1
         assert runtimes[0].search_count == 1
     finally:

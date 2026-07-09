@@ -223,7 +223,7 @@ collection.close()
 - cuVS 只接管 pure dense search；sparse/hybrid query 在 `fallback_to_native=true` 时走原生本地索引。
 - local 集成通过 native scalar/path index 生成 prefilter，因此继承原生 DSL、`date_time`、`geo_point` 和 path depth 的过滤语义，而不是在 Python 重复实现。
 - 每次 GPU rebuild 会向 native engine 注册一次 cuVS label 顺序。新过滤条件直接复用 native scalar/path index 的 bitmap，再投影为 cuVS row bitset，不再用 Python 扫描所有 host-side records。
-- `filter_cache_size` 会保留最近使用的 GPU bitset 或 native 路由决策，并在数据更新时失效；auto 模式命中已缓存的 native 路由时会绕过串行 cuVS search 路径，直接进入 native index。
+- `filter_cache_size` 会保留最近使用的 GPU bitset 或 native 路由决策，并在数据更新时失效；auto 模式在进入串行 cuVS search 前预判候选数，不同的首次过滤条件可通过 native engine 的共享读路径并行计算，命中已缓存的 native 路由时则直接进入 native index。generation 校验会阻止跨 mutation 计算出的旧结果写入路由缓存。
 - 每次 upsert/delete 后会在下一次查询时重建 GPU 索引。这保证了首版更新语义正确，但不适合写密集负载。
 - cuVS 索引不作为权威持久化数据；进程重启时会从 OpenViking 本地 store 重建，因此不受 cuVS 跨版本序列化格式变化影响。
 - `brute_force` 适合功能对齐和 ground truth；CAGRA 的 graph/search 参数需要在后续结合召回率、QPS、延迟和显存进行调优。

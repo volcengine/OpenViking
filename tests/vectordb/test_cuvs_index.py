@@ -1,6 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from openviking.storage.vectordb.index.cuvs_index import (
@@ -325,15 +328,118 @@ def test_auto_mode_caches_native_route_for_selective_filter():
         with pytest.raises(CuVSNativeRouteError, match="1 candidates"):
             index.search([1.0, 0.0], 1, filter_a, resolve, register)
 
-    assert index.has_cached_native_route(filter_a)
-    assert not index.has_cached_native_route(
-        {"op": "must", "field": "account_id", "conds": ["missing"]}
-    )
     assert calls == [("register", [10, 20]), ("resolve", filter_a)]
     # Selectivity is decided before GPU admission/build, even while dirty.
     assert runtime.build_count == 0
     assert runtime.release_count == 0
     assert runtime.prepare_filter_count == 0
+
+
+def test_auto_mode_preflights_different_filters_concurrently():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={
+            "auto_filter_native_threshold": 1,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates(
+        [
+            candidate(10, [1.0, 0.0], account_id="a"),
+            candidate(20, [0.0, 1.0], account_id="b"),
+        ]
+    )
+    barrier = threading.Barrier(4)
+    active_lock = threading.Lock()
+    active = 0
+    peak_active = 0
+    registered_layouts = []
+
+    def register(ordered_labels):
+        registered_layouts.append(list(ordered_labels))
+
+    def resolve(_filters):
+        nonlocal active, peak_active
+        with active_lock:
+            active += 1
+            peak_active = max(peak_active, active)
+        barrier.wait(timeout=5)
+        with active_lock:
+            active -= 1
+        return [0b01], 1
+
+    filters = [
+        {"op": "must", "field": "account_id", "conds": [value]}
+        for value in ("a", "b", "c", "d")
+    ]
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [
+            executor.submit(index.preflight_native_count, item, resolve, register)
+            for item in filters
+        ]
+        routes = [future.result(timeout=5) for future in futures]
+
+    assert routes == [1] * 4
+    assert peak_active == 4
+    assert registered_layouts == [[10, 20]]
+
+
+def test_auto_mode_does_not_cache_preflight_across_record_change():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={
+            "auto_filter_native_threshold": 1,
+            "auto_memory_reserve_mb": 0,
+            "auto_memory_safety_factor": 1.0,
+        },
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(10, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    resolver_started = threading.Event()
+    resume_resolver = threading.Event()
+
+    def resolve(_filters):
+        resolver_started.set()
+        assert resume_resolver.wait(timeout=5)
+        return [0b1], 1
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            index.preflight_native_count,
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+        assert resolver_started.wait(timeout=5)
+        index.add_candidates([candidate(20, [0.0, 1.0], account_id="b")])
+        resume_resolver.set()
+        assert future.result(timeout=5) is None
+
+    cache_miss_observed = threading.Event()
+
+    def resolve_after_change(_filters):
+        cache_miss_observed.set()
+        return [0b11], 2
+
+    assert index.preflight_native_count(
+        filter_a,
+        resolve_after_change,
+        lambda _labels: None,
+    ) is None
+    assert cache_miss_observed.is_set()
 
 
 def test_auto_mode_selective_filter_skips_rebuild_after_mutation():
