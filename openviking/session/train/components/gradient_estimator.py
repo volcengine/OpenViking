@@ -135,7 +135,15 @@ class ExperienceGradientEstimator:
         provider._ctx = context.request_context
         provider._viking_fs = viking_fs
 
-        async def post_validation_hook(operations: Any, retry_count: int):
+        async def post_validation_hook(
+            operations: Any,
+            retry_count: int,
+            *,
+            messages: list[dict[str, Any]] | None = None,
+            latest_draft: Any = None,
+        ):
+            if retry_count >= 1:
+                return None
             analysis_obj = _analysis_from_context_metadata(context)
             experience_set = _experience_set_from_context_metadata(context)
             gradients = _operations_to_gradients(

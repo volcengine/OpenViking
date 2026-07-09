@@ -4,17 +4,22 @@
 Tests for memory ExtractLoop orchestrator.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from openviking.session.memory.dataclass import (
+    MemoryField,
     MemoryTypeSchema,
 )
 from openviking.session.memory.extract_loop import (
     ExtractLoop,
+    PostValidationRetryDecision,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.memory_updater import ExtractContext
+from openviking.session.memory.merge_op.base import FieldType, MergeOp
 
 
 class TestPreFetchFileFiltering:
@@ -265,3 +270,162 @@ class TestExtractLoopFinalJsonRetry:
         assert final_prompts
         assert '"delete_ids": []' in final_prompts[-1]
         assert '"preferences": []' in final_prompts[-1]
+
+
+class TestExtractLoopPostValidationHook:
+    @staticmethod
+    def _preference_schema() -> MemoryTypeSchema:
+        return MemoryTypeSchema(
+            memory_type="preferences",
+            description="Preferences",
+            directory="viking://user/{user_space}/memories/preferences",
+            filename_template="{topic}.md",
+            fields=[
+                MemoryField(
+                    name="topic",
+                    field_type=FieldType.STRING,
+                    description="topic",
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    description="content",
+                    merge_op=MergeOp.PATCH,
+                ),
+            ],
+        )
+
+    @staticmethod
+    def _preference_ops(content: str) -> str:
+        return json.dumps(
+            {
+                "preferences": [
+                    {
+                        "page_id": 100,
+                        "topic": "color",
+                        "content": content,
+                    }
+                ],
+                "delete_ids": [],
+            }
+        )
+
+    class _FakeContextProvider:
+        read_file_contents = {}
+
+        def __init__(self, schemas):
+            self._schemas = schemas
+            self._extract_context = ExtractContext([], split_long_text_messages=False)
+
+        def get_memory_schemas(self, ctx):
+            return self._schemas
+
+        def get_tools(self):
+            return []
+
+        def get_extract_context(self):
+            return self._extract_context
+
+        def get_output_language(self):
+            return "en"
+
+        def instruction(self):
+            return "Extract memory operations."
+
+        async def prefetch(self):
+            return []
+
+    class _FakeIsolationHandler:
+        def get_read_scope(self):
+            return None
+
+        def fill_identity_fields(self, item_dict, role_scope=None, memory_type_schema=None):
+            return None
+
+        def calculate_memory_uris(self, memory_type_schema, operation, extract_context):
+            name = operation.memory_fields.get("topic", "memory")
+            return [f"viking://user/default/memories/{memory_type_schema.memory_type}/{name}.md"]
+
+    class _SequenceVLM:
+        model = "test-model"
+
+        def __init__(self, responses):
+            self.responses = list(responses)
+            self.seen_calls = []
+
+        async def get_completion_async(self, **kwargs):
+            self.seen_calls.append(kwargs)
+            if not self.responses:
+                raise AssertionError("No fake VLM response left")
+            return self.responses.pop(0)
+
+    @pytest.mark.asyncio
+    async def test_post_validation_hook_can_append_latest_draft_and_retry(self):
+        decisions = [
+            PostValidationRetryDecision(
+                retry=True,
+                instruction="Rewrite the complete JSON object with a source-bound correction.",
+                include_latest_draft=True,
+            ),
+            None,
+        ]
+
+        async def post_validation_hook(operations, retry_count, *, messages, latest_draft):
+            expected_retry_count = 0 if len(decisions) == 2 else 1
+            assert retry_count == expected_retry_count
+            assert operations.upsert_operations
+            assert messages
+            assert latest_draft.preferences
+            return decisions.pop(0)
+
+        vlm = self._SequenceVLM(
+            [
+                self._preference_ops("first draft"),
+                self._preference_ops("second draft"),
+            ]
+        )
+        extract_loop = ExtractLoop(
+            vlm=vlm,
+            viking_fs=MagicMock(),
+            context_provider=self._FakeContextProvider([self._preference_schema()]),
+            isolation_handler=self._FakeIsolationHandler(),
+            post_validation_hook=post_validation_hook,
+            max_iterations=1,
+        )
+
+        result, _ = await extract_loop.run()
+
+        assert len(result.upsert_operations) == 1
+        assert result.upsert_operations[0].memory_fields["content"] == "second draft"
+        assert len(vlm.seen_calls) == 2
+        retry_messages = vlm.seen_calls[1]["messages"]
+        assert any(
+            message["role"] == "assistant" and "first draft" in message["content"]
+            for message in retry_messages
+        )
+        assert any(
+            message["role"] == "user" and "source-bound correction" in message["content"]
+            for message in retry_messages
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_validation_hook_can_discard_without_exception(self):
+        def post_validation_hook(operations, retry_count, *, messages, latest_draft):
+            return PostValidationRetryDecision(discard=True)
+
+        vlm = self._SequenceVLM([self._preference_ops("discard me")])
+        extract_loop = ExtractLoop(
+            vlm=vlm,
+            viking_fs=MagicMock(),
+            context_provider=self._FakeContextProvider([self._preference_schema()]),
+            isolation_handler=self._FakeIsolationHandler(),
+            post_validation_hook=post_validation_hook,
+            max_iterations=1,
+        )
+
+        result, _ = await extract_loop.run()
+
+        assert result.upsert_operations == []
+        assert result.errors == []
+        assert len(vlm.seen_calls) == 1

@@ -83,7 +83,6 @@ class TestSchemaModelGenerator:
         """Create a registry with real schemas."""
         return create_default_registry()
 
-
     def test_peer_enabled_false_omits_peer_id_field(self):
         memory_type = MemoryTypeSchema(
             memory_type="cases",
@@ -184,7 +183,6 @@ class TestSchemaModelGenerator:
         # Check business fields
         assert "field1" in model.model_fields
         assert "field2" in model.model_fields
-
 
     def test_page_id_field_is_emitted_before_mutable_content(self, registry_with_sample):
         """page_id should appear before mutable fields so the model anchors target page first."""
@@ -404,6 +402,47 @@ class TestSchemaModelGenerator:
             assert "custom_field" in model.model_fields
             assert "memory_type" not in model.model_fields
 
+    def test_directory_loader_skips_non_memory_yaml_templates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            memory_schema_path = tmp_path / "memory_type.yaml"
+            gate_template_path = tmp_path / "root_cause_gate.yaml"
+
+            with open(memory_schema_path, "w", encoding="utf-8") as f:
+                yaml.dump(
+                    {
+                        "memory_type": "new_custom_type",
+                        "description": "A dynamically added custom type",
+                        "directory": "test://new",
+                        "filename_template": "custom_{name}.md",
+                        "fields": [
+                            {
+                                "name": "custom_field",
+                                "type": "string",
+                                "description": "Custom field description",
+                                "merge_op": "patch",
+                            }
+                        ],
+                    },
+                    f,
+                )
+            with open(gate_template_path, "w", encoding="utf-8") as f:
+                yaml.dump(
+                    {
+                        "template_type": "root_cause_gate",
+                        "system_prompt": "judge",
+                        "user_prompt": "draft",
+                    },
+                    f,
+                )
+
+            registry = MemoryTypeRegistry(load_schemas=False)
+            loaded = registry.load_from_directory(str(tmp_path))
+
+            assert loaded == 1
+            assert registry.get("new_custom_type") is not None
+            assert registry.get("root_cause_gate") is None
+
 
 class TestWikiLink:
     def test_invalid_link_type_keeps_freeform_short_label(self):
@@ -426,6 +465,7 @@ class TestWikiLink:
 
         assert link_type_schema["type"] == "string"
         assert "enum" not in link_type_schema
+
 
 class TestIntegration:
     """Integration tests for the complete schema system."""

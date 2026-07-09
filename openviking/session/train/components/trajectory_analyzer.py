@@ -4,15 +4,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from openviking.core.context import Context
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
-from openviking.session.memory.extract_loop import PostValidationRetryDecision
 from openviking.session.memory.agent_trajectory_context_provider import (
     AgentTrajectoryContextProvider,
     extract_injected_experience_reminders,
@@ -22,6 +21,7 @@ from openviking.session.memory.dataclass import (
     ResolvedOperations,
     StoredLink,
 )
+from openviking.session.memory.extract_loop import PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -31,6 +31,7 @@ from openviking.session.skill.session_skill_context_provider import (
 from openviking.session.train.components.experience_feedback import (
     record_experience_feedback_stats,
 )
+from openviking.session.train.components.root_cause_gate import RootCauseGate
 from openviking.session.train.domain import (
     CriterionResult,
     Rollout,
@@ -258,10 +259,23 @@ class TrajectoryRolloutAnalyzer:
         provider._ctx = ctx
         provider._viking_fs = viking_fs
 
-        async def post_validation_hook(operations: Any, retry_count: int):
+        root_cause_gate = RootCauseGate(vlm=vlm, thinking=True, max_followups=2)
+
+        async def post_validation_hook(
+            operations: Any,
+            retry_count: int,
+            *,
+            messages: list[dict[str, Any]] | None = None,
+            latest_draft: Any = None,
+        ):
             issues = _trajectory_validation_issues(operations)
             if not issues:
-                return None
+                return await root_cause_gate(
+                    operations,
+                    retry_count,
+                    messages=messages,
+                    latest_draft=latest_draft,
+                )
             return PostValidationRetryDecision(
                 retry=True,
                 instruction=_trajectory_validation_retry_instruction(issues),
@@ -275,7 +289,7 @@ class TrajectoryRolloutAnalyzer:
             isolation_handler=isolation_handler,
             thinking=True,
             post_validation_hook=post_validation_hook,
-            max_post_validation_retries=1,
+            max_post_validation_retries=3,
         )
 
         try:
@@ -450,7 +464,9 @@ def _trajectory_content_validation_issues(
         ]
 
     c1 = _candidate_section(content, "C1")
-    repair_principle = _field_from_section(_section(content, "Experience Repair Signal"), "Repair principle")
+    repair_principle = _field_from_section(
+        _section(content, "Experience Repair Signal"), "Repair principle"
+    )
     reusable_text = "\n".join([c1, f"Repair principle: {repair_principle}"])
     issues: list[_TrajectoryValidationIssue] = []
 
@@ -535,8 +551,7 @@ def _filter_invalid_trajectory_operations(operations: ResolvedOperations) -> Res
         valid_upserts.append(op)
     if rejected_names:
         tracer.info(
-            "[trajectory] Dropped invalid trajectory ops after validation retry: "
-            f"{rejected_names}"
+            f"[trajectory] Dropped invalid trajectory ops after validation retry: {rejected_names}"
         )
     return operations.model_copy(update={"upsert_operations": valid_upserts})
 

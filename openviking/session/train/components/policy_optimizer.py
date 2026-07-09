@@ -166,7 +166,15 @@ class PatchMergePolicyOptimizer:
             console=False,
         )
 
-        async def post_validation_hook(operations: Any, retry_count: int):
+        async def post_validation_hook(
+            operations: Any,
+            retry_count: int,
+            *,
+            messages: list[dict[str, Any]] | None = None,
+            latest_draft: Any = None,
+        ):
+            if retry_count >= 1:
+                return None
             gate_runner = context.gate_runner
             if gate_runner is None or self.memory_type != "experiences":
                 return None

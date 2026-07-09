@@ -188,6 +188,9 @@ class MemoryTypeRegistry:
 
         for yaml_file in dir_path_obj.glob("*.yaml"):
             try:
+                if not self._is_memory_type_yaml(str(yaml_file)):
+                    logger.debug(f"Skipping non-memory template YAML: {yaml_file}")
+                    continue
                 self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
@@ -195,12 +198,32 @@ class MemoryTypeRegistry:
 
         for yaml_file in dir_path_obj.glob("*.yml"):
             try:
+                if not self._is_memory_type_yaml(str(yaml_file)):
+                    logger.debug(f"Skipping non-memory template YAML: {yaml_file}")
+                    continue
                 self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to load {yaml_file}: {e}")
 
         return count
+
+    @staticmethod
+    def _is_memory_type_yaml(yaml_path: str) -> bool:
+        """Return whether a YAML file is a memory type schema.
+
+        The memory templates directory also hosts auxiliary extraction prompts
+        (for example root-cause gates).  Directory loading should only register
+        real memory schemas, while explicit ``load_from_yaml`` keeps its
+        fail-loud behavior for callers that point at a non-schema file.
+        """
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            return False
+        if data.get("template_type") and data.get("template_type") != "memory_type":
+            return False
+        return bool(data.get("memory_type") or data.get("name")) and "fields" in data
 
     def _parse_memory_type(self, data: dict) -> MemoryTypeSchema:
         """Parse memory type from YAML data."""

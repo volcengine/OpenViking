@@ -87,16 +87,19 @@ class PostValidationRetryDecision:
 
     This is intentionally domain-agnostic. Higher-level callers may validate
     resolved operations and ask ExtractLoop to append a retry instruction before
-    the next LLM call.
+    the next LLM call.  Callers can request that the latest parsed draft is
+    appended as the assistant message before the feedback instruction, or
+    discard the draft without writing memory.
     """
 
     retry: bool = False
     instruction: str = ""
+    discard: bool = False
+    include_latest_draft: bool = False
 
 
 PostValidationHook = Callable[
-    [ResolvedOperations, int],
-    PostValidationRetryDecision | Awaitable[PostValidationRetryDecision | None] | None,
+    ..., PostValidationRetryDecision | Awaitable[PostValidationRetryDecision | None] | None
 ]
 
 
@@ -136,8 +139,9 @@ class ExtractLoop:
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
             thinking: Whether to explicitly enable model thinking for this extraction loop.
             post_validation_hook: Optional domain-level validator called after operations are
-                resolved and built-in patch validation passes. It may request one or more
-                retry iterations by returning a retry instruction.
+                resolved and built-in patch validation passes. It receives extra keyword
+                context including ``messages`` and ``latest_draft``, and may request one
+                or more retry iterations or discard the draft.
             max_post_validation_retries: Maximum retry iterations requested by the hook.
         """
         self.vlm = vlm
@@ -342,18 +346,38 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     )
                     continue
 
-                if (
-                    self.post_validation_hook is not None
-                    and post_validation_retry_count < self.max_post_validation_retries
-                ):
+                if self.post_validation_hook is not None:
                     decision = await self._run_post_validation_hook(
                         final_operations,
                         post_validation_retry_count,
+                        messages=messages,
+                        latest_draft=operations,
                     )
+                    if decision is not None and decision.discard:
+                        final_operations = ResolvedOperations(
+                            upsert_operations=[],
+                            delete_file_contents=[],
+                            errors=[],
+                        )
+                        raw_links = []
+                        break
                     if decision is not None and decision.retry and decision.instruction.strip():
+                        if post_validation_retry_count >= self.max_post_validation_retries:
+                            tracer.info(
+                                "Post-validation retry requested after max retries; "
+                                f"max_post_validation_retries={self.max_post_validation_retries}"
+                            )
+                            break
                         post_validation_retry_count += 1
                         max_iterations += 1
                         self._disable_tools_for_iteration = True
+                        if decision.include_latest_draft:
+                            messages.append(
+                                {
+                                    "role": "assistant",
+                                    "content": self._serialize_operations_draft(operations),
+                                }
+                            )
                         messages.append(
                             {
                                 "role": "user",
@@ -416,6 +440,13 @@ The final output of the model must strictly follow the JSON Schema format shown 
         await self.finalize_operations(final_operations, raw_links)
 
         return final_operations, tools_used
+
+    @staticmethod
+    def _serialize_operations_draft(operations: Any) -> str:
+        serialized = JsonUtils.dumps(operations, indent=2)
+        if serialized is not None:
+            return serialized
+        return json.dumps(operations, ensure_ascii=False, default=str, indent=2)
 
     async def resolve_operations(self, operations) -> tuple[ResolvedOperations, List]:
         tracer.info(f"operations={JsonUtils.dumps(operations)}")
@@ -972,12 +1003,20 @@ The final output of the model must strictly follow the JSON Schema format shown 
         self,
         operations: ResolvedOperations,
         retry_count: int,
+        *,
+        messages: List[Dict[str, Any]],
+        latest_draft: Any,
     ) -> PostValidationRetryDecision | None:
         hook = self.post_validation_hook
         if hook is None:
             return None
         try:
-            decision = hook(operations, retry_count)
+            decision = hook(
+                operations,
+                retry_count,
+                messages=messages,
+                latest_draft=latest_draft,
+            )
             if inspect.isawaitable(decision):
                 decision = await decision
         except Exception as exc:
