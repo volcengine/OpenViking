@@ -5,6 +5,8 @@ from openviking.storage.vectordb.collection.local_collection import (
     get_or_create_local_collection,
 )
 from openviking.storage.vectordb.index import cuvs_index
+from openviking.telemetry.backends.memory import MemoryOperationTelemetry
+from openviking.telemetry.context import bind_telemetry
 
 
 class FakeCuVSRuntime:
@@ -180,6 +182,43 @@ def test_local_collection_routes_dense_search_to_cuvs(monkeypatch):
         collection.delete_data(["first"])
         result = collection.search_by_vector("default", dense_vector=[1, 0, 0, 0], limit=3)
         assert [item.id for item in result.data] == ["second", "hidden"]
+    finally:
+        collection.close()
+
+
+def test_local_collection_records_cuvs_route_telemetry(monkeypatch):
+    patch_cuvs_runtime(monkeypatch)
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "cuvs_telemetry",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 2},
+            ],
+        },
+        config={"dense_search": {"backend": "cuvs", "algorithm": "brute_force"}},
+    )
+    try:
+        collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        collection.upsert_data([{"id": "first", "vector": [1.0, 0.0]}])
+        telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+
+        with bind_telemetry(telemetry):
+            result = collection.search_by_vector("default", dense_vector=[1.0, 0.0], limit=1)
+
+        assert [item.id for item in result.data] == ["first"]
+        cuvs = telemetry.finish().summary["vector"]["cuvs"]
+        assert cuvs["algorithm"] == "brute_force"
+        assert cuvs["route_reason"] == "cuvs"
+        assert cuvs["filter_kind"] == "none"
+        assert cuvs["build_performed"] is True
+        assert cuvs["index_size"] == 1
     finally:
         collection.close()
 

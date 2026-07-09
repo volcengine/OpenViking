@@ -14,6 +14,7 @@ from openviking.storage.vectordb.index.cuvs_index import (
     CuVSDenseIndex,
     CuVSMemoryBudgetError,
     CuVSNativeRouteError,
+    CuVSSearchTelemetry,
     CuVSUnavailableError,
     UnsupportedCuVSFilterError,
 )
@@ -332,51 +333,109 @@ class LocalIndex(IIndex):
             if self.field_type_converter and filters is not None:
                 filters = self.field_type_converter.convert_filter_for_index(filters)
 
+            cuvs_telemetry: Optional[CuVSSearchTelemetry] = None
+            telemetry_started = 0.0
             if self.dense_search and query_vector:
-                if not sparse_raw_terms and not sparse_values:
-                    native_count = None
-                    if self._auto_cuvs and filters:
-                        native_count = self.dense_search.preflight_native_count(
-                            filters,
-                            self.engine_proxy.evaluate_filter,
-                            self.engine_proxy.set_filter_layout,
-                        )
-                    if native_count == 0:
-                        return [], []
-                    if native_count is not None:
-                        logger.debug(
-                            "cuVS auto mode selected native filtered search (%d candidates)",
-                            native_count,
+                cuvs_telemetry = CuVSSearchTelemetry(
+                    algorithm=self.dense_search.algorithm,
+                    auto_mode=self._auto_cuvs,
+                )
+                telemetry_started = time.perf_counter()
+
+            try:
+                if self.dense_search and query_vector and cuvs_telemetry is not None:
+                    if not sparse_raw_terms and not sparse_values:
+                        native_count = None
+                        if self._auto_cuvs and filters:
+                            native_count = self.dense_search.preflight_native_count(
+                                filters,
+                                self.engine_proxy.evaluate_filter,
+                                self.engine_proxy.set_filter_layout,
+                                telemetry=cuvs_telemetry,
+                            )
+                        if native_count == 0:
+                            cuvs_telemetry.route_reason = "empty_filter"
+                            return [], []
+                        if native_count is not None:
+                            cuvs_telemetry.route_reason = "native_filter_threshold"
+                            logger.debug(
+                                "cuVS auto mode selected native filtered search (%d candidates)",
+                                native_count,
+                            )
+                        else:
+                            queue_started = time.perf_counter()
+                            with self._dense_search_lock:
+                                cuvs_telemetry.queue_ms += (
+                                    time.perf_counter() - queue_started
+                                ) * 1000.0
+                                try:
+                                    result = self.dense_search.search(
+                                        query_vector,
+                                        limit,
+                                        filters,
+                                        self.engine_proxy.evaluate_filter,
+                                        self.engine_proxy.set_filter_layout,
+                                        telemetry=cuvs_telemetry,
+                                    )
+                                    cuvs_telemetry.route_reason = "cuvs"
+                                    return result
+                                except CuVSMemoryBudgetError as exc:
+                                    cuvs_telemetry.route_reason = "native_memory_budget"
+                                    if not self._auto_cuvs:
+                                        raise
+                                    logger.debug("cuVS auto mode kept native dense search: %s", exc)
+                                except CuVSNativeRouteError as exc:
+                                    cuvs_telemetry.route_reason = "native_filter_threshold"
+                                    logger.debug(
+                                        "cuVS auto mode selected native dense search: %s", exc
+                                    )
+                                except UnsupportedCuVSFilterError as exc:
+                                    cuvs_telemetry.route_reason = "native_unsupported_filter"
+                                    if not self.dense_search.fallback_to_native:
+                                        raise
+                                    logger.debug("Falling back to native dense search: %s", exc)
+                    elif not self.dense_search.fallback_to_native:
+                        cuvs_telemetry.route_reason = "unsupported_sparse_hybrid"
+                        raise ValueError(
+                            "cuVS dense search does not support OpenViking sparse/hybrid queries"
                         )
                     else:
-                        with self._dense_search_lock:
-                            try:
-                                return self.dense_search.search(
-                                    query_vector,
-                                    limit,
-                                    filters,
-                                    self.engine_proxy.evaluate_filter,
-                                    self.engine_proxy.set_filter_layout,
-                                )
-                            except CuVSMemoryBudgetError as exc:
-                                if not self._auto_cuvs:
-                                    raise
-                                logger.debug("cuVS auto mode kept native dense search: %s", exc)
-                            except CuVSNativeRouteError as exc:
-                                logger.debug("cuVS auto mode selected native dense search: %s", exc)
-                            except UnsupportedCuVSFilterError as exc:
-                                if not self.dense_search.fallback_to_native:
-                                    raise
-                                logger.debug("Falling back to native dense search: %s", exc)
-                elif not self.dense_search.fallback_to_native:
-                    raise ValueError(
-                        "cuVS dense search does not support OpenViking sparse/hybrid queries"
-                    )
+                        cuvs_telemetry.route_reason = "native_sparse_hybrid"
 
-            return self.engine_proxy.search(
-                query_vector, limit, filters, sparse_raw_terms, sparse_values
-            )
+                native_started = time.perf_counter()
+                try:
+                    return self.engine_proxy.search(
+                        query_vector, limit, filters, sparse_raw_terms, sparse_values
+                    )
+                finally:
+                    if cuvs_telemetry is not None:
+                        cuvs_telemetry.native_search_ms += (
+                            time.perf_counter() - native_started
+                        ) * 1000.0
+                        if cuvs_telemetry.route_reason == "pending":
+                            cuvs_telemetry.route_reason = "native_fallback"
+            except Exception:
+                if cuvs_telemetry is not None and cuvs_telemetry.route_reason == "pending":
+                    cuvs_telemetry.route_reason = "cuvs_error"
+                raise
+            finally:
+                if cuvs_telemetry is not None:
+                    cuvs_telemetry.total_ms += (time.perf_counter() - telemetry_started) * 1000.0
+                    self._record_cuvs_telemetry(cuvs_telemetry)
         return [], []
+
+    @staticmethod
+    def _record_cuvs_telemetry(telemetry: CuVSSearchTelemetry) -> None:
+        payload = telemetry.as_dict()
+        logger.debug("cuVS search telemetry: %s", json.dumps(payload, sort_keys=True))
+        try:
+            from openviking.telemetry import get_current_telemetry
+
+            operation_telemetry = get_current_telemetry()
+            for key, value in payload.items():
+                operation_telemetry.set(f"vector.cuvs.{key}", value)
+        except Exception:
+            logger.debug("Failed to record cuVS search telemetry", exc_info=True)
 
     def aggregate(
         self,

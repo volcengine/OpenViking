@@ -249,6 +249,39 @@ def test_telemetry_summary_uses_simplified_internal_metric_keys():
     assert result["memory"] == {"extracted": 6}
 
 
+def test_telemetry_summary_includes_cuvs_route_and_stage_timings():
+    telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+    telemetry.set("vector.cuvs.algorithm", "brute_force")
+    telemetry.set("vector.cuvs.auto_mode", True)
+    telemetry.set("vector.cuvs.route_reason", "native_filter_threshold")
+    telemetry.set("vector.cuvs.filter_kind", "path")
+    telemetry.set("vector.cuvs.filter_cache_hit", True)
+    telemetry.set("vector.cuvs.build_performed", False)
+    telemetry.set("vector.cuvs.eligible_count", 12)
+    telemetry.set("vector.cuvs.records_generation", 3)
+    telemetry.set("vector.cuvs.index_size", 1000)
+    telemetry.set("vector.cuvs.total_ms", 1.25)
+    telemetry.set("vector.cuvs.preflight_ms", 0.4)
+    telemetry.set("vector.cuvs.native_search_ms", 0.7)
+
+    cuvs = telemetry.finish().summary["vector"]["cuvs"]
+
+    assert cuvs == {
+        "algorithm": "brute_force",
+        "auto_mode": True,
+        "route_reason": "native_filter_threshold",
+        "filter_kind": "path",
+        "filter_cache_hit": True,
+        "build_performed": False,
+        "eligible_count": 12,
+        "records_generation": 3,
+        "index_size": 1000,
+        "total_ms": 1.25,
+        "preflight_ms": 0.4,
+        "native_search_ms": 0.7,
+    }
+
+
 def test_init_tracer_forwards_headers_to_grpc_exporter(monkeypatch):
     captured = {}
 

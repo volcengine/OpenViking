@@ -10,6 +10,7 @@ from openviking.storage.vectordb.index.cuvs_index import (
     CuVSDenseIndex,
     CuVSMemoryBudgetError,
     CuVSNativeRouteError,
+    CuVSSearchTelemetry,
     CuVSUnavailableError,
     UnsupportedCuVSFilterError,
     estimate_cuvs_memory,
@@ -127,6 +128,42 @@ def test_cuvs_dense_search_handles_filter_upsert_delete_and_lazy_rebuild():
     index.delete([DeltaRecord(label=10)])
     assert index.search([1.0, 0.0], 3, None)[0] == [30, 20]
     assert runtime.build_count == 3
+
+
+def test_cuvs_search_telemetry_records_build_filter_cache_and_search():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"algorithm": "brute_force"},
+        runtime=runtime,
+    )
+    index.add_candidates(
+        [
+            candidate(1, [1.0, 0.0], account_id="a"),
+            candidate(2, [0.0, 1.0], account_id="b"),
+        ]
+    )
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    first = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+    assert index.search([1.0, 0.0], 1, filter_a, telemetry=first)[0] == [1]
+    assert first.build_performed is True
+    assert first.filter_kind == "scalar"
+    assert first.filter_cache_hit is False
+    assert first.eligible_count == 1
+    assert first.index_size == 2
+    assert first.build_ms >= 0
+    assert first.filter_prepare_ms >= 0
+    assert first.gpu_search_ms >= 0
+
+    second = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=False)
+    assert index.search([1.0, 0.0], 1, filter_a, telemetry=second)[0] == [1]
+    assert second.build_performed is False
+    assert second.filter_cache_hit is True
+    assert second.eligible_count == 1
 
 
 def test_cuvs_l2_scores_match_openviking_score_convention():
@@ -376,8 +413,7 @@ def test_auto_mode_preflights_different_filters_concurrently():
         return [0b01], 1
 
     filters = [
-        {"op": "must", "field": "account_id", "conds": [value]}
-        for value in ("a", "b", "c", "d")
+        {"op": "must", "field": "account_id", "conds": [value]} for value in ("a", "b", "c", "d")
     ]
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [
@@ -434,11 +470,14 @@ def test_auto_mode_does_not_cache_preflight_across_record_change():
         cache_miss_observed.set()
         return [0b11], 2
 
-    assert index.preflight_native_count(
-        filter_a,
-        resolve_after_change,
-        lambda _labels: None,
-    ) is None
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            resolve_after_change,
+            lambda _labels: None,
+        )
+        is None
+    )
     assert cache_miss_observed.is_set()
 
 

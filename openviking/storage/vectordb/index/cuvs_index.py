@@ -21,6 +21,7 @@ import logging
 import math
 import re
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -55,6 +56,48 @@ class CuVSMemoryEstimate:
     build_graph_bytes: int
     filter_cache_bytes: int
     estimated_peak_bytes: int
+
+
+@dataclass
+class CuVSSearchTelemetry:
+    """Low-cardinality timings and route metadata for one dense query."""
+
+    algorithm: str
+    auto_mode: bool
+    route_reason: str = "pending"
+    filter_kind: str = "none"
+    filter_cache_hit: bool = False
+    build_performed: bool = False
+    eligible_count: Optional[int] = None
+    records_generation: int = 0
+    index_size: int = 0
+    total_ms: float = 0.0
+    preflight_ms: float = 0.0
+    queue_ms: float = 0.0
+    build_ms: float = 0.0
+    filter_prepare_ms: float = 0.0
+    gpu_search_ms: float = 0.0
+    native_search_ms: float = 0.0
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "algorithm": self.algorithm,
+            "auto_mode": self.auto_mode,
+            "route_reason": self.route_reason,
+            "filter_kind": self.filter_kind,
+            "filter_cache_hit": self.filter_cache_hit,
+            "build_performed": self.build_performed,
+            "eligible_count": self.eligible_count,
+            "records_generation": self.records_generation,
+            "index_size": self.index_size,
+            "total_ms": round(self.total_ms, 3),
+            "preflight_ms": round(self.preflight_ms, 3),
+            "queue_ms": round(self.queue_ms, 3),
+            "build_ms": round(self.build_ms, 3),
+            "filter_prepare_ms": round(self.filter_prepare_ms, 3),
+            "gpu_search_ms": round(self.gpu_search_ms, 3),
+            "native_search_ms": round(self.native_search_ms, 3),
+        }
 
 
 def estimate_cuvs_memory(
@@ -595,45 +638,67 @@ class CuVSDenseIndex:
         filters: Mapping[str, Any],
         native_filter_resolver: Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]],
         native_filter_layout_registrar: Callable[[Sequence[int]], None],
+        telemetry: Optional[CuVSSearchTelemetry] = None,
     ) -> Optional[int]:
         """Return the native-route candidate count, or None for the cuVS path."""
 
-        if not self.auto_memory or not filters:
-            return None
-        cache_key = self._filter_cache_key(filters)
-        with self._lock:
-            cached = self._get_cached_filter(cache_key)
-            if cached is not None:
-                return cached.eligible_count if cached.route_native else None
-            native_threshold = (
-                self.auto_path_filter_native_threshold
-                if _filter_uses_field_type(filters, self.field_types, "path")
-                else self.auto_filter_native_threshold
-            )
-            if native_threshold <= 0:
+        started = time.perf_counter()
+        try:
+            if not self.auto_memory or not filters:
                 return None
+            cache_key = self._filter_cache_key(filters)
+            with self._lock:
+                if telemetry is not None:
+                    telemetry.filter_kind = (
+                        "path"
+                        if _filter_uses_field_type(filters, self.field_types, "path")
+                        else "scalar"
+                    )
+                    telemetry.records_generation = self._records_generation
+                    telemetry.index_size = len(self._records)
+                cached = self._get_cached_filter(cache_key)
+                if cached is not None:
+                    if telemetry is not None:
+                        telemetry.filter_cache_hit = True
+                        telemetry.eligible_count = cached.eligible_count
+                    return cached.eligible_count if cached.route_native else None
+                native_threshold = (
+                    self.auto_path_filter_native_threshold
+                    if _filter_uses_field_type(filters, self.field_types, "path")
+                    else self.auto_filter_native_threshold
+                )
+                if native_threshold <= 0:
+                    return None
 
-        generation = self._ensure_native_filter_layout(native_filter_layout_registrar)
-        if generation is None:
-            return None
-        resolved = self._resolve_native_filter(filters, native_filter_resolver)
+            generation = self._ensure_native_filter_layout(native_filter_layout_registrar)
+            if generation is None:
+                return None
+            resolved = self._resolve_native_filter(filters, native_filter_resolver)
+            if telemetry is not None:
+                telemetry.eligible_count = resolved.eligible_count
 
-        with self._lock:
-            if self._records_generation != generation:
-                return None
-            cached = self._get_cached_filter(cache_key)
-            if cached is not None:
+            with self._lock:
+                if self._records_generation != generation:
+                    return None
+                cached = self._get_cached_filter(cache_key)
+                if cached is not None:
+                    if telemetry is not None:
+                        telemetry.filter_cache_hit = True
+                        telemetry.eligible_count = cached.eligible_count
+                    return cached.eligible_count if cached.route_native else None
+                if not resolved.route_native and resolved.eligible_count != 0:
+                    return None
+                cached = _CachedFilter(
+                    prepared=None,
+                    eligible_count=resolved.eligible_count,
+                    route_native=resolved.route_native,
+                    native_threshold=resolved.native_threshold,
+                )
+                self._cache_filter(cache_key, cached)
                 return cached.eligible_count if cached.route_native else None
-            if not resolved.route_native and resolved.eligible_count != 0:
-                return None
-            cached = _CachedFilter(
-                prepared=None,
-                eligible_count=resolved.eligible_count,
-                route_native=resolved.route_native,
-                native_threshold=resolved.native_threshold,
-            )
-            self._cache_filter(cache_key, cached)
-            return cached.eligible_count if cached.route_native else None
+        finally:
+            if telemetry is not None:
+                telemetry.preflight_ms += (time.perf_counter() - started) * 1000.0
 
     def _resolve_native_filter(
         self,
@@ -711,59 +776,67 @@ class CuVSDenseIndex:
         native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
         *,
         filter_layout_is_current: bool = False,
+        telemetry: Optional[CuVSSearchTelemetry] = None,
     ) -> None:
         if not self._dirty:
             return
-        self._labels = list(self._records)
-        if not self._labels:
-            self._index = None
-            self._dirty = False
-            return
-        if self.auto_memory:
-            self._index = None
-            release_index = getattr(self._runtime, "release_index", None)
-            if release_index is not None:
-                release_index()
-            estimate = estimate_cuvs_memory(
-                vector_count=len(self._labels),
-                dimension=self.dimension,
-                algorithm=self.algorithm,
-                build_params=self._build_params,
-                filter_cache_size=self.filter_cache_size,
-                safety_factor=self.auto_memory_safety_factor,
-            )
-            try:
-                free_bytes, total_bytes = self._runtime.memory_info()
-            except Exception as exc:
-                raise CuVSMemoryBudgetError(
-                    "cuVS auto mode could not read free GPU memory"
-                ) from exc
-            usable_bytes = max(0, free_bytes - self.auto_memory_reserve_bytes)
-            if estimate.estimated_peak_bytes > usable_bytes:
-                raise CuVSMemoryBudgetError(
-                    "cuVS auto mode kept native search because the estimated GPU peak "
-                    f"({estimate.estimated_peak_bytes} bytes) exceeds the usable free "
-                    f"memory ({usable_bytes} of {total_bytes} bytes after reserve)"
-                )
-        dataset = [self._records[label].vector for label in self._labels]
-        self._index = None
+        build_started = time.perf_counter()
         try:
-            self._index = self._runtime.build(dataset)
-        except Exception as exc:
-            is_out_of_memory = getattr(self._runtime, "is_out_of_memory", None)
-            if self.auto_memory and is_out_of_memory is not None and is_out_of_memory(exc):
+            self._labels = list(self._records)
+            if not self._labels:
+                self._index = None
+                self._dirty = False
+                return
+            if self.auto_memory:
+                self._index = None
                 release_index = getattr(self._runtime, "release_index", None)
                 if release_index is not None:
                     release_index()
-                raise CuVSMemoryBudgetError(
-                    "cuVS auto mode fell back to native search after a GPU allocation failure"
-                ) from exc
-            raise
-        if native_filter_layout_registrar is not None and not filter_layout_is_current:
-            native_filter_layout_registrar(self._labels)
-            self._filter_layout_generation = self._records_generation
-        self._dirty = False
-        logger.info("Built cuVS %s index with %d vectors", self.algorithm, len(self._labels))
+                estimate = estimate_cuvs_memory(
+                    vector_count=len(self._labels),
+                    dimension=self.dimension,
+                    algorithm=self.algorithm,
+                    build_params=self._build_params,
+                    filter_cache_size=self.filter_cache_size,
+                    safety_factor=self.auto_memory_safety_factor,
+                )
+                try:
+                    free_bytes, total_bytes = self._runtime.memory_info()
+                except Exception as exc:
+                    raise CuVSMemoryBudgetError(
+                        "cuVS auto mode could not read free GPU memory"
+                    ) from exc
+                usable_bytes = max(0, free_bytes - self.auto_memory_reserve_bytes)
+                if estimate.estimated_peak_bytes > usable_bytes:
+                    raise CuVSMemoryBudgetError(
+                        "cuVS auto mode kept native search because the estimated GPU peak "
+                        f"({estimate.estimated_peak_bytes} bytes) exceeds the usable free "
+                        f"memory ({usable_bytes} of {total_bytes} bytes after reserve)"
+                    )
+            dataset = [self._records[label].vector for label in self._labels]
+            self._index = None
+            try:
+                if telemetry is not None:
+                    telemetry.build_performed = True
+                self._index = self._runtime.build(dataset)
+            except Exception as exc:
+                is_out_of_memory = getattr(self._runtime, "is_out_of_memory", None)
+                if self.auto_memory and is_out_of_memory is not None and is_out_of_memory(exc):
+                    release_index = getattr(self._runtime, "release_index", None)
+                    if release_index is not None:
+                        release_index()
+                    raise CuVSMemoryBudgetError(
+                        "cuVS auto mode fell back to native search after a GPU allocation failure"
+                    ) from exc
+                raise
+            if native_filter_layout_registrar is not None and not filter_layout_is_current:
+                native_filter_layout_registrar(self._labels)
+                self._filter_layout_generation = self._records_generation
+            self._dirty = False
+            logger.info("Built cuVS %s index with %d vectors", self.algorithm, len(self._labels))
+        finally:
+            if telemetry is not None:
+                telemetry.build_ms += (time.perf_counter() - build_started) * 1000.0
 
     def search(
         self,
@@ -774,6 +847,7 @@ class CuVSDenseIndex:
             Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]]
         ] = None,
         native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
+        telemetry: Optional[CuVSSearchTelemetry] = None,
     ) -> Tuple[List[int], List[float]]:
         if limit <= 0:
             return [], []
@@ -781,11 +855,19 @@ class CuVSDenseIndex:
         if self.auto_memory and native_filter_layout_registrar is not None:
             self._ensure_native_filter_layout(native_filter_layout_registrar)
         with self._lock:
+            if telemetry is not None:
+                telemetry.filter_kind = (
+                    "path"
+                    if filters and _filter_uses_field_type(filters, self.field_types, "path")
+                    else "scalar"
+                    if filters
+                    else "none"
+                )
+                telemetry.records_generation = self._records_generation
+                telemetry.index_size = len(self._records)
             cached_filter: Optional[_CachedFilter] = None
             resolved_native_filter: Optional[_ResolvedNativeFilter] = None
-            filter_layout_is_current = (
-                self._filter_layout_generation == self._records_generation
-            )
+            filter_layout_is_current = self._filter_layout_generation == self._records_generation
 
             # Auto mode decides whether a selective filter should remain native
             # before paying GPU admission or rebuild costs. A dirty native
@@ -794,6 +876,9 @@ class CuVSDenseIndex:
             if filters and self.auto_memory and native_filter_resolver is not None:
                 cache_key = self._filter_cache_key(filters)
                 cached_filter = self._get_cached_filter(cache_key)
+                if cached_filter is not None and telemetry is not None:
+                    telemetry.filter_cache_hit = True
+                    telemetry.eligible_count = cached_filter.eligible_count
                 if cached_filter is None:
                     if (
                         self._dirty
@@ -831,17 +916,26 @@ class CuVSDenseIndex:
             self._rebuild_if_needed(
                 native_filter_layout_registrar,
                 filter_layout_is_current=filter_layout_is_current,
+                telemetry=telemetry,
             )
             if self._index is None:
                 return [], []
 
             mask: Optional[Any] = None
             if filters:
+                filter_started = time.perf_counter()
+                if cached_filter is None:
+                    cached_filter = self._get_cached_filter(self._filter_cache_key(filters))
+                    if cached_filter is not None and telemetry is not None:
+                        telemetry.filter_cache_hit = True
                 cached_filter = cached_filter or self._prepare_filter(
                     filters,
                     native_filter_resolver,
                     resolved_native_filter,
                 )
+                if telemetry is not None:
+                    telemetry.filter_prepare_ms += (time.perf_counter() - filter_started) * 1000.0
+                    telemetry.eligible_count = cached_filter.eligible_count
                 mask = cached_filter.prepared
                 eligible_count = cached_filter.eligible_count
                 if eligible_count == 0:
@@ -856,7 +950,12 @@ class CuVSDenseIndex:
             else:
                 result_limit = min(limit, len(self._labels))
 
-            offsets, distances = self._runtime.search(self._index, query, result_limit, mask)
+            gpu_started = time.perf_counter()
+            try:
+                offsets, distances = self._runtime.search(self._index, query, result_limit, mask)
+            finally:
+                if telemetry is not None:
+                    telemetry.gpu_search_ms += (time.perf_counter() - gpu_started) * 1000.0
             labels: List[int] = []
             scores: List[float] = []
             for offset, distance in zip(offsets, distances, strict=True):

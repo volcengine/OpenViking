@@ -226,6 +226,27 @@ class TelemetrySummaryBuilder:
                 "scanned": vectors_scanned,
                 "scan_reason": gauges.get("vector.scan_reason", ""),
             }
+            if cls._has_metric_prefix("vector.cuvs", counters, gauges):
+                summary["vector"]["cuvs"] = {
+                    "algorithm": gauges.get("vector.cuvs.algorithm", ""),
+                    "auto_mode": cls._bool(gauges.get("vector.cuvs.auto_mode"), False),
+                    "route_reason": gauges.get("vector.cuvs.route_reason", ""),
+                    "filter_kind": gauges.get("vector.cuvs.filter_kind", "none"),
+                    "filter_cache_hit": cls._bool(
+                        gauges.get("vector.cuvs.filter_cache_hit"), False
+                    ),
+                    "build_performed": cls._bool(gauges.get("vector.cuvs.build_performed"), False),
+                    "eligible_count": cls._i(gauges.get("vector.cuvs.eligible_count"), 0),
+                    "records_generation": cls._i(gauges.get("vector.cuvs.records_generation"), 0),
+                    "index_size": cls._i(gauges.get("vector.cuvs.index_size"), 0),
+                    "total_ms": cls._f(gauges.get("vector.cuvs.total_ms"), 0.0),
+                    "preflight_ms": cls._f(gauges.get("vector.cuvs.preflight_ms"), 0.0),
+                    "queue_ms": cls._f(gauges.get("vector.cuvs.queue_ms"), 0.0),
+                    "build_ms": cls._f(gauges.get("vector.cuvs.build_ms"), 0.0),
+                    "filter_prepare_ms": cls._f(gauges.get("vector.cuvs.filter_prepare_ms"), 0.0),
+                    "gpu_search_ms": cls._f(gauges.get("vector.cuvs.gpu_search_ms"), 0.0),
+                    "native_search_ms": cls._f(gauges.get("vector.cuvs.native_search_ms"), 0.0),
+                }
 
         if cls._has_metric_prefix("semantic_nodes", counters, gauges):
             summary["semantic_nodes"] = {
