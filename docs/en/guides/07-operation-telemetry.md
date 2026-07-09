@@ -176,6 +176,28 @@ Only fields that are actually produced by an operation are returned. Missing gro
 | `summary.vector.scanned` | Number of vectors scanned by the backend |
 | `summary.vector.scan_reason` | Text description of the scan strategy or reason |
 
+When cuVS is configured, `summary.vector.cuvs` can also report the selected
+route and its component timings. It never includes the query vector, filter
+values, or URI contents.
+
+| Field | Meaning |
+| --- | --- |
+| `summary.vector.cuvs.algorithm` | cuVS algorithm, such as `brute_force` or `cagra` |
+| `summary.vector.cuvs.auto_mode` | Whether automatic CPU/GPU routing was enabled |
+| `summary.vector.cuvs.route_reason` | Selected route, such as `cuvs`, `native_filter_threshold`, or `native_memory_budget` |
+| `summary.vector.cuvs.filter_kind` | Low-cardinality filter class: `none`, `scalar`, or `path` |
+| `summary.vector.cuvs.filter_cache_hit` | Whether a prepared or preflight filter was reused |
+| `summary.vector.cuvs.native_filter_reused` | Whether native recall reused the preflight bitmap |
+| `summary.vector.cuvs.eligible_count` | Number of rows eligible after native filtering |
+| `summary.vector.cuvs.index_size` | Number of rows in the cuVS host snapshot |
+| `summary.vector.cuvs.total_ms` | Total dense routing and search time |
+| `summary.vector.cuvs.preflight_ms` | Native filter preflight time |
+| `summary.vector.cuvs.queue_ms` | Time waiting for the current cuVS search lock |
+| `summary.vector.cuvs.build_ms` | GPU admission and index build time, when a build occurred |
+| `summary.vector.cuvs.filter_prepare_ms` | Time preparing or retrieving the device filter |
+| `summary.vector.cuvs.gpu_search_ms` | cuVS search time |
+| `summary.vector.cuvs.native_search_ms` | Native fallback search time |
+
 ### `summary.resource`
 
 This group appears on resource ingestion operations such as `resources.add_resource`.

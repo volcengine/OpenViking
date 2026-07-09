@@ -156,8 +156,9 @@ flowchart TD
 2. native engine 将每个 cuVS row 预映射到 native logical offset；
 3. 查询时 native filter parser 与 scalar/path index 计算原生 bitmap；
 4. `evaluate_filter(dsl)` 按已注册 layout 投影，返回 packed `uint32` words 和 eligible count；
-5. cuVS 将 words 复制到 device，并通过 `filters.from_bitset()` 构造 prefilter；
-6. 相同 filter 复用 device bitset；mutation 同时使 layout 和 cache 失效。
+5. 宽过滤把 preflight words 直接交给 cuVS，通过 `filters.from_bitset()` 构造 prefilter，不重复计算 native bitmap；
+6. 窄过滤由 native engine 返回一个有界、短生命周期的 bitmap token，CPU recall 直接复用；token miss 时安全回退到普通 search；
+7. 相同 filter 复用 device bitset；mutation 同时使 layout、device cache 和 native token 失效。
 
 auto 模式会在进入串行 cuVS search 前完成候选数 preflight。native engine 对
 `evaluate_filter` 使用共享读锁，因此不同的首次过滤条件可以并行计算；layout 注册和
@@ -460,6 +461,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 - 目标 VectorDB 单元/集成测试通过；
 - stable-ABI loader 测试通过；
 - standalone C++ engine bitmap projection 测试通过；
+- native bitmap token 复用、mutation 失效及旧 ABI fallback 测试通过；
 - brute-force/CAGRA GPU smoke 覆盖组合过滤、update、delete 和 rebuild；
 - Python lint、C++ syntax 和 diff check 通过；
 - 提交前扫描 staged/committed diff，不允许包含凭据、私钥或非公开环境标识。

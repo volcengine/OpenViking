@@ -235,6 +235,9 @@ class TelemetrySummaryBuilder:
                     "filter_cache_hit": cls._bool(
                         gauges.get("vector.cuvs.filter_cache_hit"), False
                     ),
+                    "native_filter_reused": cls._bool(
+                        gauges.get("vector.cuvs.native_filter_reused"), False
+                    ),
                     "build_performed": cls._bool(gauges.get("vector.cuvs.build_performed"), False),
                     "eligible_count": cls._i(gauges.get("vector.cuvs.eligible_count"), 0),
                     "records_generation": cls._i(gauges.get("vector.cuvs.records_generation"), 0),

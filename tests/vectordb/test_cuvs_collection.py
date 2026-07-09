@@ -396,13 +396,18 @@ def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
             ]
         )
 
-        result = collection.search_by_vector(
-            "default",
-            dense_vector=[1.0, 0.0, 0.0, 0.0],
-            limit=1,
-            filters={"op": "must", "field": "account_id", "conds": ["a"]},
-        )
+        telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
+        with bind_telemetry(telemetry):
+            result = collection.search_by_vector(
+                "default",
+                dense_vector=[1.0, 0.0, 0.0, 0.0],
+                limit=1,
+                filters={"op": "must", "field": "account_id", "conds": ["a"]},
+            )
         assert [item.id for item in result.data] == ["first"]
+        cuvs = telemetry.finish().summary["vector"]["cuvs"]
+        assert cuvs["route_reason"] == "native_filter_threshold"
+        assert cuvs["native_filter_reused"] is True
         assert dense_search_calls == 0
         assert runtimes[0].build_count == 0
         assert runtimes[0].search_count == 0

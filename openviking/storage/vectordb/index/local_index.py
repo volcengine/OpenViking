@@ -113,6 +113,24 @@ class IndexEngineProxy:
         scores = search_result.scores
         return labels, scores
 
+    def search_with_filter_token(
+        self,
+        query_vector: List[float],
+        limit: int,
+        filter_token: int,
+    ) -> Optional[Tuple[List[int], List[float]]]:
+        """Reuse a native scalar bitmap when the engine still owns its token."""
+
+        if not self.index_engine or filter_token <= 0:
+            return None
+        req = engine.SearchRequest()
+        req.query = normalize_vector(query_vector) if self.normalize_vector_flag else query_vector
+        req.topk = limit
+        search_result = self.index_engine.search_with_filter_token(req, filter_token)
+        if search_result is None:
+            return None
+        return search_result.labels, search_result.scores
+
     def add_data(self, cands_list: List[CandidateData]):
         if not self.index_engine:
             raise RuntimeError("Index engine not initialized")
@@ -196,13 +214,20 @@ class IndexEngineProxy:
         if result != 0:
             raise RuntimeError("Failed to register native scalar filter layout")
 
-    def evaluate_filter(self, filters: Dict[str, Any]) -> Tuple[List[int], int]:
+    def evaluate_filter(
+        self,
+        filters: Dict[str, Any],
+        max_cached_candidates: int = 0,
+    ) -> Tuple[List[int], int, int]:
         """Evaluate a native scalar filter in the registered dense-index row order."""
 
         if not self.index_engine:
             raise RuntimeError("Index engine not initialized")
-        result = self.index_engine.evaluate_filter(json.dumps(filters))
-        return result.bitset_words, result.eligible_count
+        result = self.index_engine.evaluate_filter(
+            json.dumps(filters),
+            max_cached_candidates=max_cached_candidates,
+        )
+        return result.bitset_words, result.eligible_count, result.native_filter_token
 
     def drop(self):
         """Release the index engine resources.
@@ -335,6 +360,7 @@ class LocalIndex(IIndex):
 
             cuvs_telemetry: Optional[CuVSSearchTelemetry] = None
             telemetry_started = 0.0
+            native_filter_token = 0
             if self.dense_search and query_vector:
                 cuvs_telemetry = CuVSSearchTelemetry(
                     algorithm=self.dense_search.algorithm,
@@ -349,7 +375,7 @@ class LocalIndex(IIndex):
                         if self._auto_cuvs and filters:
                             native_count = self.dense_search.preflight_native_count(
                                 filters,
-                                self.engine_proxy.evaluate_filter,
+                                self._evaluate_cuvs_filter,
                                 self.engine_proxy.set_filter_layout,
                                 telemetry=cuvs_telemetry,
                             )
@@ -358,6 +384,7 @@ class LocalIndex(IIndex):
                             return [], []
                         if native_count is not None:
                             cuvs_telemetry.route_reason = "native_filter_threshold"
+                            native_filter_token = self.dense_search.native_filter_token(filters)
                             logger.debug(
                                 "cuVS auto mode selected native filtered search (%d candidates)",
                                 native_count,
@@ -373,7 +400,7 @@ class LocalIndex(IIndex):
                                         query_vector,
                                         limit,
                                         filters,
-                                        self.engine_proxy.evaluate_filter,
+                                        self._evaluate_cuvs_filter,
                                         self.engine_proxy.set_filter_layout,
                                         telemetry=cuvs_telemetry,
                                     )
@@ -404,6 +431,15 @@ class LocalIndex(IIndex):
 
                 native_started = time.perf_counter()
                 try:
+                    if native_filter_token:
+                        token_result = self.engine_proxy.search_with_filter_token(
+                            query_vector,
+                            limit,
+                            native_filter_token,
+                        )
+                        if token_result is not None:
+                            cuvs_telemetry.native_filter_reused = True
+                            return token_result
                     return self.engine_proxy.search(
                         query_vector, limit, filters, sparse_raw_terms, sparse_values
                     )
@@ -423,6 +459,14 @@ class LocalIndex(IIndex):
                     cuvs_telemetry.total_ms += (time.perf_counter() - telemetry_started) * 1000.0
                     self._record_cuvs_telemetry(cuvs_telemetry)
         return [], []
+
+    def _evaluate_cuvs_filter(self, filters: Dict[str, Any]) -> Tuple[List[int], int, int]:
+        if self.dense_search is None or self.engine_proxy is None:
+            raise RuntimeError("cuVS filter evaluation requires an initialized index")
+        return self.engine_proxy.evaluate_filter(
+            filters,
+            max_cached_candidates=self.dense_search.native_filter_threshold(filters),
+        )
 
     @staticmethod
     def _record_cuvs_telemetry(telemetry: CuVSSearchTelemetry) -> None:

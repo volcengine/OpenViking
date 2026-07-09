@@ -24,11 +24,17 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 
 logger = logging.getLogger(__name__)
+
+NativeFilterEvaluation = Union[
+    Tuple[Sequence[int], int],
+    Tuple[Sequence[int], int, int],
+]
+NativeFilterResolver = Callable[[Mapping[str, Any]], NativeFilterEvaluation]
 
 
 class CuVSUnavailableError(RuntimeError):
@@ -67,6 +73,7 @@ class CuVSSearchTelemetry:
     route_reason: str = "pending"
     filter_kind: str = "none"
     filter_cache_hit: bool = False
+    native_filter_reused: bool = False
     build_performed: bool = False
     eligible_count: Optional[int] = None
     records_generation: int = 0
@@ -86,6 +93,7 @@ class CuVSSearchTelemetry:
             "route_reason": self.route_reason,
             "filter_kind": self.filter_kind,
             "filter_cache_hit": self.filter_cache_hit,
+            "native_filter_reused": self.native_filter_reused,
             "build_performed": self.build_performed,
             "eligible_count": self.eligible_count,
             "records_generation": self.records_generation,
@@ -437,6 +445,7 @@ class _CachedFilter:
     eligible_count: int
     route_native: bool = False
     native_threshold: int = 0
+    native_filter_token: int = 0
 
 
 @dataclass(frozen=True)
@@ -445,6 +454,7 @@ class _ResolvedNativeFilter:
     eligible_count: int
     route_native: bool
     native_threshold: int
+    native_filter_token: int = 0
 
 
 class CuVSDenseIndex:
@@ -519,6 +529,7 @@ class CuVSDenseIndex:
         self._index: Any = None
         self._dirty = True
         self._filter_cache: OrderedDict[str, _CachedFilter] = OrderedDict()
+        self._preflight_filter_cache: OrderedDict[str, _ResolvedNativeFilter] = OrderedDict()
         self._lock = threading.RLock()
         self._filter_layout_lock = threading.Lock()
         self._records_generation = 0
@@ -591,6 +602,7 @@ class CuVSDenseIndex:
         self._records_generation += 1
         self._dirty = True
         self._filter_cache.clear()
+        self._preflight_filter_cache.clear()
 
     @staticmethod
     def _filter_cache_key(filters: Mapping[str, Any]) -> Optional[str]:
@@ -610,9 +622,45 @@ class CuVSDenseIndex:
     def _cache_filter(self, cache_key: Optional[str], cached: _CachedFilter) -> None:
         if cache_key is None or self.filter_cache_size <= 0:
             return
+        self._preflight_filter_cache.pop(cache_key, None)
         self._filter_cache[cache_key] = cached
         while len(self._filter_cache) > self.filter_cache_size:
             self._filter_cache.popitem(last=False)
+
+    def _get_preflight_filter(self, cache_key: Optional[str]) -> Optional[_ResolvedNativeFilter]:
+        if cache_key is None:
+            return None
+        cached = self._preflight_filter_cache.pop(cache_key, None)
+        if cached is not None:
+            self._preflight_filter_cache[cache_key] = cached
+        return cached
+
+    def _cache_preflight_filter(
+        self,
+        cache_key: Optional[str],
+        resolved: _ResolvedNativeFilter,
+    ) -> None:
+        if cache_key is None:
+            return
+        self._preflight_filter_cache[cache_key] = resolved
+        capacity = max(1, self.filter_cache_size)
+        while len(self._preflight_filter_cache) > capacity:
+            self._preflight_filter_cache.popitem(last=False)
+
+    def native_filter_threshold(self, filters: Mapping[str, Any]) -> int:
+        return (
+            self.auto_path_filter_native_threshold
+            if _filter_uses_field_type(filters, self.field_types, "path")
+            else self.auto_filter_native_threshold
+        )
+
+    def native_filter_token(self, filters: Mapping[str, Any]) -> int:
+        cache_key = self._filter_cache_key(filters)
+        with self._lock:
+            cached = self._get_cached_filter(cache_key)
+            if cached is None or not cached.route_native:
+                return 0
+            return cached.native_filter_token
 
     def _ensure_native_filter_layout(
         self,
@@ -636,7 +684,7 @@ class CuVSDenseIndex:
     def preflight_native_count(
         self,
         filters: Mapping[str, Any],
-        native_filter_resolver: Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]],
+        native_filter_resolver: NativeFilterResolver,
         native_filter_layout_registrar: Callable[[Sequence[int]], None],
         telemetry: Optional[CuVSSearchTelemetry] = None,
     ) -> Optional[int]:
@@ -662,13 +710,17 @@ class CuVSDenseIndex:
                         telemetry.filter_cache_hit = True
                         telemetry.eligible_count = cached.eligible_count
                     return cached.eligible_count if cached.route_native else None
-                native_threshold = (
-                    self.auto_path_filter_native_threshold
-                    if _filter_uses_field_type(filters, self.field_types, "path")
-                    else self.auto_filter_native_threshold
-                )
+                native_threshold = self.native_filter_threshold(filters)
                 if native_threshold <= 0:
                     return None
+                preflight_cached = self._get_preflight_filter(cache_key)
+                if preflight_cached is not None:
+                    if telemetry is not None:
+                        telemetry.filter_cache_hit = True
+                        telemetry.eligible_count = preflight_cached.eligible_count
+                    return (
+                        preflight_cached.eligible_count if preflight_cached.route_native else None
+                    )
 
             generation = self._ensure_native_filter_layout(native_filter_layout_registrar)
             if generation is None:
@@ -687,12 +739,14 @@ class CuVSDenseIndex:
                         telemetry.eligible_count = cached.eligible_count
                     return cached.eligible_count if cached.route_native else None
                 if not resolved.route_native and resolved.eligible_count != 0:
+                    self._cache_preflight_filter(cache_key, resolved)
                     return None
                 cached = _CachedFilter(
                     prepared=None,
                     eligible_count=resolved.eligible_count,
                     route_native=resolved.route_native,
                     native_threshold=resolved.native_threshold,
+                    native_filter_token=resolved.native_filter_token,
                 )
                 self._cache_filter(cache_key, cached)
                 return cached.eligible_count if cached.route_native else None
@@ -703,14 +757,15 @@ class CuVSDenseIndex:
     def _resolve_native_filter(
         self,
         filters: Mapping[str, Any],
-        native_filter_resolver: Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]],
+        native_filter_resolver: NativeFilterResolver,
     ) -> _ResolvedNativeFilter:
-        words, eligible_count = native_filter_resolver(filters)
-        native_threshold = (
-            self.auto_path_filter_native_threshold
-            if _filter_uses_field_type(filters, self.field_types, "path")
-            else self.auto_filter_native_threshold
-        )
+        evaluation = native_filter_resolver(filters)
+        if len(evaluation) == 2:
+            words, eligible_count = evaluation
+            native_filter_token = 0
+        else:
+            words, eligible_count, native_filter_token = evaluation
+        native_threshold = self.native_filter_threshold(filters)
         route_native = (
             self.auto_memory and native_threshold > 0 and eligible_count <= native_threshold
         )
@@ -719,14 +774,13 @@ class CuVSDenseIndex:
             eligible_count=int(eligible_count),
             route_native=route_native,
             native_threshold=native_threshold,
+            native_filter_token=int(native_filter_token),
         )
 
     def _prepare_filter(
         self,
         filters: Mapping[str, Any],
-        native_filter_resolver: Optional[
-            Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]]
-        ] = None,
+        native_filter_resolver: Optional[NativeFilterResolver] = None,
         resolved_native_filter: Optional[_ResolvedNativeFilter] = None,
     ) -> _CachedFilter:
         cache_key = self._filter_cache_key(filters)
@@ -767,6 +821,11 @@ class CuVSDenseIndex:
             eligible_count=eligible_count,
             route_native=route_native,
             native_threshold=native_threshold,
+            native_filter_token=(
+                resolved_native_filter.native_filter_token
+                if resolved_native_filter is not None
+                else 0
+            ),
         )
         self._cache_filter(cache_key, cached)
         return cached
@@ -843,9 +902,7 @@ class CuVSDenseIndex:
         query_vector: Sequence[float],
         limit: int,
         filters: Optional[Mapping[str, Any]],
-        native_filter_resolver: Optional[
-            Callable[[Mapping[str, Any]], Tuple[Sequence[int], int]]
-        ] = None,
+        native_filter_resolver: Optional[NativeFilterResolver] = None,
         native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
         telemetry: Optional[CuVSSearchTelemetry] = None,
     ) -> Tuple[List[int], List[float]]:
@@ -880,17 +937,22 @@ class CuVSDenseIndex:
                     telemetry.filter_cache_hit = True
                     telemetry.eligible_count = cached_filter.eligible_count
                 if cached_filter is None:
-                    if (
-                        self._dirty
-                        and native_filter_layout_registrar is not None
-                        and not filter_layout_is_current
-                    ):
-                        native_filter_layout_registrar(list(self._records))
-                        filter_layout_is_current = True
-                        self._filter_layout_generation = self._records_generation
-                    resolved_native_filter = self._resolve_native_filter(
-                        filters, native_filter_resolver
-                    )
+                    resolved_native_filter = self._get_preflight_filter(cache_key)
+                    if resolved_native_filter is not None and telemetry is not None:
+                        telemetry.filter_cache_hit = True
+                        telemetry.eligible_count = resolved_native_filter.eligible_count
+                    if resolved_native_filter is None:
+                        if (
+                            self._dirty
+                            and native_filter_layout_registrar is not None
+                            and not filter_layout_is_current
+                        ):
+                            native_filter_layout_registrar(list(self._records))
+                            filter_layout_is_current = True
+                            self._filter_layout_generation = self._records_generation
+                        resolved_native_filter = self._resolve_native_filter(
+                            filters, native_filter_resolver
+                        )
                     if (
                         resolved_native_filter.route_native
                         or resolved_native_filter.eligible_count == 0
@@ -900,6 +962,7 @@ class CuVSDenseIndex:
                             eligible_count=resolved_native_filter.eligible_count,
                             route_native=resolved_native_filter.route_native,
                             native_threshold=resolved_native_filter.native_threshold,
+                            native_filter_token=resolved_native_filter.native_filter_token,
                         )
                         self._cache_filter(cache_key, cached_filter)
 

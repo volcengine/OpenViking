@@ -176,6 +176,27 @@ summary 顶层这 3 个基础字段总会存在：
 | `summary.vector.scanned` | 底层实际扫描的向量数量 |
 | `summary.vector.scan_reason` | 本次扫描策略或扫描原因说明 |
 
+配置 cuVS 后，`summary.vector.cuvs` 还会给出 CPU/GPU 路由和分阶段耗时。
+其中不会包含查询向量、filter 值或 URI 内容。
+
+| 字段 | 含义 |
+| --- | --- |
+| `summary.vector.cuvs.algorithm` | cuVS 算法，例如 `brute_force` 或 `cagra` |
+| `summary.vector.cuvs.auto_mode` | 是否启用了自动 CPU/GPU 路由 |
+| `summary.vector.cuvs.route_reason` | 最终路由，例如 `cuvs`、`native_filter_threshold` 或 `native_memory_budget` |
+| `summary.vector.cuvs.filter_kind` | 低基数 filter 类型：`none`、`scalar` 或 `path` |
+| `summary.vector.cuvs.filter_cache_hit` | 是否复用了已准备或 preflight 的 filter |
+| `summary.vector.cuvs.native_filter_reused` | native recall 是否复用了 preflight bitmap |
+| `summary.vector.cuvs.eligible_count` | native filter 后的候选行数 |
+| `summary.vector.cuvs.index_size` | cuVS host snapshot 的行数 |
+| `summary.vector.cuvs.total_ms` | dense 路由与检索总耗时 |
+| `summary.vector.cuvs.preflight_ms` | native filter preflight 耗时 |
+| `summary.vector.cuvs.queue_ms` | 等待当前 cuVS search lock 的耗时 |
+| `summary.vector.cuvs.build_ms` | 发生 build 时的 GPU 准入与建索引耗时 |
+| `summary.vector.cuvs.filter_prepare_ms` | 准备或读取 device filter 的耗时 |
+| `summary.vector.cuvs.gpu_search_ms` | cuVS search 耗时 |
+| `summary.vector.cuvs.native_search_ms` | native fallback search 耗时 |
+
 ### `summary.resource`
 
 这个分组常见于 `resources.add_resource` 这类资源导入操作。

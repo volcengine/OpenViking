@@ -256,6 +256,7 @@ def test_telemetry_summary_includes_cuvs_route_and_stage_timings():
     telemetry.set("vector.cuvs.route_reason", "native_filter_threshold")
     telemetry.set("vector.cuvs.filter_kind", "path")
     telemetry.set("vector.cuvs.filter_cache_hit", True)
+    telemetry.set("vector.cuvs.native_filter_reused", True)
     telemetry.set("vector.cuvs.build_performed", False)
     telemetry.set("vector.cuvs.eligible_count", 12)
     telemetry.set("vector.cuvs.records_generation", 3)
@@ -272,6 +273,7 @@ def test_telemetry_summary_includes_cuvs_route_and_stage_timings():
         "route_reason": "native_filter_threshold",
         "filter_kind": "path",
         "filter_cache_hit": True,
+        "native_filter_reused": True,
         "build_performed": False,
         "eligible_count": 12,
         "records_generation": 3,

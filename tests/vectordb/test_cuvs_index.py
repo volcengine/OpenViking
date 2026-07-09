@@ -584,16 +584,50 @@ def test_auto_mode_wide_filter_reuses_preflight_bitmap_after_build():
         resolve_count += 1
         return [0b11], 2
 
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            resolve,
+            lambda _labels: None,
+        )
+        is None
+    )
     labels, _ = index.search(
         [1.0, 0.0],
         2,
-        {"op": "must", "field": "account_id", "conds": ["a"]},
+        filter_a,
         resolve,
         lambda _labels: None,
     )
     assert labels == [10, 20]
     assert resolve_count == 1
     assert runtime.build_count == 1
+
+
+def test_auto_mode_retains_native_filter_token_for_selective_route():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"account_id": "string"},
+        config={"auto_filter_native_threshold": 1},
+        runtime=runtime,
+        auto_memory=True,
+    )
+    index.add_candidates([candidate(10, [1.0, 0.0], account_id="a")])
+    filter_a = {"op": "must", "field": "account_id", "conds": ["a"]}
+
+    assert (
+        index.preflight_native_count(
+            filter_a,
+            lambda _filters: ([0b1], 1, 17),
+            lambda _labels: None,
+        )
+        == 1
+    )
+    assert index.native_filter_token(filter_a) == 17
 
 
 def test_auto_mode_uses_lower_native_threshold_for_path_filters():
