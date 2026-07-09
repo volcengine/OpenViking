@@ -325,6 +325,10 @@ def test_auto_mode_caches_native_route_for_selective_filter():
         with pytest.raises(CuVSNativeRouteError, match="1 candidates"):
             index.search([1.0, 0.0], 1, filter_a, resolve, register)
 
+    assert index.has_cached_native_route(filter_a)
+    assert not index.has_cached_native_route(
+        {"op": "must", "field": "account_id", "conds": ["missing"]}
+    )
     assert calls == [("register", [10, 20]), ("resolve", filter_a)]
     # Selectivity is decided before GPU admission/build, even while dirty.
     assert runtime.build_count == 0

@@ -333,30 +333,38 @@ class LocalIndex(IIndex):
                 filters = self.field_type_converter.convert_filter_for_index(filters)
 
             if self.dense_search and query_vector:
-                with self._dense_search_lock:
-                    if not sparse_raw_terms and not sparse_values:
-                        try:
-                            return self.dense_search.search(
-                                query_vector,
-                                limit,
-                                filters,
-                                self.engine_proxy.evaluate_filter,
-                                self.engine_proxy.set_filter_layout,
-                            )
-                        except CuVSMemoryBudgetError as exc:
-                            if not self._auto_cuvs:
-                                raise
-                            logger.debug("cuVS auto mode kept native dense search: %s", exc)
-                        except CuVSNativeRouteError as exc:
-                            logger.debug("cuVS auto mode selected native dense search: %s", exc)
-                        except UnsupportedCuVSFilterError as exc:
-                            if not self.dense_search.fallback_to_native:
-                                raise
-                            logger.debug("Falling back to native dense search: %s", exc)
-                    elif not self.dense_search.fallback_to_native:
-                        raise ValueError(
-                            "cuVS dense search does not support OpenViking sparse/hybrid queries"
-                        )
+                if not sparse_raw_terms and not sparse_values:
+                    cached_native_route = (
+                        self._auto_cuvs
+                        and bool(filters)
+                        and self.dense_search.has_cached_native_route(filters)
+                    )
+                    if cached_native_route:
+                        logger.debug("cuVS auto mode reused a cached native filter route")
+                    else:
+                        with self._dense_search_lock:
+                            try:
+                                return self.dense_search.search(
+                                    query_vector,
+                                    limit,
+                                    filters,
+                                    self.engine_proxy.evaluate_filter,
+                                    self.engine_proxy.set_filter_layout,
+                                )
+                            except CuVSMemoryBudgetError as exc:
+                                if not self._auto_cuvs:
+                                    raise
+                                logger.debug("cuVS auto mode kept native dense search: %s", exc)
+                            except CuVSNativeRouteError as exc:
+                                logger.debug("cuVS auto mode selected native dense search: %s", exc)
+                            except UnsupportedCuVSFilterError as exc:
+                                if not self.dense_search.fallback_to_native:
+                                    raise
+                                logger.debug("Falling back to native dense search: %s", exc)
+                elif not self.dense_search.fallback_to_native:
+                    raise ValueError(
+                        "cuVS dense search does not support OpenViking sparse/hybrid queries"
+                    )
 
             return self.engine_proxy.search(
                 query_vector, limit, filters, sparse_raw_terms, sparse_values

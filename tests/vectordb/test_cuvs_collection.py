@@ -295,13 +295,22 @@ def test_auto_cuvs_falls_back_then_retries_when_memory_is_available(monkeypatch)
 
 def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
     runtimes = []
+    dense_search_calls = 0
+
+    original_search = cuvs_index.CuVSDenseIndex.search
+
+    def tracked_search(self, *args, **kwargs):
+        nonlocal dense_search_calls
+        dense_search_calls += 1
+        return original_search(self, *args, **kwargs)
 
     def make_runtime(_algorithm, metric, _build_params, _search_params):
-        runtime = MemoryAwareFakeCuVSRuntime(metric, free_memory_bytes=32)
+        runtime = MemoryAwareFakeCuVSRuntime(metric, free_memory_bytes=64)
         runtimes.append(runtime)
         return runtime
 
     monkeypatch.setattr(cuvs_index, "_CuVSRuntime", make_runtime)
+    monkeypatch.setattr(cuvs_index.CuVSDenseIndex, "search", tracked_search)
     collection = get_or_create_local_collection(
         meta_data={
             "CollectionName": "auto_cuvs_selective_first",
@@ -315,7 +324,7 @@ def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
             "dense_search": {
                 "backend": "auto_cuvs",
                 "algorithm": "brute_force",
-                "filter_cache_size": 0,
+                "filter_cache_size": 1,
                 "auto_memory_reserve_mb": 0,
                 "auto_memory_safety_factor": 1.0,
                 "auto_filter_native_threshold": 1,
@@ -353,11 +362,22 @@ def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
             filters={"op": "must", "field": "account_id", "conds": ["a"]},
         )
         assert [item.id for item in result.data] == ["first"]
+        assert dense_search_calls == 1
         assert runtimes[0].build_count == 0
         assert runtimes[0].search_count == 0
 
+        result = collection.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=1,
+            filters={"op": "must", "field": "account_id", "conds": ["a"]},
+        )
+        assert [item.id for item in result.data] == ["first"]
+        assert dense_search_calls == 1
+
         result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
         assert [item.id for item in result.data] == ["first"]
+        assert dense_search_calls == 2
         assert runtimes[0].build_count == 1
         assert runtimes[0].search_count == 1
     finally:

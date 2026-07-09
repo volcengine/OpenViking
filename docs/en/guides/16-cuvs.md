@@ -137,7 +137,9 @@ each rebuild it registers the cuVS label order with the native engine once.
 The first use of a scalar or URI filter then reuses OpenViking's native
 scalar/path index and projects its bitmap into cuVS row order; it does not scan
 all host-side records in Python. `filter_cache_size` retains the resulting
-device bitsets and routing decisions and invalidates them on mutation.
+device bitsets and routing decisions and invalidates them on mutation. In auto
+mode, a cached native routing decision bypasses the serialized cuVS search path
+and goes directly to the native index.
 Sparse/hybrid queries fall back to OpenViking's native local index when
 `fallback_to_native` is enabled. The canonical vectors remain in the local
 store and repopulate cuVS after restart.

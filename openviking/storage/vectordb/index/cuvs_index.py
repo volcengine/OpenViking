@@ -567,6 +567,16 @@ class CuVSDenseIndex:
         while len(self._filter_cache) > self.filter_cache_size:
             self._filter_cache.popitem(last=False)
 
+    def has_cached_native_route(self, filters: Mapping[str, Any]) -> bool:
+        """Return whether auto mode already routed this filter to native search."""
+
+        if not self.auto_memory or not filters:
+            return False
+        cache_key = self._filter_cache_key(filters)
+        with self._lock:
+            cached = self._get_cached_filter(cache_key)
+            return cached is not None and cached.route_native
+
     def _resolve_native_filter(
         self,
         filters: Mapping[str, Any],
