@@ -132,6 +132,8 @@ class MemoryIsolationHandler:
             return True
         if self.allowed_memory_types is not None and memory_type not in self.allowed_memory_types:
             return False
+        if not self.allow_self and not getattr(memory_type_schema, "peer_enabled", True):
+            return False
         return True
 
     def _can_write_peer(self, peer_id: str) -> bool:
@@ -207,7 +209,7 @@ class MemoryIsolationHandler:
         has_ranges = operation.memory_fields.get("ranges") is not None
         if not getattr(memory_type_schema, "peer_enabled", True):
             operation.memory_fields.pop("peer_id", None)
-            target_ids = [_SELF_PEER_ID]
+            target_ids = [_SELF_PEER_ID] if self.allow_self else []
         elif operation.memory_fields.get("ranges") is not None:
             target_ids = self._range_targets(
                 operation.memory_fields.get("ranges"),
