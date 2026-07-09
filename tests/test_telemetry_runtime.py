@@ -261,6 +261,9 @@ def test_telemetry_summary_includes_cuvs_route_and_stage_timings():
     telemetry.set("vector.cuvs.eligible_count", 12)
     telemetry.set("vector.cuvs.records_generation", 3)
     telemetry.set("vector.cuvs.index_size", 1000)
+    telemetry.set("vector.cuvs.memory_estimated_peak_bytes", 4096)
+    telemetry.set("vector.cuvs.memory_free_bytes", 8192)
+    telemetry.set("vector.cuvs.memory_usable_bytes", 6144)
     telemetry.set("vector.cuvs.total_ms", 1.25)
     telemetry.set("vector.cuvs.preflight_ms", 0.4)
     telemetry.set("vector.cuvs.native_search_ms", 0.7)
@@ -278,6 +281,9 @@ def test_telemetry_summary_includes_cuvs_route_and_stage_timings():
         "eligible_count": 12,
         "records_generation": 3,
         "index_size": 1000,
+        "memory_estimated_peak_bytes": 4096,
+        "memory_free_bytes": 8192,
+        "memory_usable_bytes": 6144,
         "total_ms": 1.25,
         "preflight_ms": 0.4,
         "native_search_ms": 0.7,

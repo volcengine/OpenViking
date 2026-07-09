@@ -189,6 +189,9 @@ summary 顶层这 3 个基础字段总会存在：
 | `summary.vector.cuvs.native_filter_reused` | native recall 是否复用了 preflight bitmap |
 | `summary.vector.cuvs.eligible_count` | native filter 后的候选行数 |
 | `summary.vector.cuvs.index_size` | cuVS host snapshot 的行数 |
+| `summary.vector.cuvs.memory_estimated_peak_bytes` | 本次 auto build 准入使用的峰值显存估算 |
+| `summary.vector.cuvs.memory_free_bytes` | 在单 GPU 准入协调器内观测到的空闲显存 |
+| `summary.vector.cuvs.memory_usable_bytes` | 扣除配置 reserve 后可用于 build 的显存 |
 | `summary.vector.cuvs.total_ms` | dense 路由与检索总耗时 |
 | `summary.vector.cuvs.preflight_ms` | native filter preflight 耗时 |
 | `summary.vector.cuvs.queue_ms` | 等待当前 cuVS search lock 的耗时 |

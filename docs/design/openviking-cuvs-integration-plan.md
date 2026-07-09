@@ -353,6 +353,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 - GPU index、dataset ownership、label mapping 和 generation 组成 immutable snapshot；
 - warmed GPU search 使用不同的 cuVS resources/CUDA stream 并发执行，只短暂串行访问 host cache；
 - mutation 不会破坏已被查询持有的 snapshot；同步 rebuild 仍由写锁合并为一次；
+- 同一 GPU 上不同 collection 的 admission/build 由进程级 coordinator 串行，避免并发超卖显存；
 - native fallback 不持有 GPU 锁，可以继续并发读取；
 - Store 是最终事实来源，重启后派生状态会重新收敛。
 

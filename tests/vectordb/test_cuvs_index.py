@@ -247,6 +247,66 @@ def test_inflight_search_keeps_immutable_snapshot_during_rebuild():
     assert runtime.build_count == 2
 
 
+def test_auto_memory_coordinator_serializes_builds_on_same_device():
+    class CoordinatedRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.device_id = 7
+            self.first_build_started = threading.Event()
+            self.resume_first_build = threading.Event()
+            self.build_lock = threading.Lock()
+            self.build_attempts = 0
+            self.active_builds = 0
+            self.peak_active_builds = 0
+
+        def build(self, dataset):
+            with self.build_lock:
+                self.build_attempts += 1
+                attempt = self.build_attempts
+                self.active_builds += 1
+                self.peak_active_builds = max(self.peak_active_builds, self.active_builds)
+            try:
+                if attempt == 1:
+                    self.first_build_started.set()
+                    assert self.resume_first_build.wait(timeout=5)
+                return super().build(dataset)
+            finally:
+                with self.build_lock:
+                    self.active_builds -= 1
+
+    runtime = CoordinatedRuntime()
+
+    def make_index(label):
+        index = CuVSDenseIndex(
+            dimension=2,
+            distance="ip",
+            normalize_vectors=False,
+            field_types={},
+            config={
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+            },
+            runtime=runtime,
+            auto_memory=True,
+        )
+        index.add_candidates([candidate(label, [1.0, 0.0])])
+        return index
+
+    first = make_index(1)
+    second = make_index(2)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(first.search, [1.0, 0.0], 1, None)
+        assert runtime.first_build_started.wait(timeout=5)
+        second_future = executor.submit(second.search, [1.0, 0.0], 1, None)
+        runtime.resume_first_build.set()
+        assert first_future.result(timeout=5)[0] == [1]
+        assert second_future.result(timeout=5)[0] == [2]
+
+    assert runtime.build_attempts == 2
+    assert runtime.peak_active_builds == 1
+
+
 def test_cuvs_l2_scores_match_openviking_score_convention():
     runtime = FakeCuVSRuntime(metric="sqeuclidean")
     index = CuVSDenseIndex(
@@ -305,14 +365,21 @@ def test_auto_cuvs_retries_after_gpu_memory_becomes_available():
     )
     index.add_candidates([candidate(1, [1.0, 0.0]), candidate(2, [0.0, 1.0])])
 
+    rejected = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=True)
     with pytest.raises(CuVSMemoryBudgetError, match="estimated GPU peak"):
-        index.search([1.0, 0.0], 1, None)
+        index.search([1.0, 0.0], 1, None, telemetry=rejected)
     assert runtime.build_count == 0
+    assert rejected.memory_estimated_peak_bytes == 16
+    assert rejected.memory_free_bytes == 15
+    assert rejected.memory_usable_bytes == 15
 
     runtime.free_memory_bytes = 16
-    assert index.search([1.0, 0.0], 1, None)[0] == [1]
+    admitted = CuVSSearchTelemetry(algorithm="brute_force", auto_mode=True)
+    assert index.search([1.0, 0.0], 1, None, telemetry=admitted)[0] == [1]
     assert runtime.build_count == 1
     assert runtime.release_count == 2
+    assert admitted.memory_estimated_peak_bytes == 16
+    assert admitted.memory_free_bytes == 16
 
 
 def test_auto_cuvs_converts_gpu_allocation_failure_to_native_fallback_signal():

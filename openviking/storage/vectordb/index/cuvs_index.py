@@ -78,6 +78,9 @@ class CuVSSearchTelemetry:
     eligible_count: Optional[int] = None
     records_generation: int = 0
     index_size: int = 0
+    memory_estimated_peak_bytes: int = 0
+    memory_free_bytes: int = 0
+    memory_usable_bytes: int = 0
     total_ms: float = 0.0
     preflight_ms: float = 0.0
     queue_ms: float = 0.0
@@ -98,6 +101,9 @@ class CuVSSearchTelemetry:
             "eligible_count": self.eligible_count,
             "records_generation": self.records_generation,
             "index_size": self.index_size,
+            "memory_estimated_peak_bytes": self.memory_estimated_peak_bytes,
+            "memory_free_bytes": self.memory_free_bytes,
+            "memory_usable_bytes": self.memory_usable_bytes,
             "total_ms": round(self.total_ms, 3),
             "preflight_ms": round(self.preflight_ms, 3),
             "queue_ms": round(self.queue_ms, 3),
@@ -151,6 +157,26 @@ def estimate_cuvs_memory(
         filter_cache_bytes=filter_cache_bytes,
         estimated_peak_bytes=estimated_peak_bytes,
     )
+
+
+class _CuVSMemoryCoordinator:
+    """Serialize admission and builds per GPU across local collections."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._device_locks: Dict[int, threading.Lock] = {}
+
+    def build_lock(self, runtime: Any) -> threading.Lock:
+        device_id = int(getattr(runtime, "device_id", 0))
+        with self._lock:
+            lock = self._device_locks.get(device_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._device_locks[device_id] = lock
+            return lock
+
+
+_CUVS_MEMORY_COORDINATOR = _CuVSMemoryCoordinator()
 
 
 def _normalize(vector: Sequence[float]) -> List[float]:
@@ -336,6 +362,7 @@ class _CuVSRuntime:
             from cuvs.neighbors import brute_force, cagra, filters
 
             device_count = cp.cuda.runtime.getDeviceCount()
+            device_id = cp.cuda.runtime.getDevice()
         except Exception as exc:
             raise CuVSUnavailableError(
                 "cuVS backend requires Python 3.11+, a CUDA-capable NVIDIA GPU, and the "
@@ -349,6 +376,7 @@ class _CuVSRuntime:
         self.cagra = cagra
         self.filters = filters
         self.Resources = Resources
+        self.device_id = int(device_id)
         self.algorithm = algorithm
         self.metric = metric
         self.build_params = dict(build_params)
@@ -901,45 +929,52 @@ class CuVSDenseIndex:
                     labels=labels,
                     generation=generation,
                 )
-            if self.auto_memory:
-                release_index = getattr(self._runtime, "release_index", None)
-                if release_index is not None and can_release_unused:
-                    release_index()
-                estimate = estimate_cuvs_memory(
-                    vector_count=len(labels),
-                    dimension=self.dimension,
-                    algorithm=self.algorithm,
-                    build_params=self._build_params,
-                    filter_cache_size=self.filter_cache_size,
-                    safety_factor=self.auto_memory_safety_factor,
-                )
-                try:
-                    free_bytes, total_bytes = self._runtime.memory_info()
-                except Exception as exc:
-                    raise CuVSMemoryBudgetError(
-                        "cuVS auto mode could not read free GPU memory"
-                    ) from exc
-                usable_bytes = max(0, free_bytes - self.auto_memory_reserve_bytes)
-                if estimate.estimated_peak_bytes > usable_bytes:
-                    raise CuVSMemoryBudgetError(
-                        "cuVS auto mode kept native search because the estimated GPU peak "
-                        f"({estimate.estimated_peak_bytes} bytes) exceeds the usable free "
-                        f"memory ({usable_bytes} of {total_bytes} bytes after reserve)"
-                    )
-            try:
-                if telemetry is not None:
-                    telemetry.build_performed = True
-                runtime_index = self._runtime.build(dataset)
-            except Exception as exc:
-                is_out_of_memory = getattr(self._runtime, "is_out_of_memory", None)
-                if self.auto_memory and is_out_of_memory is not None and is_out_of_memory(exc):
+            with _CUVS_MEMORY_COORDINATOR.build_lock(self._runtime):
+                if self.auto_memory:
                     release_index = getattr(self._runtime, "release_index", None)
                     if release_index is not None and can_release_unused:
                         release_index()
-                    raise CuVSMemoryBudgetError(
-                        "cuVS auto mode fell back to native search after a GPU allocation failure"
-                    ) from exc
-                raise
+                    estimate = estimate_cuvs_memory(
+                        vector_count=len(labels),
+                        dimension=self.dimension,
+                        algorithm=self.algorithm,
+                        build_params=self._build_params,
+                        filter_cache_size=self.filter_cache_size,
+                        safety_factor=self.auto_memory_safety_factor,
+                    )
+                    if telemetry is not None:
+                        telemetry.memory_estimated_peak_bytes = estimate.estimated_peak_bytes
+                    try:
+                        free_bytes, total_bytes = self._runtime.memory_info()
+                    except Exception as exc:
+                        raise CuVSMemoryBudgetError(
+                            "cuVS auto mode could not read free GPU memory"
+                        ) from exc
+                    usable_bytes = max(0, free_bytes - self.auto_memory_reserve_bytes)
+                    if telemetry is not None:
+                        telemetry.memory_free_bytes = free_bytes
+                        telemetry.memory_usable_bytes = usable_bytes
+                    if estimate.estimated_peak_bytes > usable_bytes:
+                        raise CuVSMemoryBudgetError(
+                            "cuVS auto mode kept native search because the estimated GPU peak "
+                            f"({estimate.estimated_peak_bytes} bytes) exceeds the usable free "
+                            f"memory ({usable_bytes} of {total_bytes} bytes after reserve)"
+                        )
+                try:
+                    if telemetry is not None:
+                        telemetry.build_performed = True
+                    runtime_index = self._runtime.build(dataset)
+                except Exception as exc:
+                    is_out_of_memory = getattr(self._runtime, "is_out_of_memory", None)
+                    if self.auto_memory and is_out_of_memory is not None and is_out_of_memory(exc):
+                        release_index = getattr(self._runtime, "release_index", None)
+                        if release_index is not None and can_release_unused:
+                            release_index()
+                        raise CuVSMemoryBudgetError(
+                            "cuVS auto mode fell back to native search after a GPU "
+                            "allocation failure"
+                        ) from exc
+                    raise
             return _CuVSBuildCandidate(
                 runtime_index=runtime_index,
                 labels=labels,

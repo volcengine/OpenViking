@@ -69,6 +69,10 @@ is unavailable, that query uses the unchanged native index. The cuVS index
 remains dirty so a later query can retry after GPU memory becomes available.
 An allocation failure after admission also falls back to native. Explicit
 `backend: "cuvs"` retains fail-fast behavior and does not use this gate.
+Build and admission are coordinated per GPU across local collections, so two
+concurrent builds cannot both pass the same stale free-memory observation.
+Builds on different devices remain independent; warmed searches are not
+serialized by this coordinator.
 Auto mode also uses the eligible count returned by the native scalar index for
 latency-aware filtered-query routing. Filters with at most
 `auto_filter_native_threshold` candidates use native vector recall; path

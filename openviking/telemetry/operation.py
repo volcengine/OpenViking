@@ -242,6 +242,11 @@ class TelemetrySummaryBuilder:
                     "eligible_count": cls._i(gauges.get("vector.cuvs.eligible_count"), 0),
                     "records_generation": cls._i(gauges.get("vector.cuvs.records_generation"), 0),
                     "index_size": cls._i(gauges.get("vector.cuvs.index_size"), 0),
+                    "memory_estimated_peak_bytes": cls._i(
+                        gauges.get("vector.cuvs.memory_estimated_peak_bytes"), 0
+                    ),
+                    "memory_free_bytes": cls._i(gauges.get("vector.cuvs.memory_free_bytes"), 0),
+                    "memory_usable_bytes": cls._i(gauges.get("vector.cuvs.memory_usable_bytes"), 0),
                     "total_ms": cls._f(gauges.get("vector.cuvs.total_ms"), 0.0),
                     "preflight_ms": cls._f(gauges.get("vector.cuvs.preflight_ms"), 0.0),
                     "queue_ms": cls._f(gauges.get("vector.cuvs.queue_ms"), 0.0),

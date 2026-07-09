@@ -190,6 +190,9 @@ values, or URI contents.
 | `summary.vector.cuvs.native_filter_reused` | Whether native recall reused the preflight bitmap |
 | `summary.vector.cuvs.eligible_count` | Number of rows eligible after native filtering |
 | `summary.vector.cuvs.index_size` | Number of rows in the cuVS host snapshot |
+| `summary.vector.cuvs.memory_estimated_peak_bytes` | Estimated peak bytes used for this auto-build admission |
+| `summary.vector.cuvs.memory_free_bytes` | Free device bytes observed inside the per-GPU admission coordinator |
+| `summary.vector.cuvs.memory_usable_bytes` | Free bytes left after applying the configured reserve |
 | `summary.vector.cuvs.total_ms` | Total dense routing and search time |
 | `summary.vector.cuvs.preflight_ms` | Native filter preflight time |
 | `summary.vector.cuvs.queue_ms` | Time waiting for the current cuVS search lock |
