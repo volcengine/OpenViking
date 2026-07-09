@@ -7,7 +7,11 @@ from openviking.core.namespace import uri_parts
 class LinkRenderer:
     """Renders and strips local markdown links in memory file content based on StoredLink metadata."""
 
-    _RELATIVE_LINK_RE = re.compile(r"\[(?P<text>[^\]]+)\]\((?P<target>[^)\s]+)\)")
+    # Target may contain spaces (e.g. `[Frank Ocean](entities/frank ocean.md)`).
+    # Markdown permits literal spaces in destinations, though they are not portable
+    # across renderers; `render_links` therefore percent-encodes spaces in generated
+    # targets so they round-trip cleanly. We accept both forms when matching.
+    _RELATIVE_LINK_RE = re.compile(r"\[(?P<text>[^\]]+)\]\((?P<target>[^)]+)\)")
     _MEMORY_FIELDS_RE = re.compile(r"(\n\n<!--\s*MEMORY_FIELDS\s*\n)", re.DOTALL)
     _CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
     _ASCII_WORD_CHAR_RE = re.compile(r"[A-Za-z0-9_]")
@@ -90,7 +94,13 @@ class LinkRenderer:
             if any(not (end <= rs or start >= re_) for rs, re_, _ in replacements):
                 continue
 
-            rendered = f"[{content[start:end]}]({link_target})"
+            # Percent-encode spaces in the rendered target so the link is portable
+            # across markdown renderers (e.g. `[Frank](entities/frank ocean.md)`
+            # would otherwise be ambiguous). We accept the literal-space form when
+            # matching existing links, but always emit the encoded form when
+            # generating new ones.
+            encoded_target = link_target.replace(" ", "%20")
+            rendered = f"[{content[start:end]}]({encoded_target})"
             replacements.append((start, end, rendered))
 
         # Apply in reverse order to preserve indices
