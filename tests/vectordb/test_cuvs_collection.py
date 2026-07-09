@@ -193,7 +193,7 @@ def test_local_collection_records_cuvs_route_telemetry(monkeypatch):
             "CollectionName": "cuvs_telemetry",
             "Fields": [
                 {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
-                {"FieldName": "vector", "FieldType": "vector", "Dim": 2},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
             ],
         },
         config={"dense_search": {"backend": "cuvs", "algorithm": "brute_force"}},
@@ -206,11 +206,13 @@ def test_local_collection_records_cuvs_route_telemetry(monkeypatch):
                 "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
             },
         )
-        collection.upsert_data([{"id": "first", "vector": [1.0, 0.0]}])
+        collection.upsert_data([{"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]}])
         telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
 
         with bind_telemetry(telemetry):
-            result = collection.search_by_vector("default", dense_vector=[1.0, 0.0], limit=1)
+            result = collection.search_by_vector(
+                "default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1
+            )
 
         assert [item.id for item in result.data] == ["first"]
         cuvs = telemetry.finish().summary["vector"]["cuvs"]
