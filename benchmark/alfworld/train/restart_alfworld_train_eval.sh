@@ -307,7 +307,7 @@ validate_alfworld_data() {
     log "ALFWORLD_DATA contains no game.tw-pddl files: ${ALFWORLD_DATA}"
     log "current disk space:"
     df -h "${ALFWORLD_DATA}" 2>/dev/null || df -h "${REPO_ROOT}" || true
-    fail "ALFWorld data is not downloaded/extracted. Free disk space or choose a larger ALFWORLD_DATA, then run: python ~/workspace/alfworld/scripts/alfworld-download --data-dir "${ALFWORLD_DATA}""
+    fail "ALFWorld data is not downloaded/extracted. Free disk space or choose a larger ALFWORLD_DATA, then run: python ~/workspace/alfworld/scripts/alfworld-download --data-dir ${ALFWORLD_DATA}"
   fi
   log "✓ ALFWorld data preflight found game: ${sample_game}"
 }

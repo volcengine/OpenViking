@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,8 @@ from openviking.session.train.components.progress import ProgressPrinter
 from openviking_cli.utils.config import get_openviking_config
 
 ALFWORLD_SYSTEM_PROMPT = "You are an expert agent operating in the ALFRED Embodied Environment."
+_TEXTWORLD_COMPAT_PATCHED = False
+_TEXTWORLD_PARSE_LOCK = threading.RLock()
 
 
 @dataclass(slots=True)
@@ -142,6 +145,7 @@ def build_alfworld_env(
 ):
     """Build an official ALFWorld TextWorld gym environment."""
 
+    _patch_textworld_alfworld_compat()
     try:
         from alfworld.agents.environment import get_environment
     except ImportError as exc:  # pragma: no cover - exercised only in ALFWorld envs
@@ -169,6 +173,57 @@ def build_alfworld_env(
             f"(current: {data_root or '<unset>'}) or pass explicit gamefiles."
         )
     return env.init_env(batch_size=env_num)
+
+
+def _patch_textworld_alfworld_compat() -> None:
+    """Patch TextWorld/ALFWorld compatibility issues in this service process.
+
+    The official ALFWorld stack currently pulls TextWorld/TatSu code that is not
+    safe to initialize concurrently: both PDDL and CSG parsers keep mutable
+    parser state in module-level singletons. The dataset service can execute
+    rollout requests from many worker threads, so parser calls must be
+    serialized or TatSu may fail with ``IndexError: pop from empty list``.
+
+    TextWorld's CSG ``EvalSymbol.derive`` also relies on ``locals().update()``
+    making grammar variables visible to ``eval()``. That is not reliable on
+    modern Python and fails on ALFWorld grammar snippets such as ``{r.name}``.
+    Evaluate against an explicit locals dict instead.
+    """
+
+    global _TEXTWORLD_COMPAT_PATCHED
+    if _TEXTWORLD_COMPAT_PATCHED:
+        return
+
+    import textworld.envs.pddl.logic as pddl_logic
+    import textworld.envs.pddl.textgen as textgen
+
+    original_logic_parse = pddl_logic._parse_and_convert
+    original_textgen_parse = textgen._parse_and_convert
+    original_eval_derive = textgen.EvalSymbol.derive
+
+    def locked_logic_parse(*args: Any, **kwargs: Any) -> Any:
+        with _TEXTWORLD_PARSE_LOCK:
+            return original_logic_parse(*args, **kwargs)
+
+    def locked_textgen_parse(*args: Any, **kwargs: Any) -> Any:
+        with _TEXTWORLD_PARSE_LOCK:
+            return original_textgen_parse(*args, **kwargs)
+
+    def eval_symbol_derive(self: Any, context: dict[str, Any] | None = None) -> list[Any]:
+        context = context or self.context
+        try:
+            value = eval(self.expression, {}, dict(context["variables"]))  # noqa: S307
+        except Exception:
+            # Preserve TextWorld's original behavior/error shape if the
+            # explicit-locals path fails for an expression that depended on
+            # another quirk of the old implementation.
+            return original_eval_derive(self, context)
+        return [textgen.TerminalSymbol(value)]
+
+    pddl_logic._parse_and_convert = locked_logic_parse
+    textgen._parse_and_convert = locked_textgen_parse
+    textgen.EvalSymbol.derive = eval_symbol_derive
+    _TEXTWORLD_COMPAT_PATCHED = True
 
 
 async def run_alfworld_batch(
