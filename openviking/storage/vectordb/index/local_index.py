@@ -350,7 +350,8 @@ class LocalIndex(IIndex):
                     dense_search_config.get("auto_background_rebuild", False)
                 )
                 self._dense_rebuild_debounce_seconds = (
-                    max(0, int(dense_search_config.get("auto_rebuild_debounce_ms", 50))) / 1000.0
+                    max(0, int(dense_search_config.get("auto_rebuild_debounce_ms", 500)))
+                    / 1000.0
                 )
                 if self._auto_background_rebuild:
                     self._dense_rebuild_thread = threading.Thread(

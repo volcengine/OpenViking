@@ -264,6 +264,12 @@ python benchmark/cuvs/run_service_concurrency_benchmark.py \
   --data-root /data/openviking-cuvs
 ```
 
+Add `--backends auto_cuvs_background` to isolate the optional coalescing
+background-rebuild path. The harness waits for a warm GPU snapshot before each
+mutation, then measures the immediate read burst while the dirty auto-cuVS
+index routes queries to native search. Rebuild waiting is kept outside the
+reported request wall time; the JSON records that wait separately.
+
 The normal tenant scope means every public service-facade query includes an
 `account_id` filter. The benchmark reports p50/p95/p99, QPS, errors, and the
 post-mutation burst separately. A later end-to-end server benchmark should add

@@ -319,7 +319,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
         "auto_path_filter_native_threshold": 200,
         "filter_cache_size": 16,
         "auto_background_rebuild": true,
-        "auto_rebuild_debounce_ms": 50
+        "auto_rebuild_debounce_ms": 500
       }
     }
   }
@@ -343,7 +343,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 | `auto_path_filter_native_threshold` | `200` | auto URI/path native 路由阈值 |
 | `filter_cache_size` | `16` | device bitset 或 native 路由决策的 LRU 大小 |
 | `auto_background_rebuild` | `false` | auto 模式合并 mutation 并在后台构建新 snapshot；dirty 期间查询走 native |
-| `auto_rebuild_debounce_ms` | `50` | 后台 rebuild 前用于合并连续 mutation 的静默窗口 |
+| `auto_rebuild_debounce_ms` | `500` | 后台 rebuild 前用于合并连续 mutation 的静默窗口 |
 
 依赖安装方式和 CUDA 12/13 wheel 选择见中英文用户指南，不在本计划中复制易过期的版本命令。
 

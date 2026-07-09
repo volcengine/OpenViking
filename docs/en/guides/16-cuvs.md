@@ -55,7 +55,7 @@ idle GPU memory without changing the default behavior for other installations:
         "auto_filter_native_threshold": 2000,
         "auto_path_filter_native_threshold": 200,
         "auto_background_rebuild": true,
-        "auto_rebuild_debounce_ms": 50
+        "auto_rebuild_debounce_ms": 500
       }
     }
   }
@@ -87,6 +87,8 @@ Explicit `backend: "cuvs"` continues to use cuVS for supported dense queries.
 `auto_background_rebuild` is disabled by default. When enabled, consecutive
 mutations are coalesced for `auto_rebuild_debounce_ms`, and a worker builds the
 new immutable GPU snapshot without holding the cross-backend mutation lock.
+The 500 ms default avoids rebuilding most intermediate batches during normal
+ingestion; use a larger value for bulk loads with longer gaps between batches.
 Queries use the current native index while the snapshot is dirty, so GPU build
 time does not become request queue time. The worker installs the new label
 layout and GPU snapshot atomically only if its record generation is still

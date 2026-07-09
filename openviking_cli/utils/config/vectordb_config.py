@@ -170,7 +170,7 @@ class CuVSConfig(BaseModel):
         ),
     )
     auto_rebuild_debounce_ms: int = Field(
-        default=50,
+        default=500,
         ge=0,
         description=(
             "Quiet period used to coalesce consecutive mutations before an auto-cuVS "
