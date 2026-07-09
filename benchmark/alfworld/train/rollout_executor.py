@@ -30,6 +30,7 @@ from openviking_cli.utils.config import get_openviking_config
 ALFWORLD_SYSTEM_PROMPT = "You are an expert agent operating in the ALFRED Embodied Environment."
 _TEXTWORLD_COMPAT_PATCHED = False
 _TEXTWORLD_PARSE_LOCK = threading.RLock()
+_ALFWORLD_ENV_LOCK = threading.RLock()
 
 
 @dataclass(slots=True)
@@ -154,25 +155,26 @@ def build_alfworld_env(
             "Install it with: python -m pip install -e ~/workspace/alfworld"
         ) from exc
 
-    config = _load_alfworld_config()
-    config["general"]["random_seed"] = seed
-    config["general"]["use_cuda"] = False
-    config["env"]["type"] = "AlfredTWEnv"
-    config["env"]["task_types"] = _task_type_ids_from_gamefiles(specific_gamefiles)
-    train_eval = "train" if is_train else normalize_alfworld_split(eval_dataset)
-    env = get_environment("AlfredTWEnv")(config, train_eval=train_eval)
-    resolved_gamefiles = _resolve_alfworld_gamefiles(specific_gamefiles)
-    if resolved_gamefiles:
-        env.game_files = resolved_gamefiles
-        env.num_games = len(resolved_gamefiles)
-    if not getattr(env, "game_files", None):
-        data_root = os.getenv("ALFWORLD_DATA", "").strip()
-        raise RuntimeError(
-            f"No ALFWorld games found for split={train_eval!r}. "
-            "Set ALFWORLD_DATA to the downloaded ALFWorld data directory "
-            f"(current: {data_root or '<unset>'}) or pass explicit gamefiles."
-        )
-    return env.init_env(batch_size=env_num)
+    with _ALFWORLD_ENV_LOCK:
+        config = _load_alfworld_config()
+        config["general"]["random_seed"] = seed
+        config["general"]["use_cuda"] = False
+        config["env"]["type"] = "AlfredTWEnv"
+        config["env"]["task_types"] = _task_type_ids_from_gamefiles(specific_gamefiles)
+        train_eval = "train" if is_train else normalize_alfworld_split(eval_dataset)
+        env = get_environment("AlfredTWEnv")(config, train_eval=train_eval)
+        resolved_gamefiles = _resolve_alfworld_gamefiles(specific_gamefiles)
+        if resolved_gamefiles:
+            env.game_files = resolved_gamefiles
+            env.num_games = len(resolved_gamefiles)
+        if not getattr(env, "game_files", None):
+            data_root = os.getenv("ALFWORLD_DATA", "").strip()
+            raise RuntimeError(
+                f"No ALFWorld games found for split={train_eval!r}. "
+                "Set ALFWORLD_DATA to the downloaded ALFWorld data directory "
+                f"(current: {data_root or '<unset>'}) or pass explicit gamefiles."
+            )
+        return env.init_env(batch_size=env_num)
 
 
 def _patch_textworld_alfworld_compat() -> None:
@@ -241,7 +243,8 @@ async def run_alfworld_batch(
 
     del temperature  # Provider-specific temperature wiring lives in configured VLMs.
     skill_prompt = _build_skill_prompt(policy_set)
-    obs, infos = env_manager.reset()
+    with _ALFWORLD_ENV_LOCK:
+        obs, infos = env_manager.reset()
     env_num = len(obs)
     if env_num != len(cases):
         raise RuntimeError(f"ALFWorld env count mismatch: env={env_num}, cases={len(cases)}")
@@ -282,7 +285,8 @@ async def run_alfworld_batch(
             messages[i].append(_message("user", prompts[i]))
             messages[i].append(_message("assistant", response))
 
-        obs, rewards, dones, infos = env_manager.step(step_actions)
+        with _ALFWORLD_ENV_LOCK:
+            obs, rewards, dones, infos = env_manager.step(step_actions)
         for i in active_indices:
             step_record = {
                 "step": step_idx,
