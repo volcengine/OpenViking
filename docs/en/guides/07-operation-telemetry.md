@@ -184,7 +184,7 @@ values, or URI contents.
 | --- | --- |
 | `summary.vector.cuvs.algorithm` | cuVS algorithm, such as `brute_force` or `cagra` |
 | `summary.vector.cuvs.auto_mode` | Whether automatic CPU/GPU routing was enabled |
-| `summary.vector.cuvs.route_reason` | Selected route, such as `cuvs`, `native_filter_threshold`, or `native_memory_budget` |
+| `summary.vector.cuvs.route_reason` | Selected route, such as `cuvs`, `native_filter_threshold`, `native_rebuild_pending`, or `native_memory_budget` |
 | `summary.vector.cuvs.filter_kind` | Low-cardinality filter class: `none`, `scalar`, or `path` |
 | `summary.vector.cuvs.filter_cache_hit` | Whether a prepared or preflight filter was reused |
 | `summary.vector.cuvs.native_filter_reused` | Whether native recall reused the preflight bitmap |

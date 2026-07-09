@@ -51,7 +51,9 @@ idle GPU memory without changing the default behavior for other installations:
         "auto_memory_reserve_mb": 1024,
         "auto_memory_safety_factor": 2.0,
         "auto_filter_native_threshold": 2000,
-        "auto_path_filter_native_threshold": 200
+        "auto_path_filter_native_threshold": 200,
+        "auto_background_rebuild": true,
+        "auto_rebuild_debounce_ms": 50
       }
     }
   }
@@ -75,6 +77,14 @@ bitmap construction can dominate wider subtrees. The defaults are 2,000 and
 200 candidates respectively, and either value can be set to zero to disable
 that route. These crossover values are hardware- and workload-dependent.
 Explicit `backend: "cuvs"` continues to use cuVS for supported dense queries.
+
+`auto_background_rebuild` is disabled by default. When enabled, consecutive
+mutations are coalesced for `auto_rebuild_debounce_ms`, and a worker builds the
+new immutable GPU snapshot without holding the cross-backend mutation lock.
+Queries use the current native index while the snapshot is dirty, so GPU build
+time does not become request queue time. The worker installs the new label
+layout and GPU snapshot atomically only if its record generation is still
+current; otherwise it discards that build and rebuilds the newest generation.
 
 ## GPU memory footprint
 
@@ -132,13 +142,17 @@ brute-force does not accept that scaled-int8 representation. CAGRA int8 or PQ
 compression must likewise be evaluated as approximate modes with an explicit
 recall/latency/memory frontier.
 
-The integration rebuilds the GPU index lazily after an upsert or delete. On
-each rebuild it registers the cuVS label order with the native engine once.
+The integration uses immutable GPU snapshots. Warmed searches use per-thread
+cuVS resources/CUDA streams, while mutation and snapshot commit use a
+cross-backend writer lock. By default, the first query after an upsert or
+delete rebuilds synchronously; optional background rebuild changes dirty
+queries to native fallback until the new snapshot is ready. On each rebuild it
+registers the cuVS label order with the native engine once.
 The first use of a scalar or URI filter then reuses OpenViking's native
 scalar/path index and projects its bitmap into cuVS row order; it does not scan
 all host-side records in Python. `filter_cache_size` retains the resulting
 device bitsets and routing decisions and invalidates them on mutation. In auto
-mode, candidate-count preflight runs before the serialized cuVS search path.
+mode, candidate-count preflight runs before the cuVS search path.
 Different unseen filters can use the native engine's shared-read path in
 parallel, while cached native routing decisions go directly to the native
 index. A record-generation check prevents a result computed across a mutation

@@ -407,6 +407,124 @@ def test_auto_cuvs_falls_back_then_retries_when_memory_is_available(monkeypatch)
         collection.close()
 
 
+def test_auto_cuvs_background_rebuild_warms_gpu_before_query(monkeypatch):
+    runtime = MemoryAwareFakeCuVSRuntime("inner_product", free_memory_bytes=64)
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_background",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 0,
+            }
+        },
+    )
+    try:
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        collection.upsert_data(
+            [
+                {"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]},
+                {"id": "second", "vector": [0.0, 1.0, 0.0, 0.0]},
+            ]
+        )
+
+        assert index.wait_for_background_rebuild(timeout=5)
+        assert runtime.build_count == 1
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+        assert [item.id for item in result.data] == ["first"]
+        assert runtime.search_count == 1
+    finally:
+        collection.close()
+
+
+def test_auto_cuvs_background_rebuild_coalesces_mutations_and_routes_native(
+    monkeypatch,
+):
+    class BlockingBuildRuntime(MemoryAwareFakeCuVSRuntime):
+        def __init__(self):
+            super().__init__("inner_product", free_memory_bytes=1 << 20)
+            self.build_started = threading.Event()
+            self.resume_build = threading.Event()
+
+        def build(self, dataset):
+            self.build_started.set()
+            assert self.resume_build.wait(timeout=5)
+            return super().build(dataset)
+
+    runtime = BlockingBuildRuntime()
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_coalesced_rebuild",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 0,
+            }
+        },
+    )
+    try:
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        collection.upsert_data([{"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]}])
+        assert runtime.build_started.wait(timeout=5)
+
+        # The build does not hold the cross-backend lock. Queries remain
+        # correct through native search and writes coalesce into one follow-up.
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+        assert [item.id for item in result.data] == ["first"]
+        assert runtime.search_count == 0
+        collection.update_data([{"id": "first", "vector": [0.0, 1.0, 0.0, 0.0]}])
+        collection.update_data([{"id": "first", "vector": [0.0, 0.0, 1.0, 0.0]}])
+
+        runtime.resume_build.set()
+        assert index.wait_for_background_rebuild(timeout=5)
+        assert runtime.build_count == 2
+    finally:
+        runtime.resume_build.set()
+        collection.close()
+
+
 def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
     runtimes = []
     dense_search_calls = 0

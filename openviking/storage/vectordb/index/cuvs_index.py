@@ -475,6 +475,13 @@ class _CuVSIndexSnapshot:
 
 
 @dataclass(frozen=True)
+class _CuVSBuildCandidate:
+    runtime_index: Any
+    labels: Tuple[int, ...]
+    generation: int
+
+
+@dataclass(frozen=True)
 class _CachedFilter:
     prepared: Any
     eligible_count: int
@@ -872,28 +879,31 @@ class CuVSDenseIndex:
         self._cache_filter(cache_key, cached)
         return cached
 
-    def _rebuild_if_needed(
+    def prepare_rebuild(
         self,
-        native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
-        *,
-        filter_layout_is_current: bool = False,
         telemetry: Optional[CuVSSearchTelemetry] = None,
-    ) -> None:
-        if not self._dirty:
-            return
-        build_started = time.perf_counter()
-        try:
+    ) -> Optional[_CuVSBuildCandidate]:
+        with self._lock:
+            if not self._dirty:
+                return None
             labels = tuple(self._records)
             generation = self._records_generation
+            dataset = [self._records[label].vector for label in labels]
+            can_release_unused = self._active_searches == 0
+            if can_release_unused:
+                self._snapshot = None
+
+        build_started = time.perf_counter()
+        try:
             if not labels:
-                self._snapshot = None
-                self._dirty = False
-                return
-            if self._active_searches == 0:
-                self._snapshot = None
+                return _CuVSBuildCandidate(
+                    runtime_index=None,
+                    labels=labels,
+                    generation=generation,
+                )
             if self.auto_memory:
                 release_index = getattr(self._runtime, "release_index", None)
-                if release_index is not None:
+                if release_index is not None and can_release_unused:
                     release_index()
                 estimate = estimate_cuvs_memory(
                     vector_count=len(labels),
@@ -916,7 +926,6 @@ class CuVSDenseIndex:
                         f"({estimate.estimated_peak_bytes} bytes) exceeds the usable free "
                         f"memory ({usable_bytes} of {total_bytes} bytes after reserve)"
                     )
-            dataset = [self._records[label].vector for label in labels]
             try:
                 if telemetry is not None:
                     telemetry.build_performed = True
@@ -925,25 +934,63 @@ class CuVSDenseIndex:
                 is_out_of_memory = getattr(self._runtime, "is_out_of_memory", None)
                 if self.auto_memory and is_out_of_memory is not None and is_out_of_memory(exc):
                     release_index = getattr(self._runtime, "release_index", None)
-                    if release_index is not None:
+                    if release_index is not None and can_release_unused:
                         release_index()
                     raise CuVSMemoryBudgetError(
                         "cuVS auto mode fell back to native search after a GPU allocation failure"
                     ) from exc
                 raise
-            if native_filter_layout_registrar is not None and not filter_layout_is_current:
-                native_filter_layout_registrar(labels)
-                self._filter_layout_generation = generation
-            self._snapshot = _CuVSIndexSnapshot(
+            return _CuVSBuildCandidate(
                 runtime_index=runtime_index,
                 labels=labels,
                 generation=generation,
             )
-            self._dirty = False
-            logger.info("Built cuVS %s index with %d vectors", self.algorithm, len(labels))
         finally:
             if telemetry is not None:
                 telemetry.build_ms += (time.perf_counter() - build_started) * 1000.0
+
+    def commit_rebuild(
+        self,
+        candidate: _CuVSBuildCandidate,
+        native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
+    ) -> bool:
+        with self._lock:
+            if self._records_generation != candidate.generation:
+                return False
+            if (
+                native_filter_layout_registrar is not None
+                and self._filter_layout_generation != candidate.generation
+            ):
+                native_filter_layout_registrar(candidate.labels)
+                self._filter_layout_generation = candidate.generation
+            self._snapshot = (
+                _CuVSIndexSnapshot(
+                    runtime_index=candidate.runtime_index,
+                    labels=candidate.labels,
+                    generation=candidate.generation,
+                )
+                if candidate.runtime_index is not None
+                else None
+            )
+            self._dirty = False
+            logger.info(
+                "Built cuVS %s index with %d vectors",
+                self.algorithm,
+                len(candidate.labels),
+            )
+            return True
+
+    def _rebuild_if_needed(
+        self,
+        native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
+        telemetry: Optional[CuVSSearchTelemetry] = None,
+    ) -> None:
+        while self.needs_rebuild:
+            candidate = self.prepare_rebuild(telemetry)
+            if candidate is None:
+                return
+            if self.commit_rebuild(candidate, native_filter_layout_registrar):
+                return
 
     def search(
         self,
@@ -1026,7 +1073,6 @@ class CuVSDenseIndex:
 
             self._rebuild_if_needed(
                 native_filter_layout_registrar,
-                filter_layout_is_current=filter_layout_is_current,
                 telemetry=telemetry,
             )
             snapshot = self._snapshot

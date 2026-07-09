@@ -28,6 +28,8 @@ def test_cuvs_auto_mode_is_opt_in_and_validates_memory_guardrails():
     assert config.auto_memory_safety_factor == 2.0
     assert config.auto_filter_native_threshold == 2000
     assert config.auto_path_filter_native_threshold == 200
+    assert config.auto_background_rebuild is False
+    assert config.auto_rebuild_debounce_ms == 50
 
     with pytest.raises(ValidationError, match="auto_memory_reserve_mb"):
         CuVSConfig(auto_memory_reserve_mb=-1)
@@ -37,6 +39,8 @@ def test_cuvs_auto_mode_is_opt_in_and_validates_memory_guardrails():
         CuVSConfig(auto_filter_native_threshold=-1)
     with pytest.raises(ValidationError, match="auto_path_filter_native_threshold"):
         CuVSConfig(auto_path_filter_native_threshold=-1)
+    with pytest.raises(ValidationError, match="auto_rebuild_debounce_ms"):
+        CuVSConfig(auto_rebuild_debounce_ms=-1)
 
 
 def test_local_adapter_only_passes_auto_cuvs_config_when_enabled():

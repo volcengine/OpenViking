@@ -147,6 +147,21 @@ class CuVSConfig(BaseModel):
             "Set to zero to disable caching."
         ),
     )
+    auto_background_rebuild: bool = Field(
+        default=False,
+        description=(
+            "Build dirty auto-cuVS snapshots in a coalescing background worker. "
+            "Queries use the native index until the new GPU snapshot is committed."
+        ),
+    )
+    auto_rebuild_debounce_ms: int = Field(
+        default=50,
+        ge=0,
+        description=(
+            "Quiet period used to coalesce consecutive mutations before an auto-cuVS "
+            "background rebuild."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 

@@ -315,7 +315,9 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
         "auto_memory_safety_factor": 2.0,
         "auto_filter_native_threshold": 2000,
         "auto_path_filter_native_threshold": 200,
-        "filter_cache_size": 16
+        "filter_cache_size": 16,
+        "auto_background_rebuild": true,
+        "auto_rebuild_debounce_ms": 50
       }
     }
   }
@@ -336,6 +338,8 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 | `auto_filter_native_threshold` | `2000` | auto 普通过滤 native 路由阈值 |
 | `auto_path_filter_native_threshold` | `200` | auto URI/path native 路由阈值 |
 | `filter_cache_size` | `16` | device bitset 或 native 路由决策的 LRU 大小 |
+| `auto_background_rebuild` | `false` | auto 模式合并 mutation 并在后台构建新 snapshot；dirty 期间查询走 native |
+| `auto_rebuild_debounce_ms` | `50` | 后台 rebuild 前用于合并连续 mutation 的静默窗口 |
 
 依赖安装方式和 CUDA 12/13 wheel 选择见中英文用户指南，不在本计划中复制易过期的版本命令。
 
@@ -412,7 +416,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 1. 已将可搜索 GPU index 变成 immutable snapshot；
 2. 已保证 in-flight query 在 rebuild 期间安全持有旧 snapshot；后台 build 期间的新请求路由仍待实现；
 3. 已实现完成后原子交换，并延迟到最后一个持有者退出再回收旧资源；
-4. 合并连续 mutation，避免每次写后重复重建；
+4. 已实现可选的连续 mutation 合并与后台 rebuild；默认关闭以保留现有 auto 行为；
 5. 已实现每线程 cuVS resources/CUDA stream；persistent query buffers 和 micro-batching 待评估；
 6. 已补充 build queue、fallback reason、eligible count 和分阶段 latency telemetry；VRAM 指标待统一管理器。
 
