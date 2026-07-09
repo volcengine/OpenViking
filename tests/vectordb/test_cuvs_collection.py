@@ -1,6 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 from openviking.storage.vectordb.collection.local_collection import (
     get_or_create_local_collection,
 )
@@ -221,6 +224,76 @@ def test_local_collection_records_cuvs_route_telemetry(monkeypatch):
         assert cuvs["filter_kind"] == "none"
         assert cuvs["build_performed"] is True
         assert cuvs["index_size"] == 1
+    finally:
+        collection.close()
+
+
+def test_local_collection_allows_concurrent_warmed_cuvs_searches(monkeypatch):
+    class ConcurrentFakeCuVSRuntime(FakeCuVSRuntime):
+        def __init__(self, metric):
+            super().__init__(metric)
+            self.barrier = threading.Barrier(1)
+            self.active_lock = threading.Lock()
+            self.active = 0
+            self.peak_active = 0
+
+        def search(self, index, query, limit, mask):
+            with self.active_lock:
+                self.active += 1
+                self.peak_active = max(self.peak_active, self.active)
+            try:
+                self.barrier.wait(timeout=5)
+                return super().search(index, query, limit, mask)
+            finally:
+                with self.active_lock:
+                    self.active -= 1
+
+    runtime = ConcurrentFakeCuVSRuntime("inner_product")
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "cuvs_concurrent_search",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={"dense_search": {"backend": "cuvs", "algorithm": "brute_force"}},
+    )
+    try:
+        collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        collection.upsert_data([{"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]}])
+        assert (
+            collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+            .data[0]
+            .id
+            == "first"
+        )
+        runtime.barrier = threading.Barrier(4)
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [
+                executor.submit(
+                    collection.search_by_vector,
+                    "default",
+                    dense_vector=[1.0, 0.0, 0.0, 0.0],
+                    limit=1,
+                )
+                for _ in range(4)
+            ]
+            assert [future.result(timeout=5).data[0].id for future in futures] == ["first"] * 4
+
+        assert runtime.peak_active == 4
     finally:
         collection.close()
 

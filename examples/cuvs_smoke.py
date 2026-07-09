@@ -1,6 +1,7 @@
 """Minimal GPU smoke test for OpenViking's cuVS dense-search backend."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 
 from openviking.storage.vectordb.collection.local_collection import (
     get_or_create_local_collection,
@@ -88,6 +89,23 @@ def main(algorithm: str) -> None:
         )
         ids = [item.id for item in result.data]
         assert ids == ["a", "b"], ids
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            concurrent_results = list(
+                executor.map(
+                    lambda _index: collection.search_by_vector(
+                        "default",
+                        dense_vector=[1, 0, 0, 0],
+                        limit=2,
+                        filters=demo_filter,
+                    ),
+                    range(4),
+                )
+            )
+        assert all(
+            [item.id for item in concurrent_result.data] == ["a", "b"]
+            for concurrent_result in concurrent_results
+        )
 
         collection.update_data(
             [

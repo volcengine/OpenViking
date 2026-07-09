@@ -119,7 +119,7 @@ sequenceDiagram
     Note over G: 下一次 GPU 查询同步重建 index
 ```
 
-`LocalIndex` 使用跨后端重入锁覆盖 native mutation 和 cuVS shadow mutation，避免查询获得新 native bitmap 却使用旧 GPU row layout。当前 mutation 后不增量修改 CAGRA，而是标脏并在下一次 dense 查询全量重建。
+`LocalIndex` 使用跨后端读写锁覆盖 native mutation 和 cuVS shadow mutation，避免查询获得新 native bitmap 却使用旧 GPU row layout。warmed query 持有共享读锁并发搜索，mutation 和同步 rebuild 持有写锁。当前 mutation 后不增量修改 CAGRA，而是标脏并在下一次 dense 查询全量重建。
 
 ### 5.2 Dense query
 
@@ -160,7 +160,7 @@ flowchart TD
 6. 窄过滤由 native engine 返回一个有界、短生命周期的 bitmap token，CPU recall 直接复用；token miss 时安全回退到普通 search；
 7. 相同 filter 复用 device bitset；mutation 同时使 layout、device cache 和 native token 失效。
 
-auto 模式会在进入串行 cuVS search 前完成候选数 preflight。native engine 对
+auto 模式会在进入 cuVS search 前完成候选数 preflight。native engine 对
 `evaluate_filter` 使用共享读锁，因此不同的首次过滤条件可以并行计算；layout 注册和
 mutation 使用写锁。cuVS shadow 的 generation 校验会丢弃跨 mutation 得到的旧路由结果。
 
@@ -215,8 +215,8 @@ auto 模式包含两层决策：
 
 URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和 subtree bitmap union；这个成本会先于 GPU search 发生。阈值设为 `0` 可关闭对应 native 路由。阈值是当前测量得到的默认值，不是跨硬件、维度和 workload 的常数。
 
-候选数 preflight 和 native fallback 都在跨后端 GPU 锁外执行，以保留 native engine
-原有的共享读并发；相同 filter 的路由决策由 LRU 直接复用。
+候选数 preflight 和 native fallback 使用跨后端共享读锁，既保留 native engine
+原有的读并发，也避免与 mutation 交错；相同 filter 的路由决策由 LRU 直接复用。
 
 ## 7. Dtype 与数值语义
 
@@ -344,9 +344,11 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 ### 10.1 当前保证
 
 - 顺序 upsert/delete 返回后，下一次 GPU dense query 会先重建，提供 read-after-write；
-- native mutation 与 cuVS shadow mutation 由跨后端锁协调；filter layout 和 bitmap
+- native mutation 与 cuVS shadow mutation 由跨后端读写锁协调；filter layout 和 bitmap
   preflight 由 native engine 读写锁及 cuVS generation 校验保证一致性；
-- GPU search 在单个 index 内当前串行化；
+- GPU index、dataset ownership、label mapping 和 generation 组成 immutable snapshot；
+- warmed GPU search 使用不同的 cuVS resources/CUDA stream 并发执行，只短暂串行访问 host cache；
+- mutation 不会破坏已被查询持有的 snapshot；同步 rebuild 仍由写锁合并为一次；
 - native fallback 不持有 GPU 锁，可以继续并发读取；
 - Store 是最终事实来源，重启后派生状态会重新收敛。
 
@@ -372,7 +374,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 | --- | --- | --- |
 | 每次 mutation 后整体重建 | 写后首查和 build 为 O(N) | base + delta、阈值重建、后台 build、原子切换 |
 | host shadow 保存完整 dense vectors | Store/native/GPU 之外增加 host memory | 连续 buffer、共享内存、减少 Python object |
-| 单 index GPU lock | 并发请求转化为排队延迟 | immutable GPU snapshot、CUDA streams、micro-batching |
+| 高并发小 query | 单 query 无法充分占用 GPU | 动态 batching 或显式 query batching |
 | Python/CuPy 数据面 | 对象构造、复制和同步有固定开销 | 先 profiling，再决定是否下沉 C++ cuVS C API |
 | 重启后 lazy rebuild | 大 collection 的首次查询延迟高 | 后台预热、版本化派生 cache |
 | native dense 与 GPU shadow 并存 | CPU 内存和写放大 | 覆盖率和回退策略稳定后再评估裁剪 |
@@ -407,12 +409,12 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 
 优先级顺序：
 
-1. 将可搜索 GPU index 变成 immutable snapshot；
-2. build 新 snapshot 时继续服务旧 snapshot；
-3. 完成后原子交换，并延迟回收旧资源；
+1. 已将可搜索 GPU index 变成 immutable snapshot；
+2. 已保证 in-flight query 在 rebuild 期间安全持有旧 snapshot；后台 build 期间的新请求路由仍待实现；
+3. 已实现完成后原子交换，并延迟到最后一个持有者退出再回收旧资源；
 4. 合并连续 mutation，避免每次写后重复重建；
-5. 评估 CUDA streams、persistent query buffers 和 micro-batching；
-6. 补充 build queue、fallback reason、eligible count、VRAM 和 latency telemetry。
+5. 已实现每线程 cuVS resources/CUDA stream；persistent query buffers 和 micro-batching 待评估；
+6. 已补充 build queue、fallback reason、eligible count 和分阶段 latency telemetry；VRAM 指标待统一管理器。
 
 ### Phase 3：容量与低精度
 

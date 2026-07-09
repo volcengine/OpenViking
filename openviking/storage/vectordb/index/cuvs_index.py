@@ -332,6 +332,7 @@ class _CuVSRuntime:
     ):
         try:
             import cupy as cp
+            from cuvs.common import Resources
             from cuvs.neighbors import brute_force, cagra, filters
 
             device_count = cp.cuda.runtime.getDeviceCount()
@@ -347,18 +348,18 @@ class _CuVSRuntime:
         self.brute_force = brute_force
         self.cagra = cagra
         self.filters = filters
+        self.Resources = Resources
         self.algorithm = algorithm
         self.metric = metric
         self.build_params = dict(build_params)
         self.search_params = dict(search_params)
-        self.dataset = None
+        self._thread_resources = threading.local()
 
     def memory_info(self) -> Tuple[int, int]:
         free_bytes, total_bytes = self.cp.cuda.runtime.memGetInfo()
         return int(free_bytes), int(total_bytes)
 
     def release_index(self) -> None:
-        self.dataset = None
         try:
             self.cp.get_default_memory_pool().free_all_blocks()
         except Exception:
@@ -374,11 +375,20 @@ class _CuVSRuntime:
         )
 
     def build(self, dataset: Sequence[Sequence[float]]):
-        self.dataset = self.cp.asarray(dataset, dtype=self.cp.float32)
+        device_dataset = self.cp.asarray(dataset, dtype=self.cp.float32)
         if self.algorithm == "brute_force":
-            return self.brute_force.build(self.dataset, metric=self.metric)
+            index = self.brute_force.build(device_dataset, metric=self.metric)
+            return _CuVSRuntimeIndex(index=index, dataset=device_dataset)
         params = self.cagra.IndexParams(metric=self.metric, **self.build_params)
-        return self.cagra.build(params, self.dataset)
+        index = self.cagra.build(params, device_dataset)
+        return _CuVSRuntimeIndex(index=index, dataset=device_dataset)
+
+    def _resources(self):
+        resources = getattr(self._thread_resources, "resources", None)
+        if resources is None:
+            resources = self.Resources()
+            self._thread_resources.resources = resources
+        return resources
 
     def _prefilter(self, mask: Sequence[bool]):
         return self.filters.from_bitset(self.prepare_filter(mask))
@@ -400,11 +410,13 @@ class _CuVSRuntime:
 
     def search(
         self,
-        index: Any,
+        runtime_index: "_CuVSRuntimeIndex",
         query: Sequence[float],
         limit: int,
         mask: Optional[Any],
     ) -> Tuple[List[int], List[float]]:
+        index = runtime_index.index
+        resources = self._resources()
         queries = self.cp.asarray([query], dtype=self.cp.float32)
         if mask is None:
             prefilter = None
@@ -414,7 +426,11 @@ class _CuVSRuntime:
             prefilter = self._prefilter(mask)
         if self.algorithm == "brute_force":
             distances, neighbors = self.brute_force.search(
-                index, queries, limit, prefilter=prefilter
+                index,
+                queries,
+                limit,
+                resources=resources,
+                prefilter=prefilter,
             )
         else:
             search_params = dict(self.search_params)
@@ -423,8 +439,14 @@ class _CuVSRuntime:
             search_params["itopk_size"] = max(configured_itopk, minimum_itopk)
             params = self.cagra.SearchParams(**search_params)
             distances, neighbors = self.cagra.search(
-                params, index, queries, limit, filter=prefilter
+                params,
+                index,
+                queries,
+                limit,
+                resources=resources,
+                filter=prefilter,
             )
+        resources.sync()
         host_neighbors = self.cp.asnumpy(neighbors)[0].tolist()
         host_distances = self.cp.asnumpy(distances)[0].tolist()
         return [int(item) for item in host_neighbors], [float(item) for item in host_distances]
@@ -437,6 +459,19 @@ class _CuVSRuntime:
 class _Record:
     vector: Tuple[float, ...]
     fields: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _CuVSRuntimeIndex:
+    index: Any
+    dataset: Any
+
+
+@dataclass(frozen=True)
+class _CuVSIndexSnapshot:
+    runtime_index: Any
+    labels: Tuple[int, ...]
+    generation: int
 
 
 @dataclass(frozen=True)
@@ -525,12 +560,13 @@ class CuVSDenseIndex:
             search_params,
         )
         self._records: Dict[int, _Record] = {}
-        self._labels: List[int] = []
-        self._index: Any = None
+        self._snapshot: Optional[_CuVSIndexSnapshot] = None
         self._dirty = True
         self._filter_cache: OrderedDict[str, _CachedFilter] = OrderedDict()
         self._preflight_filter_cache: OrderedDict[str, _ResolvedNativeFilter] = OrderedDict()
         self._lock = threading.RLock()
+        self._idle_condition = threading.Condition(self._lock)
+        self._active_searches = 0
         self._filter_layout_lock = threading.Lock()
         self._records_generation = 0
         self._filter_layout_generation = -1
@@ -545,6 +581,11 @@ class CuVSDenseIndex:
     def size(self) -> int:
         with self._lock:
             return len(self._records)
+
+    @property
+    def needs_rebuild(self) -> bool:
+        with self._lock:
+            return self._dirty
 
     def _prepare_vector(self, vector: Sequence[float]) -> Tuple[float, ...]:
         if len(vector) != self.dimension:
@@ -780,6 +821,7 @@ class CuVSDenseIndex:
     def _prepare_filter(
         self,
         filters: Mapping[str, Any],
+        labels: Sequence[int],
         native_filter_resolver: Optional[NativeFilterResolver] = None,
         resolved_native_filter: Optional[_ResolvedNativeFilter] = None,
     ) -> _CachedFilter:
@@ -804,12 +846,12 @@ class CuVSDenseIndex:
                 else:
                     prepared = tuple(
                         bool(resolved.bitset_words[row // 32] & (1 << (row % 32)))
-                        for row in range(len(self._labels))
+                        for row in range(len(labels))
                     )
         else:
             mask = [
                 matches_filter(self._records[label].fields, filters, self.field_types)
-                for label in self._labels
+                for label in labels
             ]
             prepare_filter = getattr(self._runtime, "prepare_filter", None)
             prepared = prepare_filter(mask) if prepare_filter is not None else tuple(mask)
@@ -841,18 +883,20 @@ class CuVSDenseIndex:
             return
         build_started = time.perf_counter()
         try:
-            self._labels = list(self._records)
-            if not self._labels:
-                self._index = None
+            labels = tuple(self._records)
+            generation = self._records_generation
+            if not labels:
+                self._snapshot = None
                 self._dirty = False
                 return
+            if self._active_searches == 0:
+                self._snapshot = None
             if self.auto_memory:
-                self._index = None
                 release_index = getattr(self._runtime, "release_index", None)
                 if release_index is not None:
                     release_index()
                 estimate = estimate_cuvs_memory(
-                    vector_count=len(self._labels),
+                    vector_count=len(labels),
                     dimension=self.dimension,
                     algorithm=self.algorithm,
                     build_params=self._build_params,
@@ -872,12 +916,11 @@ class CuVSDenseIndex:
                         f"({estimate.estimated_peak_bytes} bytes) exceeds the usable free "
                         f"memory ({usable_bytes} of {total_bytes} bytes after reserve)"
                     )
-            dataset = [self._records[label].vector for label in self._labels]
-            self._index = None
+            dataset = [self._records[label].vector for label in labels]
             try:
                 if telemetry is not None:
                     telemetry.build_performed = True
-                self._index = self._runtime.build(dataset)
+                runtime_index = self._runtime.build(dataset)
             except Exception as exc:
                 is_out_of_memory = getattr(self._runtime, "is_out_of_memory", None)
                 if self.auto_memory and is_out_of_memory is not None and is_out_of_memory(exc):
@@ -889,10 +932,15 @@ class CuVSDenseIndex:
                     ) from exc
                 raise
             if native_filter_layout_registrar is not None and not filter_layout_is_current:
-                native_filter_layout_registrar(self._labels)
-                self._filter_layout_generation = self._records_generation
+                native_filter_layout_registrar(labels)
+                self._filter_layout_generation = generation
+            self._snapshot = _CuVSIndexSnapshot(
+                runtime_index=runtime_index,
+                labels=labels,
+                generation=generation,
+            )
             self._dirty = False
-            logger.info("Built cuVS %s index with %d vectors", self.algorithm, len(self._labels))
+            logger.info("Built cuVS %s index with %d vectors", self.algorithm, len(labels))
         finally:
             if telemetry is not None:
                 telemetry.build_ms += (time.perf_counter() - build_started) * 1000.0
@@ -981,7 +1029,8 @@ class CuVSDenseIndex:
                 filter_layout_is_current=filter_layout_is_current,
                 telemetry=telemetry,
             )
-            if self._index is None:
+            snapshot = self._snapshot
+            if snapshot is None:
                 return [], []
 
             mask: Optional[Any] = None
@@ -993,6 +1042,7 @@ class CuVSDenseIndex:
                         telemetry.filter_cache_hit = True
                 cached_filter = cached_filter or self._prepare_filter(
                     filters,
+                    snapshot.labels,
                     native_filter_resolver,
                     resolved_native_filter,
                 )
@@ -1011,26 +1061,38 @@ class CuVSDenseIndex:
                     )
                 result_limit = min(limit, eligible_count)
             else:
-                result_limit = min(limit, len(self._labels))
+                result_limit = min(limit, len(snapshot.labels))
+            self._active_searches += 1
 
-            gpu_started = time.perf_counter()
-            try:
-                offsets, distances = self._runtime.search(self._index, query, result_limit, mask)
-            finally:
-                if telemetry is not None:
-                    telemetry.gpu_search_ms += (time.perf_counter() - gpu_started) * 1000.0
-            labels: List[int] = []
-            scores: List[float] = []
-            for offset, distance in zip(offsets, distances, strict=True):
-                if offset < 0 or offset >= len(self._labels):
-                    continue
-                labels.append(self._labels[offset])
-                scores.append(1.0 - distance if self.distance == "l2" else distance)
-            return labels, scores
+        gpu_started = time.perf_counter()
+        try:
+            offsets, distances = self._runtime.search(
+                snapshot.runtime_index,
+                query,
+                result_limit,
+                mask,
+            )
+        finally:
+            if telemetry is not None:
+                telemetry.gpu_search_ms += (time.perf_counter() - gpu_started) * 1000.0
+            with self._lock:
+                self._active_searches -= 1
+                if self._active_searches == 0:
+                    self._idle_condition.notify_all()
+        labels: List[int] = []
+        scores: List[float] = []
+        for offset, distance in zip(offsets, distances, strict=True):
+            if offset < 0 or offset >= len(snapshot.labels):
+                continue
+            labels.append(snapshot.labels[offset])
+            scores.append(1.0 - distance if self.distance == "l2" else distance)
+        return labels, scores
 
     def close(self) -> None:
         with self._lock:
-            self._index = None
-            self._labels = []
+            while self._active_searches:
+                self._idle_condition.wait()
+            self._snapshot = None
             self._filter_cache.clear()
+            self._preflight_filter_cache.clear()
             self._runtime.close()

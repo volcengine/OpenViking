@@ -166,6 +166,87 @@ def test_cuvs_search_telemetry_records_build_filter_cache_and_search():
     assert second.eligible_count == 1
 
 
+def test_warmed_cuvs_searches_run_concurrently():
+    class ConcurrentRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.barrier = threading.Barrier(4)
+            self.active_lock = threading.Lock()
+            self.active = 0
+            self.peak_active = 0
+
+        def search(self, index, query, limit, mask):
+            with self.active_lock:
+                self.active += 1
+                self.peak_active = max(self.peak_active, self.active)
+            try:
+                self.barrier.wait(timeout=5)
+                return super().search(index, query, limit, mask)
+            finally:
+                with self.active_lock:
+                    self.active -= 1
+
+    runtime = ConcurrentRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0])])
+    # Build without entering the barrier.
+    runtime.barrier = threading.Barrier(1)
+    assert index.search([1.0, 0.0], 1, None)[0] == [1]
+    runtime.barrier = threading.Barrier(4)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(index.search, [1.0, 0.0], 1, None) for _ in range(4)]
+        assert [future.result(timeout=5)[0] for future in futures] == [[1]] * 4
+
+    assert runtime.peak_active == 4
+
+
+def test_inflight_search_keeps_immutable_snapshot_during_rebuild():
+    class BlockingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.block_next = False
+            self.search_started = threading.Event()
+            self.resume_search = threading.Event()
+
+        def search(self, index, query, limit, mask):
+            if self.block_next:
+                self.block_next = False
+                self.search_started.set()
+                assert self.resume_search.wait(timeout=5)
+            return super().search(index, query, limit, mask)
+
+    runtime = BlockingRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0])])
+    assert index.search([1.0, 0.0], 1, None)[0] == [1]
+
+    runtime.block_next = True
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        inflight = executor.submit(index.search, [1.0, 0.0], 1, None)
+        assert runtime.search_started.wait(timeout=5)
+        index.upsert([delta(2, [2.0, 0.0])])
+        assert index.search([1.0, 0.0], 1, None)[0] == [2]
+        runtime.resume_search.set()
+        assert inflight.result(timeout=5)[0] == [1]
+
+    assert runtime.build_count == 2
+
+
 def test_cuvs_l2_scores_match_openviking_score_convention():
     runtime = FakeCuVSRuntime(metric="sqeuclidean")
     index = CuVSDenseIndex(

@@ -6,8 +6,9 @@ import os
 import shutil
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import openviking.storage.vectordb.engine as engine
 from openviking.storage.vectordb.index.cuvs_index import (
@@ -51,6 +52,47 @@ def normalize_vector(vector: List[float]) -> List[float]:
 
     # Normalize
     return [x / norm for x in vector]
+
+
+class _ReadWriteLock:
+    """Writer-preferring lock for atomic mutation and concurrent warmed reads."""
+
+    def __init__(self):
+        self._condition = threading.Condition(threading.Lock())
+        self._readers = 0
+        self._writer = False
+        self._waiting_writers = 0
+
+    @contextmanager
+    def read(self) -> Iterator[None]:
+        with self._condition:
+            while self._writer or self._waiting_writers:
+                self._condition.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._condition.notify_all()
+
+    @contextmanager
+    def write(self) -> Iterator[None]:
+        with self._condition:
+            self._waiting_writers += 1
+            try:
+                while self._writer or self._readers:
+                    self._condition.wait()
+                self._writer = True
+            finally:
+                self._waiting_writers -= 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._writer = False
+                self._condition.notify_all()
 
 
 class IndexEngineProxy:
@@ -276,7 +318,7 @@ class LocalIndex(IIndex):
         self.meta = meta
         self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
         self.dense_search: Optional[CuVSDenseIndex] = None
-        self._dense_search_lock = threading.RLock()
+        self._dense_search_lock = _ReadWriteLock()
         self._auto_cuvs = False
         dense_search_config = dict(dense_search_config or {})
         dense_search_backend = dense_search_config.get("backend")
@@ -322,7 +364,7 @@ class LocalIndex(IIndex):
 
     def upsert_data(self, delta_list: List[DeltaRecord]):
         if self.dense_search:
-            with self._dense_search_lock:
+            with self._dense_search_lock.write():
                 if self.engine_proxy:
                     self.engine_proxy.upsert_data(self._convert_delta_list_for_index(delta_list))
                 self.dense_search.upsert(delta_list)
@@ -331,7 +373,7 @@ class LocalIndex(IIndex):
 
     def delete_data(self, delta_list: List[DeltaRecord]):
         if self.dense_search:
-            with self._dense_search_lock:
+            with self._dense_search_lock.write():
                 if self.engine_proxy:
                     self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
                 self.dense_search.delete(delta_list)
@@ -371,56 +413,63 @@ class LocalIndex(IIndex):
             try:
                 if self.dense_search and query_vector and cuvs_telemetry is not None:
                     if not sparse_raw_terms and not sparse_values:
-                        native_count = None
                         if self._auto_cuvs and filters:
-                            native_count = self.dense_search.preflight_native_count(
-                                filters,
-                                self._evaluate_cuvs_filter,
-                                self.engine_proxy.set_filter_layout,
-                                telemetry=cuvs_telemetry,
-                            )
-                        if native_count == 0:
-                            cuvs_telemetry.route_reason = "empty_filter"
-                            return [], []
-                        if native_count is not None:
-                            cuvs_telemetry.route_reason = "native_filter_threshold"
-                            native_filter_token = self.dense_search.native_filter_token(filters)
-                            logger.debug(
-                                "cuVS auto mode selected native filtered search (%d candidates)",
-                                native_count,
-                            )
-                        else:
                             queue_started = time.perf_counter()
-                            with self._dense_search_lock:
+                            with self._dense_search_lock.read():
                                 cuvs_telemetry.queue_ms += (
                                     time.perf_counter() - queue_started
                                 ) * 1000.0
-                                try:
-                                    result = self.dense_search.search(
+                                native_count = self.dense_search.preflight_native_count(
+                                    filters,
+                                    self._evaluate_cuvs_filter,
+                                    self.engine_proxy.set_filter_layout,
+                                    telemetry=cuvs_telemetry,
+                                )
+                                if native_count == 0:
+                                    cuvs_telemetry.route_reason = "empty_filter"
+                                    return [], []
+                                if native_count is not None:
+                                    cuvs_telemetry.route_reason = "native_filter_threshold"
+                                    native_filter_token = self.dense_search.native_filter_token(
+                                        filters
+                                    )
+                                    logger.debug(
+                                        "cuVS auto mode selected native filtered search "
+                                        "(%d candidates)",
+                                        native_count,
+                                    )
+                                    return self._search_native(
                                         query_vector,
                                         limit,
                                         filters,
-                                        self._evaluate_cuvs_filter,
-                                        self.engine_proxy.set_filter_layout,
-                                        telemetry=cuvs_telemetry,
+                                        sparse_raw_terms,
+                                        sparse_values,
+                                        native_filter_token,
+                                        cuvs_telemetry,
                                     )
-                                    cuvs_telemetry.route_reason = "cuvs"
-                                    return result
-                                except CuVSMemoryBudgetError as exc:
-                                    cuvs_telemetry.route_reason = "native_memory_budget"
-                                    if not self._auto_cuvs:
-                                        raise
-                                    logger.debug("cuVS auto mode kept native dense search: %s", exc)
-                                except CuVSNativeRouteError as exc:
-                                    cuvs_telemetry.route_reason = "native_filter_threshold"
-                                    logger.debug(
-                                        "cuVS auto mode selected native dense search: %s", exc
-                                    )
-                                except UnsupportedCuVSFilterError as exc:
-                                    cuvs_telemetry.route_reason = "native_unsupported_filter"
-                                    if not self.dense_search.fallback_to_native:
-                                        raise
-                                    logger.debug("Falling back to native dense search: %s", exc)
+                        try:
+                            result = self._search_cuvs(
+                                query_vector,
+                                limit,
+                                filters,
+                                cuvs_telemetry,
+                            )
+                            cuvs_telemetry.route_reason = "cuvs"
+                            return result
+                        except CuVSMemoryBudgetError as exc:
+                            cuvs_telemetry.route_reason = "native_memory_budget"
+                            if not self._auto_cuvs:
+                                raise
+                            logger.debug("cuVS auto mode kept native dense search: %s", exc)
+                        except CuVSNativeRouteError as exc:
+                            cuvs_telemetry.route_reason = "native_filter_threshold"
+                            native_filter_token = self.dense_search.native_filter_token(filters)
+                            logger.debug("cuVS auto mode selected native dense search: %s", exc)
+                        except UnsupportedCuVSFilterError as exc:
+                            cuvs_telemetry.route_reason = "native_unsupported_filter"
+                            if not self.dense_search.fallback_to_native:
+                                raise
+                            logger.debug("Falling back to native dense search: %s", exc)
                     elif not self.dense_search.fallback_to_native:
                         cuvs_telemetry.route_reason = "unsupported_sparse_hybrid"
                         raise ValueError(
@@ -429,27 +478,15 @@ class LocalIndex(IIndex):
                     else:
                         cuvs_telemetry.route_reason = "native_sparse_hybrid"
 
-                native_started = time.perf_counter()
-                try:
-                    if native_filter_token:
-                        token_result = self.engine_proxy.search_with_filter_token(
-                            query_vector,
-                            limit,
-                            native_filter_token,
-                        )
-                        if token_result is not None:
-                            cuvs_telemetry.native_filter_reused = True
-                            return token_result
-                    return self.engine_proxy.search(
-                        query_vector, limit, filters, sparse_raw_terms, sparse_values
-                    )
-                finally:
-                    if cuvs_telemetry is not None:
-                        cuvs_telemetry.native_search_ms += (
-                            time.perf_counter() - native_started
-                        ) * 1000.0
-                        if cuvs_telemetry.route_reason == "pending":
-                            cuvs_telemetry.route_reason = "native_fallback"
+                return self._search_native(
+                    query_vector,
+                    limit,
+                    filters,
+                    sparse_raw_terms,
+                    sparse_values,
+                    native_filter_token,
+                    cuvs_telemetry,
+                )
             except Exception:
                 if cuvs_telemetry is not None and cuvs_telemetry.route_reason == "pending":
                     cuvs_telemetry.route_reason = "cuvs_error"
@@ -459,6 +496,79 @@ class LocalIndex(IIndex):
                     cuvs_telemetry.total_ms += (time.perf_counter() - telemetry_started) * 1000.0
                     self._record_cuvs_telemetry(cuvs_telemetry)
         return [], []
+
+    def _search_cuvs(
+        self,
+        query_vector: List[float],
+        limit: int,
+        filters: Dict[str, Any],
+        telemetry: CuVSSearchTelemetry,
+    ) -> Tuple[List[int], List[float]]:
+        if self.dense_search is None or self.engine_proxy is None:
+            raise RuntimeError("cuVS search requires an initialized index")
+        while True:
+            queue_started = time.perf_counter()
+            with self._dense_search_lock.read():
+                telemetry.queue_ms += (time.perf_counter() - queue_started) * 1000.0
+                if not self.dense_search.needs_rebuild:
+                    return self.dense_search.search(
+                        query_vector,
+                        limit,
+                        filters,
+                        self._evaluate_cuvs_filter,
+                        self.engine_proxy.set_filter_layout,
+                        telemetry=telemetry,
+                    )
+
+            queue_started = time.perf_counter()
+            with self._dense_search_lock.write():
+                telemetry.queue_ms += (time.perf_counter() - queue_started) * 1000.0
+                if self.dense_search.needs_rebuild:
+                    return self.dense_search.search(
+                        query_vector,
+                        limit,
+                        filters,
+                        self._evaluate_cuvs_filter,
+                        self.engine_proxy.set_filter_layout,
+                        telemetry=telemetry,
+                    )
+
+    def _search_native(
+        self,
+        query_vector: List[float],
+        limit: int,
+        filters: Dict[str, Any],
+        sparse_raw_terms: List[str],
+        sparse_values: List[float],
+        native_filter_token: int,
+        telemetry: Optional[CuVSSearchTelemetry],
+    ) -> Tuple[List[int], List[float]]:
+        if self.engine_proxy is None:
+            return [], []
+        native_started = time.perf_counter()
+        try:
+            if native_filter_token:
+                token_result = self.engine_proxy.search_with_filter_token(
+                    query_vector,
+                    limit,
+                    native_filter_token,
+                )
+                if token_result is not None:
+                    if telemetry is not None:
+                        telemetry.native_filter_reused = True
+                    return token_result
+            return self.engine_proxy.search(
+                query_vector,
+                limit,
+                filters,
+                sparse_raw_terms,
+                sparse_values,
+            )
+        finally:
+            if telemetry is not None:
+                telemetry.native_search_ms += (time.perf_counter() - native_started) * 1000.0
+                if telemetry.route_reason == "pending":
+                    telemetry.route_reason = "native_fallback"
 
     def _evaluate_cuvs_filter(self, filters: Dict[str, Any]) -> Tuple[List[int], int, int]:
         if self.dense_search is None or self.engine_proxy is None:
@@ -524,14 +634,16 @@ class LocalIndex(IIndex):
 
     def close(self):
         if self.dense_search:
-            self.dense_search.close()
-            self.dense_search = None
+            with self._dense_search_lock.write():
+                self.dense_search.close()
+                self.dense_search = None
         return None
 
     def drop(self):
         if self.dense_search:
-            self.dense_search.close()
-            self.dense_search = None
+            with self._dense_search_lock.write():
+                self.dense_search.close()
+                self.dense_search = None
         if self.engine_proxy:
             self.engine_proxy.drop()
         self.meta = None
