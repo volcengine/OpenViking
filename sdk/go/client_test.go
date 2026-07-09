@@ -347,6 +347,98 @@ func TestSearchOmitsSearchFiltersWhenUnset(t *testing.T) {
 	}
 }
 
+func TestFindSendsIncludeProvenanceAndParsesProvenance(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/find" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		if got := body["include_provenance"]; got != true {
+			t.Fatalf("include_provenance = %#v", got)
+		}
+		writeOK(t, w, map[string]any{
+			"resources": []any{},
+			"provenance": []map[string]any{
+				{"query": "auth", "score_threshold": 0.5},
+			},
+		})
+	}))
+	defer closeServer()
+
+	res, err := client.Find(context.Background(), "auth", &FindOptions{IncludeProvenance: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.QueryResults) != 1 {
+		t.Fatalf("QueryResults = %#v", res.QueryResults)
+	}
+	if got := res.QueryResults[0]["query"]; got != "auth" {
+		t.Fatalf("QueryResults[0][query] = %#v", got)
+	}
+}
+
+func TestFindOmitsIncludeProvenanceWhenUnset(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/find" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		requireBodyKeysAbsent(t, body, "include_provenance")
+		writeOK(t, w, map[string]any{"resources": []any{}})
+	}))
+	defer closeServer()
+
+	if _, err := client.Find(context.Background(), "auth", &FindOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchSendsIncludeProvenanceAndParsesProvenance(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/search" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		if got := body["include_provenance"]; got != true {
+			t.Fatalf("include_provenance = %#v", got)
+		}
+		writeOK(t, w, map[string]any{
+			"resources": []any{},
+			"provenance": []map[string]any{
+				{"query": "auth", "score_threshold": 0.5},
+			},
+		})
+	}))
+	defer closeServer()
+
+	res, err := client.Search(context.Background(), "auth", &SearchOptions{IncludeProvenance: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.QueryResults) != 1 {
+		t.Fatalf("QueryResults = %#v", res.QueryResults)
+	}
+	if got := res.QueryResults[0]["query"]; got != "auth" {
+		t.Fatalf("QueryResults[0][query] = %#v", got)
+	}
+}
+
+func TestSearchOmitsIncludeProvenanceWhenUnset(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/search" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		requireBodyKeysAbsent(t, body, "include_provenance")
+		writeOK(t, w, map[string]any{"resources": []any{}})
+	}))
+	defer closeServer()
+
+	if _, err := client.Search(context.Background(), "auth", &SearchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestErrorEnvelopePreservesCodeDetailsAndStatus(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(t, w, http.StatusNotFound, "NOT_FOUND", map[string]any{"resource": "viking://resources/missing"})
