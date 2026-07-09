@@ -155,6 +155,7 @@ export function formatCodeLocateOutput(result, { uri } = {}) {
       lines.push("- Keep the first pass limited to the listed edit target and behavior reference.")
       lines.push("- Treat tests and assertions as behavior evidence unless the issue explicitly asks to update tests.")
       lines.push(`- Follow first: ${stagedAction}`)
+      if (stagedCandidate.confidence) lines.push(`- Confidence: ${stagedCandidate.confidence}`)
       lines.push(`- Edit target: ${candidateLabel(stagedCandidate)}`)
       const editLines = snippetLines(stagedCandidate)
       if (editLines[0]) lines.push(`- Edit line: ${editLines[0]}`)
@@ -194,7 +195,7 @@ export function formatCodeLocateOutput(result, { uri } = {}) {
     }
     if (result.summary_text) lines.push(`Summary: ${result.summary_text}`)
     lines.push(
-      "Contract: read the top edit candidate first and the top behavior reference only if needed. Patch before broader grep/read/codesearch.",
+      "Contract: follow each candidate confidence and next action. Patch before broader grep/read/codesearch only for high-confidence or explicit PATCH FIRST guidance.",
     )
     lines.push(
       "If pytest fails before collection or dependency imports, treat it as setup and do not broaden code search.",
@@ -203,6 +204,7 @@ export function formatCodeLocateOutput(result, { uri } = {}) {
     if (!editCandidates.length) lines.push("- no ranked candidates")
     for (const candidate of editCandidates) {
       lines.push(`${candidate.rank}. ${candidateLabel(candidate)}`)
+      if (candidate.confidence) lines.push(`   confidence: ${candidate.confidence}`)
       const focus = (candidate.focus_symbols ?? []).map(symbolLabel).filter(Boolean)
       if (focus.length) lines.push(`   focus: ${focus.join(", ")}`)
       const reasons = candidate.reasons ?? []
@@ -224,6 +226,7 @@ export function formatCodeLocateOutput(result, { uri } = {}) {
     if (!behaviorReferences.length) lines.push("- no ranked candidates")
     for (const candidate of behaviorReferences) {
       lines.push(`${candidate.rank}. ${candidateLabel(candidate)}`)
+      if (candidate.confidence) lines.push(`   confidence: ${candidate.confidence}`)
       const reasons = candidate.reasons ?? []
       if (reasons.length) lines.push(`   why: ${reasons.slice(0, 3).join("; ")}`)
       const snippets = candidate.snippets ?? []
@@ -235,6 +238,7 @@ export function formatCodeLocateOutput(result, { uri } = {}) {
             .join("; ")}`,
         )
       }
+      if (candidate.next_action) lines.push(`   next: ${candidate.next_action}`)
     }
 
     if (runnable.length) {

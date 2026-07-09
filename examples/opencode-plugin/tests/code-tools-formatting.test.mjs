@@ -67,6 +67,7 @@ test("code locate output lifts patch-first staged action above ranked candidates
             text: 'same-file diagnostic precedent: msg = __("Failed to resolve a document reference. A title or label was not found: %s")',
           },
         ],
+        confidence: "high",
         next_action:
           "PATCH FIRST: diagnostic wording delta; patch only diagnostic message/arguments and matching assertions",
       },
@@ -109,6 +110,7 @@ test("code locate output lifts patch-first staged action above ranked candidates
     /- Treat tests and assertions as behavior evidence unless the issue explicitly asks to update tests\./,
   )
   assert.match(formatted, /- Follow first: diagnostic wording delta/)
+  assert.match(formatted, /- Confidence: high/)
   assert.match(
     formatted,
     /- Edit line: docsuite\/domains\/std\.py:L822 logger\.warning/,
@@ -172,6 +174,7 @@ test("code locate output keeps normal guidance compact and top-first", () => {
   const candidates = Array.from({ length: 5 }, (_, index) => ({
     rank: index + 1,
     location: { path: `pkg/module_${index + 1}.py` },
+    confidence: index === 0 ? "high" : "medium",
     reasons: [`reason ${index + 1}`],
     snippets: [{ line: 10 + index, text: `def target_${index + 1}(): pass` }],
     next_action: "read this top edit file first",
@@ -179,8 +182,10 @@ test("code locate output keeps normal guidance compact and top-first", () => {
   const references = Array.from({ length: 3 }, (_, index) => ({
     rank: index + 1,
     location: { path: `tests/test_module_${index + 1}.py` },
+    confidence: "medium",
     reasons: [`reference ${index + 1}`],
     snippets: [{ line: 20 + index, text: `def test_target_${index + 1}(): pass` }],
+    next_action: "read only this behavior reference if needed",
   }))
 
   const formatted = formatCodeLocateOutput({
@@ -195,12 +200,15 @@ test("code locate output keeps normal guidance compact and top-first", () => {
     ],
   })
 
-  assert.match(formatted, /Contract: read the top edit candidate first/)
-  assert.match(formatted, /Patch before broader grep\/read\/codesearch/)
+  assert.match(formatted, /Contract: follow each candidate confidence and next action/)
+  assert.match(formatted, /Patch before broader grep\/read\/codesearch only for high-confidence/)
+  assert.match(formatted, /confidence: high/)
+  assert.match(formatted, /confidence: medium/)
   assert.match(formatted, /If pytest fails before collection or dependency imports/)
   assert.match(formatted, /pkg\/module_3\.py/)
   assert.doesNotMatch(formatted, /pkg\/module_4\.py/)
   assert.match(formatted, /tests\/test_module_2\.py/)
+  assert.match(formatted, /next: read only this behavior reference if needed/)
   assert.doesNotMatch(formatted, /tests\/test_module_3\.py/)
   assert.match(formatted, /python3 -m py_compile pkg\/module_1\.py/)
   assert.match(formatted, /python3 -m pytest tests\/test_module_1\.py/)

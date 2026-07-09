@@ -587,8 +587,11 @@ class TestLocateCode:
 
         assert len(result.edit_candidates) <= 3
         assert len(result.behavior_references) <= 2
-        assert "Contract: read the top edit candidate first" in text
-        assert "Patch before broader grep/read/codesearch" in text
+        assert "Contract: follow each candidate confidence and next action" in text
+        assert (
+            "Patch before broader grep/read/codesearch only for high-confidence"
+            in text
+        )
         assert "If pytest fails before collection or dependency imports" in text
 
     def test_locate_code_structured_uses_structured_terms_and_hints(self):
@@ -1038,6 +1041,123 @@ class TestLocateCode:
 
         assert result.edit_candidates[0].location["relative_path"] == "samplepkg/utils/pretty.py"
 
+    def test_locate_code_marks_weak_hint_only_candidate_low_confidence(self):
+        result = locate_code_structured(
+            "fix request routing regression",
+            [
+                CodeLocateFile(
+                    "def helper():\n    return 'shared utility'\n",
+                    "/repo/webfw/core/router.py",
+                    location_type="local",
+                    relative_path="webfw/core/router.py",
+                ),
+                CodeLocateFile(
+                    "def parse_request():\n    return 'request handling route local evidence'\n",
+                    "/repo/webfw/http/request.py",
+                    location_type="local",
+                    relative_path="webfw/http/request.py",
+                ),
+            ],
+            hints=CodeLocateHints(paths=["webfw/core/router.py"]),
+        )
+
+        candidate = result.edit_candidates[0]
+        assert candidate.confidence in {"low", "medium"}
+        assert "patch before broader grep/read/codesearch" not in candidate.next_action
+        assert "read this top edit file first" not in candidate.next_action
+
+    def test_locate_code_prefers_local_test_colocation_over_broad_hints(self):
+        result = locate_code_structured(
+            "ColumnTransformer fails to preserve pandas feature names in output",
+            [
+                CodeLocateFile(
+                    "class Pipeline:\n    def transform(self, X):\n        return X\n",
+                    "/repo/sklearn/pipeline.py",
+                    location_type="local",
+                    relative_path="sklearn/pipeline.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "class ColumnTransformer:\n"
+                        "    def get_feature_names_out(self):\n"
+                        "        return self.transformers_  # pandas feature names output\n"
+                    ),
+                    "/repo/sklearn/compose/_column_transformer.py",
+                    location_type="local",
+                    relative_path="sklearn/compose/_column_transformer.py",
+                ),
+                CodeLocateFile(
+                    (
+                        "def test_column_transformer_pandas_feature_names():\n"
+                        "    assert ColumnTransformer().get_feature_names_out()\n"
+                    ),
+                    "/repo/sklearn/compose/tests/test_column_transformer.py",
+                    location_type="local",
+                    relative_path="sklearn/compose/tests/test_column_transformer.py",
+                ),
+            ],
+            terms=["ColumnTransformer", "feature_names_out", "pandas"],
+            hints=CodeLocateHints(path_terms=["pipeline"], symbols=["Pipeline"]),
+            failing_tests=[
+                "sklearn/compose/tests/test_column_transformer.py::test_column_transformer_pandas_feature_names",
+            ],
+        )
+
+        assert result.edit_candidates[0].location["relative_path"] == (
+            "sklearn/compose/_column_transformer.py"
+        )
+        assert result.behavior_references[0].location["relative_path"] == (
+            "sklearn/compose/tests/test_column_transformer.py"
+        )
+
+    def test_locate_code_avoids_concrete_pytest_for_weak_source_test_pair(self):
+        result = locate_code_structured(
+            "request routing regression",
+            [
+                CodeLocateFile(
+                    "def request(path):\n    return path\n",
+                    "/repo/webfw/http/request.py",
+                    location_type="local",
+                    relative_path="webfw/http/request.py",
+                ),
+                CodeLocateFile(
+                    "def test_auth_permissions():\n    request = object()\n    assert request\n",
+                    "/repo/tests/auth/test_permissions.py",
+                    location_type="local",
+                    relative_path="tests/auth/test_permissions.py",
+                ),
+            ],
+            source_root="/repo",
+        )
+
+        commands = [item["command"] for item in result.verification if item.get("command")]
+        assert "python3 -m py_compile webfw/http/request.py" in commands
+        assert "python3 -m pytest tests/auth/test_permissions.py" not in commands
+
+    def test_locate_code_does_not_pair_tests_on_short_substrings(self):
+        result = locate_code_structured(
+            "io parsing regression",
+            [
+                CodeLocateFile(
+                    "def load_io(stream):\n    return stream.read()\n",
+                    "/repo/pkg/io.py",
+                    location_type="local",
+                    relative_path="pkg/io.py",
+                ),
+                CodeLocateFile(
+                    "def test_condition_message():\n    assert 'condition' in message\n",
+                    "/repo/tests/test_messages.py",
+                    location_type="local",
+                    relative_path="tests/test_messages.py",
+                ),
+            ],
+            source_root="/repo",
+        )
+
+        commands = [item["command"] for item in result.verification if item.get("command")]
+        assert "python3 -m py_compile pkg/io.py" in commands
+        assert "python3 -m pytest tests/test_messages.py" not in commands
+
     def test_locate_code_ignores_package_name_path_hint_as_broad_noise(self):
         result = locate_code_structured(
             "ValueError truth value of an array ambiguous compact_repr repr",
@@ -1266,7 +1386,7 @@ class TestLocateCode:
         assert result.index("Useful behavior references:") < result.index(
             "viking://r/tests/checkers/unittest_misc.py"
         )
-        assert "Contract: read the top edit candidate first" in result
+        assert "Contract: follow each candidate confidence and next action" in result
         assert "next: read this top edit file first" in result
         assert "viking://r/ChangeLog" not in result
 
@@ -1963,8 +2083,11 @@ class ChangePlanner:
         payload = result.to_dict()
         assert "search_policy" not in payload
         assert "workflow" not in payload
-        assert "read this top edit file first" in result.edit_candidates[0].next_action
-        assert "patch before broader grep/read/codesearch" in (
+        assert result.edit_candidates[0].confidence == "medium"
+        assert "top behavior reference or one alternate before patching" in (
+            result.edit_candidates[0].next_action
+        )
+        assert "patch before broader grep/read/codesearch" not in (
             result.edit_candidates[0].next_action
         )
         assert "lookup" not in result.edit_candidates[0].next_action
