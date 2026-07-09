@@ -10,7 +10,7 @@ block that degrades from full content to summary to URI-only entries.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 from openviking.core.namespace import canonical_user_root
@@ -18,10 +18,23 @@ from openviking.server.identity import RequestContext
 
 TYPE_ORDER = ("events", "entities", "preferences", "experiences")
 DEFAULT_QUOTAS = {"events": 10, "entities": 10, "preferences": 3, "experiences": 0}
+DEFAULT_OTHER_PEER_PENALTIES = {
+    "events": 0.1,
+    "entities": 0.1,
+    "preferences": 0.02,
+    "experiences": 0.02,
+}
 DEFAULT_MAX_CHARS = 6500
 DEFAULT_MIN_SCORE = 0.1
 EVENTS_BUDGET_RATIO = 0.75
 PREFERENCE_FULL_LIMIT = 3
+OTHER_PEER_OVERFETCH = 4
+ORIGIN_ORDER = ("actor_peer", "self", "other_peer")
+ORIGIN_LABEL = {
+    "actor_peer": "current-project",
+    "self": "global",
+    "other_peer": "other-projects",
+}
 
 
 @dataclass
@@ -30,6 +43,7 @@ class RecallEntry:
     score: float
     type: str
     mode: str
+    origin: str = ""
     content: str = ""
     summary: str = ""
     rank: int = 0
@@ -49,6 +63,8 @@ class RecallEntry:
             data["summary"] = self.summary
         if self.abstract:
             data["abstract"] = self.abstract
+        if self.origin:
+            data["origin"] = self.origin
         return data
 
 
@@ -78,6 +94,29 @@ def normalize_quotas(quotas: Mapping[str, Any] | None) -> dict[str, int]:
     return merged
 
 
+def _clamp_penalty(value: Any, fallback: float) -> float:
+    try:
+        penalty = float(value)
+    except (TypeError, ValueError):
+        penalty = fallback
+    return min(1.0, max(0.0, penalty))
+
+
+def normalize_penalties(value: Any = None) -> dict[str, float]:
+    """Normalize other-peer recall penalties by memory type."""
+    if value is None:
+        return dict(DEFAULT_OTHER_PEER_PENALTIES)
+    if isinstance(value, Mapping):
+        merged = dict(DEFAULT_OTHER_PEER_PENALTIES)
+        for key, penalty in value.items():
+            if key not in DEFAULT_OTHER_PEER_PENALTIES:
+                continue
+            merged[key] = _clamp_penalty(penalty, merged[key])
+        return merged
+    penalty = _clamp_penalty(value, 0.0)
+    return dict.fromkeys(TYPE_ORDER, penalty)
+
+
 def memory_target_roots(ctx: RequestContext) -> list[str]:
     user_root = canonical_user_root(ctx)
     targets = [f"{user_root}/memories"]
@@ -88,6 +127,23 @@ def memory_target_roots(ctx: RequestContext) -> list[str]:
 
 def _type_target(root: str, memory_type: str) -> str:
     return f"{root.rstrip('/')}/{memory_type}"
+
+
+def _is_under(uri: str, root: str) -> bool:
+    uri = uri.rstrip("/")
+    root = root.rstrip("/")
+    return uri == root or uri.startswith(f"{root}/")
+
+
+def _origin_for_uri(uri: str, actor_peer_id: str | None, user_root: str) -> str:
+    peers_root = f"{user_root.rstrip('/')}/peers"
+    if _is_under(uri, peers_root):
+        suffix = uri[len(peers_root) :].strip("/")
+        peer_id = suffix.split("/", 1)[0] if suffix else ""
+        if actor_peer_id and peer_id == actor_peer_id:
+            return "actor_peer"
+        return "other_peer"
+    return "self"
 
 
 def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
@@ -133,6 +189,26 @@ def _dedupe(items: list[Any]) -> list[Any]:
 
 def _limit(items: list[Any], limit: int) -> list[Any]:
     return sorted(items, key=_score, reverse=True)[: max(0, limit)]
+
+
+def _limit_with_peer_penalties(
+    items: list[Any],
+    *,
+    memory_type: str,
+    limit: int,
+    penalties: Mapping[str, float],
+    actor_peer_id: str | None,
+    user_root: str,
+) -> list[tuple[Any, str]]:
+    origin_rank = {origin: index for index, origin in enumerate(ORIGIN_ORDER)}
+
+    def sort_key(item: Any) -> tuple[float, int]:
+        origin = _origin_for_uri(_uri(item), actor_peer_id, user_root)
+        penalty = penalties.get(memory_type, 0.0) if origin == "other_peer" else 0.0
+        return (_score(item) - penalty, -origin_rank.get(origin, len(origin_rank)))
+
+    limited = sorted(items, key=sort_key, reverse=True)[: max(0, limit)]
+    return [(item, _origin_for_uri(_uri(item), actor_peer_id, user_root)) for item in limited]
 
 
 def _filename_from_uri(uri: str) -> str:
@@ -201,6 +277,14 @@ def _group_fragment(memory_type: str, fragments: list[str]) -> str:
     )
 
 
+def _section_fragment(origin: str, groups: list[str]) -> str:
+    return (
+        f'<memory_section source="{ORIGIN_LABEL.get(origin, origin)}">\n'
+        + "\n".join(groups)
+        + "\n</memory_section>"
+    )
+
+
 async def search_type_quota_recall(
     *,
     service: Any,
@@ -210,11 +294,17 @@ async def search_type_quota_recall(
     max_chars: int = DEFAULT_MAX_CHARS,
     min_score: float = DEFAULT_MIN_SCORE,
     render: bool = True,
+    peer_scope: str = "all",
+    other_peer_penalty: Any = None,
 ) -> RecallResult:
     normalized_quotas = normalize_quotas(quotas)
+    normalized_penalties = normalize_penalties(other_peer_penalty)
+    peer_scope = "actor" if peer_scope == "actor" else "all"
+    user_root = canonical_user_root(ctx)
     roots = memory_target_roots(ctx)
+    open_ctx = replace(ctx, actor_peer_id=None, legacy_agent_id=None)
     raw_by_type: dict[str, list[Any]] = {}
-    selected: list[tuple[str, Any, int]] = []
+    selected: list[tuple[str, Any, int, str, RequestContext]] = []
 
     for memory_type in TYPE_ORDER:
         quota = normalized_quotas.get(memory_type, 0)
@@ -232,12 +322,52 @@ async def search_type_quota_recall(
                 level=None,
             )
             found.extend(_extract_memories(result))
-        found = _limit(_dedupe(found), quota)
-        raw_by_type[memory_type] = found
-        selected.extend((memory_type, item, rank) for rank, item in enumerate(found, start=1))
+        if peer_scope == "all":
+            result = await service.search.find(
+                query=query,
+                ctx=open_ctx,
+                target_uri=f"{user_root}/peers",
+                limit=max(quota * OTHER_PEER_OVERFETCH, quota),
+                score_threshold=min_score,
+                level=None,
+            )
+            found.extend(
+                item
+                for item in _extract_memories(result)
+                if f"/memories/{memory_type}/" in _uri(item)
+                and _origin_for_uri(_uri(item), ctx.actor_peer_id, user_root) == "other_peer"
+            )
+            found = _dedupe(found)
+            raw_by_type[memory_type] = found
+            ranked = _limit_with_peer_penalties(
+                found,
+                memory_type=memory_type,
+                limit=quota,
+                penalties=normalized_penalties,
+                actor_peer_id=ctx.actor_peer_id,
+                user_root=user_root,
+            )
+        else:
+            found = _limit(_dedupe(found), quota)
+            raw_by_type[memory_type] = found
+            ranked = [
+                (item, _origin_for_uri(_uri(item), ctx.actor_peer_id, user_root)) for item in found
+            ]
+
+        selected.extend(
+            (
+                memory_type,
+                item,
+                rank,
+                origin,
+                open_ctx if origin == "other_peer" else ctx,
+            )
+            for rank, (item, origin) in enumerate(ranked, start=1)
+        )
 
     entries: list[RecallEntry] = []
     fragments_by_type: dict[str, list[str]] = {key: [] for key in TYPE_ORDER}
+    fragments_by_origin_type: dict[tuple[str, str], list[str]] = {}
     budgets = type_char_budgets(max_chars)
     used_by_type = dict.fromkeys(TYPE_ORDER, 0)
     total_chars = 0
@@ -245,7 +375,7 @@ async def search_type_quota_recall(
     dropped = 0
     seen_content: set[int] = set()
 
-    for index, (memory_type, item, rank) in enumerate(selected, start=1):
+    for index, (memory_type, item, rank, origin, read_ctx) in enumerate(selected, start=1):
         uri = _uri(item)
         if not uri or uri.rstrip("/").endswith("/profile.md"):
             continue
@@ -253,7 +383,7 @@ async def search_type_quota_recall(
         abstract = _abstract(item)
         content = ""
         try:
-            content = await service.fs.read(uri, ctx=ctx)
+            content = await service.fs.read(uri, ctx=read_ctx)
         except Exception:
             content = ""
 
@@ -315,6 +445,7 @@ async def search_type_quota_recall(
                 score=score,
                 type=memory_type,
                 mode=mode,
+                origin=origin,
                 content=entry_content,
                 summary=summary,
                 rank=rank,
@@ -322,15 +453,32 @@ async def search_type_quota_recall(
             )
         )
         fragments_by_type.setdefault(memory_type, []).append(fragment)
+        fragments_by_origin_type.setdefault((origin, memory_type), []).append(fragment)
 
     rendered = ""
     if render:
-        rendered_groups = [
-            _group_fragment(memory_type, fragments_by_type[memory_type])
-            for memory_type in TYPE_ORDER
-            if fragments_by_type.get(memory_type)
-        ]
-        rendered = "\n".join(rendered_groups)
+        if peer_scope == "actor":
+            rendered_groups = [
+                _group_fragment(memory_type, fragments_by_type[memory_type])
+                for memory_type in TYPE_ORDER
+                if fragments_by_type.get(memory_type)
+            ]
+            rendered = "\n".join(rendered_groups)
+        else:
+            rendered_sections: list[str] = []
+            for origin in ORIGIN_ORDER:
+                groups = [
+                    _group_fragment(memory_type, fragments_by_origin_type[(origin, memory_type)])
+                    for memory_type in TYPE_ORDER
+                    if fragments_by_origin_type.get((origin, memory_type))
+                ]
+                if groups:
+                    rendered_sections.append(_section_fragment(origin, groups))
+            rendered = "\n".join(rendered_sections)
+
+    origins = dict.fromkeys(ORIGIN_ORDER, 0)
+    for entry in entries:
+        origins[entry.origin] = origins.get(entry.origin, 0) + 1
 
     return RecallResult(
         entries=entries,
@@ -343,5 +491,8 @@ async def search_type_quota_recall(
             "dropped": dropped,
             "max_chars": max_chars,
             "min_score": min_score,
+            "peer_scope": peer_scope,
+            "other_peer_penalties": normalized_penalties,
+            "origins": origins,
         },
     )

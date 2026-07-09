@@ -44,6 +44,7 @@ jobs:
             examples/memory-plugin-shared/install-opencode-jsonc.test.mjs \
             examples/memory-plugin-shared/sync.test.mjs \
             examples/memory-plugin-shared/recall-core.test.mjs \
+            examples/memory-plugin-shared/workspace-peer.test.mjs \
             examples/memory-plugin-shared/uri-guard.test.mjs \
             examples/opencode-plugin/tests/*.test.mjs \
             examples/opencode-plugin/servers/mcp-proxy.test.mjs \

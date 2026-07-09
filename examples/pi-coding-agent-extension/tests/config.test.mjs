@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../config.ts";
 
-async function withConfigFile(body, fn) {
+async function withConfigFile(body, fn, env = {}) {
   const dir = await mkdtemp(join(tmpdir(), "ov-pi-config-"));
   const oldEnv = {
     OPENVIKING_URL: process.env.OPENVIKING_URL,
@@ -13,6 +13,8 @@ async function withConfigFile(body, fn) {
     OPENVIKING_ACCOUNT: process.env.OPENVIKING_ACCOUNT,
     OPENVIKING_USER: process.env.OPENVIKING_USER,
     OPENVIKING_PEER_ID: process.env.OPENVIKING_PEER_ID,
+    OPENVIKING_WORKSPACE_PEER: process.env.OPENVIKING_WORKSPACE_PEER,
+    OPENVIKING_RECALL_PEER_SCOPE: process.env.OPENVIKING_RECALL_PEER_SCOPE,
     OPENVIKING_CREDENTIAL_SOURCE: process.env.OPENVIKING_CREDENTIAL_SOURCE,
     OPENVIKING_CLI_CONFIG_FILE: process.env.OPENVIKING_CLI_CONFIG_FILE,
     OPENVIKING_CONFIG_FILE: process.env.OPENVIKING_CONFIG_FILE,
@@ -23,8 +25,14 @@ async function withConfigFile(body, fn) {
   delete process.env.OPENVIKING_ACCOUNT;
   delete process.env.OPENVIKING_USER;
   delete process.env.OPENVIKING_PEER_ID;
+  delete process.env.OPENVIKING_WORKSPACE_PEER;
+  delete process.env.OPENVIKING_RECALL_PEER_SCOPE;
   delete process.env.OPENVIKING_CLI_CONFIG_FILE;
   delete process.env.OPENVIKING_CONFIG_FILE;
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 
   try {
     await writeFile(join(dir, "config.json"), JSON.stringify(body), "utf8");
@@ -97,4 +105,24 @@ test("loadConfig clamps invalid takeover values", async () => {
     assert.equal(cfg.takeoverOverviewPollMs, 0);
     assert.equal(cfg.takeoverOverviewPollMax, 1);
   });
+});
+
+test("loadConfig derives workspace peer by default", async () => {
+  const oldCwd = process.cwd();
+  await withConfigFile({}, (cfg) => {
+    assert.equal(cfg.peerId, oldCwd.replace(/[^A-Za-z0-9]/g, "-"));
+    assert.equal(cfg.workspacePeer, true);
+    assert.equal(cfg.recallPeerScope, "all");
+  });
+});
+
+test("loadConfig keeps explicit peer and actor recall scope", async () => {
+  await withConfigFile({
+    recallPeerScope: "actor",
+    workspacePeer: false,
+  }, (cfg) => {
+    assert.equal(cfg.peerId, "explicit-peer");
+    assert.equal(cfg.workspacePeer, false);
+    assert.equal(cfg.recallPeerScope, "actor");
+  }, { OPENVIKING_PEER_ID: "explicit-peer" });
 });

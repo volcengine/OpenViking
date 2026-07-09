@@ -18,6 +18,8 @@ import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { isBypassed, makeFetchJSON } from "./lib/ov-session.mjs";
 import { writeJsonState } from "./lib/state.mjs";
+import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
+import { postRecall } from "./shared/recall-core.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -119,7 +121,7 @@ function dedupeItems(items) {
 const USER_RESERVED_DIRS = new Set(["memories", "skills"]);
 let _userSpaceCache = "";
 
-async function resolveUserSpace() {
+async function resolveUserSpace(actorPeerId = "") {
   if (_userSpaceCache) return _userSpaceCache;
 
   let fallbackSpace = "default";
@@ -131,7 +133,7 @@ async function resolveUserSpace() {
   const lsRes = await fetchJSON(
     `/api/v1/fs/ls?uri=${encodeURIComponent("viking://user")}&output=original`,
     {},
-    { actorPeerId: cfg.peerId },
+    { actorPeerId },
   );
   if (lsRes.ok && Array.isArray(lsRes.result)) {
     const spaces = lsRes.result
@@ -148,7 +150,7 @@ async function resolveUserSpace() {
   return fallbackSpace;
 }
 
-async function resolveTargetUri(targetUri) {
+async function resolveTargetUri(targetUri, actorPeerId = "") {
   const trimmed = targetUri.trim().replace(/\/+$/, "");
   const m = trimmed.match(/^viking:\/\/user(?:\/(.*))?$/);
   if (!m) return trimmed;
@@ -157,7 +159,7 @@ async function resolveTargetUri(targetUri) {
   const parts = rawRest.split("/").filter(Boolean);
   if (parts.length === 0) return trimmed;
   if (!USER_RESERVED_DIRS.has(parts[0])) return trimmed;
-  const space = await resolveUserSpace();
+  const space = await resolveUserSpace(actorPeerId);
   return `viking://user/${space}/${parts.join("/")}`;
 }
 
@@ -171,20 +173,20 @@ const SOURCES = [
   { type: "skill",  uri: "viking://user/skills",    bucket: "skills"   },
 ];
 
-async function searchOneSource(query, source, limit) {
-  const resolvedUri = await resolveTargetUri(source.uri);
+async function searchOneSource(query, source, limit, actorPeerId = "") {
+  const resolvedUri = await resolveTargetUri(source.uri, actorPeerId);
   const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
   const res = await fetchJSON("/api/v1/search/find", {
     method: "POST",
     body: JSON.stringify(body),
-  }, { actorPeerId: cfg.peerId });
+  }, { actorPeerId });
   if (!res.ok) return [];
   const items = res.result?.[source.bucket] || [];
   return items.map(item => ({ ...item, _sourceType: source.type }));
 }
 
-async function searchAllSources(query, perSourceLimit) {
-  const results = await Promise.all(SOURCES.map(src => searchOneSource(query, src, perSourceLimit)));
+async function searchAllSources(query, perSourceLimit, actorPeerId = "") {
+  const results = await Promise.all(SOURCES.map(src => searchOneSource(query, src, perSourceLimit, actorPeerId)));
   const all = results.flat();
   log("search_summary", {
     counts: SOURCES.map((src, i) => ({ type: src.type, uri: src.uri, count: results[i].length })),
@@ -210,7 +212,7 @@ function estimateTokens(text) {
  * Resolve display content for a single item.
  * Ported from openclaw-plugin/index.ts:1822 resolveMemoryContent.
  */
-async function resolveItemContent(item) {
+async function resolveItemContent(item, actorPeerId = "") {
   let content;
 
   if (cfg.recallPreferAbstract && (item.abstract || item.overview || "").trim()) {
@@ -220,7 +222,7 @@ async function resolveItemContent(item) {
       const res = await fetchJSON(
         `/api/v1/content/read?uri=${encodeURIComponent(item.uri)}`,
         {},
-        { actorPeerId: cfg.peerId },
+        { actorPeerId },
       );
       const body = res.ok && typeof res.result === "string" ? res.result.trim() : "";
       content = body || (item.abstract || item.overview || "").trim() || item.uri;
@@ -243,7 +245,7 @@ async function resolveItemContent(item) {
  * Front items (within budget) get full content lines.
  * Remaining items (beyond budget) degrade to URI + score only.
  */
-async function buildInjectionBlock(items) {
+async function buildInjectionBlock(items, actorPeerId = "") {
   if (items.length === 0) return null;
 
   let budgetRemaining = cfg.recallTokenBudget;
@@ -259,7 +261,7 @@ async function buildInjectionBlock(items) {
     const uriLine = `- [${item._sourceType} ${score}%] ${item.uri}`;
 
     if (budgetRemaining > 0) {
-      const content = await resolveItemContent(item);
+      const content = await resolveItemContent(item, actorPeerId);
       const contentLine = `- [${item._sourceType} ${score}%] ${content}`;
       const lineTokens = estimateTokens(contentLine);
 
@@ -291,22 +293,21 @@ async function buildInjectionBlock(items) {
   return { block: lines.join("\n"), contentCount, hintCount, budgetUsed };
 }
 
-async function recallViaTypeQuotaEndpoint(query) {
-  const res = await fetchJSON("/api/v1/search/recall", {
-    method: "POST",
-    body: JSON.stringify({
-      query,
-      quotas: {
-        events: Math.max(cfg.recallLimit, 1),
-        entities: Math.max(cfg.recallLimit, 1),
-        preferences: Math.max(1, Math.min(cfg.recallLimit, 3)),
-        experiences: 0,
-      },
-      max_chars: Math.max(cfg.recallMaxContentChars * Math.max(cfg.recallLimit, 1), 1000),
-      min_score: cfg.scoreThreshold,
-      render: true,
-    }),
-  }, { actorPeerId: cfg.peerId });
+async function recallViaTypeQuotaEndpoint(query, actorPeerId = "") {
+  const body = {
+    query,
+    quotas: {
+      events: Math.max(cfg.recallLimit, 1),
+      entities: Math.max(cfg.recallLimit, 1),
+      preferences: Math.max(1, Math.min(cfg.recallLimit, 3)),
+      experiences: 0,
+    },
+    max_chars: Math.max(cfg.recallMaxContentChars * Math.max(cfg.recallLimit, 1), 1000),
+    min_score: cfg.scoreThreshold,
+    render: true,
+  };
+  if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
+  const res = await postRecall(fetchJSON, body, { actorPeerId, log });
   if (!res.ok) {
     log("recall_endpoint_fallback", { status: res.status || 0 });
     return null;
@@ -358,6 +359,7 @@ async function main() {
   const userPrompt = (input.prompt || "").trim();
   const sessionId = input.session_id;
   const cwd = input.cwd;
+  const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", {
     query: userPrompt.slice(0, 200),
     queryLength: userPrompt.length,
@@ -366,6 +368,8 @@ async function main() {
       scoreThreshold: cfg.scoreThreshold,
       recallMaxContentChars: cfg.recallMaxContentChars,
       recallTokenBudget: cfg.recallTokenBudget,
+      peerSource: effectivePeer.source,
+      recallPeerScope: cfg.recallPeerScope,
     },
   });
 
@@ -391,7 +395,7 @@ async function main() {
     return;
   }
 
-  const endpointBlock = await recallViaTypeQuotaEndpoint(userPrompt);
+  const endpointBlock = await recallViaTypeQuotaEndpoint(userPrompt, effectivePeer.peerId);
   if (endpointBlock !== null) {
     if (!endpointBlock) {
       log("skip", { reason: "recall_endpoint_no_results" });
@@ -414,7 +418,7 @@ async function main() {
   }
 
   const perSourceLimit = Math.max(cfg.recallLimit * 2, 8);
-  const raw = await searchAllSources(userPrompt, perSourceLimit);
+  const raw = await searchAllSources(userPrompt, perSourceLimit, effectivePeer.peerId);
   if (raw.length === 0) {
     log("skip", { reason: "no results" });
     writeRecallState({ count: 0, reason: "no_results", cc_session_id: sessionId });
@@ -441,7 +445,7 @@ async function main() {
     return;
   }
 
-  const built = await buildInjectionBlock(picked);
+  const built = await buildInjectionBlock(picked, effectivePeer.peerId);
   const topScore = picked.reduce((m, it) => Math.max(m, clampScore(it.score)), 0);
   writeRecallState({
     count: picked.length,

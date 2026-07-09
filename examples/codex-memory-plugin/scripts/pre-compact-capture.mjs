@@ -27,9 +27,11 @@ import {
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
+import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("pre-compact");
+let activePeerId = cfg.peerId || "";
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -50,7 +52,7 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
+    if (activePeerId) headers["X-OpenViking-Actor-Peer"] = activePeerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return null;
@@ -98,7 +100,7 @@ async function appendTurns(ovSessionId, turns) {
     const body = turn.parts?.length
       ? { role: turn.role, parts: turn.parts }
       : { role: turn.role, content: turn.text };
-    if (cfg.peerId) body.peer_id = cfg.peerId;
+    if (activePeerId) body.peer_id = activePeerId;
     const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -130,7 +132,9 @@ async function main() {
   const sessionId = input.session_id || "unknown";
   const transcriptPath = input.transcript_path || null;
   const trigger = input.trigger || "auto";
-  log("start", { sessionId, transcriptPath, trigger });
+  const state = await loadState(sessionId);
+  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId;
+  log("start", { sessionId, transcriptPath, trigger, hasPeer: Boolean(activePeerId) });
 
   const health = await fetchJSON("/health");
   if (!health) {
@@ -139,7 +143,6 @@ async function main() {
     return;
   }
 
-  const state = await loadState(sessionId);
   const allTurns = await readTranscriptTurns(transcriptPath);
   const newTurns = allTurns.slice(state.capturedTurnCount);
 

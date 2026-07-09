@@ -134,8 +134,9 @@ All plugin behavior can be set via env vars. Connection / identity vars affect b
 | `OPENVIKING_ACCOUNT`                             | Multi-tenant account (`X-OpenViking-Account` header)                     |
 | `OPENVIKING_USER`                                | Multi-tenant user (`X-OpenViking-User` header)                           |
 | `OPENVIKING_PEER_ID`                             | Optional stable peer for recall and captured session messages            |
+| `OPENVIKING_WORKSPACE_PEER`                      | Derive a peer from the current workspace by default; set `0` to disable  |
 
-When `OPENVIKING_PEER_ID` is set, data-plane recall/profile requests send it as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. Subagent capture falls back to Claude's `agent_id` when no explicit peer is configured, so different subagents can keep separate peer memory by default.
+By default the plugin derives a peer from the workspace path using Claude's project-directory naming rule: every non-letter-or-digit character becomes `-`, with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. Data-plane recall/profile requests send the effective peer as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. `OPENVIKING_PEER_ID` overrides the workspace-derived value. Set `OPENVIKING_WORKSPACE_PEER=0` to turn this off. Subagent capture uses the parent workspace peer when available, and falls back to Claude's `agent_id` only when no explicit or workspace peer exists.
 
 #### Recall tuning
 
@@ -146,8 +147,11 @@ When `OPENVIKING_PEER_ID` is set, data-plane recall/profile requests send it as 
 | `OPENVIKING_RECALL_TOKEN_BUDGET`       | `2000`       | Token budget for inline content; over-budget items degrade to URI hints  |
 | `OPENVIKING_RECALL_MAX_CONTENT_CHARS`  | `500`        | Per-item content cap                                                     |
 | `OPENVIKING_RECALL_PREFER_ABSTRACT`    | `true`       | Prefer abstract over full body when available                            |
+| `OPENVIKING_RECALL_PEER_SCOPE`          | `all`        | `all` can recall other project memories with a score penalty; `actor` only sees global plus the current project |
 | `OPENVIKING_SCORE_THRESHOLD`           | `0.35`       | Min relevance score (0–1)                                                |
 | `OPENVIKING_MIN_QUERY_LENGTH`          | `3`          | Skip recall for very short queries                                       |
+
+Recall defaults to the broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces penalized and rendered later. Set `OPENVIKING_RECALL_PEER_SCOPE=actor` for the isolation mode, which only sees global memory plus the current workspace. In deployments where one bot serves multiple real people, such as zouk, vikingbot, or AstrBot, use the isolation mode with an explicit actor peer so one person's memories are not recalled into another person's session.
 | `OPENVIKING_LOG_RANKING_DETAILS`       | `false`      | Per-candidate scoring logs (verbose)                                     |
 
 #### Capture tuning

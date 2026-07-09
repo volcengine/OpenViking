@@ -305,9 +305,12 @@ async def recall(
     quotas: Optional[dict[str, int]] = None,
     max_chars: int = DEFAULT_MAX_CHARS,
     min_score: float = DEFAULT_MIN_SCORE,
+    peer_scope: str = "all",
+    other_peer_penalty: Optional[Any] = None,
 ) -> str:
     """Type-quota memory recall. Searches events, entities, preferences, and experiences separately, then returns a bounded memory_group block."""
     service = get_service()
+    effective_peer_scope = "actor" if peer_scope == "actor" else "all"
     result = await search_type_quota_recall(
         service=service,
         ctx=_get_ctx(),
@@ -315,6 +318,8 @@ async def recall(
         quotas=quotas or DEFAULT_QUOTAS,
         max_chars=max(1, int(max_chars)),
         min_score=min_score,
+        peer_scope=effective_peer_scope,
+        other_peer_penalty=other_peer_penalty,
         render=True,
     )
     if result.rendered.strip():
