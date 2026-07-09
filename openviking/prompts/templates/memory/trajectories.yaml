@@ -1,12 +1,13 @@
 memory_type: trajectories
 description: |
-  Extract a compact trajectory memory whose primary purpose is to propose a reusable runtime
-  experience that could be added to future reminders.
+  Extract a compact SkillOpt-style trajectory analysis whose primary purpose is to propose
+  one bounded, reusable runtime experience candidate for future reminders.
 
   This is not a verbose audit log. Prefer one causal lesson that is source-bound, actionable at
-  runtime, and safe to inject as an experience. Extract only when the trajectory contains a
-  meaningful task boundary: tool use, user confirmation, policy choice, calculation, write action,
-  staged workflow, or final communication.
+  runtime, and safe to inject as an experience. Follow SkillOpt's analyst discipline: identify
+  the systematic failure/success pattern, keep the lesson generalizable, do not hardcode case
+  literals, do not duplicate existing coverage, and output no candidate when no bounded runtime
+  patch is warranted.
 
 embedding_template: |-
   {{ trajectory_name }}
@@ -75,8 +76,20 @@ fields:
     description: |
       Write in {{ language }}. Keep raw tool names, schema keys, and quoted runtime values unchanged.
 
-      PRIMARY GOAL: output a complete `Runtime experience content` block that can be directly used
-      as an experience reminder. The block must look like a production experience, not an audit log:
+      PRIMARY GOAL: produce a SkillOpt-style analyst record for ONE trajectory, plus the OV parser
+      fields required by downstream experience gates. Analyze the trajectory like a bounded skill
+      patch:
+      1. Identify the earliest material boundary where the outcome diverged.
+      2. Classify the failure/success pattern.
+      3. Decide whether one generalizable, source-bound runtime experience could change that boundary.
+      4. Propose at most one candidate: Candidate C1, or choose `Selected candidate: none`.
+      5. Do not learn full workflows, task-specific answers, IDs, dates, exact amounts, hidden grading
+         terms, or broad "check everything" advice.
+      6. Only fill C1 with directly injectable, runtime-facing guidance. Put raw literals only in
+         `Case Evidence`.
+
+      Candidate C1's `Runtime experience content` block must look like a production experience,
+      not an audit log:
 
       # <experience_name>
 
@@ -96,55 +109,92 @@ fields:
       - Domain: <task/tool domain>
       - User Goal: <generalized goal, no task id>
       - Trigger Boundary: <when this experience should be injected>
-      - Key Runtime Facts:
+      - Failure Summary:
+        - Failure type: <wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|premature_write|extra_write|premature_done|tool_error|success_pattern|none>
+        - Count: 1
+        - Description: <one-line reusable pattern, not case-specific>
+      - Runtime Facts:
         - User obligation: <user request/confirmation that creates the obligation, or none>
         - Tool/policy facts: <visible facts needed for the rule, or none>
         - Correct work to preserve: <actions/reads/communications this lesson must not block, or none>
-      - Earliest Material Boundary:
+        - db_check: <passed|failed|unknown>
+        - action_checks: <passed|failed|unknown>
+        - communicate_checks: <passed|failed|unknown>
+      - First Wrong Tool Call:
         - Step: <raw step id, final_response, expected_missing_tool, or none>
         - Tool: <one raw tool name, communicate_with_user, or none>
-        - Divergence: <missing_expected_tool|missing_communication|wrong_arguments|wrong_object|wrong_policy_branch|premature_write|extra_write|premature_done|tool_error|none>
-        - Cause: <missed runtime binding/scope/order/policy/calculation/communication obligation>
+        - Error type: <missing_expected_tool|missing_communication|wrong_arguments|wrong_object|wrong_policy_branch|premature_write|extra_write|premature_done|tool_error|none>
+        - Candidate shape: <generalized risky candidate_tool_args/content shape, or none>
+        - Missing check: <single missing runtime fact/policy gate/object binding/calculation/confirmation/communication, or none>
         - Expected behavior: <what should have happened at that boundary>
-      - Ideal Experience To Add:
+      - Counterfactual Ideal Experience:
+        - Candidate C1:
+          - Situation: <visible runtime condition where the reminder should fire, or none>
+          - Repair rule: <minimal source-bound rule that would change the boundary, or none>
+          - Experience name: <lower_snake_case or concise name, or none>
+          - Injection boundary: <opening|after_read|before_confirmation|before_write|after_write|final_response|none>
+          - Runtime experience content:
+            <complete production-style experience block, or none>
+          - Source binding:
+            - Scope freeze point: <when object set/value/decision becomes fixed, or none>
+            - Included records: <semantic roles included, or none>
+            - Excluded records: <semantic roles excluded, or none>
+            - Source field: <runtime fields/text/tool outputs to read, or none>
+            - Derivation: <how to compute/select/verify using visible facts, or none>
+            - Later write effect: <whether later writes change a previously requested value/scope, or none>
+            - Confirmation binding: <which user confirmation authorizes which write objects, or none>
+          - Applicability: <exact runtime shape where C1 applies>
+          - Anti-pattern: <tempting broad/wrong-scope lesson not to learn>
+          - Preserve: <specific correct behavior this experience must preserve>
+          - Why this would help: <one sentence, runtime-causal>
+        - Selected candidate: <C1|none>
+      - Experience Repair Signal:
         - Recommended operation: <create|update|validate|skip>
         - Existing target experience: <name or none>
-        - Experience name: <lower_snake_case or concise name, or none>
-        - Injection boundary: <opening|after_read|before_confirmation|before_write|after_write|final_response|none>
-        - Runtime experience content:
-          <complete production-style experience block, or none>
-        - Source binding:
-          - Scope freeze point: <when object set/value/decision becomes fixed, or none>
-          - Included records: <semantic roles included, or none>
-          - Excluded records: <semantic roles excluded, or none>
-          - Source fields: <runtime fields/text/tool outputs to read, or none>
-          - Derivation: <how to compute/select/verify using visible facts, or none>
-          - Later write effect: <whether later writes change a previously requested value/scope, or none>
-          - Confirmation binding: <which user confirmation authorizes which write objects, or none>
-        - Preserve: <specific correct behavior this experience must preserve>
+        - New experience action: <create|none>
+        - Trigger boundary: <same tool/boundary as First Wrong Tool Call.Tool or final_response/none>
+        - Repair principle: <C1 repair in one sentence, or none>
         - Reject over-broad lesson: <tempting broad rule that should not be learned>
         - Reject wrong-scope lesson: <nearby non-causal or wrong-scope rule that should not be learned>
-        - Why this would help: <one sentence, runtime-causal>
       - Case Evidence:
         - Diagnostic literals: <ids/values/tool args only as evidence, or none>
         - Observed wrong behavior: <what happened, or none>
         - Observed correct behavior: <what worked, or none>
       - Result: <final outcome and side effects>
 
-      Selection rules:
-      - For failure/partial/unfinished: choose create or update when a narrow runtime reminder could
-        have prevented the earliest material failure. Use skip only when no reusable pre-tool or
-        pre-response reminder exists.
-      - For success: use validate when the trajectory demonstrates a reusable strategy that should
-        be reinforced; use update when an injected experience was helpful but should be sharpened;
-        use skip only for trivial success with no reusable lesson.
-      - `Runtime experience content` is mandatory for create/update/validate and must be directly
-        injectable. It must contain no case ids, exact dates, exact amounts, task numbers, dataset
-        names, hidden grading terms, or diagnostic-only literals.
+      OV compatibility requirements:
+      - Keep the exact section labels `Runtime Facts`, `First Wrong Tool Call`,
+        `Counterfactual Ideal Experience`, and `Experience Repair Signal`.
+      - Use exactly `Candidate C1` and `Selected candidate: C1|none`; do not output C2/C3.
+      - If `Selected candidate: C1`, fill `First Wrong Tool Call.Tool`,
+        `First Wrong Tool Call.Error type`, `Experience Repair Signal.Recommended operation`,
+        `Experience Repair Signal.Trigger boundary`, and all C1 `Source binding` fields.
+      - For totals/counts/lists/summaries, C1 must fill non-empty `Scope freeze point`,
+        `Included records`, `Excluded records`, `Source field`, `Derivation`, and
+        `Later write effect`. Freeze the scope at the time the user asks for the aggregate/list;
+        later writes must explicitly say whether they change that already-requested scope.
+      - If a valid C1 cannot be written, set `Selected candidate: none`,
+        `Recommended operation: skip`, and use `Runtime experience content: none`.
+      - `Runtime Facts` may contain `db_check`, `action_checks`, and `communicate_checks` so OV
+        gates can parse rollout components. Do NOT put these control-plane terms inside C1,
+        `Repair principle`, or `Runtime experience content`.
+
+      SkillOpt-style selection rules:
+      - Failure-driven candidates take priority. For failure/partial/unfinished, choose
+        create or update only when a narrow runtime reminder could have prevented the earliest
+        material failure. Use skip when no reusable pre-tool or pre-response reminder exists.
+      - Success is conservative. For success, use validate only when the trajectory demonstrates
+        a reusable strategy worth reinforcing and not already covered; otherwise skip.
+      - C1 must be generalizable and actionable. It must not hardcode task-specific values,
+        exact identifiers, exact amounts, exact dates, hidden answer markers, or dataset/control
+        terms.
       - Put exact identifiers, exact amounts, exact dates, and tool payload snippets only under
         `Case Evidence`.
+      - Do not duplicate existing injected experience reminders. Use `experience_effects` to mark
+        helpful, weak, or misleading reminders; if an injected reminder was over-broad/misleading,
+        make C1 an update that narrows that existing target.
 
-      What good experiences usually capture:
+      Good C1 candidates usually capture:
       - Aggregate/list scope: freeze the query scope; distinguish all-current vs excluded/remaining.
       - Named object scope: mutate only explicitly requested/confirmed objects; do not substitute
         discovered alternatives.
@@ -161,10 +211,10 @@ fields:
 
       Safety rules:
       - No hidden grading/control-plane wording, internal checker names, hidden-answer markers,
-        or dataset/control-plane terminology in `Runtime experience content`.
+        or dataset/control-plane terminology in C1 or `Runtime experience content`.
       - Avoid vague advice such as "check all requirements". Bind every rule to a visible runtime
         source: user wording, confirmation, object membership, selected tool result, policy gate,
-        calculation, or payment/source field.
-      - Keep the memory concise. Prefer 4-8 runtime rules. Do not add extra headings, code fences,
-        hidden reasoning, or closing remarks.
+        calculation, communication obligation, or payment/source field.
+      - Keep the memory concise. Prefer 4-8 runtime rules inside C1's experience block. Do not add
+        extra headings, code fences, hidden reasoning, or closing remarks.
     merge_op: patch
