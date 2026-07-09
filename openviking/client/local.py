@@ -358,7 +358,13 @@ class LocalClient(BaseClient):
         ctx = self._ctx
 
         # Verify the skill exists and determine its root URI
-        root_uri = await _require_skill(service, ctx, skill_name, target_uri)
+        root_uri = await _require_skill(
+            service,
+            ctx,
+            skill_name,
+            target_uri,
+            allow_fallback=target_uri is None,
+        )
         skill_root_parent = root_uri.rsplit("/", 1)[0]
 
         execution = await run_with_telemetry(
@@ -475,7 +481,13 @@ class LocalClient(BaseClient):
         """Delete a skill."""
         service = self._service
         ctx = self._ctx
-        root_uri = await _require_skill(service, ctx, skill_name, target_uri)
+        root_uri = await _require_skill(
+            service,
+            ctx,
+            skill_name,
+            target_uri,
+            allow_fallback=target_uri is None,
+        )
         result = await service.fs.rm(root_uri, ctx=ctx, recursive=True)
         return {"name": skill_name, "uri": root_uri, "root_uri": root_uri, "deleted": True}
 

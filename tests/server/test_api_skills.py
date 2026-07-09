@@ -207,6 +207,95 @@ async def test_skills_api_update_requires_matching_name(client):
     assert shown["source"]["skill_name"] == "update-skill"
 
 
+async def test_skills_api_update_with_target_uri_does_not_fallback_to_user_skill(client):
+    await _add_skill(client, "scoped-update-skill", "User scoped update skill")
+
+    response = await client.put(
+        "/api/v1/skills/scoped-update-skill",
+        json={
+            "target_uri": "viking://agent/skills",
+            "data": _skill_md(
+                "scoped-update-skill",
+                "Agent scoped update skill",
+                "This should not replace the user-scope skill.",
+            ),
+            "wait": True,
+        },
+    )
+    assert response.status_code == 404
+
+    show_response = await client.get(
+        "/api/v1/skills/scoped-update-skill",
+        params={"include_content": True},
+    )
+    assert show_response.status_code == 200, show_response.text
+    shown = show_response.json()["result"]
+    assert shown["root_uri"].endswith("/user/default/skills/scoped-update-skill")
+    assert shown["description"] == "User scoped update skill"
+    assert "This should not replace" not in shown["content"]
+
+
+async def test_skills_api_delete_with_target_uri_does_not_fallback_to_user_skill(client):
+    await _add_skill(client, "scoped-delete-skill", "User scoped delete skill")
+
+    response = await client.delete(
+        "/api/v1/skills/scoped-delete-skill",
+        params={"target_uri": "viking://agent/skills"},
+    )
+    assert response.status_code == 404
+
+    show_response = await client.get("/api/v1/skills/scoped-delete-skill")
+    assert show_response.status_code == 200, show_response.text
+    assert show_response.json()["result"]["root_uri"].endswith(
+        "/user/default/skills/scoped-delete-skill"
+    )
+
+
+async def test_skills_api_update_rejects_empty_target_uri_without_user_fallback(client):
+    await _add_skill(client, "empty-target-update-skill", "User scoped update skill")
+
+    response = await client.put(
+        "/api/v1/skills/empty-target-update-skill",
+        json={
+            "target_uri": "",
+            "data": _skill_md(
+                "empty-target-update-skill",
+                "Should not update",
+                "This should not replace the user-scope skill.",
+            ),
+            "wait": True,
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+    show_response = await client.get(
+        "/api/v1/skills/empty-target-update-skill",
+        params={"include_content": True},
+    )
+    assert show_response.status_code == 200, show_response.text
+    shown = show_response.json()["result"]
+    assert shown["description"] == "User scoped update skill"
+    assert "This should not replace" not in shown["content"]
+
+
+async def test_skills_api_delete_rejects_empty_target_uri_without_user_fallback(client):
+    await _add_skill(client, "empty-target-delete-skill", "User scoped delete skill")
+
+    response = await client.delete(
+        "/api/v1/skills/empty-target-delete-skill",
+        params={"target_uri": ""},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+    show_response = await client.get("/api/v1/skills/empty-target-delete-skill")
+    assert show_response.status_code == 200, show_response.text
+    assert show_response.json()["result"]["root_uri"].endswith(
+        "/user/default/skills/empty-target-delete-skill"
+    )
+
+
 async def test_skills_api_update_accepts_temp_uploaded_single_file_with_arbitrary_name(
     client,
     tmp_path,
