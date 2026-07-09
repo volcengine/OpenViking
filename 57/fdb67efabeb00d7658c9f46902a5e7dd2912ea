@@ -1,0 +1,32 @@
+docs/en/agent-integrations/08-community-plugins.md
+  s_6f68568e9d9230::t_d4c2429ab0cec7 51,53-55,57,60-61,64-66
+docs/images/agents/en/opencode.md
+  s_6f68568e9d9230::t_317d6010d55bac 27,29-31,33,36-37,40-42
+docs/images/agents/zh/opencode.md
+  s_6f68568e9d9230::t_1e74f7afdd3d19 28,30-32,34,37-38,41-43
+docs/zh/agent-integrations/08-community-plugins.md
+  s_6f68568e9d9230::t_e24e01e4e92e8f 51,53-55,57,60-61,64-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "57fdb67efabeb00d7658c9f46902a5e7dd2912ea",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_6f68568e9d9230": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3a8f-a88f-7103-b527-a4ceecdb26ab",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

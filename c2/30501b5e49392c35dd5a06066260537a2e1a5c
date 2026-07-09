@@ -1,0 +1,32 @@
+openviking/utils/image_search.py
+  s_4537a39f346db9::t_badd7faa6a08a5 1-70
+tests/retrieve/test_hierarchical_retriever_image.py
+  s_4537a39f346db9::t_0b988537ff9595 1-117
+tests/service/test_search_service_image.py
+  s_4537a39f346db9::t_a0dcf69d5cc37c 1-34
+tests/unit/test_image_search.py
+  s_4537a39f346db9::t_9b2a7ad33801d4 1-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c230501b5e49392c35dd5a06066260537a2e1a5c",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_4537a39f346db9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fc5-20a5-78c1-ae5b-7f497f47a9fa",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

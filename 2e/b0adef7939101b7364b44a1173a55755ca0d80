@@ -1,0 +1,25 @@
+README.md
+  s_f271a51846cdf7::t_5720dcaa5963f3 64,66,74,78-80
+README_CN.md
+  s_f271a51846cdf7::t_70594b9c088d17 64,66,74,78-80
+README_JA.md
+  s_f271a51846cdf7::t_79b6c957092627 64-81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "2eb0adef7939101b7364b44a1173a55755ca0d80",
+  "prompts": {},
+  "sessions": {
+    "s_f271a51846cdf7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3b93-5055-71d0-8440-4fed6090d609",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

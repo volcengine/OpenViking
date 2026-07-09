@@ -1,0 +1,28 @@
+openviking/retrieve/hierarchical_retriever.py
+  s_57d08a4992336a::t_a2591a296b232f 229,321,332,456
+tests/retrieve/test_hierarchical_retriever_rerank.py
+  s_57d08a4992336a::t_990e1c93d2c8c0 6-9,295-326
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "2761dbbbd0ef26be2f98b90dcff670b688de6abc",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_57d08a4992336a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3bc4-94c6-7970-a33e-51ef4ffba95d",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
