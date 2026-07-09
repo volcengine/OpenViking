@@ -25,6 +25,7 @@ Start with exact brute-force search:
       "distance_metric": "cosine",
       "cuvs": {
         "algorithm": "brute_force",
+        "dtype": "float32",
         "fallback_to_native": true,
         "filter_cache_size": 16
       }
@@ -92,8 +93,9 @@ current; otherwise it discards that build and rebuilds the newest generation.
 
 ## GPU memory footprint
 
-The current GPU shadow is float32, so brute-force's dominant retained payload
-is `N * dimension * 4` bytes. CAGRA additionally retains approximately
+The default GPU shadow is float32, so brute-force's dominant retained payload
+is `N * dimension * 4` bytes. Opt-in `dtype: "float16"` reduces that vector
+payload to `N * dimension * 2` bytes. CAGRA additionally retains approximately
 `N * graph_degree * 4` bytes for the graph and can require an intermediate
 `N * intermediate_graph_degree * 4` bytes while building. Each cached filter
 bitset costs approximately `ceil(N / 32) * 4` bytes.
@@ -138,13 +140,14 @@ filter candidate thresholds can select either representation per query, so
 applications that require one fixed numerical representation should use an
 explicit backend or disable the native-routing thresholds.
 
-Lower-precision GPU storage is a follow-up rather than an implicit cast. The
-first candidate is configurable float16 for both the cuVS dataset and queries,
-with Recall@K measured against float32. Native-compatible int8 requires a
-separate design because OpenViking uses a per-vector scale, while cuVS
-brute-force does not accept that scaled-int8 representation. CAGRA int8 or PQ
-compression must likewise be evaluated as approximate modes with an explicit
-recall/latency/memory frontier.
+Lower-precision GPU storage is explicit rather than an implicit cast. Setting
+`dtype: "float16"` casts both the cuVS dataset and every query to float16 for
+brute-force or CAGRA; mixed query/index dtypes are not used. This is a storage
+cast, not per-vector quantization, and must be reported with Recall@K against
+the default float32 path. Native-compatible int8 still requires a separate
+design because OpenViking uses a per-vector scale that cuVS brute-force does
+not accept directly. CAGRA int8 or PQ compression must likewise be evaluated
+as approximate modes with an explicit recall/latency/memory frontier.
 
 The integration uses immutable GPU snapshots. Warmed searches use per-thread
 cuVS resources/CUDA streams, while mutation and snapshot commit use a
@@ -171,4 +174,5 @@ Python interop path, even when the host provides a CUDA driver but no toolkit.
 After installation, run `python examples/cuvs_smoke.py` for an exact
 GPU-backed write and filtered-search check, or
 `python examples/cuvs_smoke.py --algorithm cagra` to exercise the graph index.
+Add `--dtype float16` to either command to validate the lower-precision path.
 Neither command requires an embedding or VLM service.

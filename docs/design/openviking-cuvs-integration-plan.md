@@ -269,6 +269,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
       "distance_metric": "cosine",
       "cuvs": {
         "algorithm": "brute_force",
+        "dtype": "float32",
         "fallback_to_native": true
       }
     }
@@ -329,6 +330,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
 | `algorithm` | `brute_force` | `brute_force` exact 或 `cagra` ANN |
+| `dtype` | `float32` | GPU dataset/query dtype；可显式设为 `float16`，不改变 native CPU dtype |
 | `build_params` | `{}` | 传给 CAGRA `IndexParams` |
 | `search_params` | `{}` | 传给 CAGRA `SearchParams` |
 | `fallback_to_native` | `true` | sparse/hybrid 等非 cuVS dense top-k 能力使用 native |
@@ -423,7 +425,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 
 ### Phase 3：容量与低精度
 
-- float16 brute-force 的 recall/latency/VRAM；
+- 已实现显式 float16 brute-force/CAGRA 路径；recall/latency/VRAM 矩阵待补齐；
 - CAGRA int8 或 VPQ frontier；
 - 大 collection 的 host shadow 内存优化；
 - 根据 benchmark 决定 CAGRA 启用规模和参数策略。

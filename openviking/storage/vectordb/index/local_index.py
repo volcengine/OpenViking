@@ -502,6 +502,7 @@ class LocalIndex(IIndex):
                 cuvs_telemetry = CuVSSearchTelemetry(
                     algorithm=self.dense_search.algorithm,
                     auto_mode=self._auto_cuvs,
+                    dtype=self.dense_search.dtype,
                 )
                 telemetry_started = time.perf_counter()
 

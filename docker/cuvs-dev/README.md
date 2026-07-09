@@ -41,6 +41,9 @@ docker run --rm --gpus all openviking-cuvs:dev \
   python /opt/openviking-cuvs/cuvs_smoke.py --algorithm cagra
 ```
 
+Append `--dtype float16` to either smoke command to exercise the opt-in
+lower-precision dataset and query path.
+
 For Python-only iteration, mount a worktree and point
 `OPENVIKING_SOURCE_DIR` at it. The entrypoint copies the prebuilt native
 engine into the mounted tree before running the command:

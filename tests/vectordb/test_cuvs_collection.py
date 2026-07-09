@@ -68,7 +68,7 @@ def patch_cuvs_runtime(monkeypatch):
     monkeypatch.setattr(
         cuvs_index,
         "_CuVSRuntime",
-        lambda algorithm, metric, build_params, search_params: FakeCuVSRuntime(metric),
+        lambda algorithm, metric, build_params, search_params, dtype: FakeCuVSRuntime(metric),
     )
 
 
@@ -220,6 +220,7 @@ def test_local_collection_records_cuvs_route_telemetry(monkeypatch):
         assert [item.id for item in result.data] == ["first"]
         cuvs = telemetry.finish().summary["vector"]["cuvs"]
         assert cuvs["algorithm"] == "brute_force"
+        assert cuvs["dtype"] == "float32"
         assert cuvs["route_reason"] == "cuvs"
         assert cuvs["filter_kind"] == "none"
         assert cuvs["build_performed"] is True
@@ -252,7 +253,7 @@ def test_local_collection_allows_concurrent_warmed_cuvs_searches(monkeypatch):
     monkeypatch.setattr(
         cuvs_index,
         "_CuVSRuntime",
-        lambda _algorithm, _metric, _build_params, _search_params: runtime,
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
     )
     collection = get_or_create_local_collection(
         meta_data={
@@ -336,7 +337,7 @@ def test_persistent_collection_rehydrates_cuvs_from_local_store(monkeypatch, tmp
 def test_auto_cuvs_falls_back_then_retries_when_memory_is_available(monkeypatch):
     runtimes = []
 
-    def make_runtime(_algorithm, metric, _build_params, _search_params):
+    def make_runtime(_algorithm, metric, _build_params, _search_params, _dtype):
         runtime = MemoryAwareFakeCuVSRuntime(metric, free_memory_bytes=31)
         runtimes.append(runtime)
         return runtime
@@ -412,7 +413,7 @@ def test_auto_cuvs_background_rebuild_warms_gpu_before_query(monkeypatch):
     monkeypatch.setattr(
         cuvs_index,
         "_CuVSRuntime",
-        lambda _algorithm, _metric, _build_params, _search_params: runtime,
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
     )
     collection = get_or_create_local_collection(
         meta_data={
@@ -476,7 +477,7 @@ def test_auto_cuvs_background_rebuild_coalesces_mutations_and_routes_native(
     monkeypatch.setattr(
         cuvs_index,
         "_CuVSRuntime",
-        lambda _algorithm, _metric, _build_params, _search_params: runtime,
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
     )
     collection = get_or_create_local_collection(
         meta_data={
@@ -536,7 +537,7 @@ def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
         dense_search_calls += 1
         return original_search(self, *args, **kwargs)
 
-    def make_runtime(_algorithm, metric, _build_params, _search_params):
+    def make_runtime(_algorithm, metric, _build_params, _search_params, _dtype):
         runtime = MemoryAwareFakeCuVSRuntime(metric, free_memory_bytes=64)
         runtimes.append(runtime)
         return runtime

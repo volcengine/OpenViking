@@ -77,8 +77,23 @@ measuring cold storage reads.
 - `native` is OpenViking's C++ flat index and is exact within its configured
   representation.
 - `cuvs_brute_force` is GPU exact search over its retained representation.
+- `cuvs_brute_force_fp16` uses the same exact algorithm after casting dataset
+  and queries to float16; report Recall@K against float32.
 - `cuvs_cagra` is approximate; the result reports Recall@K against an exact
   backend from the same run.
+- `cuvs_cagra_fp16` combines CAGRA approximation with float16 storage/query
+  casts and must be compared on both recall and retained VRAM.
+
+Run the dtype frontier in one clean process with:
+
+```bash
+python benchmark/cuvs/run_index_benchmark.py \
+  --backends cuvs_brute_force,cuvs_brute_force_fp16,cuvs_cagra,cuvs_cagra_fp16 \
+  --vector-count 100000 \
+  --dimension 768 \
+  --query-count 1000 \
+  --k 10
+```
 
 The index-only harness constructs the native index without an explicit
 `Quant`, so both native and cuVS brute-force use float32 there. The collection

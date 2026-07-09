@@ -183,6 +183,7 @@ values, or URI contents.
 | Field | Meaning |
 | --- | --- |
 | `summary.vector.cuvs.algorithm` | cuVS algorithm, such as `brute_force` or `cagra` |
+| `summary.vector.cuvs.dtype` | GPU dataset and query dtype, `float32` or `float16` |
 | `summary.vector.cuvs.auto_mode` | Whether automatic CPU/GPU routing was enabled |
 | `summary.vector.cuvs.route_reason` | Selected route, such as `cuvs`, `native_filter_threshold`, `native_rebuild_pending`, or `native_memory_budget` |
 | `summary.vector.cuvs.filter_kind` | Low-cardinality filter class: `none`, `scalar`, or `path` |

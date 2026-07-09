@@ -12,11 +12,15 @@ from openviking_cli.utils.config.vectordb_config import CuVSConfig, VectorDBBack
 
 
 def test_cuvs_filter_cache_defaults_and_disable_value():
+    assert CuVSConfig().dtype == "float32"
+    assert CuVSConfig(dtype="float16").dtype == "float16"
     assert CuVSConfig().filter_cache_size == 16
     assert CuVSConfig(filter_cache_size=0).filter_cache_size == 0
 
 
 def test_cuvs_filter_cache_rejects_negative_size():
+    with pytest.raises(ValidationError, match="dtype"):
+        CuVSConfig(dtype="int8")
     with pytest.raises(ValidationError, match="filter_cache_size"):
         CuVSConfig(filter_cache_size=-1)
 

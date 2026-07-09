@@ -182,6 +182,7 @@ summary 顶层这 3 个基础字段总会存在：
 | 字段 | 含义 |
 | --- | --- |
 | `summary.vector.cuvs.algorithm` | cuVS 算法，例如 `brute_force` 或 `cagra` |
+| `summary.vector.cuvs.dtype` | GPU dataset 和 query dtype：`float32` 或 `float16` |
 | `summary.vector.cuvs.auto_mode` | 是否启用了自动 CPU/GPU 路由 |
 | `summary.vector.cuvs.route_reason` | 最终路由，例如 `cuvs`、`native_filter_threshold`、`native_rebuild_pending` 或 `native_memory_budget` |
 | `summary.vector.cuvs.filter_kind` | 低基数 filter 类型：`none`、`scalar` 或 `path` |

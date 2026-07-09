@@ -70,6 +70,7 @@ class CuVSSearchTelemetry:
 
     algorithm: str
     auto_mode: bool
+    dtype: str = "float32"
     route_reason: str = "pending"
     filter_kind: str = "none"
     filter_cache_hit: bool = False
@@ -93,6 +94,7 @@ class CuVSSearchTelemetry:
         return {
             "algorithm": self.algorithm,
             "auto_mode": self.auto_mode,
+            "dtype": self.dtype,
             "route_reason": self.route_reason,
             "filter_kind": self.filter_kind,
             "filter_cache_hit": self.filter_cache_hit,
@@ -122,6 +124,7 @@ def estimate_cuvs_memory(
     build_params: Mapping[str, Any],
     filter_cache_size: int,
     safety_factor: float,
+    dtype: str = "float32",
 ) -> CuVSMemoryEstimate:
     """Estimate peak VRAM without changing the explicit cuVS backend behavior.
 
@@ -137,7 +140,9 @@ def estimate_cuvs_memory(
     if safety_factor < 1.0:
         raise ValueError("cuVS auto memory safety factor must be at least 1.0")
 
-    vector_bytes = vector_count * dimension * 4
+    if dtype not in {"float32", "float16"}:
+        raise ValueError(f"Unsupported cuVS memory-estimate dtype: {dtype!r}")
+    vector_bytes = vector_count * dimension * (2 if dtype == "float16" else 4)
     graph_bytes = 0
     build_graph_bytes = 0
     if algorithm == "cagra":
@@ -355,6 +360,7 @@ class _CuVSRuntime:
         metric: str,
         build_params: Mapping[str, Any],
         search_params: Mapping[str, Any],
+        dtype: str,
     ):
         try:
             import cupy as cp
@@ -377,6 +383,8 @@ class _CuVSRuntime:
         self.filters = filters
         self.Resources = Resources
         self.device_id = int(device_id)
+        self.dtype = dtype
+        self.device_dtype = cp.float16 if dtype == "float16" else cp.float32
         self.algorithm = algorithm
         self.metric = metric
         self.build_params = dict(build_params)
@@ -403,7 +411,7 @@ class _CuVSRuntime:
         )
 
     def build(self, dataset: Sequence[Sequence[float]]):
-        device_dataset = self.cp.asarray(dataset, dtype=self.cp.float32)
+        device_dataset = self.cp.asarray(dataset, dtype=self.device_dtype)
         if self.algorithm == "brute_force":
             index = self.brute_force.build(device_dataset, metric=self.metric)
             return _CuVSRuntimeIndex(index=index, dataset=device_dataset)
@@ -445,7 +453,7 @@ class _CuVSRuntime:
     ) -> Tuple[List[int], List[float]]:
         index = runtime_index.index
         resources = self._resources()
-        queries = self.cp.asarray([query], dtype=self.cp.float32)
+        queries = self.cp.asarray([query], dtype=self.device_dtype)
         if mask is None:
             prefilter = None
         elif isinstance(mask, self.cp.ndarray) and mask.dtype == self.cp.uint32:
@@ -556,6 +564,11 @@ class CuVSDenseIndex:
             )
         if self.distance not in {"ip", "l2"}:
             raise ValueError(f"Unsupported OpenViking distance for cuVS: {self.distance!r}")
+        self.dtype = str(config.get("dtype", "float32")).lower()
+        if self.dtype not in {"float32", "float16"}:
+            raise ValueError(
+                f"Unsupported cuVS dtype {self.dtype!r}; choose 'float32' or 'float16'"
+            )
 
         self.fallback_to_native = bool(config.get("fallback_to_native", True))
         self.filter_cache_size = int(config.get("filter_cache_size", 16))
@@ -593,6 +606,7 @@ class CuVSDenseIndex:
             self._metric,
             build_params,
             search_params,
+            self.dtype,
         )
         self._records: Dict[int, _Record] = {}
         self._snapshot: Optional[_CuVSIndexSnapshot] = None
@@ -941,6 +955,7 @@ class CuVSDenseIndex:
                         build_params=self._build_params,
                         filter_cache_size=self.filter_cache_size,
                         safety_factor=self.auto_memory_safety_factor,
+                        dtype=self.dtype,
                     )
                     if telemetry is not None:
                         telemetry.memory_estimated_peak_bytes = estimate.estimated_peak_bytes

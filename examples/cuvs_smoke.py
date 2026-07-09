@@ -8,7 +8,7 @@ from openviking.storage.vectordb.collection.local_collection import (
 )
 
 
-def main(algorithm: str) -> None:
+def main(algorithm: str, dtype: str) -> None:
     collection = get_or_create_local_collection(
         meta_data={
             "CollectionName": "cuvs_smoke",
@@ -23,6 +23,7 @@ def main(algorithm: str) -> None:
             "dense_search": {
                 "backend": "cuvs",
                 "algorithm": algorithm,
+                "dtype": dtype,
                 "fallback_to_native": True,
                 "build_params": (
                     {"graph_degree": 16, "intermediate_graph_degree": 32}
@@ -126,7 +127,12 @@ def main(algorithm: str) -> None:
         )
         ids_after_mutation = [item.id for item in result.data]
         assert ids_after_mutation == ["b"], ids_after_mutation
-        print(f"cuVS {algorithm} smoke test passed:", ids, "->", ids_after_mutation)
+        print(
+            f"cuVS {algorithm}/{dtype} smoke test passed:",
+            ids,
+            "->",
+            ids_after_mutation,
+        )
     finally:
         collection.close()
 
@@ -138,5 +144,10 @@ if __name__ == "__main__":
         choices=("brute_force", "cagra"),
         default="brute_force",
     )
+    parser.add_argument(
+        "--dtype",
+        choices=("float32", "float16"),
+        default="float32",
+    )
     args = parser.parse_args()
-    main(args.algorithm)
+    main(args.algorithm, args.dtype)

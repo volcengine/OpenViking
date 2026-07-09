@@ -79,6 +79,13 @@ class QdrantConfig(BaseModel):
 class CuVSConfig(BaseModel):
     """Configuration for GPU dense-vector search through NVIDIA cuVS."""
 
+    dtype: Literal["float32", "float16"] = Field(
+        default="float32",
+        description=(
+            "GPU dataset and query dtype. float16 is an opt-in direct cast and "
+            "must be benchmarked for recall; it does not change native CPU quantization."
+        ),
+    )
     algorithm: Literal["brute_force", "cagra"] = Field(
         default="brute_force",
         description=(

@@ -252,6 +252,7 @@ def test_telemetry_summary_uses_simplified_internal_metric_keys():
 def test_telemetry_summary_includes_cuvs_route_and_stage_timings():
     telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
     telemetry.set("vector.cuvs.algorithm", "brute_force")
+    telemetry.set("vector.cuvs.dtype", "float16")
     telemetry.set("vector.cuvs.auto_mode", True)
     telemetry.set("vector.cuvs.route_reason", "native_filter_threshold")
     telemetry.set("vector.cuvs.filter_kind", "path")
@@ -272,6 +273,7 @@ def test_telemetry_summary_includes_cuvs_route_and_stage_timings():
 
     assert cuvs == {
         "algorithm": "brute_force",
+        "dtype": "float16",
         "auto_mode": True,
         "route_reason": "native_filter_threshold",
         "filter_kind": "path",

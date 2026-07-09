@@ -107,6 +107,19 @@ def test_cagra_itopk_sweep_preserves_shared_search_params():
     ]
 
 
+def test_validate_args_accepts_float16_backend_variants():
+    parser = benchmark.build_parser()
+    args = parser.parse_args(
+        ["--backends", "cuvs_brute_force,cuvs_brute_force_fp16,cuvs_cagra_fp16"]
+    )
+
+    assert benchmark.validate_args(parser, args) == [
+        "cuvs_brute_force",
+        "cuvs_brute_force_fp16",
+        "cuvs_cagra_fp16",
+    ]
+
+
 def test_cagra_itopk_and_search_width_sweeps_form_cartesian_product():
     parser = benchmark.build_parser()
     args = parser.parse_args(

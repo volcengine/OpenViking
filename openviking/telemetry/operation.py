@@ -229,6 +229,7 @@ class TelemetrySummaryBuilder:
             if cls._has_metric_prefix("vector.cuvs", counters, gauges):
                 summary["vector"]["cuvs"] = {
                     "algorithm": gauges.get("vector.cuvs.algorithm", ""),
+                    "dtype": gauges.get("vector.cuvs.dtype", "float32"),
                     "auto_mode": cls._bool(gauges.get("vector.cuvs.auto_mode"), False),
                     "route_reason": gauges.get("vector.cuvs.route_reason", ""),
                     "filter_kind": gauges.get("vector.cuvs.filter_kind", "none"),

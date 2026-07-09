@@ -345,6 +345,29 @@ def test_cuvs_memory_estimate_accounts_for_fp32_graphs_and_filter_cache():
         + estimate.filter_cache_bytes
     )
 
+    fp16 = estimate_cuvs_memory(
+        vector_count=1_000_000,
+        dimension=768,
+        algorithm="brute_force",
+        build_params={},
+        filter_cache_size=0,
+        safety_factor=1.0,
+        dtype="float16",
+    )
+    assert fp16.vector_bytes == 1_000_000 * 768 * 2
+
+
+def test_cuvs_rejects_unsupported_gpu_dtype():
+    with pytest.raises(ValueError, match="dtype"):
+        CuVSDenseIndex(
+            dimension=2,
+            distance="ip",
+            normalize_vectors=False,
+            field_types={},
+            config={"dtype": "int8"},
+            runtime=FakeCuVSRuntime(),
+        )
+
 
 def test_auto_cuvs_retries_after_gpu_memory_becomes_available():
     runtime = FakeCuVSRuntime()
