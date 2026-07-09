@@ -25,6 +25,7 @@ from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.expr import FilterExpr
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve.types import (
     ContextType,
     MatchedContext,
@@ -114,8 +115,13 @@ class HierarchicalRetriever:
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
         effective_threshold = self._resolve_threshold(score_threshold)
+        image_query = bool(getattr(query, "image_query", False))
         if mode is None:
             mode = RetrieverMode.QUICK if not self._rerank_client else RetrieverMode.THINKING
+        if image_query:
+            mode = RetrieverMode.QUICK
+            if level is None:
+                level = [2]
 
         # 创建 proxy 包装器，绑定当前 ctx
         vector_proxy = VikingDBManagerProxy(self.vector_store, ctx)
@@ -137,8 +143,17 @@ class HierarchicalRetriever:
         query_vector = None
         sparse_query_vector = None
         if self.embedder:
+            if image_query and not getattr(self.embedder, "supports_multimodal", False):
+                raise InvalidArgumentError(
+                    "Image search requires a multimodal embedding model."
+                )
             with telemetry.measure("search.embed_query"):
-                result: EmbedResult = await embed_compat(self.embedder, query.query, is_query=True)
+                embedding_input = getattr(query, "embedding_input", None) or query.query
+                result: EmbedResult = await embed_compat(
+                    self.embedder,
+                    embedding_input,
+                    is_query=True,
+                )
                 query_vector = result.dense_vector
                 sparse_query_vector = result.sparse_vector
 
@@ -149,8 +164,11 @@ class HierarchicalRetriever:
             root_uris = default_target_directories(ctx, context_type=query.context_type)
 
         context_type = query.context_type.value if query.context_type else None
+        if image_query and context_type is None:
+            context_type = ContextType.RESOURCE.value
 
         if mode == RetrieverMode.QUICK:
+            search_limit = max(limit * 5, 50) if image_query else max(limit, self.GLOBAL_SEARCH_TOPK)
             with telemetry.measure("search.vector_retrieval"):
                 quick_results = await vector_proxy.search_in_tenant(
                     query_vector=query_vector,
@@ -159,7 +177,7 @@ class HierarchicalRetriever:
                     target_directories=target_dirs,
                     extra_filter=scope_dsl,
                     level=level,
-                    limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+                    limit=search_limit,
                 )
             telemetry.count("vector.searches", 1)
             telemetry.count("vector.scored", len(quick_results))

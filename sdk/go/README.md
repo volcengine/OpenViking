@@ -85,6 +85,18 @@ for _, item := range results.Resources {
 	fmt.Println(item.URI, item.Score)
 }
 
+// Search by image. Image accepts a local path, viking:// URI, HTTP URL, or data:image URI.
+imageResults, err := client.Find(ctx, "", &openviking.FindOptions{
+	TargetURI: "viking://resources/images",
+	Image:     "./query.png",
+	Limit:     5,
+})
+similarPosters, err := client.Search(ctx, "similar poster", &openviking.SearchOptions{
+	TargetURI: "viking://resources/images",
+	Image:     "viking://resources/images/poster.png",
+	Limit:     5,
+})
+
 // Work with sessions.
 session, err := client.CreateSession(ctx, &openviking.CreateSessionOptions{
 	SessionID: "demo-session",
@@ -96,7 +108,8 @@ commit, err := client.CommitSession(ctx, "demo-session", &openviking.CommitSessi
 	KeepRecentCount: 2,
 })
 
-_, _, _ = resource, updated, session
+_, _, _, _ = resource, updated, imageResults, similarPosters
+_ = session
 _ = commit
 ```
 

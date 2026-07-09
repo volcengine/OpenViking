@@ -51,6 +51,7 @@ from openviking.storage.internal_names import (
     STORAGE_INTERNAL_ENTRY_NAMES,
 )
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_utils import format_iso8601, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -81,9 +82,9 @@ LS_ALL_NODES = 2**31 - 1
 _T = TypeVar("_T")
 
 
-def _ensure_non_empty_search_query(query: str) -> None:
-    if not query.strip():
-        raise InvalidArgumentError("Search query must not be empty.")
+def _ensure_non_empty_search_query(query: str, image_url: Optional[str] = None) -> None:
+    if not query.strip() and not image_url:
+        raise InvalidArgumentError("Search query or image_url must not be empty.")
 
 
 def _is_directory_not_empty_error(message: str) -> bool:
@@ -1976,6 +1977,7 @@ class VikingFS:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
+        image_url: Optional[str] = None,
     ):
         """Semantic search.
 
@@ -1989,7 +1991,7 @@ class VikingFS:
         Returns:
             FindResult
         """
-        _ensure_non_empty_search_query(query)
+        _ensure_non_empty_search_query(query, image_url)
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking_cli.retrieve import (
@@ -2024,6 +2026,10 @@ class VikingFS:
             context_type=None,
             intent="",
             target_directories=retrieval_targets.target_directories,
+            embedding_input=(
+                build_multimodal_embedding_input(query, image_url) if image_url else None
+            ),
+            image_query=bool(image_url),
         )
 
         logger.debug(
@@ -2068,6 +2074,7 @@ class VikingFS:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
+        image_url: Optional[str] = None,
     ):
         """Complex search with session context.
 
@@ -2081,7 +2088,7 @@ class VikingFS:
         Returns:
             FindResult
         """
-        _ensure_non_empty_search_query(query)
+        _ensure_non_empty_search_query(query, image_url)
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
@@ -2115,7 +2122,19 @@ class VikingFS:
                 target_abstract = ""
 
         # With session context: intent analysis
-        if session_summary or current_messages:
+        if image_url:
+            typed_queries = [
+                TypedQuery(
+                    query=query,
+                    context_type=None,
+                    intent="",
+                    priority=1,
+                    target_directories=retrieval_targets.target_directories,
+                    embedding_input=build_multimodal_embedding_input(query, image_url),
+                    image_query=True,
+                )
+            ]
+        elif session_summary or current_messages:
             analyzer = IntentAnalyzer(max_recent_messages=5)
             with telemetry.measure("search.intent_analysis"):
                 query_plan = await analyzer.analyze(

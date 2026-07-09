@@ -96,7 +96,8 @@ class FindRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = ""
+    image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     agent_id: Optional[str] = None
@@ -119,7 +120,8 @@ class SearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = ""
+    image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     agent_id: Optional[str] = None
@@ -199,6 +201,7 @@ async def find(
             score_threshold=request.score_threshold,
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
+            image_url=request.image_url,
         ),
     )
     result = execution.result
@@ -244,6 +247,7 @@ async def search(
             score_threshold=request.score_threshold,
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
+            image_url=request.image_url,
         )
 
     execution = await run_operation(
