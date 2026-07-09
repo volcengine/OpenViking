@@ -95,13 +95,24 @@ function sourceMode(env) {
   return "auto";
 }
 
-function deriveBaseUrl({ env, cliFile, ovFile, useCli }) {
+function hasEnvCredentialFields(env) {
+  return Boolean(
+    str(env.OPENVIKING_URL, str(env.OPENVIKING_BASE_URL, "")) ||
+    str(env.OPENVIKING_MCP_URL, "") ||
+    str(env.OPENVIKING_BEARER_TOKEN, str(env.OPENVIKING_API_KEY, "")) ||
+    str(env.OPENVIKING_ACCOUNT, "") ||
+    str(env.OPENVIKING_USER, "") ||
+    str(env.OPENVIKING_PEER_ID, ""),
+  );
+}
+
+function deriveBaseUrl({ env, cliFile, ovFile, mode, useCli }) {
   const envUrl = str(env.OPENVIKING_URL, str(env.OPENVIKING_BASE_URL, ""));
   const cliUrl = str(cliFile.url, "");
 
+  if (mode !== "cli" && envUrl) return envUrl.replace(/\/+$/, "");
   if (useCli && cliUrl) return cliUrl.replace(/\/+$/, "");
-  if (!useCli && envUrl) return envUrl.replace(/\/+$/, "");
-  if (!useCli && cliUrl) return cliUrl.replace(/\/+$/, "");
+  if (mode !== "env" && cliUrl) return cliUrl.replace(/\/+$/, "");
 
   const server = ovFile.server || {};
   const ovUrl = str(server.url, "");
@@ -115,11 +126,13 @@ function deriveBaseUrl({ env, cliFile, ovFile, useCli }) {
 export function resolveOpenVikingCredentials(env = process.env) {
   const files = loadCredentialFiles(env);
   const mode = sourceMode(env);
-  const useCli = mode === "cli" || (mode === "auto" && files.cliPath && hasCredentialFields(files.cliFile));
+  const envHasCredentials = hasEnvCredentialFields(env);
+  const useCli = mode === "cli" ||
+    (mode === "auto" && !envHasCredentials && files.cliPath && hasCredentialFields(files.cliFile));
   const cx = files.ovFile.codex || {};
   const server = files.ovFile.server || {};
 
-  const baseUrl = deriveBaseUrl({ env, ...files, useCli });
+  const baseUrl = deriveBaseUrl({ env, ...files, mode, useCli });
 
   const apiKey = useCli
     ? str(files.cliFile.api_key, "")
@@ -156,11 +169,11 @@ export function resolveOpenVikingCredentials(env = process.env) {
       );
 
   const explicitMcpUrl = str(env.OPENVIKING_MCP_URL, "");
-  const mcpUrl = (!useCli && explicitMcpUrl) ? explicitMcpUrl : `${baseUrl.replace(/\/+$/, "")}/mcp`;
+  const mcpUrl = (mode !== "cli" && explicitMcpUrl) ? explicitMcpUrl : `${baseUrl.replace(/\/+$/, "")}/mcp`;
 
   return {
     ...files,
-    credentialSource: useCli ? "ovcli" : (mode === "env" ? "env" : "auto"),
+    credentialSource: useCli ? "ovcli" : ((mode === "env" || envHasCredentials) ? "env" : "auto"),
     baseUrl,
     mcpUrl,
     apiKey,

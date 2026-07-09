@@ -415,8 +415,8 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 | 权限 |
 |------|------|------|------|
-| POST | `/api/v1/pack/export` | 导出 .ovpack 文件 | ROOT/ADMIN |
-| POST | `/api/v1/pack/import` | 导入 .ovpack 文件 | ROOT/ADMIN |
+| POST | `/api/v1/pack/export` | 导出 .ovpack 文件 | ROOT/ADMIN/USER，受正常 URI ACL 限制 |
+| POST | `/api/v1/pack/import` | 导入 .ovpack 文件 | ROOT/ADMIN/USER，受正常 URI ACL 限制 |
 | POST | `/api/v1/pack/backup` | 备份公开 scope | ROOT/ADMIN |
 | POST | `/api/v1/pack/restore` | 恢复备份包 | ROOT/ADMIN |
 
