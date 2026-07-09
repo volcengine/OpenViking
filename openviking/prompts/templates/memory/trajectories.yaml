@@ -1,14 +1,12 @@
 memory_type: trajectories
 description: |
-  A compact execution-audit record distilled from an agent task trajectory.
+  Extract a compact trajectory memory whose primary purpose is to propose a reusable runtime
+  experience that could be added to future reminders.
 
-  The trajectory memory is not a success workflow or an experience instruction. It records what
-  actually happened, what the task/evaluation required, where the first material divergence occurred,
-  and whether a reusable experience repair should be learned from that divergence.
-
-  Extract when the agent worked through identifiable tasks involving decisions, tool calls,
-  user confirmations, final communication, or multi-step actions. Skip pure chitchat or simple Q&A
-  with no execution trace.
+  This is not a verbose audit log. Prefer one causal lesson that is source-bound, actionable at
+  runtime, and safe to inject as an experience. Extract only when the trajectory contains a
+  meaningful task boundary: tool use, user confirmation, policy choice, calculation, write action,
+  staged workflow, or final communication.
 
 embedding_template: |-
   {{ trajectory_name }}
@@ -25,25 +23,22 @@ fields:
   - name: trajectory_name
     type: string
     description: |
-      Name the audited execution boundary directly and stably.
+      Name the reusable lesson or audited boundary directly.
       Must be written in {{ language }}.
-      {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
-      Do not create near-duplicate names for the same boundary.
-      Good: "wrong_target_update", "missing_aggregate_scope", "final_summary_omission", "范围汇总遗漏".
-      Prefer the first material decision/repair boundary over the broad opening request.
+      {% if language == 'en' %}Use lowercase snake_case, max 6 words.{% else %}Use a concise noun phrase, max 18 characters.{% endif %}
+      Prefer the experience-worthy boundary over the broad task name.
+      Good: "named_scope_no_substitution", "aggregate_scope_freeze", "cancel_once_then_book", "点名范围不替代".
     merge_op: immutable
 
   - name: outcome
     type: string
     description: |
       Use exactly one of: success, failure, partial, unfinished, unknown.
-
-      Choose from reward/evaluation facts when available:
-      - success: all required tool/db/action and communication checks passed.
-      - failure: reward-critical database/action or communication check failed.
-      - partial: some required work succeeded but at least one material requirement failed.
-      - unfinished: execution stopped before the task reached a terminal answer or write boundary.
-      - unknown: evaluation facts are unavailable or ambiguous.
+      success means the task's required state/actions and required communication were completed.
+      failure means a material requirement failed.
+      partial means some important work succeeded but one material requirement failed.
+      unfinished means the task stopped before the necessary terminal action/answer.
+      unknown means the evidence is insufficient.
     merge_op: immutable
 
   - name: retrieval_anchor
@@ -51,133 +46,125 @@ fields:
     description: |
       Positive semantic retrieval text for embedding, not display.
       Format exactly:
-      "Stage: <opening|after_read|before_write|after_write|final_response|terminal_handoff>; Boundary: <first material audited condition>; Capability: <operation/check/communication this record audits>; Target: <primary object or sub-object>; Outcome: <success|failure|partial|unfinished|unknown>."
+      "Stage: <opening|after_read|before_confirmation|before_write|after_write|final_response|terminal_handoff>; Boundary: <runtime condition>; Capability: <operation/check/communication>; Target: <semantic object role>; Outcome: <success|failure|partial|unfinished|unknown>."
 
-      Rules:
-      - Keep it shorter and more retrieval-focused than content.
-      - Anchor on the condition that was actually established at runtime, not merely the opening request.
-      - Use positive applies-when language only. Put exclusions and near-misses in content.
-      - Generalize identifiers, names, exact amounts, exact dates, paths, and raw payload values.
+      Generalize identifiers, names, exact amounts, dates, task numbers, and raw payload values.
+      Anchor on the condition where the future reminder should trigger.
     merge_op: immutable
 
   - name: experience_effects
     type: string
     description: |
-      Machine-readable JSON object for rule-based statistics about injected experience reminders.
+      Machine-readable JSON object about injected experience reminders.
       Output ONLY a valid compact JSON object, not markdown and not a code block.
 
       Required shape:
-      {
-        "positive_ids": ["E1"],
-        "negative_ids": [],
-        "weak_ids": []
-      }
+      {"positive_ids":["E1"],"negative_ids":[],"weak_ids":[]}
 
-      Rules:
-      - If no experience reminder was injected, output exactly: {"positive_ids":[],"negative_ids":[],"weak_ids":[]}
-      - `positive_ids` may include only experiences that were necessary/helpful for a correct decision or recovery.
-      - `negative_ids` may include only experiences that were over-broad or misleading and plausibly changed execution toward a reward-changing mistake.
-      - `weak_ids` may include only experiences that were helpful-but-not-sufficient or too weak to prevent the First Wrong Tool Call.
-      - Any injected ID not listed in positive_ids, negative_ids, or weak_ids is treated as neutral/ignored by downstream statistics; do not output a separate neutral list.
-      - Use only IDs from the deterministic injected list. Do not invent IDs.
+      If no experience reminder was injected, output exactly:
+      {"positive_ids":[],"negative_ids":[],"weak_ids":[]}
+
+      positive_ids: injected experiences that were necessary/helpful.
+      negative_ids: injected experiences that were misleading or over-broad.
+      weak_ids: injected experiences that were relevant but insufficient.
+      Use only IDs from the injected list. Do not invent IDs.
     merge_op: immutable
 
   - name: content
     type: string
     description: |
-      Natural-language content must be written in {{ language }}. Keep fixed section labels,
-      tool names, schema fields, trace step IDs, Python/DSL identifiers, and quoted runtime values unchanged.
+      Write in {{ language }}. Keep raw tool names, schema keys, and quoted runtime values unchanged.
 
-      Write a minimal repair-to-experience record in EXACTLY this format and label order.
-      The main purpose is to say what reusable experience should be added or updated:
+      PRIMARY GOAL: output a complete `Runtime experience content` block that can be directly used
+      as an experience reminder. The block must look like a production experience, not an audit log:
+
+      # <experience_name>
+
+      当 <reusable runtime situation> 时，必须 <core strategy>。
+
+      ## 规则
+      1. <actionable rule bound to runtime facts>
+      2. <actionable rule bound to runtime facts>
+      ...
+
+      目标是避免 <closest tempting wrong behavior>。
+
+      Output EXACTLY this markdown shape and label order:
 
       # <trajectory_name>
       - Outcome: <success|failure|partial|unfinished|unknown>
       - Domain: <task/tool domain>
-      - User Goal: <generalized user goal>
-      - Loaded Experiences:
-        - <none OR E1: <experience name> — <trigger boundary>; <helpful|weak|misleading|irrelevant|ignored>; <brief reason>>
-      - Runtime Facts:
-        - Failed requirement: <failed state/action/tool/communication requirement>
-        - Preserve: <correct matched actions/tools/content that the new experience must not block>
-        - Source facts: <visible user/tool/policy/calculation facts needed to derive the repair>
-      - First Wrong Tool Call:
-        - Step: <Ax, final_response, none, or expected_missing_tool>
+      - User Goal: <generalized goal, no task id>
+      - Trigger Boundary: <when this experience should be injected>
+      - Key Runtime Facts:
+        - User obligation: <user request/confirmation that creates the obligation, or none>
+        - Tool/policy facts: <visible facts needed for the rule, or none>
+        - Correct work to preserve: <actions/reads/communications this lesson must not block, or none>
+      - Earliest Material Boundary:
+        - Step: <raw step id, final_response, expected_missing_tool, or none>
         - Tool: <one raw tool name, communicate_with_user, or none>
-        - Candidate shape: <candidate_tool=...; decisive_field=...; wrong_value_source=...; expected_value_source=...; candidate_args_or_content=...>
-        - Error type: <none|wrong_tool|wrong_arguments|wrong_object|wrong_policy_branch|missing_read_before_tool|missing_confirmation_before_tool|missing_communication|premature_write|extra_write|tool_error|unrecoverable>
-        - Expected at call: <expected tool/args/content or missing call>
-      - First Material Divergence:
-        - Step: <same boundary, final_response, expected_missing_tool, or none>
-        - Kind: <none|wrong_tool|wrong_arguments|wrong_object|wrong_policy_branch|missing_read|missing_confirmation|missing_communication|missing_expected_tool|premature_write|extra_write|tool_error|unrecoverable>
-        - Cause: <missed fact/binding/scope/provenance/policy/communication obligation>
-        - Impact: <why this changed reward/goal/state/communication>
-      - Counterfactual Ideal Experience:
-        - Candidate C1:
-          - Candidate type: source_bound_runtime_repair
-          - Would fix source rollout: <true|false>
-          - Experience name: <name or none>
-          - Injection boundary: <tool boundary or none>
-          - Situation: <reusable runtime condition; no evaluator/control-plane wording>
-          - Repair rule: <minimal pre-tool instruction using runtime facts only>
-          - Source binding:
-            - User request that created obligation: <explicit user request/confirmation or none>
-            - Scope freeze point: <when the relevant object set/value scope becomes fixed, or none>
-            - Included records: <semantic roles included in the value/list/decision>
-            - Excluded records: <semantic roles excluded>
-            - Source field: <runtime field/content to read, e.g. price/status/id/content, or none>
-            - Derivation: <how to compute/select/verify the value from runtime facts>
-            - Later write effect: <whether later writes change the previously requested scope/value>
-            - Non-aggregate source: <confirmed target, selected source object, policy gate, or none>
-          - Applicability: <narrow boundary/object role/scope/candidate shape>
-          - Anti-pattern: <closest tempting wrong behavior>
-          - Weakness: <remaining risk; write none if source-bound and causal>
-        - Candidate C2:
-          - Candidate type: over_broad_reject
-          - Would fix source rollout: <true|false>
-          - Experience name: <name or none>
-          - Injection boundary: <tool boundary or none>
-          - Situation: <tempting broad condition>
-          - Repair rule: <tempting broad rule>
-          - Source binding: <why this lacks runtime semantic binding>
-          - Applicability: <why it would over-trigger>
-          - Anti-pattern: <broad/vague behavior to avoid>
-          - Weakness: <why this should not be selected>
-        - Candidate C3:
-          - Candidate type: wrong_scope_or_noncausal_reject
-          - Would fix source rollout: <true|false>
-          - Experience name: <name or none>
-          - Injection boundary: <tool boundary or none>
-          - Situation: <nearby but wrong-scope/non-causal condition>
-          - Repair rule: <nearby but wrong repair>
-          - Source binding: <why this binds to the wrong source/scope or non-causal factor>
-          - Applicability: <nearby condition where it may apply, or none>
-          - Anti-pattern: <wrong-scope/non-causal behavior to avoid>
-          - Weakness: <why this should not be selected>
-        - Selected candidate: <C1|none>
-        - Selection reason: <why C1 is source-bound and causal, or why no reusable pre-tool repair exists>
-        - Case evidence: <diagnostic literals/ids/values and evaluator facts only; not hardcoded>
-      - Experience Repair Signal:
-        - Recommended operation: <create|update|skip>
-        - Existing experience action: <update|none>
+        - Divergence: <missing_expected_tool|missing_communication|wrong_arguments|wrong_object|wrong_policy_branch|premature_write|extra_write|premature_done|tool_error|none>
+        - Cause: <missed runtime binding/scope/order/policy/calculation/communication obligation>
+        - Expected behavior: <what should have happened at that boundary>
+      - Ideal Experience To Add:
+        - Recommended operation: <create|update|validate|skip>
         - Existing target experience: <name or none>
-        - New experience action: <create|skip>
-        - New experience candidate: <selected candidate experience name, or none>
-        - Trigger boundary: <selected candidate Injection boundary, or none>
-        - Repair principle: <one-line summary of selected candidate Repair rule + Source binding>
-        - Do not learn: <nearby broad/non-causal candidate or lesson to avoid>
+        - Experience name: <lower_snake_case or concise name, or none>
+        - Injection boundary: <opening|after_read|before_confirmation|before_write|after_write|final_response|none>
+        - Runtime experience content:
+          <complete production-style experience block, or none>
+        - Source binding:
+          - Scope freeze point: <when object set/value/decision becomes fixed, or none>
+          - Included records: <semantic roles included, or none>
+          - Excluded records: <semantic roles excluded, or none>
+          - Source fields: <runtime fields/text/tool outputs to read, or none>
+          - Derivation: <how to compute/select/verify using visible facts, or none>
+          - Later write effect: <whether later writes change a previously requested value/scope, or none>
+          - Confirmation binding: <which user confirmation authorizes which write objects, or none>
+        - Preserve: <specific correct behavior this experience must preserve>
+        - Reject over-broad lesson: <tempting broad rule that should not be learned>
+        - Reject wrong-scope lesson: <nearby non-causal or wrong-scope rule that should not be learned>
+        - Why this would help: <one sentence, runtime-causal>
+      - Case Evidence:
+        - Diagnostic literals: <ids/values/tool args only as evidence, or none>
+        - Observed wrong behavior: <what happened, or none>
+        - Observed correct behavior: <what worked, or none>
       - Result: <final outcome and side effects>
 
-      Rules:
-      - PRIMARY OUTPUT: `Counterfactual Ideal Experience` is the main output. Generate exactly three candidates: C1 must be the best source-bound runtime repair, C2 must be a tempting over-broad reject, and C3 must be a wrong-scope/non-causal reject. `Experience Repair Signal` is only a routing summary derived from C1 when selected.
-      - FIXED SHAPE: Output every section above in order. For success, set wrong/divergence fields to `none`, all candidates Would fix source rollout to `false`, Selected candidate to `none`, and Repair Signal to `skip`.
-      - DEFAULT LEARN: For non-success, C1 should have Would fix source rollout=`true` when a narrow pre-tool reminder could have prevented the first material failure. Use Selected candidate=`none` only when no reusable pre-tool repair exists.
-      - SELECTION GATE: Select only C1 or none. Never select C2/C3. If C1's Situation, Repair rule, or Source binding uses only vague completeness wording or evaluator/control-plane terms, set Selected candidate=`none` and explain what runtime source binding is missing.
-      - FIRST BOUNDARY: Pick one earliest material boundary. `Tool` must be one raw tool name, `communicate_with_user`, or `none`; never prose, `done`, multiple tools, or alternatives. Communication-only failures target `communicate_with_user`.
-      - BANNED REUSABLE WORDING: C1 reusable fields (Experience name, Situation, Repair rule, Source binding, Applicability, Anti-pattern, Repair principle) must not contain evaluator/control-plane wording such as `evaluation`, `evaluator`, `communicate_checks`, `action_checks`, `db_check`, `reward`, `rubric`, `评估`, `奖励`, or vague phrases like “include/check all required info”. Those words may appear only in Case evidence.
-      - SOURCE BINDING: Bind C1 to runtime semantic sources: user-request scope, confirmed target, selected source object, row/set membership, field to read, calculation, policy gate, or communication obligation. If the missing value is only visible as an evaluator literal, reverse-map it to the user/tool facts that produce that literal.
-      - AGGREGATE/LIST SCOPE: For totals, counts, summaries, balances, or lists, C1 must fill Scope freeze point, Included records, Excluded records, Source field, Derivation, and Later write effect with non-`none` values. If any are missing, do not select C1. Name the closest wrong aggregate/list as Anti-pattern.
-      - PRESERVE CORRECT WORK: List matched/correct actions in Preserve and do not learn a rule that blocks them. When same tool can be right or wrong, distinguish by object role, membership, confirmation scope, provenance, source selection, calculation scope, or content coverage.
-      - DOMAIN-NEUTRAL STYLE: Generalize identifiers, names, timestamps, exact values, and dataset-specific wording into roles. Concrete literals only in Case evidence as diagnostic/not hardcoded. Concise bullets only; no extra headings, code fences, hidden reasoning, or closing remarks.
+      Selection rules:
+      - For failure/partial/unfinished: choose create or update when a narrow runtime reminder could
+        have prevented the earliest material failure. Use skip only when no reusable pre-tool or
+        pre-response reminder exists.
+      - For success: use validate when the trajectory demonstrates a reusable strategy that should
+        be reinforced; use update when an injected experience was helpful but should be sharpened;
+        use skip only for trivial success with no reusable lesson.
+      - `Runtime experience content` is mandatory for create/update/validate and must be directly
+        injectable. It must contain no case ids, exact dates, exact amounts, task numbers, dataset
+        names, hidden grading terms, or diagnostic-only literals.
+      - Put exact identifiers, exact amounts, exact dates, and tool payload snippets only under
+        `Case Evidence`.
 
+      What good experiences usually capture:
+      - Aggregate/list scope: freeze the query scope; distinguish all-current vs excluded/remaining.
+      - Named object scope: mutate only explicitly requested/confirmed objects; do not substitute
+        discovered alternatives.
+      - Independent obligations: do not drop baggage, payment, communication, or follow-up duties
+        just because another branch failed.
+      - Payment ledger: respect per-reservation limits, global balances, selected card, and do not
+        reuse balances or assume refunds are immediately available unless visible state proves it.
+      - Staged workflows: after a first write, communicate and wait when the next user instruction is
+        expected; do not finish before second-stage obligations are handled.
+      - Policy distinctions: separate permission to perform an action from refund/price/eligibility
+        side effects.
+      - Execution linearity: once a confirmed plan exists, do each write once, then continue to the
+        next required write; do not repeat successful writes or transfer prematurely.
+
+      Safety rules:
+      - No hidden grading/control-plane wording, internal checker names, hidden-answer markers,
+        or dataset/control-plane terminology in `Runtime experience content`.
+      - Avoid vague advice such as "check all requirements". Bind every rule to a visible runtime
+        source: user wording, confirmation, object membership, selected tool result, policy gate,
+        calculation, or payment/source field.
+      - Keep the memory concise. Prefer 4-8 runtime rules. Do not add extra headings, code fences,
+        hidden reasoning, or closing remarks.
     merge_op: patch
