@@ -2046,7 +2046,11 @@ class Session:
 
     async def _get_pending_archive_messages(self) -> List[Message]:
         """Return messages from in-progress archives newer than the latest completed archive."""
-        latest_completed_index = max(0, self._meta.commit_count)
+        # commit_count is advanced during commit phase 1, before memory
+        # extraction writes the archive .done marker. Only .done proves an
+        # archive is completed; otherwise get_session_context must still expose
+        # its messages as pending context.
+        latest_completed_index = 0
         pending_archives: List[Dict[str, Any]] = []
         for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
             try:

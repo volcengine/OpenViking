@@ -395,6 +395,36 @@ class TestGetSessionContext:
         assert context["stats"]["activeTokens"] == session.messages[0].estimated_tokens
         assert context["stats"]["activeTokens"] > _estimate_tokens("Executing tool...")
 
+    async def test_get_session_context_includes_pending_archive_when_commit_count_advanced(
+        self, client: AsyncOpenViking
+    ):
+        session = client.session(session_id="assemble_pending_commit_count_test")
+        pending_messages = [
+            Message(id="pending-user", role="user", parts=[TextPart("Pending user message")]),
+            Message(
+                id="pending-assistant",
+                role="assistant",
+                parts=[TextPart("Pending assistant response")],
+            ),
+        ]
+
+        await session._viking_fs.write_file(
+            uri=f"{session.uri}/history/archive_001/messages.jsonl",
+            content="\n".join(msg.to_jsonl() for msg in pending_messages) + "\n",
+            ctx=session.ctx,
+        )
+        session._compression.compression_index = 1
+        session._meta.commit_count = 1
+        session.add_message("user", [TextPart("Current live message")])
+
+        context = await session.get_session_context()
+
+        assert [message["parts"][0]["text"] for message in context["messages"]] == [
+            "Pending user message",
+            "Pending assistant response",
+            "Current live message",
+        ]
+
     async def test_get_session_context_reads_latest_overview_and_all_archive_abstracts(
         self, client: AsyncOpenViking, monkeypatch
     ):
