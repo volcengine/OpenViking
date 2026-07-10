@@ -1,0 +1,39 @@
+docs/en/agent-integrations/01-overview.md
+  s_5e17b6c73ed8ec::t_61a7f6b5787b7f 12
+docs/en/agent-integrations/12-cursor.md
+  s_5e17b6c73ed8ec::t_a0e28732e82670 9,23,51-52,58,65,71
+docs/images/agents/en/cursor.md
+  s_5e17b6c73ed8ec::t_031cbe10c12eac 3,13-14,22
+docs/images/agents/en/index.json
+  s_5e17b6c73ed8ec::t_4ba3366cd31790 80
+docs/images/agents/zh/cursor.md
+  s_5e17b6c73ed8ec::t_a993bd5f661f19 3,13-14,22
+docs/images/agents/zh/index.json
+  s_5e17b6c73ed8ec::t_9dba48d35a6f1c 80
+docs/zh/agent-integrations/01-overview.md
+  s_5e17b6c73ed8ec::t_07325d056098a5 12
+docs/zh/agent-integrations/12-cursor.md
+  s_5e17b6c73ed8ec::t_39b5459af0b6e0 9,23,51-52,58,65,71
+examples/memory-plugin-shared/install-agent-hooks.test.mjs
+  s_5e17b6c73ed8ec::t_17d796c11e62be 2,73-74,87-88
+examples/memory-plugin-shared/install.sh
+  s_5e17b6c73ed8ec::t_60e03b203ca772 138,1829-1830,1832,1866-1867,1872-1878,1881-1882,2394-2396,2398,2400,2555
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b310645fbcae798ae64a6426c43540cefb37a8ec",
+  "prompts": {},
+  "sessions": {
+    "s_5e17b6c73ed8ec": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f49b4-d234-7ae0-a95d-b3a3014392cd",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
