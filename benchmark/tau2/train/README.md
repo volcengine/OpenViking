@@ -147,11 +147,12 @@ bash benchmark/tau2/train/restart_vikingbot_train_eval.sh \
   --skip-final-eval
 ```
 
-Environment variables such as `OPENVIKING_PORT`, `OPENVIKING_BOT_PORT`,
-`TAU2_SERVICE_PORT`, `OPENVIKING_CONFIG_FILE`, `OPENVIKING_DATA_DIR`,
-`RESULT_DIR_NAME`, and `LOG_DIR` can still override the slot-derived defaults.
-For non-zero slots, the launcher copies base `~/.openviking/*.conf*` config files
-when needed and rewrites the slot config's `storage.workspace`, `server.port`,
+Slot routing is hermetic: inherited environment variables such as
+`OPENVIKING_PORT`, `OPENVIKING_BOT_PORT`, `TAU2_SERVICE_PORT`,
+`OPENVIKING_CONFIG_FILE`, `OPENVIKING_DATA_DIR`, `RESULT_DIR_NAME`, and
+`LOG_DIR` do not override the slot-derived defaults. For non-zero slots, the
+launcher copies base `~/.openviking/*.conf*` config files when needed and
+rewrites the slot config's `storage.workspace`, `server.port`,
 `server.bot_api_url`, and `bot.ov_server.server_url`.
 
 The launcher writes service logs and pid files under:

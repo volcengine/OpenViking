@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TAU2_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${TAU2_DIR}/../.." && pwd)"
 
-SLOT="${TAU2_TRAIN_SLOT:-0}"
+SLOT="0"
 AUTO_COMMIT=false
 declare -a TRAIN_CLI_ARGS=()
 
@@ -128,20 +128,22 @@ else
   DEFAULT_OPENVIKING_DATA_DIR="${DEFAULT_SLOT_ROOT}/data"
 fi
 
-OPENVIKING_PORT="${OPENVIKING_PORT:-${DEFAULT_OPENVIKING_PORT}}"
-OPENVIKING_BOT_PORT="${OPENVIKING_BOT_PORT:-${DEFAULT_OPENVIKING_BOT_PORT}}"
-TAU2_SERVICE_HOST="${TAU2_SERVICE_HOST:-127.0.0.1}"
-TAU2_SERVICE_PORT="${TAU2_SERVICE_PORT:-${DEFAULT_TAU2_SERVICE_PORT}}"
-TAU2_ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-vikingbot}"
-TAU2_EXPERIENCE_LOADER_MODE="${TAU2_EXPERIENCE_LOADER_MODE:-constraint}"
-TAU2_MAX_ROLLOUT_CONCURRENCY="${TAU2_MAX_ROLLOUT_CONCURRENCY:-150}"
-TAU2_ROLLOUT_THREAD_WORKERS="${TAU2_ROLLOUT_THREAD_WORKERS:-${TAU2_MAX_ROLLOUT_CONCURRENCY}}"
-WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-180}"
-RESULT_DIR_NAME="${RESULT_DIR_NAME:-${DEFAULT_RESULT_DIR_NAME}}"
-LOG_DIR="${LOG_DIR:-${DEFAULT_LOG_DIR}}"
-OPENVIKING_CONFIG_FILE="${OPENVIKING_CONFIG_FILE:-${DEFAULT_OPENVIKING_CONFIG_FILE}}"
-OPENVIKING_DATA_DIR="${OPENVIKING_DATA_DIR:-${DEFAULT_OPENVIKING_DATA_DIR}}"
-SLOT_ROOT="${SLOT_ROOT:-${DEFAULT_SLOT_ROOT}}"
+# Keep train slots hermetic: inherited environment variables must not reroute
+# --slot 1 to the default 1933/~/.openviking service.
+OPENVIKING_PORT="${DEFAULT_OPENVIKING_PORT}"
+OPENVIKING_BOT_PORT="${DEFAULT_OPENVIKING_BOT_PORT}"
+TAU2_SERVICE_HOST="127.0.0.1"
+TAU2_SERVICE_PORT="${DEFAULT_TAU2_SERVICE_PORT}"
+TAU2_ROLLOUT_BACKEND="vikingbot"
+TAU2_EXPERIENCE_LOADER_MODE="constraint"
+TAU2_MAX_ROLLOUT_CONCURRENCY="150"
+TAU2_ROLLOUT_THREAD_WORKERS="${TAU2_MAX_ROLLOUT_CONCURRENCY}"
+WAIT_TIMEOUT_SECONDS="180"
+RESULT_DIR_NAME="${DEFAULT_RESULT_DIR_NAME}"
+LOG_DIR="${DEFAULT_LOG_DIR}"
+OPENVIKING_CONFIG_FILE="${DEFAULT_OPENVIKING_CONFIG_FILE}"
+OPENVIKING_DATA_DIR="${DEFAULT_OPENVIKING_DATA_DIR}"
+SLOT_ROOT="${DEFAULT_SLOT_ROOT}"
 
 OPENVIKING_LOG="${LOG_DIR}/openviking-server.log"
 TAU2_SERVICE_LOG="${LOG_DIR}/tau2-service.log"
@@ -382,11 +384,12 @@ run_train_eval() {
   fi
 
   export OPENVIKING_CONFIG_FILE
-  export BENCHMARK_SERVICE_URL="http://${TAU2_SERVICE_HOST}:${TAU2_SERVICE_PORT}"
-  log "starting batch train/eval with BENCHMARK_SERVICE_URL=${BENCHMARK_SERVICE_URL}"
-  log "command: benchmark/tau2/train/run_batch_train_eval.sh --config ${OPENVIKING_CONFIG_FILE} --server-url http://127.0.0.1:${OPENVIKING_PORT} --result-dir-name ${RESULT_DIR_NAME} ${train_args[*]}"
+  local benchmark_service_url="http://${TAU2_SERVICE_HOST}:${TAU2_SERVICE_PORT}"
+  log "starting batch train/eval with benchmark service ${benchmark_service_url}"
+  log "command: benchmark/tau2/train/run_batch_train_eval.sh --benchmark-service-url ${benchmark_service_url} --config ${OPENVIKING_CONFIG_FILE} --server-url http://127.0.0.1:${OPENVIKING_PORT} --result-dir-name ${RESULT_DIR_NAME} ${train_args[*]}"
   cd "${REPO_ROOT}"
   exec benchmark/tau2/train/run_batch_train_eval.sh \
+    --benchmark-service-url "${benchmark_service_url}" \
     --config "${OPENVIKING_CONFIG_FILE}" \
     --server-url "http://127.0.0.1:${OPENVIKING_PORT}" \
     --result-dir-name "${RESULT_DIR_NAME}" \

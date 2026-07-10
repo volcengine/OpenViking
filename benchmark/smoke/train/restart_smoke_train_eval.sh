@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SMOKE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${SMOKE_DIR}/../.." && pwd)"
 
-SLOT="${SMOKE_TRAIN_SLOT:-0}"
+SLOT="0"
 declare -a TRAIN_CLI_ARGS=()
 
 usage() {
@@ -115,19 +115,21 @@ else
   DEFAULT_OPENVIKING_DATA_DIR="${DEFAULT_SLOT_ROOT}/data"
 fi
 
-OPENVIKING_PORT="${OPENVIKING_PORT:-${DEFAULT_OPENVIKING_PORT}}"
-OPENVIKING_BOT_PORT="${OPENVIKING_BOT_PORT:-${DEFAULT_OPENVIKING_BOT_PORT}}"
-SMOKE_SERVICE_HOST="${SMOKE_SERVICE_HOST:-127.0.0.1}"
-SMOKE_SERVICE_PORT="${SMOKE_SERVICE_PORT:-${DEFAULT_SMOKE_SERVICE_PORT}}"
-SMOKE_MAX_ROLLOUT_CONCURRENCY="${SMOKE_MAX_ROLLOUT_CONCURRENCY:-32}"
-SMOKE_ROLLOUT_THREAD_WORKERS="${SMOKE_ROLLOUT_THREAD_WORKERS:-8}"
-SMOKE_NATIVE_THREAD_WORKERS="${SMOKE_NATIVE_THREAD_WORKERS:-8}"
-WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-180}"
-RESULT_DIR_NAME="${RESULT_DIR_NAME:-${DEFAULT_RESULT_DIR_NAME}}"
-LOG_DIR="${LOG_DIR:-${DEFAULT_LOG_DIR}}"
-OPENVIKING_CONFIG_FILE="${OPENVIKING_CONFIG_FILE:-${DEFAULT_OPENVIKING_CONFIG_FILE}}"
-OPENVIKING_DATA_DIR="${OPENVIKING_DATA_DIR:-${DEFAULT_OPENVIKING_DATA_DIR}}"
-SLOT_ROOT="${SLOT_ROOT:-${DEFAULT_SLOT_ROOT}}"
+# Keep smoke slots hermetic: inherited environment variables must not reroute
+# --slot 1 to the default 1933/~/.openviking service.
+OPENVIKING_PORT="${DEFAULT_OPENVIKING_PORT}"
+OPENVIKING_BOT_PORT="${DEFAULT_OPENVIKING_BOT_PORT}"
+SMOKE_SERVICE_HOST="127.0.0.1"
+SMOKE_SERVICE_PORT="${DEFAULT_SMOKE_SERVICE_PORT}"
+SMOKE_MAX_ROLLOUT_CONCURRENCY="32"
+SMOKE_ROLLOUT_THREAD_WORKERS="8"
+SMOKE_NATIVE_THREAD_WORKERS="8"
+WAIT_TIMEOUT_SECONDS="180"
+RESULT_DIR_NAME="${DEFAULT_RESULT_DIR_NAME}"
+LOG_DIR="${DEFAULT_LOG_DIR}"
+OPENVIKING_CONFIG_FILE="${DEFAULT_OPENVIKING_CONFIG_FILE}"
+OPENVIKING_DATA_DIR="${DEFAULT_OPENVIKING_DATA_DIR}"
+SLOT_ROOT="${DEFAULT_SLOT_ROOT}"
 
 OPENVIKING_LOG="${LOG_DIR}/openviking-server.log"
 SMOKE_SERVICE_LOG="${LOG_DIR}/smoke-service.log"
@@ -357,11 +359,12 @@ run_train_eval() {
   fi
 
   export OPENVIKING_CONFIG_FILE
-  export BENCHMARK_SERVICE_URL="http://${SMOKE_SERVICE_HOST}:${SMOKE_SERVICE_PORT}"
-  log "starting batch train/eval with BENCHMARK_SERVICE_URL=${BENCHMARK_SERVICE_URL}"
-  log "command: benchmark/smoke/train/run_batch_train_eval.sh --config ${OPENVIKING_CONFIG_FILE} --server-url http://127.0.0.1:${OPENVIKING_PORT} --result-dir-name ${RESULT_DIR_NAME} ${train_args[*]}"
+  local benchmark_service_url="http://${SMOKE_SERVICE_HOST}:${SMOKE_SERVICE_PORT}"
+  log "starting batch train/eval with benchmark service ${benchmark_service_url}"
+  log "command: benchmark/smoke/train/run_batch_train_eval.sh --benchmark-service-url ${benchmark_service_url} --config ${OPENVIKING_CONFIG_FILE} --server-url http://127.0.0.1:${OPENVIKING_PORT} --result-dir-name ${RESULT_DIR_NAME} ${train_args[*]}"
   cd "${REPO_ROOT}"
   exec benchmark/smoke/train/run_batch_train_eval.sh \
+    --benchmark-service-url "${benchmark_service_url}" \
     --config "${OPENVIKING_CONFIG_FILE}" \
     --server-url "http://127.0.0.1:${OPENVIKING_PORT}" \
     --result-dir-name "${RESULT_DIR_NAME}" \

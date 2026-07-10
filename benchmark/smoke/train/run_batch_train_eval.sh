@@ -5,6 +5,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SMOKE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${SMOKE_DIR}/../.." && pwd)"
 
+declare -a BENCHMARK_SERVICE_ARG=()
+HAS_BENCHMARK_SERVICE_URL=0
+for arg in "$@"; do
+  case "${arg}" in
+    --benchmark-service-url|--benchmark-service-url=*)
+      HAS_BENCHMARK_SERVICE_URL=1
+      ;;
+  esac
+done
+if [[ "${HAS_BENCHMARK_SERVICE_URL}" == "0" ]]; then
+  BENCHMARK_SERVICE_ARG=(--benchmark-service-url "http://127.0.0.1:1964")
+fi
+
 exec "${REPO_ROOT}/openviking/session/train/run_batch_train_eval.sh" \
   --dataset smoke \
   --domain tickets \
@@ -13,5 +26,5 @@ exec "${REPO_ROOT}/openviking/session/train/run_batch_train_eval.sh" \
   --train-trials 1 \
   --concurrency 4 \
   --commit-concurrency 4 \
-  --benchmark-service-url "${BENCHMARK_SERVICE_URL:-http://127.0.0.1:1964}" \
+  "${BENCHMARK_SERVICE_ARG[@]}" \
   "$@"

@@ -124,9 +124,10 @@ class RootCauseGate:
                 reason=reason,
                 followup_message=(
                     "The prior trajectory draft could not be accepted because the root-cause "
-                    "quality was not verified. Rewrite the complete JSON object matching the "
-                    "original schema. Make the ideal experience source-bound, runtime-injectable, "
-                    "narrow, and tied to the earliest material boundary. Output ONLY complete JSON."
+                    "quality was not verified. Re-diagnose the earliest preventable boundary, "
+                    "visible runtime source binding, object/value scope semantics, mutation/read "
+                    "scope separation, injectability, preserve rules, and tempting wrong-scope or "
+                    "over-broad repairs."
                 ),
             )
         return verdict
@@ -181,10 +182,10 @@ def _followup_message(verdict: _RootCauseGateVerdict) -> str:
 def _default_followup_message() -> str:
     return (
         "Your previous trajectory extraction did not identify a sufficient reusable root cause. "
-        "Rewrite the complete JSON object matching the original schema. Focus on the earliest "
-        "material boundary, visible runtime source binding, a directly injectable ideal "
-        "experience, preserve rules, and over-broad/wrong-scope rejects. Output ONLY the "
-        "complete JSON object."
+        "Re-diagnose the earliest preventable boundary, visible runtime source binding, "
+        "object/value scope semantics, mutation/read scope separation, injectability, preserve "
+        "rules, and tempting wrong-scope or over-broad repairs. Do not merely improve wording; "
+        "find the narrow runtime rule that would change the future agent behavior."
     )
 
 

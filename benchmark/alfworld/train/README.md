@@ -30,6 +30,10 @@ bash benchmark/alfworld/train/restart_alfworld_train_eval.sh \
 The launcher restarts OpenViking, starts the ALFWorld rollout service, waits for
 health checks, and then invokes `benchmark/alfworld/train/run_batch_train_eval.sh`.
 Use `--slot N` before train/eval args for isolated ports/config/data/result dirs.
+Slot routing is hermetic: inherited environment variables such as
+`OPENVIKING_PORT`, `OPENVIKING_CONFIG_FILE`, `OPENVIKING_DATA_DIR`,
+`ALFWORLD_SERVICE_PORT`, `RESULT_DIR_NAME`, and `LOG_DIR` do not override the
+slot-derived defaults.
 
 Then run the generic batch pipeline through the wrapper:
 

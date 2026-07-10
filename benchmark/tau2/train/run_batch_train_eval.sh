@@ -10,11 +10,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TAU2_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${TAU2_DIR}/../.." && pwd)"
 
+declare -a BENCHMARK_SERVICE_ARG=()
+HAS_BENCHMARK_SERVICE_URL=0
+for arg in "$@"; do
+  case "${arg}" in
+    --benchmark-service-url|--benchmark-service-url=*)
+      HAS_BENCHMARK_SERVICE_URL=1
+      ;;
+  esac
+done
+if [[ "${HAS_BENCHMARK_SERVICE_URL}" == "0" ]]; then
+  BENCHMARK_SERVICE_ARG=(--benchmark-service-url "http://127.0.0.1:1944")
+fi
+
 exec "${REPO_ROOT}/openviking/session/train/run_batch_train_eval.sh" \
   --dataset tau2 \
   --domain airline \
   --eval-each-epoch \
   --concurrency 200 \
   --commit-concurrency 200 \
-  --benchmark-service-url "${BENCHMARK_SERVICE_URL:-http://127.0.0.1:1944}" \
+  "${BENCHMARK_SERVICE_ARG[@]}" \
   "$@"
