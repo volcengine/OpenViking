@@ -1266,7 +1266,9 @@ class MemoryUpdater:
                 mf = MemoryFileUtils.read(content, uri=uri)
                 from openviking.session.memory.utils.link_renderer import LinkRenderer
 
-                abstract = LinkRenderer.strip_all_links(mf.content or "")
+                # Prefer VLM-generated summary from extra_fields (e.g. events type);
+                # fall back to full content for types without summary field.
+                abstract = mf.extra_fields.get("summary", "") or LinkRenderer.strip_all_links(mf.content or "")
                 abstract = self._truncate_memory_abstract(abstract)
                 embedding_text = abstract
 
