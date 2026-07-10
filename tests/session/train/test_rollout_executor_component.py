@@ -770,6 +770,11 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert "name: experience_loader" in content
     assert "search_experience" in content
     assert "read_experience" in content
+    assert "Situation snippets" in content or "`situation` as a filter only" in content
+    assert "you MUST call `read_experience`" in content
+    assert "current or later task boundary" in content
+    assert "case_name" in content
+    assert "case URI" not in content
     assert fake_sandbox.writes
     assert fake_sandbox.writes[0][0] == "skills/experience_loader/SKILL.md"
     assert context_builder.latest_experience_loader_skill_content == content

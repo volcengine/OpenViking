@@ -1061,7 +1061,10 @@ def _build_system_prompt(
     if loader_mode == "skill":
         instructions.append(
             "Before taking task actions, you MUST use the required `experience_loader` skill. "
-            "It explains how to search OpenViking case memories with the `search_experience` tool, return linked experience URIs, and read selected experiences using the `read_experience` tool."
+            "It explains how to search OpenViking case memories with the `search_experience` "
+            "tool, use Situation snippets only as filters, and read every non-excluded "
+            "experience that may apply to the current task or a later task boundary using "
+            "the `read_experience` tool."
         )
         instructions.append(
             "Loaded experiences are guidance from prior training runs. "
