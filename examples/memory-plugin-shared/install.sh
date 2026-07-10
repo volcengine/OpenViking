@@ -1697,6 +1697,10 @@ copy_agent_integration() { # copy_agent_integration <source-subdir> <dest-name>
   rm -rf "$tmp"
   mkdir -p "$tmp"
   (cd "$source" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$tmp" && tar -xf -)
+  # Preserve the first-install timestamp across managed upgrades. The package
+  # descriptor is copied from source; integration.json records this machine's
+  # installation and must survive replacing the runtime directory.
+  [ -f "$dest/integration.json" ] && cp "$dest/integration.json" "$tmp/integration.json"
   rm -rf "$dest"
   mkdir -p "$(dirname "$dest")"
   mv "$tmp" "$dest"
@@ -1730,10 +1734,10 @@ assemble_agent_integration() { # assemble_agent_integration <source-subdir> <des
 
 agent_write_json_configs() { # agent_write_json_configs <kind> <hooks> <mcp> <root> <client-id> <node-bin>
   local kind="$1" hooks_path="$2" mcp_path="$3" root="$4" client_id="$5" node_bin="$6"
-  "$NODE_BIN" - "$kind" "$hooks_path" "$mcp_path" "$root" "$client_id" "$node_bin" <<'NODE'
+  "$NODE_BIN" - "$kind" "$hooks_path" "$mcp_path" "$root" "$client_id" "$node_bin" "$SOURCE_MODE" <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
-const [kind, hooksPath, mcpPath, root, clientId, nodeBin] = process.argv.slice(2);
+const [kind, hooksPath, mcpPath, root, clientId, nodeBin, sourceMode] = process.argv.slice(2);
 
 function readJson(file) {
   if (!fs.existsSync(file)) return {};
@@ -1766,48 +1770,83 @@ function shellArg(value) {
 
 function isOpenVikingHook(value) {
   const text = JSON.stringify(value || {});
-  return text.includes("openviking") && [
+  return text.includes("OPENVIKING_INTEGRATION_ID") || (text.includes("openviking") && [
     "cursor-hook.mjs",
     "trae-hook.mjs",
     "trae-auto-recall.mjs",
     "trae-auto-capture.mjs",
     "claude-code-memory-plugin/scripts/session-start.mjs",
-  ].some((name) => text.includes(name));
+  ].some((name) => text.includes(name)));
 }
 
+const packageManifest = readJson(path.join(root, "openviking.integration.json"));
+if (packageManifest.id !== "openviking-memory" || !Array.isArray(packageManifest.clients)
+  || !packageManifest.clients.includes(clientId)) {
+  throw new Error(`Invalid OpenViking integration manifest for ${clientId}`);
+}
+const integrationEnv = {
+  OPENVIKING_INTEGRATION_ID: packageManifest.id,
+  OPENVIKING_INTEGRATION_VERSION: packageManifest.version,
+  OPENVIKING_HOOK_SOURCE: clientId,
+};
+const envPrefix = Object.entries(integrationEnv)
+  .map(([key, value]) => `${key}=${shellArg(value)}`)
+  .join(" ");
+
+function renderHookCommand(command) {
+  let rendered = command;
+  const cursorMatch = /^node\s+\$\{CURSOR_PLUGIN_ROOT\}\/(.+)$/u.exec(rendered);
+  if (cursorMatch) {
+    rendered = `${shellArg(nodeBin)} ${shellArg(path.join(root, cursorMatch[1]))}`;
+  } else {
+    const traeMatch = /^node\s+__OPENVIKING_TRAE_ROOT__\/(\S+)\s+(.+)$/u.exec(rendered);
+    if (!traeMatch) throw new Error(`Unsupported ${clientId} hook command template: ${command}`);
+    rendered = `${shellArg(nodeBin)} ${shellArg(path.join(root, traeMatch[1]))} ${traeMatch[2]
+      .replaceAll("__OPENVIKING_CLIENT_ID__", clientId)}`;
+  }
+  return `${envPrefix} ${rendered} # openviking-memory`;
+}
+
+function renderHookValue(value) {
+  if (Array.isArray(value)) return value.map(renderHookValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [
+    key,
+    key === "command" && typeof child === "string" ? renderHookCommand(child) : renderHookValue(child),
+  ]));
+}
+
+const hookTemplate = readJson(path.join(root, "hooks", "hooks.json"));
+if (!hookTemplate.hooks || typeof hookTemplate.hooks !== "object" || Array.isArray(hookTemplate.hooks)) {
+  throw new Error(`Invalid ${clientId} hooks template`);
+}
 const hooksConfig = readJson(hooksPath);
 hooksConfig.version = Number.isFinite(Number(hooksConfig.version)) ? Number(hooksConfig.version) : 1;
 hooksConfig.hooks = hooksConfig.hooks && typeof hooksConfig.hooks === "object" && !Array.isArray(hooksConfig.hooks)
   ? hooksConfig.hooks : {};
 
+for (const [event, entries] of Object.entries(hookTemplate.hooks)) {
+  if (!Array.isArray(entries)) throw new Error(`Invalid ${clientId} hook entries for ${event}`);
+  const current = Array.isArray(hooksConfig.hooks[event]) ? hooksConfig.hooks[event] : [];
+  hooksConfig.hooks[event] = [
+    ...current.filter((item) => !isOpenVikingHook(item)),
+    ...renderHookValue(entries),
+  ];
+}
 if (kind === "cursor") {
-  const timeouts = { sessionStart: 30, beforeSubmitPrompt: 20, stop: 30, preCompact: 30, sessionEnd: 30 };
-  for (const [event, timeout] of Object.entries(timeouts)) {
-    const current = Array.isArray(hooksConfig.hooks[event]) ? hooksConfig.hooks[event] : [];
-    const command = `${shellArg(nodeBin)} ${shellArg(path.join(root, "scripts", "cursor-hook.mjs"))} ${event} # openviking-memory`;
-    hooksConfig.hooks[event] = [...current.filter((item) => !isOpenVikingHook(item)), { command, timeout }];
-  }
   if (Array.isArray(hooksConfig.hooks.postToolUse)) {
     const remaining = hooksConfig.hooks.postToolUse.filter((item) => !isOpenVikingHook(item));
     if (remaining.length) hooksConfig.hooks.postToolUse = remaining;
     else delete hooksConfig.hooks.postToolUse;
   }
-} else {
-  const events = {
-    SessionStart: ["session-start", 30],
-    UserPromptSubmit: ["user-prompt-submit", 20],
-    Stop: ["stop", 30],
-  };
-  for (const [event, [arg, timeout]] of Object.entries(events)) {
-    const current = Array.isArray(hooksConfig.hooks[event]) ? hooksConfig.hooks[event] : [];
-    const command = `${shellArg(nodeBin)} ${shellArg(path.join(root, "scripts", "trae-hook.mjs"))} ${arg} ${clientId} # openviking-memory`;
-    const entry = { hooks: [{ type: "command", command, timeout }] };
-    if (event === "UserPromptSubmit") entry.matcher = "";
-    hooksConfig.hooks[event] = [...current.filter((item) => !isOpenVikingHook(item)), entry];
-  }
 }
 atomicWrite(hooksPath, hooksConfig);
 
+const mcpTemplate = readJson(path.join(root, ".mcp.json"));
+const templateServer = mcpTemplate.mcpServers?.openviking;
+if (!templateServer || typeof templateServer !== "object" || Array.isArray(templateServer)) {
+  throw new Error(`Invalid ${clientId} MCP template`);
+}
 const mcp = readJson(mcpPath);
 mcp.mcpServers = mcp.mcpServers && typeof mcp.mcpServers === "object" && !Array.isArray(mcp.mcpServers)
   ? mcp.mcpServers : {};
@@ -1815,12 +1854,34 @@ mcp.mcpServers = mcp.mcpServers && typeof mcp.mcpServers === "object" && !Array.
 // key itself is the OpenViking marker; leave every other MCP server untouched.
 delete mcp.mcpServers["ov-mcp-server"];
 const server = {
+  ...templateServer,
   command: nodeBin,
   args: [path.join(root, "servers", "mcp-proxy.mjs")],
+  env: { ...(templateServer.env || {}), ...integrationEnv },
 };
-if (kind === "trae") server.env = { OPENVIKING_HOOK_SOURCE: clientId };
 mcp.mcpServers.openviking = server;
 atomicWrite(mcpPath, mcp);
+
+const installedManifestPath = path.join(root, "integration.json");
+const previousManifest = readJson(installedManifestPath);
+const now = new Date().toISOString();
+const unchangedInstall = previousManifest.version === packageManifest.version
+  && previousManifest.source === sourceMode
+  && previousManifest.hooksConfig === hooksPath
+  && previousManifest.mcpConfig === mcpPath;
+atomicWrite(installedManifestPath, {
+  schemaVersion: 1,
+  id: packageManifest.id,
+  version: packageManifest.version,
+  client: clientId,
+  installMode: "managed-native",
+  source: sourceMode,
+  capabilities: packageManifest.capabilities,
+  hooksConfig: hooksPath,
+  mcpConfig: mcpPath,
+  installedAt: previousManifest.installedAt || now,
+  updatedAt: unchangedInstall ? previousManifest.updatedAt || previousManifest.installedAt || now : now,
+});
 NODE
 }
 
@@ -2465,8 +2526,11 @@ EOF
   fi
   if contains_harness cursor; then
     if grep -q 'cursor-hook.mjs' "$HOME/.cursor/hooks.json" 2>/dev/null \
+      && grep -q 'OPENVIKING_INTEGRATION_ID' "$HOME/.cursor/hooks.json" 2>/dev/null \
       && grep -q 'mcp-proxy.mjs' "$HOME/.cursor/mcp.json" 2>/dev/null \
       && [ -f "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/cursor/.cursor-plugin/plugin.json" ] \
+      && [ -f "$OV_HOME/agent-integrations/cursor/integration.json" ] \
       && [ -f "$HOME/.cursor/rules/openviking-memory.mdc" ] \
       && [ -f "$HOME/.cursor/skills/openviking-memory/SKILL.md" ]; then
       "$NODE_BIN" --check "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" || ok=0
@@ -2487,8 +2551,10 @@ EOF
     local trae_mcp
     trae_mcp="$(trae_mcp_path trae)"
     if grep -q 'trae-hook.mjs' "$HOME/.trae/hooks.json" 2>/dev/null \
+      && grep -q 'OPENVIKING_INTEGRATION_ID' "$HOME/.trae/hooks.json" 2>/dev/null \
       && grep -q 'mcp-proxy.mjs' "$trae_mcp" 2>/dev/null \
-      && [ -f "$OV_HOME/agent-integrations/trae/scripts/trae-hook.mjs" ]; then
+      && [ -f "$OV_HOME/agent-integrations/trae/scripts/trae-hook.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/trae/integration.json" ]; then
       "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae/scripts/trae-hook.mjs" || ok=0
       if ! printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
         "$NODE_BIN" "$OV_HOME/agent-integrations/trae/scripts/trae-hook.mjs" session-start trae >/dev/null; then
@@ -2505,8 +2571,10 @@ EOF
     local trae_cn_mcp
     trae_cn_mcp="$(trae_mcp_path trae-cn)"
     if grep -q 'trae-hook.mjs' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
+      && grep -q 'OPENVIKING_INTEGRATION_ID' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
       && grep -q 'mcp-proxy.mjs' "$trae_cn_mcp" 2>/dev/null \
-      && [ -f "$OV_HOME/agent-integrations/trae-cn/scripts/trae-hook.mjs" ]; then
+      && [ -f "$OV_HOME/agent-integrations/trae-cn/scripts/trae-hook.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/trae-cn/integration.json" ]; then
       "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae-cn/scripts/trae-hook.mjs" || ok=0
       if ! printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
         "$NODE_BIN" "$OV_HOME/agent-integrations/trae-cn/scripts/trae-hook.mjs" session-start trae-cn >/dev/null; then

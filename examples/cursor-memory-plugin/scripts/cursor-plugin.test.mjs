@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -32,6 +32,10 @@ function runHook(event, input, env) {
 
 test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP entrypoints", () => {
   for (const file of [
+    ".cursor-plugin/plugin.json",
+    "hooks/hooks.json",
+    ".mcp.json",
+    "openviking.integration.json",
     "scripts/cursor-hook.mjs",
     "scripts/cursor-transcript.mjs",
     "servers/mcp-proxy.mjs",
@@ -40,6 +44,12 @@ test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP e
   ]) {
     assert.ok(existsSync(join(pluginRoot, file)), `${file} must exist`);
   }
+  const plugin = JSON.parse(readFileSync(join(pluginRoot, ".cursor-plugin", "plugin.json"), "utf8"));
+  const integration = JSON.parse(readFileSync(join(pluginRoot, "openviking.integration.json"), "utf8"));
+  const hooks = JSON.parse(readFileSync(join(pluginRoot, "hooks", "hooks.json"), "utf8"));
+  assert.equal(plugin.name, integration.id);
+  assert.equal(plugin.version, integration.version);
+  assert.deepEqual(Object.keys(hooks.hooks), ["sessionStart", "beforeSubmitPrompt", "stop", "preCompact", "sessionEnd"]);
 });
 
 test("Cursor transcript parser keeps only user and assistant text", () => {

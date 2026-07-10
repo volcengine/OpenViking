@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,16 @@ import test from "node:test";
 import { buildTraeTurns, cleanTraeText } from "./trae-turns.mjs";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+test("TRAE integration contains native Hook and MCP declarations", () => {
+  for (const file of ["hooks/hooks.json", ".mcp.json", "openviking.integration.json"]) {
+    assert.ok(existsSync(join(pluginRoot, file)), `${file} must exist`);
+  }
+  const integration = JSON.parse(readFileSync(join(pluginRoot, "openviking.integration.json"), "utf8"));
+  const hooks = JSON.parse(readFileSync(join(pluginRoot, "hooks", "hooks.json"), "utf8"));
+  assert.deepEqual(integration.clients, ["trae", "trae-cn"]);
+  assert.deepEqual(Object.keys(hooks.hooks), ["SessionStart", "UserPromptSubmit", "Stop"]);
+});
 
 function runHook(event, client, input, env) {
   return new Promise((resolveRun, reject) => {

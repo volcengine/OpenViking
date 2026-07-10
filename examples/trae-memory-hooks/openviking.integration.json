@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "id": "openviking-memory",
+  "version": "0.1.0",
+  "clients": ["trae", "trae-cn"],
+  "capabilities": ["hooks", "mcp"]
+}

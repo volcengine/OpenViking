@@ -67,12 +67,18 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     } });
 
     runInstall(home);
+    const firstInstallTimes = Object.fromEntries(["cursor", "trae", "trae-cn"].map((client) => {
+      const manifest = JSON.parse(readFileSync(join(home, ".openviking", "agent-integrations", client, "integration.json"), "utf8"));
+      return [client, { installedAt: manifest.installedAt, updatedAt: manifest.updatedAt }];
+    }));
     runInstall(home);
 
     const cursor = JSON.parse(readFileSync(cursorHooks, "utf8"));
     assert.equal(cursor.hooks.stop.filter((entry) => entry.command.includes("cursor-hook.mjs")).length, 1);
     assert.ok(cursor.hooks.stop.some((entry) => entry.command === "third-party stop"));
     assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes(installedNode)));
+    assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes("OPENVIKING_INTEGRATION_ID='openviking-memory'")));
+    assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes("OPENVIKING_HOOK_SOURCE='cursor'")));
     assert.equal(Boolean(cursor.hooks.postToolUse), false);
 
     for (const [file, label] of [[traeHooks, "trae"], [traeCnHooks, "trae-cn"]]) {
@@ -80,15 +86,30 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
       assert.equal(config.hooks.Stop.filter((entry) => JSON.stringify(entry).includes("trae-hook.mjs")).length, 1, label);
       assert.ok(config.hooks.Stop.some((entry) => JSON.stringify(entry).includes(`third-party ${label}`)), label);
       assert.equal(config.hooks.Stop.some((entry) => JSON.stringify(entry).includes("trae-auto-capture.mjs")), false, label);
+      assert.ok(config.hooks.Stop.some((entry) => JSON.stringify(entry).includes(`OPENVIKING_HOOK_SOURCE='${label}'`)), label);
     }
 
     const cursorMcp = JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")).mcpServers.openviking;
     assert.equal(cursorMcp.command, installedNode);
+    assert.equal(cursorMcp.env.OPENVIKING_INTEGRATION_ID, "openviking-memory");
+    assert.equal(cursorMcp.env.OPENVIKING_HOOK_SOURCE, "cursor");
     assert.match(readFileSync(join(home, ".cursor", "rules", "openviking-memory.mdc"), "utf8"), /OpenViking/);
     assert.match(readFileSync(join(home, ".cursor", "skills", "openviking-memory", "SKILL.md"), "utf8"), /OpenViking Memory/);
     const shared = join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib");
     assert.ok(existsSync(join(shared, "agent-hook-runtime.mjs")));
     assert.ok(existsSync(join(shared, "mcp-proxy-core.mjs")));
+    for (const client of ["cursor", "trae", "trae-cn"]) {
+      const manifest = JSON.parse(readFileSync(join(home, ".openviking", "agent-integrations", client, "integration.json"), "utf8"));
+      assert.equal(manifest.id, "openviking-memory");
+      assert.equal(manifest.client, client);
+      assert.equal(manifest.installMode, "managed-native");
+      assert.equal(manifest.source, "dev");
+      assert.deepEqual(
+        { installedAt: manifest.installedAt, updatedAt: manifest.updatedAt },
+        firstInstallTimes[client],
+        `${client} manifest must be idempotent`,
+      );
+    }
     for (const [client, args] of [
       ["cursor", ["sessionStart"]],
       ["trae", ["session-start", "trae"]],
@@ -107,8 +128,10 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
       ? join(home, "Library", "Application Support", "Trae", "User", "mcp.json")
       : join(home, ".trae", "mcp.json");
     assert.ok(JSON.parse(readFileSync(traeMcp, "utf8")).mcpServers.openviking);
+    assert.equal(JSON.parse(readFileSync(traeMcp, "utf8")).mcpServers.openviking.env.OPENVIKING_HOOK_SOURCE, "trae");
     const traeCnServers = JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers;
     assert.ok(traeCnServers.openviking);
+    assert.equal(traeCnServers.openviking.env.OPENVIKING_HOOK_SOURCE, "trae-cn");
     assert.ok(traeCnServers["third-party"]);
     assert.equal(Boolean(traeCnServers["ov-mcp-server"]), false);
 
