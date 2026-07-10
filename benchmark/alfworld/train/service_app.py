@@ -24,13 +24,22 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from benchmark.alfworld.train.case_loader import AlfworldCaseLoader, TASKS
-from benchmark.alfworld.train.rollout_executor import AlfworldRolloutExecutor
+from benchmark.alfworld.train.rollout_executor import (
+    DEFAULT_ALFWORLD_EXPERIENCE_LOADER_MODE,
+    DEFAULT_ALFWORLD_ROLLOUT_BACKEND,
+    make_alfworld_rollout_executor,
+    normalize_alfworld_experience_loader_mode,
+    normalize_alfworld_rollout_backend,
+)
 from openviking.session.train.components.dataset_service import create_dataset_service_app
 
 
 def create_app(
     *,
     data_root: str | None = None,
+    config_path: str | None = None,
+    rollout_backend: str | None = None,
+    loader_mode: str | None = None,
     max_rollout_concurrency: int | None = None,
     rollout_thread_workers: int | None = None,
     default_case_count: int = 1,
@@ -39,6 +48,14 @@ def create_app(
         raise ValueError("default_case_count must be > 0")
     if data_root:
         os.environ["ALFWORLD_DATA"] = str(Path(data_root).expanduser())
+    default_backend = normalize_alfworld_rollout_backend(
+        rollout_backend or os.getenv("ALFWORLD_ROLLOUT_BACKEND") or DEFAULT_ALFWORLD_ROLLOUT_BACKEND
+    )
+    default_loader_mode = normalize_alfworld_experience_loader_mode(
+        loader_mode
+        or os.getenv("ALFWORLD_EXPERIENCE_LOADER_MODE")
+        or DEFAULT_ALFWORLD_EXPERIENCE_LOADER_MODE
+    )
 
     def make_case_loader(
         dataset: str,
@@ -64,17 +81,20 @@ def create_app(
             metadata=dict(filters or {}),
         )
 
-    def make_rollout_executor(options: dict[str, Any]) -> AlfworldRolloutExecutor:
-        return AlfworldRolloutExecutor(
-            max_steps=int(options.get("max_steps") or options.get("max_iterations") or 50),
-            max_api_workers=int(options.get("max_api_workers") or 8),
-            max_completion_tokens=int(options.get("max_completion_tokens") or 16384),
-            seed=int(options.get("seed") or 42),
-            eval_dataset=_optional_str(options.get("eval_dataset")),
-            is_train=_optional_bool(options.get("is_train")),
-            concurrency=int(options.get("env_concurrency") or 1),
-            show_progress=_bool_option(options.get("show_progress"), default=False),
-            progress_label=str(options.get("progress_label") or "alfworld"),
+    def make_rollout_executor(options: dict[str, Any]):
+        backend = normalize_alfworld_rollout_backend(
+            options.get("rollout_backend") or options.get("backend") or default_backend
+        )
+        rollout_options = {
+            **options,
+            "config_path": options.get("config_path") or config_path,
+            "loader_mode": options.get("loader_mode") or default_loader_mode,
+            "show_progress": options.get("show_progress", False),
+            "progress_label": options.get("progress_label") or "alfworld",
+        }
+        return make_alfworld_rollout_executor(
+            backend=backend,
+            options=rollout_options,
         )
 
     return create_dataset_service_app(
@@ -144,6 +164,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1954)
     parser.add_argument("--data-root", default=os.getenv("ALFWORLD_DATA"))
+    parser.add_argument("--config", default=os.getenv("OPENVIKING_CONFIG_FILE"))
+    parser.add_argument(
+        "--rollout-backend",
+        choices=["direct", "vikingbot"],
+        default=os.getenv("ALFWORLD_ROLLOUT_BACKEND", DEFAULT_ALFWORLD_ROLLOUT_BACKEND),
+        help="Rollout implementation backend (default: direct).",
+    )
+    parser.add_argument(
+        "--loader-mode",
+        choices=["skill", "constraint", "direct_experience"],
+        default=os.getenv(
+            "ALFWORLD_EXPERIENCE_LOADER_MODE",
+            DEFAULT_ALFWORLD_EXPERIENCE_LOADER_MODE,
+        ),
+        help="Experience loading mode for VikingBot rollouts (default: skill).",
+    )
     parser.add_argument(
         "--default-case-count",
         type=int,
@@ -210,6 +246,9 @@ def main() -> None:
         return
     app = create_app(
         data_root=args.data_root,
+        config_path=args.config,
+        rollout_backend=args.rollout_backend,
+        loader_mode=args.loader_mode,
         max_rollout_concurrency=args.max_rollout_concurrency,
         rollout_thread_workers=(
             None if args.rollout_thread_workers == 0 else args.rollout_thread_workers

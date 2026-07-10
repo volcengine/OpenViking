@@ -13,6 +13,26 @@ export ALFWORLD_REPO=~/workspace/alfworld  # optional; run_service adds this by 
 bash benchmark/alfworld/train/run_service.sh --host 127.0.0.1 --port 1954
 ```
 
+Rollout backends:
+
+- `direct` (default): service calls the configured VLM directly with
+  observation/admissible-command prompts.
+- `vikingbot`: ALFWorld is exposed to VikingBot as tools (`alfworld_step`,
+  `done`) and can use the Tau2-style `experience_loader` skill with
+  `search_experience` / `read_experience`.
+
+Example VikingBot backend:
+
+```bash
+ALFWORLD_ROLLOUT_BACKEND=vikingbot \
+ALFWORLD_EXPERIENCE_LOADER_MODE=skill \
+bash benchmark/alfworld/train/run_service.sh \
+  --host 127.0.0.1 \
+  --port 1954 \
+  --rollout-backend vikingbot \
+  --loader-mode skill
+```
+
 
 ## One-click restart launcher
 
@@ -24,6 +44,21 @@ export ALFWORLD_REPO=~/workspace/alfworld  # optional; run_service adds this by 
 bash benchmark/alfworld/train/restart_alfworld_train_eval.sh \
   --epochs 1 \
   --eval-split test \
+  --max-iterations 50
+```
+
+To run the one-click flow with the VikingBot backend:
+
+```bash
+ALFWORLD_ROLLOUT_BACKEND=vikingbot \
+ALFWORLD_EXPERIENCE_LOADER_MODE=skill \
+bash benchmark/alfworld/train/restart_alfworld_train_eval.sh \
+  --epochs 1 \
+  --train-index 0 \
+  --eval-index 0 \
+  --trials 1 \
+  --train-trials 1 \
+  --concurrency 2 \
   --max-iterations 50
 ```
 

@@ -9,7 +9,6 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -49,7 +48,9 @@ def normalize_alfworld_rollout_backend(value: Any) -> AlfworldRolloutBackend:
 def normalize_alfworld_experience_loader_mode(value: Any) -> AlfworldExperienceLoaderMode:
     mode = str(value or DEFAULT_ALFWORLD_EXPERIENCE_LOADER_MODE).strip().lower()
     if mode not in {"skill", "constraint", "direct_experience"}:
-        raise ValueError("ALFWorld loader_mode must be 'skill', 'constraint', or 'direct_experience'")
+        raise ValueError(
+            "ALFWorld loader_mode must be 'skill', 'constraint', or 'direct_experience'"
+        )
     return mode  # type: ignore[return-value]
 
 
@@ -901,8 +902,11 @@ def _configure_alfworld_vikingbot_tools(
     keep_default_tools: bool,
     loader_mode: AlfworldExperienceLoaderMode,
 ) -> None:
-    del keep_default_tools
     for tool_name in list(agent.tools.tool_names):
+        if keep_default_tools and not str(tool_name).startswith("openviking_"):
+            continue
+        if loader_mode == "skill" and tool_name == "read_file":
+            continue
         agent.tools.unregister(tool_name)
     if loader_mode == "skill":
         from benchmark.tau2.train.rollout_executor_vikingbot import (
@@ -964,9 +968,7 @@ def _make_alfworld_done_tool(controller: _AlfworldToolController):
         def parameters(self) -> dict[str, Any]:
             return {
                 "type": "object",
-                "properties": {
-                    "reason": {"type": "string", "description": "Short stop reason."}
-                },
+                "properties": {"reason": {"type": "string", "description": "Short stop reason."}},
             }
 
         async def execute(self, tool_context: Any, reason: str = "", **kwargs: Any) -> str:
@@ -986,7 +988,17 @@ async def _run_alfworld_vikingbot_agent(
     direct_experience_content: str | None = None,
     direct_experience_name: str | None = None,
     direct_experience_uri: str | None = None,
-) -> tuple[Any, Any, list[dict[str, Any]], Any, Any, str | None, str | None, str | None, list[dict[str, Any]]]:
+) -> tuple[
+    Any,
+    Any,
+    list[dict[str, Any]],
+    Any,
+    Any,
+    str | None,
+    str | None,
+    str | None,
+    list[dict[str, Any]],
+]:
     from benchmark.tau2.train.rollout_executor_vikingbot import (
         _build_direct_experience_reminder,
         _case_memory_context_from_tools,
@@ -1106,12 +1118,16 @@ def _build_vikingbot_rollout_messages(
             messages.append(msg)
     if final_content and str(final_content).strip():
         final_text = str(final_content)
-        if not any(message.role == "assistant" and message.content == final_text for message in messages):
-            messages.append(Message(
-                id="alfworld-vikingbot-final",
-                role="assistant",
-                parts=[TextPart(text=final_text)],
-            ))
+        if not any(
+            message.role == "assistant" and message.content == final_text for message in messages
+        ):
+            messages.append(
+                Message(
+                    id="alfworld-vikingbot-final",
+                    role="assistant",
+                    parts=[TextPart(text=final_text)],
+                )
+            )
     return messages
 
 
@@ -1324,3 +1340,34 @@ def _progress_stage_label(stage: Any, *, default: str) -> str:
     if stage_name.endswith("_rollout_start"):
         return stage_name
     return default
+
+
+def _bool_option(value: Any, *, default: bool) -> bool:
+    parsed = _optional_bool(value)
+    return default if parsed is None else parsed
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(f"Invalid boolean option: {value!r}")
+    return bool(value)
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text.strip() else None
+
+
+def _safe_session_fragment(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "_.-" else "_" for ch in value)[:80] or "rollout"

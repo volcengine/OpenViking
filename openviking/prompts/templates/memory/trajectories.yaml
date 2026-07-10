@@ -1,13 +1,14 @@
 memory_type: trajectories
 description: |
   Extract a compact SkillOpt-style trajectory analysis whose primary purpose is to propose
-  one bounded, reusable runtime experience candidate for future reminders.
+  the minimum reusable runtime experience that would make the next similar session succeed.
 
-  This is not a verbose audit log. Prefer one causal lesson that is source-bound, actionable at
-  runtime, and safe to inject as an experience. Follow SkillOpt's analyst discipline: identify
-  the systematic failure/success pattern, keep the lesson generalizable, do not hardcode case
-  literals, do not duplicate existing coverage, and output no candidate when no bounded runtime
-  patch is warranted.
+  This is not a verbose audit log. Treat each candidate as a counterfactual prevention
+  hypothesis: if injected before the first preventable wrong decision, it should change the
+  agent's behavior enough to avoid the failure while preserving correct behavior. Prefer one
+  causal lesson that is source-bound, runtime-actionable, generalizable, and safe to inject.
+  Do not hardcode case literals, do not duplicate existing coverage, and output no candidate
+  when no bounded runtime patch would prevent recurrence.
 
 embedding_template: |-
   {{ trajectory_name }}
@@ -79,27 +80,31 @@ fields:
       You are an expert SkillOpt-style failure-analysis agent for AI agent tasks.
 
       You will be given ONE agent trajectory, the task outcome, and any injected experience
-      reminders. Your job is to identify the most important reusable behavior pattern in this
-      trajectory and propose a concise bounded "experience patch" for future runs.
+      reminders. Your job is to identify the minimum reusable experience that would make the
+      next similar session succeed if it were injected before the first preventable wrong
+      decision.
 
       ## Analysis Process
       1. Read the whole trajectory before writing.
       2. Decide whether the trajectory is a failure, partial failure, unfinished run, success, or
          unknown.
-      3. For failures, locate the earliest material boundary that changed the final outcome:
-         a tool call, missing tool call, confirmation point, calculation, policy branch, write
-         action, final response, or handoff.
-      4. Classify the failure type and write a one-line reusable pattern.
+      3. For failures, locate the first preventable wrong decision: the earliest boundary where
+         a reminder could have changed a tool call, missing tool call, confirmation, calculation,
+         policy branch, write action, communication, final response, or handoff.
+      4. Diagnose the mistaken runtime rule the agent used at that boundary: wrong scope,
+         object binding, policy branch, calculation, confirmation assumption, ordering, or
+         communication obligation. Do not stop at the symptom.
       5. Propose at most ONE candidate repair: `Candidate C1`.
-      6. The candidate must be generalizable, source-bound, runtime-actionable, and safe to inject
-         before a future boundary. Do not hardcode task-specific values.
+      6. Candidate C1 must be a counterfactual prevention experience: it must trigger from
+         visible runtime facts before the wrong decision, replace the mistaken rule, state what
+         future behavior changes, and explain why the next similar session would succeed.
       7. Do not learn a full workflow. Patch only the missing rule/check/communication that would
-         change the earliest material boundary.
+         change the first preventable wrong decision.
       8. Do not duplicate existing experience reminders. If an injected reminder was helpful,
          weak, or misleading, reflect that in the `experience_effects` field and choose
          validate/update/none accordingly.
-      9. If no bounded reusable candidate is warranted, set `Selected candidate: none` and
-         `Recommended operation: skip`.
+      9. If no bounded reusable candidate would actually prevent recurrence, set
+         `Selected candidate: none` and `Recommended operation: skip`.
 
       ## Output Format
       Output exactly ONE markdown record with the labels below. Do not add extra top-level sections.
@@ -124,12 +129,12 @@ fields:
         - Tool: <one raw tool name, communicate_with_user, or none>
         - Error type: <missing_expected_tool|missing_communication|wrong_arguments|wrong_object|wrong_policy_branch|premature_write|extra_write|premature_done|tool_error|none>
         - Candidate shape: <generalized risky candidate_tool_args/content shape, or none>
-        - Missing check: <single missing runtime fact, policy gate, object binding, calculation, confirmation, or communication, or none>
-        - Expected behavior: <what should have happened at that boundary>
+        - Missing check: <mistaken runtime rule or single missing runtime fact/policy gate/object binding/calculation/confirmation/communication, or none>
+        - Expected behavior: <what should have changed at that boundary so the session would succeed>
       - Counterfactual Ideal Experience:
         - Candidate C1:
           - Situation: <visible runtime condition where the reminder should fire, or none>
-          - Repair rule: <minimal source-bound rule that would change the boundary, or none>
+          - Repair rule: <minimal source-bound rule that replaces the mistaken runtime rule, or none>
           - Experience name: <lower_snake_case or concise name, or none>
           - Injection boundary: <opening|after_read|before_confirmation|before_write|after_write|final_response|none>
           - Runtime experience content:
@@ -145,7 +150,7 @@ fields:
           - Applicability: <exact runtime shape where C1 applies>
           - Anti-pattern: <tempting broad or wrong-scope lesson not to learn>
           - Preserve: <specific correct behavior this experience must preserve>
-          - Why this would help: <one sentence, runtime-causal>
+          - Why this would help: <trigger -> changed future behavior -> why the next similar session succeeds>
         - Selected candidate: <C1|none>
       - Experience Repair Signal:
         - Recommended operation: <create|update|validate|skip>
@@ -164,7 +169,8 @@ fields:
       ## Runtime Experience Content
       When `Selected candidate: C1` and the recommended operation is create/update/validate,
       `Runtime experience content` must be a directly injectable production reminder, not an
-      explanation. Use this shape:
+      explanation or case audit. It should tell the future agent what mistaken decision to avoid
+      and what runtime check/rule would make the next similar session succeed. Use this shape:
 
       # <experience_name>
 
@@ -175,15 +181,15 @@ fields:
       2. <actionable rule bound to visible runtime facts>
       ...
 
-      目标是避免 <closest tempting wrong behavior>。
+      目标是避免 <closest tempting wrong behavior>，从而在相似场景中完成用户目标。
 
       If {{ language }} is English, write the same structure in English. If no candidate is
       selected, write `Runtime experience content: none`.
 
       ## Selection Rules
       - Failure-driven candidates take priority. For failure/partial/unfinished trajectories,
-        choose create or update when a narrow runtime reminder could have prevented the earliest
-        material failure.
+        choose create or update only when a narrow runtime reminder would likely have prevented
+        the first preventable wrong decision and made the next similar session succeed.
       - Success-driven candidates are conservative. For success trajectories, choose validate only
         when the trajectory demonstrates a reusable strategy not already covered; otherwise skip.
       - Candidate C1 must not include task IDs, exact dates, exact amounts, raw entity names, hidden
@@ -192,6 +198,10 @@ fields:
       - Avoid vague lessons such as "check all requirements" or "include all required information".
         Bind each rule to user wording, confirmation, object membership, selected tool output,
         source field, calculation, policy gate, payment/source field, or communication obligation.
+      - For scope, aggregate, list, summary, or value failures, diagnose the implicit scope/value
+        decision the agent made, what runtime evidence did or did not justify it, and what earlier
+        reminder would change that decision. Do not force a preferred scope shape; extract the
+        causal rule that would prevent the observed failure.
       - Preserve correct near-miss behavior. If the same tool had both correct and wrong calls,
         Candidate C1 must name the discriminator that makes the wrong call different.
 

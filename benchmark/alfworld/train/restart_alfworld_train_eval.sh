@@ -125,6 +125,8 @@ ALFWORLD_SERVICE_PORT="${DEFAULT_ALFWORLD_SERVICE_PORT}"
 ALFWORLD_MAX_ROLLOUT_CONCURRENCY="32"
 ALFWORLD_ROLLOUT_THREAD_WORKERS="${ALFWORLD_MAX_ROLLOUT_CONCURRENCY}"
 ALFWORLD_NATIVE_THREAD_WORKERS="32"
+ALFWORLD_ROLLOUT_BACKEND="${ALFWORLD_ROLLOUT_BACKEND:-direct}"
+ALFWORLD_EXPERIENCE_LOADER_MODE="${ALFWORLD_EXPERIENCE_LOADER_MODE:-skill}"
 WAIT_TIMEOUT_SECONDS="180"
 RESULT_DIR_NAME="${DEFAULT_RESULT_DIR_NAME}"
 LOG_DIR="${DEFAULT_LOG_DIR}"
@@ -349,7 +351,7 @@ start_openviking_server() {
 
 start_alfworld_service() {
   log "restarting ALFWorld service on ${ALFWORLD_SERVICE_HOST}:${ALFWORLD_SERVICE_PORT}"
-  log "ALFWorld service concurrency=${ALFWORLD_MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${ALFWORLD_ROLLOUT_THREAD_WORKERS}"
+  log "ALFWorld service backend=${ALFWORLD_ROLLOUT_BACKEND} loader_mode=${ALFWORLD_EXPERIENCE_LOADER_MODE} concurrency=${ALFWORLD_MAX_ROLLOUT_CONCURRENCY} rollout_thread_workers=${ALFWORLD_ROLLOUT_THREAD_WORKERS}"
   log "ALFWorld data root: ${ALFWORLD_DATA:-<unset>}"
   log "ALFWorld service log: ${ALFWORLD_SERVICE_LOG}"
   : > "${ALFWORLD_SERVICE_LOG}"
@@ -366,6 +368,9 @@ start_alfworld_service() {
       --host "${ALFWORLD_SERVICE_HOST}" \
       --port "${ALFWORLD_SERVICE_PORT}" \
       --data-root "${ALFWORLD_DATA:-}" \
+      --config "${OPENVIKING_CONFIG_FILE}" \
+      --rollout-backend "${ALFWORLD_ROLLOUT_BACKEND}" \
+      --loader-mode "${ALFWORLD_EXPERIENCE_LOADER_MODE}" \
       --native-thread-workers "${ALFWORLD_NATIVE_THREAD_WORKERS}" \
       --max-rollout-concurrency "${ALFWORLD_MAX_ROLLOUT_CONCURRENCY}" \
       --rollout-thread-workers "${ALFWORLD_ROLLOUT_THREAD_WORKERS}"

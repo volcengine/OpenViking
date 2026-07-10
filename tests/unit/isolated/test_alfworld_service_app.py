@@ -70,12 +70,17 @@ def test_alfworld_service_wires_generic_dataset_service(monkeypatch):
         {"task_indices": [1], "case_count": 4},
     )
     executor = app["make_rollout_executor"]({"max_iterations": 7, "show_progress": True})
+    vikingbot_executor = app["make_rollout_executor"](
+        {"rollout_backend": "vikingbot", "loader_mode": "skill", "max_iterations": 9}
+    )
 
     assert captured["service_name"] == "alfworld"
     assert loader.task_indices == [1]
     assert loader.case_count == 4
     assert executor.max_steps == 7
     assert executor.show_progress is True
+    assert vikingbot_executor.max_steps == 9
+    assert vikingbot_executor.loader_mode == "skill"
 
 
 def test_alfworld_explicit_gamefiles_do_not_collect_whole_split():
