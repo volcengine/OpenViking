@@ -3,6 +3,7 @@
 """Tests for LockManager."""
 
 import asyncio
+import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -113,6 +114,31 @@ class TestLockManagerBasic:
             await lm._recover_pending_redo()
 
         lm._redo_log.mark_done_async.assert_not_awaited()
+
+    async def test_recover_pending_redo_writes_terminal_archive_marker(self, lm, monkeypatch):
+        info = {
+            "archive_uri": "viking://user/alice/sessions/demo/history/archive_001",
+            "session_uri": "viking://user/alice/sessions/demo",
+            "account_id": "acme",
+            "user_id": "alice",
+            "role": "admin",
+        }
+        lm._redo_log = MagicMock()
+        lm._redo_log.list_pending_async = AsyncMock(return_value=["redo-task"])
+        lm._redo_log.read_async = AsyncMock(return_value=info)
+        lm._redo_log.mark_done_async = AsyncMock()
+        lm._redo_session_memory = AsyncMock()
+        viking_fs = MagicMock()
+        viking_fs.write_file = AsyncMock()
+        monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: viking_fs)
+
+        await lm._recover_pending_redo()
+
+        viking_fs.write_file.assert_awaited_once()
+        marker = viking_fs.write_file.await_args.kwargs
+        assert marker["uri"] == f"{info['archive_uri']}/.failed.json"
+        assert json.loads(marker["content"])["stage"] == "redo_recovery"
+        lm._redo_log.mark_done_async.assert_awaited_once_with("redo-task")
 
     async def test_start_skips_redo_recovery_when_disabled(self, client):
         lm_disabled = LockManager(

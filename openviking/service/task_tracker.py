@@ -152,6 +152,7 @@ class TaskTracker:
 
     def __init__(self, store: TaskStore) -> None:
         self._store = store
+        self._started_at = time.time()
         self._tasks: Dict[str, TaskRecord] = {}
         self._lock = threading.Lock()
         self._async_lock = asyncio.Lock()
@@ -494,15 +495,29 @@ class TaskTracker:
         payload = await self._store.get(task_id, account_id=account_id, user_id=user_id)
         if payload is None:
             return None
-        return self._record_from_payload(payload)
+        return await self._reconcile_loaded_task(self._record_from_payload(payload))
 
     async def _load_all_from_store(
         self, account_id: str, user_id: Optional[str]
     ) -> List[TaskRecord]:
-        return [
-            self._record_from_payload(payload)
-            for payload in await self._store.list(account_id, user_id=user_id)
-        ]
+        tasks = []
+        for payload in await self._store.list(account_id, user_id=user_id):
+            tasks.append(await self._reconcile_loaded_task(self._record_from_payload(payload)))
+        return tasks
+
+    async def _reconcile_loaded_task(self, task: TaskRecord) -> TaskRecord:
+        # ponytail: Reconcile lazily until TaskStore supports owner enumeration for a startup scan.
+        if (
+            task.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
+            and task.updated_at < self._started_at
+        ):
+            task.status = TaskStatus.FAILED
+            task.stage = "failed"
+            task.error = "Task interrupted by server restart"
+            task.updated_at = time.time()
+            await self._store.update(task)
+            logger.warning("[TaskTracker] Reconciled interrupted task %s", task.task_id)
+        return task
 
     @staticmethod
     def _copy(task: TaskRecord) -> TaskRecord:

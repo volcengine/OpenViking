@@ -477,7 +477,7 @@ async def test_persistent_store_keeps_tasktracker_tasks_dict():
     assert task.task_id in tracker._tasks
 
 
-async def test_persistent_store_survives_tracker_reset():
+async def test_persistent_store_fails_active_task_after_tracker_reset():
     agfs = _FakeAgfs()
     tracker1 = TaskTracker(store=PersistentTaskStore(agfs))
     task = await tracker1.create("session_commit", resource_id="sess-123", **_owner_kwargs())
@@ -487,7 +487,13 @@ async def test_persistent_store_survives_tracker_reset():
     loaded = await tracker2.get(task.task_id, account_id="acme", user_id="alice")
 
     assert loaded is not None
-    assert loaded.status == TaskStatus.RUNNING
+    assert loaded.status == TaskStatus.FAILED
+    assert loaded.stage == "failed"
+    assert loaded.error == "Task interrupted by server restart"
+    persisted = json.loads(
+        agfs.files[f"/local/acme/_system/tasks/alice/{task.task_id}.json"].decode("utf-8")
+    )
+    assert persisted["status"] == "failed"
 
 
 async def test_persistent_store_ignores_existing_task_dirs():

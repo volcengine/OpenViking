@@ -449,10 +449,52 @@ class LockManager:
             try:
                 info = await self._redo_log.read_async(task_id)
                 if info:
-                    await self._redo_session_memory(info)
+                    try:
+                        await self._redo_session_memory(info)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        await self._write_redo_terminal_marker(
+                            info,
+                            "Redo recovery failed after server restart",
+                        )
+                        raise
+                    await self._write_redo_terminal_marker(
+                        info,
+                        "Task interrupted by server restart; redo recovery completed",
+                    )
                 await self._redo_log.mark_done_async(task_id)
             except Exception as e:
                 logger.error(f"Redo recovery failed for {task_id}: {e}", exc_info=True)
+
+    async def _write_redo_terminal_marker(self, info: Dict[str, Any], error: str) -> None:
+        """Mark an interrupted archive terminal so later commits cannot wait forever."""
+        from openviking.server.identity import RequestContext, Role
+        from openviking.storage.viking_fs import get_viking_fs
+        from openviking_cli.session.user_id import UserIdentifier
+
+        archive_uri = info.get("archive_uri")
+        if not archive_uri:
+            return
+        account_id = info.get("account_id", "default")
+        user_id = info.get("user_id", "default")
+        ctx = RequestContext(
+            user=UserIdentifier(account_id=account_id, user_id=user_id),
+            role=Role(info.get("role", "root")),
+        )
+        await get_viking_fs().write_file(
+            uri=f"{archive_uri}/.failed.json",
+            content=json.dumps(
+                {
+                    "stage": "redo_recovery",
+                    "error": error,
+                    "failed_at": int(time.time()),
+                    "skipped": True,
+                },
+                ensure_ascii=False,
+            ),
+            ctx=ctx,
+        )
 
     async def _redo_session_memory(self, info: Dict[str, Any]) -> None:
         """Re-extract memories from archive.
