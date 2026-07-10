@@ -67,6 +67,8 @@ class ParserApiConfig(BaseModel):
     http_timeout_seconds: float = 10.0
     response_timeout_seconds: int = 1800
     poll_interval_ms: int = 3000
+    max_concurrent: int = 10
+    upload_part_max_concurrent: int = 3
 
     model_config = {"extra": "forbid"}
 
@@ -99,6 +101,10 @@ class ParserApiConfig(BaseModel):
             raise ValueError("parser_api.response_timeout_seconds must be > 0")
         if self.poll_interval_ms <= 0:
             raise ValueError("parser_api.poll_interval_ms must be > 0")
+        if self.max_concurrent <= 0:
+            raise ValueError("parser_api.max_concurrent must be > 0")
+        if self.upload_part_max_concurrent <= 0:
+            raise ValueError("parser_api.upload_part_max_concurrent must be > 0")
         return self
 
 

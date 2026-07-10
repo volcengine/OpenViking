@@ -204,6 +204,80 @@ def test_openviking_config_ignores_deprecated_memory_version(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
+def test_parser_api_max_concurrent(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict(
+        {
+            "parser_api": {
+                "enable": True,
+                "extensions": ["txt"],
+                "host": "https://example.com",
+                "api_key": "test-key",
+                "max_concurrent": 4,
+            }
+        }
+    )
+
+    assert config.parser_api.max_concurrent == 4
+    with pytest.raises(ValueError, match="parser_api.max_concurrent must be > 0"):
+        OpenVikingConfig.from_dict(
+            {
+                "parser_api": {
+                    "enable": True,
+                    "extensions": ["txt"],
+                    "host": "https://example.com",
+                    "api_key": "test-key",
+                    "max_concurrent": 0,
+                }
+            }
+        )
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+def test_parser_api_upload_part_max_concurrent(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict(
+        {
+            "parser_api": {
+                "enable": True,
+                "extensions": ["pdf"],
+                "host": "https://example.com",
+                "api_key": "test-key",
+                "upload_part_max_concurrent": 2,
+            }
+        }
+    )
+
+    assert config.parser_api.upload_part_max_concurrent == 2
+    with pytest.raises(ValueError, match="parser_api.upload_part_max_concurrent must be > 0"):
+        OpenVikingConfig.from_dict(
+            {
+                "parser_api": {
+                    "enable": True,
+                    "extensions": ["pdf"],
+                    "host": "https://example.com",
+                    "api_key": "test-key",
+                    "upload_part_max_concurrent": 0,
+                }
+            }
+        )
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
 def test_openviking_config_ignores_deprecated_agent_memory_enabled(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

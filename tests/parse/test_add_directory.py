@@ -13,9 +13,10 @@ Verifies that:
 - Errors during parsing are captured as warnings.
 """
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -26,6 +27,7 @@ from openviking.parse.base import (
 )
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.directory import DirectoryParser
+from openviking.parse.understanding_api import UnderstandingAPIError
 
 # ---------------------------------------------------------------------------
 # Fake VikingFS – records mkdir / write / move / ls operations
@@ -65,7 +67,7 @@ class FakeVikingFS:
     async def read(self, uri: str, offset: int = 0, size: int = -1) -> bytes:
         return self.files.get(uri, b"")
 
-    async def ls(self, uri: str) -> List[Dict[str, Any]]:
+    async def ls(self, uri: str, **kw) -> List[Dict[str, Any]]:
         """List direct children of *uri* (mirrors real AGFS entry format)."""
         prefix = uri.rstrip("/") + "/"
         children: Dict[str, bool] = {}  # name → is_dir
@@ -92,6 +94,17 @@ class FakeVikingFS:
                 }
             )
         return result
+
+    async def glob(self, pattern: str, uri: str, **kw) -> Dict[str, List[str]]:
+        """Return matching files under *uri* for parser tests."""
+        suffix = pattern[1:] if pattern.startswith("*") else pattern
+        prefix = uri.rstrip("/") + "/"
+        matches = [
+            file_uri
+            for file_uri in sorted(self.files)
+            if file_uri.startswith(prefix) and file_uri.endswith(suffix)
+        ]
+        return {"matches": matches}
 
     # ---- move / delete operations ----------------------------------------
 
@@ -126,7 +139,15 @@ def fake_fs():
 @pytest.fixture
 def parser(fake_fs):
     """DirectoryParser with VikingFS patched for ALL BaseParser instances."""
-    with patch.object(BaseParser, "_get_viking_fs", return_value=fake_fs):
+    mock_router = MagicMock()
+    mock_router.should_use_understanding_api.return_value = False
+    with (
+        patch.object(BaseParser, "_get_viking_fs", return_value=fake_fs),
+        patch(
+            "openviking.parse.parsers.directory.DirectoryParser._get_parser_router",
+            return_value=mock_router,
+        ),
+    ):
         yield DirectoryParser()
 
 
@@ -348,6 +369,248 @@ class TestMixedDirectory:
 
 class TestParserDelegation:
     """Files with a dedicated parser should be processed via parser.parse()."""
+
+    @pytest.mark.asyncio
+    async def test_parser_api_file_goes_through_parser_router(
+        self,
+        tmp_path: Path,
+        parser,
+        fake_fs,
+    ) -> None:
+        """Files matching parser_api should be processed by ParserRouter."""
+        source_file = tmp_path / "contract.pdf"
+        source_file.write_bytes(b"%PDF-1.4")
+
+        mock_temp = fake_fs.create_temp_uri()
+        doc_dir = f"{mock_temp}/contract"
+        await fake_fs.mkdir(mock_temp)
+        await fake_fs.mkdir(doc_dir)
+        await fake_fs.write_file(f"{doc_dir}/contract.md", "# Converted PDF")
+
+        fake_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(source_file),
+            source_format="pdf",
+            parser_name="UnderstandingAPI",
+            parse_time=0.1,
+        )
+        fake_result.temp_dir_path = mock_temp
+
+        mock_router = MagicMock()
+        mock_router.should_use_understanding_api.return_value = True
+        mock_router.parse = AsyncMock(return_value=fake_result)
+
+        with patch(
+            "openviking.parse.parsers.directory.DirectoryParser._get_parser_router",
+            return_value=mock_router,
+        ):
+            result = await parser.parse(str(tmp_path))
+
+        mock_router.should_use_understanding_api.assert_called_once_with(source_file)
+        mock_router.parse.assert_awaited_once_with(
+            str(source_file),
+            enable_link_rewrite=True,
+            link_rewrite_root=str(tmp_path.resolve()),
+            allowed_media_dirs=[tmp_path.resolve()],
+        )
+        assert result.meta["processed_files"] == [
+            {"path": "contract.pdf", "parser": "UnderstandingAPI"}
+        ]
+
+        dir_name = tmp_path.name
+        found_md = any(
+            uri.endswith("contract.md") and f"/{dir_name}/" in uri for uri in fake_fs.files
+        )
+        assert found_md, f"contract.md not found. Files: {list(fake_fs.files.keys())}"
+
+    @pytest.mark.asyncio
+    async def test_parser_api_video_bypasses_direct_media_upload(
+        self,
+        tmp_path: Path,
+        parser,
+    ) -> None:
+        """Configured MP4 files should use UnderstandingAPI before media direct upload."""
+        source_file = tmp_path / "clip.mp4"
+        source_file.write_bytes(b"video")
+
+        fake_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(source_file),
+            source_format="mp4",
+            parser_name="UnderstandingAPI",
+            parse_time=0.1,
+        )
+
+        mock_router = MagicMock()
+        mock_router.should_use_understanding_api.return_value = True
+        mock_router.parse = AsyncMock(return_value=fake_result)
+
+        with (
+            patch(
+                "openviking.parse.parsers.directory.DirectoryParser._get_parser_router",
+                return_value=mock_router,
+            ),
+            patch.object(
+                DirectoryParser,
+                "_upload_file_directly",
+                new_callable=AsyncMock,
+            ) as direct_upload,
+        ):
+            result = await parser.parse(str(tmp_path), directly_upload_media=True)
+
+        mock_router.should_use_understanding_api.assert_called_once_with(source_file)
+        mock_router.parse.assert_awaited_once_with(
+            str(source_file),
+            enable_link_rewrite=True,
+            link_rewrite_root=str(tmp_path.resolve()),
+            allowed_media_dirs=[tmp_path.resolve()],
+        )
+        direct_upload.assert_not_awaited()
+        assert result.meta["processed_files"] == [
+            {"path": "clip.mp4", "parser": "UnderstandingAPI"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_parser_api_files_are_processed_concurrently(
+        self,
+        tmp_path: Path,
+        parser,
+        fake_fs,
+    ) -> None:
+        """Directory imports should issue parser_api requests concurrently."""
+        for name in ("a.txt", "b.txt", "c.txt"):
+            (tmp_path / name).write_text(name, encoding="utf-8")
+
+        inflight = 0
+        max_seen = 0
+
+        async def parse_side_effect(source: str, **kwargs):
+            nonlocal inflight, max_seen
+            inflight += 1
+            max_seen = max(max_seen, inflight)
+            await asyncio.sleep(0.05)
+
+            stem = Path(source).stem
+            mock_temp = fake_fs.create_temp_uri()
+            await fake_fs.mkdir(mock_temp)
+            await fake_fs.mkdir(f"{mock_temp}/{stem}")
+            await fake_fs.write_file(f"{mock_temp}/{stem}/{stem}.md", f"# {stem}")
+
+            inflight -= 1
+            fake_result = create_parse_result(
+                root=ResourceNode(type=NodeType.ROOT),
+                source_path=source,
+                source_format=Path(source).suffix.lstrip("."),
+                parser_name="UnderstandingAPI",
+                parse_time=0.1,
+            )
+            fake_result.temp_dir_path = mock_temp
+            return fake_result
+
+        mock_router = MagicMock()
+        mock_router.should_use_understanding_api.return_value = True
+        mock_router.parse = AsyncMock(side_effect=parse_side_effect)
+
+        with (
+            patch(
+                "openviking.parse.parsers.directory.DirectoryParser._get_parser_router",
+                return_value=mock_router,
+            ),
+            patch(
+                "openviking.parse.parsers.directory.DirectoryParser._get_parser_api_max_concurrent",
+                return_value=2,
+            ),
+        ):
+            result = await parser.parse(str(tmp_path))
+
+        assert result.meta["file_count"] == 3
+        assert mock_router.parse.await_count == 3
+        assert max_seen == 2
+        assert result.meta["processed_files"] == [
+            {"path": "a.txt", "parser": "UnderstandingAPI"},
+            {"path": "b.txt", "parser": "UnderstandingAPI"},
+            {"path": "c.txt", "parser": "UnderstandingAPI"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_parser_api_file_timeout_is_recorded(
+        self,
+        tmp_path: Path,
+        parser,
+    ) -> None:
+        """A stuck parser_api file should not hang the whole directory import."""
+        (tmp_path / "slow.txt").write_text("slow", encoding="utf-8")
+
+        mock_router = MagicMock()
+        mock_router.should_use_understanding_api.return_value = True
+
+        async def slow_parse(*args, **kwargs):
+            await asyncio.sleep(1.0)
+
+        mock_router.parse = AsyncMock(side_effect=slow_parse)
+
+        with (
+            patch(
+                "openviking.parse.parsers.directory.DirectoryParser._get_parser_router",
+                return_value=mock_router,
+            ),
+            patch(
+                "openviking.parse.parsers.directory.DirectoryParser._get_parser_api_job_timeout",
+                return_value=0.01,
+            ),
+        ):
+            result = await parser.parse(str(tmp_path))
+
+        assert result.meta["file_count"] == 0
+        assert len(result.meta["failed_files"]) == 1
+        failed = result.meta["failed_files"][0]
+        assert failed["path"] == "slow.txt"
+        assert failed["parser"] == "UnderstandingAPI"
+        assert "parser_api job timed out after 0.0s" in failed["error"]
+        assert "Failed to parse slow.txt: parser_api job timed out after 0.0s" in result.warnings
+
+    @pytest.mark.asyncio
+    async def test_parser_api_failure_records_remote_ids(
+        self,
+        tmp_path: Path,
+        parser,
+    ) -> None:
+        """Directory import should expose parser_api IDs for failed files."""
+        source_file = tmp_path / "bad.pdf"
+        source_file.write_bytes(b"%PDF-1.4")
+
+        mock_router = MagicMock()
+        mock_router.should_use_understanding_api.return_value = True
+        mock_router.parse = AsyncMock(
+            side_effect=UnderstandingAPIError(
+                "understanding failed",
+                {
+                    "doc_name": "bad",
+                    "doc_type": "pdf",
+                    "file_name": "bad.pdf",
+                    "file_id": "file_abc",
+                    "response_id": "0-pp_task_123",
+                },
+            )
+        )
+
+        with patch(
+            "openviking.parse.parsers.directory.DirectoryParser._get_parser_router",
+            return_value=mock_router,
+        ):
+            result = await parser.parse(str(tmp_path))
+
+        assert result.meta["file_count"] == 0
+        assert len(result.meta["failed_files"]) == 1
+        failed = result.meta["failed_files"][0]
+        assert failed["path"] == "bad.pdf"
+        assert failed["parser"] == "UnderstandingAPI"
+        assert failed["doc_name"] == "bad"
+        assert failed["doc_type"] == "pdf"
+        assert failed["file_name"] == "bad.pdf"
+        assert failed["file_id"] == "file_abc"
+        assert failed["response_id"] == "0-pp_task_123"
+        assert "understanding failed" in failed["error"]
 
     @pytest.mark.asyncio
     async def test_md_file_goes_through_parser(self, tmp_path: Path, parser, fake_fs) -> None:

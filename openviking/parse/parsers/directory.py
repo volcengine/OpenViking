@@ -16,6 +16,7 @@ CodeRepositoryParser:
    can move the content to AGFS and enqueue semantic processing.
 """
 
+import asyncio
 import time
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
@@ -119,6 +120,7 @@ class DirectoryParser(BaseParser):
             from openviking.parse.registry import get_registry
 
             registry = get_registry()
+            parser_router = self._get_parser_router(registry)
 
             scan_result = scan_directory(
                 root=str(source_path),
@@ -168,12 +170,18 @@ class DirectoryParser(BaseParser):
 
             # ── Phase 2: process each file ────────────────────────────
             file_count = 0
-            processed_files: List[Dict[str, str]] = []
-            failed_files: List[Dict[str, str]] = []
+            processed_files: List[Dict[str, Any]] = []
+            failed_files: List[Dict[str, Any]] = []
+            processing_results: Dict[int, Any] = {}
+            file_jobs: List[Dict[str, Any]] = []
+            parser_api_jobs: List[Dict[str, Any]] = []
 
-            for cf in processable_files:
+            for index, cf in enumerate(processable_files):
                 file_parser = self._assign_parser(cf, registry)
                 parser_name = type(file_parser).__name__ if file_parser else "direct"
+                if parser_router.should_use_understanding_api(cf.path):
+                    file_parser = parser_router
+                    parser_name = "UnderstandingAPI"
 
                 # Check if this is a media parser and we should directly upload
                 is_media_parser = file_parser and parser_name in [
@@ -184,7 +192,22 @@ class DirectoryParser(BaseParser):
                 ext = Path(cf.path).suffix.lower()
                 is_media_file = ext in MEDIA_EXTENSIONS
 
-                if directly_upload_media and is_media_parser and is_media_file:
+                job = {
+                    "index": index,
+                    "classified_file": cf,
+                    "file_parser": file_parser,
+                    "parser_name": parser_name,
+                    "direct_upload": bool(
+                        directly_upload_media and is_media_parser and is_media_file
+                    ),
+                }
+                file_jobs.append(job)
+
+                if parser_name == "UnderstandingAPI" and file_parser is not None:
+                    parser_api_jobs.append(job)
+                    continue
+
+                if job["direct_upload"]:
                     # Directly upload media file without using media parser
                     ok = await self._upload_file_directly(
                         cf,
@@ -193,7 +216,7 @@ class DirectoryParser(BaseParser):
                         warnings,
                         preserve_structure=preserve_structure,
                     )
-                    parser_name = "direct_upload"
+                    job["parser_name"] = "direct_upload"
                 else:
                     # Normal processing with parser
                     ok = await self._process_single_file(
@@ -206,21 +229,40 @@ class DirectoryParser(BaseParser):
                         import_root=str(source_path),
                     )
 
-                if ok:
+                processing_results[index] = ok
+
+            if parser_api_jobs:
+                max_concurrent = self._get_parser_api_max_concurrent()
+                job_timeout = self._get_parser_api_job_timeout()
+                logger.info(
+                    f"[DirectoryParser] Processing {len(parser_api_jobs)} parser_api file(s) "
+                    f"with max_concurrent={max_concurrent}, job_timeout={job_timeout:.1f}s"
+                )
+                processing_results.update(
+                    await self._process_parser_jobs_concurrently(
+                        parser_api_jobs,
+                        target_uri,
+                        viking_fs,
+                        warnings,
+                        preserve_structure=preserve_structure,
+                        import_root=str(source_path),
+                        max_concurrent=max_concurrent,
+                        job_timeout=job_timeout,
+                    )
+                )
+
+            for job in file_jobs:
+                cf = job["classified_file"]
+                parser_name = job["parser_name"]
+                detail = self._normalize_processing_result(
+                    processing_results.get(job["index"], False)
+                )
+                file_entry = self._file_status_entry(cf, parser_name, detail)
+                if detail["ok"]:
                     file_count += 1
-                    processed_files.append(
-                        {
-                            "path": cf.rel_path,
-                            "parser": parser_name,
-                        }
-                    )
+                    processed_files.append(file_entry)
                 else:
-                    failed_files.append(
-                        {
-                            "path": cf.rel_path,
-                            "parser": parser_name,
-                        }
-                    )
+                    failed_files.append(file_entry)
 
             # Collect unsupported files from scan result
             unsupported_files = [
@@ -328,9 +370,81 @@ class DirectoryParser(BaseParser):
             result.append({"path": path, "status": status})
         return result
 
+    @staticmethod
+    def _normalize_processing_result(value: Any) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return {
+                "ok": bool(value.get("ok")),
+                "meta": value.get("meta") if isinstance(value.get("meta"), dict) else {},
+                "error": value.get("error"),
+            }
+        return {"ok": bool(value), "meta": {}, "error": None}
+
+    @staticmethod
+    def _file_status_entry(
+        classified_file: "ClassifiedFile",
+        parser_name: str,
+        detail: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        entry: Dict[str, Any] = {
+            "path": classified_file.rel_path,
+            "parser": parser_name,
+        }
+        meta = detail.get("meta")
+        if isinstance(meta, dict):
+            for key in (
+                "doc_name",
+                "doc_type",
+                "source_name",
+                "file_name",
+                "file_id",
+                "response_id",
+            ):
+                if meta.get(key):
+                    entry[key] = meta[key]
+        if detail.get("error"):
+            entry["error"] = str(detail["error"])
+        return entry
+
     # ------------------------------------------------------------------
     # Parser assignment
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_parser_router(registry: "ParserRegistry") -> Any:
+        """Create the file-level parser router used inside directory imports."""
+        from openviking.parse.parser_router import ParserRouter
+
+        return ParserRouter(registry)
+
+    @staticmethod
+    def _get_parser_api_max_concurrent(default: int = 10) -> int:
+        """Return the folder-import concurrency for parser_api-backed files."""
+        try:
+            from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+            parser_api = getattr(get_openviking_config(), "parser_api", None)
+            value = int(getattr(parser_api, "max_concurrent", default))
+        except Exception:
+            value = default
+        return max(1, value)
+
+    @staticmethod
+    def _get_parser_api_job_timeout(default: float = 1800.0) -> float:
+        """Return an end-to-end timeout for each parser_api-backed folder file."""
+        try:
+            from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+            parser_api = getattr(get_openviking_config(), "parser_api", None)
+            response_timeout = float(getattr(parser_api, "response_timeout_seconds", default))
+            http_timeout = float(getattr(parser_api, "http_timeout_seconds", 10.0))
+        except Exception:
+            response_timeout = default
+            http_timeout = 10.0
+
+        # Polling has its own deadline. Add bounded headroom for submit/result HTTP calls
+        # so a non-poll upload/download wait cannot hold the whole directory import forever.
+        return max(1.0, response_timeout + max(60.0, http_timeout * 2.0))
 
     @staticmethod
     def _assign_parser(
@@ -378,28 +492,19 @@ class DirectoryParser(BaseParser):
 
         if parser:
             try:
-                sub_result = await parser.parse(
-                    str(src_file),
-                    # Rewrite only makes sense when relative structure is preserved;
-                    # in flat mode link targets don't exist at their original paths.
-                    enable_link_rewrite=preserve_structure,
-                    link_rewrite_root=import_root,
-                    # The whole ingested tree is fair game for image ingestion:
-                    # an md may reference shared images outside its own directory
-                    # (e.g. ../images/x.gif) that still live inside the import.
-                    allowed_media_dirs=[Path(import_root)] if import_root else None,
+                sub_result = await DirectoryParser._parse_file_with_parser(
+                    classified_file,
+                    parser,
+                    preserve_structure=preserve_structure,
+                    import_root=import_root,
                 )
-                if sub_result.temp_dir_path:
-                    if preserve_structure:
-                        parent = str(PurePosixPath(rel_path).parent)
-                        dest = f"{target_uri}/{parent}" if parent != "." else target_uri
-                    else:
-                        dest = target_uri
-                    await DirectoryParser._merge_temp(
-                        viking_fs,
-                        sub_result.temp_dir_path,
-                        dest,
-                    )
+                await DirectoryParser._merge_parser_result(
+                    classified_file,
+                    sub_result,
+                    target_uri,
+                    viking_fs,
+                    preserve_structure=preserve_structure,
+                )
                 return True
             except Exception as exc:
                 warnings.append(f"Failed to parse {rel_path}: {exc}")
@@ -416,6 +521,127 @@ class DirectoryParser(BaseParser):
             except Exception as exc:
                 warnings.append(f"Failed to upload {rel_path}: {exc}")
                 return False
+
+    @staticmethod
+    async def _process_parser_jobs_concurrently(
+        jobs: List[Dict[str, Any]],
+        target_uri: str,
+        viking_fs: Any,
+        warnings: List[str],
+        preserve_structure: bool = True,
+        import_root: Optional[str] = None,
+        max_concurrent: int = 10,
+        job_timeout: float = 1860.0,
+    ) -> Dict[int, Dict[str, Any]]:
+        """Parse parser_api-backed files concurrently, then merge results in input order."""
+        sem = asyncio.Semaphore(max(1, max_concurrent))
+
+        async def _parse_job(job: Dict[str, Any]) -> Dict[str, Any]:
+            classified_file = job["classified_file"]
+            parser = job["file_parser"]
+            try:
+                async with sem:
+                    parse_coro = DirectoryParser._parse_file_with_parser(
+                        classified_file,
+                        parser,
+                        preserve_structure=preserve_structure,
+                        import_root=import_root,
+                    )
+                    sub_result = await asyncio.wait_for(parse_coro, timeout=job_timeout)
+                return {"job": job, "result": sub_result, "error": None}
+            except asyncio.TimeoutError:
+                return {
+                    "job": job,
+                    "result": None,
+                    "error": TimeoutError(f"parser_api job timed out after {job_timeout:.1f}s"),
+                }
+            except Exception as exc:
+                return {"job": job, "result": None, "error": exc}
+
+        parsed = await asyncio.gather(*(_parse_job(job) for job in jobs))
+        results: Dict[int, Dict[str, Any]] = {}
+
+        for item in parsed:
+            job = item["job"]
+            classified_file = job["classified_file"]
+            rel_path = classified_file.rel_path
+            error = item["error"]
+            if error is not None:
+                warnings.append(f"Failed to parse {rel_path}: {error}")
+                error_meta = getattr(error, "meta", {})
+                results[job["index"]] = {
+                    "ok": False,
+                    "meta": error_meta if isinstance(error_meta, dict) else {},
+                    "error": str(error),
+                }
+                continue
+
+            try:
+                sub_result = item["result"]
+                await DirectoryParser._merge_parser_result(
+                    classified_file,
+                    sub_result,
+                    target_uri,
+                    viking_fs,
+                    preserve_structure=preserve_structure,
+                )
+                results[job["index"]] = {
+                    "ok": True,
+                    "meta": getattr(sub_result, "meta", {}) or {},
+                    "error": None,
+                }
+            except Exception as exc:
+                warnings.append(f"Failed to parse {rel_path}: {exc}")
+                sub_result = item.get("result")
+                results[job["index"]] = {
+                    "ok": False,
+                    "meta": getattr(sub_result, "meta", {}) or {},
+                    "error": str(exc),
+                }
+
+        return results
+
+    @staticmethod
+    async def _parse_file_with_parser(
+        classified_file: "ClassifiedFile",
+        parser: BaseParser,
+        preserve_structure: bool = True,
+        import_root: Optional[str] = None,
+    ) -> ParseResult:
+        src_file = classified_file.path
+        return await parser.parse(
+            str(src_file),
+            # Rewrite only makes sense when relative structure is preserved;
+            # in flat mode link targets don't exist at their original paths.
+            enable_link_rewrite=preserve_structure,
+            link_rewrite_root=import_root,
+            # The whole ingested tree is fair game for image ingestion:
+            # an md may reference shared images outside its own directory
+            # (e.g. ../images/x.gif) that still live inside the import.
+            allowed_media_dirs=[Path(import_root)] if import_root else None,
+        )
+
+    @staticmethod
+    async def _merge_parser_result(
+        classified_file: "ClassifiedFile",
+        sub_result: ParseResult,
+        target_uri: str,
+        viking_fs: Any,
+        preserve_structure: bool = True,
+    ) -> None:
+        if not sub_result.temp_dir_path:
+            return
+
+        if preserve_structure:
+            parent = str(PurePosixPath(classified_file.rel_path).parent)
+            dest = f"{target_uri}/{parent}" if parent != "." else target_uri
+        else:
+            dest = target_uri
+        await DirectoryParser._merge_temp(
+            viking_fs,
+            sub_result.temp_dir_path,
+            dest,
+        )
 
     @staticmethod
     async def _upload_file_directly(
