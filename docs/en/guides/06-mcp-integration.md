@@ -22,7 +22,7 @@ The following platforms have been successfully integrated with OpenViking MCP:
 | **Trae** | Standard MCP config |
 | **Cursor** | Standard MCP config |
 | **ChatGPT & Codex** | Standard MCP config |
-| **OpenCode** | Standard MCP config |
+| **OpenCode** | Native OpenCode `mcp` config |
 | **Manus** | Standard MCP config |
 | **Claude.ai / Claude Desktop** | Native OAuth 2.1 (see [11-oauth](11-oauth.md)) |
 
@@ -82,6 +82,26 @@ Or in `.mcp.json`:
 
 Add `--scope user` to make the config global (shared across all projects).
 
+### OpenCode
+
+Configure `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "openviking": {
+      "type": "remote",
+      "url": "https://your-server.com/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
+      }
+    }
+  }
+}
+```
+
 ### Claude.ai / Claude Desktop (OAuth)
 
 These clients only accept OAuth 2.1 — API Keys cannot be passed directly.
@@ -132,16 +152,14 @@ Once connected, OpenViking exposes 14 tools:
 
 > Feishu/Lark imports without `args.feishu_access_token` keep the existing app/tenant-token behavior and can be watched. Feishu/Lark one-time user-token imports pass only `args.feishu_access_token`; Feishu/Lark user-token watches must also pass `args.feishu_refresh_token` and require the same Feishu app credentials configured on the OpenViking server.
 
-### Adding local-file resources (progressive upload)
+### Adding local-file resources (single-step upload)
 
 The `add_resource` tool accepts both **remote URLs** and **local file paths**, handled differently:
 
 - **Remote URL** (`http(s)://`, `git@`, `ssh://`, `git://`): single round-trip — the server fetches and ingests directly.
-- **Local file path**: the tool returns a **two-step upload instruction** (plain prose with `Step 1` / `Step 2` formatting). The agent must:
-  1. POST the file as `multipart/form-data` to the `temp_upload_signed` URL given in the response (URL embeds a one-shot token; 10-minute TTL by default). The server mints the `temp_file_id` at write time and returns it as JSON: `{"temp_file_id": "..."}`.
-  2. Read `temp_file_id` from that response, then call `add_resource(temp_file_id="<id from step 1>")` again — the server resolves the file via `TempUploadStore` and ingests.
+- **Local file path**: the tool returns an **upload instruction** (plain prose). The agent POSTs the file as `multipart/form-data` (field name `file`) to the `temp_upload` URL given in the response. The URL embeds a one-shot token (10-minute TTL by default) that authorizes the upload, so no API key is needed. The server then ingests the file **automatically in the same request** and returns the final result — the agent does **not** call `add_resource` again.
 
-This lets any MCP client — including sandboxed environments without a local filesystem (Claude web, Manus, etc.) — push files into OpenViking without pre-installing the `ov` CLI. The signed endpoint shares the same persistence layer as the authenticated `temp_upload` route, so the `local` / `shared` upload modes (and multi-worker support via the `shared` mode) apply equally.
+This lets any MCP client — including sandboxed environments without a local filesystem (Claude web, Manus, etc.) — push files into OpenViking without pre-installing the `ov` CLI. The token upload reuses the authenticated `temp_upload` route (API key first, otherwise the one-shot `?token=`) and its `TempUploadStore` persistence, so the same `local` / `shared` upload modes apply. Note: the one-shot token is held in-process, so in a multi-worker deployment the `add_resource` call and the follow-up upload POST must reach the same worker (or run single-worker) for the token to resolve.
 
 #### When you must set `OPENVIKING_PUBLIC_BASE_URL`
 

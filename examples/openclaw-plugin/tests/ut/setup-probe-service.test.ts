@@ -69,6 +69,42 @@ describe("setup probe service", () => {
     });
   });
 
+  it("merges configured headers into health and API-key probe requests", async () => {
+    const transport = vi.fn<SetupNetworkTransport>().mockResolvedValue(
+      response(200, { result: { version: "2026.6.1" } }),
+    );
+    const probes = createSetupNetworkProbes({
+      pluginVersion: "2026.6.5",
+      compatRange: ">= 2026.6.0",
+      checkVersionCompatibility: () => "compatible",
+      transport,
+    });
+    const headers = {
+      openviking: "i18n-instance",
+      token: "root-token",
+      region: "SG",
+      "X-API-Key": "from-config",
+    };
+
+    await probes.checkServiceHealth("http://127.0.0.1:1933", "sk-explicit", headers);
+    await probes.probeApiKeyType("http://127.0.0.1:1933", "sk-explicit", headers);
+
+    const healthHeaders = (transport.mock.calls[0]![1] as RequestInit).headers as Record<string, string>;
+    const probeHeaders = (transport.mock.calls[1]![1] as RequestInit).headers as Record<string, string>;
+    expect(healthHeaders).toMatchObject({
+      openviking: "i18n-instance",
+      token: "root-token",
+      region: "SG",
+      "X-API-Key": "from-config",
+    });
+    expect(probeHeaders).toMatchObject({
+      openviking: "i18n-instance",
+      token: "root-token",
+      region: "SG",
+      "X-API-Key": "from-config",
+    });
+  });
+
   it("does not hit the network when no API key is configured", async () => {
     const transport = vi.fn<SetupNetworkTransport>();
     const probes = createSetupNetworkProbes({

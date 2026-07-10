@@ -34,6 +34,7 @@ jobs:
         working-directory: docs
         env:
           DOCS_BASE: /
+          VITE_COUNTER_URL: ${{ vars.VITE_COUNTER_URL }}
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6

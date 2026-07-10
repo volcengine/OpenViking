@@ -38,13 +38,20 @@ from openviking.parse.parsers.code.ast.code_tools import (
     outline_file,
     search_symbols,
 )
-from openviking.server.auth import normalize_actor_peer_header, resolve_identity
+from openviking.retrieve.type_quota_recall import (
+    DEFAULT_MAX_CHARS,
+    DEFAULT_MIN_SCORE,
+    DEFAULT_QUOTAS,
+    search_type_quota_recall,
+)
+from openviking.server.auth import resolve_actor_peer_headers, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     TEMP_FILE_ID_RE,
     is_remote_resource_source,
 )
+from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
 from openviking_cli.exceptions import (
@@ -150,8 +157,9 @@ class _IdentityASGIMiddleware:
                 x_openviking_account=request.headers.get("x-openviking-account"),
                 x_openviking_user=request.headers.get("x-openviking-user"),
             )
-            actor_peer_id = normalize_actor_peer_header(
-                request.headers.get("x-openviking-actor-peer")
+            actor_peer_id, legacy_agent_id = resolve_actor_peer_headers(
+                request.headers.get("x-openviking-actor-peer"),
+                request.headers.get("x-openviking-agent"),
             )
         except (UnauthenticatedError, PermissionDeniedError, InvalidArgumentError) as exc:
             status = (
@@ -184,6 +192,7 @@ class _IdentityASGIMiddleware:
             ),
             role=identity.role,
             actor_peer_id=actor_peer_id,
+            legacy_agent_id=legacy_agent_id,
             from_oauth=identity.from_oauth,
         )
         url_info = {
@@ -288,6 +297,34 @@ def _format_search_result(result) -> str:
         + "\n".join(lines)
         + "\n\nUse the read tool to expand a URI."
     )
+
+
+@mcp.tool()
+async def recall(
+    query: str,
+    quotas: Optional[dict[str, int]] = None,
+    max_chars: int = DEFAULT_MAX_CHARS,
+    min_score: float = DEFAULT_MIN_SCORE,
+    peer_scope: str = "all",
+    other_peer_penalty: Optional[Any] = None,
+) -> str:
+    """Type-quota memory recall. Searches events, entities, preferences, and experiences separately, then returns a bounded memory_group block."""
+    service = get_service()
+    effective_peer_scope = "actor" if peer_scope == "actor" else "all"
+    result = await search_type_quota_recall(
+        service=service,
+        ctx=_get_ctx(),
+        query=query,
+        quotas=quotas or DEFAULT_QUOTAS,
+        max_chars=max(1, int(max_chars)),
+        min_score=min_score,
+        peer_scope=effective_peer_scope,
+        other_peer_penalty=other_peer_penalty,
+        render=True,
+    )
+    if result.rendered.strip():
+        return result.rendered
+    return "No relevant memories found."
 
 
 # -- read ------------------------------------------------------------------
@@ -433,8 +470,44 @@ def _resolve_public_base_url() -> tuple[str, str]:
             return f"http://{host_hdr}", "host"
 
     if config is not None:
-        return f"http://{config.host}:{config.port}", "listen"
+        from openviking.server.config import map_bind_host_to_loopback
+
+        host = map_bind_host_to_loopback(config.host)
+        return f"http://{host}:{config.port}", "listen"
     return "http://127.0.0.1:1933", "listen"
+
+
+async def _maybe_sitemap_hint(path: str) -> str:
+    """Best-effort sitemap/RSS suggestion for a single-page add (never crawls).
+
+    Policy: only suggest when the added URL is the site root / homepage (path is
+    empty or "/"). Adding a deep article URL implies intent for just that page, and
+    gating to the root also keeps the (bounded, non-recursive) probe from re-running
+    when many pages of the same site are added one-by-one.
+
+    Gated by config (``webfeed.suggest_feed``) and fully exception-safe so it can
+    never block or fail the add it is attached to.
+    """
+    try:
+        from urllib.parse import urlparse
+
+        if urlparse(path).path not in ("", "/"):
+            return ""
+
+        from openviking.parse.accessors import discover_feed_hint
+        from openviking.utils.network_guard import ensure_public_remote_target
+        from openviking_cli.utils.config import get_openviking_config
+
+        webfeed = getattr(get_openviking_config(), "webfeed", None)
+        if webfeed is not None and not getattr(webfeed, "suggest_feed", True):
+            return ""
+        timeout = float(getattr(webfeed, "suggest_timeout", 2.5)) if webfeed else 2.5
+        hint = await discover_feed_hint(
+            path, timeout=timeout, request_validator=ensure_public_remote_target
+        )
+        return hint or ""
+    except Exception:
+        return ""
 
 
 @mcp.tool()
@@ -448,39 +521,25 @@ async def add_resource(
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
 
-    Three ways to invoke:
+    Remote URL: pass ``path`` as an http(s)://, git@, ssh://, or git:// URL. A sitemap /
+    RSS / Atom URL ingests the WHOLE site as one resource tree; pass ``args={"site": true}``
+    to force whole-site ingestion from a bare domain.
 
-    1. Remote URL: pass ``path`` set to an http(s)://, git@, ssh://, or git:// URL.
-       Returns a success message immediately. Supports ``watch_interval`` for
-       auto-refresh subscriptions; pass ``to`` to choose the exact target URI, or
-       omit it to bind the watch to the URI created by this add.
-
-    2. Local file: pass ``path`` set to a local filesystem path (e.g. ``/tmp/foo.pdf``).
-       The response is NOT a success message — it's a multi-step upload instruction.
-       HTTP POST the file to the URL the response gives you, read ``temp_file_id`` from
-       the upload response body, then call this tool again with that ``temp_file_id``.
-
-    3. Re-call after upload: pass ``temp_file_id`` set to the value the signed upload
-       response returned. Omit ``path``. The server resolves the file via TempUploadStore
-       and ingests it.
+    Local file: pass ``path`` as a filesystem path (e.g. ``/tmp/foo.pdf``). The response is an
+    upload instruction — HTTP POST the file to the returned URL and the server ingests it
+    automatically; you do NOT need to call this tool again.
 
     Args:
-        path: Remote URL or local filesystem path.
-        temp_file_id: Server-minted upload id from a prior signed upload. Either
-            ``path`` or ``temp_file_id`` is required.
+        path: Remote URL or local filesystem path. Required unless ``temp_file_id`` is set.
+        temp_file_id: Server-minted upload id from a prior signed local-file upload.
         description: Optional human-readable reason for adding the resource.
-        watch_interval: Auto-refresh cadence in minutes. 0 (default) = no watch.
-            >0 = periodically re-fetch the resource at that cadence (full re-ingest
-            each time). Prefer >=1440 (24h) unless the source genuinely changes
-            faster — every refresh re-embeds the entire resource. When ``to`` is
-            omitted, the watch binds to the URI created by this add.
+        watch_interval: Auto-refresh cadence in minutes. 0 = no watch. Prefer >=1440 (24h)
+            unless the source changes faster — every refresh re-embeds the whole resource.
             Only applies to remote-URL invocations.
-        to: Target URI under viking://resources/ (e.g.
-            "viking://resources/volcengine/OpenViking"). Leave empty to let the
-            system derive a URI from the source.
-        args: Parser-specific import options. For Feishu one-time user-token imports,
-            pass {"feishu_access_token": "..."}. For Feishu user-token watches,
-            pass {"feishu_access_token": "...", "feishu_refresh_token": "..."}.
+        to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
+            Leave empty to derive a URI from the source.
+        args: Parser-specific options, e.g. {"feishu_access_token": "..."} for Feishu imports,
+            or {"site": true} for whole-site ingestion.
     """
     from openviking.server.local_input_guard import require_remote_resource_source
 
@@ -493,36 +552,32 @@ async def add_resource(
             "use a positive number of minutes (>=1440 recommended) to subscribe to auto-refresh."
         )
 
-    # Branch 1: ingest by temp_file_id (second leg of progressive upload, or REST-style)
+    # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
+    # signed upload now auto-ingests server-side, so agents no longer need this second leg.
     if temp_file_id:
         from openviking.server.config import ServerConfig
 
         server_config = get_server_config() or ServerConfig()
         store = TempUploadStore.build(server_config)
         try:
-            resolved = await store.resolve_for_consume(temp_file_id, ctx)
+            result = await ingest_temp_upload(
+                store, temp_file_id, ctx, to=to, reason=description, args=args
+            )
         except (PermissionDeniedError, InvalidArgumentError) as exc:
             return f"Error: {exc}"
-        try:
-            try:
-                result = await service.resources.add_resource(
-                    path=resolved.local_path,
-                    ctx=ctx,
-                    to=to or None,
-                    reason=description,
-                    source_name=resolved.original_filename,
-                    wait=False,
-                    allow_local_path_resolution=True,
-                    enforce_public_remote_targets=True,
-                    args=args,
-                )
-            except Exception as exc:
-                await store.mark_failed(resolved, ctx)
-                return f"Error adding resource: {exc}"
-            await store.mark_consumed(resolved, ctx)
-        finally:
-            await resolved.cleanup()
-        root_uri = result.get("root_uri", "")
+        except Exception as exc:
+            return f"Error adding resource: {exc}"
+        # add_resource returns a business-error dict (no raise) for parse/finalize failures;
+        # surface it instead of reporting a false success.
+        if isinstance(result, dict) and result.get("status") == "error":
+            errors = result.get("errors")
+            detail = (
+                result.get("message")
+                or (errors[0] if isinstance(errors, list) and errors else None)
+                or "resource processing failed"
+            )
+            return f"Error adding resource: {detail}"
+        root_uri = result.get("root_uri", "") if isinstance(result, dict) else ""
         return (
             f"Resource added: {root_uri}"
             if root_uri
@@ -560,11 +615,18 @@ async def add_resource(
             watch_suffix = f" (watch enabled, refresh every {watch_interval:g} minute(s))"
         else:
             watch_suffix = ""
-        return (
+        message = (
             f"Resource added: {root_uri}{watch_suffix}"
             if root_uri
             else f"Resource added (processing in background){watch_suffix}."
         )
+        # Detect-and-suggest: if this single page belongs to a site that exposes a
+        # sitemap/RSS feed, hint at whole-site ingestion. Never auto-crawls; the
+        # add above is already done, so a slow/failed probe has no functional impact.
+        hint = await _maybe_sitemap_hint(path)
+        if hint:
+            message += "\n" + hint
+        return message
 
     # Branch 4: local path — mint token, return upload instruction
     server_config = get_server_config()
@@ -578,24 +640,24 @@ async def add_resource(
         ctx.user.account_id,
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,
+        to=to,
+        reason=description,
+        actor_peer_id=ctx.actor_peer_id or "",
     )
     base_url, url_source = _resolve_public_base_url()
-    upload_url = f"{base_url}/api/v1/resources/temp_upload_signed?token={quote(token, safe='')}"
+    upload_url = f"{base_url}/api/v1/resources/temp_upload?token={quote(token, safe='')}"
     expires_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
     minutes = max(1, ttl_seconds // 60)
 
     prose = (
-        "Local file detected — upload required before this resource can be ingested.\n"
+        "Local file detected — upload it to ingest this resource.\n"
         "\n"
-        'Step 1. HTTP POST the file bytes (multipart/form-data, field name "file") to:\n'
+        'HTTP POST the file bytes (multipart/form-data, field name "file") to:\n'
         "\n"
         f"  {upload_url}\n"
         "\n"
-        '  The response will be JSON: {"temp_file_id": "<id>"}\n'
-        "\n"
-        "Step 2. Read `temp_file_id` from that response, then call this tool again:\n"
-        "\n"
-        '  add_resource(temp_file_id="<id from step 1>")\n'
+        "The URL's token authorizes the upload (no API key needed); the server ingests "
+        "the file automatically once received — you do NOT need to call add_resource again.\n"
         "\n"
         f"This upload URL expires in ~{minutes} minutes ({expires_iso})."
     )
@@ -605,7 +667,7 @@ async def add_resource(
             "\n\n"
             "Note for the user: this upload URL was auto-detected from the incoming "
             "request because OPENVIKING_PUBLIC_BASE_URL is not set on the server. "
-            "If Step 1 fails (connection refused, wrong host, TLS error), ask the "
+            "If the upload fails (connection refused, wrong host, TLS error), ask the "
             "server operator to set OPENVIKING_PUBLIC_BASE_URL to the agent-facing "
             "URL of the OpenViking server (e.g. via docker-compose `environment:` "
             "or systemd unit) and retry."
@@ -624,11 +686,7 @@ async def add_resource(
 
 @mcp.tool()
 async def list_watches() -> str:
-    """List watch tasks (auto-refresh subscriptions) visible to the current user.
-
-    Each line shows: target URI, refresh interval (minutes), active/paused status,
-    and the next scheduled execution time. Returns "No watch tasks." when empty.
-    """
+    """List watch tasks (auto-refresh subscriptions) visible to the current user."""
     service = get_service()
     ctx = _get_ctx()
     scheduler = getattr(service, "watch_scheduler", None)
@@ -660,11 +718,7 @@ async def list_watches() -> str:
 
 @mcp.tool()
 async def cancel_watch(to_uri: str) -> str:
-    """Cancel (delete) a watch task by its target URI.
-
-    The URI must match the watch task's `to` value (e.g. "viking://resources/volcengine/OpenViking").
-    To change the cadence or pause temporarily, cancel and re-add with a new watch_interval.
-    """
+    """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking")."""
     from openviking.resource import watch_manager as _wm_mod
 
     service = get_service()
@@ -782,7 +836,7 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 
 @mcp.tool()
 async def forget(uri: str, recursive: bool = False) -> str:
-    """Permanently delete a viking:// URI from OpenViking. This is irreversible. Only use when the user explicitly asks to forget or delete something. Always confirm with the user before calling this tool. Use the search tool first to find the exact URI, then pass it here. Set recursive=true only when the user explicitly asks to delete a directory tree."""
+    """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling."""
     service = get_service()
     ctx = _get_ctx()
     await service.fs.rm(uri, ctx=ctx, recursive=recursive)
@@ -804,17 +858,7 @@ def _require_viking_uri(uri: str) -> Optional[str]:
 
 @mcp.tool()
 async def code_outline(uri: str) -> str:
-    """Show a confirmed viking:// source file's symbol structure: classes, functions,
-    methods, and line ranges. Returns a structural map without reading implementation bodies.
-
-    Use only for source files inside an ingested code repository, after you know the exact
-    viking:// file URI. Do not use on directories, documentation-only files, plain text notes,
-    chat/session history, or files that are not supported source code.
-
-    Use read instead when you need the full file content.
-    Typical workflow: code_search → code_outline → code_expand.
-
-    uri must be a viking:// file URI (not a directory)."""
+    """Show symbol structure (classes, functions, methods, line ranges) of a viking:// source file without reading full content."""
     err = _require_viking_uri(uri)
     if err:
         return err
@@ -831,20 +875,7 @@ async def code_outline(uri: str) -> str:
 
 @mcp.tool()
 async def code_search(query: str, uri: str) -> str:
-    """Search AST-supported symbol names (class / function / method) by substring across a
-    confirmed viking:// code repository or source subtree. Returns structured results:
-    symbol type, class context, file URI, line range.
-
-    Use only after you have evidence that the uri contains supported source files. If you have
-    not confirmed that this is an ingested code repository, first use ls/glob/read or
-    add_resource output to verify it.
-
-    Do not use for general memory search, documentation-only resources, plain text notes,
-    chat/session history, or local filesystem paths. Skip if you already know the exact file;
-    use code_outline or read directly.
-
-    Scans up to 200 source files. Narrow uri to a subdirectory for deeper coverage.
-    uri is required to avoid accidentally walking the entire VikingFS."""
+    """Search symbol names (class/function/method) by substring across a viking:// code repository. Returns symbol type, class context, file URI, and line range. Scans up to 200 source files — narrow uri for deeper coverage."""
     err = _require_viking_uri(uri)
     if err:
         return err
@@ -885,16 +916,7 @@ async def code_search(query: str, uri: str) -> str:
 
 @mcp.tool()
 async def code_expand(uri: str, symbol: str) -> str:
-    """Return the full source of a single named symbol from a confirmed viking:// source file.
-    Reads only that symbol's body, avoiding the overhead of reading an entire file.
-
-    Use only after code_outline or other evidence shows the symbol exists in that file.
-    Do not use for broad exploration, non-code files, documentation, chat/session history,
-    or unverified viking:// resources. For reading multiple symbols from the same file,
-    read is often more efficient.
-
-    `symbol` accepts 'bar' (top-level) or 'Foo.bar' (method).
-    uri must be a viking:// file URI."""
+    """Return the full source of a single named symbol from a viking:// source file. symbol accepts 'bar' (top-level) or 'Foo.bar' (method)."""
     err = _require_viking_uri(uri)
     if err:
         return err

@@ -5,7 +5,7 @@
 import sys
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 # Import auth plugin registry for config validation
 from openviking.server.auth.registry import get_registry
@@ -24,6 +24,69 @@ from openviking_cli.utils.config.consts import (
 )
 
 logger = get_logger(__name__)
+
+
+def _normalize_config_uri(value: Optional[str], field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    uri = value.strip().rstrip("/")
+    if not uri:
+        raise ValueError(f"{field_name} must not be empty")
+    return uri
+
+
+class AddTargetsConfig(BaseModel):
+    """Add targets for resource and skill writes."""
+
+    resource_uri: Optional[str] = None
+    skill_uri: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("resource_uri")
+    @classmethod
+    def validate_resource_uri(cls, value: Optional[str]) -> Optional[str]:
+        uri = _normalize_config_uri(value, "resource_uri")
+        if uri is None:
+            return None
+        from openviking.core.namespace import classify_uri, uri_parts
+        from openviking.core.uri_validation import validate_viking_uri
+        from openviking_cli.utils.uri import VikingURI
+
+        validate_viking_uri(uri, field_name="resource_uri")
+        normalized = VikingURI.normalize(uri).rstrip("/")
+        parts = uri_parts(normalized)
+        classification = classify_uri(normalized)
+        if parts[:1] == ["resources"] or (
+            parts[:1] == ["user"]
+            and classification.context_type == "resource"
+            and classification.content_index is not None
+        ):
+            return normalized
+        raise ValueError("resource_uri must be a resource directory URI")
+
+    @field_validator("skill_uri")
+    @classmethod
+    def validate_skill_uri(cls, value: Optional[str]) -> Optional[str]:
+        uri = _normalize_config_uri(value, "skill_uri")
+        if uri is None:
+            return None
+        from openviking_cli.utils.uri import VikingURI
+
+        normalized = VikingURI.normalize(uri).rstrip("/")
+        if normalized in {"viking://user/skills", "viking://agent/skills"}:
+            return normalized
+        raise ValueError("skill_uri must be viking://user/skills or viking://agent/skills")
+
+
+class UserConfig(BaseModel):
+    """User configuration values that can be defaulted or initialized."""
+
+    add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
+
+    model_config = {"extra": "forbid"}
 
 
 class MetricsAccountDimensionConfig(BaseModel):
@@ -179,6 +242,7 @@ class ServerConfig(BaseModel):
     public_base_url: Optional[str] = None
     upload_signed_ttl_seconds: int = 600
     temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
+    user_config_defaults: UserConfig = Field(default_factory=UserConfig)
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
@@ -200,6 +264,30 @@ class ServerConfig(BaseModel):
         return AuthMode.DEV.value
 
 
+def map_bind_host_to_loopback(host: str) -> str:
+    """Map a server *bind* host to a client-connectable *loopback* host.
+
+    ``server.host`` configures the address the server binds/listens on. A
+    wildcard bind address such as ``0.0.0.0`` (or IPv6 ``::``) is valid to
+    listen on but is *not* a destination a client can connect to. Clients that
+    derive a connect URL from the configured host (the bot proxy, the bot's
+    own config loader, ``doctor``) must translate the wildcard to loopback:
+
+    - ``"0.0.0.0"``, ``""``, ``"*"``   -> ``"127.0.0.1"``
+    - ``"::"``, ``"::0"``, ``"[::]"``  -> ``"[::1]"``
+    - bare IPv6 literals (e.g. ``"::1"``) are bracketed for URL syntax
+    - everything else passes through unchanged
+    """
+    host = str(host or "").strip()
+    if host in ("0.0.0.0", "", "*"):
+        return "127.0.0.1"
+    if host in ("::", "::0", "[::]"):
+        return "[::1]"
+    if ":" in host and not (host.startswith("[") and host.endswith("]")):
+        return f"[{host}]"
+    return host
+
+
 def get_server_url_from_server_data(server_data: object) -> str:
     """Return the loopback URL clients use for the configured OpenViking server."""
     if isinstance(server_data, dict):
@@ -208,9 +296,7 @@ def get_server_url_from_server_data(server_data: object) -> str:
     else:
         host_value = getattr(server_data, "host", None)
         port_value = getattr(server_data, "port", None)
-    host = str(host_value or "127.0.0.1").strip()
-    if ":" in host and not (host.startswith("[") and host.endswith("]")):
-        host = f"[{host}]"
+    host = map_bind_host_to_loopback(str(host_value or "127.0.0.1"))
     port = str(port_value or "1933").strip()
     return f"http://{host}:{port}"
 

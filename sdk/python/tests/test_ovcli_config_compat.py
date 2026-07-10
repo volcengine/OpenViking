@@ -125,7 +125,7 @@ def test_async_http_client_inherits_profile_enabled_from_ovcli_config(tmp_path, 
 
 
 def test_async_http_client_rejects_explicit_actor_peer_id_and_agent_id_together():
-    with pytest.raises(ValueError, match="actor_peer_id cannot be used with legacy agent_id"):
+    with pytest.raises(ValueError, match="actor_peer_id cannot be used with agent_id"):
         AsyncHTTPClient(
             url="http://explicit-host:1933",
             actor_peer_id="actor-a",

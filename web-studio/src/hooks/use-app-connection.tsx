@@ -122,7 +122,12 @@ function normalizeConnectionDraft(
     accountId: connection.accountId.trim(),
     adminApiKey: connection.adminApiKey.trim(),
     apiKey: connection.apiKey.trim(),
-    baseUrl: normalizeBaseUrl(connection.baseUrl),
+    // Keep the URL as typed (whitespace trimmed only). Stripping the trailing
+    // slash here ran on every keystroke and fought the input: typing the "//"
+    // of "http://" kept collapsing back to "http:". Trailing slashes are
+    // stripped where the URL is actually used instead (ovClient.setOptions,
+    // detectServerMode, detectConnectionRole, and the admin client).
+    baseUrl: connection.baseUrl.trim(),
     userId: connection.userId.trim(),
   }
 }
@@ -150,6 +155,45 @@ export function resolveInitialApiKey({
   return envApiKey || storedApiKey || defaultApiKey
 }
 
+export function resolveConnectionRoleProbeState({
+  apiKey,
+  baseUrl,
+  serverMode,
+}: {
+  apiKey: string
+  baseUrl: string
+  serverMode: ServerMode
+}): {
+  isLoading: boolean
+  role: ConnectionRole
+  shouldProbe: boolean
+} {
+  if (!baseUrl) {
+    return { isLoading: false, role: 'unknown', shouldProbe: false }
+  }
+  if (serverMode === 'dev') {
+    return { isLoading: false, role: 'root', shouldProbe: false }
+  }
+  if (!apiKey) {
+    return { isLoading: false, role: 'unknown', shouldProbe: false }
+  }
+  return { isLoading: true, role: 'unknown', shouldProbe: true }
+}
+
+export function shouldRedirectToLoginOnApiError(
+  error: unknown,
+  isClientError: (value: unknown) => boolean = isOvClientError,
+): boolean {
+  if (!isClientError(error)) {
+    return false
+  }
+
+  const clientError = error as { code?: string; statusCode?: number }
+  return (
+    clientError.statusCode === 401 || clientError.code === 'UNAUTHENTICATED'
+  )
+}
+
 function applyConnection(
   connection: ConnectionDraft,
   serverMode: ServerMode,
@@ -166,24 +210,47 @@ function applyConnection(
   })
 }
 
-async function detectConnectionRole(
+type ConnectionIdentity = {
+  accountId: string
+  role: ConnectionRole
+}
+
+async function detectConnectionIdentity(
   connection: ConnectionDraft,
-): Promise<ConnectionRole> {
+): Promise<ConnectionIdentity> {
   const headers: Record<string, string> = {}
   const apiKey = connection.adminApiKey || connection.apiKey
   if (apiKey) {
     headers['X-API-Key'] = apiKey
   }
-
-  const response = await fetch(`${connection.baseUrl}/health`, { headers })
-  if (!response.ok) {
-    return 'unknown'
+  // Identity headers are required for trusted-mode identity resolution.
+  // In api_key mode the server strips them, so they are always safe to send.
+  if (connection.accountId) {
+    headers['X-OpenViking-Account'] = connection.accountId
+  }
+  if (connection.userId) {
+    headers['X-OpenViking-User'] = connection.userId
   }
 
+  const response = await fetch(
+    `${normalizeBaseUrl(connection.baseUrl)}/health`,
+    { headers },
+  )
+  if (!response.ok) {
+    return { accountId: '', role: 'unknown' }
+  }
+
+  // /health resolves the presented key and echoes back its identity:
+  // { role, account_id, user_id }. We use role to gate the admin UI and
+  // account_id to pin the assumed account for an account-admin key.
   const data = (await response.json().catch(() => null)) as {
+    account_id?: unknown
     role?: unknown
   } | null
-  return isConnectionRole(data?.role) ? data.role : 'unknown'
+  return {
+    accountId: typeof data?.account_id === 'string' ? data.account_id : '',
+    role: isConnectionRole(data?.role) ? data.role : 'unknown',
+  }
 }
 
 function readInitialConnection(): ConnectionDraft {
@@ -311,22 +378,37 @@ export function AppConnectionProvider({
   React.useEffect(() => {
     let cancelled = false
     const apiKey = connection.adminApiKey || connection.apiKey
+    const roleProbe = resolveConnectionRoleProbeState({
+      apiKey,
+      baseUrl: connection.baseUrl,
+      serverMode,
+    })
 
-    setConnectionRole('unknown')
-    setConnectionRoleLoading(Boolean(connection.baseUrl && apiKey))
-    if (!connection.baseUrl || !apiKey) {
+    setConnectionRole(roleProbe.role)
+    setConnectionRoleLoading(roleProbe.isLoading)
+    if (!roleProbe.shouldProbe) {
       return () => {
         cancelled = true
       }
     }
 
-    void detectConnectionRole(connection)
-      .then((role) => {
+    void detectConnectionIdentity(connection)
+      .then(({ accountId, role }) => {
         if (cancelled) {
           return
         }
         setConnectionRole(role)
         setConnectionRoleLoading(false)
+        // An account-admin Root key is scoped to its own account. Pin that
+        // account as the assumed identity so admin and data calls target the
+        // right tenant instead of failing with a mismatch (the server rejects
+        // a foreign account with "ADMIN can only manage account: <x>"). A root
+        // key is not account-scoped, so its account selection is left intact.
+        if (role === 'admin' && accountId) {
+          setConnection((prev) =>
+            prev.accountId === accountId ? prev : { ...prev, accountId },
+          )
+        }
       })
       .catch(() => {
         if (!cancelled) {
@@ -344,6 +426,7 @@ export function AppConnectionProvider({
     connection.apiKey,
     connection.baseUrl,
     connection.userId,
+    serverMode,
   ])
 
   React.useEffect(() => {
@@ -351,8 +434,7 @@ export function AppConnectionProvider({
       (response) => response,
       (error) => {
         if (
-          isOvClientError(error) &&
-          (error.statusCode === 401 || error.statusCode === 403) &&
+          shouldRedirectToLoginOnApiError(error) &&
           Date.now() >= authPromptSuppressedUntilRef.current
         ) {
           openConnectionSettings()

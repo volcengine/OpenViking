@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Filesystem endpoints for OpenViking HTTP Server."""
 
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel
 
+from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
 from openviking.core.path_variables import resolve_path_variables
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.server.auth import get_request_context
@@ -14,9 +15,43 @@ from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking_cli.exceptions import NotFoundError
+from openviking.server.routers.content import SetTagsRequest, set_tags as content_set_tags
+from openviking.storage import VikingDBManagerProxy
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
+
+
+_ATTR_INDEX_FIELDS = ["level", "search_tags"]
+
+
+def _clean_memory_attrs(raw: str) -> dict[str, Any]:
+    from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+    mf = MemoryFileUtils.read(raw)
+    attrs: dict[str, Any] = mf.to_metadata()
+    attrs.pop("content", None)
+    return attrs
+
+
+async def _tags_attr(service: Any, uri: str, ctx: RequestContext) -> list[str]:
+    vikingdb_manager = getattr(service, "vikingdb_manager", None)
+    if not vikingdb_manager:
+        return []
+
+    proxy = VikingDBManagerProxy(vikingdb_manager, ctx)
+    records = await proxy.filter(
+        filter={"op": "must", "field": "uri", "conds": [uri]},
+        limit=10,
+        output_fields=_ATTR_INDEX_FIELDS,
+    )
+    records = sorted(records, key=lambda item: item.get("level", 99))
+    tags: list[str] = []
+    for record in records:
+        for tag in record.get("search_tags") or []:
+            if tag not in tags:
+                tags.append(tag)
+    return tags
 
 
 @router.get("/ls")
@@ -117,6 +152,56 @@ async def stat(
         if mapped is not None:
             raise mapped from exc
         raise
+
+
+@router.get("/attrs")
+async def attrs(
+    uri: str = Query(..., description="Viking URI"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get logical extended attributes for a URI."""
+    service = get_service()
+    uri = resolve_path_variables(uri)
+    try:
+        stat_result = await service.fs.stat(uri, ctx=_ctx)
+        try:
+            canonical_uri = canonicalize_uri(uri, _ctx)
+        except NamespaceShapeError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+
+        result = {
+            "uri": canonical_uri,
+            "context_type": context_type_for_uri(canonical_uri),
+            "attrs": {
+                "tags": await _tags_attr(service, canonical_uri, _ctx),
+            },
+        }
+        if result["context_type"] == "memory" and not stat_result.get("isDir", False):
+            result["attrs"]["memory"] = _clean_memory_attrs(
+                await service.fs.read(canonical_uri, ctx=_ctx)
+            )
+        return Response(status="ok", result=result)
+    except AGFSNotFoundError:
+        raise NotFoundError(uri, "file")
+    except AGFSClientError as e:
+        mapped = map_exception(e, resource=uri, resource_type="file")
+        if mapped is not None:
+            raise mapped from e
+        raise
+    except Exception as exc:
+        mapped = map_exception(exc, resource=uri)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+
+
+@router.post("/attrs/set_tags")
+async def attrs_set_tags(
+    request: SetTagsRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Set explicit k=v retrieval tags metadata for a file or directory."""
+    return await content_set_tags(request, _ctx)
 
 
 class MkdirRequest(BaseModel):

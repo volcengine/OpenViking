@@ -587,6 +587,103 @@ openviking stat viking://resources/my-project/docs
 
 ---
 
+### attrs()
+
+获取文件或目录的逻辑扩展属性。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | str | 是 | - | Viking URI |
+
+**Python SDK (HTTP)**
+
+```python
+attrs = client.attrs("viking://resources/docs/api.md")
+print(attrs["attrs"]["tags"])
+```
+
+**Go SDK**
+
+```go
+attrs, err := client.Attrs(ctx, "viking://resources/docs/api.md")
+if err != nil {
+    return err
+}
+metadata := attrs["attrs"].(map[string]any)
+fmt.Println(metadata["tags"])
+```
+
+**HTTP API**
+
+```
+GET /api/v1/fs/attrs?uri={uri}
+POST /api/v1/fs/attrs/set_tags
+```
+
+```bash
+curl -X GET "http://localhost:1933/api/v1/fs/attrs?uri=viking://resources/docs/api.md" \
+  -H "X-API-Key: your-key"
+
+curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"uri":"viking://resources/docs","tags":["team=search"],"mode":"append","recursive":true}'
+```
+
+**CLI**
+
+```bash
+openviking attrs get viking://resources/docs/api.md
+openviking attrs get viking://resources/docs/api.md tags
+openviking attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
+openviking attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
+openviking attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+```
+
+目录目标会更新目录语义记录；`recursive=true` 还会更新已有子文件和子目录语义记录。
+
+**响应（Resource）**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/docs/api.md",
+    "context_type": "resource",
+    "attrs": {
+      "tags": ["team=search", "env=prod"]
+    }
+  }
+}
+```
+
+**响应（Memory）**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://user/alice/memories/experiences/foo.md",
+    "context_type": "memory",
+    "attrs": {
+      "memory": {
+        "memory_type": "experiences",
+        "name": "foo",
+        "tags": ["ui"],
+        "resource_refs": ["viking://resources/docs/api.md"]
+      },
+      "tags": ["team=search"]
+    }
+  }
+}
+```
+
+`attrs.memory` 来自 `MEMORY_FIELDS` 元信息，已去掉正文内容。`attrs.tags` 是 `attrs set-tags` 和搜索过滤使用的显式检索标签。
+
+---
+
 ### mkdir()
 
 创建目录。
@@ -817,7 +914,7 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 | pattern | str | 是 | - | 搜索模式（正则表达式） |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | exclude_uri | str | 否 | None | 搜索时要排除的 URI 前缀 |
-| node_limit | int | 否 | None | 最大返回节点数 |
+| node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
 
 **Python SDK (Embedded / HTTP)**
@@ -826,7 +923,8 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 results = client.grep(
     "viking://resources/",
     "authentication",
-    case_insensitive=True
+    case_insensitive=True,
+    node_limit=1024,
 )
 
 print(f"Found {results['count']} matches")
@@ -838,8 +936,10 @@ for match in results['matches']:
 **Go SDK**
 
 ```go
+nodeLimit := 1024
 result, err := client.Grep(ctx, "viking://resources/", "authentication", &openviking.GrepOptions{
     CaseInsensitive: true,
+    NodeLimit:       &nodeLimit,
 })
 if err != nil {
     return err
@@ -901,7 +1001,7 @@ openviking grep "authentication" --uri viking://resources/ [--ignore-case]
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`） |
 | uri | str | 否 | "viking://" | 起始 URI |
-| node_limit | int | 否 | None | 最大返回匹配数 |
+| node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -920,7 +1020,9 @@ print(f"Found {results['count']} Python files")
 **Go SDK**
 
 ```go
-result, err := client.Glob(ctx, "**/*.md", "viking://resources/")
+result, err := client.Glob(ctx, "**/*.md", "viking://resources/", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+})
 if err != nil {
     return err
 }

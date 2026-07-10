@@ -20,6 +20,7 @@ def _event(
     payload: dict,
     *,
     ts: datetime | None = None,
+    user_id: str = "user-1",
 ) -> ObservabilityEvent:
     return ObservabilityEvent(
         event_name=event_name,
@@ -27,7 +28,7 @@ def _event(
         timestamp=ts or datetime(2026, 5, 12, 1, 2, 3, tzinfo=timezone.utc),
         request_id=payload.get("request_id"),
         account_id="acct-1",
-        user_id="user-1",
+        user_id=user_id,
     )
 
 
@@ -125,6 +126,16 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
                     },
                 ),
                 _event(
+                    "embedding.call",
+                    {
+                        "provider": "p",
+                        "model_name": "e",
+                        "prompt_tokens": 100,
+                        "completion_tokens": 0,
+                    },
+                    user_id="user-2",
+                ),
+                _event(
                     "http.request",
                     {
                         "request_id": "req-find",
@@ -137,12 +148,34 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
                 _event(
                     "http.request",
                     {
+                        "request_id": "req-search-user-2",
+                        "method": "POST",
+                        "route": "/api/v1/search/search",
+                        "status": "200",
+                        "duration_seconds": 0.1,
+                    },
+                    user_id="user-2",
+                ),
+                _event(
+                    "http.request",
+                    {
                         "request_id": "req-message",
                         "method": "POST",
                         "route": "/api/v1/sessions/{session_id}/messages",
                         "status": "200",
                         "duration_seconds": 0.1,
                     },
+                ),
+                _event(
+                    "http.request",
+                    {
+                        "request_id": "req-message-user-2",
+                        "method": "POST",
+                        "route": "/api/v1/sessions/{session_id}/messages",
+                        "status": "200",
+                        "duration_seconds": 0.1,
+                    },
+                    user_id="user-2",
                 ),
                 _event(
                     "http.request",
@@ -182,11 +215,26 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
         ) == {
             "vlm_input": 3,
             "vlm_output": 2,
+            "embedding_input": 105,
+            "total": 110,
+        }
+        assert await store.get_today_tokens(
+            account_id="acct-1", user_id="user-1", user_date="2026-05-12", tz=UTC
+        ) == {
+            "vlm_input": 3,
+            "vlm_output": 2,
             "embedding_input": 5,
             "total": 10,
         }
         assert await store.get_today_retrievals(
             account_id="acct-1", user_date="2026-05-12", tz=UTC
+        ) == {
+            "find": 1,
+            "search": 1,
+            "total": 2,
+        }
+        assert await store.get_today_retrievals(
+            account_id="acct-1", user_id="user-1", user_date="2026-05-12", tz=UTC
         ) == {
             "find": 1,
             "search": 0,
@@ -199,11 +247,31 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
             bucket="hour",
             tz=UTC,
         )
+        account_commits = commits
+        commits = await store.get_context_commit_heatmap(
+            account_id="acct-1",
+            user_id="user-1",
+            start_user_date="2026-05-12",
+            end_user_date="2026-05-12",
+            bucket="hour",
+            tz=UTC,
+        )
+        assert any(
+            row["hour"] == 1 and row["session_add_message"] == 2 for row in account_commits
+        )
         assert any(row["hour"] == 1 and row["session_add_message"] == 1 for row in commits)
         audit = await store.query_audit_logs(account_id="acct-1")
+        assert audit["total"] == 4
+        assert audit["success_rate"] == 1.0
+        assert {item["api_type"] for item in audit["items"]} == {
+            "search.find",
+            "search.search",
+            "sessions",
+        }
+        audit = await store.query_audit_logs(account_id="acct-1", user_id="user-1")
         assert audit["total"] == 2
         assert audit["success_rate"] == 1.0
-        assert {item["api_type"] for item in audit["items"]} == {"search.find", "sessions"}
+        assert {item["request_id"] for item in audit["items"]} == {"req-find", "req-message"}
     finally:
         await store.close()
 

@@ -43,7 +43,12 @@ class SkillsLoader:
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
                         skills.append(
-                            {"name": skill_dir.name, "path": str(skill_file), "source": "workspace"}
+                            {
+                                "name": skill_dir.name,
+                                "path": str(skill_file),
+                                "relative_path": f"skills/{skill_dir.name}/SKILL.md",
+                                "source": "workspace",
+                            }
                         )
 
         # Filter by requirements
@@ -113,7 +118,7 @@ class SkillsLoader:
         lines = ["<skills>"]
         for s in all_skills:
             name = escape_xml(s["name"])
-            path = s["path"]
+            path = escape_xml(s.get("relative_path") or s["path"])
             desc = escape_xml(self._get_skill_description(s["name"]))
             skill_meta = self._get_skill_meta(s["name"])
             available = self._check_requirements(skill_meta)

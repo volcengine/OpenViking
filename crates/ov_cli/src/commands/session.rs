@@ -288,17 +288,11 @@ fn parse_messages(input: &str) -> Result<Vec<(String, String)>> {
     Ok(vec![("user".to_string(), input.to_string())])
 }
 
-fn message_body(client: &HttpClient, role: &str, content: &str) -> serde_json::Value {
-    let mut body = json!({
+fn message_body(role: &str, content: &str) -> serde_json::Value {
+    json!({
         "role": role,
         "content": content
-    });
-    if role == "assistant" {
-        if let Some(agent_id) = client.legacy_agent_id() {
-            body["agent_id"] = json!(agent_id);
-        }
-    }
-    body
+    })
 }
 
 pub async fn add_message(
@@ -316,16 +310,7 @@ pub async fn add_message(
         "content": content
     });
     if let Some(peer_id) = peer_id {
-        if client.legacy_agent_id().is_some() {
-            return Err(Error::Client(
-                "peer_id cannot be used when client is configured with legacy agent_id".to_string(),
-            ));
-        }
         body["peer_id"] = json!(peer_id);
-    } else if role == "assistant" {
-        if let Some(agent_id) = client.legacy_agent_id() {
-            body["agent_id"] = json!(agent_id);
-        }
     }
 
     let response: serde_json::Value = client.post(&path, &body).await?;
@@ -344,7 +329,7 @@ pub async fn add_messages(
     let path = format!("/api/v1/sessions/{}/messages/batch", url_encode(session_id));
     let messages_json: Vec<serde_json::Value> = messages
         .iter()
-        .map(|(role, content)| message_body(client, role, content))
+        .map(|(role, content)| message_body(role, content))
         .collect();
     let body = json!({"messages": messages_json});
     let response: serde_json::Value = client.post(&path, &body).await?;
@@ -389,7 +374,7 @@ pub async fn add_memory(
     let path = format!("/api/v1/sessions/{}/messages/batch", url_encode(session_id));
     let messages_json: Vec<serde_json::Value> = messages
         .iter()
-        .map(|(role, content)| message_body(client, role, content))
+        .map(|(role, content)| message_body(role, content))
         .collect();
     let body = json!({"messages": messages_json});
     let response: serde_json::Value = client.post(&path, &body).await?;

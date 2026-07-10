@@ -133,24 +133,29 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
 
     Only sets model parameters - provider config is read directly from OpenVikingConfig.
     """
+    if vlm_data:
+        if "agents" not in bot_data:
+            bot_data["agents"] = {}
+
+    agents = bot_data.get("agents", {})
+    if vlm_data and "timeout" not in agents:
+        agents["timeout"] = vlm_data["timeout"] if "timeout" in vlm_data else 60.0
+
     # Set default model from vlm.model
     if "agents" in bot_data:
-        agents = bot_data["agents"]
         if "model" in agents and agents["model"]:
             return
     if vlm_data.get("model"):
-        if "agents" not in bot_data:
-            bot_data["agents"] = {}
         model = vlm_data["model"]
         provider = vlm_data.get("provider")
-        bot_data["agents"]["model"] = model
-        bot_data["agents"]["provider"] = provider if provider else ""
-        bot_data["agents"]["api_base"] = vlm_data.get("api_base", "")
-        bot_data["agents"]["api_key"] = vlm_data.get("api_key", "")
-        if "temperature" in vlm_data and "temperature" not in bot_data["agents"]:
-            bot_data["agents"]["temperature"] = vlm_data["temperature"]
+        agents["model"] = model
+        agents["provider"] = provider if provider else ""
+        agents["api_base"] = vlm_data.get("api_base", "")
+        agents["api_key"] = vlm_data.get("api_key", "")
+        if "temperature" in vlm_data and "temperature" not in agents:
+            agents["temperature"] = vlm_data["temperature"]
         if "extra_headers" in vlm_data and vlm_data["extra_headers"] is not None:
-            bot_data["agents"]["extra_headers"] = vlm_data["extra_headers"]
+            agents["extra_headers"] = vlm_data["extra_headers"]
 
 
 def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> str:
@@ -205,8 +210,20 @@ def _fill_user_api_key_from_ovcli(bot_data: dict) -> None:
     try:
         cli_config = load_ovcli_config()
     except ValueError as e:
-        print(str(e), file=sys.stderr)
-        raise
+        # A missing or invalid ovcli identity only affects OpenViking memory/file
+        # tools. It must NOT abort loading the rest of the bot config (LLM/vlm
+        # provider, agents, channels): load_config() would otherwise catch this
+        # ValueError, discard the whole config and silently fall back to defaults,
+        # so a user who only configured `vlm` ends up on the default
+        # `openai/*` model with no credentials ("Missing credentials ... set
+        # OPENAI_API_KEY") instead of their configured provider. Degraded
+        # OpenViking auth is surfaced separately by validate_openviking_auth().
+        print(
+            f"Warning: could not load OpenViking user API key from ovcli config: {e}\n"
+            "OpenViking memory and file tools may not work until this is fixed.",
+            file=sys.stderr,
+        )
+        return
     if cli_config and cli_config.api_key:
         bot_data["api_key"] = cli_config.api_key
 
@@ -439,7 +456,14 @@ def validate_openviking_auth(config: Config) -> None:
 
     auth_mode = _ov_server_auth_mode(ov_server)
 
-    health = _request_openviking_json(server_url, "/health")
+    # Build headers with API key if configured
+    # Public gateways like Volcengine VikingDB require X-API-Key on every request
+    headers: dict[str, str] = {}
+    api_key = getattr(ov_server, "api_key", None)
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    health = _request_openviking_json(server_url, "/health", headers=headers)
     if not health.ok:
         _server_unavailable_warning(server_url, health)
         return

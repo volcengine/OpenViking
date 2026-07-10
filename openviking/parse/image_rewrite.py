@@ -227,7 +227,7 @@ async def rewrite_image_uris(
     root_prefix = root_uri.rstrip("/")
 
     # Find all .md files recursively
-    glob_result = await viking_fs.glob("*.md", uri=root_uri, ctx=ctx)
+    glob_result = await viking_fs.glob("**/*.md", uri=root_uri, ctx=ctx)
     md_uris = glob_result.get("matches", [])
 
     if not md_uris:
@@ -275,7 +275,13 @@ async def rewrite_image_uris(
 
         if rewrite_count > 0:
             try:
-                await viking_fs.write_file(md_uri, new_content, ctx=ctx)
+                # TODO: This must be optimized once pathlock is pushed down into ragfs.
+                await viking_fs.write_file(
+                    md_uri,
+                    new_content,
+                    ctx=ctx,
+                    lock_handle=lock_handle,
+                )
                 files_processed += 1
                 references_rewritten += rewrite_count
                 logger.debug(f"[image_rewrite] Rewrote {rewrite_count} image ref(s) in {md_uri}")

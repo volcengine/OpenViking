@@ -30,6 +30,7 @@ def init_queue_manager(
     mount_point: str = "/queue",
     max_concurrent_embedding: int = 10,
     max_concurrent_semantic: int = 64,
+    max_concurrent_external_parse: int = 4,
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
 
@@ -47,6 +48,7 @@ def init_queue_manager(
         mount_point=mount_point,
         max_concurrent_embedding=max_concurrent_embedding,
         max_concurrent_semantic=max_concurrent_semantic,
+        max_concurrent_external_parse=max_concurrent_external_parse,
     )
     return _instance
 
@@ -67,6 +69,7 @@ class QueueManager:
     # Standard queue names
     EMBEDDING = "Embedding"
     SEMANTIC = "Semantic"
+    EXTERNAL_PARSE = "ExternalParse"
 
     def __init__(
         self,
@@ -75,6 +78,7 @@ class QueueManager:
         mount_point: str = "/queue",
         max_concurrent_embedding: int = 10,
         max_concurrent_semantic: int = 64,
+        max_concurrent_external_parse: int = 4,
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
@@ -82,6 +86,7 @@ class QueueManager:
         self.mount_point = mount_point
         self._max_concurrent_embedding = max_concurrent_embedding
         self._max_concurrent_semantic = max_concurrent_semantic
+        self._max_concurrent_external_parse = max_concurrent_external_parse
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
@@ -149,11 +154,12 @@ class QueueManager:
             if thread.is_alive():
                 return
 
-        max_concurrent = (
-            self._max_concurrent_embedding
-            if queue.name == self.EMBEDDING
-            else self._max_concurrent_semantic
-        )
+        if queue.name == self.EMBEDDING:
+            max_concurrent = self._max_concurrent_embedding
+        elif queue.name == self.EXTERNAL_PARSE:
+            max_concurrent = self._max_concurrent_external_parse
+        else:
+            max_concurrent = self._max_concurrent_semantic
         stop_event = threading.Event()
         self._queue_stop_events[queue.name] = stop_event
         thread = threading.Thread(

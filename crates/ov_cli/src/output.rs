@@ -194,9 +194,13 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
                     }
                 }
             }
+            let expandable_lists_are_entire_payload =
+                obj.keys().filter(|key| key.as_str() != "profile").count()
+                    == dict_lists.len() + prim_lists.len();
 
             // Rule 3a: single list[primitive] -> one item per line
-            if dict_lists.is_empty() && prim_lists.len() == 1 {
+            if expandable_lists_are_entire_payload && dict_lists.is_empty() && prim_lists.len() == 1
+            {
                 let (key, items) = &prim_lists[0];
                 let col = if key.ends_with("es") {
                     key.strip_suffix("es").unwrap_or(key)
@@ -218,7 +222,8 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
             }
 
             // Rule 3b: single list[dict] -> render directly
-            if dict_lists.len() == 1 && prim_lists.is_empty() {
+            if expandable_lists_are_entire_payload && dict_lists.len() == 1 && prim_lists.is_empty()
+            {
                 let (_key, items) = &dict_lists[0];
                 if let Some(table) = format_array_to_table(items, compact) {
                     println!("{}", append_profile_section(table, obj));
@@ -227,7 +232,7 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
             }
 
             // Rule 2: multiple list[dict] -> flatten with type column
-            if !dict_lists.is_empty() {
+            if expandable_lists_are_entire_payload && !dict_lists.is_empty() {
                 let mut merged: Vec<serde_json::Value> = Vec::new();
                 for (key, items) in &dict_lists {
                     let type_name = if key.ends_with("es") {
@@ -418,9 +423,12 @@ fn value_to_table(value: &serde_json::Value, compact: bool) -> Option<String> {
                 }
             }
         }
+        let expandable_lists_are_entire_payload =
+            obj.keys().filter(|key| key.as_str() != "profile").count()
+                == dict_lists.len() + prim_lists.len();
 
         // Rule 3a: single list[primitive] -> one item per line
-        if dict_lists.is_empty() && prim_lists.len() == 1 {
+        if expandable_lists_are_entire_payload && dict_lists.is_empty() && prim_lists.len() == 1 {
             let (key, items) = &prim_lists[0];
             let col = if key.ends_with("es") {
                 key.strip_suffix("es").unwrap_or(key)
@@ -439,13 +447,13 @@ fn value_to_table(value: &serde_json::Value, compact: bool) -> Option<String> {
         }
 
         // Rule 3b: single list[dict] -> render directly
-        if dict_lists.len() == 1 && prim_lists.is_empty() {
+        if expandable_lists_are_entire_payload && dict_lists.len() == 1 && prim_lists.is_empty() {
             let (_key, items) = &dict_lists[0];
             return format_array_to_table(items, compact);
         }
 
         // Rule 2: multiple list[dict] -> flatten with type column
-        if !dict_lists.is_empty() {
+        if expandable_lists_are_entire_payload && !dict_lists.is_empty() {
             let mut merged: Vec<serde_json::Value> = Vec::new();
             for (key, items) in &dict_lists {
                 let type_name = if key.ends_with("es") {
@@ -1097,6 +1105,27 @@ mod tests {
                 .join("\n")
             )
         );
+    }
+
+    #[test]
+    fn test_mixed_object_with_warnings_keeps_scalar_fields() {
+        let value = json!({
+            "status": "success",
+            "root_uri": "viking://resources/www.volcengine.com_1",
+            "task_id": "task-1",
+            "warnings": [
+                "'viking://resources/www.volcengine.com' already exists. Creating 'viking://resources/www.volcengine.com_1'."
+            ]
+        });
+
+        let rendered = value_to_table_with_profile(&value, true).expect("table should render");
+        let rendered = strip_ansi(&rendered);
+
+        assert!(rendered.contains("status"));
+        assert!(rendered.contains("root_uri"));
+        assert!(rendered.contains("task_id"));
+        assert!(rendered.contains("warnings"));
+        assert!(rendered.contains("viking://resources/www.volcengine.com_1"));
     }
 
     fn strip_ansi(input: &str) -> String {

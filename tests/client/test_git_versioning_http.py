@@ -239,3 +239,87 @@ async def test_http_restore_dry_run_does_not_mutate(http_git_client, http_servic
 
     log_after = await client.snapshot.log(limit=10)
     assert len(log_after) == len(log_before)
+
+
+_AUTH_HEADERS = {
+    "X-API-Key": "test-key",
+    "X-OpenViking-Account": "git_http_test_account",
+    "X-OpenViking-User": "git_http_test_user",
+}
+
+
+async def test_http_ignore_get_set_delete_roundtrip(http_app, http_service):
+    """Drive the /api/v1/snapshot/ignore routes directly via httpx.
+
+    Bypasses AsyncHTTPClient (whose snapshot namespace is not wired in this
+    environment) and confirms the FastAPI routes -> FsService -> VikingFS
+    path works end-to-end, including the ignore rule taking effect at commit.
+    """
+    transport = httpx.ASGITransport(app=http_app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", headers=_AUTH_HEADERS, timeout=30.0
+    ) as c:
+        # Absent -> empty string result.
+        r = await c.get("/api/v1/snapshot/ignore")
+        assert r.status_code == 200
+        assert r.json()["result"] == ""
+
+        # Set via PUT.
+        r = await c.put("/api/v1/snapshot/ignore", json={"content": "*.log\n"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "ok"
+
+        # Read back.
+        r = await c.get("/api/v1/snapshot/ignore")
+        assert r.json()["result"] == "*.log\n"
+
+        # The rule affects commits over HTTP: a .log file is skipped.
+        await _write_blob(http_service, "viking://resources/h_keep.md", b"keep")
+        await _write_blob(http_service, "viking://resources/h_skip.log", b"skip")
+        r = await c.post(
+            "/api/v1/snapshot/commit",
+            json={"message": "http ignore"},
+        )
+        assert r.status_code == 200
+        body = r.json()["result"]
+        assert body["result"] == "created"
+        assert body["ignored"] == 1
+
+        # Delete is idempotent.
+        r = await c.delete("/api/v1/snapshot/ignore")
+        assert r.status_code == 200
+        r = await c.delete("/api/v1/snapshot/ignore")
+        assert r.status_code == 200
+
+        # Gone -> empty string again.
+        r = await c.get("/api/v1/snapshot/ignore")
+        assert r.json()["result"] == ""
+
+
+async def test_http_sdk_snapshot_ignore_roundtrip(http_git_client, http_service):
+    """Drive ignore management through the real AsyncHTTPClient.snapshot namespace.
+
+    Unlike test_http_ignore_get_set_delete_roundtrip (which hits the routes
+    with raw httpx), this exercises the SDK surface end-to-end:
+    AsyncHTTPClient.snapshot.get/set/delete_gitignore -> httpx -> FastAPI ->
+    FsService -> VikingFS, including the rule taking effect at commit time.
+    """
+    client = http_git_client
+
+    # Absent -> empty string.
+    assert await client.snapshot.get_gitignore() == ""
+
+    # Set a rule via the SDK namespace.
+    await client.snapshot.set_gitignore(content="*.log\n")
+    assert await client.snapshot.get_gitignore() == "*.log\n"
+
+    # The rule affects a commit performed through the same SDK namespace.
+    await _write_blob(http_service, "viking://resources/sdk_keep.md", b"keep")
+    await _write_blob(http_service, "viking://resources/sdk_skip.log", b"skip")
+    commit = await client.snapshot.commit(message="sdk ignore")
+    assert commit["result"] == "created"
+    assert commit["ignored"] == 1
+
+    # Delete via the SDK namespace, then confirm it is gone.
+    await client.snapshot.delete_gitignore()
+    assert await client.snapshot.get_gitignore() == ""

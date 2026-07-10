@@ -37,9 +37,29 @@ claude mcp add --transport http openviking \
 
 > 如果你需要免工具调用的自动召回与自动捕获，请使用 [Claude Code 记忆插件](./02-claude-code.md)。
 
-### Trae / Cursor / ChatGPT / Codex / OpenCode
+### Trae / Cursor / ChatGPT / Codex
 
 使用上面的标准 `mcpServers` 配置即可——均已通过 API Key 鉴权验证。
+
+### OpenCode
+
+在 `~/.config/opencode/opencode.json` 中使用 OpenCode 原生 `mcp` 配置：
+
+```json
+{
+  "mcp": {
+    "openviking": {
+      "type": "remote",
+      "url": "https://your-server.com/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
+      }
+    }
+  }
+}
+```
 
 ### Claude Desktop / Claude.ai (OAuth)
 

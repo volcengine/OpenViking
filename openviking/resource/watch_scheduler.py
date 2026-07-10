@@ -18,8 +18,10 @@ from openviking.resource.feishu_watch_auth import (
     is_feishu_auth_state,
 )
 from openviking.resource.watch_manager import WatchManager
+from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -249,24 +251,35 @@ class WatchScheduler:
                     role=role,
                 )
 
-                processor_kwargs = dict(getattr(task, "processor_kwargs", {}) or {})
-                processor_kwargs.pop("build_index", None)
-                processor_kwargs.pop("summarize", None)
-                auth_state = getattr(task, "auth_state", None)
-                if is_feishu_auth_state(auth_state):
-                    try:
-                        auth_state = await self._prepare_feishu_auth_state(task, auth_state)
-                        processor_kwargs["feishu_access_token"] = auth_state["access_token"]
-                    except FeishuTokenRefreshError as e:
-                        if e.permanent:
-                            should_deactivate = True
-                            deactivation_reason = str(e)
-                            logger.error(
-                                f"[WatchScheduler] Task {task.task_id} permanent Feishu "
-                                f"token refresh failure: {e}. Deactivating task."
-                            )
-                        else:
-                            raise
+                if task.to_uri:
+                    target_exists = await self._check_target_uri_exists(task.to_uri, ctx)
+                    if target_exists is False:
+                        should_deactivate = True
+                        deactivation_reason = f"Watched target URI does not exist: {task.to_uri}"
+                        logger.warning(
+                            f"[WatchScheduler] Task {task.task_id}: {deactivation_reason}. "
+                            "Deactivating task."
+                        )
+
+                if not should_deactivate:
+                    processor_kwargs = dict(getattr(task, "processor_kwargs", {}) or {})
+                    processor_kwargs.pop("build_index", None)
+                    processor_kwargs.pop("summarize", None)
+                    auth_state = getattr(task, "auth_state", None)
+                    if is_feishu_auth_state(auth_state):
+                        try:
+                            auth_state = await self._prepare_feishu_auth_state(task, auth_state)
+                            processor_kwargs["feishu_access_token"] = auth_state["access_token"]
+                        except FeishuTokenRefreshError as e:
+                            if e.permanent:
+                                should_deactivate = True
+                                deactivation_reason = str(e)
+                                logger.error(
+                                    f"[WatchScheduler] Task {task.task_id} permanent Feishu "
+                                    f"token refresh failure: {e}. Deactivating task."
+                                )
+                            else:
+                                raise
 
                 if not should_deactivate:
                     result = await self._resource_service.add_resource(
@@ -382,6 +395,20 @@ class WatchScheduler:
         except Exception as e:
             logger.warning(f"[WatchScheduler] Failed to check path existence {path}: {e}")
             return False
+
+    async def _check_target_uri_exists(self, uri: str, ctx: RequestContext) -> Optional[bool]:
+        if self._viking_fs is None:
+            return True
+        try:
+            await self._viking_fs.stat(uri, ctx=ctx)
+            return True
+        except NotFoundError:
+            return False
+        except Exception as e:
+            if is_not_found_error(e):
+                return False
+            logger.warning(f"[WatchScheduler] Failed to check target URI existence {uri}: {e}")
+            return None
 
     @property
     def is_running(self) -> bool:

@@ -17,7 +17,7 @@ from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
-from openviking.session.memory.dataclass import ResolvedOperations, StoredLink
+from openviking.session.memory.dataclass import MemoryFile, ResolvedOperations, StoredLink
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import (
     MemoryUpdateResult,
@@ -547,6 +547,7 @@ class SessionCompressorV2:
             strict_extract_errors=strict_extract_errors,
             phase_label="trajectory",
             allowed_memory_types=allowed_execution_types,
+            thinking=True,
         )
         if traj_result is None:
             return empty_result
@@ -622,6 +623,7 @@ class SessionCompressorV2:
                 phase_label=f"experience({traj_uri})",
                 post_apply=_append_sources_before_unlock,
                 allowed_memory_types=allowed_execution_types,
+                thinking=True,
             )
             if exp_result is None:
                 fallback_uris = await self._single_existing_experience_uris(
@@ -719,6 +721,7 @@ class SessionCompressorV2:
         phase_label: str,
         post_apply: Optional[ExtractPostApply] = None,
         allowed_memory_types: Optional[set[str]] = None,
+        thinking: bool = False,
     ):
         """Run one ExtractLoop phase with its own lock scope, then apply operations.
 
@@ -758,6 +761,7 @@ class SessionCompressorV2:
             ctx=ctx,
             context_provider=provider,
             isolation_handler=isolation_handler,
+            thinking=thinking,
         )
 
         lock_manager = None
@@ -1025,12 +1029,13 @@ class SessionCompressorV2:
                     [lock_path],
                     lock_mode="exact",
                     handle=lock_handle,
-                ):
+                ) as active_lock_handle:
                     await self._append_trajectory_metadata(
                         exp_uri,
                         normalized_traj_uris,
                         ctx,
                         viking_fs,
+                        lock_handle=active_lock_handle,
                     )
             except Exception as e:
                 logger.warning(f"Failed to append source trajectories to {exp_uri}: {e}")
@@ -1041,6 +1046,7 @@ class SessionCompressorV2:
         traj_uris: List[str],
         ctx,
         viking_fs,
+        lock_handle=None,
     ) -> None:
         from datetime import timezone
 
@@ -1064,7 +1070,13 @@ class SessionCompressorV2:
         mf.links = new_exp_links
 
         if links_changed:
-            await viking_fs.write_file(exp_uri, MemoryFileUtils.write(mf), ctx=ctx)
+            # TODO: This must be optimized once pathlock is pushed down into ragfs.
+            await viking_fs.write_file(
+                exp_uri,
+                MemoryFileUtils.write(mf),
+                ctx=ctx,
+                lock_handle=lock_handle,
+            )
             tracer.info(
                 f"[agent_link] wrote exp→traj links -> {exp_uri} (traj_count={len(traj_uris)})"
             )
@@ -1168,17 +1180,47 @@ class SessionCompressorV2:
                 }
             )
 
-        # Read new content for adds and updates
-        for item in adds + updates:
+        # Read new content for adds and updates.
+        # Some upsert operations can be reported as successful even when the
+        # final file body is identical to the pre-existing content (for
+        # example, a no-op merge/patch or a write that only re-serializes the
+        # same memory). memory_diff.json should only include effective content
+        # changes, so filter no-op updates after the final content is known.
+        effective_adds = []
+        for item in adds:
             try:
                 content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
                 mf = MemoryFileUtils.read(content)
                 item["after"] = mf.content
             except Exception:
                 pass
+            effective_adds.append(item)
+
+        effective_updates = []
+        for item in updates:
+            op = upsert_by_uri.get(item["uri"])
+            old_file = op.old_memory_file_content if op else None
+            new_file = None
+            try:
+                content = await viking_fs.read_file(uri=item["uri"], ctx=ctx)
+                new_file = MemoryFileUtils.read(content, uri=item["uri"])
+                item["after"] = new_file.content
+            except Exception:
+                pass
+            if old_file is not None and self._same_memory_file(old_file, new_file):
+                logger.info(
+                    "Skipping unchanged memory file in memory_diff.json: %s",
+                    item.get("uri"),
+                )
+                continue
+            effective_updates.append(item)
+
+        adds = effective_adds
+        updates = effective_updates
 
         return {
             "archive_uri": archive_uri,
+            "trace_id": tracer.get_trace_id() or None,
             "extracted_at": datetime.utcnow().isoformat() + "Z",
             "operations": {
                 "adds": adds,
@@ -1191,6 +1233,18 @@ class SessionCompressorV2:
                 "total_deletes": len(deletes),
             },
         }
+
+    @staticmethod
+    def _same_memory_file(before: Optional[MemoryFile], after: Optional[MemoryFile]) -> bool:
+        """Return whether two parsed memory files represent the same stored memory."""
+        if before is None or after is None:
+            return False
+        # memory_type is commonly known from the operation/URI even when the raw
+        # memory file does not serialize it, so do not treat that metadata-only
+        # representation difference as a real file update.
+        return before.model_dump(exclude={"uri", "memory_type"}) == after.model_dump(
+            exclude={"uri", "memory_type"}
+        )
 
     def _get_memory_type_from_uri(self, uri: str) -> str:
         """Extract memory type from URI.

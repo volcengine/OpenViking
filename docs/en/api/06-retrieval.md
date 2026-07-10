@@ -54,7 +54,8 @@ The `find()` method performs pure vector similarity search for simple query scen
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| query | str | Yes | - | Search query string |
+| query | str | No | "" | Search query string. Required unless `image_url` is provided |
+| image_url | str | No | None | Image query as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | node_limit | int | No | None | Maximum number of results |
@@ -71,6 +72,11 @@ The `find()` method performs pure vector similarity search for simple query scen
 - With empty `target_uri`, non-ROOT retrieval searches the current user root (`viking://user/{user}`) and shared `viking://resources`.
 - To filter the current user's peer collection to one peer for filesystem and retrieval operations, send `X-OpenViking-Actor-Peer: <peer_id>` or construct the SDK/CLI client with `actor_peer_id`. See [Multi-Tenant: Peer Collection Filter](../concepts/11-multi-tenant.md#peer-restricted-view).
 - Current-user shorthand target URIs such as `viking://user/memories`, `viking://user/resources`, and `viking://user/skills` are canonicalized from the authenticated request identity.
+
+**Image search notes**:
+- Image queries use the image vector as the query and search L2 resource leaf nodes in the target scope by default. Results are not limited to image files; multimodal embedding decides similarity between the query image and text/image resources.
+- Text-only embedding models still index image summaries, but image query input is rejected.
+- Existing image resources keep their existing vectors; image-vector recall applies to images vectorized after this capability is enabled or after a later reindex.
 
 **FindResult Structure**
 
@@ -140,6 +146,18 @@ curl -X POST http://localhost:1933/api/v1/search/find \
     -d '{
         "query": "authentication",
         "context_type": ["memory", "resource"]
+}'
+```
+
+**Image Search**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/find \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "image_url": "viking://resources/images/cat.png",
+        "limit": 10
     }'
 ```
 
@@ -168,6 +186,9 @@ typed_results = client.find(
     "authentication",
     context_type=[ContextType.MEMORY, ContextType.RESOURCE],
 )
+
+# Search by local image, bytes, data URI, HTTP URL, or viking:// URI
+image_results = client.find(image="/path/to/photo.png")
 
 # Iterate through results
 for ctx in results.resources:
@@ -259,6 +280,18 @@ openviking find "how to authenticate users" --level 0
 
 # Limit to specific level(s) (L1 and L2) using short option
 openviking find "how to authenticate users" -L 1,2
+
+# Image queries use only --image; pass a local path, viking://, http(s)://, or data:image URI
+openviking find --image ./query.png --uri "viking://resources/images" --limit 5
+
+# Search by an image already stored in VikingFS
+openviking find --image "viking://resources/images/cat.png" --uri "viking://resources/images" --limit 5
+
+# Search by a public image URL
+openviking find --image "https://example.com/images/cat.png" --uri "viking://resources/images" --limit 5
+
+# Combine text and image
+openviking find "red poster style" --image ./poster.png --uri "viking://resources/images"
 ```
 
 **Response Example**
@@ -327,7 +360,8 @@ The `search()` method adds session context understanding and intent analysis cap
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| query | str | Yes | - | Search query string |
+| query | str | No | "" | Search query string. Required unless `image_url` is provided |
+| image_url | str | No | None | Image query as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
@@ -342,7 +376,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
-`search()` uses the same target resolution rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`.
+`search()` uses the same target resolution rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning.
 
 #### 3. Usage Examples
 
@@ -374,6 +408,19 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     -H "X-API-Key: your-key" \
     -d '{
         "query": "how to implement OAuth 2.0 authorization code flow"
+}'
+```
+
+**Image Search**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/search \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: your-key" \
+    -d '{
+        "query": "similar poster",
+        "image_url": "data:image/png;base64,...",
+        "limit": 10
     }'
 ```
 
@@ -422,6 +469,12 @@ for ctx in results.resources:
     print(f"Found: {ctx.uri} (score: {ctx.score:.3f})")
 ```
 
+**Image Search**
+
+```python
+results = client.search("similar poster", image="/path/to/poster.png")
+```
+
 **Go SDK**
 
 ```go
@@ -456,6 +509,9 @@ openviking search "best practices" --level 0
 
 # Limit to specific level(s) (L1 and L2) using short option
 openviking search "how to implement OAuth" -L 1,2
+
+# Image queries also use --image; they use direct retrieval and skip session planning
+openviking search "similar poster" --image ./poster.png --uri "viking://resources/images"
 ```
 
 **Response Example**
@@ -532,7 +588,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
 | level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
 
 #### 3. Usage Examples
@@ -565,7 +621,8 @@ client.initialize()
 results = client.grep(
     "viking://resources",
     "authentication",
-    case_insensitive=True
+    case_insensitive=True,
+    node_limit=1024,
 )
 
 print(f"Found {results['count']} matches")
@@ -577,8 +634,10 @@ for match in results['matches']:
 **Go SDK**
 
 ```go
+nodeLimit := 1024
 result, err := client.Grep(ctx, "viking://resources", "authentication", &openviking.GrepOptions{
     CaseInsensitive: true,
+    NodeLimit:       &nodeLimit,
 })
 if err != nil {
     return err
@@ -635,7 +694,7 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 - `[]` matches character range
 
 **Code Entry Points**:
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.glob()` - Python SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.glob()` - Python SDK entry (HTTP)
 - `openviking/server/routers/search.py:glob()` - HTTP router
 - `crates/ov_cli/src/commands/search.rs:glob()` - Rust CLI command
 
@@ -647,7 +706,7 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
-| node_limit | int | No | None | Maximum number of matches to return |
+| node_limit | int | No | 256 | Maximum number of matches to return. Omitted requests default to 256; pass a larger integer when you need more results |
 
 #### 3. Usage Examples
 
@@ -675,21 +734,23 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
-# Find all markdown files
+# Find all markdown files (defaults to returning at most 256 matches)
 results = client.glob("**/*.md", "viking://resources")
 print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# Find all Python files
-results = client.glob("**/*.py", "viking://resources")
+# Find all Python files with a higher explicit cap
+results = client.glob("**/*.py", "viking://resources", node_limit=1024)
 print(f"Found {results['count']} Python files")
 ```
 
 **Go SDK**
 
 ```go
-result, err := client.Glob(ctx, "**/*.md", "viking://resources")
+result, err := client.Glob(ctx, "**/*.md", "viking://resources", &openviking.GlobOptions{
+    NodeLimit: openviking.Int(1024),
+})
 if err != nil {
     return err
 }

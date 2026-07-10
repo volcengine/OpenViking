@@ -91,8 +91,8 @@ openclaw --version
 
 **If `openclaw` is missing:**
 
-> (CN) 你的系统没有安装 OpenClaw。请先安装 OpenClaw（>= 2026.4.8），然后再回来找我。
-> (EN) OpenClaw is not installed. Please install OpenClaw (>= 2026.4.8) first, then come back.
+> (CN) 你的系统没有安装 OpenClaw。请先安装 OpenClaw（>= 2026.5.27），然后再回来找我。
+> (EN) OpenClaw is not installed. Please install OpenClaw (>= 2026.5.27) first, then come back.
 
 **Stop. Do NOT continue.**
 
@@ -736,7 +736,7 @@ Match against actual stderr / JSON `error` strings.
 
 | Symptom (exact string) | Likely cause | Fix |
 |---|---|---|
-| `command not found: openclaw` | OpenClaw not installed | Stop. Ask user to install OpenClaw >= 2026.4.8. |
+| `command not found: openclaw` | OpenClaw not installed | Stop. Ask user to install OpenClaw >= 2026.5.27. |
 | `command not found: node` / `'node' is not recognized` | Node missing | Stop. Ask user to install Node.js >= 22. |
 | `429` / `rate limit` / `Too Many Requests` from `plugins install` | ClawHub throttle | Switch to backup Path B (`ov-install`). |
 | `not logged in` / `please log in` from `plugins install` | Anonymous user hit limit | Switch to backup Path B (`ov-install`). |

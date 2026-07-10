@@ -113,6 +113,8 @@ embedding_template: |
 directory: "viking://user/{{ user_space }}/memories/..."
 enabled: true
 operation_mode: "upsert"
+stage: "user"
+peer_enabled: true
 ```
 
 字段含义：
@@ -135,6 +137,10 @@ operation_mode: "upsert"
   - 是否启用该类记忆
 - `operation_mode`
   - 该类记忆的更新模式，例如 `upsert`
+- `stage`
+  - 抽取阶段。默认是 `user`，参与会话用户记忆抽取；`agent` 用于 trajectories、experiences 这类执行派生 schema。
+- `peer_enabled`
+  - 当 `peer_id` 或消息 ranges 指向某个 peer 时，是否将该类记忆按 peer 分目录存储。默认是 `true`；如果该类记忆必须保留在当前 user 目录下，设置为 `false`。
 
 编写 memory schema 时，建议重点关注：
 
@@ -249,7 +255,7 @@ operation_mode: "upsert"
   - 关键字段：`tool_name`、`static_desc`、`call_count`、`success_time`、`when_to_use`、`optimal_params`
 
 - `trajectories`
-  - 生效环节：agent 轨迹型记忆落盘阶段（agent_only，仅追加）
+  - 生效环节：agent 轨迹型记忆落盘阶段（`stage: agent`，仅追加）
   - 影响能力：agent 任务轨迹中可复用的操作契约沉淀——多步决策、工具调用、执行链路
   - 作用：定义"任务轨迹中提炼出哪些可复用的操作/契约"这一类轨迹型记忆
   - 关键字段：`trajectory_name`、`outcome`、`retrieval_anchor`、`content`

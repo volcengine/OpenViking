@@ -87,7 +87,6 @@ pub async fn handle_add_resource(
         auth.account,
         auth.user,
         ctx.config.effective_actor_peer_id(),
-        ctx.config.agent_id.clone(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.extra_headers.clone(),
@@ -506,11 +505,15 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::CreateAccount {
             account_id,
             admin_user_id,
+            seed,
+            user_config_json,
         } => {
             commands::admin::create_account(
                 &client,
                 &account_id,
                 &admin_user_id,
+                seed.as_deref(),
+                user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -530,12 +533,16 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             account_id,
             user_id,
             role,
+            seed,
+            user_config_json,
         } => {
             commands::admin::register_user(
                 &client,
                 &account_id,
                 &user_id,
                 &role,
+                seed.as_deref(),
+                user_config_json.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -589,11 +596,13 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
         AdminCommands::RegenerateKey {
             account_id,
             user_id,
+            seed,
         } => {
             commands::admin::regenerate_key(
                 &client,
                 &account_id,
                 &user_id,
+                seed.as_deref(),
                 ctx.output_format,
                 ctx.compact,
             )
@@ -1247,8 +1256,9 @@ pub async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Res
 }
 
 pub async fn handle_find(
-    query: String,
+    query: Option<String>,
     uri: String,
+    image: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
     after: Option<String>,
@@ -1258,7 +1268,16 @@ pub async fn handle_find(
     tags: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
+    let query = query.unwrap_or_default();
+    if query.trim().is_empty() && image.is_none() {
+        return Err(Error::Client(
+            "Search query or --image must not be empty.".to_string(),
+        ));
+    }
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(ref img) = image {
+        params.push(format!("--image {}", img));
+    }
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
@@ -1285,6 +1304,7 @@ pub async fn handle_find(
         &client,
         &query,
         &uri,
+        image,
         node_limit,
         threshold,
         after.as_deref(),
@@ -1300,8 +1320,9 @@ pub async fn handle_find(
 }
 
 pub async fn handle_search(
-    query: String,
+    query: Option<String>,
     uri: String,
+    image: Option<String>,
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
@@ -1312,7 +1333,16 @@ pub async fn handle_search(
     tags: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
+    let query = query.unwrap_or_default();
+    if query.trim().is_empty() && image.is_none() {
+        return Err(Error::Client(
+            "Search query or --image must not be empty.".to_string(),
+        ));
+    }
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(ref img) = image {
+        params.push(format!("--image {}", img));
+    }
     if let Some(s) = &session_id {
         params.push(format!("--session-id {}", s));
     }
@@ -1342,6 +1372,7 @@ pub async fn handle_search(
         &client,
         &query,
         &uri,
+        image,
         session_id,
         node_limit,
         threshold,
@@ -1494,6 +1525,18 @@ pub async fn handle_mv(from_uri: String, to_uri: String, ctx: CliContext) -> Res
 pub async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::filesystem::attrs(
+        &client,
+        &uri,
+        key.as_deref(),
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 pub async fn handle_grep(

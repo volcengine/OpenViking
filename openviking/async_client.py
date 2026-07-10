@@ -9,7 +9,7 @@ For HTTP mode, use AsyncHTTPClient or SyncHTTPClient.
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
@@ -20,6 +20,10 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+if TYPE_CHECKING:
+    from openviking.snapshot_namespace import AsyncSnapshotNamespace
 
 
 class AsyncOpenViking:
@@ -299,7 +303,9 @@ class AsyncOpenViking:
         Add a resource (file/URL) to OpenViking.
 
         Args:
-            path: Local file path or URL.
+            path: Local file path or URL. A sitemap / RSS / Atom URL ingests the
+                whole site as one resource tree; pass ``args={"site": True}`` to
+                force whole-site ingestion from a bare domain.
             reason: Context/reason for adding this resource.
             instruction: Specific instruction for processing.
             wait: If True, wait for processing to complete.
@@ -307,6 +313,9 @@ class AsyncOpenViking:
             parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
+            watch_interval: Auto-refresh interval in minutes (>0 enables a watch).
+                On a sitemap/feed URL this keeps the whole site refreshed.
+            args: Parser/accessor-specific options (e.g. ``site``, ``max_pages``).
             telemetry: Whether to attach operation telemetry data to the result.
         """
         await self._ensure_initialized()
@@ -505,7 +514,7 @@ class AsyncOpenViking:
 
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session: Optional[Union["Session", Any]] = None,
         session_id: Optional[str] = None,
@@ -519,6 +528,7 @@ class AsyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        image: Optional[Any] = None,
     ):
         """
         Complex search with session context.
@@ -550,11 +560,12 @@ class AsyncOpenViking:
             until=until,
             time_field=time_field,
             level=level,
+            image=image,
         )
 
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -566,6 +577,7 @@ class AsyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        image: Optional[Any] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -582,6 +594,7 @@ class AsyncOpenViking:
             until=until,
             time_field=time_field,
             level=level,
+            image=image,
         )
 
     # ============= FS methods =============
@@ -599,6 +612,14 @@ class AsyncOpenViking:
     async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read file content"""
         await self._ensure_initialized()
+        return await self._client.read(uri, offset=offset, limit=limit)
+
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read raw file content, including hidden MEMORY_FIELDS metadata."""
+        await self._ensure_initialized()
+        read_raw = getattr(self._client, "read_raw", None)
+        if read_raw is not None:
+            return await read_raw(uri, offset=offset, limit=limit)
         return await self._client.read(uri, offset=offset, limit=limit)
 
     async def write(

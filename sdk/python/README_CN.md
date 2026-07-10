@@ -182,6 +182,13 @@ result = client.find("hello", limit=5)
 print(result)
 ```
 
+图片搜索也使用同一组方法。`image` 支持本地路径、bytes、data URI、HTTP URL 或 `viking://` URI；服务端需要使用 multimodal embedding 模型。
+
+```python
+result = client.find(image="/path/to/photo.png", limit=5)
+result = client.search("similar poster", image="viking://resources/poster.png")
+```
+
 ## 管理员操作
 
 如果你使用 root key 连接，SDK 也暴露了管理员 API，例如：
@@ -206,9 +213,32 @@ root_client = SyncHTTPClient(
 result = root_client.admin_create_account(
     account_id="demo-account",
     admin_user_id="demo-admin",
+    seed="demo-admin-seed",
 )
 print(result)
+
+root_client.admin_register_user(
+    account_id="demo-account",
+    user_id="alice",
+    role="user",
+    seed="alice-seed",
+    user_config={
+        "add_targets": {
+            "resource_uri": "viking://user/resources/project-a",
+            "skill_uri": "viking://user/skills",
+        }
+    },
+)
+
+root_client.admin_regenerate_key(
+    account_id="demo-account",
+    user_id="alice",
+    seed="alice-new-seed",
+)
 ```
+
+`admin_create_account` 也接受同样结构的 `user_config`。这些字段用于初始化服务端用户配置；普通添加调用仍然只需省略 `to` / `parent` / `target_uri`，由服务端解析默认值。
+传入 `seed` 时，返回的 API Key 会基于 `sha256(user_id + "\0" + seed)` 生成；省略时仍使用随机生成逻辑。
 
 ## 错误处理
 

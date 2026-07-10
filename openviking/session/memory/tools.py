@@ -21,6 +21,12 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_LLM_HIDDEN_MEMORY_FIELDS = {
+    "source_extraction_id",
+    "source_extraction_ids",
+    "last_update_trace_id",
+}
+
 
 def optimize_search_result(result: Any, limit: int = 10) -> Any:
     """优化搜索结果以减少 Token 消耗，并过滤掉抽象文件。"""
@@ -192,6 +198,8 @@ class MemoryReadTool(MemoryTool):
             llm_result = mf.to_metadata()
             llm_result.pop("links", None)
             llm_result.pop("backlinks", None)
+            for hidden_field in _LLM_HIDDEN_MEMORY_FIELDS:
+                llm_result.pop(hidden_field, None)
             # Annotate with page_id for link extraction
             if ctx and ctx.page_id_map:
                 page_id = ctx.page_id_map.get_page_id(uri)
@@ -212,7 +220,6 @@ class MemoryReadTool(MemoryTool):
                 )
             return llm_result
         except NotFoundError as e:
-            tracer.info(f"read not found: {uri}")
             return {"error": str(e)}
         except Exception as e:
             tracer.error(f"Failed to execute read: {e}")

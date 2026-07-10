@@ -49,10 +49,11 @@ def stream_delta_value(delta: Any, name: str) -> str:
 def merge_stream_tool_call_delta(
     raw_tool_calls: dict[int, dict[str, Any]],
     delta_tool_call: Any,
+    fallback_index: int | None = None,
 ) -> None:
     index = getattr(delta_tool_call, "index", None)
     if index is None:
-        index = len(raw_tool_calls)
+        index = fallback_index if fallback_index is not None else len(raw_tool_calls)
     entry = raw_tool_calls.setdefault(
         int(index),
         {"id": "", "name": "", "arguments": ""},

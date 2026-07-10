@@ -182,6 +182,13 @@ result = client.find("hello", limit=5)
 print(result)
 ```
 
+Image search uses the same methods. Pass a local path, bytes, data URI, HTTP URL, or `viking://` URI with `image`. The server must use a multimodal embedding model.
+
+```python
+result = client.find(image="/path/to/photo.png", limit=5)
+result = client.search("similar poster", image="viking://resources/poster.png")
+```
+
 ## Admin Operations
 
 If you connect with a root key, the SDK also exposes admin APIs such as:
@@ -206,9 +213,35 @@ root_client = SyncHTTPClient(
 result = root_client.admin_create_account(
     account_id="demo-account",
     admin_user_id="demo-admin",
+    seed="demo-admin-seed",
 )
 print(result)
+
+root_client.admin_register_user(
+    account_id="demo-account",
+    user_id="alice",
+    role="user",
+    seed="alice-seed",
+    user_config={
+        "add_targets": {
+            "resource_uri": "viking://user/resources/project-a",
+            "skill_uri": "viking://user/skills",
+        }
+    },
+)
+
+root_client.admin_regenerate_key(
+    account_id="demo-account",
+    user_id="alice",
+    seed="alice-new-seed",
+)
 ```
+
+`admin_create_account` also accepts `user_config` with the same shape.
+These fields initialize server-side user config; ordinary add calls still just
+omit `to` / `parent` / `target_uri` and let the server resolve defaults.
+When `seed` is set, the returned API key is derived from
+`sha256(user_id + "\0" + seed)`; omit it for random key generation.
 
 ## Error Handling
 

@@ -7,7 +7,11 @@ from openviking.core.namespace import uri_parts
 class LinkRenderer:
     """Renders and strips local markdown links in memory file content based on StoredLink metadata."""
 
-    _RELATIVE_LINK_RE = re.compile(r"\[(?P<text>[^\]]+)\]\((?P<target>[^)\s]+)\)")
+    # Target may contain spaces (e.g. `[Frank Ocean](entities/frank ocean.md)`).
+    # Markdown permits literal spaces in destinations, though they are not portable
+    # across renderers; `render_links` therefore percent-encodes spaces in generated
+    # targets so they round-trip cleanly. We accept both forms when matching.
+    _RELATIVE_LINK_RE = re.compile(r"\[(?P<text>[^\]]+)\]\((?P<target>[^)]+)\)")
     _MEMORY_FIELDS_RE = re.compile(r"(\n\n<!--\s*MEMORY_FIELDS\s*\n)", re.DOTALL)
     _CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
     _ASCII_WORD_CHAR_RE = re.compile(r"[A-Za-z0-9_]")
@@ -23,15 +27,29 @@ class LinkRenderer:
     @staticmethod
     def _find_match_span(content: str, match_text: str) -> Optional[tuple[int, int]]:
         escaped = re.escape(match_text)
+        # Character spans already covered by an existing [text](target) link. A match
+        # inside one is already linked, so wrapping it again would produce a broken
+        # nested link like "[[Frank](..) Ocean](..)"; skip those candidates.
+        linked_spans = [
+            (m.start(), m.end()) for m in LinkRenderer._RELATIVE_LINK_RE.finditer(content)
+        ]
+
+        def _inside_existing_link(start: int, end: int) -> bool:
+            return any(ls <= start and end <= le for ls, le in linked_spans)
+
         if LinkRenderer._contains_cjk(match_text):
-            match = re.search(escaped, content)
-            if not match:
-                return None
-            return match.start(), match.end()
+            for match in re.finditer(escaped, content):
+                start, end = match.start(), match.end()
+                if _inside_existing_link(start, end):
+                    continue
+                return start, end
+            return None
 
         pattern = re.compile(escaped, re.IGNORECASE)
         for match in pattern.finditer(content):
             start, end = match.start(), match.end()
+            if _inside_existing_link(start, end):
+                continue
             left_char = content[start - 1] if start > 0 else ""
             right_char = content[end] if end < len(content) else ""
             if LinkRenderer._is_ascii_word_char(left_char) or LinkRenderer._is_ascii_word_char(
@@ -76,7 +94,13 @@ class LinkRenderer:
             if any(not (end <= rs or start >= re_) for rs, re_, _ in replacements):
                 continue
 
-            rendered = f"[{content[start:end]}]({link_target})"
+            # Percent-encode spaces in the rendered target so the link is portable
+            # across markdown renderers (e.g. `[Frank](entities/frank ocean.md)`
+            # would otherwise be ambiguous). We accept the literal-space form when
+            # matching existing links, but always emit the encoded form when
+            # generating new ones.
+            encoded_target = link_target.replace(" ", "%20")
+            rendered = f"[{content[start:end]}]({encoded_target})"
             replacements.append((start, end, rendered))
 
         # Apply in reverse order to preserve indices

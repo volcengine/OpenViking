@@ -2,10 +2,10 @@
 
 This plugin adds one unified OpenViking plugin for OpenCode:
 
-- Semantic retrieval for external repositories
+- OpenViking MCP tools for memory, resources, and code context
 - Long-term memory, session synchronization, lifecycle commit, and automatic recall
 
-This is the only OpenCode plugin example maintained in this repository. It does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. The former skill-style capabilities are exposed as OpenCode tools here.
+This is the only OpenCode plugin example maintained in this repository. It does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. Model tools are provided by the same stdio MCP proxy used by the Claude Code and Codex memory plugins.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ Prepare the following first:
 
 - OpenCode
 - OpenViking HTTP Server
-- Node.js / npm, used to install plugin dependencies
+- Node.js 18+
 - A valid OpenViking API key if authentication is enabled on the server
 
 Start OpenViking first:
@@ -53,8 +53,7 @@ mkdir -p ~/.config/opencode/plugins/openviking
 cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
-cd ~/.config/opencode/plugins/openviking
-npm install
+cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
 
 After installation, the layout should look like this:
@@ -66,7 +65,7 @@ After installation, the layout should look like this:
     ├── index.mjs
     ├── package.json
     ├── lib/
-    └── node_modules/
+    └── servers/
 ```
 
 The top-level `openviking.js` forwards the first-level `.js` entry that OpenCode can discover to the actual plugin directory:
@@ -92,22 +91,22 @@ Example configuration:
 
 ```json
 {
-  "endpoint": "http://localhost:1933",
-  "apiKey": "",
-  "account": "",
-  "user": "",
-  "peerId": "",
   "enabled": true,
   "timeoutMs": 30000,
   "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
   "autoRecall": {
     "enabled": true,
     "limit": 6,
-    "scoreThreshold": 0.15,
+    "scoreThreshold": 0.35,
     "maxContentChars": 500,
     "preferAbstract": true,
-    "tokenBudget": 2000
-  }
+    "tokenBudget": 2000,
+    "minQueryLength": 3
+  },
+  "commitTokenThreshold": 20000,
+  "commitKeepRecentCount": 10,
+  "profileTokenBudget": 10000,
+  "resumeContextBudget": 32000
 }
 ```
 
@@ -117,7 +116,7 @@ It is recommended to provide the API key through an environment variable instead
 export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
-`apiKey` is sent as `X-API-Key`. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty when using API-key mode with user/admin API keys. `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource requests; captured session messages store it as body `peer_id`.
+API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty when using API-key mode with user/admin API keys. `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource requests; captured session messages store it as body `peer_id`.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the corresponding values in `openviking-config.json`.
 
@@ -127,13 +126,13 @@ For advanced setups, use `OPENVIKING_PLUGIN_CONFIG` to point to another configur
 
 Restart OpenCode after changing plugin or OpenViking configuration.
 
-In a new OpenCode session, ask the agent to browse OpenViking memory or search for a known indexed resource. The plugin should expose these tools:
+In a new OpenCode session, ask the agent to browse OpenViking memory or search for a known indexed resource. The plugin should expose the OpenViking MCP server, with tools namespaced by OpenCode as `openviking_*`:
 
-- `memsearch`, `memread`, `membrowse`
-- `memgrep`, `memglob`
-- `memadd`, `memwrite`, `memremove`, `memqueue`
-- `memcommit`
-- `codesearch`, `codeoutline`, `codeexpand`
+- `openviking_recall`, `openviking_search`, `openviking_find`
+- `openviking_read`, `openviking_list`, `openviking_grep`, `openviking_glob`
+- `openviking_remember`, `openviking_add_resource`, `openviking_forget`, `openviking_health`
+- `openviking_list_watches`, `openviking_cancel_watch`
+- `openviking_code_search`, `openviking_code_outline`, `openviking_code_expand`
 
 If anything looks wrong, check the runtime files:
 
@@ -148,35 +147,37 @@ For a local server, also confirm OpenViking is reachable:
 curl http://localhost:1933/health
 ```
 
-## Available Tools
+## Available MCP Tools
 
-The plugin exposes the following tools through the OpenCode `tool` hook:
+The plugin registers OpenViking's stdio MCP proxy through OpenCode config. The server's real `tools/list` response is the source of truth; current OpenViking servers expose:
 
-- `memsearch`: semantic retrieval across memories, resources, and skills
-- `memread`: read a specific `viking://` URI
-- `membrowse`: browse the OpenViking filesystem
-- `memcommit`: commit the current session and trigger memory extraction
-- `memgrep`: exact text or pattern search, replacing the former `ov grep` use case
-- `memglob`: file glob enumeration, replacing the former `ov glob` use case
-- `memadd`: add a remote URL or local file resource, replacing common `ov add-resource` scenarios
-- `memwrite`: write text to a `viking://` file through `/api/v1/content/write`
-- `memremove`: remove resources, replacing `ov rm`
-- `memqueue`: inspect the processing queue, replacing `ov observer queue`
+- `openviking_recall`: balanced current-task recall.
+- `openviking_search`: deep semantic retrieval across memories, resources, and skills.
+- `openviking_find`: fast semantic retrieval.
+- `openviking_remember`: store important facts or decisions for memory extraction.
+- `openviking_read`: read one or more `viking://` files.
+- `openviking_list`: list a `viking://` directory.
+- `openviking_grep`: exact text or regex search.
+- `openviking_glob`: glob file matching.
+- `openviking_add_resource`: add a URL, local file, sitemap, or feed.
+- `openviking_forget`: delete a `viking://` URI after explicit user confirmation.
+- `openviking_list_watches` / `openviking_cancel_watch`: inspect or cancel resource watches.
+- `openviking_code_search`, `openviking_code_outline`, `openviking_code_expand`: inspect indexed code symbols.
+- `openviking_health`: check OpenViking server health.
 
 Usage guidance:
 
-- Use `memsearch` for conceptual questions.
-- Use `memgrep` for exact symbols, function names, class names, or error strings.
-- Use `memglob` to enumerate files.
-- Use `memread` to read content.
-- Use `membrowse` to explore directory structure.
-- Use `memwrite` for durable notes or small direct text updates; default mode is `create`.
-- Before deleting anything, obtain explicit user confirmation first; then call `memremove` with `confirm: true`.
-- If an agent tries to use OpenCode's local `read`, `glob`, or `grep` tools on a `viking://` URI, the plugin blocks that call and points it to `memread`, `membrowse`, or `memsearch`.
+- Use `openviking_search` for conceptual questions.
+- Use `openviking_grep` for exact symbols, function names, class names, or error strings.
+- Use `openviking_glob` to enumerate files.
+- Use `openviking_read` to read content.
+- Use `openviking_list` to explore directory structure.
+- Before deleting anything, obtain explicit user confirmation first; then call `openviking_forget`.
+- If an agent tries to use OpenCode's local `read`, `glob`, or `grep` tools on a `viking://` URI, the plugin blocks that call and points it to the MCP tools.
 
-## Local Files with `memadd`
+## Local Files with `openviking_add_resource`
 
-`memadd` supports three input types:
+`openviking_add_resource` supports three input types:
 
 - Remote `http(s)` URL: directly calls `/api/v1/resources`
 - Local file path: first calls `/api/v1/resources/temp_upload`, then adds the resource using the returned `temp_file_id`
@@ -185,9 +186,9 @@ Usage guidance:
 Relative paths are resolved against the current OpenCode project directory. Examples:
 
 ```text
-memadd path="https://example.com/spec.md" to="viking://resources/spec"
-memadd path="./docs/notes.md" parent="viking://resources/"
-memadd path="file:///home/alice/project/notes.md" reason="project notes"
+openviking_add_resource(path="https://example.com/spec.md", to="viking://resources/spec")
+openviking_add_resource(path="./docs/notes.md", to="viking://resources/notes.md")
+openviking_add_resource(path="file:///home/alice/project/notes.md", description="project notes")
 ```
 
 Automatic zip upload for local directories is not supported yet. Passing a directory will return a clear error.
@@ -203,7 +204,7 @@ By default, the plugin writes runtime files to:
 Possible files include:
 
 - `openviking-memory.log`
-- `openviking-session-map.json`
+- `openviking-session-state.json`
 
 You can change this directory with `runtime.dataDir` in the configuration.
 
@@ -214,7 +215,7 @@ These are local runtime files and should not be committed to the repository.
 | Issue | What to check |
 |-------|---------------|
 | Plugin does not load | For package installs, confirm `~/.config/opencode/opencode.json` contains `@openviking/opencode-plugin`; for source installs, confirm `~/.config/opencode/plugins/openviking.js` exists |
-| Tools call the wrong server | Check `endpoint` in `~/.config/opencode/openviking-config.json`, or set `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
+| MCP tools call the wrong server | Check `~/.openviking/ovcli.conf`, or set `OPENVIKING_*` env vars / `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
 | Recall is empty | Confirm OpenViking has indexed memories/resources and `autoRecall.enabled` is `true` |
-| Local `memadd` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |
+| Local `openviking_add_resource` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |

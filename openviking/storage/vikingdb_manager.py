@@ -185,7 +185,6 @@ class VikingDBManagerProxy:
 
         # 使用（无需传 ctx；仅在需要保留未显式传入字段时开启 partial_update）
         await proxy.upsert(data, partial_update=True)
-        results = await proxy.search_similar_memories(...)
         ```
     """
 
@@ -306,9 +305,7 @@ class VikingDBManagerProxy:
         self,
         sparse_embedder: LocalBM25Embedder,
     ) -> int:
-        return await self._manager.rebuild_local_bm25_sparse_vectors(
-            sparse_embedder, ctx=self._ctx
-        )
+        return await self._manager.rebuild_local_bm25_sparse_vectors(sparse_embedder, ctx=self._ctx)
 
     async def exists(self, id: str) -> bool:
         return await self._manager.exists(id, ctx=self._ctx)
@@ -427,6 +424,7 @@ class VikingDBManagerProxy:
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
@@ -437,27 +435,9 @@ class VikingDBManagerProxy:
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
+            level=level,
             limit=limit,
             offset=offset,
-        )
-
-    async def search_global_roots_in_tenant(
-        self,
-        query_vector: Optional[List[float]],
-        sparse_query_vector: Optional[Dict[str, float]] = None,
-        context_type: Optional[str] = None,
-        target_directories: Optional[List[str]] = None,
-        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        return await self._manager.search_global_roots_in_tenant(
-            self._ctx,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            context_type=context_type,
-            target_directories=target_directories,
-            extra_filter=extra_filter,
-            limit=limit,
         )
 
     async def search_children_in_tenant(
@@ -479,21 +459,6 @@ class VikingDBManagerProxy:
             target_directories=target_directories,
             extra_filter=extra_filter,
             limit=limit,
-        )
-
-    async def search_similar_memories(
-        self,
-        owner_space: Optional[str],
-        category_uri_prefix: str,
-        query_vector: List[float],
-        limit: int = 5,
-    ) -> List[Dict[str, Any]]:
-        return await self._manager.search_similar_memories(
-            owner_space=owner_space,
-            category_uri_prefix=category_uri_prefix,
-            query_vector=query_vector,
-            limit=limit,
-            ctx=self._ctx,
         )
 
     async def get_context_by_uri(

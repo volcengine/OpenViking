@@ -1,4 +1,6 @@
+import asyncio
 import re
+import time
 from datetime import datetime
 from typing import Any
 
@@ -31,7 +33,13 @@ _global_clients: dict[str, Any] = {}
 
 async def get_global_client(workspace_id: str | None) -> VikingClient:
     """Get or create the shared VikingClient."""
-    cache_key = str(workspace_id or "__default__")
+    # VikingClient (and its underlying AsyncHTTPClient / streaming updater / connection
+    # pool) creates asyncio.Event/Lock/Semaphore bound to the running loop at creation
+    # time. Reusing one client across event loops (which happens with the native
+    # multi-threaded rollout workers in tau2 training) raises
+    # "<asyncio.locks.Event ... [unset]> is bound to a different event loop". Key the
+    # cache by (workspace_id, running_loop) so each loop gets its own client.
+    cache_key = (str(workspace_id or "__default__"), id(asyncio.get_running_loop()))
     client = _global_clients.get(cache_key)
     if client is None:
         client = await VikingClient.create(workspace_id)
@@ -227,7 +235,10 @@ class OpenVikingCompactHook(Hook):
 
 class OpenVikingPostCallHook(Hook):
     name = "openviking_post_call"
-    is_sync = True
+    # Hook execute() is genuinely async (it awaits ov_client search/read). Mark it
+    # async so the hook manager routes it through asyncio.gather with other async
+    # hooks instead of the sequential sync_hooks path.
+    is_sync = False
 
     async def _get_client(self, workspace_id: str) -> VikingClient:
         return await get_global_client(workspace_id)
@@ -236,24 +247,90 @@ class OpenVikingPostCallHook(Hook):
         """用 skill 描述检索 experience 记忆，只检索 experiences 目录。"""
         if not query:
             return ""
+        started_at = time.perf_counter()
+        query_preview = query.replace("\n", "\\n")[:120]
         try:
             ov_client = await self._get_client(workspace_id)
+            logger.debug(
+                "[SKILL_EXP]: start workspace_id=%s query_len=%d query=%r",
+                workspace_id,
+                len(query),
+                query_preview,
+            )
             experiences = await ov_client.search_experiences(query, limit=3)
-            logger.info(f"[SKILL_EXP]: found {len(experiences)} experiences, query={query[:50]}")
+            logger.info(
+                "[SKILL_EXP]: found %d experiences workspace_id=%s elapsed_ms=%.1f query=%r",
+                len(experiences),
+                workspace_id,
+                (time.perf_counter() - started_at) * 1000.0,
+                query_preview,
+            )
             if not experiences:
                 return ""
             parts = []
-            for exp in experiences:
+            for index, exp in enumerate(experiences):
                 uri = exp.get("uri", "") if isinstance(exp, dict) else getattr(exp, "uri", "")
                 score = exp.get("score", 0) if isinstance(exp, dict) else getattr(exp, "score", 0)
                 if score < 0.3:
+                    logger.debug(
+                        "[SKILL_EXP]: skip low score workspace_id=%s index=%d uri=%s score=%s",
+                        workspace_id,
+                        index,
+                        uri,
+                        score,
+                    )
                     continue
-                content = await ov_client.read_content(uri, level="read")
+                read_started_at = time.perf_counter()
+                try:
+                    content = await ov_client.read_content(uri, level="read")
+                except Exception as read_exc:
+                    logger.warning(
+                        "[SKILL_EXP]: failed to read experience workspace_id=%s "
+                        "index=%d uri=%s score=%s elapsed_ms=%.1f error_type=%s error=%r",
+                        workspace_id,
+                        index,
+                        uri,
+                        score,
+                        (time.perf_counter() - read_started_at) * 1000.0,
+                        type(read_exc).__name__,
+                        read_exc,
+                    )
+                    continue
                 if content:
                     parts.append(content)
+                    logger.debug(
+                        "[SKILL_EXP]: read experience workspace_id=%s index=%d uri=%s "
+                        "score=%s chars=%d elapsed_ms=%.1f",
+                        workspace_id,
+                        index,
+                        uri,
+                        score,
+                        len(content),
+                        (time.perf_counter() - read_started_at) * 1000.0,
+                    )
+            logger.info(
+                "[SKILL_EXP]: finished workspace_id=%s kept=%d/%d elapsed_ms=%.1f query=%r",
+                workspace_id,
+                len(parts),
+                len(experiences),
+                (time.perf_counter() - started_at) * 1000.0,
+                query_preview,
+            )
             return "\n\n---\n".join(parts) if parts else ""
         except Exception as e:
-            logger.warning(f"Failed to search experiences for skill: {e}")
+            # Skill experience injection is best-effort. Under high-parallel evals,
+            # OpenViking search may time out; log a compact line instead of a full
+            # traceback so rollout logs are not dominated by optional retrieval.
+            logger.warning(
+                "[SKILL_EXP]: skipped experience search workspace_id={} "
+                "elapsed_ms={:.1f} error_type={} error={!r} query_len={} query={!r}",
+                workspace_id,
+                (time.perf_counter() - started_at) * 1000.0,
+                type(e).__name__,
+                e,
+                len(query),
+                query_preview,
+            )
             return ""
 
     async def execute(self, context: HookContext, tool_name, params, result) -> Any:
@@ -262,6 +339,8 @@ class OpenVikingPostCallHook(Hook):
                 match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
                 if match:
                     skill_name = match.group(1).strip()
+                    if skill_name == "experience_loader":
+                        return {"tool_name": tool_name, "params": params, "result": result}
                     desc_match = re.search(r"^description:\s*(.+)$", result, re.MULTILINE)
                     skill_query = desc_match.group(1).strip() if desc_match else skill_name
 

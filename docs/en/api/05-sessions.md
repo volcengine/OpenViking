@@ -42,7 +42,7 @@ Create a new session. Sessions are containers for conversations, storing message
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
-| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
+| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
 
 #### 3. Usage Examples
 
@@ -996,7 +996,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 
 #### 1. API Implementation Introduction
 
-Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background. Returns a `task_id` for polling status.
+Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background when messages are archived. Archived commits return `status: "accepted"` with a `task_id`; no-op commits return `status: "skipped"` with `task_id: null`.
 
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Snapshot current messages, clear live session, create archive directory, write original messages
@@ -1004,6 +1004,7 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 
 **Notes:**
 - Rapid consecutive commits on the same session are accepted; each request gets its own `task_id`.
+- Empty sessions, or commits where all messages remain inside `keep_recent_count`, complete synchronously with `archived: false`.
 - Background Phase 2 work is serialized by archive order: archive `N+1` waits until archive `N` writes `.done`.
 - If an earlier archive failed and left no `.done`, later commit requests fail with `FAILED_PRECONDITION` until that failure is resolved.
 - If committed messages contain durable facts, judgments, preferences, or events that mention `viking://resources/...`, memory extraction preserves the resource as a markdown link and records it in `MEMORY_FIELDS.resource_refs`.
@@ -1098,6 +1099,22 @@ ov session commit a1b2c3d4
     "task_id": "uuid-xxx",
     "archive_uri": "viking://user/alice/sessions/a1b2c3d4/history/archive_001",
     "archived": true
+  }
+}
+```
+
+**No-op Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "status": "skipped",
+    "task_id": null,
+    "archive_uri": null,
+    "archived": false,
+    "reason": "no_messages"
   }
 }
 ```

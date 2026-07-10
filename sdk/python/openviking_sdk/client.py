@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import inspect
+import mimetypes
+import os
 import tempfile
 import uuid
 import zipfile
@@ -57,6 +60,32 @@ ERROR_CODE_TO_EXCEPTION = {
     "SESSION_EXPIRED": SessionExpiredError,
     "UNKNOWN": OpenVikingError,
 }
+
+
+def _image_mime_type(file_name: str = "") -> str:
+    mime_type, _ = mimetypes.guess_type(file_name or "")
+    if mime_type and mime_type.startswith("image/"):
+        return mime_type
+    return "image/png"
+
+
+def _image_to_data_uri(data: bytes | bytearray | memoryview, file_name: str = "") -> str:
+    encoded = base64.b64encode(bytes(data)).decode("ascii")
+    return f"data:{_image_mime_type(file_name)};base64,{encoded}"
+
+
+def _normalize_image_input(image: Any) -> Optional[str]:
+    if image is None:
+        return None
+    if isinstance(image, (bytes, bytearray, memoryview)):
+        return _image_to_data_uri(image)
+    value = os.fspath(image) if isinstance(image, os.PathLike) else str(image)
+    if value.startswith(("data:image/", "http://", "https://", "viking://")):
+        return value
+    path = Path(value).expanduser()
+    if path.is_file():
+        return _image_to_data_uri(path.read_bytes(), path.name)
+    return value
 
 
 class VikingURI:
@@ -218,9 +247,9 @@ class AsyncHTTPClient:
         upload_mode: Optional[str] = None,
     ):
         if actor_peer_id and agent_id:
-            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+            raise ValueError("actor_peer_id cannot be used with agent_id")
         effective_user = user if user is not None else user_id
-        effective_actor = actor_peer_id or agent_id
+        effective_actor = actor_peer_id if actor_peer_id is not None else agent_id
         config = resolve_client_config(
             url=url,
             api_key=api_key,
@@ -781,6 +810,12 @@ class AsyncHTTPClient:
         response = await self._http.get("/api/v1/fs/stat", params={"uri": VikingURI.normalize(uri)})
         return self._handle_response(response)
 
+    async def attrs(self, uri: str) -> Dict[str, Any]:
+        response = await self._http.get(
+            "/api/v1/fs/attrs", params={"uri": VikingURI.normalize(uri)}
+        )
+        return self._handle_response(response)
+
     async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         payload = {"uri": VikingURI.normalize(uri)}
         if description is not None:
@@ -858,7 +893,7 @@ class AsyncHTTPClient:
         telemetry: Any = False,
     ) -> Dict[str, Any]:
         response = await self._http.post(
-            "/api/v1/content/set_tags",
+            "/api/v1/fs/attrs/set_tags",
             json={
                 "uri": VikingURI.normalize(uri),
                 "tags": tags,
@@ -871,7 +906,7 @@ class AsyncHTTPClient:
 
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         node_limit: Optional[int] = None,
@@ -880,10 +915,12 @@ class AsyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
         payload = {
             "query": query,
+            "image_url": _normalize_image_input(image),
             "target_uri": self._normalize_target_uri(target_uri),
             "limit": actual_limit,
             "score_threshold": score_threshold,
@@ -898,7 +935,7 @@ class AsyncHTTPClient:
 
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session: Optional[Any] = None,
         session_id: Optional[str] = None,
@@ -909,11 +946,13 @@ class AsyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
         payload = {
             "query": query,
+            "image_url": _normalize_image_input(image),
             "target_uri": self._normalize_target_uri(target_uri),
             "session_id": sid,
             "limit": actual_limit,
@@ -932,25 +971,33 @@ class AsyncHTTPClient:
         uri: str,
         pattern: str,
         case_insensitive: bool = False,
-        node_limit: Optional[int] = None,
+        node_limit: int = 256,
         exclude_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         request_json = {
             "uri": VikingURI.normalize(uri),
             "pattern": pattern,
             "case_insensitive": case_insensitive,
+            "node_limit": node_limit,
         }
-        if node_limit is not None:
-            request_json["node_limit"] = node_limit
         if exclude_uri is not None:
             request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
         response = await self._http.post("/api/v1/search/grep", json=request_json)
         return self._handle_response(response)
 
-    async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
+    async def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: int = 256,
+    ) -> Dict[str, Any]:
         response = await self._http.post(
             "/api/v1/search/glob",
-            json={"pattern": pattern, "uri": VikingURI.normalize(uri)},
+            json={
+                "pattern": pattern,
+                "uri": VikingURI.normalize(uri),
+                "node_limit": node_limit,
+            },
         )
         return self._handle_response(response)
 
@@ -1223,10 +1270,21 @@ class AsyncHTTPClient:
         response = await self._http.get("/api/v1/observer/system")
         return self._handle_response(response)
 
-    async def admin_create_account(self, account_id: str, admin_user_id: str) -> Dict[str, Any]:
+    async def admin_create_account(
+        self,
+        account_id: str,
+        admin_user_id: str,
+        user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"account_id": account_id, "admin_user_id": admin_user_id}
+        if seed is not None:
+            payload["seed"] = seed
+        if user_config is not None:
+            payload["user_config"] = user_config
         response = await self._http.post(
             "/api/v1/admin/accounts",
-            json={"account_id": account_id, "admin_user_id": admin_user_id},
+            json=payload,
         )
         return self._handle_response(response)
 
@@ -1239,11 +1297,21 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def admin_register_user(
-        self, account_id: str, user_id: str, role: str = "user"
+        self,
+        account_id: str,
+        user_id: str,
+        role: str = "user",
+        user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
     ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"user_id": user_id, "role": role}
+        if seed is not None:
+            payload["seed"] = seed
+        if user_config is not None:
+            payload["user_config"] = user_config
         response = await self._http.post(
             f"/api/v1/admin/accounts/{account_id}/users",
-            json={"user_id": user_id, "role": role},
+            json=payload,
         )
         return self._handle_response(response)
 
@@ -1262,8 +1330,16 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def admin_regenerate_key(self, account_id: str, user_id: str) -> Dict[str, Any]:
-        response = await self._http.post(f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key")
+    async def admin_regenerate_key(
+        self, account_id: str, user_id: str, seed: Optional[str] = None
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        if seed is not None:
+            payload["seed"] = seed
+        response = await self._http.post(
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
+            json=payload,
+        )
         return self._handle_response(response)
 
     async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
@@ -1370,6 +1446,25 @@ class AsyncHTTPClient:
             params={"branch": branch, "limit": limit},
         )
         return self._handle_response(response)
+
+    async def git_get_ignore(self) -> str:
+        """Return the account ``.ovgitignore`` content (empty string if absent)."""
+        response = await self._http.get("/api/v1/snapshot/ignore")
+        result = self._handle_response(response)
+        return result if isinstance(result, str) else ""
+
+    async def git_set_ignore(self, *, content: str) -> None:
+        """Write the account ``.ovgitignore`` control file."""
+        response = await self._http.put(
+            "/api/v1/snapshot/ignore",
+            json={"content": content},
+        )
+        self._handle_response(response)
+
+    async def git_delete_ignore(self) -> None:
+        """Delete the account ``.ovgitignore`` control file (missing is success)."""
+        response = await self._http.delete("/api/v1/snapshot/ignore")
+        self._handle_response(response)
 
     @property
     def snapshot(self) -> "AsyncHTTPSnapshotNamespace":
@@ -1563,9 +1658,7 @@ class SyncHTTPClient:
         skill_name: str,
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.delete_skill(skill_name, target_uri=target_uri)
-        )
+        return run_async(self._async_client.delete_skill(skill_name, target_uri=target_uri))
 
     def list_watches(
         self,
@@ -1664,6 +1757,9 @@ class SyncHTTPClient:
     def stat(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.stat(uri))
 
+    def attrs(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.attrs(uri))
+
     def mkdir(self, uri: str, description: Optional[str] = None) -> None:
         run_async(self._async_client.mkdir(uri, description=description))
 
@@ -1728,7 +1824,7 @@ class SyncHTTPClient:
 
     def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         node_limit: Optional[int] = None,
@@ -1737,6 +1833,7 @@ class SyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.find(
@@ -1749,12 +1846,13 @@ class SyncHTTPClient:
                 context_type=context_type,
                 tags=tags,
                 telemetry=telemetry,
+                image=image,
             )
         )
 
     def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session: Optional[Any] = None,
         session_id: Optional[str] = None,
@@ -1765,6 +1863,7 @@ class SyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
     ) -> Dict[str, Any]:
         actual_session_id = session_id
         if actual_session_id is None and session is not None:
@@ -1781,6 +1880,7 @@ class SyncHTTPClient:
                 context_type=context_type,
                 tags=tags,
                 telemetry=telemetry,
+                image=image,
             )
         )
 
@@ -1789,7 +1889,7 @@ class SyncHTTPClient:
         uri: str,
         pattern: str,
         case_insensitive: bool = False,
-        node_limit: Optional[int] = None,
+        node_limit: int = 256,
         exclude_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
@@ -1802,8 +1902,13 @@ class SyncHTTPClient:
             )
         )
 
-    def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
-        return run_async(self._async_client.glob(pattern, uri=uri))
+    def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: int = 256,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.glob(pattern, uri=uri, node_limit=node_limit))
 
     def relations(self, uri: str) -> List[Any]:
         return run_async(self._async_client.relations(uri))
@@ -1965,8 +2070,21 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.reindex(uri=uri, mode=mode, wait=wait))
 
-    def admin_create_account(self, account_id: str, admin_user_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_create_account(account_id, admin_user_id))
+    def admin_create_account(
+        self,
+        account_id: str,
+        admin_user_id: str,
+        user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.admin_create_account(
+                account_id,
+                admin_user_id,
+                seed=seed,
+                user_config=user_config,
+            )
+        )
 
     def admin_list_accounts(self) -> List[Any]:
         return run_async(self._async_client.admin_list_accounts())
@@ -1975,9 +2093,22 @@ class SyncHTTPClient:
         return run_async(self._async_client.admin_delete_account(account_id))
 
     def admin_register_user(
-        self, account_id: str, user_id: str, role: str = "user"
+        self,
+        account_id: str,
+        user_id: str,
+        role: str = "user",
+        user_config: Optional[Dict[str, Any]] = None,
+        seed: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_register_user(account_id, user_id, role))
+        return run_async(
+            self._async_client.admin_register_user(
+                account_id,
+                user_id,
+                role,
+                seed=seed,
+                user_config=user_config,
+            )
+        )
 
     def admin_list_users(self, account_id: str) -> List[Any]:
         return run_async(self._async_client.admin_list_users(account_id))
@@ -1988,8 +2119,10 @@ class SyncHTTPClient:
     def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_set_role(account_id, user_id, role))
 
-    def admin_regenerate_key(self, account_id: str, user_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.admin_regenerate_key(account_id, user_id))
+    def admin_regenerate_key(
+        self, account_id: str, user_id: str, seed: Optional[str] = None
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_regenerate_key(account_id, user_id, seed=seed))
 
     def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
         return run_async(self._async_client.admin_migrate(cleanup=cleanup))
@@ -2082,6 +2215,15 @@ class AsyncHTTPSnapshotNamespace:
     ) -> List[Dict[str, Any]]:
         return await self._client.git_log(branch=branch, limit=limit)
 
+    async def get_gitignore(self) -> str:
+        return await self._client.git_get_ignore()
+
+    async def set_gitignore(self, *, content: str) -> None:
+        await self._client.git_set_ignore(content=content)
+
+    async def delete_gitignore(self) -> None:
+        await self._client.git_delete_ignore()
+
 
 class SyncHTTPSnapshotNamespace:
     """Synchronous wrapper around the HTTP client's snapshot namespace."""
@@ -2149,3 +2291,12 @@ class SyncHTTPSnapshotNamespace:
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         return run_async(self._ns().log(branch=branch, limit=limit))
+
+    def get_gitignore(self) -> str:
+        return run_async(self._ns().get_gitignore())
+
+    def set_gitignore(self, *, content: str) -> None:
+        run_async(self._ns().set_gitignore(content=content))
+
+    def delete_gitignore(self) -> None:
+        run_async(self._ns().delete_gitignore())

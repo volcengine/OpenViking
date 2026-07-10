@@ -4,6 +4,7 @@
 """Tests for Admin API endpoints (openviking/server/routers/admin.py)."""
 
 import asyncio
+import hashlib
 import json
 import uuid
 
@@ -21,6 +22,7 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.user_config import read_user_add_targets
 from openviking.service.core import OpenVikingService
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
@@ -32,6 +34,10 @@ from openviking_cli.session.user_id import UserIdentifier
 
 def _uid() -> str:
     return f"acme_{uuid.uuid4().hex[:8]}"
+
+
+def _seed_secret(user_id: str, seed: str) -> str:
+    return hashlib.sha256(f"{user_id}\0{seed}".encode("utf-8")).hexdigest()
 
 
 ROOT_KEY = "admin-api-test-root-key-abcdef1234567890ab"
@@ -67,6 +73,18 @@ class _FakeAGFS:
 class _FakeVikingFS:
     def __init__(self):
         self.agfs = _FakeAGFS()
+        self.files = {}
+
+    async def read_file(self, uri, **_kwargs):
+        if uri not in self.files:
+            raise FileNotFoundError(uri)
+        return self.files[uri]
+
+    async def write_file(self, uri, content, **_kwargs):
+        self.files[uri] = content
+
+    async def rm(self, uri, **_kwargs):
+        self.files.pop(uri, None)
 
 
 class _FakeService:
@@ -88,6 +106,7 @@ def _build_lightweight_admin_test_app() -> FastAPI:
     app = FastAPI()
     app.state.config = ServerConfig(root_api_key=ROOT_KEY)
     fake_service = _FakeService()
+    app.state.fake_service = fake_service
     set_service(fake_service)
 
     @app.exception_handler(OpenVikingError)
@@ -249,6 +268,48 @@ async def test_create_account(admin_client: httpx.AsyncClient, admin_service: Op
     ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
     assert await admin_service.viking_fs.abstract("viking://resources", ctx=ctx)
     assert await admin_service.viking_fs.abstract("viking://user", ctx=ctx)
+
+
+async def test_create_user_paths_accept_initial_user_config(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    viking_fs = lightweight_admin_app.state.fake_service.viking_fs
+
+    resp = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/admin"}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    alice_settings = await read_user_add_targets(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
+    )
+    assert alice_settings.resource_uri == "viking://user/resources/admin"
+
+    resp = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={
+            "user_id": "bob",
+            "role": "user",
+            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/bob"}},
+        },
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+
+    bob_settings = await read_user_add_targets(
+        viking_fs,
+        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
+    )
+    assert bob_settings.resource_uri == "viking://user/resources/bob"
 
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):
@@ -609,6 +670,60 @@ async def test_regenerate_key(admin_client: httpx.AsyncClient):
         headers={"X-API-Key": new_key},
     )
     assert resp.status_code == 200
+
+
+async def test_seeded_admin_key_endpoints(admin_client: httpx.AsyncClient):
+    from openviking.server.api_keys import parse_api_key
+
+    acct = _uid()
+    resp = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice", "seed": "admin-seed"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    admin_key = resp.json()["result"]["user_key"]
+    account_id, user_id, secret = parse_api_key(admin_key)
+    assert account_id == acct
+    assert user_id == "alice"
+    assert secret == _seed_secret("alice", "admin-seed")
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob", "role": "user", "seed": "bob-seed"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    old_key = resp.json()["result"]["user_key"]
+    _, _, old_secret = parse_api_key(old_key)
+    assert old_secret == _seed_secret("bob", "bob-seed")
+
+    resp = await admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users/bob/key",
+        json={"seed": "bob-new-seed"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    new_key = resp.json()["result"]["user_key"]
+    _, _, new_secret = parse_api_key(new_key)
+    assert new_secret == _seed_secret("bob", "bob-new-seed")
+    assert new_key != old_key
+
+    resp = await admin_client.get(
+        "/api/v1/fs/ls?uri=viking://",
+        headers={"X-API-Key": old_key},
+    )
+    assert resp.status_code == 401
+
+
+async def test_empty_seed_rejected(admin_client: httpx.AsyncClient):
+    acct = _uid()
+    resp = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice", "seed": ""},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 400
 
 
 # ---- Permission guard ----

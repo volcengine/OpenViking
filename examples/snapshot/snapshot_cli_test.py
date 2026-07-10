@@ -116,9 +116,26 @@ def print_find(query: str, root_uri: str) -> None:
     run_ov(["find", query, "--uri", root_uri, "--limit", "10", "-o", "json"])
 
 
-def commit_snapshot(message: str) -> dict[str, Any]:
-    proc = run_ov(["snapshot", "commit", "-m", message, "-o", "json"])
+def commit_snapshot(message: str, paths: list[str] | None = None) -> dict[str, Any]:
+    args = ["snapshot", "commit", "-m", message, "-o", "json"]
+    if paths:
+        args += ["--paths", ",".join(paths)]
+    proc = run_ov(args)
     return parse_json(proc.stdout).get("result") or {}
+
+
+def set_gitignore(content: str) -> None:
+    run_ov(["snapshot", "ignore-set", "--content", content, "-o", "json"])
+
+
+def get_gitignore() -> str:
+    proc = run_ov(["snapshot", "ignore-get", "-o", "json"])
+    result = parse_json(proc.stdout).get("result")
+    return result if isinstance(result, str) else ""
+
+
+def delete_gitignore() -> None:
+    run_ov(["snapshot", "ignore-delete", "-o", "json"])
 
 
 def get_task(task_id: str) -> dict[str, Any]:
@@ -168,7 +185,7 @@ def main() -> None:
     print_section("v1 initial import")
     write_text(uris["guide"], f"# Guide\n\nInitial CLI content with {alpha}.\n", "create")
     write_text(uris["todo"], f"# Todo\n\nRemember {todo}.\n", "create")
-    v1 = commit_snapshot("cli v1 initial import")
+    v1 = commit_snapshot("cli v1 initial import", paths=[root_uri])
     print_commit_oid("v1", v1)
     print_find(alpha, root_uri)
 
@@ -176,7 +193,7 @@ def main() -> None:
     write_text(uris["guide"], f"# Guide\n\nUpdated CLI content with {beta}.\n", "replace")
     remove_resource(uris["todo"])
     write_text(uris["changelog"], f"# Changelog\n\nCreated {changelog}.\n", "create")
-    v2 = commit_snapshot("cli v2 modify delete add")
+    v2 = commit_snapshot("cli v2 modify delete add", paths=[root_uri])
     print_commit_oid("v2", v2)
     print_find(beta, root_uri)
     print_find(todo, root_uri)
@@ -186,7 +203,7 @@ def main() -> None:
     mkdir(f"{root_uri}/archive")
     write_text(uris["changelog"], f"# Changelog\n\nCreated {changelog}. Added {gamma}.\n", "replace")
     write_text(uris["archive"], f"# Archive\n\nArchived marker {archive}.\n", "create")
-    v3 = commit_snapshot("cli v3 second changes")
+    v3 = commit_snapshot("cli v3 second changes", paths=[root_uri])
     print_commit_oid("v3", v3)
     print_find(gamma, root_uri)
     print_find(archive, root_uri)
@@ -209,6 +226,23 @@ def main() -> None:
     print_find(beta, root_uri)
     print_find(changelog, root_uri)
     run_ov(["snapshot", "log", "--limit", "10", "-o", "json"])
+
+    print_section("ovgitignore exclude")
+    set_gitignore("*.txt\n")
+    print(f"get_gitignore: {get_gitignore()!r}")
+    # Write two files: debug.txt matches *.txt (excluded), notes.md does not.
+    ignored_uri = f"{root_uri}/debug.txt"
+    kept_uri = f"{root_uri}/notes.md"
+    write_text(ignored_uri, f"# Scratch\n\ndebug noise {archive}.\n", "create")
+    write_text(kept_uri, f"# Notes\n\nkept marker {archive}.\n", "create")
+    v4 = commit_snapshot("cli v4 with ovgitignore", paths=[root_uri])
+    print(f"ignored count: {v4.get('ignored')}")
+    # debug.txt matches *.txt -> show on the snapshot should 404.
+    run_ov(["snapshot", "show", v4.get("commit_oid", ""), "--path", ignored_uri, "-o", "json"], check=False)
+    # notes.md is not ignored -> readable from the snapshot.
+    run_ov(["snapshot", "show", v4.get("commit_oid", ""), "--path", kept_uri, "-o", "json"], check=False)
+    delete_gitignore()
+    print(f"get_gitignore after delete: {get_gitignore()!r}")
 
     print_section("done")
     print("CLI snapshot multi-version example finished")

@@ -18,11 +18,16 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	if opts.NodeLimit != nil {
 		actualLimit = *opts.NodeLimit
 	}
+	imageURL, err := normalizeImageInput(opts.Image)
+	if err != nil {
+		return nil, err
+	}
 	payload := map[string]any{
 		"query":      queryText,
 		"target_uri": normalizeTarget(opts.TargetURI),
 		"limit":      actualLimit,
 	}
+	setString(payload, "image_url", imageURL)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
@@ -32,11 +37,9 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	if len(opts.Level) > 0 {
 		payload["level"] = opts.Level
 	}
-	setString(payload, "agent_id", opts.AgentID)
-	setString(payload, "agent_uri", opts.AgentURI)
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/find", nil, payload, &result)
+	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/find", nil, payload, &result)
 	return &result, err
 }
 
@@ -53,11 +56,16 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	if opts.NodeLimit != nil {
 		actualLimit = *opts.NodeLimit
 	}
+	imageURL, err := normalizeImageInput(opts.Image)
+	if err != nil {
+		return nil, err
+	}
 	payload := map[string]any{
 		"query":      queryText,
 		"target_uri": normalizeTarget(opts.TargetURI),
 		"limit":      actualLimit,
 	}
+	setString(payload, "image_url", imageURL)
 	setString(payload, "session_id", opts.SessionID)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
@@ -68,11 +76,9 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	if len(opts.Level) > 0 {
 		payload["level"] = opts.Level
 	}
-	setString(payload, "agent_id", opts.AgentID)
-	setString(payload, "agent_uri", opts.AgentURI)
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)
+	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)
 	return &result, err
 }
 
@@ -89,6 +95,9 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 	if opts.NodeLimit != nil {
 		payload["node_limit"] = *opts.NodeLimit
 	}
+	if opts.LevelLimit != nil {
+		payload["level_limit"] = *opts.LevelLimit
+	}
 	if opts.ExcludeURI != "" {
 		payload["exclude_uri"] = NormalizeURI(opts.ExcludeURI)
 	}
@@ -98,14 +107,21 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 }
 
 // Glob finds files by glob pattern.
-func (c *Client) Glob(ctx context.Context, pattern string, uri string) (map[string]any, error) {
+func (c *Client) Glob(ctx context.Context, pattern string, uri string, opts *GlobOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &GlobOptions{}
+	}
 	if uri == "" {
 		uri = "viking://"
 	}
-	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/glob", nil, map[string]any{
+	payload := map[string]any{
 		"pattern": pattern,
 		"uri":     NormalizeURI(uri),
-	}, &result)
+	}
+	if opts.NodeLimit != nil {
+		payload["node_limit"] = *opts.NodeLimit
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/glob", nil, payload, &result)
 	return result, err
 }

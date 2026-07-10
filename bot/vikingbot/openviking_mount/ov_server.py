@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import json
 import re
@@ -60,6 +59,9 @@ class VikingClient:
         self.mode = "local" if self.auth_mode == "dev" else "remote"
         self.api_key_type = self._resolve_api_key_type(openviking_config)
 
+        self._request_connection = self._normalize_connection(connection)
+        self._request_role: str | None = None
+
         self.admin_user_client = None
         self._user_clients = {}
         self._namespace_policy = {
@@ -67,8 +69,6 @@ class VikingClient:
             "isolate_agent_scope_by_user": False,
         }
         self._namespace_policy_loaded = False
-        self._request_connection = self._normalize_connection(connection)
-        self._request_role: str | None = None
         connection_actor_peer_id = (
             self._request_connection.get("actor_peer_id") if self._request_connection else None
         )
@@ -229,7 +229,26 @@ class VikingClient:
         return instance
 
     def _matched_context_to_dict(self, matched_context: Any) -> Dict[str, Any]:
-        """将 MatchedContext 对象转换为字典"""
+        """将 MatchedContext 对象或 dict 结果转换为字典。"""
+        if isinstance(matched_context, dict):
+            relations = matched_context.get("relations", [])
+            return {
+                "uri": str(matched_context.get("uri", "") or ""),
+                "context_type": str(
+                    matched_context.get("context_type")
+                    or matched_context.get("type")
+                    or ""
+                ),
+                "is_leaf": bool(matched_context.get("is_leaf", False)),
+                "abstract": str(matched_context.get("abstract", "") or ""),
+                "overview": matched_context.get("overview"),
+                "category": str(matched_context.get("category", "") or ""),
+                "score": matched_context.get("score", 0.0),
+                "match_reason": str(matched_context.get("match_reason", "") or ""),
+                "relations": [
+                    self._relation_to_dict(r) for r in relations if r is not None
+                ] if isinstance(relations, list) else [],
+            }
         return {
             "uri": getattr(matched_context, "uri", ""),
             "context_type": str(getattr(matched_context, "context_type", "")),
@@ -594,6 +613,14 @@ class VikingClient:
                 return await client.overview(uri)
             elif level == "read":
                 return await client.read(uri)
+            elif level == "raw":
+                read_raw = getattr(client, "read_raw", None)
+                if read_raw is not None:
+                    return await read_raw(uri)
+                try:
+                    return await client.read(uri, raw=True)
+                except TypeError:
+                    return await client.read(uri)
             else:
                 raise ValueError(f"Unsupported level: {level}")
         except FileNotFoundError:
@@ -629,6 +656,7 @@ class VikingClient:
         target_uri: str | list[str] | None = None,
         limit: int = 10,
         user_id: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         client = self.client
         should_close = False
@@ -639,6 +667,8 @@ class VikingClient:
             client, should_close = await self._get_user_scoped_client(scoped_user_id)
 
         try:
+            if peer_id:
+                target_uri = target_uri or self._current_peer_memory_target_uri(peer_id)
             result = await client.search(
                 query,
                 target_uri=target_uri,
@@ -773,8 +803,8 @@ class VikingClient:
     async def search_experiences(self, query: str, limit: int = 5) -> list[Any]:
         """用 query 检索 vikingbot experience 记忆。"""
         exp_uri = f"{self._memory_target_uri(self.admin_user_id)}experiences/"
-        result = await self.search(query=query, target_uri=exp_uri, limit=limit)
-        return result.get("memories", [])
+        result = await self.client.find(query=query, target_uri=exp_uri, limit=limit)
+        return self._matched_context_group_to_dicts(result, "memories")
 
     async def grep(
         self,
@@ -1080,43 +1110,3 @@ class VikingClient:
             await self.admin_user_client.close()
         for client in self._user_clients.values():
             await client.close()
-
-
-async def main_test():
-    client = await VikingClient.create()
-    # res = client.list_resources()
-    # res = await client.search("头有点疼", target_uri="viking://user/memories/")
-    # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
-    res = await client.search_memory("你好", "user_1")
-    # res = await client.list_resources("viking://resources/")
-    # res = await client.read_content("viking://user/memories/profile.md", level="read")
-    # res = await client.add_resource("https://github.com/volcengine/OpenViking", "ov代码")
-    # res = await client.grep("viking://resources/", "viking", True)
-    # res = await client.commit(
-    #     session_id="99999",
-    #     messages=[{"role": "user", "content": "你好"}],
-    #     user_id="1010101010",
-    # )
-    # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
-    #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
-    print(res)
-
-    await client.close()
-    print("处理完成！")
-
-
-async def account_test():
-    client = ov.AsyncHTTPClient(
-        url="http://localhost:1933",
-        api_key="",
-    )
-    await client.initialize()
-
-    res = await client.search("123")
-
-    print(res)
-
-
-if __name__ == "__main__":
-    asyncio.run(main_test())
-    # asyncio.run(account_test())

@@ -41,6 +41,7 @@ function userSessionUri(sessionId: string): string {
 
 export type OpenVikingClientOptions = {
   transport?: HttpTransport;
+  headers?: Record<string, string>;
   resourcePackager?: ResourcePackager;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -48,7 +49,7 @@ export type OpenVikingClientOptions = {
 
 export type CommitSessionResult = {
   session_id: string;
-  /** "accepted" (async), "completed", "failed", or "timeout" (wait mode). */
+  /** "accepted" (async), "skipped" (no archive), "completed", "failed", or "timeout" (wait mode). */
   status: string;
   task_id?: string;
   archive_uri?: string;
@@ -254,6 +255,7 @@ async function cleanupUploadTempPath(path?: string): Promise<void> {
 
 export class OpenVikingClient {
   private readonly transport: HttpTransport;
+  private readonly configuredHeaders: Record<string, string>;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly resourcePackager: ResourcePackager;
@@ -277,6 +279,7 @@ export class OpenVikingClient {
 	        ? optionsOrLegacyUserScope
 	        : (legacyOptions ?? {});
 	    this.transport = options.transport ?? defaultHttpTransport;
+    this.configuredHeaders = options.headers ?? {};
 	    this.now = options.now ?? Date.now;
 	    this.sleep = options.sleep ?? sleep;
     this.resourcePackager = options.resourcePackager ?? defaultResourcePackager;
@@ -356,6 +359,11 @@ export class OpenVikingClient {
       const actorPeerHeader = this.resolveActorPeerHeader(actorPeerId);
       if (actorPeerHeader) {
         headers.set("X-OpenViking-Actor-Peer", actorPeerHeader);
+      }
+      for (const [key, value] of Object.entries(this.configuredHeaders)) {
+        if (key && typeof value === "string" && value.trim()) {
+          headers.set(key, value);
+        }
       }
       if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");

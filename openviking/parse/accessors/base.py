@@ -68,19 +68,22 @@ class LocalResource:
         if not self.is_temporary:
             return
 
-        if not self.path.exists():
+        cleanup_path_value = self.meta.get("_cleanup_path")
+        cleanup_path = Path(cleanup_path_value) if cleanup_path_value else self.path
+
+        if not cleanup_path.exists():
             return
 
         try:
-            if self.path.is_dir():
-                shutil.rmtree(self.path, ignore_errors=True)
+            if cleanup_path.is_dir():
+                shutil.rmtree(cleanup_path, ignore_errors=True)
             else:
-                self.path.unlink(missing_ok=True)
+                cleanup_path.unlink(missing_ok=True)
         except Exception as e:
             from openviking_cli.utils.logger import get_logger
 
             logger = get_logger(__name__)
-            logger.warning(f"[LocalResource] Failed to cleanup resource {self.path}: {e}")
+            logger.warning(f"[LocalResource] Failed to cleanup resource {cleanup_path}: {e}")
 
     def __enter__(self) -> "LocalResource":
         """Support context manager protocol."""
@@ -103,12 +106,15 @@ class DataAccessor(ABC):
     """
 
     @abstractmethod
-    def can_handle(self, source: Union[str, Path]) -> bool:
+    def can_handle(self, source: Union[str, Path], **kwargs) -> bool:
         """
         Check if this accessor can handle the given source.
 
         Args:
             source: Source string (URL, path, etc.) or Path object
+            **kwargs: Optional accessor-selection hints forwarded from
+                ``access()`` (e.g. an explicit ``site=True`` override). Most
+                accessors ignore these and decide purely from ``source``.
 
         Returns:
             True if this accessor can handle the source

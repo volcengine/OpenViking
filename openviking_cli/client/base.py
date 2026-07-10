@@ -253,7 +253,7 @@ class BaseClient(ABC):
     @abstractmethod
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -261,6 +261,7 @@ class BaseClient(ABC):
         context_type: Optional[SearchContextTypeInput] = None,
         tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search without session context."""
         ...
@@ -268,7 +269,7 @@ class BaseClient(ABC):
     @abstractmethod
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -277,6 +278,7 @@ class BaseClient(ABC):
         context_type: Optional[SearchContextTypeInput] = None,
         tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         ...
@@ -586,3 +588,15 @@ class BaseClient(ABC):
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """Walk back along parents[0] up to limit commits."""
+
+    @abstractmethod
+    async def git_get_ignore(self) -> str:
+        """Return the account .ovgitignore content (empty string if absent)."""
+
+    @abstractmethod
+    async def git_set_ignore(self, *, content: str) -> None:
+        """Write the account .ovgitignore control file."""
+
+    @abstractmethod
+    async def git_delete_ignore(self) -> None:
+        """Delete the account .ovgitignore control file (missing is success)."""

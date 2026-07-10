@@ -47,7 +47,7 @@
     "test:watch": "vitest"
   },
   "engines": {
-    "openclaw": ">=2026.4.8"
+    "openclaw": ">=2026.5.27"
   },
   "dependencies": {
     "@sinclair/typebox": "0.34.48",
@@ -69,12 +69,12 @@
     ],
     "setupEntry": "./dist/commands/setup.js",
     "compat": {
-      "pluginApi": ">=2026.4.8",
-      "minGatewayVersion": "2026.4.8"
+      "pluginApi": ">=2026.5.27",
+      "minGatewayVersion": "2026.5.27"
     },
     "build": {
-      "openclawVersion": "2026.4.8",
-      "pluginSdkVersion": "2026.4.8"
+      "openclawVersion": "2026.5.27",
+      "pluginSdkVersion": "2026.5.27"
     }
   },
   "devDependencies": {

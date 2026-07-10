@@ -56,4 +56,5 @@ class SpawnTool(Tool):
             task=task,
             label=label,
             session_key=tool_context.session_key,
+            channel_metadata=tool_context.channel_metadata,
         )

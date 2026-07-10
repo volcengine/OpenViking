@@ -131,7 +131,7 @@ L1: """
 ### 3. HTMLParser (`html.py`)
 **支持格式**: `.html`, `.htm`
 
-使用 `readabilipy` 库提取可读内容，去除广告、导航等噪音元素，转换为 Markdown 后通过 MarkdownParser 处理。
+使用 `trafilatura` 抽取正文，去除广告、导航等噪音元素，转换为 Markdown 后通过 MarkdownParser 处理。
 
 ### 4. TextParser (`text.py`)
 **支持格式**: `.txt`, `.text`, `.log`, `.csv`, `.tsv`, `.json`, `.yaml`, `.yml`, `.xml`, `.ini`, `.cfg`, `.conf`

@@ -12,7 +12,6 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.skills import (
     _list_skill_files,
     _list_skills_from_root,
-    _merge_skills,
     _require_skill,
     _restore_skill_privacy,
     _skill_summary_from_hit,
@@ -25,6 +24,7 @@ from openviking.telemetry.execution import (
     attach_telemetry_payload,
     run_with_telemetry,
 )
+from openviking.utils.image_search import normalize_client_image_input
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.client.base import BaseClient
@@ -81,6 +81,7 @@ class LocalClient(BaseClient):
         path: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
         actor_peer_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
         """Initialize LocalClient.
 
@@ -88,7 +89,11 @@ class LocalClient(BaseClient):
             path: Local storage path (overrides ov.conf storage path)
             user: Explicit account/user identity for embedded mode
             actor_peer_id: Optional view filter for the current user's peer collection.
+            agent_id: Legacy alias that marks the actor peer scope as legacy agent mode.
         """
+        if actor_peer_id is not None and agent_id is not None:
+            raise ValueError("actor_peer_id cannot be used with legacy agent_id")
+        effective_actor_peer_id = actor_peer_id or agent_id
         self._service = OpenVikingService(
             path=path,
             user=user or UserIdentifier.the_default_user(),
@@ -97,7 +102,8 @@ class LocalClient(BaseClient):
         self._ctx = RequestContext(
             user=self._user,
             role=Role.USER,
-            actor_peer_id=normalize_peer_id(actor_peer_id),
+            actor_peer_id=normalize_peer_id(effective_actor_peer_id),
+            legacy_agent_id=normalize_peer_id(agent_id),
         )
 
     @property
@@ -284,11 +290,11 @@ class LocalClient(BaseClient):
     ) -> Dict[str, Any]:
         """Get a skill by name."""
         from openviking.server.routers.skills import (
+            SOURCE_METADATA_FILENAME,
             _parse_abstract_meta,
             _relative_skill_path,
             _skill_file_kind,
             _skill_summary_from_meta,
-            SOURCE_METADATA_FILENAME,
         )
         from openviking.server.skill_source_metadata import read_skill_source_metadata
 
@@ -470,7 +476,7 @@ class LocalClient(BaseClient):
         service = self._service
         ctx = self._ctx
         root_uri = await _require_skill(service, ctx, skill_name, target_uri)
-        result = await service.fs.rm(root_uri, ctx=ctx, recursive=True)
+        await service.fs.rm(root_uri, ctx=ctx, recursive=True)
         return {"name": skill_name, "uri": root_uri, "root_uri": root_uri, "deleted": True}
 
     async def validate_skill(
@@ -600,6 +606,10 @@ class LocalClient(BaseClient):
         """
         return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
 
+    async def read_raw(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read raw file content, including hidden MEMORY_FIELDS metadata."""
+        return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
+
     async def abstract(self, uri: str) -> str:
         """Read L0 abstract."""
         return await self._service.fs.abstract(uri, ctx=self._ctx)
@@ -664,7 +674,7 @@ class LocalClient(BaseClient):
 
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -676,11 +686,13 @@ class LocalClient(BaseClient):
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search without session context."""
         resolved_filter = _resolve_search_filter(
             filter, context_type, since, until, time_field, tags
         )
+        image_url = normalize_client_image_input(image)
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -692,6 +704,7 @@ class LocalClient(BaseClient):
                 score_threshold=score_threshold,
                 filter=resolved_filter,
                 level=level,
+                image_url=image_url,
             ),
         )
         return attach_telemetry_payload(
@@ -701,7 +714,7 @@ class LocalClient(BaseClient):
 
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -714,11 +727,13 @@ class LocalClient(BaseClient):
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         resolved_filter = _resolve_search_filter(
             filter, context_type, since, until, time_field, tags
         )
+        image_url = normalize_client_image_input(image)
 
         async def _search():
             session = None
@@ -734,6 +749,7 @@ class LocalClient(BaseClient):
                 score_threshold=score_threshold,
                 filter=resolved_filter,
                 level=level,
+                image_url=image_url,
             )
 
         execution = await run_with_telemetry(
@@ -1014,10 +1030,7 @@ class LocalClient(BaseClient):
                 {
                     "role": role,
                     "parts": message_parts,
-                    "peer_id": self._resolve_message_peer_id(
-                        role,
-                        message.get("peer_id"),
-                    ),
+                    "peer_id": self._resolve_message_peer_id(role, message.get("peer_id")),
                     "created_at": message.get("created_at"),
                 }
             )
@@ -1029,8 +1042,18 @@ class LocalClient(BaseClient):
             "added": len(added),
         }
 
-    def _resolve_message_peer_id(self, role: str, peer_id: Optional[str]) -> Optional[str]:
-        return normalize_peer_id(peer_id)
+    def _resolve_message_peer_id(
+        self,
+        role: str,
+        peer_id: Optional[str],
+    ) -> Optional[str]:
+        normalized_peer_id = normalize_peer_id(peer_id)
+        if normalized_peer_id is not None:
+            return normalized_peer_id
+        legacy_agent_id = getattr(self._ctx, "legacy_agent_id", None)
+        if legacy_agent_id is not None and role == "assistant":
+            return legacy_agent_id
+        return None
 
     # ============= Pack =============
 
@@ -1147,6 +1170,18 @@ class LocalClient(BaseClient):
     ) -> List[Dict[str, Any]]:
         """Walk back along parents[0] up to limit commits."""
         return await self._service.fs.log(branch=branch, limit=limit, ctx=self._ctx)
+
+    async def git_get_ignore(self) -> str:
+        """Return the account .ovgitignore content (empty string if absent)."""
+        return await self._service.fs.get_gitignore(ctx=self._ctx)
+
+    async def git_set_ignore(self, *, content: str) -> None:
+        """Write the account .ovgitignore control file."""
+        await self._service.fs.set_gitignore(content=content, ctx=self._ctx)
+
+    async def git_delete_ignore(self) -> None:
+        """Delete the account .ovgitignore control file (missing is success)."""
+        await self._service.fs.delete_gitignore(ctx=self._ctx)
 
     # ============= Debug =============
 

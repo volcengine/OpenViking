@@ -153,11 +153,11 @@ openclaw --version
 Requirements:
 
 - Node.js >= 22
-- OpenClaw >= 2026.4.8
+- OpenClaw >= 2026.5.27
 
 Version boundaries:
 
-- `2026.4.8` is the minimum supported OpenClaw version for the current `@openviking/openclaw-plugin` plugin.
+- `2026.5.27` is the minimum supported OpenClaw version for the current `@openviking/openclaw-plugin` plugin.
 - `2026.5.3` starts requiring compiled JavaScript runtime output during package install when a plugin package declares TypeScript entries.
 - `2026.5.4` and later no longer fall back to `.ts` source for installed/global plugin runtime loading when the compiled JavaScript output is missing; the plugin may be skipped.
 - Published ClawHub packages are built before release and include `dist/*.js`, so normal users do not need to build locally.

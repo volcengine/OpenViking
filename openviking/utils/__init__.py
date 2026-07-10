@@ -3,6 +3,7 @@
 """Utility functions and helpers."""
 
 from openviking.utils.code_hosting_utils import (
+    is_code_hosting_blob_url,
     is_code_hosting_url,
     is_git_repo_url,
     is_github_url,
@@ -29,6 +30,7 @@ __all__ = [
     "is_github_url",
     "is_gitlab_url",
     "is_code_hosting_url",
+    "is_code_hosting_blob_url",
     "validate_git_ssh_uri",
     "is_git_repo_url",
 ]

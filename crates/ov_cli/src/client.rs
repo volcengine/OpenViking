@@ -3,6 +3,8 @@ use serde_json::{Map, Value};
 use std::env;
 use std::path::Path;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+
 pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
@@ -31,6 +33,32 @@ fn compact_request_body(body: &mut Value) {
         }
         true
     });
+}
+
+fn normalize_image_input(image: Option<String>) -> Result<Option<String>> {
+    let Some(value) = image else {
+        return Ok(None);
+    };
+    if value.starts_with("data:image/")
+        || value.starts_with("http://")
+        || value.starts_with("https://")
+        || value.starts_with("viking://")
+    {
+        return Ok(Some(value));
+    }
+
+    let path = Path::new(&value);
+    if path.is_file() {
+        let bytes = std::fs::read(path)?;
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        return Ok(Some(format!(
+            "data:{};base64,{}",
+            mime,
+            BASE64_STANDARD.encode(bytes)
+        )));
+    }
+
+    Ok(Some(value))
 }
 
 #[derive(serde::Serialize)]
@@ -71,7 +99,6 @@ pub enum SnapshotShowResult {
 #[derive(Clone)]
 pub struct HttpClient {
     base: BaseClient,
-    legacy_agent_id: Option<String>,
 }
 
 impl HttpClient {
@@ -81,7 +108,6 @@ impl HttpClient {
         account: Option<String>,
         user: Option<String>,
         actor_peer_id: Option<String>,
-        legacy_agent_id: Option<String>,
         timeout_secs: f64,
         profile_enabled: bool,
         extra_headers: Option<std::collections::HashMap<String, String>>,
@@ -97,7 +123,6 @@ impl HttpClient {
                 profile_enabled,
                 extra_headers,
             ),
-            legacy_agent_id,
         }
     }
 
@@ -107,10 +132,6 @@ impl HttpClient {
 
     pub fn actor_peer_id(&self) -> Option<&str> {
         self.base.actor_peer_id()
-    }
-
-    pub fn legacy_agent_id(&self) -> Option<&str> {
-        self.legacy_agent_id.as_deref()
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -286,7 +307,7 @@ impl HttpClient {
             "mode": mode,
             "recursive": recursive,
         });
-        self.post("/api/v1/content/set_tags", &body).await
+        self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
     fn build_write_body(
@@ -471,12 +492,18 @@ impl HttpClient {
         self.get("/api/v1/fs/stat", &params).await
     }
 
+    pub async fn attrs(&self, uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/fs/attrs", &params).await
+    }
+
     // ============ Search Methods ============
 
     pub async fn find(
         &self,
         query: String,
         uri: String,
+        image: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
         since: Option<String>,
@@ -486,8 +513,10 @@ impl HttpClient {
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
+        let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
             "query": query,
+            "image_url": image_url,
             "target_uri": uri,
             "limit": node_limit,
             "score_threshold": threshold,
@@ -498,7 +527,6 @@ impl HttpClient {
             "context_type": context_type,
             "tags": tags,
         });
-        self.attach_legacy_agent_scope(&mut body);
         compact_request_body(&mut body);
         self.post("/api/v1/search/find", &body).await
     }
@@ -507,6 +535,7 @@ impl HttpClient {
         &self,
         query: String,
         uri: String,
+        image: Option<String>,
         session_id: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
@@ -517,8 +546,10 @@ impl HttpClient {
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
+        let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
             "query": query,
+            "image_url": image_url,
             "target_uri": uri,
             "session_id": session_id,
             "limit": node_limit,
@@ -530,15 +561,8 @@ impl HttpClient {
             "context_type": context_type,
             "tags": tags,
         });
-        self.attach_legacy_agent_scope(&mut body);
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
-    }
-
-    fn attach_legacy_agent_scope(&self, body: &mut Value) {
-        if let Some(agent_id) = self.legacy_agent_id() {
-            body["agent_id"] = serde_json::json!(agent_id);
-        }
     }
 
     pub async fn grep(
@@ -1261,12 +1285,26 @@ impl HttpClient {
         &self,
         account_id: &str,
         admin_user_id: &str,
+        seed: Option<&str>,
+        user_config: Option<&Value>,
     ) -> Result<Value> {
-        let body = serde_json::json!({
-            "account_id": account_id,
-            "admin_user_id": admin_user_id,
-        });
-        self.post("/api/v1/admin/accounts", &body).await
+        let mut body = Map::new();
+        body.insert(
+            "account_id".to_string(),
+            Value::String(account_id.to_string()),
+        );
+        body.insert(
+            "admin_user_id".to_string(),
+            Value::String(admin_user_id.to_string()),
+        );
+        if let Some(config) = user_config {
+            body.insert("user_config".to_string(), config.clone());
+        }
+        if let Some(seed) = seed {
+            body.insert("seed".to_string(), Value::String(seed.to_string()));
+        }
+        self.post("/api/v1/admin/accounts", &Value::Object(body))
+            .await
     }
 
     pub async fn admin_list_accounts(&self) -> Result<Value> {
@@ -1283,13 +1321,20 @@ impl HttpClient {
         account_id: &str,
         user_id: &str,
         role: &str,
+        seed: Option<&str>,
+        user_config: Option<&Value>,
     ) -> Result<Value> {
         let path = format!("/api/v1/admin/accounts/{}/users", account_id);
-        let body = serde_json::json!({
-            "user_id": user_id,
-            "role": role,
-        });
-        self.post(&path, &body).await
+        let mut body = Map::new();
+        body.insert("user_id".to_string(), Value::String(user_id.to_string()));
+        body.insert("role".to_string(), Value::String(role.to_string()));
+        if let Some(config) = user_config {
+            body.insert("user_config".to_string(), config.clone());
+        }
+        if let Some(seed) = seed {
+            body.insert("seed".to_string(), Value::String(seed.to_string()));
+        }
+        self.post(&path, &Value::Object(body)).await
     }
 
     pub async fn admin_list_users(
@@ -1329,12 +1374,21 @@ impl HttpClient {
         self.put(&path, &body).await
     }
 
-    pub async fn admin_regenerate_key(&self, account_id: &str, user_id: &str) -> Result<Value> {
+    pub async fn admin_regenerate_key(
+        &self,
+        account_id: &str,
+        user_id: &str,
+        seed: Option<&str>,
+    ) -> Result<Value> {
         let path = format!(
             "/api/v1/admin/accounts/{}/users/{}/key",
             account_id, user_id
         );
-        self.post(&path, &serde_json::json!({})).await
+        let body = match seed {
+            Some(seed) => serde_json::json!({ "seed": seed }),
+            None => serde_json::json!({}),
+        };
+        self.post(&path, &body).await
     }
 
     pub async fn admin_migrate(&self, cleanup: bool) -> Result<Value> {
@@ -1546,12 +1600,24 @@ impl HttpClient {
         self.get("/api/v1/snapshot/log", &params).await
     }
 
+    pub async fn snapshot_ignore_get(&self) -> Result<Value> {
+        self.get("/api/v1/snapshot/ignore", &[]).await
+    }
+
+    pub async fn snapshot_ignore_set(&self, content: &str) -> Result<Value> {
+        self.put("/api/v1/snapshot/ignore", &serde_json::json!({ "content": content }))
+            .await
+    }
+
+    pub async fn snapshot_ignore_delete(&self) -> Result<Value> {
+        self.delete("/api/v1/snapshot/ignore", &[]).await
+    }
+
     pub async fn snapshot_show(
         &self,
         target_ref: &str,
         path: Option<&str>,
-    ) -> Result<SnapshotShowResult> {
-        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
+    ) -> Result<SnapshotShowResult> {        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
         let mut query: Vec<(String, String)> = vec![("target_ref".to_string(), target_ref.to_string())];
         if let Some(p) = path {
             query.push(("path".to_string(), p.to_string()));
@@ -1766,7 +1832,7 @@ mod tests {
     #[tokio::test]
     async fn ls_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, None, 5.0, false, None);
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
             .ls("viking://resources", false, false, "agent", 256, false, 1)
@@ -1782,7 +1848,7 @@ mod tests {
     #[tokio::test]
     async fn tree_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, None, 5.0, false, None);
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
 
         client
             .tree("viking://resources", "agent", 256, false, 1, 3)
@@ -1795,24 +1861,37 @@ mod tests {
         assert!(!request.contains("include_mod_time_iso="));
     }
 
-    #[test]
-    fn search_body_includes_legacy_agent_id() {
-        let client = HttpClient::new(
-            "http://localhost:1933",
-            None,
-            None,
-            None,
-            Some("legacy-agent".to_string()),
-            Some("legacy-agent".to_string()),
-            5.0,
-            false,
-            None,
-        );
-        let mut body = json!({"query": "invoice"});
+    #[tokio::test]
+    async fn admin_seed_payloads_are_sent() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .admin_create_account("acct", "admin", Some("admin-seed"), None)
+            .await
+            .expect("create account should succeed");
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/admin/accounts "));
+        assert!(request.contains(r#""seed":"admin-seed""#));
 
-        client.attach_legacy_agent_scope(&mut body);
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .admin_register_user("acct", "alice", "admin", Some("alice-seed"), None)
+            .await
+            .expect("register user should succeed");
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/admin/accounts/acct/users "));
+        assert!(request.contains(r#""seed":"alice-seed""#));
 
-        assert_eq!(body["agent_id"], json!("legacy-agent"));
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+        client
+            .admin_regenerate_key("acct", "alice", Some("new-seed"))
+            .await
+            .expect("regenerate key should succeed");
+        let request = request_rx.await.expect("request should be captured");
+        assert!(request.starts_with("POST /api/v1/admin/accounts/acct/users/alice/key "));
+        assert!(request.contains(r#""seed":"new-seed""#));
     }
 
     #[test]

@@ -26,9 +26,12 @@ import {
   markRecallCompressorRuntimeFailed,
 } from "./recall-compressor-profile.mjs";
 import { deriveOvSessionId } from "./session-state.mjs";
+import { postRecall } from "./shared/recall-core.mjs";
+import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
+const effectivePeer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
 
 let emitted = false;
 let activeCompressor = null;
@@ -94,14 +97,16 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
+    if (effectivePeer.peerId) headers["X-OpenViking-Actor-Peer"] = effectivePeer.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
-    if (!body) return null;
-    if (!res.ok || body.status === "error") return null;
-    return body.result ?? body;
+    if (!body) return { ok: false, status: res.status };
+    if (!res.ok || body.status === "error") {
+      return { ok: false, status: res.status, error: body.error || body };
+    }
+    return { ok: true, result: body.result ?? body };
   } catch {
-    return null;
+    return { ok: false, status: 0 };
   } finally {
     clearTimeout(timer);
   }
@@ -214,21 +219,55 @@ function postProcess(items, limit, threshold) {
 }
 
 async function searchScope(query, targetUri, limit, bucket = "memories", sessionId = null) {
-  // Keep current-user shorthand here; the server canonicalizes it using the
-  // authenticated/trusted request context.
   const body = { query, target_uri: targetUri, limit, score_threshold: 0 };
   if (sessionId) body.session_id = sessionId;
   const result = await fetchJSON("/api/v1/search/search", {
     method: "POST",
     body: JSON.stringify(body),
   });
-  return result?.[bucket] || [];
+  return result.ok ? (result.result?.[bucket] || []) : [];
+}
+
+// Candidate target URIs for a bucket, most-specific first. In trusted mode a
+// user's memories live under viking://user/<user>/<bucket>; in api_key mode the
+// server canonicalizes the generic viking://user/<bucket> to the authenticated
+// user. Trying the user-scoped path first with the generic path as a fallback
+// recalls correctly in both modes. De-duped so a missing/blank user never
+// doubles the request count.
+function userScopedTargets(kind) {
+  const suffix = kind.replace(/^\/+/, "");
+  const targets = [`viking://user/${suffix}`];
+  if (cfg.user) {
+    targets.unshift(`viking://user/${cfg.user}/${suffix}`);
+  }
+  return [...new Set(targets)];
+}
+
+// Two-phase, short-circuiting search over the candidate targets:
+//   1) a session-scoped pass (uses OpenViking's session-aware planner);
+//   2) only if the entire session pass is empty, a single session-independent
+//      pass (the planner can legitimately decide that no extra context is
+//      needed for this session, but auto-recall still needs a memory lookup).
+// Each phase stops at the first non-empty target, so a warm user costs one
+// request and the worst case is bounded by (targets x 2) — instead of running
+// a per-target session+fallback for every target.
+async function searchBucket(query, targetUris, limit, bucket, sessionId = null) {
+  for (const targetUri of targetUris) {
+    const items = await searchScope(query, targetUri, limit, bucket, sessionId);
+    if (items.length > 0) return items;
+  }
+  if (!sessionId) return [];
+  for (const targetUri of targetUris) {
+    const items = await searchScope(query, targetUri, limit, bucket, null);
+    if (items.length > 0) return items;
+  }
+  return [];
 }
 
 async function searchAll(query, limit, sessionId = null) {
   const [userMems, userSkills] = await Promise.all([
-    searchScope(query, "viking://user/memories", limit, "memories", sessionId),
-    searchScope(query, "viking://user/skills", limit, "skills", sessionId),
+    searchBucket(query, userScopedTargets("memories"), limit, "memories", sessionId),
+    searchBucket(query, userScopedTargets("skills"), limit, "skills", sessionId),
   ]);
   log("search_complete", { scope: "user", rawCount: userMems.length, topScores: userMems.slice(0, 3).map((m) => m.score) });
   log("search_complete", { scope: "skills", rawCount: userSkills.length, topScores: userSkills.slice(0, 3).map((m) => m.score) });
@@ -253,9 +292,38 @@ function resolveRecallSessionId(codexSessionId) {
 async function readMemoryContent(uri) {
   try {
     const result = await fetchJSON(`/api/v1/content/read?uri=${encodeURIComponent(uri)}`);
-    if (result && typeof result === "string" && result.trim()) return result.trim();
+    if (result.ok && typeof result.result === "string" && result.result.trim()) return result.result.trim();
   } catch { /* fallback */ }
   return null;
+}
+
+async function recallViaTypeQuotaEndpoint(query) {
+  const body = {
+    query,
+    quotas: {
+      events: Math.max(cfg.recallLimit, 1),
+      entities: Math.max(cfg.recallLimit, 1),
+      preferences: Math.max(1, Math.min(cfg.recallLimit, 3)),
+      experiences: 0,
+    },
+    max_chars: cfg.recallCompressMaxInputChars || 6500,
+    min_score: cfg.scoreThreshold,
+    render: true,
+  };
+  if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
+  const result = await postRecall(fetchJSON, body, { actorPeerId: effectivePeer.peerId, log });
+  if (!result.ok) {
+    log("recall_endpoint_fallback", { status: result.status || 0 });
+    return null;
+  }
+  const rendered = String(result.result?.rendered || "").trim();
+  if (!rendered) return "";
+  return [
+    "OpenViking memory digest:",
+    rendered,
+    "",
+    "More detail: use the OpenViking MCP recall/read/search tools with cited viking:// URIs if needed.",
+  ].join("\n");
 }
 
 function truncateText(text, maxChars) {
@@ -465,7 +533,12 @@ async function main() {
     recallSessionId,
     query: userPrompt.slice(0, 200),
     queryLength: userPrompt.length,
-    config: { recallLimit: cfg.recallLimit, scoreThreshold: cfg.scoreThreshold },
+    config: {
+      recallLimit: cfg.recallLimit,
+      scoreThreshold: cfg.scoreThreshold,
+      peerSource: effectivePeer.source,
+      recallPeerScope: cfg.recallPeerScope,
+    },
   });
 
   if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
@@ -475,9 +548,21 @@ async function main() {
   }
 
   const health = await fetchJSON("/health");
-  if (!health) {
+  if (!health.ok) {
     logError("health_check", "server unreachable or unhealthy");
     emit();
+    return;
+  }
+
+  const endpointRecall = await recallViaTypeQuotaEndpoint(userPrompt);
+  if (endpointRecall !== null) {
+    if (!endpointRecall) {
+      log("skip", { stage: "recall_endpoint", reason: "no results" });
+      emit();
+      return;
+    }
+    log("recall_endpoint", { chars: endpointRecall.length });
+    emit(endpointRecall);
     return;
   }
 

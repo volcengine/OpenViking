@@ -9,7 +9,8 @@ use crate::core::filesystem::{
     relative_match_file,
 };
 use crate::core::{
-    FileInfo, FileSystem, GrepMatch, GrepResult, MultiWriteWrappedFS, Result, TreeEntry, WriteFlag,
+    FileInfo, FileSystem, GlobPage, GrepMatch, GrepResult, MultiWriteWrappedFS, Result,
+    TreeEntry, WriteFlag,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -1134,6 +1135,18 @@ impl FileSystem for CachedFileSystem {
         Ok(())
     }
 
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let _guard = self.operation_lock.write().await;
+        self.backend.replace(src_path, dst_path).await?;
+        self.bump_generation(src_path).await;
+        self.bump_generation(dst_path).await;
+        self.invalidate_path_objects(src_path).await;
+        self.invalidate_path_objects(dst_path).await;
+        self.invalidate_parent_directory(src_path).await;
+        self.invalidate_parent_directory(dst_path).await;
+        Ok(())
+    }
+
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         let _guard = self.operation_lock.write().await;
         self.backend.chmod(path, mode).await?;
@@ -1219,6 +1232,27 @@ impl FileSystem for CachedFileSystem {
 
         self.backend
             .tree_directory(path, show_hidden, node_limit, level_limit)
+            .await
+    }
+
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        self.backend
+            .glob_directory(
+                path,
+                pattern,
+                show_hidden,
+                page_size,
+                level_limit,
+                continuation_token,
+            )
             .await
     }
 }

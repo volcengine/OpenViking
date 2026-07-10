@@ -20,6 +20,42 @@ import sys
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 
 
+def _config_missing() -> bool:
+    """True when no ov.conf resolves through the standard four-level chain."""
+    from openviking_cli.utils.config.config_loader import resolve_config_path
+    from openviking_cli.utils.config.consts import DEFAULT_OV_CONF
+
+    return resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF) is None
+
+
+def _maybe_offer_init() -> None:
+    """On an interactive TTY with no config, offer to run the setup wizard.
+
+    Falls through silently in non-interactive contexts (Docker, CI) so the
+    server keeps its existing missing-config behavior there.
+    """
+    try:
+        interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        interactive = False
+    if not interactive or not _config_missing():
+        return
+
+    print("No OpenViking configuration found.")
+    try:
+        answer = input("Run interactive setup now? [Y/n]: ").strip().lower()
+    except (EOFError, OSError):
+        return
+    if answer not in ("", "y", "yes"):
+        return
+
+    from openviking_cli.setup_wizard import main as init_main
+
+    code = init_main()
+    if code != 0 or _config_missing():
+        sys.exit(code or 1)
+
+
 def main():
     """Bootstrap the server while binding a stable execution-level log trace ID."""
     # Pre-parse --config from sys.argv before any openviking imports,
@@ -50,6 +86,17 @@ def main():
 
         with bind_log_execution_trace():
             sys.exit(doctor_main())
+
+    # `openviking-server ingest ...` runs the local-log ingestion CLI (client-side).
+    if len(sys.argv) > 1 and sys.argv[1] == "ingest":
+        from openviking.ingest.cli import app as ingest_app
+
+        with bind_log_execution_trace():
+            ingest_app(args=sys.argv[2:], prog_name="openviking-server ingest")
+        return
+
+    if not any(arg in ("-h", "--help", "--version") for arg in sys.argv[1:]):
+        _maybe_offer_init()
 
     from openviking.server.bootstrap import main as _real_main
 

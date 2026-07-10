@@ -34,6 +34,17 @@ class TestLiteLLMThinkingParam:
         assert "extra_body" in kwargs
         assert kwargs["extra_body"]["enable_thinking"] is True
 
+    def test_litellm_dashscope_uses_instance_thinking_by_default(self):
+        """DashScope calls should inherit config thinking when no call override is passed."""
+        vlm = self._make_provider("qwen-plus", thinking=True)
+        model = vlm._resolve_model("qwen-plus")
+        messages = [{"role": "user", "content": "hello"}]
+
+        kwargs = vlm._build_kwargs(model, messages)
+
+        assert "extra_body" in kwargs
+        assert kwargs["extra_body"]["enable_thinking"] is True
+
     def test_litellm_non_dashscope_no_thinking_field(self):
         """Non-DashScope model should NOT have enable_thinking in extra_body."""
         vlm = self._make_provider("gpt-4o")

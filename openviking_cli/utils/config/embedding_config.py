@@ -388,9 +388,7 @@ class EmbeddingModelConfig(BaseModel):
 
         elif provider == "local_bm25":
             if self.tokenizer and self.tokenizer not in {"jieba", "regex"}:
-                raise ValueError(
-                    f"{label}: local_bm25 tokenizer must be one of: 'jieba', 'regex'"
-                )
+                raise ValueError(f"{label}: local_bm25 tokenizer must be one of: 'jieba', 'regex'")
             if self.rebuild_growth_factor is not None and self.rebuild_growth_factor <= 1.0:
                 raise ValueError(
                     f"{label}: local_bm25 rebuild_growth_factor must be > 1.0 "
@@ -402,9 +400,7 @@ class EmbeddingModelConfig(BaseModel):
                 self.rebuild_max_interval_seconds is not None
                 and self.rebuild_max_interval_seconds <= 0
             ):
-                raise ValueError(
-                    f"{label}: local_bm25 rebuild_max_interval_seconds must be > 0"
-                )
+                raise ValueError(f"{label}: local_bm25 rebuild_max_interval_seconds must be > 0")
 
     def _validate_credentials(self) -> None:
         """Validate each credential when credentials list is non-empty.
@@ -564,6 +560,7 @@ class EmbeddingModelConfig(BaseModel):
         if self.credentials and self.credentials[0].model:
             return self.credentials[0].model
         return self.model
+
     def get_effective_dimension(self) -> int:
         """Resolve the dimension used for schema creation and validation."""
         if self.dimension is not None:
@@ -854,6 +851,7 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
                     "config": dict(runtime_config),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
             ("volcengine", "sparse"): (
@@ -863,6 +861,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "config": dict(runtime_config),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
             ("volcengine", "hybrid"): (
@@ -874,6 +873,7 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
                     "config": dict(runtime_config),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
             ("vikingdb", "dense"): (

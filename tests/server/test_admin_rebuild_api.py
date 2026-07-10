@@ -987,7 +987,6 @@ async def test_reindex_memory_l2_falls_back_to_body_when_abstract_missing(monkey
     monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
-    monkeypatch.setattr(ReindexExecutor, "_chunk_memory_body", lambda self, uri, body: [])
     monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()
@@ -1039,7 +1038,6 @@ async def test_reindex_memory_l2_strips_memory_fields_from_abstract(monkeypatch)
     monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
-    monkeypatch.setattr(ReindexExecutor, "_chunk_memory_body", lambda self, uri, body: [])
     monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()
@@ -1115,7 +1113,6 @@ async def test_reindex_memory_vectors_walks_deep_subtree(monkeypatch):
     monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
-    monkeypatch.setattr(ReindexExecutor, "_chunk_memory_body", lambda self, uri, body: [])
     monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()
@@ -1203,7 +1200,6 @@ async def test_reindex_memory_vectors_rebuilds_directory_levels_without_regenera
     monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fake_safe_read_text)
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
     monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
-    monkeypatch.setattr(ReindexExecutor, "_chunk_memory_body", lambda self, uri, body: [])
     monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()

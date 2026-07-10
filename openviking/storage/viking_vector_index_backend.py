@@ -38,18 +38,6 @@ LOOKUP_OUTPUT_FIELDS = [
     "active_count",
 ]
 
-MEMORY_DEDUP_OUTPUT_FIELDS = [
-    "uri",
-    "abstract",
-    "context_type",
-    "created_at",
-    "updated_at",
-    "active_count",
-    "level",
-    "account_id",
-    "owner_user_id",
-]
-
 FETCH_BY_URI_OUTPUT_FIELDS = [
     "id",
     "uri",
@@ -919,9 +907,7 @@ class VikingVectorIndexBackend:
         sparse_embedder: LocalBM25Embedder,
         state: Any,
     ) -> None:
-        task = asyncio.create_task(
-            self._drain_local_bm25_rebuilds(ctx, sparse_embedder, state)
-        )
+        task = asyncio.create_task(self._drain_local_bm25_rebuilds(ctx, sparse_embedder, state))
         state.task = task
         task.add_done_callback(
             lambda done_task: self._finish_local_bm25_rebuild(
@@ -955,9 +941,7 @@ class VikingVectorIndexBackend:
                 inserts_consumed = state.pending_inserts
                 deletes_consumed = state.pending_deletes
                 try:
-                    rebuilt = await self.rebuild_local_bm25_sparse_vectors(
-                        sparse_embedder, ctx=ctx
-                    )
+                    rebuilt = await self.rebuild_local_bm25_sparse_vectors(sparse_embedder, ctx=ctx)
                 except Exception as exc:
                     logger.warning("Failed to rebuild local BM25 sparse vectors: %s", exc)
                     return
@@ -970,9 +954,7 @@ class VikingVectorIndexBackend:
                 # instead of dropping those deltas on the floor.
                 state.pending_inserts = max(0, state.pending_inserts - inserts_consumed)
                 state.pending_deletes = max(0, state.pending_deletes - deletes_consumed)
-                logger.debug(
-                    "Rebuilt local BM25 sparse vectors for %d corpus records", rebuilt
-                )
+                logger.debug("Rebuilt local BM25 sparse vectors for %d corpus records", rebuilt)
 
     async def exists(self, id: str, *, ctx: RequestContext) -> bool:
         backend = self._get_backend_for_context(ctx)
@@ -1267,6 +1249,7 @@ class VikingVectorIndexBackend:
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
@@ -1275,6 +1258,7 @@ class VikingVectorIndexBackend:
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
+            level=level,
         )
         return await self.search(
             query_vector=query_vector,
@@ -1282,37 +1266,6 @@ class VikingVectorIndexBackend:
             filter=scope_filter,
             limit=limit,
             offset=offset,
-            output_fields=RETRIEVAL_OUTPUT_FIELDS,
-            ctx=ctx,
-        )
-
-    async def search_global_roots_in_tenant(
-        self,
-        ctx: RequestContext,
-        query_vector: Optional[List[float]],
-        sparse_query_vector: Optional[Dict[str, float]] = None,
-        context_type: Optional[str] = None,
-        target_directories: Optional[List[str]] = None,
-        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
-        limit: int = 10,
-    ) -> List[Dict[str, Any]]:
-        if not query_vector:
-            return []
-
-        merged_filter = self._merge_filters(
-            self._build_scope_filter(
-                ctx=ctx,
-                context_type=context_type,
-                target_directories=target_directories,
-                extra_filter=extra_filter,
-            ),
-            In("level", [0, 1, 2]),  # TODO: smj fix this
-        )
-        return await self.search(
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            filter=merged_filter,
-            limit=limit,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
         )
@@ -1360,31 +1313,6 @@ class VikingVectorIndexBackend:
             limit=limit,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
-        )
-
-    async def search_similar_memories(
-        self,
-        owner_space: Optional[str],
-        category_uri_prefix: str,
-        query_vector: List[float],
-        limit: int = 5,
-        *,
-        ctx: RequestContext,
-    ) -> List[Dict[str, Any]]:
-        conds: List[FilterExpr] = [
-            Eq("context_type", "memory"),
-            Eq("level", 2),
-            Eq("account_id", ctx.account_id),
-        ]
-        if category_uri_prefix:
-            conds.append(PathScope("uri", canonicalize_uri(category_uri_prefix, ctx), depth=-1))
-
-        backend = self._get_backend_for_context(ctx)
-        return await backend.search(
-            query_vector=query_vector,
-            filter=And(conds),
-            limit=limit,
-            output_fields=MEMORY_DEDUP_OUTPUT_FIELDS,
         )
 
     async def get_context_by_uri(
@@ -1547,6 +1475,7 @@ class VikingVectorIndexBackend:
         context_type: Optional[str],
         target_directories: Optional[List[str]],
         extra_filter: Optional[FilterExpr | Dict[str, Any]],
+        level: Optional[List[int]] = None,
     ) -> Optional[FilterExpr]:
         filters: List[FilterExpr] = []
         if context_type:
@@ -1571,8 +1500,10 @@ class VikingVectorIndexBackend:
             else:
                 filters.append(extra_filter)
 
-        merged = self._merge_filters(*filters)
-        return merged
+        if level:
+            filters.append(In("level", level))
+
+        return self._merge_filters(*filters)
 
     @staticmethod
     def _tenant_filter(

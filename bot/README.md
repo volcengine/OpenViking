@@ -14,12 +14,12 @@ Vikingbot is deeply integrated with OpenViking, providing powerful knowledge man
 
 ## 📦 Install
 
-**Option 1: Install from PyPI (Simplest)**
+### Option 1: Install from PyPI (Simplest)**
 ```bash
 pip install "openviking[bot]"
 ```
 
-**Option 2: Install from source (for development)**
+### Option 2: Install from source (for development)**
 
 **Prerequisites**
 
@@ -46,38 +46,8 @@ uv venv --python 3.11
 source .venv/bin/activate  # macOS/Linux
 # .venv\Scripts\activate   # Windows
 
-# Install dependencies (minimal)
+# Install (all features included)
 uv pip install -e ".[bot]"
-
-# Or install with optional features
-uv pip install -e ".[bot,bot-langfuse,bot-telegram]"
-```
-
-### Optional Dependencies
-
-Install only the features you need:
-
-| Feature Group | Install Command | Description |
-|---------------|-----------------|-------------|
-| **Full** | `uv pip install -e ".[bot-full]"` | All features included |
-| **Langfuse** | `uv pip install -e ".[bot-langfuse]"` | LLM observability and tracing |
-| **FUSE** | `uv pip install -e ".[bot-fuse]"` | OpenViking filesystem mount |
-| **Sandbox** | `uv pip install -e ".[bot-sandbox]"` | Code execution sandbox |
-| **OpenCode** | `uv pip install -e ".[bot-opencode]"` | OpenCode AI integration |
-
-#### Channels (chat apps)
-
-| Channel | Install Command |
-|---------|-----------------|
-| **Telegram** | `uv pip install -e ".[bot-telegram]"` |
-| **Feishu/Lark** | `uv pip install -e ".[bot-feishu]"` |
-| **DingTalk** | `uv pip install -e ".[bot-dingtalk]"` |
-| **Slack** | `uv pip install -e ".[bot-slack]"` |
-| **QQ** | `uv pip install -e ".[bot-qq]"` |
-
-Multiple features can be combined:
-```bash
-uv pip install -e ".[bot,bot-langfuse,bot-telegram]"
 ```
 
 ## 🚀 Quick Start
@@ -168,12 +138,15 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
 - `agents`: Agent configuration
   - `model`: LLM model name used by the bot. When `provider` is set, use the provider-native model name (for example `doubao-seed-2-0-pro-260215`).
   - `temperature`: Sampling temperature for LLM requests. Defaults to `0.7`.
+  - `thinking`: Enable provider reasoning/thinking mode for bot LLM requests when the selected provider protocol supports an explicit thinking parameter. Defaults to `true`; set to `false` to disable (for example to reduce latency/cost or for models where reasoning params are unsupported). Applied per provider — VolcEngine `thinking={"type": "enabled"}`, DashScope `extra_body.enable_thinking=true`, and OpenAI reasoning models `reasoning_effort`.
+  - `timeout`: Per-request timeout in seconds for fetching chat results from the model provider. Inherits `vlm.timeout` when omitted (default `60.0`).
   - `provider`: Optional model provider name. When set, vikingbot uses OpenViking's `VLMFactory` + adapter path to create the backend directly (for example `volcengine`, `openai`, `deepseek`).
   - `api_key`: Optional API key for the agent model provider. Can be configured here directly when you want bot-specific credentials.
   - `api_base`: Optional API base for the agent model provider. Useful for provider gateways or custom endpoints such as VolcEngine Ark.
   - `extra_headers`: Optional extra HTTP headers passed to the model provider.
   - `max_tool_iterations`: Maximum number of cycles for a single round of conversation tasks, returns results directly if exceeded
   - `memory_window`: Upper limit of conversation rounds for automatically submitting sessions to OpenViking
+  - `subagent_enabled`: Enable the `spawn` tool so the main agent can start background subagents. Defaults to `true`; set to `false` to disable subagents.
   - `gen_image_model`: Model for generating images
 - `gateway`: Gateway configuration
   - `host`: Gateway listening address, default value is `0.0.0.0`
@@ -210,8 +183,11 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "provider": "volcengine",
       "temperature": 0.7,
+      "thinking": true,
+      "timeout": 60.0,
       "max_tool_iterations": 50,
-      "memory_window": 50
+      "memory_window": 50,
+      "subagent_enabled": true
     },
     "gateway": {
       "host": "0.0.0.0",
@@ -460,11 +436,6 @@ Add to `~/.openviking/ov.conf`:
 ```
 
 For Langfuse Cloud, use `https://cloud.langfuse.com` as the `base_url`.
-
-**Install Langfuse support:**
-```bash
-uv pip install -e ".[bot-langfuse]"
-```
 
 **Restart vikingbot:**
 ```bash

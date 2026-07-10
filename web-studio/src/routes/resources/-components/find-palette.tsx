@@ -35,8 +35,8 @@ import {
 } from '../-hooks/viking-fm'
 import { useListNavigation } from '../-hooks/use-list-navigation'
 import type { VikingFsEntry } from '../-types/viking-fm'
-import { FilePreview } from './file-preview'
 import { DirBrowser } from './dir-browser'
+import { LazyFilePreview } from './lazy-file-preview'
 
 interface FindPaletteProps {
   open: boolean
@@ -535,7 +535,7 @@ export function FindPalette({
               {/* Preview pane */}
               {showPreview && (
                 <div className="animate-palette-preview flex h-full w-[32rem] flex-col overflow-hidden">
-                  <FilePreview
+                  <LazyFilePreview
                     file={previewEntry}
                     onClose={() => setIndex(-1)}
                     showCloseButton={false}

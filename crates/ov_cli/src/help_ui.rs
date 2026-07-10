@@ -68,9 +68,11 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
     "read",
     "write",
     "add-memory",
+    "set-tags",
 ];
 
-const FILESYSTEM: &[HelpCommand] = help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "get"];
+const FILESYSTEM: &[HelpCommand] =
+    help_commands!["ls", "tree", "mkdir", "rm", "mv", "stat", "attrs", "get"];
 
 const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
     "find", "search", "grep", "glob", "abstract", "overview", "read"
@@ -125,7 +127,7 @@ const HELP_SECTIONS: &[HelpSection] = &[
 const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["add-resource"],
-        purpose: "Import a local file, folder, URL, or repository into OpenViking.",
+        purpose: "Import a local file, folder, URL, repository, or whole website (sitemap/RSS) into OpenViking.",
         examples: &[
             HelpItem {
                 label: "ov add-resource ./docs --parent viking://projects/acme --wait",
@@ -134,6 +136,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov add-resource https://example.com/spec.md --to viking://specs/api.md",
                 description: "Import a URL to an exact target URI.",
+            },
+            HelpItem {
+                label: "ov add-resource https://example.com/sitemap.xml --watch-interval 1440",
+                description: "Import a whole site via sitemap/RSS and refresh it daily.",
             },
         ],
         next_steps: &[
@@ -318,6 +324,30 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
     },
     CommandHelpSpec {
+        path: &["attrs"],
+        purpose: "Get or update logical extended attributes for a resource.",
+        examples: &[
+            HelpItem {
+                label: "ov attrs get viking://projects/acme/spec.md",
+                description: "Show all logical attributes for a resource.",
+            },
+            HelpItem {
+                label: "ov attrs set-tags viking://projects/acme/spec.md --tags team=search",
+                description: "Set retrieval tags on a resource.",
+            },
+        ],
+        next_steps: &[
+            HelpItem {
+                label: "ov stat <uri>",
+                description: "Inspect resource metadata.",
+            },
+            HelpItem {
+                label: "ov find \"query\" -u <uri>",
+                description: "Search with updated context.",
+            },
+        ],
+    },
+    CommandHelpSpec {
         path: &["read"],
         purpose: "Read exact Level 2 file content from a Viking URI.",
         examples: &[HelpItem {
@@ -384,6 +414,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         ],
     },
     CommandHelpSpec {
+        path: &["set-tags"],
+        purpose: "Update explicit retrieval tags for a file or directory.",
+        examples: &[
+            HelpItem {
+                label: "ov set-tags viking://resources/proj --tags env=prod,team=search",
+                description: "Replace tags on a directory.",
+            },
+            HelpItem {
+                label: "ov set-tags viking://resources/proj --tags env=staging --mode append",
+                description: "Append (merge) tags without dropping existing keys.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov find \"query\" -u <uri>",
+            description: "Verify the tags influence retrieval.",
+        }],
+    },
+    CommandHelpSpec {
         path: &["get"],
         purpose: "Download a file resource to a local path.",
         examples: &[HelpItem {
@@ -406,6 +454,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
             HelpItem {
                 label: "ov find \"auth flow\" -u viking://projects/acme -L 1,2",
                 description: "Search a subtree and include overview/file results.",
+            },
+            HelpItem {
+                label: "ov find --image ./query.png -u viking://resources/images",
+                description: "Search by image with a local file or image URI.",
             },
         ],
         next_steps: &[
@@ -571,6 +623,54 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         next_steps: &[HelpItem {
             label: "ov snapshot show <commit>",
             description: "Inspect a commit from the log.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "ignore-get"],
+        purpose: "Show the account-level .ovgitignore content.",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot ignore-get",
+                description: "Print the .ovgitignore content to stdout.",
+            },
+            HelpItem {
+                label: "ov snapshot ignore-get -o json",
+                description: "Return the content wrapped in the standard JSON envelope.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot ignore-set --content \"*.log\"",
+            description: "Update the ignore rules.",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "ignore-set"],
+        purpose: "Set the account-level .ovgitignore content (overwrites).",
+        examples: &[
+            HelpItem {
+                label: "ov snapshot ignore-set --content \"*.log\"",
+                description: "Ignore all .log files from future commits.",
+            },
+            HelpItem {
+                label: "ov snapshot ignore-set --file ./my-rules",
+                description: "Read the content from a file (--file takes precedence over --content).",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov snapshot commit -m \"with ignore\"",
+            description: "Commit; matching files are excluded (see the `ignored` count).",
+        }],
+    },
+    CommandHelpSpec {
+        path: &["snapshot", "ignore-delete"],
+        purpose: "Delete the account-level .ovgitignore file (idempotent).",
+        examples: &[HelpItem {
+            label: "ov snapshot ignore-delete",
+            description: "Remove the ignore rules; missing is success.",
+        }],
+        next_steps: &[HelpItem {
+            label: "ov snapshot ignore-get",
+            description: "Confirm the rules are gone (returns an empty string).",
         }],
     },
     CommandHelpSpec {
@@ -1148,6 +1248,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Register a user in an account.",
             },
             HelpItem {
+                label: "ov admin regenerate-key <account> <user> --seed <seed>",
+                description: "Regenerate a predictable API key from a seed.",
+            },
+            HelpItem {
                 label: "ov admin migrate --sudo",
                 description: "Start legacy agent/session migration.",
             },
@@ -1210,10 +1314,16 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
     CommandHelpSpec {
         path: &["reindex"],
         purpose: "Reindex semantic/vector artifacts for a URI.",
-        examples: &[HelpItem {
-            label: "ov reindex viking://projects/acme --mode vectors_only --wait true",
-            description: "Rebuild vector artifacts and wait.",
-        }],
+        examples: &[
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode vectors_only --wait true",
+                description: "Rebuild vector artifacts and wait.",
+            },
+            HelpItem {
+                label: "ov reindex viking://projects/acme --mode semantic_and_vectors --wait true",
+                description: "Regenerate semantic artifacts, then vectors.",
+            },
+        ],
         next_steps: &[
             HelpItem {
                 label: "ov task list",
@@ -2712,7 +2822,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find [OPTIONS] <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] [query]"));
         assert!(rendered.contains("Examples"));
         assert!(rendered.contains("Common options"));
         assert!(rendered.contains("Next"));
@@ -2757,6 +2867,17 @@ mod tests {
     }
 
     #[test]
+    fn reindex_help_lists_supported_modes() {
+        let rendered = strip_ansi(
+            &render_command_help_request(&os_args(&["ov", "reindex", "--help"]))
+                .expect("reindex help should render"),
+        );
+
+        assert!(rendered.contains("--mode <vectors_only|semantic_and_vectors>"));
+        assert!(rendered.contains("Regenerate semantic artifacts, then vectors."));
+    }
+
+    #[test]
     fn renders_curated_command_help_for_single_dash_help_alias() {
         let rendered = strip_ansi(
             &render_command_help_request(&os_args(&["ov", "find", "-help"]))
@@ -2764,7 +2885,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find [OPTIONS] <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] [query]"));
         assert!(rendered.contains("Usage:"));
     }
 

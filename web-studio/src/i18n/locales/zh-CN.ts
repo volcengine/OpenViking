@@ -111,17 +111,20 @@ const zhCN = {
       regenerate: '重新生成',
       save: '保存',
       use: '使用',
-      useForData: '用作 User key',
+      useForData: '用作 User API Key',
     },
     connection: {
       accountListLimited:
         '当前 key 不能列出所有 account；如果它有 account-admin 权限，仍可管理选中的 account。',
-      adminError: '加载 admin 身份失败：{{message}}',
+      adminError: '校验 Root API Key 失败：{{message}}',
       description:
-        '租户数据 API 使用 User API key；控制 API 可单独使用 root 或 account-admin key。',
+        '租户数据 API 使用 User API Key；控制 API 可单独使用 Root 或 account-admin key。',
+      devMode: '当前为开发模式 — 身份自动确定，无需 API key。',
       noKey:
-        '输入 root 或 account-admin API key 后，可以加载 account 和 user 可选项。',
+        '填入 Root API Key 即可管理 account / user 并生成 user key。仅凭 User API Key 即可使用 Playground 和数据 API。',
+      rootHint: '用于列出 account / user，以及生成或轮换 key。',
       title: '连接设置',
+      userHint: '供 Playground 和租户数据 API 使用。',
     },
     dialogs: {
       addAccount: {
@@ -154,7 +157,8 @@ const zhCN = {
       apiKey: 'API key',
       baseUrl: '服务地址',
       dataApiKey: 'User API key',
-      userApiKey: 'User API key',
+      rootApiKey: 'Root or Admin API Key',
+      userApiKey: 'User API Key',
       role: '角色',
       user: 'User',
     },
@@ -182,8 +186,10 @@ const zhCN = {
       title: '用户管理',
     },
     page: {
+      adminDescription:
+        '配置当前 OpenViking Studio 身份，并管理账号、用户和 API key。',
       description:
-        '配置当前 OpenViking Studio 身份，并管理 accounts、users 和 API keys。',
+        '配置当前 OpenViking Studio 的服务地址和 API key，查看当前身份下的数据。',
       title: '连接与身份',
     },
     placeholders: {
@@ -297,6 +303,8 @@ const zhCN = {
       title: 'tokens 总消耗统计',
     },
     usageDisabled: 'Usage/Audit 未初始化，暂无实时统计。',
+    usageAccessRequired:
+      '当前连接未获取到 admin/root 权限，无法显示 Usage/Audit 数据。请在连接与身份中配置具备 Console Usage/Audit 权限的 API Key。',
   },
   operations: {
     page: {
@@ -304,8 +312,14 @@ const zhCN = {
     },
   },
   requestLogs: {
+    accessRequired: {
+      description:
+        '当前连接未获取到 admin/root 权限，无法显示请求日志。请在连接与身份中配置具备 Console Usage/Audit 权限的 API Key。',
+      title: '需要 admin 权限',
+    },
     clear: '清空',
-    description: '查看服务端审计到的 API 请求，包括状态、耗时和请求标识。',
+    description:
+      '查看当前身份下服务端审计到的 API 请求，包括状态、耗时和请求标识。',
     disabled: {
       description: 'Usage/Audit 未初始化，暂无服务端请求日志。',
       title: '审计日志不可用',
@@ -345,6 +359,10 @@ const zhCN = {
     refresh: '刷新',
     reset: '重置',
     searchPlaceholder: '筛选方法、路径或状态码',
+    scope: {
+      currentIdentity: '当前范围：当前 API key 身份',
+      currentIdentityWithName: '当前范围：当前 API key 身份（{{identity}}）',
+    },
     status: {
       error: 'ERR',
       pending: 'PENDING',
@@ -525,8 +543,21 @@ const zhCN = {
       loadingEditor: '加载编辑器...',
       markdownPreview: '预览',
       markdownSource: '源码',
+      noDirectoryContext: '这个目录暂无摘要或概览。',
       save: '保存',
+      selectDirectoryContext: '选择一个标签查看目录上下文。',
       unsupportedBinary: '二进制文件不支持文本预览。',
+      jsonl: {
+        collapse: '收起',
+        dialogMode: '对话',
+        emptyJsonl: '空 JSONL。',
+        emptyMessage: '空消息',
+        expand: '展开',
+        noArguments: '无参数',
+        rawMode: 'JSONL',
+        recordCount: '{{count}} 条记录',
+        toolcall: '工具调用',
+      },
     },
   },
   retrieval: {
@@ -614,6 +645,12 @@ const zhCN = {
       toolInput: '输入',
       toolResult: '结果',
       loadMoreRefs: '加载更多 {{count}} 条（剩余 {{remaining}} 条）',
+      relativeTime: {
+        justNow: '刚刚',
+        minutesAgo: '{{count}} 分钟前',
+        hoursAgo: '{{count}} 小时前',
+        daysAgo: '{{count}} 天前',
+      },
       toolStatus: {
         completed: '完成',
         failed: '失败',
@@ -698,6 +735,10 @@ const zhCN = {
     explorer: {
       title: '上下文目录',
       addResource: '添加资源',
+      abstractLevel: 'L0',
+      empty: '空',
+      loading: '加载中',
+      overviewLevel: 'L1',
       search: '搜索上下文',
       refresh: '刷新目录',
       namespaces: {
@@ -726,6 +767,7 @@ const zhCN = {
         title: '请开启 bot 模式',
         description:
           '当前服务未启用 Agent 对话能力，请使用 bot 模式启动服务后重试。',
+        command: 'openviking-server --with-bot',
         retry: '重新检测',
       },
       empty: {
@@ -753,6 +795,7 @@ const zhCN = {
       searchScopeLine: '搜索范围：{{scope}}',
       helpParameters: '参数',
       helpExamples: '示例',
+      helpSubcommands: '子命令',
       noParameters: '无参数',
       currentScopeAction: '使用当前目录',
       readUsage: '用法：/read viking://resources/...',
@@ -764,7 +807,8 @@ const zhCN = {
       sessionUsage:
         '用法：/session [current|list|create|switch|get|context|messages|archive|commit|extract|message|used|tool-results|tool-result|tool-search|delete] ...',
       sessionDeleteUsage: '用法：/session delete <session_id>',
-      sessionMissing: '当前没有 active session，请先打开 Agent 面板创建会话，或指定 session_id。',
+      sessionMissing:
+        '当前没有 active session，请先打开 Agent 面板创建会话，或指定 session_id。',
       sessionCurrentBody: '当前 active session：{{id}}',
       sessionListBody: '共有 {{count}} 个 session。',
       sessionCreatedBody: '已创建并切换到 session：{{id}}',
@@ -811,7 +855,8 @@ const zhCN = {
         },
         scope: {
           name: '--scope <.|uri>',
-          description: '可选。不填则全局搜索；传 . 使用当前目录；传 uri 使用指定目录。',
+          description:
+            '可选。不填则全局搜索；传 . 使用当前目录；传 uri 使用指定目录。',
         },
         sessionAction: {
           name: '子命令',
@@ -820,7 +865,8 @@ const zhCN = {
         },
         sessionId: {
           name: 'session_id',
-          description: '可选。省略时多数子命令使用当前 Agent session；delete 必须显式指定。',
+          description:
+            '可选。省略时多数子命令使用当前 Agent session；delete 必须显式指定。',
         },
         archiveId: {
           name: 'archive_id',
@@ -1082,6 +1128,30 @@ const zhCN = {
         session: {
           description: '管理 Agent 会话',
           usage: '/session 子命令',
+        },
+        tree: {
+          description: '展示目录树',
+          usage: '/tree [viking://resources/...]',
+        },
+        stat: {
+          description: '查看资源元信息',
+          usage: '/stat viking://resources/...',
+        },
+        abstract: {
+          description: '读取目录摘要',
+          usage: '/abstract viking://resources/...',
+        },
+        overview: {
+          description: '读取目录概览',
+          usage: '/overview viking://resources/...',
+        },
+        health: {
+          description: '查看后端健康状态',
+          usage: '/health',
+        },
+        wait: {
+          description: '等待服务就绪',
+          usage: '/wait [--timeout seconds]',
         },
       },
     },

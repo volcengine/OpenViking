@@ -286,6 +286,66 @@ async def test_vectorize_text_summary_first_reuses_single_file_read(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_vectorize_image_file_enqueues_summary_and_image(monkeypatch):
+    queue = DummyQueue()
+    fs = DummyFS(b"\x89PNG\r\n\x1a\nimage")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/photo.png",
+        summary_dict={"name": "photo.png", "summary": "a cat on a sofa"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.message[0] == {"type": "text", "text": "a cat on a sofa"}
+    assert msg.message[1]["type"] == "image_url"
+    assert msg.message[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert msg.context_data["content"] == "a cat on a sofa"
+
+
+@pytest.mark.asyncio
+async def test_vectorize_image_file_falls_back_to_summary_when_image_unreadable(monkeypatch):
+    class UnreadableImageFS(DummyFS):
+        async def read_file_bytes(self, _path, ctx=None):
+            self.read_file_bytes_calls += 1
+            raise OSError("cannot read")
+
+    queue = DummyQueue()
+    fs = UnreadableImageFS("")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/photo.png",
+        summary_dict={"name": "photo.png", "summary": "fallback summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    assert queue.items[0].message == "fallback summary"
+    assert fs.read_file_bytes_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_vectorize_text_file_reuses_summary_content_without_reread(monkeypatch):
     queue = DummyQueue()
     raw_content = "# README\nraw text already read during summary\n"

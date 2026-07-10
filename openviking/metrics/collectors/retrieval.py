@@ -94,22 +94,33 @@ class RetrievalCollector(EventMetricCollector):
         """
         Record counters and latency for one completed retrieval operation.
 
-        Result counts are clamped to non-negative counter increments, while rerank usage and
-        rerank fallback are tracked as separate global counters for coarse operational visibility.
+        Every retrieval increments REQUESTS_TOTAL and is classified as either having
+        results (RESULTS_TOTAL += count) or being empty (ZERO_RESULT_TOTAL += 1); rerank
+        usage and fallback are tracked as separate global counters for coarse operational
+        visibility.
         """
         labels = {"context_type": str(context_type or "unknown")}
+        count = int(result_count)
         registry.inc_counter(
             self.REQUESTS_TOTAL,
             labels=labels,
             label_names=("context_type",),
         )
-        registry.inc_counter(
-            self.RESULTS_TOTAL,
-            labels=labels,
-            label_names=("context_type",),
-            amount=max(0, int(result_count)),
-        )
-        if int(result_count) == 0:
+        # Classify the outcome exhaustively so every request lands in exactly one bucket.
+        # Only a positive count is a valid RESULTS_TOTAL increment: the registry rejects
+        # non-positive deltas, so the previous ``amount=max(0, int(result_count))`` passed
+        # 0 on every empty retrieval and raised ValueError, aborting the rest of this method
+        # (ZERO_RESULT_TOTAL, latency, rerank were dropped) plus a WARNING on a hot path
+        # (#2922). A zero (or, defensively, malformed negative) count means "no results
+        # returned" and is recorded on the zero-result counter instead.
+        if count > 0:
+            registry.inc_counter(
+                self.RESULTS_TOTAL,
+                labels=labels,
+                label_names=("context_type",),
+                amount=count,
+            )
+        else:
             registry.inc_counter(
                 self.ZERO_RESULT_TOTAL,
                 labels=labels,
