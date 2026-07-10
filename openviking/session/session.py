@@ -90,6 +90,7 @@ def _message_peer_ids(messages: List[Message]) -> set[str]:
     return {
         peer_id
         for message in messages
+        if getattr(message, "role", None) == "user"
         if (peer_id := safe_peer_id(getattr(message, "peer_id", None)))
     }
 
