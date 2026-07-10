@@ -6,15 +6,7 @@
 
 ## 安装
 
-在 Cursor 的 Plugins/Customize 页面安装 `openviking-memory`。正式发布到公共 Marketplace 后，也可以在 Cursor Agent 中执行：
-
-```text
-/add-plugin openviking-memory
-```
-
-Plugin 会整体安装内部的 Hook、MCP Server、Rule 与 Skill，无需任何额外 MCP 配置。
-
-在当前 Cursor Marketplace 尚未提供该 Plugin 时，使用共享安装器安装完整兼容 runtime；脚本支持安全重复执行：
+一条命令安装完整 Cursor Plugin。安装器支持幂等重复执行，并会同时配置 Hook、MCP Server、Rule 与 Skill：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
@@ -28,7 +20,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
   --harness cursor --dist tos
 ```
 
-兼容安装器会同时写入 Hook 与 MCP 配置。Marketplace Plugin 安装成功后，应移除兼容兜底，不要同时启用两套。
+无需追加任何 Cursor 或 MCP 配置。安装完成后重启 Cursor。
 
 ## 工作方式
 
@@ -54,34 +46,29 @@ Cursor 当前公开文档中的 `beforeSubmitPrompt` 输出只稳定支持放行
 
 ## 验证
 
-Plugin 安装方式：在 Cursor 的 Plugins/Customize 页面确认 `openviking-memory` 已启用，再确认该 Plugin 提供的 OpenViking Hook 与 MCP Server 处于活动状态。Plugin 管理的配置不要求出现在用户级 JSON 文件中。
-
-直接兼容兜底方式：
-
 1. 检查 `~/.cursor/hooks.json` 中是否存在 `cursor-hook.mjs`。
 2. 检查 `~/.cursor/mcp.json` 中是否存在 `openviking`。
-3. 设置 `OPENVIKING_DEBUG=1`，新建一次使用工具的会话，然后检查 `~/.openviking/logs/cursor-hooks.log`。
+3. 检查 `~/.cursor/rules/openviking-memory.mdc` 和 `~/.cursor/skills/openviking-memory/SKILL.md`。
+4. 设置 `OPENVIKING_DEBUG=1`，新建一次使用工具的会话，然后检查 `~/.openviking/logs/cursor-hooks.log`。
 
 Hook 状态位于 `~/.openviking/hook-state/cursor/`；OpenViking session 使用 `cu-` 前缀。
 
 ## 升级与卸载
 
-Marketplace Plugin 应在 Cursor 的 Plugins/Customize 页面升级或卸载，其内部能力由 Cursor 统一管理。
-
-直接兼容兜底可重复运行安装命令升级；卸载命令如下：
+重复运行安装命令即可升级。卸载 Plugin：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
   --harness cursor --uninstall --yes
 ```
 
-兜底卸载只清理 OpenViking 管理的 Cursor 配置和运行文件。
+卸载命令只清理 OpenViking 管理的 Cursor 配置和运行文件。
 
 ## 故障排查
 
 | 现象 | 处理 |
 |------|------|
-| 出现两个 OpenViking MCP 或重复召回 | Plugin 已启用时删除手工/兜底配置，只保留一种安装方式。 |
+| 出现两个 OpenViking MCP 或重复召回 | 重跑安装器迁移旧 OpenViking 条目，然后重启 Cursor。 |
 | Hook 找不到 Node | 确认 Cursor 进程 PATH 中存在 `node`，然后重启 Cursor。 |
 | 连接或鉴权失败 | 检查 `~/.openviking/ovcli.conf`；Hook 与 MCP 使用同一份活动配置。 |
 

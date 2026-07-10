@@ -6,15 +6,7 @@ Source: [examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking
 
 ## Install
 
-Install `openviking-memory` from Cursor's Plugins/Customize page. After public Marketplace publication, you can also run this command in Cursor Agent:
-
-```text
-/add-plugin openviking-memory
-```
-
-The Plugin installs its Hook, MCP server, Rule, and Skill together. No additional MCP configuration is required.
-
-Before the Plugin is available in your Cursor Marketplace, use the shared installer. It installs the complete compatibility runtime and is safe to re-run:
+Install the complete Cursor Plugin with one command. The installer is idempotent and configures its Hook, MCP server, Rule, and Skill together:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
@@ -28,7 +20,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
   --harness cursor --dist tos
 ```
 
-The compatibility installer writes both the Hook and MCP configuration. Once the Marketplace Plugin is installed, remove the compatibility fallback instead of enabling both.
+No additional Cursor or MCP configuration is required. Restart Cursor after installation.
 
 ## How it works
 
@@ -54,34 +46,29 @@ Cursor's currently documented `beforeSubmitPrompt` output can allow or block sub
 
 ## Verify
 
-For the plugin path, confirm that `openviking-memory` is enabled in Cursor's Plugins/Customize page, then confirm its OpenViking Hook and MCP server are active. Plugin-managed configuration does not need to appear in user-level JSON files.
-
-For the direct fallback path:
-
 1. Check `~/.cursor/hooks.json` for `cursor-hook.mjs`.
 2. Check `~/.cursor/mcp.json` for the `openviking` server.
-3. Start a new Agent chat, make one tool-using request, and inspect `~/.openviking/logs/cursor-hooks.log` with `OPENVIKING_DEBUG=1`.
+3. Check `~/.cursor/rules/openviking-memory.mdc` and `~/.cursor/skills/openviking-memory/SKILL.md`.
+4. Start a new Agent chat, make one tool-using request, and inspect `~/.openviking/logs/cursor-hooks.log` with `OPENVIKING_DEBUG=1`.
 
 Hook state is isolated under `~/.openviking/hook-state/cursor/`; OpenViking session IDs use the `cu-` prefix.
 
 ## Upgrade and uninstall
 
-Upgrade or uninstall a marketplace plugin from Cursor's Plugin/Customize page. Cursor manages all capabilities bundled by that plugin.
-
-For the direct fallback, re-run the install command to upgrade. To uninstall it:
+Re-run the install command to upgrade. To uninstall the Plugin:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
   --harness cursor --uninstall --yes
 ```
 
-The fallback uninstall removes only OpenViking-managed Cursor entries and files.
+The uninstall command removes only OpenViking-managed Cursor entries and files.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| Two OpenViking MCP servers or duplicate recall | Remove the manual/fallback configuration when the plugin is enabled; use one installation path only. |
+| Two OpenViking MCP servers or duplicate recall | Re-run the installer to migrate old OpenViking entries, then restart Cursor. |
 | Hook command cannot find Node | Ensure `node` is available in Cursor's process PATH, then restart Cursor. |
 | Connection/authentication fails | Check `~/.openviking/ovcli.conf`; hooks and MCP read the same active config. |
 

@@ -77,7 +77,7 @@
       "name": "Cursor",
       "tags": ["Plugin", "Memory"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
-      "summary": "One Cursor plugin bundles lifecycle hooks, MCP tools, rules, and skills for automatic memory recall and capture.",
+      "summary": "One command installs Cursor lifecycle hooks, MCP tools, rules, and skills for automatic memory recall and capture.",
       "detailPath": "https://docs.openviking.net/agents/en/cursor.md"
     },
     {

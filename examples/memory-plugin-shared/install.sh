@@ -135,7 +135,7 @@ Options:
   --user ID          Optional OpenViking user.
   --statusline       Register the Claude Code statusline without asking.
   --no-statusline    Skip the statusline prompt.
-  --uninstall        Remove Cursor/TRAE OpenViking hooks and MCP entries.
+  --uninstall        Remove Cursor/TRAE OpenViking integration files and config.
   --yes, -y          Use defaults for prompts when possible.
 EOF
 }
@@ -1826,8 +1826,10 @@ NODE
 uninstall_agent_integrations() {
   if contains_harness cursor; then
     agent_remove_json_configs "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)"
+    rm -f "$HOME/.cursor/rules/openviking-memory.mdc"
+    rm -rf "$HOME/.cursor/skills/openviking-memory"
     rm -rf "$OV_HOME/agent-integrations/cursor"
-    info "$(t 'Removed Cursor OpenViking hooks and MCP config.' '已移除 Cursor OpenViking hooks 与 MCP 配置。')"
+    info "$(t 'Removed the Cursor OpenViking integration.' '已移除 Cursor OpenViking 集成。')"
   fi
   if contains_harness trae; then
     agent_remove_json_configs "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)"
@@ -1861,16 +1863,23 @@ trae_mcp_path() { # trae_mcp_path <client-id>
 }
 
 install_cursor() {
-  heading "$(t '4. Cursor compatibility fallback' '4. Cursor 兼容兜底')"
-  local root hooks_path mcp_path
+  heading "$(t '4. Cursor plugin' '4. Cursor 插件')"
+  local root hooks_path mcp_path skill_tmp
   root="$(copy_agent_integration cursor-memory-plugin cursor)" || return 1
   hooks_path="$HOME/.cursor/hooks.json"
   mcp_path="$(cursor_mcp_path)"
   agent_write_json_configs cursor "$hooks_path" "$mcp_path" "$root" cursor
+  mkdir -p "$HOME/.cursor/rules" "$HOME/.cursor/skills"
+  cp "$root/rules/openviking-memory.mdc" "$HOME/.cursor/rules/openviking-memory.mdc"
+  skill_tmp="$HOME/.cursor/skills/openviking-memory.tmp"
+  rm -rf "$skill_tmp"
+  cp -R "$root/skills/openviking-memory" "$skill_tmp"
+  rm -rf "$HOME/.cursor/skills/openviking-memory"
+  mv "$skill_tmp" "$HOME/.cursor/skills/openviking-memory"
   info "$(t 'Cursor hooks installed:' 'Cursor hooks 已安装：') $hooks_path"
   info "$(t 'Cursor MCP installed:' 'Cursor MCP 已安装：') $mcp_path"
-  info "$(t 'No separate manual MCP setup is required.' '无需再手动配置 MCP。')"
-  info "$(t 'The formal Cursor plugin bundles these Hooks, MCP, Rule, and Skill; prefer /add-plugin when marketplace installation is available.' '正式 Cursor Plugin 内封装这些 Hook、MCP、Rule 与 Skill；Marketplace 可用时优先通过 /add-plugin 安装。')"
+  info "$(t 'Cursor Rule and Skill installed under ~/.cursor.' 'Cursor Rule 与 Skill 已安装到 ~/.cursor。')"
+  info "$(t 'The command installed the complete plugin; no additional setup is required.' '命令已安装完整插件，无需追加配置。')"
 }
 
 install_trae_variant() { # install_trae_variant <trae|trae-cn>
@@ -2382,11 +2391,13 @@ EOF
   if contains_harness cursor; then
     if grep -q 'cursor-hook.mjs' "$HOME/.cursor/hooks.json" 2>/dev/null \
       && grep -q 'mcp-proxy.mjs' "$HOME/.cursor/mcp.json" 2>/dev/null \
-      && [ -f "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" ]; then
+      && [ -f "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" ] \
+      && [ -f "$HOME/.cursor/rules/openviking-memory.mdc" ] \
+      && [ -f "$HOME/.cursor/skills/openviking-memory/SKILL.md" ]; then
       node --check "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" || ok=0
-      info "cursor: $(t 'hooks and MCP are configured' 'hooks 与 MCP 已配置')"
+      info "cursor: $(t 'plugin installed (Hooks, MCP, Rule, Skill)' '插件已安装（Hook、MCP、Rule、Skill）')"
     else
-      warn "cursor: $(t 'OpenViking hook or MCP config is incomplete' 'OpenViking hook 或 MCP 配置不完整')"
+      warn "cursor: $(t 'OpenViking plugin installation is incomplete' 'OpenViking 插件安装不完整')"
       ok=0
     fi
   fi
@@ -2541,7 +2552,7 @@ case "$SOURCE_MODE" in
 esac
 if contains_harness claude; then info "Claude-format: $(list_words "$CLAUDE_BINS") -> $PLUGIN_ID"; fi
 if contains_harness codex; then info "Codex-format:  $(list_words "$CODEX_BINS") -> $PLUGIN_ID"; fi
-if contains_harness cursor; then info "Cursor: ~/.cursor/hooks.json + ~/.cursor/mcp.json"; fi
+if contains_harness cursor; then info "Cursor: Hooks + MCP + Rule + Skill"; fi
 if contains_harness trae; then info "TRAE: ~/.trae/hooks.json + MCP"; fi
 if contains_harness trae-cn; then info "TRAE CN: ~/.trae-cn/hooks.json + MCP"; fi
 if contains_harness opencode; then info "OpenCode: @openviking/opencode-plugin"; fi

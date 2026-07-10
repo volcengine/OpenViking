@@ -77,7 +77,7 @@
       "name": "Cursor",
       "tags": ["Plugin", "Memory"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
-      "summary": "一个 Cursor Plugin 内封装生命周期 Hook、MCP 工具、Rules 与 Skills，实现自动记忆召回和会话捕获",
+      "summary": "一条命令安装 Cursor 生命周期 Hook、MCP 工具、Rules 与 Skills，实现自动记忆召回和会话捕获",
       "detailPath": "https://docs.openviking.net/agents/zh/cursor.md"
     },
     {

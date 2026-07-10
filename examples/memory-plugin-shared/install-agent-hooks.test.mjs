@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,6 +70,8 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     }
 
     assert.ok(JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")).mcpServers.openviking);
+    assert.match(readFileSync(join(home, ".cursor", "rules", "openviking-memory.mdc"), "utf8"), /OpenViking/);
+    assert.match(readFileSync(join(home, ".cursor", "skills", "openviking-memory", "SKILL.md"), "utf8"), /OpenViking Memory/);
     const traeMcp = process.platform === "darwin"
       ? join(home, "Library", "Application Support", "Trae", "User", "mcp.json")
       : join(home, ".trae", "mcp.json");
@@ -82,6 +84,8 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     runUninstall(home);
     assert.ok(JSON.parse(readFileSync(cursorHooks, "utf8")).hooks.stop.some((entry) => entry.command === "third-party stop"));
     assert.equal(JSON.parse(readFileSync(cursorHooks, "utf8")).hooks.stop.some((entry) => entry.command.includes("cursor-hook.mjs")), false);
+    assert.equal(existsSync(join(home, ".cursor", "rules", "openviking-memory.mdc")), false);
+    assert.equal(existsSync(join(home, ".cursor", "skills", "openviking-memory")), false);
     assert.equal(Boolean(JSON.parse(readFileSync(traeMcp, "utf8")).mcpServers.openviking), false);
     assert.equal(Boolean(JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers.openviking), false);
   } finally {
