@@ -40,7 +40,7 @@ def test_owner_memory_extraction_scope_uses_message_peer_ids():
     assert scope.include_session_skills is True
 
 
-def test_owner_memory_extraction_scope_ignores_assistant_peer_ids():
+def test_owner_memory_extraction_scope_includes_assistant_peer_ids():
     assistant_message = _message("assistant-bot")
     assistant_message.role = "assistant"
 
@@ -52,7 +52,7 @@ def test_owner_memory_extraction_scope_ignores_assistant_peer_ids():
     )
 
     assert scope.allow_self_memory is True
-    assert scope.allowed_peer_ids == {"alice"}
+    assert scope.allowed_peer_ids == {"alice", "assistant-bot"}
     assert scope.include_session_skills is True
 
 
