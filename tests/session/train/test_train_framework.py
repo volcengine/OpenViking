@@ -1557,6 +1557,48 @@ def test_rollout_artifact_recorder_includes_pre_tool_experience_reminders_in_mem
     assert "Check refund eligibility before cancellation." in memory_context
 
 
+def test_report_builder_counts_pre_tool_experience_reminders_as_memory_usage():
+    from openviking.session.train import PipelineReportBuilder
+
+    case = Case(
+        name="tau2_airline_train_5",
+        task_signature="tau2:airline:train:5",
+        input={"train_trial": 0},
+        rubric=Rubric(name="reward", description="reward", criteria=[]),
+    )
+    reminder = (
+        "<experience_reminder>\n"
+        "<triggered_before_tool>communicate_with_user</triggered_before_tool>\n"
+        "<experience>Include the requested total.</experience>\n"
+        "</experience_reminder>"
+    )
+    rollout = Rollout(
+        case=case,
+        messages=[
+            Message(id="m1", role="user", parts=[TextPart(text="cancel reservation")]),
+            Message(id="m2", role="user", parts=[TextPart(text=reminder)]),
+        ],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=False, score=0.0, criterion_results=[], feedback=[]),
+        metadata={"memory": "", "tools_used": [{"tool_name": "get_reservation_details"}]},
+    )
+    analysis = RolloutAnalysis(
+        evaluation=rollout.evaluation,
+        trajectories=[],
+        metadata={"rollout": rollout},
+    )
+
+    usage = PipelineReportBuilder().memory_usage_from_analyses([analysis])
+
+    assert usage["memory_context_count"] == 1
+    assert usage["memory_context_ratio"] == 1.0
+    assert usage["memory_tool_call_rollout_count"] == 1
+    assert usage["memory_tool_call_total"] == 1
+    assert usage["memory_recall_tool_call_total"] == 0
+    assert usage["pre_tool_experience_reminder_rollout_count"] == 1
+    assert usage["pre_tool_experience_reminder_total"] == 1
+
+
 def test_rollout_artifact_recorder_separates_epoch_eval_dirs(tmp_path):
     from openviking.session.train import RolloutArtifactRecorder
 

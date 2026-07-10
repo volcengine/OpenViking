@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from openviking.message import TextPart
 from openviking.session.train.components.reporter import NoopPipelineLifecycleHook
 from openviking.session.train.domain import (
     CriterionResult,
@@ -65,16 +66,12 @@ class PipelineReportBuilder:
         trials = [
             {
                 "trial": trial_index,
-                **self.evaluation_summary_from_analyses(
-                    analyses_by_trial.get(trial_index, [])
-                ),
+                **self.evaluation_summary_from_analyses(analyses_by_trial.get(trial_index, [])),
             }
             for trial_index in range(trial_count)
         ]
         accuracies = [
-            float(item["accuracy"])
-            for item in trials
-            if item.get("accuracy") is not None
+            float(item["accuracy"]) for item in trials if item.get("accuracy") is not None
         ]
         average_rewards = [
             float(item["average_reward"])
@@ -224,11 +221,23 @@ class PipelineReportBuilder:
         memory_context_count = 0
         memory_tool_call_rollout_count = 0
         memory_tool_call_total = 0
+        memory_recall_tool_call_rollout_count = 0
+        memory_recall_tool_call_total = 0
+        pre_tool_experience_reminder_rollout_count = 0
+        pre_tool_experience_reminder_total = 0
         for rollout in rollouts:
             metadata = rollout.metadata or {}
-            if str(metadata.get("memory") or "").strip():
+            reminder_count = self.pre_tool_experience_reminder_count(rollout)
+            if str(metadata.get("memory") or "").strip() or reminder_count:
                 memory_context_count += 1
-            tool_call_count = self.memory_tool_call_count(metadata.get("tools_used"))
+            recall_tool_call_count = self.memory_tool_call_count(metadata.get("tools_used"))
+            if recall_tool_call_count:
+                memory_recall_tool_call_rollout_count += 1
+                memory_recall_tool_call_total += recall_tool_call_count
+            if reminder_count:
+                pre_tool_experience_reminder_rollout_count += 1
+                pre_tool_experience_reminder_total += reminder_count
+            tool_call_count = recall_tool_call_count + reminder_count
             if tool_call_count:
                 memory_tool_call_rollout_count += 1
                 memory_tool_call_total += tool_call_count
@@ -242,6 +251,12 @@ class PipelineReportBuilder:
                 rollout_count,
             ),
             "memory_tool_call_total": memory_tool_call_total,
+            "memory_recall_tool_call_rollout_count": memory_recall_tool_call_rollout_count,
+            "memory_recall_tool_call_total": memory_recall_tool_call_total,
+            "pre_tool_experience_reminder_rollout_count": (
+                pre_tool_experience_reminder_rollout_count
+            ),
+            "pre_tool_experience_reminder_total": pre_tool_experience_reminder_total,
         }
 
     def memory_tool_call_count(self, tools_used: Any) -> int:
@@ -255,6 +270,19 @@ class PipelineReportBuilder:
             if tool_name.startswith(self.memory_tool_name_prefix):
                 count += 1
         return count
+
+    def pre_tool_experience_reminder_count(self, rollout: Rollout) -> int:
+        reminders: set[str] = set()
+        for message in rollout.messages or []:
+            if getattr(message, "role", None) != "user":
+                continue
+            for part in getattr(message, "parts", []) or []:
+                if not isinstance(part, TextPart):
+                    continue
+                text = str(part.text or "").strip()
+                if "<experience_reminder>" in text and "</experience_reminder>" in text:
+                    reminders.add(text)
+        return len(reminders)
 
     def accuracy_delta(
         self,

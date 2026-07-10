@@ -9,13 +9,14 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from benchmark.alfworld.train.case_loader import get_task_type, normalize_alfworld_split
-from openviking.message import Message, TextPart
+from openviking.message import Message, TextPart, ToolPart
 from openviking.session.train import (
     Case,
     CriterionResult,
@@ -31,6 +32,58 @@ ALFWORLD_SYSTEM_PROMPT = "You are an expert agent operating in the ALFRED Embodi
 _TEXTWORLD_COMPAT_PATCHED = False
 _TEXTWORLD_PARSE_LOCK = threading.RLock()
 _ALFWORLD_ENV_LOCK = threading.RLock()
+
+AlfworldRolloutBackend = Literal["direct", "vikingbot"]
+AlfworldExperienceLoaderMode = Literal["skill", "constraint", "direct_experience"]
+DEFAULT_ALFWORLD_ROLLOUT_BACKEND: AlfworldRolloutBackend = "direct"
+DEFAULT_ALFWORLD_EXPERIENCE_LOADER_MODE: AlfworldExperienceLoaderMode = "skill"
+
+
+def normalize_alfworld_rollout_backend(value: Any) -> AlfworldRolloutBackend:
+    backend = str(value or DEFAULT_ALFWORLD_ROLLOUT_BACKEND).strip().lower()
+    if backend not in {"direct", "vikingbot"}:
+        raise ValueError("ALFWorld rollout backend must be 'direct' or 'vikingbot'")
+    return backend  # type: ignore[return-value]
+
+
+def normalize_alfworld_experience_loader_mode(value: Any) -> AlfworldExperienceLoaderMode:
+    mode = str(value or DEFAULT_ALFWORLD_EXPERIENCE_LOADER_MODE).strip().lower()
+    if mode not in {"skill", "constraint", "direct_experience"}:
+        raise ValueError("ALFWorld loader_mode must be 'skill', 'constraint', or 'direct_experience'")
+    return mode  # type: ignore[return-value]
+
+
+def make_alfworld_rollout_executor(
+    *,
+    backend: Any = DEFAULT_ALFWORLD_ROLLOUT_BACKEND,
+    options: dict[str, Any] | None = None,
+) -> Any:
+    opts = dict(options or {})
+    selected = normalize_alfworld_rollout_backend(backend)
+    common = {
+        "max_steps": int(opts.get("max_steps") or opts.get("max_iterations") or 50),
+        "seed": int(opts.get("seed") or 42),
+        "eval_dataset": _optional_str(opts.get("eval_dataset")),
+        "is_train": _optional_bool(opts.get("is_train")),
+        "concurrency": int(opts.get("env_concurrency") or 1),
+        "show_progress": _bool_option(opts.get("show_progress"), default=False),
+        "progress_label": str(opts.get("progress_label") or "alfworld"),
+    }
+    if selected == "vikingbot":
+        return VikingBotAlfworldRolloutExecutor(
+            **common,
+            config_path=_optional_str(opts.get("config_path")),
+            keep_default_tools=_bool_option(opts.get("keep_default_tools"), default=False),
+            loader_mode=normalize_alfworld_experience_loader_mode(opts.get("loader_mode")),
+            direct_experience_content=_optional_str(opts.get("direct_experience_content")),
+            direct_experience_name=_optional_str(opts.get("direct_experience_name")),
+            direct_experience_uri=_optional_str(opts.get("direct_experience_uri")),
+        )
+    return AlfworldRolloutExecutor(
+        **common,
+        max_api_workers=int(opts.get("max_api_workers") or 8),
+        max_completion_tokens=int(opts.get("max_completion_tokens") or 16384),
+    )
 
 
 @dataclass(slots=True)
@@ -135,6 +188,192 @@ class AlfworldRolloutExecutor:
                 "duration_ms", round((time.perf_counter() - started_at) * 1000.0, 2)
             )
         return batch_results
+
+
+@dataclass(slots=True)
+class VikingBotAlfworldRolloutExecutor:
+    """Execute ALFWorld rollouts through VikingBot with ALFWorld tools.
+
+    This mirrors tau2's VikingBot backend shape: the environment is exposed as
+    tools, while optional ``experience_loader`` tools let the agent search/read
+    OpenViking case-linked experiences at runtime.
+    """
+
+    max_steps: int = 50
+    seed: int = 42
+    eval_dataset: str | None = None
+    is_train: bool | None = None
+    concurrency: int = 1
+    show_progress: bool = False
+    progress_label: str = "alfworld"
+    config_path: str | None = None
+    keep_default_tools: bool = False
+    loader_mode: AlfworldExperienceLoaderMode = DEFAULT_ALFWORLD_EXPERIENCE_LOADER_MODE
+    direct_experience_content: str | None = None
+    direct_experience_name: str | None = None
+    direct_experience_uri: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_steps <= 0:
+            raise ValueError("max_steps must be > 0")
+        if self.concurrency <= 0:
+            raise ValueError("concurrency must be > 0")
+        self.loader_mode = normalize_alfworld_experience_loader_mode(self.loader_mode)
+        if (
+            self.loader_mode == "direct_experience"
+            and not str(self.direct_experience_content or "").strip()
+        ):
+            raise ValueError(
+                "direct_experience_content is required when loader_mode='direct_experience'"
+            )
+
+    async def execute(
+        self,
+        cases: list[Case],
+        policy_set: ExperienceSet,
+        context: ExecutionContext,
+    ) -> list[Rollout]:
+        del policy_set
+        case_list = list(cases)
+        if not case_list:
+            return []
+        progress = ProgressPrinter(
+            total=len(case_list),
+            label=_progress_stage_label(context.metadata.get("stage"), default=self.progress_label),
+            enabled=self.show_progress,
+            description=(
+                f"Running {len(case_list)} ALFWorld VikingBot rollouts, "
+                f"concurrency={self.concurrency}"
+            ),
+        )
+        progress.render()
+        semaphore = asyncio.Semaphore(self.concurrency)
+
+        async def run_one(index: int, case: Case) -> Rollout:
+            async with semaphore:
+                progress.start_one()
+                try:
+                    rollout = await self._execute_one(case, context, index)
+                    progress.complete_one()
+                    return rollout
+                except Exception:
+                    progress.fail_one()
+                    raise
+
+        try:
+            return list(
+                await asyncio.gather(*(run_one(i, case) for i, case in enumerate(case_list)))
+            )
+        finally:
+            progress.finish()
+
+    async def _execute_one(self, case: Case, context: ExecutionContext, case_index: int) -> Rollout:
+        started_at = time.perf_counter()
+        eval_dataset = str(
+            self.eval_dataset
+            or case.input.get("eval_dataset")
+            or normalize_alfworld_split(case.input.get("split", "test"))
+        )
+        is_train = self.is_train if self.is_train is not None else eval_dataset == "train"
+        gamefile = str(case.input.get("gamefile") or "")
+        env_manager = build_alfworld_env(
+            env_num=1,
+            eval_dataset=eval_dataset,
+            seed=self.seed + case_index,
+            is_train=bool(is_train),
+            specific_gamefiles=[gamefile] if gamefile else None,
+        )
+        controller = _AlfworldToolController(
+            env_manager=env_manager,
+            case=case,
+            max_steps=self.max_steps,
+        )
+        await controller.reset()
+
+        agent = await asyncio.to_thread(
+            _build_vikingbot_agent,
+            self.config_path,
+            max_iterations=self.max_steps + 8,
+        )
+        _configure_alfworld_vikingbot_tools(
+            agent,
+            controller,
+            keep_default_tools=self.keep_default_tools,
+            loader_mode=self.loader_mode,
+        )
+        system_prompt = _build_alfworld_vikingbot_system_prompt(loader_mode=self.loader_mode)
+        user_prompt = controller.initial_prompt()
+        SessionKey = _tau2_vikingbot_imports()["SessionKey"]
+        stage = _safe_session_fragment(str(context.metadata.get("stage") or "rollout"))
+        session_key = SessionKey(
+            type="cli",
+            channel_id="alfworld",
+            chat_id=f"alfworld_{stage}_{_safe_session_fragment(case.name)}",
+        )
+        (
+            final_content,
+            final_reasoning_content,
+            tools_used,
+            token_usage,
+            iteration,
+            memory_content,
+            experience_reminder,
+            experience_loader_skill,
+            runtime_messages,
+        ) = await _run_alfworld_vikingbot_agent(
+            agent=agent,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            session_key=session_key,
+            loader_mode=self.loader_mode,
+            direct_experience_content=self.direct_experience_content,
+            direct_experience_name=self.direct_experience_name,
+            direct_experience_uri=self.direct_experience_uri,
+        )
+        won = bool(controller.won)
+        fail_reason = "" if won else controller.fail_reason()
+        messages = _build_vikingbot_rollout_messages(
+            runtime_messages,
+            final_content=final_content,
+        )
+        metadata = {
+            "rollout_backend": "alfworld_vikingbot",
+            "task_type": case.input.get("task_type") or get_task_type(gamefile),
+            "gamefile": gamefile,
+            "task_description": controller.task_goal,
+            "hard": 1 if won else 0,
+            "soft": 1.0 if won else 0.0,
+            "n_turns": len(controller.history),
+            "fail_reason": fail_reason,
+            "agent_ok": True,
+            "conversation": list(controller.history),
+            "tools_used": tools_used,
+            "token_usage": token_usage,
+            "iterations": iteration,
+            "memory": memory_content,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "final_content": final_content,
+            "final_reasoning_content": final_reasoning_content,
+            "experience_loader_mode": self.loader_mode,
+            "experience_loader_skill": experience_loader_skill,
+            "experience_reminder": experience_reminder,
+            "direct_experience": _direct_experience_metadata(
+                content=self.direct_experience_content,
+                name=self.direct_experience_name,
+                uri=self.direct_experience_uri,
+                enabled=self.loader_mode == "direct_experience",
+            ),
+            "execution_metadata": dict(context.metadata),
+            "duration_ms": round((time.perf_counter() - started_at) * 1000.0, 2),
+        }
+        return Rollout(
+            case=case,
+            messages=messages,
+            policy_snapshot_id=context.policy_snapshot_id,
+            evaluation=_alfworld_evaluation(won=won, fail_reason=fail_reason),
+            metadata=metadata,
+        )
 
 
 def build_alfworld_env(
@@ -510,6 +749,463 @@ def _message(role: str, text: str) -> Message:
         role=role,  # type: ignore[arg-type]
         parts=[TextPart(text=text)],
     )
+
+
+class _AlfworldToolController:
+    def __init__(self, *, env_manager: Any, case: Case, max_steps: int) -> None:
+        self.env_manager = env_manager
+        self.case = case
+        self.max_steps = max_steps
+        self.obs = ""
+        self.infos: dict[str, Any] = {}
+        self.step_count = 0
+        self.done = False
+        self.won = False
+        self.task_goal = ""
+        self.history: list[dict[str, Any]] = []
+
+    async def reset(self) -> None:
+        with _ALFWORLD_ENV_LOCK:
+            obs, infos = self.env_manager.reset()
+        self.obs = str(obs[0] if obs else "")
+        self.infos = infos
+        self.task_goal = _extract_alfworld_task_goal(self.obs)
+        self.step_count = 0
+        self.done = False
+        self.won = bool(_info_value(infos, "won", 0, default=False))
+
+    def initial_prompt(self) -> str:
+        return "\n".join(
+            [
+                "You are controlling one ALFWorld text-game episode.",
+                "Use `alfworld_step` with exactly one command from the current admissible_commands.",
+                "After each `alfworld_step` result, choose the next admissible command.",
+                "Call `done` only after the environment reports won=true/done=true, or when no useful action remains.",
+                "",
+                self._state_json(),
+            ]
+        )
+
+    async def step(self, action: str) -> str:
+        action = str(action or "").strip()
+        if self.done:
+            return self._state_json(error="episode already done")
+        admissible = self.admissible_commands()
+        if admissible and action not in admissible:
+            return self._state_json(
+                error=(
+                    f"invalid action {action!r}; choose exactly one command from "
+                    "admissible_commands"
+                )
+            )
+        with _ALFWORLD_ENV_LOCK:
+            obs, rewards, dones, infos = self.env_manager.step([action])
+        observation = str(obs[0] if obs else "")
+        reward = float(rewards[0]) if rewards else 0.0
+        done = bool(dones[0]) if dones else False
+        won = bool(_info_value(infos, "won", 0, default=False))
+        self.step_count += 1
+        self.obs = observation
+        self.infos = infos
+        self.done = done or self.step_count >= self.max_steps
+        self.won = won
+        record = {
+            "step": self.step_count - 1,
+            "action": action,
+            "env_feedback": observation,
+            "reward": reward,
+            "done": self.done,
+            "won": won,
+        }
+        self.history.append(record)
+        return self._state_json(last_action=action, reward=reward)
+
+    def finish(self, reason: str = "") -> str:
+        return self._state_json(done_requested=True, reason=reason)
+
+    def admissible_commands(self) -> list[str]:
+        value = _info_value(self.infos, "admissible_commands", 0, default=[]) or []
+        return [str(item) for item in value]
+
+    def fail_reason(self) -> str:
+        if self.won:
+            return ""
+        if self.step_count >= self.max_steps:
+            return f"Timeout after {self.max_steps} steps"
+        if self.done:
+            return "Episode ended without completing the task"
+        return "Agent stopped without completing the task"
+
+    def _state_json(self, **extra: Any) -> str:
+        payload = {
+            "task_goal": self.task_goal,
+            "observation": self.obs,
+            "admissible_commands": self.admissible_commands(),
+            "step": self.step_count,
+            "max_steps": self.max_steps,
+            "done": self.done,
+            "won": self.won,
+            **extra,
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _extract_alfworld_task_goal(observation: str) -> str:
+    match = re.search(r"(?im)^Your task is to:\s*(.+?)\s*$", observation or "")
+    return match.group(1).strip() if match else ""
+
+
+def _build_alfworld_vikingbot_system_prompt(
+    *,
+    loader_mode: AlfworldExperienceLoaderMode,
+) -> str:
+    parts = [
+        "You are an expert ALFWorld text-game agent.",
+        "Your only environment-changing action is `alfworld_step(action)`.",
+        "Always choose an action that appears in the latest admissible_commands.",
+        "Keep the original task_goal in mind across all steps; do not optimize only for the latest observation.",
+        "For look_at_obj_in_light tasks, explicitly reason about both the target object and the light source.",
+    ]
+    if loader_mode == "skill":
+        parts.append(
+            "Before taking ALFWorld actions, use the required `experience_loader` skill: "
+            "call `search_experience` with the task goal/task type, gate candidate experiences, "
+            "and call `read_experience` for applicable experience URIs."
+        )
+    elif loader_mode == "direct_experience":
+        parts.append(
+            "A direct experimental experience may be injected before the task. Use it only if it "
+            "matches the current ALFWorld task and observation."
+        )
+    else:
+        parts.append("Use any injected experience reminders only when they match the current task.")
+    return "\n".join(parts)
+
+
+def _build_vikingbot_agent(config_path: str | None, *, max_iterations: int):
+    from benchmark.tau2.train.rollout_executor_vikingbot import _build_agent
+
+    return _build_agent(config_path, max_iterations=max_iterations)
+
+
+def _tau2_vikingbot_imports() -> dict[str, Any]:
+    from benchmark.tau2.train.rollout_executor_vikingbot import _vikingbot_imports
+
+    return _vikingbot_imports()
+
+
+def _configure_alfworld_vikingbot_tools(
+    agent: Any,
+    controller: _AlfworldToolController,
+    *,
+    keep_default_tools: bool,
+    loader_mode: AlfworldExperienceLoaderMode,
+) -> None:
+    del keep_default_tools
+    for tool_name in list(agent.tools.tool_names):
+        agent.tools.unregister(tool_name)
+    if loader_mode == "skill":
+        from benchmark.tau2.train.rollout_executor_vikingbot import (
+            _make_read_experience_tool,
+            _make_search_experience_tool,
+        )
+
+        agent.tools.register(_make_search_experience_tool())
+        agent.tools.register(_make_read_experience_tool())
+    agent.tools.register(_make_alfworld_step_tool(controller))
+    agent.tools.register(_make_alfworld_done_tool(controller))
+
+
+def _make_alfworld_step_tool(controller: _AlfworldToolController):
+    Tool = _tau2_vikingbot_imports()["Tool"]
+
+    class AlfworldStepTool(Tool):
+        @property
+        def name(self) -> str:
+            return "alfworld_step"
+
+        @property
+        def description(self) -> str:
+            return "Execute one exact ALFWorld admissible command and return the next state."
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "Exact command from the latest admissible_commands list.",
+                    }
+                },
+                "required": ["action"],
+            }
+
+        async def execute(self, tool_context: Any, action: str, **kwargs: Any) -> str:
+            del tool_context, kwargs
+            return await controller.step(action)
+
+    return AlfworldStepTool()
+
+
+def _make_alfworld_done_tool(controller: _AlfworldToolController):
+    Tool = _tau2_vikingbot_imports()["Tool"]
+
+    class AlfworldDoneTool(Tool):
+        @property
+        def name(self) -> str:
+            return "done"
+
+        @property
+        def description(self) -> str:
+            return "Stop the rollout after ALFWorld is complete or no useful action remains."
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "Short stop reason."}
+                },
+            }
+
+        async def execute(self, tool_context: Any, reason: str = "", **kwargs: Any) -> str:
+            del tool_context, kwargs
+            return controller.finish(reason=reason)
+
+    return AlfworldDoneTool()
+
+
+async def _run_alfworld_vikingbot_agent(
+    *,
+    agent: Any,
+    system_prompt: str,
+    user_prompt: str,
+    session_key: Any,
+    loader_mode: AlfworldExperienceLoaderMode,
+    direct_experience_content: str | None = None,
+    direct_experience_name: str | None = None,
+    direct_experience_uri: str | None = None,
+) -> tuple[Any, Any, list[dict[str, Any]], Any, Any, str | None, str | None, str | None, list[dict[str, Any]]]:
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _build_direct_experience_reminder,
+        _case_memory_context_from_tools,
+        _execute_required_experience_loader_read,
+        _extract_experience_content,
+        _extract_memory_content,
+        _insert_experience_reminder_message,
+        _merge_memories,
+        _prepare_experience_loader_skill,
+    )
+
+    loader_mode = normalize_alfworld_experience_loader_mode(loader_mode)
+    message_context = agent.context
+    experience_loader_skill = None
+    if loader_mode == "skill":
+        message_context = await _prepare_experience_loader_skill(
+            agent=agent,
+            session_key=session_key,
+            system_prompt_profile="minimal",
+        )
+        experience_loader_skill = getattr(
+            message_context,
+            "latest_experience_loader_skill_content",
+            None,
+        )
+    messages = await message_context.build_messages(
+        history=[],
+        current_message=user_prompt,
+        session_key=session_key,
+        ov_tools_enable=False,
+        experience_recall_enable=False,
+        media=None,
+        profile_user_list=[],
+        system_prompt_profile="minimal",
+    )
+    if system_prompt:
+        messages.insert(1, {"role": "system", "content": system_prompt})
+    direct_experience_reminder = None
+    if loader_mode == "direct_experience":
+        direct_experience_reminder = _build_direct_experience_reminder(
+            content=direct_experience_content,
+            name=direct_experience_name,
+            uri=direct_experience_uri,
+        )
+        _insert_experience_reminder_message(messages, direct_experience_reminder)
+
+    user_memory = None
+    experience_reminder_text = None
+    for msg in messages:
+        content = msg.get("content", "") if isinstance(msg, dict) else ""
+        if not isinstance(content, str):
+            continue
+        if "[Experience Reminder]" in content and "## Relevant Agent Experience" in content:
+            experience_reminder_text = content
+            continue
+        if content.startswith("## Current Session"):
+            user_memory = _extract_memory_content(content)
+    exp_content = (
+        _extract_experience_content(experience_reminder_text) if experience_reminder_text else None
+    )
+    memory_content = _merge_memories(user_memory, exp_content)
+    required_skill_tool = None
+    if experience_loader_skill and str(experience_loader_skill).strip():
+        required_skill_tool = await _execute_required_experience_loader_read(
+            agent=agent,
+            messages=messages,
+            session_key=session_key,
+            sender_id="alfworld_user",
+        )
+    result = await agent._run_agent_loop(
+        messages=messages,
+        session_key=session_key,
+        publish_events=False,
+        sender_id="alfworld_user",
+        ov_tools_enable=False,
+        stop_tool_names=["done"],
+    )
+    final_content, final_reasoning_content, tools_used, token_usage, iteration = result
+    runtime_messages = list(getattr(result, "messages", []) or [])
+    if required_skill_tool is not None:
+        tools_used = [required_skill_tool, *tools_used]
+    case_memory_context = _case_memory_context_from_tools(tools_used)
+    memory_content = _merge_memories(memory_content, case_memory_context)
+    return (
+        final_content,
+        final_reasoning_content,
+        tools_used,
+        token_usage,
+        iteration,
+        memory_content,
+        experience_reminder_text or direct_experience_reminder,
+        experience_loader_skill,
+        runtime_messages,
+    )
+
+
+def _build_vikingbot_rollout_messages(
+    runtime_messages: list[dict[str, Any]],
+    *,
+    final_content: str | None,
+) -> list[Message]:
+    messages: list[Message] = []
+    tool_inputs_by_id: dict[str, dict[str, Any]] = {}
+    for raw in runtime_messages or []:
+        if not isinstance(raw, dict):
+            continue
+        for call in raw.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id") or "")
+            function = call.get("function") if isinstance(call.get("function"), dict) else {}
+            if call_id:
+                tool_inputs_by_id[call_id] = _as_tool_input(function.get("arguments", {}))
+    for idx, raw in enumerate(runtime_messages or []):
+        msg = _runtime_message_to_rollout_message(raw, idx=idx, tool_inputs_by_id=tool_inputs_by_id)
+        if msg is not None:
+            messages.append(msg)
+    if final_content and str(final_content).strip():
+        final_text = str(final_content)
+        if not any(message.role == "assistant" and message.content == final_text for message in messages):
+            messages.append(Message(
+                id="alfworld-vikingbot-final",
+                role="assistant",
+                parts=[TextPart(text=final_text)],
+            ))
+    return messages
+
+
+def _runtime_message_to_rollout_message(
+    raw: dict[str, Any],
+    *,
+    idx: int,
+    tool_inputs_by_id: dict[str, dict[str, Any]],
+) -> Message | None:
+    role = str(raw.get("role") or "user")
+    content = raw.get("content")
+    if role == "system":
+        return Message(
+            id=f"alfworld-runtime-{idx}",
+            role="user",
+            parts=[TextPart(text=f"system:\n{_runtime_content_to_text(content)}")],
+        )
+    if role == "tool":
+        tool_call_id = str(raw.get("tool_call_id") or f"alfworld-runtime-tool-{idx}")
+        tool_name = str(raw.get("name") or raw.get("tool_name") or "unknown")
+        return Message(
+            id=f"alfworld-runtime-{idx}",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id=tool_call_id,
+                    tool_name=tool_name,
+                    tool_input=tool_inputs_by_id.get(tool_call_id, {}),
+                    tool_output=_runtime_content_to_text(content),
+                    tool_status="completed",
+                )
+            ],
+        )
+    if role not in {"user", "assistant"}:
+        role = "user"
+    if raw.get("tool_calls") and not str(content or "").strip():
+        return None
+    text = _runtime_content_to_text(content)
+    if not text.strip():
+        return None
+    return Message(
+        id=f"alfworld-runtime-{idx}",
+        role=role,  # type: ignore[arg-type]
+        parts=[TextPart(text=text)],
+    )
+
+
+def _runtime_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+            else:
+                parts.append(json.dumps(item, ensure_ascii=False, default=str))
+        return "\n".join(part for part in parts if part)
+    return "" if content is None else str(content)
+
+
+def _as_tool_input(args: Any) -> dict[str, Any]:
+    if isinstance(args, dict):
+        return args
+    if isinstance(args, str):
+        try:
+            parsed = json.loads(args)
+        except json.JSONDecodeError:
+            return {"arguments": args}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"arguments": parsed}
+    return {"arguments": args}
+
+
+def _direct_experience_metadata(
+    *,
+    content: str | None,
+    name: str | None,
+    uri: str | None,
+    enabled: bool,
+) -> dict[str, Any] | None:
+    if not enabled:
+        return None
+    from hashlib import sha256
+
+    content_text = str(content or "")
+    exp_name = str(name or "").strip() or "direct_experience"
+    return {
+        "name": exp_name,
+        "uri": str(uri or "").strip() or f"direct://experience/{exp_name}",
+        "content_chars": len(content_text),
+        "content_sha256": sha256(content_text.encode("utf-8")).hexdigest(),
+    }
 
 
 def _load_alfworld_config() -> dict[str, Any]:
