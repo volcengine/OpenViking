@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from "node:fs/promises";
-import { parseCursorTranscript } from "./lib/cursor-transcript.mjs";
+import { parseCursorTranscript } from "./cursor-transcript.mjs";
 
 import {
   addAgentMessage,
@@ -20,7 +20,7 @@ import {
   stableHash,
   withAgentHookLock,
   writeHookState,
-} from "./shared/agent-hook-runtime.mjs";
+} from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 
 const CLIENT_ID = "cursor";
 const PREFIX = "cu-";
@@ -47,7 +47,7 @@ async function captureTranscript(input, state, sessionId) {
     const hash = stableHash(index, turn.role, turn.content);
     if (capturedHashes.has(hash)) continue;
     const result = await addAgentMessage(fetchJSON, sessionId, turn);
-    if (result.ok || result.status === 0 || result.status >= 500) {
+    if (result.ok || [0, 408, 429].includes(result.status) || result.status >= 500) {
       capturedHashes.add(hash);
       captured += 1;
     }

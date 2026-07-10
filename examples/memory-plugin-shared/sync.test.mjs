@@ -20,8 +20,8 @@ const HARNESS_SHARED_FILES = [
 ];
 const OPENCODE_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs"];
 const TARGETS = [
-  { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: null },
-  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: null },
+  { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
+  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
   { dir: join(ROOT, "examples", "opencode-plugin", "lib", "shared"), files: OPENCODE_SHARED_FILES },
   { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: HARNESS_SHARED_FILES },
 ];

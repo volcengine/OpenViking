@@ -72,6 +72,23 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     assert.ok(JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")).mcpServers.openviking);
     assert.match(readFileSync(join(home, ".cursor", "rules", "openviking-memory.mdc"), "utf8"), /OpenViking/);
     assert.match(readFileSync(join(home, ".cursor", "skills", "openviking-memory", "SKILL.md"), "utf8"), /OpenViking Memory/);
+    const shared = join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib");
+    assert.ok(existsSync(join(shared, "agent-hook-runtime.mjs")));
+    assert.ok(existsSync(join(shared, "mcp-proxy-core.mjs")));
+    for (const [client, args] of [
+      ["cursor", ["sessionStart"]],
+      ["trae", ["session-start", "trae"]],
+      ["trae-cn", ["session-start", "trae-cn"]],
+    ]) {
+      const hook = join(home, ".openviking", "agent-integrations", client, "scripts",
+        client === "cursor" ? "cursor-hook.mjs" : "trae-hook.mjs");
+      const smoke = spawnSync(process.execPath, [hook, ...args], {
+        env: { ...process.env, HOME: home, OPENVIKING_MEMORY_ENABLED: "0" },
+        input: "{}",
+        encoding: "utf8",
+      });
+      assert.equal(smoke.status, 0, `${client}: ${smoke.stderr}`);
+    }
     const traeMcp = process.platform === "darwin"
       ? join(home, "Library", "Application Support", "Trae", "User", "mcp.json")
       : join(home, ".trae", "mcp.json");
@@ -88,6 +105,7 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     assert.equal(existsSync(join(home, ".cursor", "skills", "openviking-memory")), false);
     assert.equal(Boolean(JSON.parse(readFileSync(traeMcp, "utf8")).mcpServers.openviking), false);
     assert.equal(Boolean(JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers.openviking), false);
+    assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared")), false);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

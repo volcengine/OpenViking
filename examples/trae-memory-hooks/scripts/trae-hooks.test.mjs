@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { buildTraeTurns, cleanTraeText } from "./lib/trae-turns.mjs";
+import { buildTraeTurns, cleanTraeText } from "./trae-turns.mjs";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 

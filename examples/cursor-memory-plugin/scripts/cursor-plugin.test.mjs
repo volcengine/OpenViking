@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -7,10 +7,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { parseCursorTranscript } from "./lib/cursor-transcript.mjs";
+import { parseCursorTranscript } from "./cursor-transcript.mjs";
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const repoRoot = resolve(pluginRoot, "..", "..");
 
 function runHook(event, input, env) {
   return new Promise((resolveRun, reject) => {
@@ -31,16 +30,16 @@ function runHook(event, input, env) {
   });
 }
 
-test("Cursor plugin and both marketplace manifests agree", () => {
-  const manifest = JSON.parse(readFileSync(join(pluginRoot, ".cursor-plugin", "plugin.json"), "utf8"));
-  assert.equal(manifest.name, "openviking-memory");
-  for (const key of ["hooks", "mcpServers", "rules", "skills"]) {
-    assert.ok(existsSync(resolve(pluginRoot, manifest[key])), `${key} path must exist`);
+test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP entrypoints", () => {
+  for (const file of [
+    "scripts/cursor-hook.mjs",
+    "scripts/cursor-transcript.mjs",
+    "servers/mcp-proxy.mjs",
+    "rules/openviking-memory.mdc",
+    "skills/openviking-memory/SKILL.md",
+  ]) {
+    assert.ok(existsSync(join(pluginRoot, file)), `${file} must exist`);
   }
-  const repoMarketplace = JSON.parse(readFileSync(join(repoRoot, ".cursor-plugin", "marketplace.json"), "utf8"));
-  assert.equal(resolve(repoRoot, repoMarketplace.plugins[0].source), pluginRoot);
-  const examplesMarketplace = JSON.parse(readFileSync(join(repoRoot, "examples", ".cursor-plugin", "marketplace.json"), "utf8"));
-  assert.equal(resolve(repoRoot, "examples", examplesMarketplace.plugins[0].source), pluginRoot);
 });
 
 test("Cursor transcript parser keeps only user and assistant text", () => {

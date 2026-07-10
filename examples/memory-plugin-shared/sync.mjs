@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SHARED_DIR = join(ROOT, "examples", "memory-plugin-shared", "lib");
 const HARNESS_SHARED_FILES = [
-  "agent-hook-runtime.mjs",
   "credentials.mjs",
   "capture-utils.mjs",
   "session-model.mjs",
@@ -21,10 +20,8 @@ const HARNESS_SHARED_FILES = [
 ];
 const OPENCODE_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs"];
 const TARGETS = [
-  { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: null },
-  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: null },
-  { dir: join(ROOT, "examples", "cursor-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
-  { dir: join(ROOT, "examples", "trae-memory-hooks", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
+  { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
+  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: OPENCODE_SHARED_FILES },
   { dir: join(ROOT, "examples", "opencode-plugin", "lib", "shared"), files: OPENCODE_SHARED_FILES },
   { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: HARNESS_SHARED_FILES },
 ];

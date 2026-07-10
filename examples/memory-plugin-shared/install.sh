@@ -1688,20 +1688,39 @@ copy_agent_integration() { # copy_agent_integration <source-subdir> <dest-name>
     return 1
   }
   dest="$OV_HOME/agent-integrations/$dest_name"
-  if [ "$SOURCE_MODE" = "dev" ]; then
-    rm -rf "$dest"
-    mkdir -p "$(dirname "$dest")"
-    ln -sfn "$source" "$dest"
-  else
-    tmp="$dest.tmp"
-    rm -rf "$tmp"
-    mkdir -p "$tmp"
-    (cd "$source" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$tmp" && tar -xf -)
-    rm -rf "$dest"
-    mkdir -p "$(dirname "$dest")"
-    mv "$tmp" "$dest"
-  fi
+  tmp="$dest.tmp"
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  (cd "$source" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$tmp" && tar -xf -)
+  rm -rf "$dest"
+  mkdir -p "$(dirname "$dest")"
+  mv "$tmp" "$dest"
   printf '%s' "$dest"
+}
+
+# Cursor and TRAE keep only their client-specific adapters in the repository.
+# Assemble a self-contained installation by adding the canonical shared runtime
+# at install time instead of committing generated copies for every client.
+assemble_agent_integration() { # assemble_agent_integration <source-subdir> <dest-name>
+  local source_subdir="$1" dest_name="$2" root shared shared_dest file
+  root="$(copy_agent_integration "$source_subdir" "$dest_name")" || return 1
+  shared="$(plugin_dir_on_disk memory-plugin-shared)" || {
+    err "$(t 'Shared agent runtime not found.' '未找到共享 Agent 运行时。')"
+    return 1
+  }
+  shared_dest="$OV_HOME/agent-integrations/memory-plugin-shared/lib"
+  rm -rf "$shared_dest.tmp"
+  mkdir -p "$shared_dest.tmp"
+  for file in \
+    agent-hook-runtime.mjs credentials.mjs debug-log.mjs mcp-proxy-core.mjs \
+    pending-queue.mjs profile-inject.mjs recall-core.mjs session-model.mjs \
+    workspace-peer.mjs; do
+    cp "$shared/lib/$file" "$shared_dest.tmp/$file"
+  done
+  rm -rf "$shared_dest"
+  mkdir -p "$(dirname "$shared_dest")"
+  mv "$shared_dest.tmp" "$shared_dest"
+  printf '%s' "$root"
 }
 
 agent_write_json_configs() { # agent_write_json_configs <kind> <hooks> <mcp> <root> <client-id>
@@ -1841,6 +1860,11 @@ uninstall_agent_integrations() {
     rm -rf "$OV_HOME/agent-integrations/trae-cn"
     info "$(t 'Removed TRAE CN OpenViking hooks and MCP config.' '已移除 TRAE CN OpenViking hooks 与 MCP 配置。')"
   fi
+  if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ]; then
+    rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
+  fi
 }
 
 cursor_mcp_path() {
@@ -1863,9 +1887,9 @@ trae_mcp_path() { # trae_mcp_path <client-id>
 }
 
 install_cursor() {
-  heading "$(t '4. Cursor plugin' '4. Cursor 插件')"
+  heading "$(t '4. Cursor integration' '4. Cursor 集成')"
   local root hooks_path mcp_path skill_tmp
-  root="$(copy_agent_integration cursor-memory-plugin cursor)" || return 1
+  root="$(assemble_agent_integration cursor-memory-plugin cursor)" || return 1
   hooks_path="$HOME/.cursor/hooks.json"
   mcp_path="$(cursor_mcp_path)"
   agent_write_json_configs cursor "$hooks_path" "$mcp_path" "$root" cursor
@@ -1879,12 +1903,12 @@ install_cursor() {
   info "$(t 'Cursor hooks installed:' 'Cursor hooks 已安装：') $hooks_path"
   info "$(t 'Cursor MCP installed:' 'Cursor MCP 已安装：') $mcp_path"
   info "$(t 'Cursor Rule and Skill installed under ~/.cursor.' 'Cursor Rule 与 Skill 已安装到 ~/.cursor。')"
-  info "$(t 'The command installed the complete plugin; no additional setup is required.' '命令已安装完整插件，无需追加配置。')"
+  info "$(t 'The command installed the complete integration; no additional setup is required.' '命令已安装完整集成，无需追加配置。')"
 }
 
 install_trae_variant() { # install_trae_variant <trae|trae-cn>
   local client_id="$1" root hooks_path mcp_path
-  root="$(copy_agent_integration trae-memory-hooks "$client_id")" || return 1
+  root="$(assemble_agent_integration trae-memory-hooks "$client_id")" || return 1
   hooks_path="$HOME/.$client_id/hooks.json"
   mcp_path="$(trae_mcp_path "$client_id")"
   agent_write_json_configs trae "$hooks_path" "$mcp_path" "$root" "$client_id"
@@ -2395,9 +2419,9 @@ EOF
       && [ -f "$HOME/.cursor/rules/openviking-memory.mdc" ] \
       && [ -f "$HOME/.cursor/skills/openviking-memory/SKILL.md" ]; then
       node --check "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" || ok=0
-      info "cursor: $(t 'plugin installed (Hooks, MCP, Rule, Skill)' '插件已安装（Hook、MCP、Rule、Skill）')"
+      info "cursor: $(t 'integration installed (Hooks, MCP, Rule, Skill)' '集成已安装（Hook、MCP、Rule、Skill）')"
     else
-      warn "cursor: $(t 'OpenViking plugin installation is incomplete' 'OpenViking 插件安装不完整')"
+      warn "cursor: $(t 'OpenViking integration installation is incomplete' 'OpenViking 集成安装不完整')"
       ok=0
     fi
   fi

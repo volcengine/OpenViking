@@ -1,6 +1,6 @@
-## 安装 Cursor Plugin
+## 安装 Cursor 集成
 
-OpenViking Cursor Plugin 内部包含生命周期 Hook、OpenViking MCP Server、always-on Rule 和记忆 Skill。一条命令安装完整 Plugin：
+一条命令同时安装生命周期 Hook、OpenViking MCP Server、always-on Rule 和记忆 Skill，不依赖 Cursor Marketplace，也无需手动配置 MCP：
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos

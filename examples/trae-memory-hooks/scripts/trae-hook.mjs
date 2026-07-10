@@ -17,8 +17,8 @@ import {
   stableHash,
   withAgentHookLock,
   writeHookState,
-} from "./shared/agent-hook-runtime.mjs";
-import { buildTraeTurns, cleanTraeText } from "./lib/trae-turns.mjs";
+} from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+import { buildTraeTurns, cleanTraeText } from "./trae-turns.mjs";
 
 const eventName = process.argv[2] || "";
 const requestedClient = process.argv[3] === "trae-cn" ? "trae-cn" : "trae";
@@ -111,7 +111,7 @@ async function main() {
         const hash = stableHash(turnKey, turn.role, turn.content);
         if (hashes.has(hash)) continue;
         const result = await addAgentMessage(fetchJSON, sessionId, turn);
-        if (result.ok || result.status === 0 || result.status >= 500) {
+        if (result.ok || [0, 408, 429].includes(result.status) || result.status >= 500) {
           hashes.add(hash);
           captured += 1;
         }

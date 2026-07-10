@@ -9,7 +9,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **Claude Code** | [Claude Code Memory Plugin](./02-claude-code.md) — auto-recall + auto-capture via hooks |
 | **OpenClaw** | [OpenClaw Plugin](./03-openclaw.md) — context-engine with full lifecycle integration |
 | **Codex** | [Codex Memory Plugin](./04-codex.md) — lifecycle hooks for auto-recall and incremental capture |
-| **Cursor** | [Cursor Memory Plugin](./12-cursor.md) — one command installs lifecycle hooks, MCP tools, rules, and skills |
+| **Cursor** | [Cursor Memory Integration](./12-cursor.md) — one command installs lifecycle hooks, MCP tools, rules, and skills |
 | **TRAE / TRAE CN** | [TRAE Memory Integration](./13-trae.md) — one installer configures prompt-time recall, turn capture, and OpenViking tools |
 | **Hermes Agent** | [Hermes Agent](./05-hermes.md) — built-in OpenViking memory provider, no plugin install needed |
 | **OpenCode** | [OpenCode Plugin](./10-opencode.md) — MCP tools plus lifecycle hooks for repo context, auto-recall, and capture |
@@ -22,7 +22,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 
 Plugin and Hook/MCP describe different layers. A plugin is the installable package; hooks, MCP servers, rules, and skills are capabilities that may be bundled inside it.
 
-- **Plugins / extensions** package and distribute the integration. For example, the Cursor plugin contains its Hooks, MCP server, Rules, and Skills.
+- **Plugins / extensions / installers** package and distribute the integration. For example, the Cursor installer configures Hooks, an MCP server, Rules, and Skills together.
 - **Lifecycle hooks** drive automatic recall and capture from runtime events. The model does not need to remember to call MCP for those lifecycle steps.
 - **MCP servers** expose explicit tools the model can call. A generic MCP-only client has these tools but no automatic lifecycle behavior.
 - **SDK integrations** (LangChain/LangGraph) wire OpenViking into framework-native abstractions such as retrievers, tools, chat history, stores, and middleware.

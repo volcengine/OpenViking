@@ -1,12 +1,12 @@
-# Cursor 记忆插件
+# Cursor 记忆集成
 
-为 Cursor 添加跨项目、跨会话的长期记忆。OpenViking Cursor Plugin 只需安装一次，即可自动召回相关记忆、捕获新回合并提供显式记忆工具，无需额外配置 MCP。
+为 Cursor 添加跨项目、跨会话的长期记忆。一条命令即可安装自动召回、回合捕获和显式记忆工具，不依赖 Cursor Marketplace，也无需手动配置 MCP。
 
 源码：[examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)
 
 ## 安装
 
-一条命令安装完整 Cursor Plugin。安装器支持幂等重复执行，并会同时配置 Hook、MCP Server、Rule 与 Skill：
+一条命令安装完整 Cursor 集成。安装器支持幂等重复执行，并会同时配置 Hook、MCP Server、Rule 与 Skill：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
@@ -24,10 +24,10 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ## 工作方式
 
-Cursor Plugin 是可安装的封装单元，运行能力全部包含在 Plugin 内：
+安装命令会把以下能力作为一个整体配置：
 
 ```text
-OpenViking Cursor Plugin
+OpenViking Cursor 集成
 ├── Hook         自动召回与捕获
 ├── MCP Server   显式 OpenViking 工具
 ├── Rule         常驻使用规则
@@ -42,7 +42,7 @@ OpenViking Cursor Plugin
 | `stop` | 从 Cursor `transcript_path` 增量捕获用户与助手回合。 |
 | `preCompact` / `sessionEnd` | 补捕获并提交 OpenViking session。 |
 
-Cursor 当前公开文档中的 `beforeSubmitPrompt` 输出只稳定支持放行或阻止，没有稳定的直接上下文注入字段。因此按 prompt 召回结果会在首个工具返回后注入；无工具回答使用 `sessionStart` 基础记忆。插件的 always-on rule 会要求 Cursor 在需要精确历史时调用 recall/search MCP。
+Cursor 当前公开文档中的 `beforeSubmitPrompt` 输出只稳定支持放行或阻止，没有稳定的直接上下文注入字段。因此按 prompt 召回结果会在首个工具返回后注入；无工具回答使用 `sessionStart` 基础记忆。always-on rule 会要求 Cursor 在需要精确历史时调用 recall/search MCP。
 
 ## 验证
 
@@ -55,7 +55,7 @@ Hook 状态位于 `~/.openviking/hook-state/cursor/`；OpenViking session 使用
 
 ## 升级与卸载
 
-重复运行安装命令即可升级。卸载 Plugin：
+重复运行安装命令即可升级。卸载集成：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \

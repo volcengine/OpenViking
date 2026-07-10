@@ -1,12 +1,12 @@
-# Cursor Memory Plugin
+# Cursor Memory Integration
 
-Give Cursor cross-project and cross-session long-term memory. Install the OpenViking Cursor Plugin once; it automatically recalls relevant memories, captures new turns, and exposes explicit memory tools without any separate MCP setup.
+Give Cursor cross-project and cross-session long-term memory. One command installs automatic recall, turn capture, and explicit memory tools without relying on Cursor Marketplace or requiring separate MCP setup.
 
 Source: [examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)
 
 ## Install
 
-Install the complete Cursor Plugin with one command. The installer is idempotent and configures its Hook, MCP server, Rule, and Skill together:
+Install the complete Cursor integration with one command. The installer is idempotent and configures its Hooks, MCP server, Rule, and Skill together:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
@@ -24,10 +24,10 @@ No additional Cursor or MCP configuration is required. Restart Cursor after inst
 
 ## How it works
 
-The Cursor Plugin is the installable package; its runtime capabilities are bundled inside it:
+The command configures these capabilities as one integration:
 
 ```text
-OpenViking Cursor Plugin
+OpenViking Cursor integration
 ├── Hooks        automatic recall and capture
 ├── MCP server   explicit OpenViking tools
 ├── Rule         always-on usage guidance
@@ -42,7 +42,7 @@ OpenViking Cursor Plugin
 | `stop` | Reads new user/assistant turns from Cursor's `transcript_path`. |
 | `preCompact` / `sessionEnd` | Captures remaining turns and commits the OpenViking session. |
 
-Cursor's currently documented `beforeSubmitPrompt` output can allow or block submission but does not provide a stable direct context-injection field. Therefore prompt-specific recall is injected after the first tool result. A no-tool answer receives the baseline `sessionStart` context; the always-on plugin rule tells Cursor to use the recall/search MCP tools when exact history is needed.
+Cursor's currently documented `beforeSubmitPrompt` output can allow or block submission but does not provide a stable direct context-injection field. Therefore prompt-specific recall is injected after the first tool result. A no-tool answer receives the baseline `sessionStart` context; the always-on rule tells Cursor to use the recall/search MCP tools when exact history is needed.
 
 ## Verify
 
@@ -55,7 +55,7 @@ Hook state is isolated under `~/.openviking/hook-state/cursor/`; OpenViking sess
 
 ## Upgrade and uninstall
 
-Re-run the install command to upgrade. To uninstall the Plugin:
+Re-run the install command to upgrade. To uninstall the integration:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \

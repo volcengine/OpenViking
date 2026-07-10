@@ -1,6 +1,6 @@
-## Install the Cursor Plugin
+## Install the Cursor integration
 
-The OpenViking Cursor Plugin bundles lifecycle Hooks, the OpenViking MCP server, an always-on Rule, and a memory Skill. Install the complete Plugin with one command:
+One command installs lifecycle Hooks, the OpenViking MCP server, an always-on Rule, and a memory Skill. It does not rely on Cursor Marketplace or require manual MCP setup:
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos

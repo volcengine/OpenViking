@@ -3,9 +3,9 @@
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
 
-import { loadAgentHookConfig } from "../scripts/shared/agent-hook-runtime.mjs";
-import { createLogger } from "../scripts/shared/debug-log.mjs";
-import { createOpenVikingMcpProxy } from "../scripts/shared/mcp-proxy-core.mjs";
+import { loadAgentHookConfig } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+import { createLogger } from "../../memory-plugin-shared/lib/debug-log.mjs";
+import { createOpenVikingMcpProxy } from "../../memory-plugin-shared/lib/mcp-proxy-core.mjs";
 
 function readConfig() {
   const clientId = process.env.OPENVIKING_HOOK_SOURCE === "trae-cn" ? "trae-cn" : "trae";
