@@ -14,9 +14,10 @@ from typing import Any, Optional
 import typer
 from loguru import logger
 from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit.styles import Style as PromptStyle
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
@@ -71,6 +72,13 @@ app = typer.Typer(
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
+_CHAT_PROMPT_MESSAGE = FormattedText([("class:user-label", "You: ")])
+_CHAT_PROMPT_STYLE = PromptStyle.from_dict(
+    {
+        "": "fg:ansidefault",
+        "user-label": "bold fg:ansicyan",
+    }
+)
 
 
 def _warn_deprecated_memory_user(memory_user: list[str] | None) -> None:
@@ -286,7 +294,8 @@ async def _read_interactive_input_async() -> str:
     try:
         with patch_stdout():
             return await _PROMPT_SESSION.prompt_async(
-                HTML("<b fg='ansiblack'>You:</b> "),
+                _CHAT_PROMPT_MESSAGE,
+                style=_CHAT_PROMPT_STYLE,
             )
     except EOFError as exc:
         raise KeyboardInterrupt from exc
