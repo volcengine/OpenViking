@@ -3824,7 +3824,7 @@ requires-dist = [
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.0.0,<2.0.0" },
     { name = "lark-oapi", specifier = ">=1.5.3" },
     { name = "lark-oapi", marker = "extra == 'bot'", specifier = ">=1.0.0" },
-    { name = "litellm", specifier = ">=1.83.7,<1.90.3" },
+    { name = "litellm", specifier = ">=1.83.7,<1.91.2" },
     { name = "llama-cpp-python", marker = "extra == 'local-embed'", specifier = ">=0.3.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "mcp", specifier = ">=1.27.0" },
