@@ -9,19 +9,22 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **Claude Code** | [Claude Code Memory Plugin](./02-claude-code.md) — auto-recall + auto-capture via hooks |
 | **OpenClaw** | [OpenClaw Plugin](./03-openclaw.md) — context-engine with full lifecycle integration |
 | **Codex** | [Codex Memory Plugin](./04-codex.md) — lifecycle hooks for auto-recall and incremental capture |
+| **Cursor** | [Cursor Memory Plugin](./12-cursor.md) — one plugin that bundles lifecycle hooks, MCP tools, rules, and skills |
+| **TRAE / TRAE CN** | [TRAE Memory Integration](./13-trae.md) — one installer configures prompt-time recall, turn capture, and OpenViking tools |
 | **Hermes Agent** | [Hermes Agent](./05-hermes.md) — built-in OpenViking memory provider, no plugin install needed |
 | **OpenCode** | [OpenCode Plugin](./10-opencode.md) — MCP tools plus lifecycle hooks for repo context, auto-recall, and capture |
 | **pi** | [pi Coding Agent Extension](./11-pi.md) — native extension with auto-recall, turn capture, and threshold commit |
 | **LangChain / LangGraph** | [LangChain and LangGraph](./07-langchain-langgraph.md) — retriever, tools, context backend, store, and middleware |
-| **Cursor / Trae / Manus / Claude Desktop / ChatGPT / …** | [MCP Clients](./06-mcp-clients.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
+| **Manus / Claude Desktop / ChatGPT / other MCP clients** | [MCP Clients](./06-mcp-clients.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
 | **AstrBot / …** | [Community Plugins](./08-community-plugins.md) — community-maintained integrations for various runtimes |
 
-## Integration depths
+## Packaging and runtime capabilities
 
-Some integrations go beyond what a generic MCP client can do:
+Plugin and Hook/MCP describe different layers. A plugin is the installable package; hooks, MCP servers, rules, and skills are capabilities that may be bundled inside it.
 
-- **Generic MCP clients** call OpenViking on demand through tools the model decides to invoke. Setup is one config snippet.
-- **Hooks-based / native plugins** (Claude Code, Codex, OpenClaw, Hermes Agent, OpenCode, pi, AstrBot) drive recall and capture from runtime lifecycle events — every prompt, every turn, session start/end, compact, subagent spawn. The model doesn't need to "remember to recall."
+- **Plugins / extensions** package and distribute the integration. For example, the Cursor plugin contains its Hooks, MCP server, Rules, and Skills.
+- **Lifecycle hooks** drive automatic recall and capture from runtime events. The model does not need to remember to call MCP for those lifecycle steps.
+- **MCP servers** expose explicit tools the model can call. A generic MCP-only client has these tools but no automatic lifecycle behavior.
 - **SDK integrations** (LangChain/LangGraph) wire OpenViking into framework-native abstractions such as retrievers, tools, chat history, stores, and middleware.
 
 For agents whose runtime exposes hooks, middleware, or a context-engine slot, the native integration path is usually the better default.

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs sessionStart",
+        "timeout": 30
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs beforeSubmitPrompt",
+        "timeout": 20
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs postToolUse",
+        "timeout": 5
+      }
+    ],
+    "stop": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs stop",
+        "timeout": 30
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs preCompact",
+        "timeout": 30
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs sessionEnd",
+        "timeout": 30
+      }
+    ]
+  }
+}

@@ -83,10 +83,22 @@ jobs:
           STAGE=/tmp/memory-plugin-marketplace
           rm -rf "${STAGE}"
           mkdir -p "${STAGE}"
-          cp -R examples/.claude-plugin examples/.agents \
+          cp -R examples/.claude-plugin examples/.cursor-plugin examples/.agents \
             examples/claude-code-memory-plugin examples/codex-memory-plugin \
+            examples/cursor-memory-plugin examples/trae-memory-hooks \
             examples/opencode-plugin examples/pi-coding-agent-extension \
             examples/memory-plugin-shared "${STAGE}/"
+          for required in \
+            .cursor-plugin/marketplace.json \
+            cursor-memory-plugin/.cursor-plugin/plugin.json \
+            cursor-memory-plugin/hooks/hooks.json \
+            trae-memory-hooks/hooks/hooks.template.json \
+            trae-memory-hooks/scripts/trae-hook.mjs; do
+            test -f "${STAGE}/${required}" || {
+              echo "::error::Marketplace archive is missing ${required}"
+              exit 1
+            }
+          done
           (cd /tmp && zip -rq "memory-plugin-marketplace-${RELEASE_TAG}.zip" memory-plugin-marketplace)
 
       - name: Build marketplace git repo (dumb HTTP)
@@ -211,6 +223,12 @@ jobs:
             echo "## Uploaded to TOS (${RELEASE_TAG})"
             echo ""
             printf '%s' "${UPLOADED_KEYS}"
+            echo "- The Cursor plugin (including Hooks, MCP, Rule, and Skill) and the TRAE/TRAE CN Hook package are included in \`memory-plugin-marketplace.zip\`."
+            if [ "${UPDATE_LATEST}" = "true" ]; then
+              echo "- Stable installer updated: \`memory-plugin-shared/install.sh\`."
+            else
+              echo "- Stable installer unchanged (\`update_latest=false\`)."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report skipped TOS upload
