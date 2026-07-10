@@ -308,12 +308,17 @@ class LocalIndex(IIndex):
         meta: Any,
         dense_search_config: Optional[Dict[str, Any]] = None,
         initial_candidates: Optional[List[CandidateData]] = None,
+        defer_dense_rebuild_start: bool = False,
     ):
         """Initialize a local index instance.
 
         Args:
             index_path_or_json (str): Path to index files or JSON configuration
             meta: Index metadata object containing configuration
+            dense_search_config: Optional dense-search backend configuration.
+            initial_candidates: Records used to initialize the dense-search shadow state.
+            defer_dense_rebuild_start: Delay the background rebuild worker until the
+                caller has finished initializing the native index.
         """
         # Get the vector normalization flag from meta
         normalize_vector_flag = meta.inner_meta.get("VectorIndex", {}).get("NormalizeVector", False)
@@ -361,19 +366,13 @@ class LocalIndex(IIndex):
                 self._dense_rebuild_debounce_seconds = (
                     max(0, int(dense_search_config.get("auto_rebuild_debounce_ms", 500))) / 1000.0
                 )
-                if self._auto_background_rebuild:
-                    self._dense_rebuild_thread = threading.Thread(
-                        target=self._dense_rebuild_loop,
-                        name="openviking-cuvs-rebuild",
-                        daemon=True,
-                    )
-                    self._dense_rebuild_thread.start()
-                    self._schedule_dense_rebuild()
             except CuVSUnavailableError:
                 if not self._auto_cuvs:
                     raise
                 logger.info("cuVS auto mode unavailable; keeping native dense search")
                 self.dense_search = None
+        if not defer_dense_rebuild_start:
+            self._start_dense_rebuild_worker()
 
     def update(
         self,
@@ -424,6 +423,24 @@ class LocalIndex(IIndex):
             self._dense_rebuild_memory_blocked = False
             self._dense_rebuild_completed.clear()
         self._dense_rebuild_event.set()
+
+    def _start_dense_rebuild_worker(self) -> None:
+        """Start the worker once native and dense initial state are aligned."""
+
+        if (
+            not self._auto_background_rebuild
+            or self.dense_search is None
+            or self._dense_rebuild_thread is not None
+            or self._dense_rebuild_stop.is_set()
+        ):
+            return
+        self._dense_rebuild_thread = threading.Thread(
+            target=self._dense_rebuild_loop,
+            name="openviking-cuvs-rebuild",
+            daemon=True,
+        )
+        self._dense_rebuild_thread.start()
+        self._schedule_dense_rebuild()
 
     def _wake_dense_rebuild_worker(self) -> None:
         """Wake the worker without extending the mutation debounce window."""
@@ -1006,9 +1023,12 @@ class VolatileIndex(LocalIndex):
             meta,
             dense_search_config=dense_search_config,
             initial_candidates=cands_list,
+            defer_dense_rebuild_start=True,
         )
         self.engine_proxy.add_data(self._convert_candidate_list_for_index(cands_list))
-        self._schedule_dense_rebuild()
+        # Native add_data() invalidates its filter layout, so publish the first
+        # dense snapshot only after the native records are present.
+        self._start_dense_rebuild_worker()
 
     def need_rebuild(self) -> bool:
         """Determine if rebuild is needed.
@@ -1074,6 +1094,7 @@ class PersistentIndex(LocalIndex):
         force_rebuild: bool = False,
         initial_timestamp: Optional[int] = None,
         dense_search_config: Optional[Dict[str, Any]] = None,
+        defer_dense_rebuild_start: bool = False,
     ):
         """Initialize a persistent index with versioning support.
 
@@ -1089,6 +1110,9 @@ class PersistentIndex(LocalIndex):
                 Defaults to False.
             initial_timestamp (Optional[int]): Timestamp to use if creating a new index
                 from scratch. If None, uses current time. Useful for recovery scenarios.
+            dense_search_config: Optional dense-search backend configuration.
+            defer_dense_rebuild_start: Delay the background rebuild worker until
+                collection-level recovery has replayed all pending deltas.
 
         Process:
             1. Create directory structure if not exists
@@ -1123,9 +1147,10 @@ class PersistentIndex(LocalIndex):
             meta,
             dense_search_config=dense_search_config,
             initial_candidates=cands_list,
+            defer_dense_rebuild_start=True,
         )
-        self._schedule_dense_rebuild()
-        # Remove scheduling logic, unified scheduling by collection layer
+        if not defer_dense_rebuild_start:
+            self._start_dense_rebuild_worker()
 
     def _create_new_index(
         self,

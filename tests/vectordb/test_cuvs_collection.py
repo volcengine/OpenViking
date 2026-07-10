@@ -1,15 +1,23 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import multiprocessing
 import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from openviking.storage.vectordb.collection.local_collection import (
+    PersistCollection,
     get_or_create_local_collection,
 )
 from openviking.storage.vectordb.index import cuvs_index
+from openviking.storage.vectordb.index.local_index import (
+    IndexEngineProxy,
+    LocalIndex,
+    PersistentIndex,
+)
 from openviking.telemetry.backends.memory import MemoryOperationTelemetry
 from openviking.telemetry.context import bind_telemetry
 
@@ -72,6 +80,19 @@ def patch_cuvs_runtime(monkeypatch):
         "_CuVSRuntime",
         lambda algorithm, metric, build_params, search_params, dtype: FakeCuVSRuntime(metric),
     )
+
+
+def _delete_without_persisting_index(path, ready, hold):
+    """Write a deletion delta, then wait to be terminated without closing."""
+
+    try:
+        collection = get_or_create_local_collection(path=path)
+        collection.delete_data(["deleted"])
+        ready.send(("ok", ""))
+        hold.wait()
+    except BaseException:
+        ready.send(("error", traceback.format_exc()))
+        raise
 
 
 def test_local_collection_routes_dense_search_to_cuvs(monkeypatch):
@@ -344,6 +365,156 @@ def test_persistent_collection_rehydrates_cuvs_from_local_store(monkeypatch, tmp
         reopened.close()
 
 
+def test_persistent_cuvs_rebuild_waits_for_deletion_replay(monkeypatch, tmp_path):
+    path = str(tmp_path / "persistent-cuvs-recovery")
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "persistent_cuvs_recovery",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+                {"FieldName": "kind", "FieldType": "string"},
+            ],
+        },
+        path=path,
+    )
+    collection.create_index(
+        "default",
+        {
+            "IndexName": "default",
+            "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            "ScalarIndex": ["kind"],
+        },
+    )
+    collection.upsert_data(
+        [
+            {
+                "id": "deleted",
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                "kind": "deleted",
+            },
+            {
+                "id": "survivor",
+                "vector": [0.0, 1.0, 0.0, 0.0],
+                "kind": "survivor",
+            },
+        ]
+    )
+    collection.close()
+
+    # Commit only the store deletion. Terminating the process leaves the native
+    # snapshot stale, so recovery has exactly one deletion to replay.
+    ctx = multiprocessing.get_context("spawn")
+    ready_parent, ready_child = ctx.Pipe(duplex=False)
+    hold = ctx.Event()
+    process = ctx.Process(
+        target=_delete_without_persisting_index,
+        args=(path, ready_child, hold),
+    )
+    process.start()
+    ready_child.close()
+    try:
+        assert ready_parent.poll(20), "deletion worker did not finish"
+        status, detail = ready_parent.recv()
+        assert status == "ok", detail
+    finally:
+        ready_parent.close()
+        if process.is_alive():
+            process.terminate()
+        process.join(10)
+        assert not process.is_alive()
+
+    runtime = MemoryAwareFakeCuVSRuntime("inner_product", free_memory_bytes=1 << 30)
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+
+    replay_completed = threading.Event()
+    layout_registered = threading.Event()
+    layouts_before_replay = []
+    replay_operations = []
+    original_init = PersistentIndex.__init__
+    original_replay = PersistCollection._replay_recovery_records
+    original_set_filter_layout = IndexEngineProxy.set_filter_layout
+
+    def synchronize_constructor(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        # The old lifecycle starts the worker during construction. Waiting here
+        # forces its stale layout to commit before recovery can replay deletion.
+        if self._dense_rebuild_thread is not None:
+            assert layout_registered.wait(timeout=5)
+
+    def observe_replay(self, *, index_name, index, records, operation):
+        replay_operations.append((operation, len(records)))
+        result = original_replay(
+            self,
+            index_name=index_name,
+            index=index,
+            records=records,
+            operation=operation,
+        )
+        replay_completed.set()
+        return result
+
+    def observe_filter_layout(self, ordered_labels):
+        result = original_set_filter_layout(self, ordered_labels)
+        if not replay_completed.is_set():
+            layouts_before_replay.append(tuple(ordered_labels))
+        layout_registered.set()
+        return result
+
+    monkeypatch.setattr(PersistentIndex, "__init__", synchronize_constructor)
+    monkeypatch.setattr(PersistCollection, "_replay_recovery_records", observe_replay)
+    monkeypatch.setattr(IndexEngineProxy, "set_filter_layout", observe_filter_layout)
+
+    reopened = get_or_create_local_collection(
+        path=path,
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 0,
+            }
+        },
+    )
+    try:
+        assert replay_operations == [("delete", 1)]
+        assert replay_completed.is_set()
+        index = reopened.get_index("default")
+        assert index is not None
+        assert index.wait_for_background_rebuild(timeout=5)
+        assert layout_registered.wait(timeout=5)
+        assert layouts_before_replay == []
+        assert runtime.build_count == 1
+
+        unfiltered = reopened.search_by_vector(
+            "default", dense_vector=[0.0, 1.0, 0.0, 0.0], limit=2
+        )
+        filtered = reopened.search_by_vector(
+            "default",
+            dense_vector=[0.0, 1.0, 0.0, 0.0],
+            limit=2,
+            filters={"op": "must", "field": "kind", "conds": ["survivor"]},
+        )
+        deleted = reopened.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=2,
+            filters={"op": "must", "field": "kind", "conds": ["deleted"]},
+        )
+        assert [item.id for item in unfiltered.data] == ["survivor"]
+        assert [item.id for item in filtered.data] == ["survivor"]
+        assert deleted.data == []
+    finally:
+        reopened.close()
+
+
 def test_auto_cuvs_falls_back_then_retries_when_memory_is_available(monkeypatch):
     runtimes = []
 
@@ -465,6 +636,89 @@ def test_auto_cuvs_background_rebuild_warms_gpu_before_query(monkeypatch):
         result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
         assert [item.id for item in result.data] == ["first"]
         assert runtime.search_count == 1
+    finally:
+        collection.close()
+
+
+def test_auto_cuvs_initial_rebuild_waits_for_native_data(monkeypatch):
+    runtime = MemoryAwareFakeCuVSRuntime("inner_product", free_memory_bytes=1 << 30)
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+
+    native_add_done = threading.Event()
+    layout_registered = threading.Event()
+    original_add_data = IndexEngineProxy.add_data
+    original_set_filter_layout = IndexEngineProxy.set_filter_layout
+    original_schedule = LocalIndex._schedule_dense_rebuild
+
+    def observe_native_add(self, candidates):
+        result = original_add_data(self, candidates)
+        native_add_done.set()
+        return result
+
+    def observe_filter_layout(self, ordered_labels):
+        result = original_set_filter_layout(self, ordered_labels)
+        layout_registered.set()
+        return result
+
+    def wait_for_early_rebuild(self):
+        original_schedule(self)
+        # Force the buggy pre-add schedule to wait until its worker publishes
+        # the stale layout; the fixed lifecycle never enters this branch.
+        if not native_add_done.is_set():
+            assert layout_registered.wait(timeout=5)
+
+    monkeypatch.setattr(IndexEngineProxy, "add_data", observe_native_add)
+    monkeypatch.setattr(IndexEngineProxy, "set_filter_layout", observe_filter_layout)
+    monkeypatch.setattr(LocalIndex, "_schedule_dense_rebuild", wait_for_early_rebuild)
+
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_initial_rebuild",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+                {"FieldName": "kind", "FieldType": "string"},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 0,
+            }
+        },
+    )
+    try:
+        collection.upsert_data([{"id": "first", "vector": [1.0, 0.0, 0.0, 0.0], "kind": "x"}])
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+                "ScalarIndex": ["kind"],
+            },
+        )
+
+        assert index.wait_for_background_rebuild(timeout=5)
+        assert runtime.build_count == 1
+        unfiltered = collection.search_by_vector(
+            "default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1
+        )
+        filtered = collection.search_by_vector(
+            "default",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            limit=1,
+            filters={"op": "must", "field": "kind", "conds": ["x"]},
+        )
+        assert [item.id for item in unfiltered.data] == ["first"]
+        assert [item.id for item in filtered.data] == ["first"]
     finally:
         collection.close()
 
