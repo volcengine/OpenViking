@@ -530,7 +530,8 @@ def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationI
             "- For totals/counts/lists/summaries, bind C1 to the object set at the time the user asked for that aggregate/list/summary. Later cancellations/updates/writes must explicitly say whether they change that already-requested scope.",
             "- For totals/counts/lists/summaries, fill non-empty Source binding fields: Scope freeze point, Included records, Excluded records, Source field, Derivation, and Later write effect.",
             "- If a valid source-bound C1 cannot be written, set `Selected candidate: none` and `Recommended operation: skip`.",
-            "Output ONLY the complete JSON object matching the required schema.",
+            "Output ONLY the complete JSON object as an instance of OUTPUT_SCHEMA; "
+            "do not output the OUTPUT_SCHEMA definition itself.",
         ]
     )
 

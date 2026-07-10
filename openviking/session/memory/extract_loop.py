@@ -265,7 +265,9 @@ class ExtractLoop:
 - Read content is returned in Claude Code format: each visible line is prefixed with `line_number<TAB>`.
 - When you copy text from read results into SEARCH/REPLACE operations, copy the exact text after the line-number prefix. Never include the line-number prefix itself in `search` or `replace`.
 ## Output Format
-The final output of the model must strictly follow the JSON Schema format shown below:
+The required final-output schema is named OUTPUT_SCHEMA.
+The final output must be an instance of OUTPUT_SCHEMA; do not output the
+OUTPUT_SCHEMA definition itself.
 ```json
 {schema_str}
 ```
@@ -381,7 +383,9 @@ The final output of the model must strictly follow the JSON Schema format shown 
                         messages.append(
                             {
                                 "role": "user",
-                                "content": decision.instruction.strip(),
+                                "content": self._build_post_validation_retry_instruction(
+                                    decision.instruction
+                                ),
                             }
                         )
                         tracer.info(
@@ -918,10 +922,20 @@ The final output of the model must strictly follow the JSON Schema format shown 
                 "role": "user",
                 "content": (
                     "Your previous output could not be parsed as valid JSON. "
-                    "Please output ONLY a valid JSON object matching the required schema. "
+                    "Please output ONLY a valid JSON object that is an instance of OUTPUT_SCHEMA. "
+                    "Do not output the OUTPUT_SCHEMA definition, JSON Schema metadata, $defs, or properties. "
                     "Do not include any explanation, markdown formatting, or text outside the JSON."
                 ),
             }
+        )
+
+    def _build_post_validation_retry_instruction(self, instruction: str) -> str:
+        """Wrap domain feedback with the stable output contract for retry calls."""
+        return (
+            f"{instruction.strip()}\n\n"
+            "After applying this feedback, output the complete extraction result as an "
+            "instance of the previously defined OUTPUT_SCHEMA. Do not output the "
+            "OUTPUT_SCHEMA definition itself, JSON Schema metadata, $defs, or properties."
         )
 
     def _build_final_operations_skeleton(self) -> Dict[str, List[Any]]:
@@ -939,7 +953,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
         return (
             "You have reached the maximum number of tool call iterations. "
             "Do not call any more tools. Return your final result now as ONLY a valid JSON object "
-            "matching the required schema. Do not include explanations or markdown. "
+            "that is an instance of OUTPUT_SCHEMA. Do not include explanations or markdown. "
+            "Do not output the OUTPUT_SCHEMA definition, JSON Schema metadata, $defs, or properties. "
             "If there are no memory changes, return this exact empty-shape JSON with all fields present:\n"
             f"{skeleton}"
         )
@@ -1041,7 +1056,8 @@ The final output of the model must strictly follow the JSON Schema format shown 
             "If you copy from numbered read output, exclude the `line_number<TAB>` prefix from SEARCH and REPLACE text. "
             "If found_in_other_uris is non-empty, diagnose this as a possible page_id mismatch and choose the correct target page_id or rewrite the patch for the current page_id; do not silently move the patch. "
             "Regenerate the complete operations JSON, including previous successful operations and fixed failed operations. "
-            "Output ONLY the complete JSON object matching the required schema.\n\n"
+            "Output ONLY the complete JSON object as an instance of OUTPUT_SCHEMA; "
+            "do not output the OUTPUT_SCHEMA definition itself, JSON Schema metadata, $defs, or properties.\n\n"
             f"Failed patch operations:\n{details}"
         )
 
