@@ -36,11 +36,13 @@ def test_owner_memory_extraction_scope_uses_message_peer_ids():
     )
 
     assert scope.allow_self_memory is True
+    assert scope.user_peer_ids == {"alice", "bob"}
+    assert scope.assistant_peer_ids == set()
     assert scope.allowed_peer_ids == {"alice", "bob"}
     assert scope.include_session_skills is True
 
 
-def test_owner_memory_extraction_scope_ignores_assistant_peer_ids():
+def test_owner_memory_extraction_scope_includes_assistant_peer_ids():
     assistant_message = _message("assistant-bot")
     assistant_message.role = "assistant"
 
@@ -52,7 +54,9 @@ def test_owner_memory_extraction_scope_ignores_assistant_peer_ids():
     )
 
     assert scope.allow_self_memory is True
-    assert scope.allowed_peer_ids == {"alice"}
+    assert scope.user_peer_ids == {"alice"}
+    assert scope.assistant_peer_ids == {"assistant-bot"}
+    assert scope.allowed_peer_ids == {"alice", "assistant-bot"}
     assert scope.include_session_skills is True
 
 
@@ -65,5 +69,25 @@ def test_actor_memory_extraction_scope_still_uses_policy_and_messages():
     )
 
     assert scope.allow_self_memory is True
+    assert scope.user_peer_ids == {"bob"}
+    assert scope.assistant_peer_ids == set()
     assert scope.allowed_peer_ids == {"bob"}
+    assert scope.include_session_skills is True
+
+
+def test_memory_extraction_scope_omits_peer_ids_when_policy_disables_peer_memory():
+    assistant_message = _message("assistant-bot")
+    assistant_message.role = "assistant"
+
+    scope = _resolve_memory_extraction_scope(
+        _ctx(),
+        MemoryPolicy(peer_enabled=False),
+        [_message("alice"), assistant_message],
+        config_session_skill_extraction_enabled=True,
+    )
+
+    assert scope.allow_self_memory is True
+    assert scope.user_peer_ids == set()
+    assert scope.assistant_peer_ids == set()
+    assert scope.allowed_peer_ids == set()
     assert scope.include_session_skills is True
