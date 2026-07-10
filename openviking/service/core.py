@@ -36,7 +36,7 @@ from openviking.utils.agfs_utils import (
 )
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
-from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
@@ -513,6 +513,9 @@ class OpenVikingService:
             raise NotInitializedError("VikingFS")
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        stat = await self._viking_fs.stat(uri, ctx=effective_ctx, skip_count=True)
+        if not stat.get("isDir", False):
+            raise InvalidArgumentError("Consistency check only supports directory URIs.")
         entries = await self._viking_fs.tree(
             uri,
             show_all_hidden=True,
