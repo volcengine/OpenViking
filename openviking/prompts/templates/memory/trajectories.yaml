@@ -146,6 +146,8 @@ fields:
             - Source field: <runtime fields/text/tool outputs to read, or none>
             - Derivation: <how to compute/select/verify using visible facts, or none>
             - Later write effect: <whether later writes change a previously requested value/scope, or none>
+            - Ambiguous alternate scopes: <if wording could mean original requested scope and
+              post-action/current remaining scope, name both labels; otherwise none>
             - Confirmation binding: <which user confirmation authorizes which write objects, or none>
           - Applicability: <exact runtime shape where C1 applies>
           - Anti-pattern: <tempting broad or wrong-scope lesson not to learn>
@@ -202,6 +204,13 @@ fields:
         decision the agent made, what runtime evidence did or did not justify it, and what earlier
         reminder would change that decision. Do not force a preferred scope shape; extract the
         causal rule that would prevent the observed failure.
+      - For information/aggregate/list/summary/value requests, preserve the source scope created
+        at the moment the user made the request. Later writes may create a second post-action or
+        current-state scope, but they must not silently replace the original requested scope.
+      - If wording is ambiguous between the original requested set and a post-action remaining
+        set, Candidate C1 should say to communicate both scopes with explicit labels rather than
+        choosing only the narrower scope. Keep this domain-agnostic; do not mention dataset names,
+        fixed IDs, exact amounts, or task-specific values in the reusable lesson.
       - Preserve correct near-miss behavior. If the same tool had both correct and wrong calls,
         Candidate C1 must name the discriminator that makes the wrong call different.
 
@@ -218,7 +227,8 @@ fields:
       - For totals/counts/lists/summaries, Candidate C1 must fill non-empty
         `Scope freeze point`, `Included records`, `Excluded records`, `Source field`,
         `Derivation`, and `Later write effect`. The freeze point must be when the user asked
-        for the aggregate/list/summary, not after later writes.
+        for the aggregate/list/summary, not after later writes. If multiple runtime scopes are
+        plausible, fill `Ambiguous alternate scopes` with explicit labels for each scope.
       - `Runtime Facts` may contain `db_check`, `action_checks`, and `communicate_checks` for OV
         parsing. Do not put those control-plane terms inside Candidate C1, `Repair principle`, or
         `Runtime experience content`.

@@ -937,12 +937,18 @@ Pass only when all are true:
 6. If the source failure involved agent-initiated scope expansion, the experience
    does not treat a user's later yes/confirmation to the agent's over-broad
    proposal as proof that the user independently requested the broader scope.
+7. For information, aggregate, list, summary, or value obligations, the
+   experience preserves the user-requested source scope from the time of the
+   request. Later writes may be described as a separate post-action/current
+   scope, but they do not silently replace the original requested scope. If both
+   scopes are plausible from runtime wording, the experience labels both.
 
 Fail when the proposed experience only summarizes the task, fires too late,
 uses unsupported or hidden facts, overfits case literals, misses the root
 decision rule, splits a coupled causal chain, treats agent-proposed expansion as
-user-initiated scope, lacks a concrete future behavior change, or would likely
-harm correct behavior.
+user-initiated scope, lets a later-write/current-state scope overwrite an
+earlier information request scope, lacks a concrete future behavior change, or
+would likely harm correct behavior.
 
 Return JSON only:
 {{
@@ -958,7 +964,7 @@ If failing, set "pass": false, choose root_cause_quality from:
 surface_level, unsupported, not_preventive, too_late_boundary,
 wrong_scope, split_causal_chain, agent_initiated_scope_expansion,
 missing_source_binding, missing_behavior_change, not_injectable,
-over_broad, unsafe, unclear.
+over_broad, later_write_scope_substitution, unsafe, unclear.
 Set repair_prompt to one concise instruction for rewriting or removing this
 specific experience. Do not ask for any output schema.
 

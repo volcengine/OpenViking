@@ -101,6 +101,9 @@ The system handles create vs update automatically:
 - State the behavior delta: block a write, change one argument, ask/read one missing fact, or include one requested source-bound fact in communication.
 - Preserve object boundaries. A user's yes to an agent-proposed broader plan is not independent evidence for extra objects/actions.
 - For communication, totals, counts, lists, or summaries, bind the answer to the user-requested scope, frozen record/set membership, included/excluded records, source field, derivation, later-write effect, selected object, or policy gate.
+- For information/aggregate/list/summary/value requests, preserve the user-requested source scope at the moment the request is made. Later write actions may create a second "post-action/current remaining state" scope, but they must not silently replace the original requested scope.
+- If user wording is ambiguous between an original requested set and a post-action remaining/current-state set, write the experience so the future agent gives both scopes with explicit labels instead of only the narrower post-action scope.
+- Do not encode dataset-specific values, IDs, amounts, or domain names in the reusable rule; express the lesson as source-scope binding, freeze point, included/excluded object roles, and later-write effect.
 - Preserve correct near-misses: `## Situation`/`## Anti-pattern` must say when NOT to apply the experience.
 - Avoid evaluator/control-plane wording such as evaluation, evaluator, communicate_checks, action_checks, db_check, reward, rubric, 评估, 奖励. Rewrite into runtime facts.
 - Keep it concise, imperative, and machine-readable. No raw IDs, hidden answers, policy dumps, or full task paths.

@@ -37,6 +37,9 @@ fields:
       - Does not apply when: <closest nearby but non-applicable situation>
       - Source binding: <which user request scope, confirmed object, retrieved record/set,
         source field, policy gate, calculation, or candidate message content supplies the rule>
+      - Scope ambiguity: <if an information/list/aggregate request could mean both the
+        originally requested set and a later post-action/current-state set, state both
+        scopes and how to label them; otherwise none>
 
       ## Reminder
       - <one sentence root-cause lesson that changes the next agent behavior>
@@ -80,8 +83,18 @@ fields:
         record/set membership, included/excluded records, source field, derivation, later-write
         effect, selected object, or policy gate. Avoid vague reminders like "include all required
         information".
-      - For aggregate/list/summary requests, state when the scope is frozen and whether later
-        writes change that already-requested scope.
+      - For information, aggregate, list, summary, or value requests, preserve the user-requested
+        source scope at the moment the request is made. Later write actions may create a second
+        "post-action/current remaining state" scope, but they must not silently replace the
+        original requested scope.
+      - If the user's wording is ambiguous between the original requested set and a post-action
+        remaining/current-state set, the experience should instruct the future agent to include
+        both scopes with explicit labels, not only the narrower post-action scope.
+      - State when the scope is frozen, the semantic roles included/excluded, the source fields
+        used for derivation, and whether later writes change the previously requested scope.
+      - Do not encode dataset-specific values, IDs, amounts, or domain names in the reusable rule;
+        express the lesson as source-scope binding, freeze point, included/excluded object roles,
+        and later-write effect.
       - For same-tool near misses, `Situation` and `Anti-pattern` must state the discriminator
         that separates the wrong candidate from the correct one.
       - Keep the experience concise: no setup chatter, no policy dumps, no full paths, no raw IDs,
