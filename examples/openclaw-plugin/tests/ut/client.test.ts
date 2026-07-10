@@ -598,7 +598,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
     expect(body.target_uri).toBe("viking://user/skills");
   });
 
-  it("includes role_id when addSessionMessage receives one", async () => {
+  it("includes peer_id when addSessionMessage receives one", async () => {
     const transport = vi.fn().mockResolvedValue(okResponse({ session_id: "s1" }));
 
     const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000, "", "", undefined, false, true, { transport });
@@ -613,6 +613,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
 
     const [, init] = transport.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(String(init.body));
-    expect(body.role_id).toBe("telegram_12345");
+    expect(body.peer_id).toBe("telegram_12345");
+    expect(body).not.toHaveProperty("role_id");
   });
 });

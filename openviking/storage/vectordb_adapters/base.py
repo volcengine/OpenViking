@@ -99,6 +99,13 @@ class CollectionAdapter(ABC):
     # Subclasses backed by VikingDB should set this to ``VIKINGDB_TEXT_FIELD_BYTE_LIMIT``.
     _TEXT_FIELD_BYTE_LIMIT: int | None = None
 
+    # Whether this backend actually stores the ``content`` (full text) field.
+    # Only VikingDB-backed adapters use ``content`` (for server-side full-text grep).
+    # All other backends leave this ``False`` so that ``content`` is silently dropped
+    # on write -- a new backend that does not need ``content`` requires no extra code.
+    # See ``viking_fs._resolve_grep_engine`` which must stay consistent with this flag.
+    USE_CONTENT_FIELD: bool = False
+
     def __init__(self, collection_name: str, index_name: str = DEFAULT_INDEX_NAME):
         self._collection_name = collection_name
         self._index_name = index_name

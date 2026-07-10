@@ -90,6 +90,12 @@
 - `_sanitize_scalar_index_fields(...)`
 - `_build_default_index_meta(...)`
 
+若后端支持服务端全文检索（BM25 grep）并需要写入 `content` 全文字段，设置类属性：
+
+- `USE_CONTENT_FIELD = True`（默认为 `False`）
+
+默认 `False` 时，写入时会自动跳过 `content` 字段（该字段仅 VikingDB 系后端使用），新增后端无需额外代码。
+
 目的：把后端特性差异收敛在 adapter 内。
 
 ---

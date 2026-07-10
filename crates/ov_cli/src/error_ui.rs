@@ -194,6 +194,9 @@ fn is_client_auth_error(status: Option<u16>, message: &str) -> bool {
     if matches!(status, Some(code) if (500..600).contains(&code)) {
         return false;
     }
+    if message.contains("Upstream model ") {
+        return false;
+    }
     looks_like_auth_error(message)
 }
 
@@ -1170,6 +1173,24 @@ Usage: ov config [OPTIONS] [COMMAND]
 
         assert!(normal.contains("Authentication Error"));
         assert!(normal.contains("OpenViking rejected the API key"));
+    }
+
+    #[test]
+    fn upstream_model_auth_error_is_not_cli_api_key_error() {
+        let error = Error::api_with_status(
+            "[UNAUTHENTICATED] Upstream model authentication failed: invalid api key".to_string(),
+            401,
+        );
+        let report = report_for_runtime_error("ov find hello", &error);
+        let normal = strip_ansi(&render_report(&report, false));
+        let verbose = strip_ansi(&render_report(&report, true));
+
+        assert!(normal.contains("OpenViking API Error"));
+        assert!(!normal.contains("Authentication Error"));
+        assert!(!normal.contains("OpenViking rejected the API key"));
+
+        assert!(verbose.contains("Detail:"));
+        assert!(verbose.contains("Upstream model authentication failed"));
     }
 
     #[test]

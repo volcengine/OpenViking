@@ -9,6 +9,7 @@ then delegates to MarkdownParser for tree structure creation.
 
 import asyncio
 import struct
+import zipfile
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -24,6 +25,7 @@ logger = get_logger(__name__)
 _MAX_STREAM_SIZE = 50 * 1024 * 1024
 # Max character count sanity cap for ccpText
 _MAX_CCP_TEXT = 10_000_000
+_ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 
 
 class LegacyDocParser(BaseParser):
@@ -50,6 +52,28 @@ class LegacyDocParser(BaseParser):
         path = Path(source)
 
         if path.exists():
+            if self._has_zip_signature(path):
+                package_type = await asyncio.to_thread(self._classify_zip_package, path)
+                if package_type == "docx":
+                    # python-docx writes OOXML regardless of the filename suffix. This
+                    # also occurs in real uploads whose extension says .doc while the
+                    # payload is a modern Word ZIP package. Never pass those bytes to
+                    # the legacy UTF-16 fallback: it turns ZIP data into plausible but
+                    # meaningless Unicode and silently persists corrupted Markdown.
+                    from openviking.parse.parsers.word import WordParser
+
+                    logger.info(
+                        "Detected OOXML Word content in %s; routing to WordParser",
+                        path.name,
+                    )
+                    return await WordParser(config=self.config).parse(
+                        path,
+                        instruction=instruction,
+                        **kwargs,
+                    )
+
+                raise ValueError(f"{path.name} is a ZIP package, not a legacy Word .doc file")
+
             text = await asyncio.to_thread(self._extract_text, path)
             result = await self._md_parser.parse_content(
                 text, source_path=str(path), instruction=instruction, **kwargs
@@ -61,6 +85,29 @@ class LegacyDocParser(BaseParser):
         result.source_format = "doc"
         result.parser_name = "LegacyDocParser"
         return result
+
+    @staticmethod
+    def _has_zip_signature(path: Path) -> bool:
+        """Return whether the payload starts with a recognized ZIP signature."""
+        with path.open("rb") as file_obj:
+            return file_obj.read(4) in _ZIP_SIGNATURES
+
+    @staticmethod
+    def _classify_zip_package(path: Path) -> str:
+        """Identify a ZIP-backed Word package without extracting archive members."""
+        try:
+            with zipfile.ZipFile(path) as archive:
+                try:
+                    archive.getinfo("[Content_Types].xml")
+                    archive.getinfo("word/document.xml")
+                except KeyError:
+                    return "zip"
+                return "docx"
+        except (zipfile.BadZipFile, zipfile.LargeZipFile):
+            # A payload with ZIP magic is still not a legacy OLE .doc. Classify
+            # malformed archives as generic ZIP so callers fail closed instead of
+            # feeding binary bytes into the permissive legacy text fallback.
+            return "zip"
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs

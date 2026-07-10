@@ -962,6 +962,8 @@ class VikingFS:
             return "fs"
 
         backend_type = getattr(vector_store, "_backend_type", "unknown")
+        # Keep this set consistent with ``CollectionAdapter.USE_CONTENT_FIELD``:
+        # only these backends store the ``content`` field required for full-text grep.
         if backend_type not in ("volcengine", "vikingdb"):
             return "fs"
 

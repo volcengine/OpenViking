@@ -168,9 +168,17 @@ class _SingleAccountBackend:
         except Exception:
             pass
 
-        content = result.get("content")
-        if isinstance(content, (str, bytes)):
-            result["content"] = content[:VIKINGDB_CONTENT_MAX_SIZE]
+        # ``content`` (full text) is only meaningful for VikingDB-backed backends,
+        # which use it for server-side full-text grep. Every other backend leaves
+        # ``USE_CONTENT_FIELD=False`` and gets ``content`` dropped here, so its large
+        # payload can't blow past the local engine's per-field byte limit. A new backend
+        # that doesn't need ``content`` requires no extra code.
+        if self._adapter.USE_CONTENT_FIELD:
+            content = result.get("content")
+            if isinstance(content, (str, bytes)):
+                result["content"] = content[:VIKINGDB_CONTENT_MAX_SIZE]
+        else:
+            result.pop("content", None)
 
         return result
 
