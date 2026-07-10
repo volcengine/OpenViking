@@ -199,7 +199,7 @@ class HierarchicalRetriever:
                     context_type=context_type,
                     target_directories=target_dirs,
                     extra_filter=scope_dsl,
-                    level=[0, 1],
+                    level=[0, 1, 2] if level is None else [0, 1],
                     limit=max(limit, self.GLOBAL_SEARCH_TOPK),
                 )
             telemetry.count("vector.searches", 1)
@@ -251,6 +251,15 @@ class HierarchicalRetriever:
             if level is not None:
                 for result, score in zip(global_results, directory_scores, strict=True):
                     if result.get("level", 2) not in level:
+                        continue
+                    candidate = dict(result)
+                    candidate["_score"] = score
+                    initial_candidates.append(candidate)
+            else:
+                # When no explicit level filter, include document-level (L2) hits
+                # from the global search as initial candidates (matching 0.4.5 behavior).
+                for result, score in zip(global_results, directory_scores, strict=True):
+                    if result.get("level", 2) != 2:
                         continue
                     candidate = dict(result)
                     candidate["_score"] = score
