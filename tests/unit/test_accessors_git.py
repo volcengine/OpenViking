@@ -4,7 +4,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -152,3 +152,43 @@ class TestGitAccessor:
     def test_cannot_handle_other_urls(self, accessor: GitAccessor, source: str) -> None:
         """GitAccessor should not handle non-git URLs or files."""
         assert accessor.can_handle(source) is False
+
+    async def test_git_clone_does_not_fetch_submodules(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        with patch.object(accessor, "_run_git", new_callable=AsyncMock) as run_git:
+            await accessor._git_clone("https://github.com/volcengine/OpenViking.git", str(tmp_path))
+
+        clone_args = run_git.await_args.args[0]
+        assert "--no-recurse-submodules" in clone_args
+        assert "--recursive" not in clone_args
+
+    async def test_github_archive_encodes_fragment_in_ref(
+        self, accessor: GitAccessor, tmp_path: Path
+    ) -> None:
+        with patch(
+            "openviking.parse.accessors.git_accessor.urllib.request.urlopen",
+            side_effect=OSError("stop before network"),
+        ) as urlopen:
+            with pytest.raises(RuntimeError):
+                await accessor._github_zip_download(
+                    "https://github.com/example/repo", "test#ssrf", str(tmp_path)
+                )
+
+        request = urlopen.call_args.args[0]
+        assert request.full_url == "https://github.com/example/repo/archive/test%23ssrf.zip"
+
+    async def test_git_error_does_not_expose_remote_stderr(self, accessor: GitAccessor) -> None:
+        process = SimpleNamespace(
+            returncode=1,
+            communicate=AsyncMock(return_value=(b"", b"remote: internal metadata")),
+        )
+        with patch(
+            "openviking.parse.accessors.git_accessor.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ):
+            with pytest.raises(RuntimeError) as exc_info:
+                await accessor._run_git(["git", "clone", "https://github.com/example/repo"])
+
+        assert str(exc_info.value) == "Git command failed."
+        assert "internal metadata" not in str(exc_info.value)
