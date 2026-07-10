@@ -512,6 +512,58 @@ def test_tau2_configure_tools_removes_only_openviking_tools():
     assert normalize_tau2_experience_loader_mode("direct_experience") == "direct_experience"
 
 
+@pytest.mark.asyncio
+async def test_tau2_search_experience_summary_only_exposes_case_name_and_experience_snippets():
+    from benchmark.tau2.train.rollout_executor_vikingbot import _experience_search_summary
+
+    case_uri = "viking://user/u/memories/cases/case_1.md"
+    exp_uri = "viking://user/u/memories/experiences/keep_scope.md"
+
+    class FakeClient:
+        async def read_content(self, uri, level="read"):
+            assert level == "read"
+            if uri == case_uri:
+                return (
+                    "# case_1\n\n"
+                    "## Task Signature\nsecret task signature\n\n"
+                    "## Input\nsecret case input\n\n"
+                    "## Linked Experiences\n"
+                    f"- [keep_scope]({exp_uri})\n"
+                )
+            if uri == exp_uri:
+                return (
+                    "## Situation\n"
+                    "- Applies when: 用户请求汇总值且后续写入改变对象集合\n"
+                    "- Source binding: 用户请求时的对象范围\n\n"
+                    "## Reminder\n- keep original scope\n"
+                )
+            raise AssertionError(f"unexpected uri: {uri}")
+
+    summary = await _experience_search_summary(
+        FakeClient(),
+        {"uri": case_uri, "score": 0.99, "abstract": "secret abstract"},
+        rank=1,
+    )
+
+    assert summary == {
+        "rank": 1,
+        "case_name": "case_1",
+        "experiences": [
+            {
+                "uri": exp_uri,
+                "situation": (
+                    "- Applies when: 用户请求汇总值且后续写入改变对象集合 "
+                    "- Source binding: 用户请求时的对象范围"
+                ),
+            }
+        ],
+    }
+    assert "case_uri" not in summary
+    assert "case_abstract" not in summary
+    assert "task_signature" not in summary
+    assert "input_summary" not in summary
+
+
 def test_tau2_rollout_backend_factory_defaults_to_native():
     from benchmark.tau2.train.rollout_executor import (
         NativeTau2RolloutExecutor,

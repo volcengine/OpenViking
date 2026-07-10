@@ -228,8 +228,9 @@ def _make_search_experience_tool():
         def description(self) -> str:
             return (
                 "Search OpenViking case memories under the current user, read each matched "
-                "case's Linked Experiences section, and return candidate case summaries plus "
-                "linked experience URIs. Use read_experience to open selected experience URIs."
+                "case's Linked Experiences section, and return candidate case names plus "
+                "linked experience URIs and Situation snippets. Use read_experience to open "
+                "selected experience URIs."
             )
 
         @property
@@ -357,20 +358,6 @@ def _case_uri(item: Any) -> str:
     return str(getattr(item, "uri", "") or "")
 
 
-def _case_score(item: Any) -> float:
-    value = item.get("score", 0.0) if isinstance(item, dict) else getattr(item, "score", 0.0)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _case_abstract(item: Any) -> str:
-    return str(
-        item.get("abstract", "") if isinstance(item, dict) else getattr(item, "abstract", "") or ""
-    )
-
-
 def _filename_name(uri: str) -> str:
     return str(uri or "").rstrip("/").rsplit("/", 1)[-1].removesuffix(".md")
 
@@ -381,14 +368,6 @@ def _markdown_section(content: str, heading: str) -> str:
         content or "",
     )
     return match.group(1).strip() if match else ""
-
-
-def _parse_json_object(value: str) -> dict[str, Any]:
-    try:
-        parsed = json.loads(str(value or "").strip())
-    except Exception:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
 
 
 def _shorten(value: Any, limit: int = 240) -> str:
@@ -410,10 +389,7 @@ async def _experience_search_summary(client: Any, item: Any, rank: int) -> dict[
     case_uri = _case_uri(item)
     summary: dict[str, Any] = {
         "rank": rank,
-        "score": round(_case_score(item), 6),
         "case_name": _filename_name(case_uri),
-        "case_uri": case_uri,
-        "case_abstract": _shorten(_case_abstract(item), 360),
         "experiences": [],
     }
     if not case_uri:
@@ -422,15 +398,11 @@ async def _experience_search_summary(client: Any, item: Any, rank: int) -> dict[
         content = await client.read_content(case_uri, level="read")
     except Exception:
         return summary
-    input_text = _markdown_section(content, "Input")
-    input_obj = _parse_json_object(input_text)
     exp_uris = _linked_experience_uris(content, source_uri=case_uri)
     # ponytail: fetch Situation snippet per experience so agent can gate read_experience on applicability.
     experiences: list[dict[str, Any]] = []
-    for idx, exp_uri in enumerate(exp_uris, start=1):
+    for exp_uri in exp_uris:
         exp_entry: dict[str, Any] = {
-            "index": idx,
-            "name": _filename_name(exp_uri),
             "uri": exp_uri,
             "situation": "",
         }
@@ -442,13 +414,7 @@ async def _experience_search_summary(client: Any, item: Any, rank: int) -> dict[
         # ponytail: cap at ~600 chars per exp to bound search-result tokens; exclusions ("不适用于"/"not apply") are preserved.
         exp_entry["situation"] = _shorten(situation, 600)
         experiences.append(exp_entry)
-    summary.update(
-        {
-            "task_signature": _shorten(_markdown_section(content, "Task Signature")),
-            "input_summary": _shorten(input_obj.get("summary") if input_obj else input_text),
-            "experiences": experiences,
-        }
-    )
+    summary["experiences"] = experiences
     return summary
 
 
