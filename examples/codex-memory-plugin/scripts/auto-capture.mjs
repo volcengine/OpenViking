@@ -8,14 +8,14 @@
  *
  * Strategy:
  *   1. For this codex session_id, derive one long-lived OpenViking session
- *      id (`cx-<codex-session-id>`) and remember it in state. Do NOT commit
- *      per turn.
+ *      id (`cx-<codex-session-id>`) and remember it in state.
  *   2. Read transcript_path, parse JSONL rollout, append every new
  *      user/assistant turn since last capture via add_message.
+ *   3. If session pending_tokens crosses commitTokenThreshold, commit while
+ *      keeping a recent live tail for continuity.
  *
- * Commit happens in two other places, never here:
- *   - PreCompact hook (deterministic, before context compaction)
- *   - SessionStart hook (active-window heuristic + idle-TTL sweep at tail)
+ * PreCompact still commits deterministically before context compaction, and
+ * SessionStart still handles orphaned sessions / idle TTL sweep.
  *
  * Stop output schema accepts {} as a no-op.
  *
@@ -27,17 +27,16 @@
 
 import { readFile } from "node:fs/promises";
 import {
-  extractTextFromPayload,
-  isAssistantSideCaptureRole,
-  normalizeCaptureRole,
-  shouldCaptureText,
+  extractCaptureTurns,
 } from "./capture-utils.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { loadState, resolveOvSessionId, saveState } from "./session-state.mjs";
+import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-capture");
+let activePeerId = cfg.peerId || "";
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -58,7 +57,7 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
+    if (activePeerId) headers["X-OpenViking-Actor-Peer"] = activePeerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return null;
@@ -89,22 +88,7 @@ function parseTranscript(content) {
 }
 
 function extractTurns(rolloutEntries) {
-  const turns = [];
-  for (const entry of rolloutEntries) {
-    if (!entry || typeof entry !== "object") continue;
-    const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
-    const message = payload.message && typeof payload.message === "object" ? payload.message : null;
-    const rawRole = message?.role || payload.role || payload.type || payload.kind;
-    const role = normalizeCaptureRole(rawRole);
-    if (!role) continue;
-    if (isAssistantSideCaptureRole(rawRole) && !cfg.captureAssistantTurns) continue;
-
-    const rawText = extractTextFromPayload(payload, { toolMaxChars: cfg.captureToolMaxChars });
-    const decision = shouldCaptureText(rawText, role, cfg);
-    if (!decision.shouldCapture) continue;
-    turns.push({ role, text: decision.text });
-  }
-  return turns;
+  return extractCaptureTurns(rolloutEntries, cfg);
 }
 
 async function readTranscriptTurns(transcriptPath) {
@@ -131,8 +115,10 @@ function selectStopTurns(state, turns) {
 async function appendTurns(ovSessionId, turns, state) {
   let appended = 0;
   for (const turn of turns) {
-    const body = { role: turn.role, content: turn.text };
-    if (cfg.peerId) body.peer_id = cfg.peerId;
+    const body = turn.parts?.length
+      ? { role: turn.role, parts: turn.parts }
+      : { role: turn.role, content: turn.text };
+    if (activePeerId) body.peer_id = activePeerId;
     const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -143,6 +129,35 @@ async function appendTurns(ovSessionId, turns, state) {
     await saveState(state);
   }
   return appended;
+}
+
+async function maybeCommitByThreshold(ovSessionId, added) {
+  if (added <= 0) return { committed: false, pendingTokens: 0, commitCount: 0, totalMessageCount: 0 };
+  const meta = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}`);
+  const pendingTokens = Number(meta?.pending_tokens || 0);
+  const commitCount = Number(meta?.commit_count || 0);
+  const totalMessageCount = Number(meta?.total_message_count || 0);
+  log("pending_tokens", {
+    ovSessionId,
+    pending: pendingTokens,
+    threshold: cfg.commitTokenThreshold,
+    keepRecentCount: cfg.commitKeepRecentCount,
+  });
+  if (pendingTokens < cfg.commitTokenThreshold) {
+    return { committed: false, pendingTokens, commitCount, totalMessageCount };
+  }
+  const commit = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
+    method: "POST",
+    body: JSON.stringify({ keep_recent_count: cfg.commitKeepRecentCount }),
+  });
+  const committed = Boolean(commit);
+  log("commit", { ovSessionId, ok: committed, pending: pendingTokens });
+  return {
+    committed,
+    pendingTokens,
+    commitCount: committed ? commitCount + 1 : commitCount,
+    totalMessageCount,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +184,9 @@ async function main() {
 
   const sessionId = input.session_id || "unknown";
   const transcriptPath = input.transcript_path || null;
-  log("start", { sessionId, transcriptPath });
+  const state = await loadState(sessionId);
+  activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd: process.cwd() }).peerId;
+  log("start", { sessionId, transcriptPath, hasPeer: Boolean(activePeerId) });
 
   const health = await fetchJSON("/health");
   if (!health) {
@@ -178,7 +195,6 @@ async function main() {
     return;
   }
 
-  const state = await loadState(sessionId);
   const allTurns = await readTranscriptTurns(transcriptPath);
 
   // Post-compact transcript-shrink defense: codex's /compact may rewrite or
@@ -210,8 +226,10 @@ async function main() {
   }
 
   let added = 0;
+  let ovSessionId = "";
+  let commitInfo = { committed: false, pendingTokens: 0, commitCount: 0, totalMessageCount: 0 };
   if (newTurns.length > 0) {
-    const ovSessionId = resolveOvSessionId(state);
+    ovSessionId = resolveOvSessionId(state);
     if (!ovSessionId) {
       logError("resolve_ov_session", "failed to derive OV session id");
     } else {
@@ -219,6 +237,7 @@ async function main() {
       await saveState(state);
       added = await appendTurns(ovSessionId, turnsToAppend, state);
       log("appended", { ovSessionId, added });
+      commitInfo = await maybeCommitByThreshold(ovSessionId, added);
     }
   }
 
@@ -227,7 +246,10 @@ async function main() {
   // could also sweep here, deliberately not — see header comment + DESIGN.md §5.
 
   if (added > 0) {
-    noop(`appended ${added} turn(s) to OpenViking session ${state.ovSessionId}`);
+    noop(
+      `appended ${added} turn(s) to OpenViking session ${state.ovSessionId}` +
+      (commitInfo.committed ? " (committed)" : ""),
+    );
   } else {
     noop();
   }

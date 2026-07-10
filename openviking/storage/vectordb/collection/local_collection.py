@@ -134,6 +134,7 @@ class LocalCollection(ICollection):
             ENV_INDEX_MAINTENANCE_SECONDS,
             DEFAULT_INDEX_MAINTENANCE_SECONDS,
         )
+        self.dense_search_config = dict((config or {}).get("dense_search", {}))
 
         self.store_mgr: Optional[StoreManager] = store_mgr
         self.data_processor = DataProcessor(
@@ -911,6 +912,7 @@ class VolatileCollection(LocalCollection):
             name=index_name,
             meta=meta,
             cands_list=cands_list,
+            dense_search_config=self.dense_search_config,
         )
         return index
 
@@ -944,6 +946,9 @@ class PersistCollection(LocalCollection):
                 pass
         if index_count > 0:
             logger.info("Recovering %d index(es) from %s", index_count, self.index_dir)
+        recovery_candidates = (
+            self.store_mgr.get_all_cands_data() if self.store_mgr is not None else []
+        )
         for folder in os.listdir(self.index_dir):
             try:
                 index_dir = safe_join(self.index_dir, folder)
@@ -975,7 +980,12 @@ class PersistCollection(LocalCollection):
             # all data from the delta log (CandidateData) regardless of when that data was created.
             # If we used the default (current time), the index would ignore older data in the log.
             index = PersistentIndex(
-                name=index_name, path=self.index_dir, meta=meta, initial_timestamp=0
+                name=index_name,
+                path=self.index_dir,
+                meta=meta,
+                cands_list=recovery_candidates,
+                initial_timestamp=0,
+                dense_search_config=self.dense_search_config,
             )
             newest_version = index.get_newest_version()
             if not self.store_mgr:
@@ -1130,6 +1140,7 @@ class PersistCollection(LocalCollection):
             meta=meta,
             cands_list=cands_list,
             force_rebuild=force_rebuild,
+            dense_search_config=self.dense_search_config,
         )
         return index
 

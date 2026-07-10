@@ -303,6 +303,7 @@ jobs:
 
         cd "$RUNNER_TEMP"
         "$PYTHON_BIN" - <<'PY'
+        import importlib
         import importlib.util
         from importlib.resources import files
 
@@ -322,12 +323,37 @@ jobs:
         if backend_spec is None or backend_spec.origin is None:
             raise SystemExit(f"backend module {module_name} was not installed")
 
+        backend = importlib.import_module(module_name)
+        required_filter_symbols = (
+            "_index_engine_set_filter_layout",
+            "_index_engine_evaluate_filter",
+        )
+        missing_filter_symbols = [
+            symbol for symbol in required_filter_symbols if not hasattr(backend, symbol)
+        ]
+        if missing_filter_symbols:
+            raise SystemExit(
+                f"backend module {module_name} is missing filter ABI symbols: "
+                f"{', '.join(missing_filter_symbols)}"
+            )
+
+        required_filter_methods = ("set_filter_layout", "evaluate_filter")
+        missing_filter_methods = [
+            method for method in required_filter_methods if not hasattr(engine.IndexEngine, method)
+        ]
+        if missing_filter_methods:
+            raise SystemExit(
+                "IndexEngine is missing filter methods: "
+                f"{', '.join(missing_filter_methods)}"
+            )
+
         studio_index = files("openviking").joinpath("web_studio/dist/index.html")
         if not studio_index.is_file():
             raise SystemExit("Web Studio index.html was not installed")
 
         print(f"Imported backend module {module_name}")
         print(f"Backend module origin {backend_spec.origin}")
+        print(f"Validated filter ABI symbols {required_filter_symbols}")
         print(f"Bundled Web Studio index {studio_index}")
         PY
 

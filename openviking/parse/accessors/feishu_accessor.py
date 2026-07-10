@@ -10,18 +10,26 @@ Note: This accessor requires the `lark-oapi` package.
 Included by default in `openviking[bot]` installation.
 """
 
+import asyncio
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, NoReturn, Optional, Tuple, Union
 from urllib.parse import urlparse
 
+from openviking.utils.exceptions import error_code_from_http_status
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
+from .mime_types import get_preferred_extension
 
 logger = get_logger(__name__)
+
+_FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
+_FEISHU_DOCUMENT_FORBIDDEN = 1770032
 
 
 def _getattr_safe(obj, key: str, default=None):
@@ -29,6 +37,47 @@ def _getattr_safe(obj, key: str, default=None):
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _response_http_status(response: Any) -> int | None:
+    status = getattr(getattr(response, "raw", None), "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _raise_from_lark_response(
+    response: Any,
+    *,
+    operation: str,
+    resource: str | None = None,
+) -> NoReturn:
+    code = getattr(response, "code", None)
+    msg = getattr(response, "msg", None) or "Feishu API request failed"
+    http_status = _response_http_status(response)
+    details: dict[str, Any] = {
+        "operation": operation,
+        "feishu_code": code,
+        "feishu_msg": msg,
+        "http_status": http_status,
+    }
+    if resource:
+        details["resource"] = resource
+
+    logger.error(
+        "[FeishuAPI] %s failed: code=%s msg=%s http=%s",
+        operation,
+        code,
+        msg,
+        http_status,
+    )
+    raise OpenVikingError(
+        f"Feishu {operation} failed: code={code}, msg={msg}",
+        code=(
+            "PERMISSION_DENIED"
+            if code == _FEISHU_DOCUMENT_FORBIDDEN or "forbidden" in msg.lower()
+            else error_code_from_http_status(http_status)
+        ),
+        details=details,
+    )
 
 
 @dataclass
@@ -185,26 +234,48 @@ class FeishuAccessor(DataAccessor):
                 feishu_access_token=feishu_access_token,
             )
 
-            # Create temporary file
-            temp_file = tempfile.NamedTemporaryFile(
-                mode="w",
-                suffix=".md",
-                prefix="ov_feishu_",
-                delete=False,
+            # lark-oapi media downloads are synchronous; run them off the event
+            # loop so a slow Feishu request cannot block unrelated async work.
+            markdown_content, downloaded_images = await asyncio.to_thread(
+                self._resolve_image_refs,
+                doc.markdown_content,
+                feishu_access_token=feishu_access_token,
             )
-            temp_file.write(doc.markdown_content)
-            temp_file.close()
 
             # Build metadata
             meta = {
                 "feishu_doc_type": doc.doc_type,
                 "feishu_token": doc.token,
                 "feishu_title": doc.title,
+                "original_filename": doc.title,
                 **doc.meta,
             }
 
+            if downloaded_images:
+                temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_"))
+                markdown_path = temp_dir / "document.md"
+                markdown_path.write_text(markdown_content, encoding="utf-8")
+                for rel_path, image_bytes in downloaded_images.items():
+                    image_path = temp_dir / rel_path
+                    image_path.parent.mkdir(parents=True, exist_ok=True)
+                    image_path.write_bytes(image_bytes)
+                meta["_cleanup_path"] = str(temp_dir)
+                local_path = markdown_path
+            else:
+                # Create temporary file
+                temp_file = tempfile.NamedTemporaryFile(
+                    mode="w",
+                    suffix=".md",
+                    prefix="ov_feishu_",
+                    delete=False,
+                    encoding="utf-8",
+                )
+                temp_file.write(markdown_content)
+                temp_file.close()
+                local_path = Path(temp_file.name)
+
             return LocalResource(
-                path=Path(temp_file.name),
+                path=local_path,
                 source_type=SourceType.FEISHU,
                 original_source=source_str,
                 meta=meta,
@@ -226,8 +297,6 @@ class FeishuAccessor(DataAccessor):
 
         This method extracts and adapts the logic from FeishuParser.parse().
         """
-        import asyncio
-
         doc_type, token = self._parse_feishu_url(url)
         title = None
         meta = {}
@@ -319,8 +388,8 @@ class FeishuAccessor(DataAccessor):
                 import lark_oapi as lark
             except ImportError:
                 raise ImportError(
-                "lark-oapi is required for Feishu document parsing. "
-                "Install it with: pip install lark-oapi>=1.0.0"
+                    "lark-oapi is required for Feishu document parsing. "
+                    "Install it with: pip install lark-oapi>=1.0.0"
                 )
             config = self._get_config()
             app_id = config.app_id or os.getenv("FEISHU_APP_ID", "")
@@ -371,8 +440,10 @@ class FeishuAccessor(DataAccessor):
         else:
             response = client.wiki.v2.space.get_node(request, option)
         if not response.success():
-            raise RuntimeError(
-                f"Failed to resolve wiki node {token}: code={response.code}, msg={response.msg}"
+            _raise_from_lark_response(
+                response,
+                operation=f"resolve wiki node {token}",
+                resource=token,
             )
         node = response.data.node
         obj_type = node.obj_type or ""
@@ -467,9 +538,10 @@ class FeishuAccessor(DataAccessor):
                 response = client.docx.v1.document_block.list(request, option)
 
             if not response.success():
-                raise RuntimeError(
-                    f"Failed to fetch blocks for {document_id}: "
-                    f"code={response.code}, msg={response.msg}"
+                _raise_from_lark_response(
+                    response,
+                    operation=f"fetch blocks for {document_id}",
+                    resource=document_id,
                 )
 
             items = response.data.items or []
@@ -589,6 +661,167 @@ class FeishuAccessor(DataAccessor):
         file_token = image.token or ""
         alt_text = getattr(image, "alt", "") or "image"
         return f"![{alt_text}](feishu://image/{file_token})"
+
+    # Image byte-magic signatures → file extension. Sniffed from the raw bytes
+    # first, since the actual content is authoritative over a (possibly generic
+    # or wrong) Content-Type header.
+    _IMAGE_MAGIC = (
+        (b"\x89PNG\r\n\x1a\n", ".png"),
+        (b"\xff\xd8\xff", ".jpg"),
+        (b"GIF87a", ".gif"),
+        (b"GIF89a", ".gif"),
+        (b"BM", ".bmp"),
+    )
+
+    @classmethod
+    def _guess_image_ext(cls, content: bytes, content_type: Optional[str]) -> str:
+        """Infer an image file extension from the bytes, then Content-Type.
+
+        Feishu media are not guaranteed to be PNG, so we avoid a hardcoded
+        extension that would misrepresent JPEG/WebP/GIF bytes to downstream
+        consumers (e.g. emitting JPEG bytes as ``data:image/png``). Byte magic
+        is checked first because the payload is authoritative; the response
+        Content-Type is only a fallback for formats we do not sniff here.
+        """
+        # WebP: "RIFF....WEBP"
+        if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+            return ".webp"
+        for magic, ext in cls._IMAGE_MAGIC:
+            if content.startswith(magic):
+                return ext
+        if content_type:
+            ext = get_preferred_extension(content_type)
+            if ext:
+                return ext
+        return ".png"
+
+    @staticmethod
+    def _image_filename(file_token: str, ext: str = ".png") -> str:
+        """Return a conservative local filename for a Feishu media token."""
+        safe_token = re.sub(r"[^A-Za-z0-9_.-]+", "_", file_token).strip("._")
+        if not ext.startswith("."):
+            ext = f".{ext}"
+        return f"{safe_token or 'image'}{ext}"
+
+    def _download_image(
+        self,
+        file_token: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> Optional[Tuple[bytes, Optional[str]]]:
+        """Download an image from Feishu Drive API by file token.
+
+        Returns a ``(content, content_type)`` tuple, or ``None`` on failure.
+        """
+        import lark_oapi as lark
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        # Match the auth mode used to fetch the document: with a user access
+        # token the request must advertise USER, otherwise lark-oapi never
+        # injects it (see lark_oapi.core.token.auth.verify) and the download
+        # silently fails — dropping images from user-token imports.
+        token_type = (
+            lark.AccessTokenType.USER if feishu_access_token else lark.AccessTokenType.TENANT
+        )
+        raw_req = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/drive/v1/medias/{file_token}/download")
+            .token_types({token_type})
+            .build()
+        )
+        option = self._user_request_option(feishu_access_token)
+
+        try:
+            raw_resp = (
+                client.request(raw_req) if option is None else client.request(raw_req, option)
+            )
+        except Exception as exc:
+            logger.warning("[FeishuAccessor] Error downloading image %s: %s", file_token, exc)
+            return None
+
+        if not raw_resp.success():
+            raw = getattr(raw_resp, "raw", None)
+            http_status = getattr(raw, "status_code", None)
+            detail = getattr(raw_resp, "msg", "") or f"HTTP {http_status}"
+            if http_status == 403:
+                detail = f"{detail} (missing Feishu permission docs:document.media:download)"
+            logger.warning(
+                "[FeishuAccessor] Failed to download image %s: code=%s, http=%s, msg=%s",
+                file_token,
+                getattr(raw_resp, "code", None),
+                http_status,
+                detail,
+            )
+            return None
+
+        raw = getattr(raw_resp, "raw", None)
+        content = getattr(raw, "content", None)
+        if not content:
+            logger.warning("[FeishuAccessor] Empty image response for %s", file_token)
+            return None
+        return content, self._response_content_type(raw)
+
+    @staticmethod
+    def _response_content_type(raw) -> Optional[str]:
+        """Best-effort extraction of the Content-Type header from a lark raw response."""
+        headers = getattr(raw, "headers", None)
+        if not headers:
+            return None
+        # lark's raw.headers may be a plain dict or a case-insensitive mapping.
+        try:
+            get = headers.get
+        except AttributeError:
+            return None
+        return get("Content-Type") or get("content-type")
+
+    def _resolve_image_refs(
+        self,
+        markdown: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> Tuple[str, Dict[str, bytes]]:
+        """Download Feishu image refs and rewrite them to local relative paths."""
+        config = self._get_config()
+        if not getattr(config, "download_images", True):
+            return markdown, {}
+
+        matches = list(_FEISHU_IMAGE_RE.finditer(markdown))
+        if not matches:
+            return markdown, {}
+
+        token_to_rel_path: Dict[str, str] = {}
+        downloaded_images: Dict[str, bytes] = {}
+        for match in matches:
+            file_token = match.group(2)
+            if file_token in token_to_rel_path:
+                continue
+
+            downloaded = self._download_image(
+                file_token,
+                feishu_access_token=feishu_access_token,
+            )
+            if downloaded is None:
+                continue
+            image_bytes, content_type = downloaded
+
+            ext = self._guess_image_ext(image_bytes, content_type)
+            rel_path = f"images/{self._image_filename(file_token, ext)}"
+            token_to_rel_path[file_token] = rel_path
+            downloaded_images[rel_path] = image_bytes
+
+        if not downloaded_images:
+            return markdown, {}
+
+        def _replace(match: re.Match[str]) -> str:
+            alt_text = match.group(1)
+            file_token = match.group(2)
+            rel_path = token_to_rel_path.get(file_token)
+            if not rel_path:
+                return match.group(0)
+            return f"![{alt_text}]({rel_path})"
+
+        return _FEISHU_IMAGE_RE.sub(_replace, markdown), downloaded_images
 
     def _extract_block_text(self, block, attr_name: str) -> str:
         """Extract text from a block's named attribute (e.g. block.text, block.heading2)."""

@@ -38,6 +38,12 @@ from openviking.parse.parsers.code.ast.code_tools import (
     outline_file,
     search_symbols,
 )
+from openviking.retrieve.type_quota_recall import (
+    DEFAULT_MAX_CHARS,
+    DEFAULT_MIN_SCORE,
+    DEFAULT_QUOTAS,
+    search_type_quota_recall,
+)
 from openviking.server.auth import resolve_actor_peer_headers, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
@@ -291,6 +297,34 @@ def _format_search_result(result) -> str:
         + "\n".join(lines)
         + "\n\nUse the read tool to expand a URI."
     )
+
+
+@mcp.tool()
+async def recall(
+    query: str,
+    quotas: Optional[dict[str, int]] = None,
+    max_chars: int = DEFAULT_MAX_CHARS,
+    min_score: float = DEFAULT_MIN_SCORE,
+    peer_scope: str = "all",
+    other_peer_penalty: Optional[Any] = None,
+) -> str:
+    """Type-quota memory recall. Searches events, entities, preferences, and experiences separately, then returns a bounded memory_group block."""
+    service = get_service()
+    effective_peer_scope = "actor" if peer_scope == "actor" else "all"
+    result = await search_type_quota_recall(
+        service=service,
+        ctx=_get_ctx(),
+        query=query,
+        quotas=quotas or DEFAULT_QUOTAS,
+        max_chars=max(1, int(max_chars)),
+        min_score=min_score,
+        peer_scope=effective_peer_scope,
+        other_peer_penalty=other_peer_penalty,
+        render=True,
+    )
+    if result.rendered.strip():
+        return result.rendered
+    return "No relevant memories found."
 
 
 # -- read ------------------------------------------------------------------

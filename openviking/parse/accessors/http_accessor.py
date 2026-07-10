@@ -578,8 +578,10 @@ class HTTPAccessor(DataAccessor):
                     raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
                 except httpx.HTTPStatusError as e:
                     status_code = e.response.status_code if e.response else "unknown"
-                    if status_code == 401 or status_code == 403:
+                    if status_code == 401:
                         user_msg = f"HTTP request failed: authentication error ({status_code}). Check your credentials or permissions."
+                    elif status_code == 403:
+                        user_msg = f"HTTP request failed: access denied ({status_code}). The site blocked the request (login or anti-bot may be required)."
                     elif status_code == 404:
                         user_msg = f"HTTP request failed: not found ({status_code}). The URL may be invalid or the resource was removed."
                     elif 500 <= status_code < 600:

@@ -31,6 +31,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -51,8 +52,11 @@ function stateFile(subagentId) {
   return join(STATE_DIR, `${safe}.json`);
 }
 
-function peerIdFromSubagent(subagentId) {
+function peerIdFromSubagent(subagentId, state, sessionId, cwd) {
   if (cfg.peerId) return cfg.peerId;
+  if (state?.peerId) return state.peerId;
+  const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
+  if (effectivePeer.peerId) return effectivePeer.peerId;
   return String(subagentId || "").replace(/[^A-Za-z0-9._-]/g, "-") || null;
 }
 
@@ -330,7 +334,7 @@ async function main() {
     return;
   }
 
-  const peerId = peerIdFromSubagent(subagentId);
+  const peerId = peerIdFromSubagent(subagentId, state, sessionId, cwd);
   const fetchJSON = makeFetchJSON(cfg);
   const health = await fetchJSON("/health");
   let result;

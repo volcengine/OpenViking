@@ -534,11 +534,11 @@ async def test_glob_normalizes_scope_uri():
         "matches": ["viking://resources/demo.md"],
     }
 
-    await client.glob("*.md", uri="/resources/")
+    await client.glob("**/*.md", uri="/resources/")
 
     fake_http.post.assert_awaited_once_with(
         "/api/v1/search/glob",
-        json={"pattern": "*.md", "uri": "viking://resources/"},
+        json={"pattern": "**/*.md", "uri": "viking://resources/"},
     )
 
 

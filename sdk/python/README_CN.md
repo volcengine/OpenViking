@@ -182,6 +182,13 @@ result = client.find("hello", limit=5)
 print(result)
 ```
 
+图片搜索也使用同一组方法。`image` 支持本地路径、bytes、data URI、HTTP URL 或 `viking://` URI；服务端需要使用 multimodal embedding 模型。
+
+```python
+result = client.find(image="/path/to/photo.png", limit=5)
+result = client.search("similar poster", image="viking://resources/poster.png")
+```
+
 ## 管理员操作
 
 如果你使用 root key 连接，SDK 也暴露了管理员 API，例如：

@@ -22,7 +22,7 @@ use crate::shape::SHAPE_MANIFEST_PATH;
 use super::context::FsContextView;
 use super::errors::{Error, Result};
 use super::filesystem::{compile_grep_regex, normalize_prefix_path, FileSystem};
-use super::types::{FileInfo, GrepResult, TreeEntry, WriteFlag};
+use super::types::{FileInfo, GlobPage, GrepResult, TreeEntry, WriteFlag};
 
 const SYSTEM_ACCOUNT_ID: &str = "_system";
 const TEMP_ROOT_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
@@ -436,6 +436,31 @@ impl FileSystem for EncryptionWrappedFS {
             .into_iter()
             .filter(|entry| !Self::is_shape_manifest_path(&entry.path))
             .collect())
+    }
+
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let mut page = self
+            .inner
+            .glob_directory(
+                path,
+                pattern,
+                show_hidden,
+                page_size,
+                level_limit,
+                continuation_token,
+            )
+            .await?;
+        page.entries
+            .retain(|entry| !Self::is_shape_manifest_path(&entry.path));
+        Ok(page)
     }
 
     async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> Result<()> {

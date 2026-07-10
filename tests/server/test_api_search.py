@@ -1007,7 +1007,7 @@ async def test_glob(client_with_resource):
     client, _ = client_with_resource
     resp = await client.post(
         "/api/v1/search/glob",
-        json={"pattern": "*.md"},
+        json={"pattern": "**/*.md"},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"

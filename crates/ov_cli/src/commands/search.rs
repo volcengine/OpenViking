@@ -120,6 +120,7 @@ pub async fn find(
     client: &HttpClient,
     query: &str,
     uri: &str,
+    image: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
     since: Option<&str>,
@@ -135,6 +136,7 @@ pub async fn find(
         .find(
             query.to_string(),
             uri.to_string(),
+            image,
             node_limit,
             threshold,
             since.map(|s| s.to_string()),
@@ -158,6 +160,7 @@ pub async fn search(
     client: &HttpClient,
     query: &str,
     uri: &str,
+    image: Option<String>,
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
@@ -174,6 +177,7 @@ pub async fn search(
         .search(
             query.to_string(),
             uri.to_string(),
+            image,
             session_id,
             node_limit,
             threshold,

@@ -22,7 +22,7 @@ The following platforms have been successfully integrated with OpenViking MCP:
 | **Trae** | Standard MCP config |
 | **Cursor** | Standard MCP config |
 | **ChatGPT & Codex** | Standard MCP config |
-| **OpenCode** | Standard MCP config |
+| **OpenCode** | Native OpenCode `mcp` config |
 | **Manus** | Standard MCP config |
 | **Claude.ai / Claude Desktop** | Native OAuth 2.1 (see [11-oauth](11-oauth.md)) |
 
@@ -81,6 +81,26 @@ Or in `.mcp.json`:
 ```
 
 Add `--scope user` to make the config global (shared across all projects).
+
+### OpenCode
+
+Configure `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "openviking": {
+      "type": "remote",
+      "url": "https://your-server.com/mcp",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
+      }
+    }
+  }
+}
+```
 
 ### Claude.ai / Claude Desktop (OAuth)
 

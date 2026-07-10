@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { OVClient } from "./client.js";
 import type { SyncManager } from "./sync.js";
 

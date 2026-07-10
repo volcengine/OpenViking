@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import inspect
+import mimetypes
+import os
 import tempfile
 import uuid
 import zipfile
@@ -58,6 +61,32 @@ ERROR_CODE_TO_EXCEPTION = {
     "SESSION_EXPIRED": SessionExpiredError,
     "UNKNOWN": OpenVikingError,
 }
+
+
+def _image_mime_type(file_name: str = "") -> str:
+    mime_type, _ = mimetypes.guess_type(file_name or "")
+    if mime_type and mime_type.startswith("image/"):
+        return mime_type
+    return "image/png"
+
+
+def _image_to_data_uri(data: bytes | bytearray | memoryview, file_name: str = "") -> str:
+    encoded = base64.b64encode(bytes(data)).decode("ascii")
+    return f"data:{_image_mime_type(file_name)};base64,{encoded}"
+
+
+def _normalize_image_input(image: Any) -> Optional[str]:
+    if image is None:
+        return None
+    if isinstance(image, (bytes, bytearray, memoryview)):
+        return _image_to_data_uri(image)
+    value = os.fspath(image) if isinstance(image, os.PathLike) else str(image)
+    if value.startswith(("data:image/", "http://", "https://", "viking://")):
+        return value
+    path = Path(value).expanduser()
+    if path.is_file():
+        return _image_to_data_uri(path.read_bytes(), path.name)
+    return value
 
 
 class VikingURI:
@@ -892,7 +921,7 @@ class AsyncHTTPClient:
 
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         node_limit: Optional[int] = None,
@@ -901,10 +930,12 @@ class AsyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
         payload = {
             "query": query,
+            "image_url": _normalize_image_input(image),
             "target_uri": self._normalize_target_uri(target_uri),
             "limit": actual_limit,
             "score_threshold": score_threshold,
@@ -919,7 +950,7 @@ class AsyncHTTPClient:
 
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session: Optional[Any] = None,
         session_id: Optional[str] = None,
@@ -930,11 +961,13 @@ class AsyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
         payload = {
             "query": query,
+            "image_url": _normalize_image_input(image),
             "target_uri": self._normalize_target_uri(target_uri),
             "session_id": sid,
             "limit": actual_limit,
@@ -953,25 +986,33 @@ class AsyncHTTPClient:
         uri: str,
         pattern: str,
         case_insensitive: bool = False,
-        node_limit: Optional[int] = None,
+        node_limit: int = 256,
         exclude_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         request_json = {
             "uri": VikingURI.normalize(uri),
             "pattern": pattern,
             "case_insensitive": case_insensitive,
+            "node_limit": node_limit,
         }
-        if node_limit is not None:
-            request_json["node_limit"] = node_limit
         if exclude_uri is not None:
             request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
         response = await self._http.post("/api/v1/search/grep", json=request_json)
         return self._handle_response(response)
 
-    async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
+    async def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: int = 256,
+    ) -> Dict[str, Any]:
         response = await self._http.post(
             "/api/v1/search/glob",
-            json={"pattern": pattern, "uri": VikingURI.normalize(uri)},
+            json={
+                "pattern": pattern,
+                "uri": VikingURI.normalize(uri),
+                "node_limit": node_limit,
+            },
         )
         return self._handle_response(response)
 
@@ -1632,9 +1673,7 @@ class SyncHTTPClient:
         skill_name: str,
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.delete_skill(skill_name, target_uri=target_uri)
-        )
+        return run_async(self._async_client.delete_skill(skill_name, target_uri=target_uri))
 
     def list_watches(
         self,
@@ -1800,7 +1839,7 @@ class SyncHTTPClient:
 
     def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         node_limit: Optional[int] = None,
@@ -1809,6 +1848,7 @@ class SyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.find(
@@ -1821,12 +1861,13 @@ class SyncHTTPClient:
                 context_type=context_type,
                 tags=tags,
                 telemetry=telemetry,
+                image=image,
             )
         )
 
     def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session: Optional[Any] = None,
         session_id: Optional[str] = None,
@@ -1837,6 +1878,7 @@ class SyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
     ) -> Dict[str, Any]:
         actual_session_id = session_id
         if actual_session_id is None and session is not None:
@@ -1853,6 +1895,7 @@ class SyncHTTPClient:
                 context_type=context_type,
                 tags=tags,
                 telemetry=telemetry,
+                image=image,
             )
         )
 
@@ -1861,7 +1904,7 @@ class SyncHTTPClient:
         uri: str,
         pattern: str,
         case_insensitive: bool = False,
-        node_limit: Optional[int] = None,
+        node_limit: int = 256,
         exclude_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
         return run_async(
@@ -1874,8 +1917,13 @@ class SyncHTTPClient:
             )
         )
 
-    def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
-        return run_async(self._async_client.glob(pattern, uri=uri))
+    def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: int = 256,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.glob(pattern, uri=uri, node_limit=node_limit))
 
     def relations(self, uri: str) -> List[Any]:
         return run_async(self._async_client.relations(uri))

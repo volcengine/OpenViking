@@ -180,6 +180,20 @@ export function resolveConnectionRoleProbeState({
   return { isLoading: true, role: 'unknown', shouldProbe: true }
 }
 
+export function shouldRedirectToLoginOnApiError(
+  error: unknown,
+  isClientError: (value: unknown) => boolean = isOvClientError,
+): boolean {
+  if (!isClientError(error)) {
+    return false
+  }
+
+  const clientError = error as { code?: string; statusCode?: number }
+  return (
+    clientError.statusCode === 401 || clientError.code === 'UNAUTHENTICATED'
+  )
+}
+
 function applyConnection(
   connection: ConnectionDraft,
   serverMode: ServerMode,
@@ -420,8 +434,7 @@ export function AppConnectionProvider({
       (response) => response,
       (error) => {
         if (
-          isOvClientError(error) &&
-          (error.statusCode === 401 || error.statusCode === 403) &&
+          shouldRedirectToLoginOnApiError(error) &&
           Date.now() >= authPromptSuppressedUntilRef.current
         ) {
           openConnectionSettings()

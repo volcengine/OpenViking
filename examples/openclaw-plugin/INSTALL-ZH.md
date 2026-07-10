@@ -27,13 +27,13 @@ openclaw plugins install clawhub:@openviking/openclaw-plugin
 | 组件 | 要求 |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.4.8 |
+| OpenClaw | >= 2026.5.27 |
 
 插件以远程模式连接到已有的 OpenViking 服务。它不会帮你启动 OpenViking server。需要先启动 OpenViking，并保持服务运行，再把插件的 `baseUrl` 指向这个 HTTP 服务。默认本地地址是 `http://127.0.0.1:1933`。
 
 OpenClaw 插件包版本边界：
 
-- `2026.4.8` 是当前插件支持的最低 OpenClaw 版本。
+- `2026.5.27` 是当前插件支持的最低 OpenClaw 版本。这个版本下限包含 2026 年 7 月 2 日 OpenClaw 安全公告批次的修复，包括 GHSA-8wg3-5mcm-fjq8 和 GHSA-83w9-h5wv-j9xm。
 - `2026.5.3` 开始，OpenClaw 在安装包时会校验 TypeScript 插件入口是否有编译后的 JavaScript 产物。
 - `2026.5.4` 及之后，已安装/全局插件如果缺少编译后的 JavaScript，运行时不再回退加载 `.ts` 源码，插件可能被跳过。
 - 推荐的 `openclaw plugins install clawhub:@openviking/openclaw-plugin` 会安装已经发布并包含 `dist/*.js` 的插件包，普通用户不需要本地编译。

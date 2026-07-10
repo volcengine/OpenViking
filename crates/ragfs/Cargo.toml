@@ -80,6 +80,7 @@ lru = "0.12"
 # Regular expressions for grep
 regex = "1.10"
 mime_guess = "2.0"
+globset = "0.4"
 
 # Encryption (envelope encryption: AES-256-GCM + HKDF-SHA256)
 aes-gcm = "0.10"

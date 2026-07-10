@@ -393,7 +393,7 @@ bash install.sh --source tos --channel prod --version 2026.6.2
 | 组件 | 要求 |
 | --- | --- |
 | Node.js | >= 22 |
-| OpenClaw | >= 2026.4.8 |
+| OpenClaw | >= 2026.5.27 |
 | OpenViking Server | >= 0.4.1 |
 
 兼容性声明在 `install-manifest.json` 的 `compatibility` 字段。

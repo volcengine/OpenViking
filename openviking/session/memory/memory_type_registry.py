@@ -206,6 +206,11 @@ class MemoryTypeRegistry:
         """Parse memory type from YAML data."""
         fields_data = data.get("fields", [])
         fields = []
+        stage = data.get("stage")
+        if stage is None and data.get("agent_only", False):
+            stage = "agent"
+        if stage is None:
+            stage = "user"
 
         for field_data in fields_data:
             field = MemoryField(
@@ -227,7 +232,7 @@ class MemoryTypeRegistry:
             directory=data.get("directory", ""),
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
-            stage=data.get("stage", "user"),
+            stage=stage,
             peer_enabled=data.get("peer_enabled", True),
             overview_template=data.get("overview_template"),
         )

@@ -194,6 +194,16 @@ pub(crate) fn report_for_plain_help_error(
     )])
 }
 
+fn is_client_auth_error(status: Option<u16>, message: &str) -> bool {
+    if matches!(status, Some(code) if (500..600).contains(&code)) {
+        return false;
+    }
+    if message.contains("Upstream model ") {
+        return false;
+    }
+    looks_like_auth_error(message)
+}
+
 pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error) -> ErrorReport {
     let language = Language::current();
     let command = command.into();
@@ -347,7 +357,7 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
                 ),
             ])
         }
-        Error::Api { message, .. } if looks_like_auth_error(message) => ErrorReport::new(
+        Error::Api { message, status } if is_client_auth_error(*status, message) => ErrorReport::new(
             copy(language, "Authentication Error", "认证错误"),
             copy(language, "OpenViking rejected the API key for the active config.", "OpenViking 拒绝了当前配置的 API Key。"),
         )
@@ -1369,6 +1379,22 @@ Usage: ov config [OPTIONS] [COMMAND]
     }
 
     #[test]
+    fn remote_resource_auth_failure_wrapped_as_5xx_is_not_api_key_error() {
+        let error = Error::api_with_status(
+            "HTTP request failed: authentication error (401). Check your credentials or permissions. URL: https://example.com/private"
+                .to_string(),
+            500,
+        );
+        let report =
+            report_for_runtime_error("ov add-resource https://example.com/private", &error);
+        let normal = strip_ansi(&render_report(&report, false));
+
+        assert!(normal.contains("OpenViking API Error"));
+        assert!(!normal.contains("Authentication Error"));
+        assert!(!normal.contains("OpenViking rejected the API key"));
+    }
+
+    #[test]
     fn gateway_standalone_proxy_error_explains_missing_openviking_server() {
         let error = Error::api(
             "VikingBot gateway proxy is active, but no available OpenViking server is configured"
@@ -1383,6 +1409,34 @@ Usage: ov config [OPTIONS] [COMMAND]
         assert!(normal.contains("serve ov chat") || normal.contains("只能使用 ov chat"));
         assert!(normal.contains("ov chat"));
         assert!(!normal.contains("OpenViking rejected the API key"));
+    }
+
+    #[test]
+    fn server_401_is_still_api_key_error() {
+        let error = Error::api_with_status("API key invalid".to_string(), 401);
+        let report = report_for_runtime_error("ov status", &error);
+        let normal = strip_ansi(&render_report(&report, false));
+
+        assert!(normal.contains("Authentication Error"));
+        assert!(normal.contains("OpenViking rejected the API key"));
+    }
+
+    #[test]
+    fn upstream_model_auth_error_is_not_cli_api_key_error() {
+        let error = Error::api_with_status(
+            "[UNAUTHENTICATED] Upstream model authentication failed: invalid api key".to_string(),
+            401,
+        );
+        let report = report_for_runtime_error("ov find hello", &error);
+        let normal = strip_ansi(&render_report(&report, false));
+        let verbose = strip_ansi(&render_report(&report, true));
+
+        assert!(normal.contains("OpenViking API Error"));
+        assert!(!normal.contains("Authentication Error"));
+        assert!(!normal.contains("OpenViking rejected the API key"));
+
+        assert!(verbose.contains("Detail:"));
+        assert!(verbose.contains("Upstream model authentication failed"));
     }
 
     #[test]

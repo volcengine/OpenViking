@@ -3401,6 +3401,7 @@ name = "ov_cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64",
  "bytes",
  "chrono",
  "clap",
@@ -3886,6 +3887,7 @@ dependencies = [
  "gix-features",
  "gix-hash",
  "gix-object",
+ "globset",
  "grep",
  "grep-matcher",
  "grep-regex",

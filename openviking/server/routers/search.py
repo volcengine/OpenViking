@@ -10,6 +10,13 @@ from pydantic import BaseModel, ConfigDict
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
+from openviking.retrieve.type_quota_recall import (
+    DEFAULT_MAX_CHARS,
+    DEFAULT_MIN_SCORE,
+    DEFAULT_OTHER_PEER_PENALTIES,
+    DEFAULT_QUOTAS,
+    search_type_quota_recall,
+)
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
@@ -90,7 +97,8 @@ class FindRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = ""
+    image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     agent_id: Optional[str] = None
@@ -113,7 +121,8 @@ class SearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = ""
+    image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     agent_id: Optional[str] = None
@@ -133,6 +142,21 @@ class SearchRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
+class RecallRequest(BaseModel):
+    """Request model for type-quota memory recall."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    quotas: Dict[str, int] = DEFAULT_QUOTAS.copy()
+    max_chars: int = DEFAULT_MAX_CHARS
+    min_score: float = DEFAULT_MIN_SCORE
+    peer_scope: Literal["actor", "all"] = "all"
+    other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
+    render: bool = True
+    telemetry: TelemetryRequest = False
+
+
 class GrepRequest(BaseModel):
     """Request model for grep."""
 
@@ -140,7 +164,7 @@ class GrepRequest(BaseModel):
     exclude_uri: Optional[str] = None
     pattern: str
     case_insensitive: bool = False
-    node_limit: Optional[int] = None
+    node_limit: Optional[int] = 256
     level_limit: int = 10
 
 
@@ -149,7 +173,7 @@ class GlobRequest(BaseModel):
 
     pattern: str
     uri: str = "viking://"
-    node_limit: Optional[int] = None
+    node_limit: Optional[int] = 256
 
 
 @router.post("/find")
@@ -180,6 +204,7 @@ async def find(
             score_threshold=request.score_threshold,
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
+            image_url=request.image_url,
         ),
     )
     result = execution.result
@@ -225,6 +250,7 @@ async def search(
             score_threshold=request.score_threshold,
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
+            image_url=request.image_url,
         )
 
     execution = await run_operation(
@@ -239,6 +265,37 @@ async def search(
     return Response(
         status="ok",
         result=result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/recall")
+async def recall(
+    request: RecallRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Type-quota memory recall with bounded rendering."""
+    service = get_service()
+    execution = await run_operation(
+        operation="search.recall",
+        telemetry=request.telemetry,
+        fn=lambda: search_type_quota_recall(
+            service=service,
+            ctx=_ctx,
+            query=request.query,
+            quotas=request.quotas,
+            max_chars=max(1, int(request.max_chars)),
+            min_score=request.min_score,
+            render=request.render,
+            peer_scope=request.peer_scope,
+            other_peer_penalty=request.other_peer_penalty
+            if request.other_peer_penalty is not None
+            else DEFAULT_OTHER_PEER_PENALTIES,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=_sanitize_floats(execution.result.to_dict()),
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
 

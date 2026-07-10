@@ -28,16 +28,22 @@ void test_basic_workflow() {
 
   // 1. Initialization (Using JSON config)
   std::string config = R"({
-        "vector_index": {
-            "type": "flat",
-            "dim": 4,
-            "metric": "l2"
+        "CollectionName": "engine_test",
+        "IndexName": "default",
+        "VectorIndex": {
+            "IndexType": "flat",
+            "ElementCount": 0,
+            "MaxElementCount": 2,
+            "Dimension": 4,
+            "Distance": "l2",
+            "Quant": "float"
         },
-        "scalar_index": {
-            "title": "string",
-            "count": "int64",
-            "price": "float32"
-        }
+        "ScalarIndex": [
+            {"FieldName": "title", "FieldType": "string"},
+            {"FieldName": "count", "FieldType": "int64"},
+            {"FieldName": "price", "FieldType": "float32"},
+            {"FieldName": "uri", "FieldType": "path"}
+        ]
     })";
 
   IndexEngine engine(config);
@@ -52,13 +58,15 @@ void test_basic_workflow() {
   AddDataRequest req1;
   req1.label = 1001;
   req1.vector = {0.1, 0.1, 0.1, 0.1};
-  req1.fields_str = R"({"title": "apple", "count": 10, "price": 5.5})";
+  req1.fields_str =
+      R"({"title": "apple", "count": 10, "price": 5.5, "uri": "/docs/one"})";
   add_reqs.push_back(req1);
 
   AddDataRequest req2;
   req2.label = 1002;
   req2.vector = {0.2, 0.2, 0.2, 0.2};
-  req2.fields_str = R"({"title": "banana", "count": 20, "price": 3.0})";
+  req2.fields_str =
+      R"({"title": "banana", "count": 20, "price": 3.0, "uri": "/other/two"})";
   add_reqs.push_back(req2);
 
   int ret = engine.add_data(add_reqs);
@@ -82,11 +90,28 @@ void test_basic_workflow() {
     exit(1);
   }
 
+  // Native scalar filters can be projected into any external row order. This
+  // is the bridge used by external dense indexes such as cuVS.
+  if (engine.set_filter_layout({1002, 9999, 1001}) != 0) {
+    SPDLOG_ERROR("Filter layout registration failed");
+    exit(1);
+  }
+  FilterResult filter_res = engine.evaluate_filter(
+      R"({"op":"must","field":"uri","conds":["/docs"],"para":"-d=-1"})");
+  if (filter_res.eligible_count != 1 || filter_res.bitset_words.size() != 1 ||
+      filter_res.bitset_words[0] != 4U) {
+    SPDLOG_ERROR(
+        "Filter projection failed: count={}, words={}, first_word={}",
+        filter_res.eligible_count, filter_res.bitset_words.size(),
+        filter_res.bitset_words.empty() ? 0 : filter_res.bitset_words[0]);
+    exit(1);
+  }
+
   // 4. Delete Data
   std::vector<DeleteDataRequest> del_reqs(1);
   del_reqs[0].label = 1001;
   del_reqs[0].old_fields_str =
-      R"({"title": "apple", "count": 10, "price": 5.5})";
+      R"({"title": "apple", "count": 10, "price": 5.5, "uri": "/docs/one"})";
 
   ret = engine.delete_data(del_reqs);
   if (ret != 0) {
@@ -118,7 +143,7 @@ void test_basic_workflow() {
 }
 
 int main() {
-  init_logging("INFO", "stdout");
+  init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
   test_basic_workflow();
   return 0;
 }

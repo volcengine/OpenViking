@@ -3,6 +3,10 @@
 
 """Hierarchical retriever rerank behavior tests."""
 
+import asyncio
+import threading
+import time
+
 import pytest
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
@@ -286,6 +290,38 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_returns_none(mon
         "viking://resources/file-a",
     ]
     assert fake_client.calls
+
+
+@pytest.mark.asyncio
+async def test_rerank_scores_runs_blocking_client_off_event_loop():
+    class SlowRerankClient:
+        def __init__(self):
+            self.thread_id = None
+
+        def rerank_batch(self, query: str, documents: list[str]):
+            self.thread_id = threading.get_ident()
+            time.sleep(0.2)
+            return [0.9 for _ in documents]
+
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=None,
+    )
+    fake_client = SlowRerankClient()
+    retriever._rerank_client = fake_client
+
+    started = time.monotonic()
+    rerank_task = asyncio.create_task(retriever._rerank_scores("hello", ["doc"], [0.1]))
+
+    ticks = 0
+    while time.monotonic() - started < 0.15:
+        await asyncio.sleep(0.01)
+        ticks += 1
+
+    assert await rerank_task == [0.9]
+    assert fake_client.thread_id != threading.get_ident()
+    assert ticks >= 3
 
 
 @pytest.mark.asyncio

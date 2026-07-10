@@ -165,6 +165,35 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 	}
 }
 
+func TestFindSendsImageQuery(t *testing.T) {
+	imagePath := filepath.Join(t.TempDir(), "query.png")
+	if err := os.WriteFile(imagePath, []byte("\x89PNG\r\n\x1a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/find" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		if got := body["query"]; got != "" {
+			t.Fatalf("query = %#v", got)
+		}
+		imageURL, ok := body["image_url"].(string)
+		if !ok || !strings.HasPrefix(imageURL, "data:image/png;base64,") {
+			t.Fatalf("image_url = %#v", body["image_url"])
+		}
+		writeOK(t, w, map[string]any{"resources": []any{}})
+	}))
+	defer closeServer()
+
+	if _, err := client.Find(context.Background(), "", &FindOptions{
+		TargetURI: "viking://resources/images",
+		Image:     imagePath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAdminCreatePathsAcceptInitialUserConfig(t *testing.T) {
 	var seen []map[string]any
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -343,6 +372,27 @@ func TestSearchOmitsSearchFiltersWhenUnset(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Search(context.Background(), "auth", &SearchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchSendsImageURI(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search/search" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		body := readJSONBody(t, r)
+		if got := body["image_url"]; got != "viking://resources/images/cat.png" {
+			t.Fatalf("image_url = %#v", got)
+		}
+		writeOK(t, w, map[string]any{"resources": []any{}})
+	}))
+	defer closeServer()
+
+	if _, err := client.Search(context.Background(), "similar poster", &SearchOptions{
+		TargetURI: "viking://resources/images",
+		Image:     "viking://resources/images/cat.png",
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -26,9 +26,12 @@ import {
   markRecallCompressorRuntimeFailed,
 } from "./recall-compressor-profile.mjs";
 import { deriveOvSessionId } from "./session-state.mjs";
+import { postRecall } from "./shared/recall-core.mjs";
+import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
+const effectivePeer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
 
 let emitted = false;
 let activeCompressor = null;
@@ -94,14 +97,16 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
+    if (effectivePeer.peerId) headers["X-OpenViking-Actor-Peer"] = effectivePeer.peerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
-    if (!body) return null;
-    if (!res.ok || body.status === "error") return null;
-    return body.result ?? body;
+    if (!body) return { ok: false, status: res.status };
+    if (!res.ok || body.status === "error") {
+      return { ok: false, status: res.status, error: body.error || body };
+    }
+    return { ok: true, result: body.result ?? body };
   } catch {
-    return null;
+    return { ok: false, status: 0 };
   } finally {
     clearTimeout(timer);
   }
@@ -220,7 +225,7 @@ async function searchScope(query, targetUri, limit, bucket = "memories", session
     method: "POST",
     body: JSON.stringify(body),
   });
-  return result?.[bucket] || [];
+  return result.ok ? (result.result?.[bucket] || []) : [];
 }
 
 // Candidate target URIs for a bucket, most-specific first. In trusted mode a
@@ -287,9 +292,38 @@ function resolveRecallSessionId(codexSessionId) {
 async function readMemoryContent(uri) {
   try {
     const result = await fetchJSON(`/api/v1/content/read?uri=${encodeURIComponent(uri)}`);
-    if (result && typeof result === "string" && result.trim()) return result.trim();
+    if (result.ok && typeof result.result === "string" && result.result.trim()) return result.result.trim();
   } catch { /* fallback */ }
   return null;
+}
+
+async function recallViaTypeQuotaEndpoint(query) {
+  const body = {
+    query,
+    quotas: {
+      events: Math.max(cfg.recallLimit, 1),
+      entities: Math.max(cfg.recallLimit, 1),
+      preferences: Math.max(1, Math.min(cfg.recallLimit, 3)),
+      experiences: 0,
+    },
+    max_chars: cfg.recallCompressMaxInputChars || 6500,
+    min_score: cfg.scoreThreshold,
+    render: true,
+  };
+  if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
+  const result = await postRecall(fetchJSON, body, { actorPeerId: effectivePeer.peerId, log });
+  if (!result.ok) {
+    log("recall_endpoint_fallback", { status: result.status || 0 });
+    return null;
+  }
+  const rendered = String(result.result?.rendered || "").trim();
+  if (!rendered) return "";
+  return [
+    "OpenViking memory digest:",
+    rendered,
+    "",
+    "More detail: use the OpenViking MCP recall/read/search tools with cited viking:// URIs if needed.",
+  ].join("\n");
 }
 
 function truncateText(text, maxChars) {
@@ -499,7 +533,12 @@ async function main() {
     recallSessionId,
     query: userPrompt.slice(0, 200),
     queryLength: userPrompt.length,
-    config: { recallLimit: cfg.recallLimit, scoreThreshold: cfg.scoreThreshold },
+    config: {
+      recallLimit: cfg.recallLimit,
+      scoreThreshold: cfg.scoreThreshold,
+      peerSource: effectivePeer.source,
+      recallPeerScope: cfg.recallPeerScope,
+    },
   });
 
   if (!userPrompt || userPrompt.length < cfg.minQueryLength) {
@@ -509,9 +548,21 @@ async function main() {
   }
 
   const health = await fetchJSON("/health");
-  if (!health) {
+  if (!health.ok) {
     logError("health_check", "server unreachable or unhealthy");
     emit();
+    return;
+  }
+
+  const endpointRecall = await recallViaTypeQuotaEndpoint(userPrompt);
+  if (endpointRecall !== null) {
+    if (!endpointRecall) {
+      log("skip", { stage: "recall_endpoint", reason: "no results" });
+      emit();
+      return;
+    }
+    log("recall_endpoint", { chars: endpointRecall.length });
+    emit(endpointRecall);
     return;
   }
 

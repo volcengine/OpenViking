@@ -255,7 +255,7 @@ openviking-server doctor
 | `doubao-embedding-vision-251215` | 1024 | multimodal | 推荐 |
 | `doubao-embedding-250615` | 1024 | text | 仅文本 |
 
-使用 `input: "multimodal"` 时，OpenViking 可以嵌入文本、图片（PNG、JPG 等）和混合内容。
+使用 `input: "multimodal"` 时，OpenViking 可以嵌入文本、图片（PNG、JPG 等）和混合内容。以图搜图需要该模式；纯文本 embedding 模型仍会索引图片 summary，但不能接收图片查询。
 
 **支持的 provider:**
 - `openai`: OpenAI Embedding API
@@ -871,7 +871,7 @@ Grep 引擎配置，用于内容模式搜索。这些设置为服务端配置，
 | `engine` | str | 搜索引擎模式：`"auto"` 在可用时使用 VikingDB BM25 召回，不可用时回退到本地文件系统搜索；`"fs"` 强制仅使用本地文件系统搜索。 | `"auto"` |
 | `switch_to_remote_threshold` | int | 切换到 VikingDB BM25 召回的 L2 记录数阈值。当搜索范围内的 L2 文件数达到此阈值时，使用 VikingDB BM25 进行第一阶段召回；否则使用本地文件系统搜索。设为 `0` 表示始终使用 VikingDB BM25。必须 ≥ 0。 | `10000` |
 
-对于 VikingDB / Volcengine FullText grep，OpenViking 会写入 `content` text 字段用于 BM25 召回。源上下文中保留完整内容，仅在最终写入向量库 adapter payload 时将该字段截断到 **1 MB**，以满足后端 payload 限制。
+对于 VikingDB / Volcengine FullText grep，OpenViking 会写入 `content` text 字段用于 BM25 召回。源上下文中保留完整内容，仅在最终写入向量库 adapter payload 时将该字段截断到 **1 MB**，以满足后端 payload 限制。只有 VikingDB 系后端使用 `content`；其它后端（`local`、`cuvs`、`qdrant`、`opengauss`、`http`）不写入该字段。
 
 ### storage
 
@@ -1181,7 +1181,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'qdrant' 或 'opengauss' | "local" |
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）, 'cuvs'（本地存储 + GPU dense search）, 'qdrant' 或 'opengauss' | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1190,6 +1190,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `sparse_weight` | float | 混合向量搜索的稀疏权重，仅在使用混合索引时生效 | 0.0 |
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
+| `cuvs` | object | NVIDIA cuVS 配置，也用于在 'local' 下显式开启显存感知自动模式，参见 [cuVS 使用指南](./16-cuvs.md) | - |
 | `qdrant` | object | 'qdrant' 类型的 Qdrant 配置 | - |
 | `opengauss` | object | 'opengauss' 原生向量后端配置 | - |
 

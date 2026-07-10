@@ -18,8 +18,9 @@ use serde::Deserialize;
 
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
+use crate::core::glob::{decode_offset_token, encode_offset_token, PreparedGlob};
 use crate::core::plugin::ServicePlugin;
-use crate::core::types::{ConfigParameter, FileInfo, GrepResult, PluginConfig, WriteFlag};
+use crate::core::types::{ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepResult, PluginConfig, WriteFlag};
 
 /// LocalFS - Local file system implementation
 pub struct LocalFileSystem {
@@ -87,8 +88,8 @@ impl LocalFileSystem {
         }
     }
 
-    /// Run blocking grep work on a dedicated thread and normalize join errors.
-    async fn run_blocking_grep<T, F>(job: F) -> Result<T>
+    /// Run blocking local filesystem work on a dedicated thread.
+    async fn run_blocking_fs<T, F>(job: F) -> Result<T>
     where
         T: Send + 'static,
         F: FnOnce() -> Result<T> + Send + 'static,
@@ -509,12 +510,156 @@ impl LocalFileSystem {
     }
     fn local_to_query_relative_path(query_root: &Path, local: &Path) -> Option<String> {
         let rel = local.strip_prefix(query_root).ok()?;
-        let s = rel.to_string_lossy();
-        if s.is_empty() {
+        let parts = rel
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>();
+        if parts.is_empty() {
             Some(".".to_string())
         } else {
-            Some(s.to_string())
+            Some(parts.join("/"))
         }
+    }
+
+    /// Build the plugin-root-relative path required by the `GlobEntry.path` contract.
+    fn local_glob_entry_path(virtual_root: &str, rel_path: &str) -> String {
+        if virtual_root == "/" {
+            format!("/{}", rel_path)
+        } else {
+            format!("{}/{}", virtual_root.trim_end_matches('/'), rel_path)
+        }
+    }
+
+    fn glob_static_max_depth(pattern: &str) -> Option<usize> {
+        let mut depth = 0usize;
+        for segment in pattern.split('/') {
+            if segment.is_empty() || segment == "." {
+                continue;
+            }
+            if segment == "**" {
+                return None;
+            }
+            depth += 1;
+        }
+        Some(depth)
+    }
+
+    fn effective_glob_max_depth(pattern: &str, level_limit: Option<usize>) -> Option<usize> {
+        match (Self::glob_static_max_depth(pattern), level_limit) {
+            (Some(pattern_depth), Some(level_depth)) => Some(pattern_depth.min(level_depth)),
+            (Some(pattern_depth), None) => Some(pattern_depth),
+            (None, Some(level_depth)) => Some(level_depth),
+            (None, None) => None,
+        }
+    }
+
+    /// Implement glob pagination via `ignore::WalkBuilder` without materializing the whole tree.
+    ///
+    /// Args:
+    /// - `base_path`: Absolute local path to the mounted root directory.
+    /// - `virtual_path`: Query path inside the plugin mount.
+    /// - `pattern`: Standard glob pattern matched against query-root-relative paths.
+    /// - `show_hidden`: Whether hidden files should be included.
+    /// - `page_size`: Page size, or `None` to return all matches.
+    /// - `level_limit`: Maximum traversal depth.
+    /// - `continuation_token`: Continuation token returned by the previous page.
+    ///
+    /// Returns:
+    /// - The current `GlobPage`, or an error if the path is missing, not a directory,
+    ///   the token is invalid, or traversal fails.
+    fn glob_via_walk(
+        base_path: &Path,
+        virtual_path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let matcher = PreparedGlob::new(pattern)?;
+        if matches!(page_size, Some(0)) {
+            return Err(Error::invalid_operation("page_size must be positive"));
+        }
+
+        let query_root = Self::resolve_virtual_path(base_path, virtual_path);
+        if !query_root.exists() {
+            return Err(Error::NotFound(virtual_path.to_string()));
+        }
+        if !query_root.is_dir() {
+            return Err(Error::NotADirectory(virtual_path.to_string()));
+        }
+
+        let start = decode_offset_token(
+            continuation_token.as_deref(),
+            virtual_path,
+            pattern,
+            show_hidden,
+            level_limit,
+        )?;
+        let limit = page_size.unwrap_or(usize::MAX);
+        let mut builder = WalkBuilder::new(&query_root);
+        builder
+            .hidden(false)
+            .parents(false)
+            .ignore(false)
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .sort_by_file_path(|left, right| left.cmp(right));
+        if let Some(max_depth) = Self::effective_glob_max_depth(pattern, level_limit) {
+            builder.max_depth(Some(max_depth));
+        }
+
+        let mut walker = builder.build();
+        let mut raw_seen = 0usize;
+        let mut entries = Vec::new();
+        let mut next_offset = None;
+
+        while let Some(dent) = walker.next() {
+            if entries.len() >= limit {
+                next_offset = Some(raw_seen);
+                break;
+            }
+
+            let dent = dent.map_err(|e| Error::plugin(format!("failed to walk directory: {}", e)))?;
+            raw_seen += 1;
+
+            if raw_seen <= start {
+                continue;
+            }
+
+            let rel_path = Self::local_to_query_relative_path(&query_root, dent.path())
+                .ok_or_else(|| Error::InvalidPath(dent.path().display().to_string()))?;
+            if rel_path == "." {
+                continue;
+            }
+
+            let name = dent.file_name().to_string_lossy().to_string();
+            let is_dir = dent
+                .file_type()
+                .map(|file_type| file_type.is_dir())
+                .unwrap_or_else(|| dent.path().is_dir());
+
+            if !show_hidden && !is_dir && name.starts_with('.') {
+                continue;
+            }
+            if !matcher.is_match(&rel_path) {
+                continue;
+            }
+
+            entries.push(GlobEntry {
+                path: Self::local_glob_entry_path(virtual_path, &rel_path),
+                rel_path,
+                name,
+                is_dir,
+            });
+        }
+
+        let next_token = next_offset
+            .filter(|_| page_size.is_some())
+            .map(|offset| encode_offset_token(offset, virtual_path, pattern, show_hidden, level_limit));
+
+        Ok(GlobPage { entries, next_token })
     }
 
     fn resolve_virtual_path(base_path: &Path, path: &str) -> PathBuf {
@@ -687,68 +832,77 @@ impl FileSystem for LocalFileSystem {
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
         let local_path = self.resolve_path(path);
+        let path = path.to_string();
 
-        // Check if directory exists
-        if !local_path.exists() {
-            return Err(Error::NotFound(path.to_string()));
-        }
+        Self::run_blocking_fs(move || {
+            // Check if directory exists
+            if !local_path.exists() {
+                return Err(Error::NotFound(path.clone()));
+            }
 
-        if !local_path.is_dir() {
-            return Err(Error::plugin(format!("not a directory: {}", path)));
-        }
+            if !local_path.is_dir() {
+                return Err(Error::plugin(format!("not a directory: {}", path)));
+            }
 
-        // Read directory
-        let entries = fs::read_dir(&local_path)
-            .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
+            // Read directory
+            let entries = fs::read_dir(&local_path)
+                .map_err(|e| Error::plugin(format!("failed to read directory: {}", e)))?;
 
-        let mut files = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
-            let metadata = entry
-                .metadata()
-                .map_err(|e| Error::plugin(format!("failed to get metadata: {}", e)))?;
+            let mut files = Vec::new();
+            for entry in entries {
+                let entry =
+                    entry.map_err(|e| Error::plugin(format!("failed to read entry: {}", e)))?;
+                let metadata = entry
+                    .metadata()
+                    .map_err(|e| Error::plugin(format!("failed to get metadata: {}", e)))?;
 
-            let name = entry.file_name().to_string_lossy().to_string();
+                let name = entry.file_name().to_string_lossy().to_string();
+                let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
+                let mod_time = metadata
+                    .modified()
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+                files.push(FileInfo::new(
+                    name,
+                    metadata.len(),
+                    mode,
+                    mod_time,
+                    metadata.is_dir(),
+                ));
+            }
+
+            Ok(files)
+        })
+        .await
+    }
+
+    async fn stat(&self, path: &str) -> Result<FileInfo> {
+        let local_path = self.resolve_path(path);
+        let path = path.to_string();
+
+        Self::run_blocking_fs(move || {
+            // Get file metadata
+            let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.clone()))?;
+
+            let name = Path::new(&path)
+                .file_name()
+                .unwrap_or(path.as_ref())
+                .to_string_lossy()
+                .to_string();
             let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
             let mod_time = metadata
                 .modified()
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
-            files.push(FileInfo::new(
+            Ok(FileInfo::new(
                 name,
                 metadata.len(),
                 mode,
                 mod_time,
                 metadata.is_dir(),
-            ));
-        }
-
-        Ok(files)
-    }
-
-    async fn stat(&self, path: &str) -> Result<FileInfo> {
-        let local_path = self.resolve_path(path);
-
-        // Get file metadata
-        let metadata = fs::metadata(&local_path).map_err(|_| Error::NotFound(path.to_string()))?;
-
-        let name = Path::new(path)
-            .file_name()
-            .unwrap_or(path.as_ref())
-            .to_string_lossy()
-            .to_string();
-        let mode = if metadata.is_dir() { 0o755 } else { 0o644 };
-        let mod_time = metadata
-            .modified()
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-        Ok(FileInfo::new(
-            name,
-            metadata.len(),
-            mode,
-            mod_time,
-            metadata.is_dir(),
-        ))
+            ))
+        })
+        .await
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
@@ -910,7 +1064,7 @@ impl FileSystem for LocalFileSystem {
             let rg_pattern = pattern_owned.clone();
             let rg_base_path = base_path.clone();
             let rg_exclude = exclude_owned.clone();
-            let rg_res = Self::run_blocking_grep(move || {
+            let rg_res = Self::run_blocking_fs(move || {
                 LocalFileSystem::grep_via_rg(
                     rg_base_path.as_path(),
                     local.as_path(),
@@ -930,7 +1084,7 @@ impl FileSystem for LocalFileSystem {
         }
 
         // Fallback: also run in a blocking thread (dir walking + file reads are blocking IO).
-        Self::run_blocking_grep(move || {
+        Self::run_blocking_fs(move || {
             LocalFileSystem::grep_via_libs(
                 base_path.as_path(),
                 &path_owned,
@@ -944,11 +1098,51 @@ impl FileSystem for LocalFileSystem {
         })
         .await
     }
+
+    /// Return one glob page in local stable DFS order without building the full directory tree first.
+    ///
+    /// Args:
+    /// - `path`: Query directory path inside the plugin mount.
+    /// - `pattern`: Glob pattern.
+    /// - `show_hidden`: Whether hidden files should be included.
+    /// - `page_size`: Page size, or `None` to return all matches.
+    /// - `level_limit`: Maximum traversal depth.
+    /// - `continuation_token`: Token returned by the previous page.
+    ///
+    /// Returns:
+    /// - The current `GlobPage`, or an error if arguments are invalid or traversal fails.
+    async fn glob_directory(
+        &self,
+        path: &str,
+        pattern: &str,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<usize>,
+        continuation_token: Option<String>,
+    ) -> Result<GlobPage> {
+        let base_path = self.base_path.clone();
+        let path_owned = path.to_string();
+        let pattern_owned = pattern.to_string();
+
+        Self::run_blocking_fs(move || {
+            LocalFileSystem::glob_via_walk(
+                base_path.as_path(),
+                &path_owned,
+                &pattern_owned,
+                show_hidden,
+                page_size,
+                level_limit,
+                continuation_token,
+            )
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::FileSystem;
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -1200,6 +1394,166 @@ mod tests {
         assert_eq!(result.matches.len(), 1);
         assert_eq!(result.matches[0].file, "a.txt");
         assert_eq!(result.matches[0].content, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_paginates_with_local_cursor_tokens() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.md", "");
+        write_file(dir.path(), "b.md", "");
+        write_file(dir.path(), "c.md", "");
+
+        let first = fs
+            .glob_directory("/", "**/*.md", false, Some(2), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            first
+                .entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["a.md", "b.md"]
+        );
+        assert!(first.next_token.is_some());
+        assert_eq!(first.entries[0].path, "/a.md");
+
+        let second = fs
+            .glob_directory("/", "**/*.md", false, Some(2), None, first.next_token)
+            .await
+            .unwrap();
+        assert_eq!(
+            second
+                .entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["c.md"]
+        );
+        assert!(second.next_token.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_keeps_directory_matches() {
+        let (dir, fs) = fallback_localfs();
+        std::fs::create_dir_all(dir.path().join("folder")).unwrap();
+
+        let out = fs.glob_directory("/", "**/*", false, None, None, None).await.unwrap();
+        assert_eq!(
+            out.entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["folder"]
+        );
+        assert!(out.entries[0].is_dir);
+    }
+
+    #[test]
+    fn test_localfs_relative_path_uses_forward_slashes() {
+        let root = Path::new("root");
+        let local = root.join("a").join("b.md");
+
+        assert_eq!(
+            LocalFileSystem::local_to_query_relative_path(root, &local).unwrap(),
+            "a/b.md"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_respects_level_limit() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "top.md", "");
+        write_file(dir.path(), "sub/nested.md", "");
+        write_file(dir.path(), "sub/deeper/late.md", "");
+
+        let out = fs
+            .glob_directory("/", "**/*.md", false, None, Some(1), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            out.entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["top.md"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_rejects_token_from_different_query_scope() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.md", "");
+        write_file(dir.path(), "b.md", "");
+        write_file(dir.path(), "c.md", "");
+
+        let first = fs
+            .glob_directory("/", "**/*.md", false, Some(2), None, None)
+            .await
+            .unwrap();
+        let err = fs
+            .glob_directory("/", "**/*.txt", false, Some(2), None, first.next_token)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidOperation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_localfs_glob_skips_hidden_files_but_keeps_hidden_dirs() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), ".hidden.md", "");
+        write_file(dir.path(), ".hidden_dir/nested.md", "");
+
+        let out = fs.glob_directory("/", "**/*.md", false, None, None, None).await.unwrap();
+        assert_eq!(
+            out.entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec![".hidden_dir/nested.md"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_localfs_glob_defers_late_subtree_errors_to_later_pages() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.md", "");
+        write_file(dir.path(), "b.md", "");
+        write_file(dir.path(), "c.md", "");
+        std::fs::create_dir_all(dir.path().join("z_blocked")).unwrap();
+        write_file(dir.path(), "z_blocked/late.md", "");
+
+        let blocked_dir = dir.path().join("z_blocked");
+        let old_mode = std::fs::metadata(&blocked_dir).unwrap().permissions().mode();
+        let mut perms = std::fs::metadata(&blocked_dir).unwrap().permissions();
+        perms.set_mode(0);
+        std::fs::set_permissions(&blocked_dir, perms).unwrap();
+
+        let first = fs.glob_directory("/", "**/*.md", false, Some(2), None, None).await;
+        assert!(first.is_ok());
+        let first = first.unwrap();
+        assert_eq!(
+            first
+                .entries
+                .iter()
+                .map(|entry| entry.rel_path.clone())
+                .collect::<Vec<_>>(),
+            vec!["a.md", "b.md"]
+        );
+        assert!(first.next_token.is_some());
+
+        let out = fs
+            .glob_directory("/", "**/*.md", false, Some(2), None, first.next_token)
+            .await;
+
+        let mut restore = std::fs::metadata(&blocked_dir).unwrap().permissions();
+        restore.set_mode(old_mode);
+        std::fs::set_permissions(&blocked_dir, restore).unwrap();
+
+        assert!(out.is_err());
     }
 }
 

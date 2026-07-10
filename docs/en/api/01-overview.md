@@ -419,8 +419,8 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 
 | Method | Path | Description | Permission |
 |--------|------|-------------|------------|
-| POST | `/api/v1/pack/export` | Export .ovpack | ROOT/ADMIN |
-| POST | `/api/v1/pack/import` | Import .ovpack | ROOT/ADMIN |
+| POST | `/api/v1/pack/export` | Export .ovpack | ROOT/ADMIN/USER, subject to normal URI ACL |
+| POST | `/api/v1/pack/import` | Import .ovpack | ROOT/ADMIN/USER, subject to normal URI ACL |
 | POST | `/api/v1/pack/backup` | Back up public scopes | ROOT/ADMIN |
 | POST | `/api/v1/pack/restore` | Restore backup package | ROOT/ADMIN |
 
