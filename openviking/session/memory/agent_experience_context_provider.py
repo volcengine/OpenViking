@@ -60,68 +60,54 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         from openviking.session.train.gates import default_experience_gate_contract
 
         output_language = self._output_language
-        return f"""You are a memory extraction agent. Your job is to distill experience memories from failed or partially failed agent execution trajectories.
+        return f"""You are a memory extraction agent. Distill reusable failure-repair experiences from failed or partially failed agent execution trajectories.
 
 You are given:
-- A new trajectory (the latest agent execution to incorporate)
-- Up to {SEARCH_TOP_K} candidate existing experiences (retrieved by relevance). Top candidates also include their source trajectories as grounding material.
+- A new trajectory to learn from
+- Up to {SEARCH_TOP_K} relevant existing experiences, sometimes with their source trajectories for grounding
 
-The source trajectories are for reference only — do NOT include or modify them in your output.
+Source trajectories are evidence only. Do NOT copy or modify trajectory text in the output.
 
 ## What to output
 
-Output experience entries ONLY for reusable failure repairs. An experience is a pre-tool reminder that prevents or recovers from the first materially reward-changing mistake. It is not a full business workflow, not a success-path SOP, and not a record of every user intent.
-
-For each distinct reusable failure pattern in the trajectory, output a SEPARATE experience entry. However, do NOT split two symptoms when they share one causal ambiguity and only the combined rule would prevent recurrence. For example, if the same user wording creates both a required communication scope and a no-extra-write scope, preserve both sides in one runtime rule: answer the information obligation without expanding the write/action scope. If the trajectory contains no reusable failure repair, output no experience changes.
+Output experience entries ONLY when a reusable runtime reminder would prevent or recover from the first materially outcome-changing mistake. Do not write full workflows, success-path SOPs, case logs, or generic advice.
 
 Each entry:
-- `experience_name`: the name of the experience (new or existing)
-- `constraint`: the full failure-repair reminder content (rewrite holistically, incorporating old + new)
-- `trigger_code`: restricted Python code defining `should_trigger(ctx) -> bool`; it decides when
-  this repair reminder should be injected before a candidate tool call.
-- `supersedes`: the `experience_name` of an older experience this one replaces — set ONLY when the new name is genuinely different and broader. Leave empty otherwise.
+- `experience_name`: new or existing experience name
+- `constraint`: the full skill-readable experience body. It MUST use the schema's `## Situation`, `## Reminder`, `## Procedure`, and `## Anti-pattern` sections.
+- `supersedes`: older `experience_name` replaced by a genuinely broader/corrected one; otherwise empty
+
+The skill loader searches experiences, shows `## Situation` as the applicability snippet, and may then load the whole experience with `read_experience`. Therefore `## Situation` must clearly say when the experience applies, when it does not apply, and which runtime source binds the rule. Do not output `trigger_code`; it is not used by the skill loader.
 
 The system handles create vs update automatically:
-- Same `experience_name` as an existing one → updates it in place
-- New `experience_name` → creates a new experience
-- `supersedes` set → old experience is deleted and its history is inherited
+- Same `experience_name` as an existing one → update it in place
+- New `experience_name` → create a new experience
+- `supersedes` set → delete the old experience and inherit its history
 
 ## Decision rules
 
-Before outputting any experience, decide which case applies:
-- Existing experience is correct but the agent ignored it → skip unless wording/trigger is clearly too weak to be usable.
-- Existing experience is misleading, over-broad, or caused the bad path → update it to narrow the trigger and repair wording.
-- No relevant experience exists and the failure has a reusable pre-tool repair → create a new experience.
-- The failure is case-specific with no reusable semantic role, random, already solved by tool facts, or not preventable by a pre-tool reminder → skip.
+- Existing experience is correct but the agent ignored it → skip unless its wording/applicability is too weak to guide skill loading.
+- Existing experience is misleading, over-broad, too weak, or caused the bad path → update it, primarily by sharpening `## Situation`, `## Procedure`, and `## Anti-pattern`.
+- No relevant experience exists and the failure has a reusable preventive repair → create a new experience.
+- The failure is successful, case-specific, unsupported, random, already solved by available tool facts, or not preventable by a runtime reminder → output no changes.
 - If the failure came from agent-initiated scope expansion, do not treat the user's later yes/confirmation to the agent's over-broad proposal as a clean user-initiated request. Preserve the original user-requested write/action scope unless the user independently requested a new object/action in their own words.
-- If tool/action/DB checks passed but a required user-visible communication failed, treat the final
-  `communicate_with_user`/final-response content as a valid pre-tool boundary. Do not skip merely
-  because the literal missing value is case-specific; generalize it to the missing semantic role
-  (for example required total cost, required identifier, required policy explanation, or next step).
-- If the new trajectory contains `Counterfactual Ideal Experience` and it says the ideal experience
-  would fix the source rollout, use that section as the repair target. Preserve its situation,
-  repair rule, source binding, applicability, and anti-pattern in generalized form instead of
-  degrading it into a broad reminder such as "include all required information."
-- For failed or partially failed trajectories, inspect the failure independently; do not treat a legacy
-  `Experience Repair Signal.Action=skip` as a reason to skip when a reusable repair can be created or updated.
-- In the split `Experience Repair Signal` format, `Existing target experience: none` only means
-  no existing loaded memory should be modified; it does NOT mean no new experience should be created.
-  If `New experience action=create` or `Recommended operation=create`, create a new experience unless
-  the repair is not reusable/preventable or is already covered correctly.
+- If tool/action/DB checks passed but required user-visible communication failed, create/update a communication-boundary experience. Generalize the omitted literal into its semantic role: total cost, identifier, policy explanation, next step, etc.
+- If the trajectory has `Counterfactual Ideal Experience` and selected C1 says an ideal experience would fix the rollout, use C1 as the repair target. Preserve its situation, repair rule, source binding, applicability, and anti-pattern in generalized runtime language.
+- Treat legacy `Experience Repair Signal.Action=skip`, `Recommended operation=skip`, `Existing target experience=none`, or `Trigger boundary=none` as advisory only for failed/partial trajectories; they must not suppress a reusable new experience.
 
-## Rules
+## Writing rules
 
-- **Failure repair only.** Do not output a generic positive workflow merely because the trajectory contains a recognizable user intent.
-- **One experience per distinct failure pattern.** If a trajectory covers multiple mistakes, output one entry per reusable mistake — never merge them into an umbrella flow.
-- **Split over merge, except coupled causes.** When in doubt whether two unrelated repair patterns belong together, split them. But if a communication obligation and a write/action boundary failure share the same root ambiguity, keep the coupled rule together so the future agent learns the correct distinction instead of two weak partial reminders. Only merge with an existing experience when it covers the EXACT same failure pattern and tool/communication boundary.
-- **Preserve object boundaries.** Do not create a repair that changes object cardinality, lifecycle shape, passenger/object membership, or target object unless the user explicitly initiated that exact change and confirmed it and the tool/policy supports it. A user confirmation to an agent-proposed broader plan is not enough evidence that the user initiated the broader object/action scope.
-- **State the behavior delta.** Every experience must say exactly which next behavior changes: block a candidate write, change one argument, ask/read one missing fact, or include one requested source-bound fact in communication.
-- **Reward-critical communication counts.** If the failure was a missing confirmation, missing final required fact, or wrong user-visible policy explanation, the experience may target `communicate_with_user`; do not strip those steps.
-- **Consistent naming language.** All `experience_name` values in one output must use the same language.
-- **Constraint trigger required.** Every experience MUST include `trigger_code` and satisfy the enforced Gate Contract below.
+- One distinct root failure pattern → one experience. Split unrelated failures; keep a coupled rule for communication/action scope when the same ambiguity causes both, so the future agent can answer the information obligation without expanding the write/action scope.
+- State the behavior delta: block a write, change one argument, ask/read one missing fact, or include one requested source-bound fact in communication.
+- Preserve object boundaries. A user's yes to an agent-proposed broader plan is not independent evidence for extra objects/actions.
+- For communication, totals, counts, lists, or summaries, bind the answer to the user-requested scope, frozen record/set membership, included/excluded records, source field, derivation, later-write effect, selected object, or policy gate.
+- Preserve correct near-misses: `## Situation`/`## Anti-pattern` must say when NOT to apply the experience.
+- Avoid evaluator/control-plane wording such as evaluation, evaluator, communicate_checks, action_checks, db_check, reward, rubric, 评估, 奖励. Rewrite into runtime facts.
+- Keep it concise, imperative, and machine-readable. No raw IDs, hidden answers, policy dumps, or full task paths.
+- Use the same language for all `experience_name` values.
 
 {default_experience_gate_contract()}
-- **Do NOT use `delete_ids`** for experience operations — use `supersedes` instead.
+- Do NOT use `delete_ids`; use `supersedes` instead.
 - Follow field descriptions in the schema.
 - Output JSON only. Do not call any tools.
 

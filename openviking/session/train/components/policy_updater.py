@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from openviking.session.memory.constraints import smoke_test_trigger_code, validate_trigger_code
-from openviking.session.memory.constraints.trigger_sandbox import TriggerSandboxError
 from openviking.session.memory.dataclass import (
     MemoryFile,
     ResolvedOperation,
@@ -184,6 +182,8 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
         metadata.update(_metadata_patch_fields(item))
         metadata.setdefault("memory_type", item.memory_type or "experiences")
         metadata["experience_name"] = item.target_name
+        if (item.memory_type or "experiences") == "experiences":
+            metadata.pop("trigger_code", None)
         version = (existing.version + 1) if existing is not None else 1
         updated = Policy(
             name=item.target_name,
@@ -220,7 +220,7 @@ def _metadata_patch_fields(item: PolicyPlanItem) -> dict[str, Any]:
                 {
                     field_key: field_value
                     for field_key, field_value in value.items()
-                    if field_key not in {"content", "constraint"}
+                    if field_key not in {"content", "constraint", "trigger_code"}
                 }
             )
     return fields
@@ -284,11 +284,6 @@ def _plan_to_resolved_operations(
         updated = _find_policy(updated_policy_set, uri=uri, name=item.target_name)
         if updated is None:
             errors.append(f"planned policy not found after simulation: {item.target_name}")
-            continue
-
-        trigger_error = _constraint_trigger_preflight_error(updated, memory_type=item.memory_type)
-        if trigger_error:
-            errors.append(trigger_error)
             continue
 
         upserts.append(
@@ -392,25 +387,3 @@ def _safe_experience_filename(name: str) -> str:
 
 def _normalize_guard_content(content: str) -> str:
     return content.strip()
-
-
-def _constraint_trigger_preflight_error(policy: Policy, *, memory_type: str | None) -> str | None:
-    """Validate LLM-generated trigger_code before writing experience constraints.
-
-    Old on-disk experiences without trigger_code can still be read by the
-    legacy skill loader, but new writes in the train/update path must include a
-    trigger so default ``loader_mode=constraint`` does not silently persist an
-    unusable experience.  Existing trigger_code is preserved by snapshot merge.
-    """
-
-    if (memory_type or "experiences") != "experiences":
-        return None
-    trigger_code = str((policy.metadata or {}).get("trigger_code") or "").strip()
-    if not trigger_code:
-        return f"missing trigger_code for {policy.name}"
-    try:
-        validate_trigger_code(trigger_code)
-        smoke_test_trigger_code(trigger_code)
-    except TriggerSandboxError as exc:
-        return f"invalid trigger_code for {policy.name}: {exc}"
-    return None

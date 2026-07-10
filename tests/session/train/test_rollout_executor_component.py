@@ -494,16 +494,21 @@ def test_tau2_configure_tools_removes_only_openviking_tools():
 
     assert agent.tools.unregistered == ["openviking_search", "openviking_memory_commit"]
     assert agent.tools.tool_names == ["read_file", "web_search"]
-    assert agent.tools.registered == ["get_user_details"]
-
-    skill_agent = FakeAgent()
-    _configure_tools(skill_agent, FakeProvider(), keep_default_tools=True, loader_mode="skill")
-
-    assert skill_agent.tools.registered == [
+    assert agent.tools.registered == [
         "search_experience",
         "read_experience",
         "get_user_details",
     ]
+
+    constraint_agent = FakeAgent()
+    _configure_tools(
+        constraint_agent,
+        FakeProvider(),
+        keep_default_tools=True,
+        loader_mode="constraint",
+    )
+
+    assert constraint_agent.tools.registered == ["get_user_details"]
     assert normalize_tau2_experience_loader_mode("direct_experience") == "direct_experience"
 
 
@@ -595,7 +600,7 @@ def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
         "keep_default_tools": True,
         "max_iterations": 9,
         "rollout_language": "zh",
-        "loader_mode": "constraint",
+        "loader_mode": "skill",
         "system_prompt_profile": "minimal",
         "direct_experience_content": None,
         "direct_experience_name": None,

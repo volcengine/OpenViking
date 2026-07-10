@@ -231,7 +231,7 @@ def default_policy_gate_runner() -> GateRunner:
     return GateRunner(
         gates=[
             ExperienceCausalSignalGate(mode="enforce"),
-            ExperienceTriggerRuntimeGate(mode="enforce"),
+            ExperienceSkillReadabilityGate(mode="enforce"),
         ]
     )
 
@@ -254,9 +254,13 @@ Your experience output will be rejected unless every experience satisfies these 
   or when the first reward-changing mistake is reusable and preventable.
 - Do not output experiences for Outcome=success.
 
-2. Trigger runtime compatibility
-- trigger_code must compile under the VikingBot constraint runtime used by pre-tool reminder injection.
-- Do not use imports, file/network/process access, mutation of ctx/messages, or other forbidden syntax.
+2. Skill-loader readability
+- Experience content must include exactly the runtime-facing sections used by the
+  skill experience loader: `## Situation`, `## Reminder`, `## Procedure`, and
+  `## Anti-pattern`.
+- `## Situation` must state applicability, non-applicability, and the runtime
+  source binding that lets a future agent decide whether to read/apply the
+  experience without executing trigger_code.
 
 If you cannot satisfy this contract, output no experience changes."""
 
@@ -388,6 +392,70 @@ class ExperienceRuntimeWordingGate:
                 "calculation, policy gate, or required user-visible message. Do not mention "
                 "evaluation/evaluator/communicate_checks/action_checks/db_check/reward/rubric/"
                 "评估/奖励. If no such rewrite is possible, output no changes."
+            ),
+        )
+
+
+@dataclass(slots=True)
+class ExperienceSkillReadabilityGate:
+    """Reject experiences that the skill loader cannot safely search/read."""
+
+    mode: GateMode = "enforce"
+    name: str = "experience_skill_readability"
+
+    def applies_to(self, target: GateTarget) -> bool:
+        return target.memory_type == "experiences" and target.after_content.strip() != ""
+
+    async def evaluate(self, target: GateTarget) -> GateDecision | None:
+        content, _ = _experience_constraint_and_trigger(target.after_content, target)
+        missing = [
+            heading
+            for heading in ("Situation", "Reminder", "Procedure", "Anti-pattern")
+            if not _markdown_section(content, heading)
+        ]
+        situation = _markdown_section(content, "Situation")
+        situation_lower = situation.lower()
+        source_binding_terms = (
+            "source binding",
+            "source-bound",
+            "source field",
+            "retrieved",
+            "record",
+            "scope",
+            "policy",
+            "calculation",
+            "confirmed",
+            "源",
+            "来源",
+            "范围",
+            "记录",
+            "字段",
+            "计算",
+            "确认",
+            "政策",
+        )
+        has_source_binding = any(term in situation_lower for term in source_binding_terms)
+        applicability_terms = ("applies when", "does not apply", "适用", "不适用")
+        has_applicability = any(term in situation_lower for term in applicability_terms)
+        if not missing and has_source_binding and has_applicability:
+            return None
+        return GateDecision(
+            gate_name=self.name,
+            action="reject",
+            reason="experience is not readable/applicable enough for skill loader",
+            evidence={
+                "target_name": target.target_name,
+                "missing_sections": missing,
+                "has_source_binding": has_source_binding,
+                "has_applicability": has_applicability,
+                "situation_preview": _preview_text(situation, limit=500),
+            },
+            retriable=True,
+            repair_prompt=(
+                "Rewrite the experience in exactly these sections: `## Situation`, "
+                "`## Reminder`, `## Procedure`, `## Anti-pattern`. In `## Situation`, "
+                "state applies-when, does-not-apply-when, and the runtime source binding "
+                "used to decide applicability. Do not add trigger_code."
             ),
         )
 
@@ -833,7 +901,6 @@ def _experience_root_cause_prevention_prompt(
     evaluation_summary = _evaluation_summary(analysis) if analysis is not None else ""
     before = _preview_text(target.before_content or "", limit=max_policy_chars)
     after = _preview_text(target.after_content or "", limit=max_policy_chars)
-    _, trigger_code = _experience_constraint_and_trigger(target.after_content, target)
     trajectory_content = _preview_text(
         trajectory.content if trajectory is not None else "",
         limit=max_trajectory_chars,
@@ -844,7 +911,9 @@ def _experience_root_cause_prevention_prompt(
     return f"""You are a senior counterfactual failure diagnostician for agent experience extraction.
 
 Review ONE proposed experience update.  The proposed experience will be injected
-as a runtime pre-tool reminder in future sessions.
+through the skill experience loader in future sessions: the agent searches
+experience candidates, reads `## Situation` snippets, and optionally loads the
+full experience before acting.
 
 Main question:
 If this exact experience had been injected before the source trajectory's first
@@ -853,13 +922,15 @@ for the next similar session to succeed, without breaking nearby correct cases?
 
 Pass only when all are true:
 1. The source trajectory supports the causal failure: first preventable wrong
-   decision, mistaken runtime rule, visible trigger/source evidence, and success link.
+   decision, mistaken runtime rule, visible runtime/source evidence, and success link.
 2. The experience is directly preventive: it changes a future tool call, missing
    tool call, confirmation, calculation, policy branch, write, communication, or
    final answer before or at the failing boundary.
 3. The experience is injectable: it is a runtime reminder, not a case audit,
    evaluator diagnosis, broad SOP, hidden answer, or generic "check everything" rule.
-4. The trigger/runtime condition is narrow enough to preserve correct behavior.
+4. `## Situation` is specific enough for the skill loader path: it tells a future
+   agent when to read/apply the experience, when not to apply it, and which
+   runtime source binding supports the rule.
 5. If the same root ambiguity caused both a communication obligation and a
    write/action scope mistake, the experience preserves that coupling instead
    of splitting it into two weak partial lessons.
@@ -877,7 +948,7 @@ Return JSON only:
 {{
   "pass": true,
   "root_cause_quality": "sufficient",
-  "reason": "brief trigger -> changed behavior -> success explanation",
+  "reason": "brief situation -> changed behavior -> success explanation",
   "expected_behavior_change": "what the future agent would do differently",
   "repair_prompt": "",
   "risks": []
@@ -907,11 +978,6 @@ outcome: {trajectory_outcome}
 target: {target.target_name}
 
 {after}
-
-## Proposed trigger_code
-```python
-{trigger_code}
-```
 """
 
 
@@ -1353,6 +1419,12 @@ def _section(content: str, title: str) -> str:
     )
     match = pattern.search(content or "")
     return match.group("body") if match else ""
+
+
+def _markdown_section(content: str, heading: str) -> str:
+    pattern = re.compile(rf"(?ims)^##\s+{re.escape(heading)}\s*\n(?P<body>.*?)(?=^##\s+|\Z)")
+    match = pattern.search(content or "")
+    return match.group("body").strip() if match else ""
 
 
 def _field_from_section(section: str, field_name: str) -> str:

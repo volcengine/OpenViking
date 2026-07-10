@@ -117,8 +117,7 @@ async def test_experience_gradient_estimator_converts_experience_operations():
                 memory_type="experiences",
                 memory_fields={
                     "experience_name": "booking_duplicate_handling",
-                    "constraint": "## Failure Pattern\n- Wrong boundary: book_reservation\n\n## Repair Procedure\n- Before calling book_reservation: check duplicate booking.\n\n## Guardrails\n- Only applies to duplicate booking candidates.",
-                    "trigger_code": 'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "book_reservation"\n',
+                    "constraint": "## Situation\n- Applies when: candidate booking may duplicate an existing retrieved booking.\n- Does not apply when: no matching existing booking is retrieved.\n- Source binding: user request and retrieved booking records.\n\n## Reminder\n- Avoid creating a duplicate booking for the same confirmed trip.\n\n## Procedure\n- Before booking: compare the candidate trip to retrieved bookings.\n- If it duplicates an existing booking: do not book and explain.\n- Else: proceed.\n\n## Anti-pattern\n- Do not book a duplicate reservation.\n- Preserve genuinely new bookings.",
                     "supersedes": ["older_experience"],
                 },
                 uris=["viking://user/u/memories/experiences/booking_duplicate_handling.md"],
@@ -144,7 +143,7 @@ async def test_experience_gradient_estimator_converts_experience_operations():
     )
     assert gradient.base_version == 7
     assert gradient.before_file is old_file
-    assert "## Failure Pattern" in gradient.after_file.content
+    assert "## Situation" in gradient.after_file.content
     assert gradient.after_file.extra_fields["supersedes"] == ["older_experience"]
     assert gradient.metadata["supersedes"] == ["older_experience"]
     assert len(gradient.links) == 1
@@ -168,8 +167,7 @@ async def test_experience_gradient_estimator_uses_policy_version_for_newer_old_f
             SimpleNamespace(
                 memory_type="experiences",
                 memory_fields={
-                    "constraint": "## Failure Pattern\n- Wrong boundary: book_reservation\n\n## Repair Procedure\n- Before calling book_reservation: check duplicate booking.\n\n## Guardrails\n- Only applies to duplicate booking candidates.",
-                    "trigger_code": 'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "book_reservation"\n',
+                    "constraint": "## Situation\n- Applies when: candidate booking may duplicate an existing retrieved booking.\n- Does not apply when: no matching existing booking is retrieved.\n- Source binding: user request and retrieved booking records.\n\n## Reminder\n- Avoid creating a duplicate booking for the same confirmed trip.\n\n## Procedure\n- Before booking: compare the candidate trip to retrieved bookings.\n- If it duplicates an existing booking: do not book and explain.\n- Else: proceed.\n\n## Anti-pattern\n- Do not book a duplicate reservation.\n- Preserve genuinely new bookings.",
                 },
                 uris=["viking://user/u/memories/experiences/booking_duplicate_handling.md"],
                 old_memory_file_content=None,
@@ -185,7 +183,7 @@ async def test_experience_gradient_estimator_uses_policy_version_for_newer_old_f
     assert gradient.target_name == "booking_duplicate_handling"
     assert gradient.base_version == 3
     assert gradient.before_file is None
-    assert "## Failure Pattern" in gradient.after_file.content
+    assert "## Situation" in gradient.after_file.content
     assert gradient.confidence == pytest.approx(0.3)
 
 

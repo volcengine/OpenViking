@@ -42,7 +42,7 @@ CONFIG="${OPENVIKING_CONFIG_FILE:-${HOME}/.openviking/ov.conf}"
 KILL_EXISTING=1
 ROLLOUT_LANGUAGE="default"
 ROLLOUT_BACKEND="${TAU2_ROLLOUT_BACKEND:-vikingbot}"
-LOADER_MODE="${TAU2_EXPERIENCE_LOADER_MODE:-constraint}"
+LOADER_MODE="${TAU2_EXPERIENCE_LOADER_MODE:-skill}"
 NATIVE_THREAD_WORKERS="${TAU2_NATIVE_THREAD_WORKERS:-128}"
 MAX_ROLLOUT_CONCURRENCY="${TAU2_MAX_ROLLOUT_CONCURRENCY:-200}"
 ROLLOUT_THREAD_WORKERS="${TAU2_ROLLOUT_THREAD_WORKERS:-200}"
@@ -76,7 +76,7 @@ Options:
   --rollout-backend native|vikingbot
                      Rollout implementation backend. Default: vikingbot.
   --loader-mode skill|constraint|direct_experience
-                     VikingBot experience loading mode. Default: constraint.
+                     VikingBot experience loading mode. Default: skill.
   --native-thread-workers N
                      Default thread pool workers for native rollout. Default: 128.
   --max-rollout-concurrency N

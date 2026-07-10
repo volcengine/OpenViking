@@ -38,7 +38,7 @@ logger = get_logger(__name__)
 
 Tau2ExperienceLoaderMode = Literal["skill", "constraint", "direct_experience"]
 VikingBotSystemPromptProfile = Literal["full", "minimal"]
-DEFAULT_TAU2_EXPERIENCE_LOADER_MODE: Tau2ExperienceLoaderMode = "constraint"
+DEFAULT_TAU2_EXPERIENCE_LOADER_MODE: Tau2ExperienceLoaderMode = "skill"
 DEFAULT_SYSTEM_PROMPT_PROFILE: VikingBotSystemPromptProfile = "minimal"
 
 

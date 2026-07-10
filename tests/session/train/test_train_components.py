@@ -992,7 +992,7 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
     assert plan.items[0].after_content == "merged update"
 
 
-def test_experience_memory_schema_includes_constraint_trigger_fields():
+def test_experience_memory_schema_is_skill_readable_without_trigger_fields():
     from openviking.session.memory.memory_type_registry import create_default_registry
 
     schema = create_default_registry().get("experiences")
@@ -1000,18 +1000,34 @@ def test_experience_memory_schema_includes_constraint_trigger_fields():
     assert schema is not None
     fields = {field.name: field for field in schema.fields}
     assert "constraint" in fields
-    assert "trigger_code" in fields
-    assert "should_trigger(ctx)" in fields["trigger_code"].description
+    assert "trigger_code" not in fields
+    assert "## Situation" in fields["constraint"].description
+    assert "skill loader" in fields["constraint"].description
     assert schema.content_template is not None
-    assert "# Experience Trigger" in schema.content_template
+    assert "# Experience Trigger" not in schema.content_template
 
 
-def test_experience_content_template_renders_markdown_trigger_section():
+def test_experience_content_template_renders_skill_readable_markdown_only():
     from openviking.session.memory.dataclass import MemoryFile
     from openviking.session.memory.memory_type_registry import create_default_registry
     from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 
     schema = create_default_registry().get("experiences")
+    body = (
+        "## Situation\n"
+        "- Applies when: refund request.\n"
+        "- Does not apply when: no refund.\n"
+        "- Source binding: user request and retrieved ticket.\n\n"
+        "## Reminder\n"
+        "- Check refund eligibility.\n\n"
+        "## Procedure\n"
+        "- Before refunding: verify eligibility.\n"
+        "- If ineligible: explain policy.\n"
+        "- Else: proceed.\n\n"
+        "## Anti-pattern\n"
+        "- Do not refund without eligibility.\n"
+        "- Preserve eligible refunds.\n"
+    )
     rendered = MemoryFileUtils.write(
         MemoryFile(
             uri="viking://user/u/memories/experiences/refund.md",
@@ -1020,32 +1036,27 @@ def test_experience_content_template_renders_markdown_trigger_section():
             extra_fields={
                 "memory_type": "experiences",
                 "experience_name": "refund_check",
-                "constraint": "## Situation\n- Refund request",
-                "trigger_code": DEFAULT_TRIGGER_CODE,
+                "constraint": body,
             },
         ),
         content_template=schema.content_template,
     )
 
-    assert "# Experience Trigger" in rendered
-    assert "- experience_name: refund_check" in rendered
-    assert "```python" in rendered
-    assert DEFAULT_TRIGGER_CODE.strip() in rendered
-    assert '"constraint": "## Situation\\n- Refund request"' in rendered
+    assert "# Experience Trigger" not in rendered
+    assert "```python" not in rendered
+    assert "## Situation" in rendered
+    assert '"constraint":' in rendered
     assert '"content":' not in rendered
     parsed = MemoryFileUtils.read(rendered)
-    assert parsed.extra_fields["constraint"] == "## Situation\n- Refund request"
+    assert parsed.extra_fields["constraint"] == body
 
 
 @pytest.mark.asyncio
-async def test_memory_file_policy_updater_persists_valid_trigger_code_from_merge_fields():
+async def test_memory_file_policy_updater_persists_skill_experience_from_merge_fields():
     from openviking.session.train import PolicyPlanItem
 
     policy_set = _experience_set()
     fs = FakeVikingFS({})
-    trigger_code = (
-        'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "refund_order"\n'
-    )
     plan = PolicyUpdatePlan(
         items=[
             PolicyPlanItem(
@@ -1059,7 +1070,6 @@ async def test_memory_file_policy_updater_persists_valid_trigger_code_from_merge
                 metadata={
                     "merge_memory_fields": {
                         "experience_name": "booking_duplicate_handling",
-                        "trigger_code": trigger_code,
                         "constraint": "new content",
                     }
                 },
@@ -1075,10 +1085,10 @@ async def test_memory_file_policy_updater_persists_valid_trigger_code_from_merge
 
     assert result.errors == []
     written = fs.files[policy_set.policies[0].uri]
-    assert '"trigger_code":' in written
     assert '"constraint": "new content"' in written
+    assert '"trigger_code":' not in written
     assert '"content":' not in written
-    assert "should_trigger" in written
+    assert "new content" in written
 
 
 @pytest.mark.asyncio
@@ -1126,48 +1136,11 @@ async def test_memory_file_policy_updater_preserves_hidden_feedback_stats_on_upd
         "positive_count": 1,
         "negative_count": 1,
     }
+    assert "trigger_code" not in written.extra_fields
 
 
 @pytest.mark.asyncio
-async def test_memory_file_policy_updater_skips_invalid_trigger_code_patch():
-    from openviking.session.train import PolicyPlanItem
-
-    policy_set = _experience_set()
-    fs = FakeVikingFS({})
-    plan = PolicyUpdatePlan(
-        items=[
-            PolicyPlanItem(
-                kind="upsert",
-                memory_type="experiences",
-                target_name="booking_duplicate_handling",
-                target_uri=policy_set.policies[0].uri,
-                before_content="content",
-                after_content="new content",
-                base_version=1,
-                metadata={
-                    "merge_memory_fields": {
-                        "experience_name": "booking_duplicate_handling",
-                        "trigger_code": "import os\ndef should_trigger(ctx):\n    return True\n",
-                    }
-                },
-            )
-        ]
-    )
-
-    result = await MemoryFilePolicyUpdater(viking_fs=fs).apply(
-        plan,
-        policy_set,
-        fake_request_context(),
-    )
-
-    assert result.written_uris == []
-    assert policy_set.policies[0].uri not in fs.files
-    assert any("invalid trigger_code" in error for error in result.errors)
-    assert result.updated_policy_set is policy_set
-
-
-@pytest.mark.asyncio
-async def test_memory_file_policy_updater_requires_trigger_code_for_experience_writes():
+async def test_memory_file_policy_updater_allows_experience_without_trigger_code():
     from openviking.session.train import PolicyPlanItem
 
     policy_set = ExperienceSet(
@@ -1205,7 +1178,6 @@ async def test_memory_file_policy_updater_requires_trigger_code_for_experience_w
         fake_request_context(),
     )
 
-    assert result.written_uris == []
-    assert policy_set.policies[0].uri not in fs.files
-    assert any("missing trigger_code for legacy_experience" in error for error in result.errors)
-    assert result.updated_policy_set is policy_set
+    assert result.errors == []
+    assert result.written_uris == [policy_set.policies[0].uri]
+    assert policy_set.policies[0].uri in fs.files

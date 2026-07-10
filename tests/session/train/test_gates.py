@@ -18,6 +18,7 @@ from openviking.session.train.gates import (
     ExperienceCausalSignalGate,
     ExperienceRootCausePreventionGate,
     ExperienceRuntimeWordingGate,
+    ExperienceSkillReadabilityGate,
     ExperienceToolAlignmentGate,
     ExperienceTriggerRuntimeGate,
     GateTarget,
@@ -113,13 +114,19 @@ def _plan_item() -> PolicyPlanItem:
         target_uri="viking://user/u/memories/experiences/missing_total_communication.md",
         before_content=None,
         after_content=(
-            "## Failure Pattern\n"
-            "- Missing required total in final user-visible message.\n\n"
-            "- Task impact: final communication omitted the required total.\n\n"
-            "## Repair Procedure\n"
-            "- Before calling `communicate_with_user`, include the required total.\n\n"
-            "## Guardrails\n"
-            "- Only applies to final summary communication.\n"
+            "## Situation\n"
+            "- Applies when: final user-visible communication must answer a requested total.\n"
+            "- Does not apply when: no total was requested.\n"
+            "- Source binding: user request scope and retrieved record prices.\n\n"
+            "## Reminder\n"
+            "- Include the requested source-bound total in the final message.\n\n"
+            "## Procedure\n"
+            "- Before calling `communicate_with_user`: check whether the requested total is present.\n"
+            "- If it is missing: add the calculated total from retrieved records.\n"
+            "- Else: proceed with the candidate message.\n\n"
+            "## Anti-pattern\n"
+            "- Do not summarize completion while omitting the requested total.\n"
+            "- Preserve unrelated correct database actions.\n"
         ),
         links=[
             StoredLink(
@@ -180,7 +187,7 @@ def _gradient_target(
 def test_default_policy_gate_runner_uses_deterministic_experience_gates_only():
     names = [gate.name for gate in default_policy_gate_runner().gates]
 
-    assert names == ["experience_causal_signal", "experience_trigger_runtime"]
+    assert names == ["experience_causal_signal", "experience_skill_readability"]
     assert "experience_counterfactual_reflection" not in names
     assert "experience_root_cause_prevention" not in names
     assert "experience_runtime_wording" not in names
@@ -191,10 +198,11 @@ def test_default_policy_gate_runner_uses_deterministic_experience_gates_only():
 
     contract = default_experience_gate_contract()
     assert "Content format" not in contract
-    assert "Use exactly these headings" not in contract
     assert "Counterfactual reflection" not in contract
     assert "Runtime wording hygiene" not in contract
-    assert "Trigger runtime compatibility" in contract
+    assert "Trigger runtime compatibility" not in contract
+    assert "Skill-loader readability" in contract
+    assert "`## Situation`" in contract
     assert "eligible for experience learning by default" in contract
     assert "Recommended operation=skip" in contract
     assert "Existing target experience=none only means" in contract
@@ -212,13 +220,19 @@ async def test_runtime_wording_gate_rejects_evaluator_terms_in_experience_conten
     )
     item = _plan_item()
     item.after_content = (
-        "## Failure Pattern\n"
-        "- Wrong boundary: communicate_with_user\n"
-        "- Missing check: communicate_checks required total from evaluator.\n\n"
-        "## Repair Procedure\n"
-        "- Before calling `communicate_with_user`, include the total required by the rubric.\n\n"
-        "## Guardrails\n"
-        "- Only applies to final summary communication.\n"
+        "## Situation\n"
+        "- Applies when: final communication must include a total.\n"
+        "- Does not apply when: no total was requested.\n"
+        "- Source binding: communicate_checks required total from evaluator.\n\n"
+        "## Reminder\n"
+        "- Include the total required by the rubric.\n\n"
+        "## Procedure\n"
+        "- Before calling `communicate_with_user`: check the final message.\n"
+        "- If the total is missing: add it.\n"
+        "- Else: proceed.\n\n"
+        "## Anti-pattern\n"
+        "- Do not omit evaluator-required content.\n"
+        "- Preserve unrelated actions.\n"
     )
     target = GateTarget(
         stage="post_plan",
@@ -236,6 +250,41 @@ async def test_runtime_wording_gate_rejects_evaluator_terms_in_experience_conten
     assert decision.action == "reject"
     assert decision.gate_name == "experience_runtime_wording"
     assert set(decision.evidence["terms"]) >= {"communicate_checks", "evaluator", "rubric"}
+
+
+@pytest.mark.asyncio
+async def test_skill_readability_gate_requires_situation_source_binding():
+    item = _plan_item()
+    item.after_content = (
+        "## Situation\n"
+        "- Applies when: final communication is needed.\n\n"
+        "## Reminder\n"
+        "- Include the requested fact.\n\n"
+        "## Procedure\n"
+        "- Before replying: check the message.\n\n"
+        "## Anti-pattern\n"
+        "- Do not omit the fact.\n"
+    )
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=_trajectory_with_repair_signal(
+            action="create",
+            first_wrong_tool="communicate_with_user",
+            trigger_boundary="communicate_with_user",
+        ),
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceSkillReadabilityGate().evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert decision.gate_name == "experience_skill_readability"
+    assert decision.evidence["has_source_binding"] is False
 
 
 @pytest.mark.asyncio

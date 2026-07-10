@@ -63,7 +63,7 @@ class BatchTrainEvalConfig:
     config_path: str | None = None
     output_path: str | None = None
     keep_default_tools: bool = True
-    loader_mode: str = "constraint"
+    loader_mode: str = "skill"
     max_iterations: int = 30
     direct_experience_content: str | None = None
     direct_experience_name: str | None = None
@@ -104,7 +104,7 @@ class BatchTrainEvalConfig:
             raise ValueError("batch_size must be > 0")
         if self.concurrency <= 0:
             raise ValueError("concurrency must be > 0")
-        self.loader_mode = str(self.loader_mode or "constraint").strip().lower()
+        self.loader_mode = str(self.loader_mode or "skill").strip().lower()
         if self.loader_mode not in {"skill", "constraint", "direct_experience"}:
             raise ValueError("loader_mode must be skill, constraint, or direct_experience")
         if self.direct_experience_content is not None:

@@ -74,8 +74,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--loader-mode",
         choices=("skill", "constraint", "direct_experience"),
-        default="constraint",
-        help="Tau2 VikingBot experience loading mode (default: constraint).",
+        default="skill",
+        help="Tau2 VikingBot experience loading mode (default: skill).",
     )
     parser.add_argument(
         "--direct-experience-content",

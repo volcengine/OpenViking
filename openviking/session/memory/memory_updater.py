@@ -1034,6 +1034,8 @@ class MemoryUpdater:
             if old_content and old_content.extra_fields:
                 schema_field_names = {f.name for f in schema.fields} | {"content", "memory_type"}
                 for key, val in old_content.extra_fields.items():
+                    if schema.memory_type == "experiences" and key == "trigger_code":
+                        continue
                     if key not in schema_field_names and key not in metadata and val is not None:
                         metadata[key] = val
 

@@ -1,8 +1,8 @@
 memory_type: experiences
 description: |
-  A generalizable, reusable failure-repair constraint distilled from agent execution — not a process record.
-  Captures the minimal reminder needed to prevent or recover from a previously observed failure,
-  plus restricted Python trigger code that decides when the reminder should be injected before a tool call.
+  A generalizable, reusable failure-repair experience distilled from agent execution.
+  It is read by the skill experience loader, so the content must expose clear applicability,
+  the minimal corrective reminder, and anti-patterns. It is not a full workflow or a case log.
 
 directory: "viking://user/{{ user_space }}/memories/experiences"
 filename_template: "{{ experience_name }}.md"
@@ -10,227 +10,82 @@ enabled: true
 operation_mode: "upsert"
 agent_only: true
 content_template: |
-  # Constraint
   {{ constraint|default(content, true) }}
-
-  # Experience Trigger
-  - experience_name: {{ experience_name }}
-  - trigger_code:
-  ```python
-  {{ trigger_code|default('', true) }}
-  ```
 
 fields:
   - name: experience_name
     type: string
     description: |
-      Name the generalizable pattern, not the specific instance.
+      Name the generalizable failure-repair pattern, not the specific instance.
       Must be written in {{ language }}.
       {% if language == 'en' %}Use lowercase snake_case, max 5 words.{% else %}Use a concise noun phrase, max 15 characters.{% endif %}
-      Good: "booking_duplicate_handling", "pytest_asyncio_cancel_hang_fix", "重复预订处理".
+      Good: "booking_duplicate_handling", "missing_total_cost", "汇总费用遗漏".
     merge_op: immutable
 
   - name: constraint
     type: string
     description: |
-      Natural-language content must be written in {{ language }}. Keep fixed section headings,
-      tool names, schema fields, Python identifiers, and quoted runtime values unchanged.
+      Natural-language content must be written in {{ language }}. Keep tool names, schema
+      fields, Python identifiers, and quoted runtime values unchanged.
 
-      Natural-language failure-repair reminder in EXACTLY this 3-section format. This output may be injected directly into an autonomous agent's context immediately before a matching tool call, so it MUST be written as strict, executable machine instructions. It is NOT a full business workflow or a success-path SOP; it is only the minimal repair needed to prevent or recover from the observed failure.
+      Output the experience in EXACTLY this 4-section Markdown format. The skill loader
+      shows `## Situation` in search results and may load the whole file with
+      `read_experience`, so the experience must be understandable without trigger_code.
 
-      ## Failure Pattern
-      - Wrong boundary: <the exact First Wrong Tool Call.Tool or communicate_with_user boundary>
-      - Wrong candidate shape: <the risky candidate_tool_args/content pattern that caused outcome loss>
-      - Missing check: <the single missing runtime fact, policy gate, object binding, calculation, confirmation, or required communication>
-      - Task impact: <why this specific boundary changed database/action/user-visible outcome>
+      ## Situation
+      - Applies when: <runtime-visible task/user/tool-result situation where this lesson matters>
+      - Does not apply when: <closest nearby but non-applicable situation>
+      - Source binding: <which user request scope, confirmed object, retrieved record/set,
+        source field, policy gate, calculation, or candidate message content supplies the rule>
 
-      ## Repair Procedure
-      - Before calling `<tool>`: <check the decisive candidate arg/content or already-read runtime fact>
-      - If <bad condition>: <do not call / change exactly one arg / ask exactly one confirmation / communicate exactly one required fact>
-      - Else: <proceed with the original candidate call without rewriting unrelated workflow steps>
+      ## Reminder
+      - <one sentence root-cause lesson that changes the next agent behavior>
 
-      ## Guardrails
-      - Only applies when candidate_tool is `<tool>` and candidate args/content match the risky shape above.
-      - Do not apply to <closest nearby but non-applicable shape/intent/tool>.
-      - Preserve correct near-miss calls: do not apply when the candidate matches an evaluation-passed/expected action or a correct object role from the source trajectory.
-      - Do not infer missing fields from broad history; if the decisive field/fact is unavailable, return False in trigger_code or ask/read before acting.
+      ## Procedure
+      - Before/when <candidate action or communication boundary>: <check the decisive runtime fact>
+      - If <bad condition>: <block/change exactly one argument, ask/read one missing fact,
+        or include one required user-visible fact>
+      - Else: <proceed without rewriting unrelated workflow steps>
 
-      Rules:
-      - FAILURE-REPAIR ONLY: Create or update an experience only when the trajectory contains a reusable failure or partial-failure repair. If the trajectory is successful, case-specific, already covered correctly, or not preventable by a pre-tool reminder, output no experience changes.
-      - DO NOT LEARN FULL WORKFLOWS: Do NOT describe or learn the full successful workflow; learn only the minimal repair for the first reward-changing failure. Never write an end-to-end business SOP.
-      - FIRST-WRONG-TOOL CARD: Structure the experience as a pre-call card for the exact `First Wrong Tool Call.Tool`. Every bullet must answer: "What should the agent check or change immediately before this one candidate call?" Delete setup, search, planning, and later recovery steps unless they are the single missing precondition for this tool.
-      - ROOT-CAUSE FOCUS: The reminder must target the first materially reward-changing mistake, not the entire task. State the generalized failure cause in `Failure Pattern` and the minimal prevention/recovery action in `Repair Procedure`.
-      - USE TRAJECTORY ERROR TOOL: Prefer the trajectory's `First Wrong Tool Call`, `First Material Divergence`, `Causal Analysis`, `Experience Repair Signal`, and `Counterfactual Ideal Experience` over broad task descriptions. If `Counterfactual Ideal Experience` contains C1/C2/C3 candidates, use ONLY `Selected candidate=C1`; do not create experiences from C2/C3 or from Selected candidate=`none`. For failed or partially failed trajectories, treat the repair signal as advisory context rather than an authorization gate: even when legacy trajectories say `Action: skip`, independently create or update an experience if the first reward-changing mistake is reusable and preventable at the `First Wrong Tool Call.Tool` boundary. In the split signal format, `Existing target experience: none` only means no existing memory should be modified; it does NOT mean no new experience should be created. If `New experience action: create` or `Recommended operation: create`, create a new experience unless the repair is not reusable/preventable. The experience MUST focus on C1's Injection boundary plus the `First Wrong Tool Call.Tool`/`Candidate shape`; preserve C1's Situation, Repair rule, structured Source binding, Applicability, and Anti-pattern in generalized runtime language. Output no changes only when the trajectory is successful, already covered correctly, not preventable by a pre-tool reminder, or has Selected candidate=`none` for a valid reason.
-      - RUNTIME WORDING SANITIZATION: Runtime-facing experience content MUST NOT contain evaluator/control-plane terms such as `evaluation`, `evaluator`, `communicate_checks`, `action_checks`, `db_check`, `reward`, `rubric`, `评估`, or `奖励`. If the selected candidate uses those terms outside Case evidence, rewrite them into runtime semantic sources (user request, confirmed target, retrieved record set, source field, calculation, policy gate) before creating/updating the experience; if that rewrite is impossible, output no changes.
-      - EVALUATION-PASSED ACTION PRESERVATION: Never write a constraint that blocks, reverses, or discourages a tool call/candidate shape that the source trajectory or evaluation marks as expected/matched/passed. If the same tool has both correct and wrong calls, explicitly preserve the correct near-miss in Guardrails and target only the failing discriminator.
-      - SAME-TOOL DISAMBIGUATION: When correct and wrong calls use the same `candidate_tool`, the `Failure Pattern`, `Repair Procedure`, `Guardrails`, and trigger_code must include the decisive discriminator: object role, target membership, confirmation scope, argument provenance, lifecycle/cardinality change, or candidate content. Do not learn a tool-level or broad intent-keyword constraint.
-      - PRE-CALL CHECKLIST ONLY: `Repair Procedure` must be a short checklist for the candidate call itself: verify candidate args/content, compare with already-read runtime facts, then either proceed, block the call, correct one argument, ask one confirmation, or send one required communication. Do not include normal workflow steps that happened before the wrong call.
-      - SELF-CORRECT BAD EXPERIENCE: If the trajectory says a loaded experience was `over-broad`, `misleading`, or `too_weak` and names it as the target experience, UPDATE that existing experience instead of creating a new one. The update must primarily narrow or correct the existing experience's Failure Pattern, Guardrails, and trigger_code so it no longer fires on the non-applicable First Wrong Tool Call candidate shape.
-      - DO NOT PATCH NON-CAUSAL EXPERIENCES: If a loaded experience was present but marked `irrelevant`, `ignored`, or `not_needed`, do not update it merely because it was loaded. Only update a loaded experience when the trajectory explicitly identifies it as causal or too weak for the First Wrong Tool Call.
-      - DB VS COMMUNICATION FAILURES: If tool/action/db checks passed and only required user-visible communication failed, create or update only a communication-boundary repair. Do not update database-operation, cancellation, booking, or workflow experiences for a pure final-response omission. Do not skip solely because the omitted literal is case-specific; abstract it to the required semantic role such as total cost, identifier, policy explanation, or next step.
-      - COMMUNICATION SOURCE BINDING: For communication-boundary repairs, do not write vague reminders such as "include all required information." Preserve the source-bound fact from C1: the user-requested scope, frozen row/set membership, included/excluded records, source field, derivation, later-write effect, selected object, or policy gate that supplies the required message content. For totals/counts/lists/summaries, the experience must explicitly say when the scope is frozen and whether later writes change that requested scope. Put concrete literals only in generalized diagnostic wording; the reusable rule must explain how to derive the fact.
-      - COUPLED COMMUNICATION/ACTION SCOPE: If one ambiguous user request creates both an information obligation and a boundary on later writes/actions, preserve the coupling in one experience when splitting would lose the root cause. The reminder must tell the future agent to satisfy the requested information scope while keeping write/action scope limited to the user-initiated targets. Do not learn only "include the total" or only "do not touch extra objects" when the recurrence is prevented by the distinction between information scope and action scope.
-      - AGENT-PROPOSED EXPANSION IS NOT USER-INITIATED SCOPE: Do not treat a user's yes/confirmation to the agent's own over-broad plan as proof that the user independently requested extra objects/actions. For scope-changing writes, require evidence that the user initiated the extra object/action in their own request, not merely accepted an agent-proposed expansion. Preserve this distinction in Failure Pattern, Repair Procedure, Guardrails, and trigger_code when it caused the failure.
-      - WRONG WRITE ARGUMENT FAILURES: If the first failure is a write tool with wrong arguments, focus the repair on the incorrect field provenance, object binding, amount calculation, confirmation, or candidate argument shape. Do not learn the surrounding successful setup steps.
-      - SCHEMA FIELD SEMANTICS: Do not infer or rewrite the meaning of tool schema fields from route topology, object lifecycle, or broad domain intuition. For flight booking, `origin` and `destination` must preserve the user's requested primary route endpoints; a round-trip or multi-leg `flights` list may return to the origin, but that does not mean the `destination` argument should be changed to the final leg's destination. Only repair the exact field named in the trajectory's `First Wrong Tool Call.Candidate shape.decisive_field`.
-      - NO POLICY HALLUCINATION OVER EVAL: Do not invent a policy prohibition, denial branch, or safety rule that contradicts evaluation action checks, rubric facts, explicit expected actions, or passed tool/action requirements. If policy evidence is ambiguous but the evaluation marks a call as expected, preserve that call and look for another failure boundary.
-      - POLICY DISTINCTION FAILURES: Preserve decisive policy distinctions instead of collapsing them. For example, permission to perform an action is not the same as refund/benefit eligibility; changing an existing object is not the same as creating replacements; one booking is not the same as multiple bookings.
-      - MUTUAL EXCLUSIVITY (NO REDUNDANCY): `Failure Pattern` identifies the failure risk and root cause. `Repair Procedure` contains only positive corrective actions. `Guardrails` contains only negative boundaries and "what not to do." Do not repeat the same concept across sections.
-      - REPAIR PATH, NOT FULL PATH: Aggressively trim conversational noise, setup actions, successful unrelated steps, broad policy summaries, and normal workflow details. Keep only actions needed immediately before the First Wrong Tool Call.
-      - NO POLICY DUMPS: Do not list all eligibility rules, fare rules, refund rules, or booking policies unless each listed rule is the actual missing check for the First Wrong Tool Call. Prefer "verify the decisive eligibility condition from the read reservation facts" over copying the entire policy.
-      - MACHINE READABILITY (IMPERATIVE VOICE): Address the future agent directly using commanding imperatives (e.g., "Verify X", "If Y, call tool Z", "Before final response, include W").
-      - ABSTRACTION MANDATE WITH ROLE PRESERVATION: Strip away specific entities, IDs, user names, exact amounts, exact dates, raw text, and raw payloads, but preserve reward-relevant semantic roles. Generalize to roles such as originally requested object, user-confirmed target, expected matched write, discovered informational object, copied extra object, and extra unexpected object instead of merging them into one broad "reservation/order/item" shape.
-      - COMMUNICATION IS ALLOWED WHEN REWARD-CRITICAL: Include communicate_with_user steps when the failure was missing confirmation, missing required final information, or wrong user-visible policy communication. Do not strip these steps merely because they are communications.
-      - CONDITIONAL BRANCH PRESERVATION: Preserve the branch that caused the failure as explicit IF/THEN/ELSE logic. Never collapse divergent user-driven branches into a single terminal action.
-      - OBJECT BOUNDARY PRESERVATION: Never let a repair change object cardinality, lifecycle shape, passenger/object membership, or target object unless the user independently requested that exact change and confirmed it and the tool/policy supports it. A confirmation to an agent-suggested broader plan does not by itself count as an independent scope-changing request.
-      - NEVER BROADEN OBJECT SHAPE: Never let an experience change object cardinality/lifecycle shape unless the user independently requested and confirmed that exact change.
-      - CORRECT NEAR-MISS GUARDRAIL REQUIRED: If the source trajectory contains a nearby correct call with the same candidate_tool or intent words, include a Guardrails bullet that says when NOT to apply the experience. The trigger_code must also return False for that near-miss whenever the decisive discriminator is available.
-      - TRIGGERABILITY TEST: Before outputting an experience, ensure the repair can be expressed as a narrow `trigger_code` for the exact `First Wrong Tool Call.Tool`. If the only possible trigger is broad keyword matching over the whole conversation, skip or narrow the repair.
-      - TRIGGER BOUNDARY LOCK: When the source trajectory contains `First Wrong Tool Call.Tool`, `trigger_code` MUST use that tool as its single candidate_tool gate. Do not choose an earlier setup tool, a later recovery tool, or a broader workflow tool as the trigger.
-      - UPDATE MEANS NARROW FIRST: When updating an existing over-broad or misleading experience, prefer narrowing the trigger and applicability boundaries over adding more procedure text. Preserve only the repair that applies to the First Wrong Tool Call.Tool and remove broad workflow language.
-      - ATOMIC SCOPE: Each experience MUST cover exactly ONE failure pattern for ONE user intent and associated tool-call/communication boundary. Multiple distinct failures or intents → SEPARATE experiences. Hard limit: if `Repair Procedure` would exceed 3 bullets or mention more than one candidate tool, STOP and split or skip.
-      - STRICT FORMATTING: Use exactly the 3 headings above in this order. Use concise markdown bullets (-) for every section. No numbered lists, no introductory sentences, no conversational filler, and no closing paragraphs. Token efficiency is critical.
-
-    merge_op: patch
-
-  - name: trigger_code
-    type: string
-    description: |
-      Restricted Python code that decides when this failure-repair constraint should be triggered.
-      It MUST define exactly one function:
-
-      def should_trigger(ctx):
-          ...
-          return <bool>
-
-      Available ctx keys:
-      - ctx["candidate_tool"]: candidate tool name about to be called.
-      - ctx["candidate_tool_args"]: JSON-like candidate tool arguments.
-      - ctx["messages"]: compact JSON-like conversation history.
+      ## Anti-pattern
+      - Do not <the tempting wrong behavior that caused the failure>
+      - Preserve <the nearest correct behavior/object/action that must not be blocked>
 
       Rules:
-      - ALWAYS return a bool.
-      - Allowed builtins include `any`, `all`, `bool`, `dict`, `enumerate`, `float`, `int`,
-        `isinstance`, `len`, `list`, `max`, `min`, `range`, `reversed`, `set`, `str`,
-        `sum`, `tuple`, `regex_match`, and `regex_search`. Do not call other functions.
-      - SINGLE-TOOL BOUNDARY: By default, one experience trigger MUST bind to exactly one
-        candidate_tool, preferably the trajectory's `First Wrong Tool Call.Tool`, using
-        `if ctx.get("candidate_tool") != "<tool_name>": return False`.
-        Do not use `candidate_tool in [...]` unless the tools are true aliases with identical
-        argument schema and the exact same failure boundary. If multiple tools could fail in
-        related but distinct ways, split them into separate experiences.
-      - ONE EXPERIENCE = ONE TOOL BOUNDARY: The experience content and trigger must repair
-        one failure pattern at one candidate-tool boundary. Do not write one trigger that
-        covers search + update, cancel + communicate, or booking + baggage update.
-      - ALWAYS start with candidate_tool filtering as the base gate. Return False immediately
-        when the candidate tool is not one of the tools where this repair can matter.
-      - FAILURE-SPECIFIC CONDITION REQUIRED: Do not stop at tool binding, argument existence,
-        broad object type, or generic task shape. After the tool gate, require a condition that
-        describes the observed risky failure shape (wrong/missing field, inconsistent object,
-        impossible amount, unconfirmed target, missing required content, or disqualifying policy fact).
-      - BROAD TRIGGER FORMS ARE NOT ENOUGH: These are too broad when used as the final return
-        condition: `"reservation_id" in args`, `args.get("flight_type") == "round_trip"`,
-        `len(payment_methods) > 1`, `"payment_id" in args`, or keyword-only history scans. You may
-        use them as early filters only if a later condition checks the failure-specific risk.
-      - CAUSAL BOUNDARY: Trigger only at the exact tool/communication boundary where this repair can
-        prevent the first materially reward-changing mistake, normally the trajectory's
-        `First Wrong Tool Call.Tool`. Do not trigger merely because the broader conversation
-        contains related keywords.
-      - CANDIDATE-SHAPE FIRST: Inspect `ctx["candidate_tool_args"]` (or `content` for
-        `communicate_with_user`) before scanning history. Return False if the candidate call
-        does not match the trajectory's generalized `First Wrong Tool Call.Candidate shape`.
-      - SAME-TOOL CORRECT CALLS: If the source trajectory had both correct and wrong calls for
-        the same candidate_tool, encode the distinguishing candidate arg/content condition in
-        trigger_code. Return False for the correct near-miss object role, target membership,
-        confirmation scope, or argument provenance whenever that evidence is available in ctx.
-      - UPDATE OLD BROAD TRIGGERS: If updating an existing trigger that fires from broad history
-        keywords, replace it with a candidate-shape gate. Do not keep legacy `return True` after
-        tool gate, message-only keyword gates, or multi-tool gates.
-      - COMMUNICATION CONTENT GATE: For `communicate_with_user`, inspect
-        `ctx["candidate_tool_args"]["content"]`. Trigger only when the candidate message itself
-        is the risky policy explanation, confirmation request, denial, or final answer covered
-        by this repair. Do not trigger from historical intent keywords alone.
-      - The trigger must be narrow enough to represent the exact failure pattern and candidate
-        shape from `First Wrong Tool Call`, not the broad business workflow. After the tool gate
-        passes, require the candidate args/content to show the risky shape; use message history
-        only as supporting evidence.
-      - FAILURE-KIND TEMPLATES:
-        - wrong_arguments: inspect the decisive candidate arg field and trigger only when it is
-          missing, malformed, inconsistent, out of range, uses the wrong schema field, or conflicts
-          with another candidate arg.
-        - wrong_object: inspect the candidate object id and require evidence that it differs from
-          the user-confirmed or runtime-selected object; if that evidence is unavailable, return False.
-        - wrong_policy_branch: inspect the candidate args/content for the risky branch and require
-          a visible disqualifying fact from messages/tool results; do not trigger on the whole policy
-          domain.
-        - missing_confirmation_before_tool: inspect the candidate write object/amount/shape and
-          require absence of matching user confirmation evidence; if confirmation state cannot be
-          checked, return False.
-        - missing_communication: inspect only the candidate message content and trigger when this
-          message is the risky/final/policy communication and lacks the required fact, amount, id,
-          denial, or next step.
-      - Add negative gates for nearby non-applicable intents, already-confirmed alternate branches,
-        incompatible object lifecycle/cardinality, or candidate tool args that would make this
-        repair irrelevant. Return False for those cases.
-      - REQUIRED NEAR-MISS GATES: Explicitly return False for nearby but different intents. Examples:
-        cancellation-only is not cancellation-then-rebooking; refund ineligibility is not
-        cancellation ineligibility; single booking is not multi-booking; final summary communication
-        is not a policy-gate communication.
-      - Be especially conservative for `communicate_with_user`: trigger only when the next user-visible
-        message is exactly the policy gate, confirmation request, or final required answer covered by
-        this repair. Do not use broad communicate triggers for general workflow advice.
-      - Prefer candidate_tool_args checks for write tools so the reminder only fires on the exact
-        write/read family affected by the failure.
-      - If the repair could change object cardinality or lifecycle shape, trigger only after the user
-        independently requested that exact shape and then explicitly confirmed it. Do not count a
-        bare "yes" to an agent-proposed broader plan as enough evidence for scope expansion.
-      - If candidate_tool_args is empty or missing the decisive field needed to prove applicability,
-        return False rather than relying on broad conversation history.
-      - Use only simple Python expressions, loops, if statements, dict/list/string operations,
-        and allowed builtins such as any/all/len/str/bool/regex_search/regex_match.
-      - Use regex_search(pattern, text) or regex_match(pattern, text) instead of importing re.
-        Regex helpers are case-insensitive and return False for invalid patterns.
-      - Do NOT import modules, call external APIs, read files, mutate global state, or use
-        eval/exec/open/print.
+      - Failure repair only. Do not output generic positive workflows, full SOPs, success-path
+        summaries, or case transcripts.
+      - One experience covers one reusable root failure pattern. Split unrelated failures; keep
+        coupled communication/action scope together only when the same ambiguity causes both.
+      - Focus on the first materially outcome-changing mistake and the minimal prevention or
+        recovery action at that boundary.
+      - Prefer the trajectory's `First Wrong Tool Call`, `First Material Divergence`,
+        `Causal Analysis`, `Experience Repair Signal`, and `Counterfactual Ideal Experience`.
+        If `Counterfactual Ideal Experience` contains candidates, use only Selected candidate=C1;
+        create no experience for Selected candidate=none unless the trajectory independently
+        shows a reusable preventable failure.
+      - For non-success trajectories, legacy `Action: skip`, `Recommended operation: skip`,
+        `Existing target experience: none`, or `Trigger boundary: none` are advisory only; they
+        must not suppress a reusable new experience.
+      - For successful, case-specific, already-covered, unsupported, or not-preventable failures,
+        output no experience changes.
+      - If a loaded experience was causal and marked over-broad, misleading, or too weak, update
+        that existing experience; otherwise do not patch irrelevant loaded experiences.
+      - Do not mention evaluator/control-plane terms such as evaluation, evaluator,
+        communicate_checks, action_checks, db_check, reward, rubric, 评估, or 奖励 in runtime
+        content. Rewrite them into runtime facts: user request, retrieved records, source fields,
+        policy gate, calculation, or required user-visible message.
+      - Preserve object boundaries. A user's yes to the agent's over-broad proposal is not proof
+        that the user independently requested extra objects/actions.
+      - For communication failures, bind required facts to their source: requested scope, frozen
+        record/set membership, included/excluded records, source field, derivation, later-write
+        effect, selected object, or policy gate. Avoid vague reminders like "include all required
+        information".
+      - For aggregate/list/summary requests, state when the scope is frozen and whether later
+        writes change that already-requested scope.
+      - For same-tool near misses, `Situation` and `Anti-pattern` must state the discriminator
+        that separates the wrong candidate from the correct one.
+      - Keep the experience concise: no setup chatter, no policy dumps, no full paths, no raw IDs,
+        no hidden answers. Use semantic roles instead of case literals.
+      - Use imperative, machine-readable bullets. No introductory or closing paragraphs.
 
-      Bad too-broad trigger (do not output this):
-      def should_trigger(ctx):
-          if ctx.get("candidate_tool") != "cancel_reservation":
-              return False
-          args = ctx.get("candidate_tool_args", {})
-          return "reservation_id" in args
-
-      Good candidate-args trigger:
-      def should_trigger(ctx):
-          if ctx.get("candidate_tool") != "book_reservation":
-              return False
-          args = ctx.get("candidate_tool_args", {})
-          payment_methods = args.get("payment_methods", [])
-          return any("id" in item and "payment_id" not in item for item in payment_methods)
-
-      Good consistency trigger:
-      def should_trigger(ctx):
-          if ctx.get("candidate_tool") != "book_reservation":
-              return False
-          args = ctx.get("candidate_tool_args", {})
-          methods = args.get("payment_methods", [])
-          amounts = [m.get("amount") for m in methods if isinstance(m, dict)]
-          return len(methods) > 1 and any(not isinstance(amount, (int, float)) or amount <= 0 for amount in amounts)
-
-      Good communication trigger:
-      def should_trigger(ctx):
-          if ctx.get("candidate_tool") != "communicate_with_user":
-              return False
-          content = str(ctx.get("candidate_tool_args", {}).get("content", ""))
-          return "refund" in content.lower() and not regex_search(r"\$?\d+", content)
     merge_op: patch
-
-  - name: supersedes
-    type: string
-    description: |
-      The experience_name of an existing experience that this one supersedes.
-      Set ONLY when this repair replaces the same failure pattern under a DIFFERENT name.
-      Do not use supersedes to merge different failure patterns or broad workflows.
-      The system will automatically delete the old experience and inherit its trajectory history.
-      Leave empty for a new experience or when updating an experience with the same name.
-    merge_op: replace
