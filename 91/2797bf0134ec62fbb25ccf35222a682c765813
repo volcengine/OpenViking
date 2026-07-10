@@ -1,0 +1,50 @@
+sdk/go/retrieval.go
+  s_4537a39f346db9::t_7b01d610e989e0 21-24,30,42,59-62,68,81
+tests/retrieve/test_hierarchical_retriever_image.py
+  s_4537a39f346db9::t_0b988537ff9595 1-118
+sdk/go/README.md
+  s_4537a39f346db9::t_fe4eb11732ea42 88-99,111-112
+sdk/go/client_test.go
+  s_4537a39f346db9::t_d276d10e37d97e 168-196,379-399
+tests/service/test_search_service_image.py
+  s_4537a39f346db9::t_a0dcf69d5cc37c 1-34
+sdk/go/helpers.go
+  s_4537a39f346db9::t_51a82708506c7b 4,6,8-9,11,113-140
+tests/unit/test_image_search.py
+  s_4537a39f346db9::t_9b2a7ad33801d4 1-38
+sdk/go/README_CN.md
+  s_4537a39f346db9::t_f6a0a504184776 36-63
+openviking/utils/image_search.py
+  s_4537a39f346db9::t_badd7faa6a08a5 1-63
+docs/zh/api/06-retrieval.md
+  s_4537a39f346db9::t_53b4e286cbf6fa 57-58,77-81,150-161,191-193,284-295,364-365,381,413-425,474-479,514-516
+docs/en/api/06-retrieval.md
+  s_4537a39f346db9::t_7bfa569e8aba2b 57-58,76-80,149-160,190-192,283-294,363-364,379,411-423,472-477,512-514
+sdk/go/types.go
+  s_4537a39f346db9::t_667598e80baf1a 192,208
+sdk/python/openviking_sdk/client.py
+  s_4537a39f346db9::t_df97a8f9301d4d 3,5-6,65-90,909,918,923,938,949,955,1827,1836,1849,1855,1866,1883
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "912797bf0134ec62fbb25ccf35222a682c765813",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_4537a39f346db9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fc5-20a5-78c1-ae5b-7f497f47a9fa",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

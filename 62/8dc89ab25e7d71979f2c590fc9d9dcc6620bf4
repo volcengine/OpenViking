@@ -1,0 +1,23 @@
+crates/ragfs/src/core/filesystem.rs
+  s_702b6d0a31d94b::t_05781a7fe68189 490-491,881,883,885
+crates/ragfs/src/core/mountable.rs
+  s_702b6d0a31d94b::t_546b181b8ede11 761,1019-1023,1674-1698
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "628dc89ab25e7d71979f2c590fc9d9dcc6620bf4",
+  "prompts": {},
+  "sessions": {
+    "s_702b6d0a31d94b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f27ad-c0c7-7cc3-a42e-7b882a20fa92",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

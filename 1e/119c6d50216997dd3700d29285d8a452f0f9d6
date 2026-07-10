@@ -1,0 +1,35 @@
+docs/en/agent-integrations/12-cursor.md
+  s_5e17b6c73ed8ec::t_479d9a026cb34e 3,12,19,21,23-26,30-33,37,48-51
+docs/en/agent-integrations/13-trae.md
+  s_5e17b6c73ed8ec::t_c3ab89b2efb617 3,18,25,27,29-32,36-38,42,49-50,55-57
+docs/images/agents/en/cursor.md
+  s_5e17b6c73ed8ec::t_abf0c99d419d01 3,11-13,21-23
+docs/images/agents/en/trae.md
+  s_5e17b6c73ed8ec::t_484266e37907c2 3,19-20,28-29
+docs/images/agents/zh/cursor.md
+  s_5e17b6c73ed8ec::t_2287d3ceeddacf 3,11-13,21-23
+docs/images/agents/zh/trae.md
+  s_5e17b6c73ed8ec::t_293b0a4b26dc06 3,19-20,28-29
+docs/zh/agent-integrations/12-cursor.md
+  s_5e17b6c73ed8ec::t_6ff242f6ed44fb 3,12,19,21,23-26,30-33,37,48-51
+docs/zh/agent-integrations/13-trae.md
+  s_5e17b6c73ed8ec::t_7064365da1c720 3,18,25,27,29-32,36-38,42,49-50,55-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1e119c6d50216997dd3700d29285d8a452f0f9d6",
+  "prompts": {},
+  "sessions": {
+    "s_5e17b6c73ed8ec": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f49b4-d234-7ae0-a95d-b3a3014392cd",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

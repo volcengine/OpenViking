@@ -1,0 +1,197 @@
+openviking/retrieve/hierarchical_retriever.py
+  s_5056d6c1111fb2::t_a529e0bdd56ede 98
+  s_b6ce80c15bdb6d::t_f6c05db3432465 117
+  h_7bbfeebef9ffd2 25,101,108,112,116,118,151-153,155,159-162,164-166,168-172,174-176,178-180,182-184,186-189,191-213,215,217-223,226-232,235-258,277-278,284,290,294,303-319,347,363,376,395-396,453,464,523,536,539 gitai:{"mixed_line_ranges":[{"Single":118}],"operations":[]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "f90e8bb35772dcc8bba6275e586d0f18c3fb981d",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_5056d6c1111fb2": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-b34584b4-77b3-4794-873b-4ffcb60b2aaf",
+        "model": "default"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_b6ce80c15bdb6d": {
+      "agent_id": {
+        "tool": "trae-cue",
+        "id": "ai_tab-icr-690f49be-8a11-40e4-aad9-2541d6c1f9be",
+        "model": "default"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {
+    "openviking/retrieve/hierarchical_retriever.py": [
+      {
+        "hash": "h_7bbfeebef9ffd2",
+        "line_ranges": [
+          {
+            "Single": 25
+          },
+          {
+            "Single": 101
+          },
+          {
+            "Single": 108
+          },
+          {
+            "Single": 112
+          },
+          {
+            "Single": 116
+          },
+          {
+            "Single": 118
+          },
+          {
+            "Range": [
+              151,
+              153
+            ]
+          },
+          {
+            "Single": 155
+          },
+          {
+            "Range": [
+              159,
+              162
+            ]
+          },
+          {
+            "Range": [
+              164,
+              166
+            ]
+          },
+          {
+            "Range": [
+              168,
+              172
+            ]
+          },
+          {
+            "Range": [
+              174,
+              176
+            ]
+          },
+          {
+            "Range": [
+              178,
+              180
+            ]
+          },
+          {
+            "Range": [
+              182,
+              184
+            ]
+          },
+          {
+            "Range": [
+              186,
+              189
+            ]
+          },
+          {
+            "Range": [
+              191,
+              213
+            ]
+          },
+          {
+            "Single": 215
+          },
+          {
+            "Range": [
+              217,
+              223
+            ]
+          },
+          {
+            "Range": [
+              226,
+              232
+            ]
+          },
+          {
+            "Range": [
+              235,
+              258
+            ]
+          },
+          {
+            "Range": [
+              277,
+              278
+            ]
+          },
+          {
+            "Single": 284
+          },
+          {
+            "Single": 290
+          },
+          {
+            "Single": 294
+          },
+          {
+            "Range": [
+              303,
+              319
+            ]
+          },
+          {
+            "Single": 347
+          },
+          {
+            "Single": 363
+          },
+          {
+            "Single": 376
+          },
+          {
+            "Range": [
+              395,
+              396
+            ]
+          },
+          {
+            "Single": 453
+          },
+          {
+            "Single": 464
+          },
+          {
+            "Single": 523
+          },
+          {
+            "Single": 536
+          },
+          {
+            "Single": 539
+          }
+        ],
+        "mixed_line_ranges": [
+          {
+            "Single": 118
+          }
+        ],
+        "operations": []
+      }
+    ]
+  },
+  "remote_transcripts": {}
+}

@@ -1,0 +1,21 @@
+openviking/storage/vectordb/engine/__init__.py
+  s_b9a5ad658b8440::t_6f0a30218ded7f 54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ac1f422c05f7601a50c072d1239d64381ba289d1",
+  "prompts": {},
+  "sessions": {
+    "s_b9a5ad658b8440": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4110-3337-77b0-9bf8-ecf0f304faab",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

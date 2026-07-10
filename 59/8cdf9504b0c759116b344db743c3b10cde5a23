@@ -1,0 +1,23 @@
+openviking/storage/vectordb/collection/local_collection.py
+  s_9893f4355bfb2f::t_a1b36360b2b2c7 60,102,112,387,402-404,430,444-446,558-563,577-578,607-611,899,933
+openviking/storage/vectordb/meta/collection_meta.py
+  s_9893f4355bfb2f::t_ceab4ecff7933a 64,133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "598cdf9504b0c759116b344db743c3b10cde5a23",
+  "prompts": {},
+  "sessions": {
+    "s_9893f4355bfb2f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3572-f3ad-7802-b0b7-e97bc07708ac",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
