@@ -2,9 +2,11 @@
 
 import asyncio
 import json
+import time as _time
 import uuid
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -15,6 +17,9 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
+
+if TYPE_CHECKING:
+    from vikingbot.config.schema import Config
 
 
 class SubagentManager:
@@ -36,8 +41,6 @@ class SubagentManager:
         temperature: float = 0.7,
         sandbox_manager: "SandboxManager | None" = None,
     ):
-        from vikingbot.config.schema import ExecToolConfig
-
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
@@ -53,6 +56,7 @@ class SubagentManager:
         session_key: SessionKey,
         label: str | None = None,
         channel_metadata: dict[str, Any] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> str:
         """
         Spawn a subagent to execute a task in the background.
@@ -77,6 +81,7 @@ class SubagentManager:
                 display_label,
                 session_key,
                 dict(channel_metadata or {}),
+                openviking_connection,
             )
         )
         self._running_tasks[task_id] = bg_task
@@ -94,6 +99,7 @@ class SubagentManager:
         label: str,
         session_key: SessionKey,
         channel_metadata: dict[str, Any] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info(f"Subagent [{task_id}] starting task: {label}")
@@ -102,7 +108,7 @@ class SubagentManager:
             # Build subagent tools (no message tool, no spawn tool)
             from vikingbot.agent.tools import register_subagent_tools
 
-            tools = ToolRegistry()
+            tools = ToolRegistry(config=self.config)
             register_subagent_tools(
                 registry=tools,
                 config=self.config,
@@ -112,14 +118,19 @@ class SubagentManager:
             task_content = task
             try:
                 from vikingbot.agent.memory import MemoryStore
-                memory_store = MemoryStore(self.workspace)
+
+                if not self.config.ov_server.is_available():
+                    raise RuntimeError("OpenViking is unavailable")
+                memory_store = MemoryStore(self.workspace, config=self.config)
                 workspace_id = (
                     self.sandbox_manager.to_workspace_id(session_key)
                     if self.sandbox_manager
                     else "shared"
                 )
                 exp_memory = await memory_store.get_viking_experience_context(
-                    query=task, workspace_id=workspace_id
+                    query=task,
+                    workspace_id=workspace_id,
+                    openviking_connection=openviking_connection,
                 )
                 if exp_memory:
                     task_content = f"## Agent Experience (relevant to this task)\n{exp_memory}\n\n---\n\n{task}"
@@ -181,6 +192,7 @@ class SubagentManager:
                             tool_call.arguments,
                             session_key=session_key,
                             sandbox_manager=self.sandbox_manager,
+                            openviking_connection=openviking_connection,
                         )
                         messages.append(
                             {
@@ -199,14 +211,28 @@ class SubagentManager:
 
             logger.info(f"Subagent [{task_id}] completed successfully")
             await self._announce_result(
-                task_id, label, task, final_result, session_key, "ok", channel_metadata
+                task_id,
+                label,
+                task,
+                final_result,
+                session_key,
+                "ok",
+                channel_metadata,
+                openviking_connection,
             )
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.exception(f"Subagent [{task_id}] failed: {e}")
             await self._announce_result(
-                task_id, label, task, error_msg, session_key, "error", channel_metadata
+                task_id,
+                label,
+                task,
+                error_msg,
+                session_key,
+                "error",
+                channel_metadata,
+                openviking_connection,
             )
 
     async def _announce_result(
@@ -218,6 +244,7 @@ class SubagentManager:
         session_key: SessionKey,
         status: str,
         channel_metadata: dict[str, Any] | None = None,
+        openviking_connection: dict[str, Any] | None = None,
     ) -> None:
         """Announce the subagent result to the main agent via the message bus."""
         status_text = "completed successfully" if status == "ok" else "failed"
@@ -237,6 +264,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             session_key=session_key,
             content=announce_content,
             metadata=dict(channel_metadata or {}),
+            openviking_connection=openviking_connection,
         )
 
         await self.bus.publish_inbound(msg)
@@ -252,9 +280,6 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
 
     def _build_subagent_prompt(self, task: str, workspace: Path | None = None) -> str:
         """Build a focused system prompt for the subagent."""
-        from datetime import datetime
-        import time as _time
-
         workspace = workspace or self.workspace
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         tz = _time.strftime("%Z") or "UTC"

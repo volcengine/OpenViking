@@ -33,6 +33,7 @@ class InboundMessage:
     sender_id: str  # User identifier
     content: str  # Message text
     session_key: SessionKey
+    actor_peer_id: str | None = None  # Authenticated OpenViking peer identity
     timestamp: datetime = field(default_factory=datetime.now)
     sender_name: str | None = None
     need_reply: bool = True

@@ -24,6 +24,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       "${CUPY_PACKAGE}" \
       "apscheduler>=3.11,<4" \
       "h5py>=3.12,<4" \
+      "httpx>=0.25,<1" \
       "pydantic>=2,<3" \
       "pytest>=8,<9" \
       "pytest-asyncio>=0.24,<2" \

@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 
 class MessageRole(str, Enum):
@@ -53,6 +53,7 @@ class OpenVikingConnection(BaseModel):
     account_id: Optional[str] = Field(default=None, description="Effective account ID")
     user_id: Optional[str] = Field(default=None, description="Effective user ID")
     agent_id: Optional[str] = Field(default=None, description="Effective agent ID")
+    actor_peer_id: Optional[str] = Field(default=None, description="Effective actor peer ID")
     role: Optional[str] = Field(default=None, description="Effective OpenViking role")
     api_key_type: Optional[str] = Field(default=None, description="OpenViking API key type")
     namespace_policy: Optional[Dict[str, bool]] = Field(
@@ -67,8 +68,9 @@ class ChatRequest(BaseModel):
 
     message: str = Field(..., description="User message to send", min_length=1)
     session_id: Optional[str] = Field(
-        default="default", description="Session ID (optional, will create new if not provided)"
+        default=None, description="Session ID (optional, will create new if not provided)"
     )
+    _principal_scope: str = PrivateAttr(default="local")
     user_id: Optional[str] = Field(default=None, description="User identifier (optional)")
     stream: bool = Field(default=False, description="Whether to stream the response")
     context: Optional[List[ChatMessage]] = Field(
@@ -122,6 +124,11 @@ class FeedbackRequest(BaseModel):
         default=None,
         description="Bot channel ID for multi-channel routing (optional)",
     )
+    openviking_connection: Optional[OpenVikingConnection] = Field(
+        default=None,
+        description="Authenticated OpenViking connection forwarded by the server proxy",
+    )
+    _principal_scope: str = PrivateAttr(default="local")
 
     @model_validator(mode="after")
     def validate_rating_feedback(self) -> "FeedbackRequest":

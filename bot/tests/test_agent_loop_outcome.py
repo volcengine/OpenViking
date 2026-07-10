@@ -111,7 +111,6 @@ def test_agent_loop_omits_spawn_tool_when_subagents_disabled(temp_dir: Path, mon
     bus = MessageBus()
     provider = _RecordingProvider()
     config = Config(storage_workspace=str(temp_dir), agents={"subagent_enabled": False})
-    monkeypatch.setattr("vikingbot.agent.tools.factory.load_config", lambda: config)
 
     loop = AgentLoop(
         bus=bus,
@@ -123,6 +122,24 @@ def test_agent_loop_omits_spawn_tool_when_subagents_disabled(temp_dir: Path, mon
     )
 
     assert "spawn" not in loop.tools.tool_names
+
+
+def test_agent_loop_standalone_omits_openviking_tools(temp_dir: Path, monkeypatch):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    config = Config(storage_workspace=str(temp_dir))
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_RecordingProvider(),
+        workspace=temp_dir / "workspace",
+        config=config,
+    )
+
+    assert config.ov_server.server_url == ""
+    assert not any(name.startswith("openviking_") for name in loop.tools.tool_names)
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="standalone")
+    assert loop._get_ov_tools_enable(session_key) is False
 
 
 @pytest.mark.asyncio
@@ -173,14 +190,6 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
     monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
     monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
-    class _OVConfig:
-        exp_write_tools = []
-
-    class _LoadedConfig:
-        ov_server = _OVConfig()
-
-    monkeypatch.setattr(loop_module, "load_config", lambda: _LoadedConfig())
 
     class _ToolLimitProvider(LLMProvider):
         def __init__(self):
@@ -458,9 +467,7 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
         }
     )
 
-    async def fake_get_ov_client(
-        self, session_key, openviking_connection=None, actor_peer_id=None
-    ):
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
         del session_key, openviking_connection, actor_peer_id
         return fake_ov_client
 
@@ -469,6 +476,7 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
     bus = MessageBus()
     config = Config(
         storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={"session_context_enabled": True, "session_context_token_budget": 321},
     )
     loop = AgentLoop(
@@ -513,9 +521,7 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
         context_payload={"messages": [{"role": "user", "content": "OV user turn"}]}
     )
 
-    async def fake_get_ov_client(
-        self, session_key, openviking_connection=None, actor_peer_id=None
-    ):
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
         del self, session_key, openviking_connection, actor_peer_id
         return fake_ov_client
 
@@ -524,6 +530,7 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
     bus = MessageBus()
     config = Config(
         storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={"session_context_enabled": True, "session_context_token_budget": 321},
     )
     loop = AgentLoop(
@@ -568,6 +575,7 @@ async def test_agent_loop_submits_openviking_session_through_compact_hook(
     bus = MessageBus()
     config = Config(
         storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={"session_context_enabled": True},
     )
     loop = AgentLoop(
@@ -620,9 +628,7 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
             state["last_synced_local_index"] = len(session.messages) - 1
         return kwargs
 
-    async def fake_get_ov_client(
-        self, session_key, openviking_connection=None, actor_peer_id=None
-    ):
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
         del self, session_key, openviking_connection, actor_peer_id
 
         class _Client:
@@ -651,6 +657,7 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
     bus = MessageBus()
     config = Config(
         storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={
             "session_context_enabled": True,
             "session_context_token_budget": 321,
@@ -725,9 +732,7 @@ async def test_agent_loop_commits_openviking_before_model_when_memory_window_rea
         session.metadata["openviking"]["last_commit_performed"] = bool(kwargs["force_commit"])
         return kwargs
 
-    async def fake_get_ov_client(
-        self, session_key, openviking_connection=None, actor_peer_id=None
-    ):
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
         del self, session_key, openviking_connection, actor_peer_id
 
         class _Client:
@@ -756,6 +761,7 @@ async def test_agent_loop_commits_openviking_before_model_when_memory_window_rea
     bus = MessageBus()
     config = Config(
         storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={
             "session_context_enabled": True,
             "session_context_token_budget": 321,
@@ -887,7 +893,11 @@ async def test_agent_loop_post_turn_passes_memory_window_threshold(temp_dir: Pat
     )
 
     bus = MessageBus()
-    config = Config(storage_workspace=str(temp_dir), agents={"session_context_enabled": True})
+    config = Config(
+        storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
+        agents={"session_context_enabled": True},
+    )
     loop = AgentLoop(
         bus=bus,
         provider=_FakeProvider(),
@@ -942,7 +952,11 @@ async def test_agent_loop_post_turn_clears_local_session_after_openviking_commit
     )
 
     bus = MessageBus()
-    config = Config(storage_workspace=str(temp_dir), agents={"session_context_enabled": True})
+    config = Config(
+        storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
+        agents={"session_context_enabled": True},
+    )
     loop = AgentLoop(
         bus=bus,
         provider=_FakeProvider(),
@@ -1001,7 +1015,10 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
     monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
 
     bus = MessageBus()
-    config = Config(storage_workspace=str(temp_dir))
+    config = Config(
+        storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
+    )
     loop = AgentLoop(
         bus=bus,
         provider=_FakeProvider(),
@@ -1081,7 +1098,10 @@ async def test_auto_openviking_memory_uses_distinct_tool_name(temp_dir: Path, mo
     monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
 
     bus = MessageBus()
-    config = Config(storage_workspace=str(temp_dir))
+    config = Config(
+        storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
+    )
     loop = AgentLoop(
         bus=bus,
         provider=_FakeProvider(),

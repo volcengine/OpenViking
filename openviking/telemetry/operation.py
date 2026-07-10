@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections import defaultdict
 from contextlib import contextmanager
@@ -11,6 +12,31 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Dict, Iterator, Optional
 from uuid import uuid4
+
+_CUVS_TIMING_FIELDS = (
+    "total_ms",
+    "preflight_ms",
+    "queue_ms",
+    "build_ms",
+    "filter_prepare_ms",
+    "gpu_search_ms",
+    "native_search_ms",
+)
+_CUVS_ROUTE_BUCKETS = {
+    "cuvs",
+    "cuvs_error",
+    "empty_filter",
+    "native_fallback",
+    "native_filter_threshold",
+    "native_memory_budget",
+    "native_rebuild_pending",
+    "native_sparse_hybrid",
+    "native_unsupported_filter",
+    "unsupported_sparse_hybrid",
+}
+_CUVS_FILTER_BUCKETS = {"none", "scalar", "path"}
+_CUVS_ALGORITHM_BUCKETS = {"brute_force", "cagra"}
+_CUVS_DTYPE_BUCKETS = {"float32", "float16"}
 
 
 @dataclass
@@ -41,6 +67,11 @@ class TelemetrySummaryBuilder:
     """Build normalized summary metrics from collector data."""
 
     _PRUNED = object()
+    _PRESERVED_ZERO_METRIC_PATHS = {
+        ("vector", "cuvs", "memory", "estimated_peak_bytes_max"),
+        ("vector", "cuvs", "memory", "free_bytes_min"),
+        ("vector", "cuvs", "memory", "usable_bytes_min"),
+    }
 
     _MEMORY_EXTRACT_STAGE_KEYS = {
         "prepare_inputs_ms": "memory.extract.stage.prepare_inputs.duration_ms",
@@ -75,7 +106,7 @@ class TelemetrySummaryBuilder:
             return default
         try:
             return int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return default
 
     @staticmethod
@@ -83,9 +114,12 @@ class TelemetrySummaryBuilder:
         if value is None:
             return default
         try:
-            return round(float(value), 3)
-        except (TypeError, ValueError):
+            normalized = float(value)
+        except (TypeError, ValueError, OverflowError):
             return default
+        if not math.isfinite(normalized):
+            return default
+        return round(normalized, 3)
 
     @staticmethod
     def _bool(value: Any, default: bool = False) -> bool:
@@ -104,11 +138,11 @@ class TelemetrySummaryBuilder:
         return default
 
     @classmethod
-    def _prune_zero_metrics(cls, value: Any) -> Any:
+    def _prune_zero_metrics(cls, value: Any, path: tuple[str, ...] = ()) -> Any:
         if isinstance(value, dict):
             pruned: Dict[str, Any] = {}
             for key, child in value.items():
-                pruned_child = cls._prune_zero_metrics(child)
+                pruned_child = cls._prune_zero_metrics(child, (*path, key))
                 if pruned_child is cls._PRUNED:
                     continue
                 pruned[key] = pruned_child
@@ -117,7 +151,11 @@ class TelemetrySummaryBuilder:
         if isinstance(value, bool):
             return value
 
-        if isinstance(value, (int, float)) and value == 0:
+        if (
+            isinstance(value, (int, float))
+            and value == 0
+            and path not in cls._PRESERVED_ZERO_METRIC_PATHS
+        ):
             return cls._PRUNED
 
         return value
@@ -130,6 +168,30 @@ class TelemetrySummaryBuilder:
         return any(key.startswith(needle) for key in counters) or any(
             key.startswith(needle) for key in gauges
         )
+
+    @classmethod
+    def _counter_breakdown(cls, prefix: str, counters: Dict[str, float]) -> Dict[str, int]:
+        needle = f"{prefix}."
+        return {
+            key[len(needle) :]: cls._i(value, 0)
+            for key, value in sorted(counters.items())
+            if key.startswith(needle) and cls._i(value, 0) > 0
+        }
+
+    @classmethod
+    def _cuvs_timing_summary(
+        cls, counters: Dict[str, float], gauges: Dict[str, Any]
+    ) -> Dict[str, Dict[str, float]]:
+        result: Dict[str, Dict[str, float]] = {}
+        for field in _CUVS_TIMING_FIELDS:
+            public_name = field.removesuffix("_ms")
+            total_us = cls._i(counters.get(f"vector.cuvs.timings.{field}.sum_us"), 0)
+            maximum_us = cls._i(gauges.get(f"vector.cuvs.timings.{field}.max_us"), 0)
+            total = cls._f(total_us / 1000.0, 0.0)
+            maximum = cls._f(maximum_us / 1000.0, 0.0)
+            if total or maximum:
+                result[public_name] = {"sum": total, "max": maximum}
+        return result
 
     @classmethod
     def _build_stage_token_summary(cls, counters: Dict[str, float]) -> Dict[str, Dict[str, Any]]:
@@ -226,6 +288,42 @@ class TelemetrySummaryBuilder:
                 "scanned": vectors_scanned,
                 "scan_reason": gauges.get("vector.scan_reason", ""),
             }
+            if cls._has_metric_prefix("vector.cuvs", counters, gauges):
+                cuvs_memory = {
+                    public_name: cls._i(gauges[metric_key], 0)
+                    for public_name, metric_key in (
+                        (
+                            "estimated_peak_bytes_max",
+                            "vector.cuvs.memory_estimated_peak_bytes.max",
+                        ),
+                        ("free_bytes_min", "vector.cuvs.memory_free_bytes.min"),
+                        ("usable_bytes_min", "vector.cuvs.memory_usable_bytes.min"),
+                    )
+                    if metric_key in gauges
+                }
+                summary["vector"]["cuvs"] = {
+                    "searches": cls._i(counters.get("vector.cuvs.searches"), 0),
+                    "algorithms": cls._counter_breakdown("vector.cuvs.algorithms", counters),
+                    "dtypes": cls._counter_breakdown("vector.cuvs.dtypes", counters),
+                    "max_concurrent_gpu_searches": cls._i(
+                        gauges.get("vector.cuvs.max_concurrent_gpu_searches"), 1
+                    ),
+                    "auto_mode_searches": cls._i(counters.get("vector.cuvs.auto_mode_searches"), 0),
+                    "routes": cls._counter_breakdown("vector.cuvs.routes", counters),
+                    "filter_kinds": cls._counter_breakdown("vector.cuvs.filter_kinds", counters),
+                    "filter_cache_hits": cls._i(counters.get("vector.cuvs.filter_cache_hits"), 0),
+                    "native_filter_reuses": cls._i(
+                        counters.get("vector.cuvs.native_filter_reuses"), 0
+                    ),
+                    "builds": cls._i(counters.get("vector.cuvs.builds"), 0),
+                    "eligible_count_max": cls._i(gauges.get("vector.cuvs.eligible_count.max"), 0),
+                    "records_generation_max": cls._i(
+                        gauges.get("vector.cuvs.records_generation.max"), 0
+                    ),
+                    "index_size_max": cls._i(gauges.get("vector.cuvs.index_size.max"), 0),
+                    "memory": cuvs_memory,
+                    "timings_ms": cls._cuvs_timing_summary(counters, gauges),
+                }
 
         if cls._has_metric_prefix("semantic_nodes", counters, gauges):
             summary["semantic_nodes"] = {
@@ -321,7 +419,7 @@ class TelemetrySummaryBuilder:
         ):
             if key not in summary:
                 continue
-            pruned_value = cls._prune_zero_metrics(summary[key])
+            pruned_value = cls._prune_zero_metrics(summary[key], (key,))
             if pruned_value is cls._PRUNED:
                 summary.pop(key, None)
             else:
@@ -366,6 +464,95 @@ class OperationTelemetry:
 
     def set_value(self, key: str, value: Any) -> None:
         self.set(key, value)
+
+    @staticmethod
+    def _metric_bucket(value: Any, allowed: set[str]) -> str:
+        normalized = str(value or "").strip().lower()
+        return normalized if normalized in allowed else "other"
+
+    @staticmethod
+    def _duration_us(value: Any) -> int:
+        """Normalize a duration to integer microseconds for deterministic addition."""
+
+        try:
+            duration_ms = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return 0
+        if not math.isfinite(duration_ms) or duration_ms <= 0:
+            return 0
+        duration_us = duration_ms * 1000.0
+        if not math.isfinite(duration_us):
+            return 0
+        return max(int(round(duration_us)), 0)
+
+    def record_cuvs_search(self, metrics: Dict[str, Any]) -> None:
+        """Aggregate one dense-search sample with order-independent operations."""
+
+        if not self.enabled:
+            return
+        route = self._metric_bucket(metrics.get("route_reason"), _CUVS_ROUTE_BUCKETS)
+        filter_kind = self._metric_bucket(metrics.get("filter_kind"), _CUVS_FILTER_BUCKETS)
+        algorithm = self._metric_bucket(metrics.get("algorithm"), _CUVS_ALGORITHM_BUCKETS)
+        dtype = self._metric_bucket(metrics.get("dtype"), _CUVS_DTYPE_BUCKETS)
+
+        with self._lock:
+            self._counters["vector.cuvs.searches"] += 1
+            self._counters[f"vector.cuvs.routes.{route}"] += 1
+            self._counters[f"vector.cuvs.filter_kinds.{filter_kind}"] += 1
+            self._counters[f"vector.cuvs.algorithms.{algorithm}"] += 1
+            self._counters[f"vector.cuvs.dtypes.{dtype}"] += 1
+            if TelemetrySummaryBuilder._bool(metrics.get("auto_mode"), False):
+                self._counters["vector.cuvs.auto_mode_searches"] += 1
+            if TelemetrySummaryBuilder._bool(metrics.get("filter_cache_hit"), False):
+                self._counters["vector.cuvs.filter_cache_hits"] += 1
+            if TelemetrySummaryBuilder._bool(metrics.get("native_filter_reused"), False):
+                self._counters["vector.cuvs.native_filter_reuses"] += 1
+            if TelemetrySummaryBuilder._bool(metrics.get("build_performed"), False):
+                self._counters["vector.cuvs.builds"] += 1
+
+            concurrency = max(
+                TelemetrySummaryBuilder._i(metrics.get("max_concurrent_gpu_searches"), 1), 1
+            )
+            self._gauges["vector.cuvs.max_concurrent_gpu_searches"] = max(
+                TelemetrySummaryBuilder._i(
+                    self._gauges.get("vector.cuvs.max_concurrent_gpu_searches"), 1
+                ),
+                concurrency,
+            )
+            for field in ("eligible_count", "records_generation", "index_size"):
+                raw_value = metrics.get(field)
+                if raw_value is None:
+                    continue
+                value = max(TelemetrySummaryBuilder._i(raw_value, 0), 0)
+                key = f"vector.cuvs.{field}.max"
+                self._gauges[key] = max(TelemetrySummaryBuilder._i(self._gauges.get(key), 0), value)
+
+            peak_raw = metrics.get("memory_estimated_peak_bytes")
+            peak = TelemetrySummaryBuilder._i(peak_raw, -1)
+            if peak_raw is not None and peak >= 0:
+                key = "vector.cuvs.memory_estimated_peak_bytes.max"
+                self._gauges[key] = max(TelemetrySummaryBuilder._i(self._gauges.get(key), 0), peak)
+            for field in ("memory_free_bytes", "memory_usable_bytes"):
+                raw_value = metrics.get(field)
+                value = TelemetrySummaryBuilder._i(raw_value, -1)
+                if raw_value is None or value < 0:
+                    continue
+                key = f"vector.cuvs.{field}.min"
+                existing = self._gauges.get(key)
+                self._gauges[key] = (
+                    value if existing is None else min(TelemetrySummaryBuilder._i(existing), value)
+                )
+
+            for field in _CUVS_TIMING_FIELDS:
+                value_us = self._duration_us(metrics.get(field))
+                sum_key = f"vector.cuvs.timings.{field}.sum_us"
+                max_key = f"vector.cuvs.timings.{field}.max_us"
+                self._counters[sum_key] = (
+                    TelemetrySummaryBuilder._i(self._counters.get(sum_key), 0) + value_us
+                )
+                self._gauges[max_key] = max(
+                    TelemetrySummaryBuilder._i(self._gauges.get(max_key), 0), value_us
+                )
 
     def add_duration(self, key: str, duration_ms: float) -> None:
         if not self.enabled:

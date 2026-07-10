@@ -120,3 +120,52 @@ def test_start_vikingbot_gateway_preserves_explicit_cli_config_env(monkeypatch, 
 
     assert process is not None
     assert captured["env"][OPENVIKING_CLI_CONFIG_ENV] == str(explicit_cli_config)
+
+
+def test_start_vikingbot_gateway_passes_managed_server_runtime(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: "/usr/bin/vikingbot")
+
+    def _fake_popen(cmd, stdout=None, stderr=None, text=None, env=None):
+        captured["env"] = env
+        return _FakeProcess()
+
+    monkeypatch.setattr(bootstrap.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
+
+    process = bootstrap._start_vikingbot_gateway(
+        enable_logging=False,
+        log_dir="/tmp/logs",
+        managed_server_url="http://127.0.0.1:1940",
+    )
+
+    assert process is not None
+    assert captured["env"]["VIKINGBOT_WITH_OPENVIKING_SERVER"] == "1"
+    assert captured["env"]["VIKINGBOT_MANAGED_OV_SERVER_URL"] == "http://127.0.0.1:1940"
+
+
+def test_start_vikingbot_gateway_allows_slow_module_probe(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda name: None)
+
+    def _fake_run(cmd, capture_output=None, timeout=None):
+        captured["probe_cmd"] = cmd
+        captured["probe_timeout"] = timeout
+        return type("Result", (), {"returncode": 0})()
+
+    def _fake_popen(cmd, stdout=None, stderr=None, text=None, env=None):
+        captured["cmd"] = cmd
+        return _FakeProcess()
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", _fake_run)
+    monkeypatch.setattr(bootstrap.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(bootstrap.time, "sleep", lambda _: None)
+
+    process = bootstrap._start_vikingbot_gateway(enable_logging=False, log_dir="/tmp/logs")
+
+    assert process is not None
+    assert captured["probe_cmd"][1:] == ["-m", "vikingbot", "--help"]
+    assert captured["probe_timeout"] == 15
+    assert captured["cmd"][1:4] == ["-m", "vikingbot", "gateway"]
