@@ -86,42 +86,18 @@ def _default_memory_counts() -> Dict[str, int]:
     return {"total": 0}
 
 
-@dataclass(frozen=True)
-class _MessagePeerIds:
-    user_peer_ids: set[str]
-    assistant_peer_ids: set[str]
-
-    @property
-    def allowed_peer_ids(self) -> set[str]:
-        return self.user_peer_ids | self.assistant_peer_ids
-
-
-def _message_peer_ids(messages: List[Message]) -> _MessagePeerIds:
-    user_peer_ids: set[str] = set()
-    assistant_peer_ids: set[str] = set()
-
-    for message in messages:
-        peer_id = safe_peer_id(getattr(message, "peer_id", None))
-        if not peer_id:
-            continue
-
-        role = getattr(message, "role", None)
-        if role == "user":
-            user_peer_ids.add(peer_id)
-        elif role == "assistant":
-            assistant_peer_ids.add(peer_id)
-
-    return _MessagePeerIds(
-        user_peer_ids=user_peer_ids,
-        assistant_peer_ids=assistant_peer_ids,
-    )
+def _message_peer_ids(messages: List[Message]) -> set[str]:
+    return {
+        peer_id
+        for message in messages
+        if getattr(message, "role", None) == "user"
+        if (peer_id := safe_peer_id(getattr(message, "peer_id", None)))
+    }
 
 
 @dataclass(frozen=True)
 class _MemoryExtractionScope:
     allow_self_memory: bool
-    user_peer_ids: set[str]
-    assistant_peer_ids: set[str]
     allowed_peer_ids: set[str]
     include_session_skills: bool
     memory_types: Optional[set[str]]
@@ -135,17 +111,11 @@ def _resolve_memory_extraction_scope(
     config_session_skill_extraction_enabled: bool,
 ) -> _MemoryExtractionScope:
     allow_self_memory = policy.self_enabled
-    message_peer_ids = (
-        _message_peer_ids(messages)
-        if policy.peer_enabled
-        else _MessagePeerIds(user_peer_ids=set(), assistant_peer_ids=set())
-    )
+    allowed_peer_ids = _message_peer_ids(messages) if policy.peer_enabled else set()
 
     return _MemoryExtractionScope(
         allow_self_memory=allow_self_memory,
-        user_peer_ids=message_peer_ids.user_peer_ids,
-        assistant_peer_ids=message_peer_ids.assistant_peer_ids,
-        allowed_peer_ids=message_peer_ids.allowed_peer_ids,
+        allowed_peer_ids=allowed_peer_ids,
         include_session_skills=config_session_skill_extraction_enabled and allow_self_memory,
         memory_types=policy.memory_types,
     )
