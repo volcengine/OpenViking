@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,6 +14,7 @@ from openviking.session.memory.agent_experience_context_provider import (
 from openviking.session.memory.agent_trajectory_context_provider import (
     AgentTrajectoryContextProvider,
 )
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -48,6 +48,23 @@ def test_user_memory_provider_splits_but_trajectory_provider_keeps_messages_whol
     assert len(user_provider.get_extract_context().messages) > 1
     assert len(trajectory_provider.get_extract_context().messages) == 1
     assert trajectory_provider.get_extract_context().messages[0] is messages[0]
+
+
+def test_agent_experience_instruction_preserves_coupled_scope_repairs():
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="scope and communication failure",
+        trajectory_uri="viking://user/user_1/memories/trajectories/scope_failure.md",
+    )
+
+    instruction = provider.instruction()
+
+    assert "coupled rule" in instruction
+    assert (
+        "answer the information obligation without expanding the write/action scope" in instruction
+    )
+    assert "agent-proposed broader plan" in instruction
+    assert "State the behavior delta" in instruction
 
 
 @pytest.mark.asyncio
@@ -109,9 +126,14 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     }
     provider.read_file = AsyncMock(return_value=read_result)
     provider._read_file_contents = {
-        "viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md": SimpleNamespace(
-            extra_fields={"experience_name": "personal_experience_sharing_conversation_flow"},
+        "viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md": MemoryFile(
+            uri="viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md",
             content="line one\nline two",
+            memory_type="experiences",
+            extra_fields={
+                "experience_name": "personal_experience_sharing_conversation_flow",
+                "page_id": 1,
+            },
             links=[],
         )
     }

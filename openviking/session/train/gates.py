@@ -527,8 +527,9 @@ class ExperienceRootCausePreventionGate:
                 result["repair_prompt"]
                 or "Rewrite or remove this experience. The repaired experience must be supported "
                 "by the source trajectory, trigger before the first preventable wrong decision, "
-                "state the narrow runtime rule that replaces the mistaken decision rule, and "
-                "explain what future behavior changes so the next similar session succeeds "
+                "state the narrow runtime rule that replaces the mistaken decision rule, preserve "
+                "any coupled communication/action-scope distinction needed to prevent recurrence, "
+                "and explain what future behavior changes so the next similar session succeeds "
                 "without blocking nearby correct behavior."
             ),
         )
@@ -859,11 +860,18 @@ Pass only when all are true:
 3. The experience is injectable: it is a runtime reminder, not a case audit,
    evaluator diagnosis, broad SOP, hidden answer, or generic "check everything" rule.
 4. The trigger/runtime condition is narrow enough to preserve correct behavior.
+5. If the same root ambiguity caused both a communication obligation and a
+   write/action scope mistake, the experience preserves that coupling instead
+   of splitting it into two weak partial lessons.
+6. If the source failure involved agent-initiated scope expansion, the experience
+   does not treat a user's later yes/confirmation to the agent's over-broad
+   proposal as proof that the user independently requested the broader scope.
 
 Fail when the proposed experience only summarizes the task, fires too late,
 uses unsupported or hidden facts, overfits case literals, misses the root
-decision rule, lacks a concrete future behavior change, or would likely harm
-correct behavior.
+decision rule, splits a coupled causal chain, treats agent-proposed expansion as
+user-initiated scope, lacks a concrete future behavior change, or would likely
+harm correct behavior.
 
 Return JSON only:
 {{
@@ -877,8 +885,9 @@ Return JSON only:
 
 If failing, set "pass": false, choose root_cause_quality from:
 surface_level, unsupported, not_preventive, too_late_boundary,
-wrong_scope, missing_source_binding, missing_behavior_change,
-not_injectable, over_broad, unsafe, unclear.
+wrong_scope, split_causal_chain, agent_initiated_scope_expansion,
+missing_source_binding, missing_behavior_change, not_injectable,
+over_broad, unsafe, unclear.
 Set repair_prompt to one concise instruction for rewriting or removing this
 specific experience. Do not ask for any output schema.
 

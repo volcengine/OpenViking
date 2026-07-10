@@ -531,7 +531,10 @@ async def test_experience_root_cause_prevention_gate_allows_preventive_experienc
 
     assert decision is None
     assert len(gate.vlm.calls) == 1
-    assert "preventable wrong decision" in gate.vlm.calls[0]["prompt"]
+    prompt = gate.vlm.calls[0]["prompt"]
+    assert "preventable wrong decision" in prompt
+    assert "coupled causal chain" in prompt
+    assert "agent-proposed expansion" in prompt
 
 
 @pytest.mark.asyncio

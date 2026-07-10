@@ -72,7 +72,7 @@ The source trajectories are for reference only — do NOT include or modify them
 
 Output experience entries ONLY for reusable failure repairs. An experience is a pre-tool reminder that prevents or recovers from the first materially reward-changing mistake. It is not a full business workflow, not a success-path SOP, and not a record of every user intent.
 
-For each distinct reusable failure pattern in the trajectory, output a SEPARATE experience entry. If the trajectory contains no reusable failure repair, output no experience changes.
+For each distinct reusable failure pattern in the trajectory, output a SEPARATE experience entry. However, do NOT split two symptoms when they share one causal ambiguity and only the combined rule would prevent recurrence. For example, if the same user wording creates both a required communication scope and a no-extra-write scope, preserve both sides in one runtime rule: answer the information obligation without expanding the write/action scope. If the trajectory contains no reusable failure repair, output no experience changes.
 
 Each entry:
 - `experience_name`: the name of the experience (new or existing)
@@ -93,6 +93,7 @@ Before outputting any experience, decide which case applies:
 - Existing experience is misleading, over-broad, or caused the bad path → update it to narrow the trigger and repair wording.
 - No relevant experience exists and the failure has a reusable pre-tool repair → create a new experience.
 - The failure is case-specific with no reusable semantic role, random, already solved by tool facts, or not preventable by a pre-tool reminder → skip.
+- If the failure came from agent-initiated scope expansion, do not treat the user's later yes/confirmation to the agent's over-broad proposal as a clean user-initiated request. Preserve the original user-requested write/action scope unless the user independently requested a new object/action in their own words.
 - If tool/action/DB checks passed but a required user-visible communication failed, treat the final
   `communicate_with_user`/final-response content as a valid pre-tool boundary. Do not skip merely
   because the literal missing value is case-specific; generalize it to the missing semantic role
@@ -112,8 +113,9 @@ Before outputting any experience, decide which case applies:
 
 - **Failure repair only.** Do not output a generic positive workflow merely because the trajectory contains a recognizable user intent.
 - **One experience per distinct failure pattern.** If a trajectory covers multiple mistakes, output one entry per reusable mistake — never merge them into an umbrella flow.
-- **Split over merge.** When in doubt whether two repair patterns belong together, split them. Only merge with an existing experience when it covers the EXACT same failure pattern and tool/communication boundary.
-- **Preserve object boundaries.** Do not create a repair that changes object cardinality, lifecycle shape, passenger/object membership, or target object unless the user explicitly requested and confirmed that change and the tool/policy supports it.
+- **Split over merge, except coupled causes.** When in doubt whether two unrelated repair patterns belong together, split them. But if a communication obligation and a write/action boundary failure share the same root ambiguity, keep the coupled rule together so the future agent learns the correct distinction instead of two weak partial reminders. Only merge with an existing experience when it covers the EXACT same failure pattern and tool/communication boundary.
+- **Preserve object boundaries.** Do not create a repair that changes object cardinality, lifecycle shape, passenger/object membership, or target object unless the user explicitly initiated that exact change and confirmed it and the tool/policy supports it. A user confirmation to an agent-proposed broader plan is not enough evidence that the user initiated the broader object/action scope.
+- **State the behavior delta.** Every experience must say exactly which next behavior changes: block a candidate write, change one argument, ask/read one missing fact, or include one requested source-bound fact in communication.
 - **Reward-critical communication counts.** If the failure was a missing confirmation, missing final required fact, or wrong user-visible policy explanation, the experience may target `communicate_with_user`; do not strip those steps.
 - **Consistent naming language.** All `experience_name` values in one output must use the same language.
 - **Constraint trigger required.** Every experience MUST include `trigger_code` and satisfy the enforced Gate Contract below.
