@@ -32,8 +32,8 @@ XIAOMEI_PEER_ID = "xiaomei"
 console = Console()
 
 # ── 对话数据 (12 轮 user + assistant 模拟) ─────────────────────────────────
-# 默认 user 消息归属 peer=xiaomei；peer_id=None 的 user 消息归属当前账号 self。
-# assistant 消息不带 peer_id，只用于填充 session 上下文。
+# user 消息不带 peer_id，归属当前账号 self。
+# 默认 assistant 消息归属 peer=xiaomei；peer_id=None 的 assistant 消息不带 peer_id。
 
 CONVERSATION = [
     {
@@ -118,6 +118,18 @@ VERIFY_QUERIES = [
 ]
 
 
+def _result_list(results, key: str):
+    if isinstance(results, dict):
+        return results.get(key) or []
+    return getattr(results, key, None) or []
+
+
+def _result_value(item, key: str, default=None):
+    if isinstance(item, dict):
+        return item.get(key, default)
+    return getattr(item, key, default)
+
+
 # ── Phase 1: 写入对话并提交 ────────────────────────────────────────────────
 
 
@@ -141,19 +153,19 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     for i, turn in enumerate(CONVERSATION, 1):
         peer_id = turn.get("peer_id", XIAOMEI_PEER_ID)
         peer_label = f"peer_id={peer_id}" if peer_id else "self"
-        console.print(f"  [dim][{i}/{total}][/dim] 添加 user({peer_label}) + assistant 消息...")
+        console.print(f"  [dim][{i}/{total}][/dim] 添加 user(self) + assistant({peer_label}) 消息...")
         client.add_message(
             session_id,
             role="user",
             parts=[{"type": "text", "text": turn["user"]}],
             created_at=session_time_str,
-            peer_id=peer_id,
         )
         client.add_message(
             session_id,
             role="assistant",
             parts=[{"type": "text", "text": turn["assistant"]}],
             created_at=session_time_str,
+            peer_id=peer_id,
         )
 
     console.print()
@@ -230,31 +242,46 @@ def run_verify(client: ov.SyncHTTPClient):
             # 收集所有召回内容
             recall_texts = []
             count = 0
-            if hasattr(results, "memories") and results.memories:
-                for m in results.memories:
-                    text = getattr(m, "content", "") or getattr(m, "text", "") or str(m)
+            memories = _result_list(results, "memories")
+            if memories:
+                for m in memories:
+                    text = (
+                        _result_value(m, "content", "")
+                        or _result_value(m, "text", "")
+                        or _result_value(m, "abstract", "")
+                        or str(m)
+                    )
                     print(f"  [DEBUG] memory text: {repr(text)}")
                     recall_texts.append(text)
-                    uri = getattr(m, "uri", "")
-                    score = getattr(m, "score", 0)
+                    uri = _result_value(m, "uri", "")
+                    score = _result_value(m, "score", 0)
                     console.print(f"    [green]Memory:[/green] {uri} (score: {score:.4f})")
                     console.print(
                         f"    [dim]{text[:120]}...[/dim]"
                         if len(text) > 120
                         else f"    [dim]{text}[/dim]"
                     )
-                count += len(results.memories)
+                count += len(memories)
 
-            if hasattr(results, "resources") and results.resources:
-                for r in results.resources:
-                    text = getattr(r, "content", "") or getattr(r, "text", "") or str(r)
+            resources = _result_list(results, "resources")
+            if resources:
+                for r in resources:
+                    text = (
+                        _result_value(r, "content", "")
+                        or _result_value(r, "text", "")
+                        or _result_value(r, "abstract", "")
+                        or str(r)
+                    )
                     print(f"  [DEBUG] resource text: {repr(text)}")
                     recall_texts.append(text)
-                    console.print(f"    [blue]Resource:[/blue] {r.uri} (score: {r.score:.4f})")
-                count += len(results.resources)
+                    uri = _result_value(r, "uri", "")
+                    score = _result_value(r, "score", 0)
+                    console.print(f"    [blue]Resource:[/blue] {uri} (score: {score:.4f})")
+                count += len(resources)
 
-            if hasattr(results, "skills") and results.skills:
-                count += len(results.skills)
+            skills = _result_list(results, "skills")
+            if skills:
+                count += len(skills)
 
             # 检查关键词命中
             all_text = " ".join(recall_texts)
