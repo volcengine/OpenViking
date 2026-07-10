@@ -294,6 +294,18 @@ class VikingDBManagerProxy:
         """
         return await self._manager.upsert(data, ctx=self._ctx, partial_update=partial_update)
 
+    async def upsert_batch(
+        self,
+        records: List[Dict[str, Any]],
+        partial_update: bool = False,
+    ) -> List[str]:
+        """Bound batch write entrypoint."""
+        return await self._manager.upsert_batch(
+            records,
+            ctx=self._ctx,
+            partial_update=partial_update,
+        )
+
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         return await self._manager.get(ids, ctx=self._ctx)
 

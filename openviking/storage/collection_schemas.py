@@ -16,7 +16,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from openviking.models.embedder.base import EmbedResult, embed_compat
+from openviking.models.embedder.base import EmbedResult, embed_batch_compat, embed_compat
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import (
     CollectionNotFoundError,
@@ -423,6 +423,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
     _request_stats_by_telemetry_id: Dict[str, RequestQueueStats] = {}
     _request_stats_order: List[str] = []
     _max_cached_stats = 1024
+    supports_batch_dequeue = True
 
     def __init__(self, vikingdb: VikingVectorIndexBackend):
         """Initialize the text embedding handler.
@@ -534,6 +535,290 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         message: str,
     ) -> str:
         return f"{message} ({cls._embedding_msg_log_context(embedding_msg)})"
+
+    async def _decrement_embedding_tracker(self, embedding_msg: EmbeddingMsg) -> None:
+        if not embedding_msg.semantic_msg_id:
+            return
+        from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
+
+        tracker = EmbeddingTaskTracker.get_instance()
+        try:
+            await tracker.decrement(embedding_msg.semantic_msg_id)
+        except Exception as tracker_err:
+            logger.warning(f"Failed to decrement embedding tracker: {tracker_err}")
+
+    async def _finish_batch_success(self, embedding_msg: EmbeddingMsg) -> None:
+        self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+        self._record_request_success(embedding_msg)
+        await self._decrement_embedding_tracker(embedding_msg)
+        self.report_success()
+
+    async def _finish_batch_requeue(self, embedding_msg: EmbeddingMsg) -> None:
+        await self._decrement_embedding_tracker(embedding_msg)
+        self.report_success()
+
+    async def _finish_batch_error(
+        self,
+        embedding_msg: Optional[EmbeddingMsg],
+        message: str,
+        data: Optional[Dict[str, Any]],
+    ) -> None:
+        if embedding_msg is not None:
+            self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+            self._record_request_failure(embedding_msg, message)
+            await self._decrement_embedding_tracker(embedding_msg)
+        self.report_error(message, data)
+
+    async def _call_upsert_single(
+        self,
+        record: Dict[str, Any],
+        ctx: RequestContext,
+    ) -> str:
+        try:
+            return await self._vikingdb.upsert(record, ctx=ctx, partial_update=True)
+        except TypeError:
+            # Some tests and third-party wrappers implement the older signature.
+            return await self._vikingdb.upsert(record, ctx=ctx)
+
+    async def _call_upsert_batch(
+        self,
+        records: List[Dict[str, Any]],
+        ctx: RequestContext,
+    ) -> List[str]:
+        batch_writer = getattr(self._vikingdb, "upsert_batch", None)
+        if batch_writer is None:
+            ids: List[str] = []
+            for record in records:
+                record_id = await self._call_upsert_single(record, ctx)
+                if record_id:
+                    ids.append(str(record_id))
+            return ids
+        try:
+            ids = await batch_writer(records, ctx=ctx, partial_update=True)
+        except TypeError:
+            ids = await batch_writer(records, ctx=ctx)
+        return [str(item) for item in (ids or []) if item is not None]
+
+    async def _fallback_single_items(
+        self,
+        items: List[Dict[str, Any]],
+        indexes: List[int],
+        results: List[Optional[Dict[str, Any]]],
+    ) -> List[Optional[Dict[str, Any]]]:
+        for idx in indexes:
+            results[idx] = await self.on_dequeue(items[idx])
+        return results
+
+    async def on_dequeue_batch(
+        self,
+        items: List[Dict[str, Any]],
+    ) -> List[Optional[Dict[str, Any]]]:
+        """Process multiple embedding messages with batch embed/upsert."""
+        results: List[Optional[Dict[str, Any]]] = [None] * len(items)
+        if not items:
+            return results
+
+        parsed: List[tuple[int, Dict[str, Any], EmbeddingMsg]] = []
+        for idx, data in enumerate(items):
+            try:
+                queue_data = json.loads(data["data"])
+                embedding_msg = EmbeddingMsg.from_dict(queue_data)
+                parsed.append((idx, data, embedding_msg))
+            except Exception as exc:
+                message = f"Error parsing embedding message: {exc}"
+                logger.error(message)
+                self.report_error(message, data)
+
+        if not parsed:
+            return results
+
+        active: List[tuple[int, Dict[str, Any], EmbeddingMsg]] = []
+        for idx, data, embedding_msg in parsed:
+            if self._vikingdb.is_closing:
+                logger.debug("Skip embedding dequeue during shutdown")
+                await self._finish_batch_success(embedding_msg)
+                continue
+            if not isinstance(embedding_msg.message, (str, list)):
+                logger.debug(f"Skipping unsupported message type: {type(embedding_msg.message)}")
+                self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+                self._record_request_success(embedding_msg)
+                await self._decrement_embedding_tracker(embedding_msg)
+                self.report_success()
+                results[idx] = data
+                continue
+            active.append((idx, data, embedding_msg))
+
+        if not active:
+            return results
+
+        try:
+            self._circuit_breaker.check()
+            self._breaker_open_last_log_at = 0.0
+            self._breaker_open_suppressed_count = 0
+        except CircuitBreakerOpen:
+            self._log_breaker_open_reenqueue_summary()
+            if getattr(self._vikingdb, "has_queue_manager", False):
+                wait = self._circuit_breaker.retry_after
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                for _, _, embedding_msg in active:
+                    await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    self._merge_request_stats(embedding_msg.telemetry_id, requeue_count=1)
+                    get_request_wait_tracker().record_embedding_requeue(
+                        embedding_msg.telemetry_id
+                    )
+                    self.report_requeue()
+                    await self._finish_batch_requeue(embedding_msg)
+                return results
+
+            for _, data, embedding_msg in active:
+                error_msg = self._embedding_error_msg(
+                    embedding_msg,
+                    "Circuit breaker open and no queue manager",
+                )
+                await self._finish_batch_error(embedding_msg, error_msg, data)
+            return results
+
+        if not self._embedder:
+            from openviking_cli.utils.config import get_openviking_config
+
+            config = get_openviking_config()
+            self._initialize_embedder(config)
+
+        if not self._embedder:
+            for _, data, embedding_msg in active:
+                error_msg = self._embedding_error_msg(
+                    embedding_msg,
+                    "Embedder not initialized, skipping vector generation",
+                )
+                logger.warning(error_msg)
+                try:
+                    from openviking.metrics.datasources import EmbeddingEventDataSource
+
+                    EmbeddingEventDataSource.record_error(error_code="not_initialized")
+                except Exception:
+                    pass
+                await self._finish_batch_error(embedding_msg, error_msg, data)
+            return results
+
+        messages = [embedding_msg.message for _, _, embedding_msg in active]
+        try:
+            embed_started = time.monotonic()
+            embed_results = await embed_batch_compat(self._embedder, messages, is_query=False)
+            embed_elapsed = time.monotonic() - embed_started
+            if len(embed_results) != len(active):
+                raise ValueError(
+                    "batch embedding returned "
+                    f"{len(embed_results)} results for {len(active)} inputs"
+                )
+        except Exception:
+            logger.warning(
+                "Batch embedding failed, falling back to per-message processing",
+                exc_info=True,
+            )
+            return await self._fallback_single_items(
+                items,
+                [idx for idx, _, _ in active],
+                results,
+            )
+
+        pending_records: List[tuple[int, Dict[str, Any], EmbeddingMsg, Dict[str, Any]]] = []
+        for (idx, data, embedding_msg), embed_result in zip(active, embed_results, strict=True):
+            inserted_data = embedding_msg.context_data or {}
+            try:
+                from openviking.metrics.datasources import EmbeddingEventDataSource
+
+                EmbeddingEventDataSource.record_success(
+                    latency_seconds=float(embed_elapsed),
+                    account_id=inserted_data.get("account_id"),
+                )
+            except Exception:
+                pass
+
+            if embed_result.dense_vector:
+                inserted_data["vector"] = embed_result.dense_vector
+                if len(embed_result.dense_vector) != self._vector_dim:
+                    error_msg = self._embedding_error_msg(
+                        embedding_msg,
+                        "Dense vector dimension mismatch: "
+                        f"expected {self._vector_dim}, got {len(embed_result.dense_vector)}",
+                    )
+                    logger.error(error_msg)
+                    await self._finish_batch_error(embedding_msg, error_msg, data)
+                    continue
+
+            if embed_result.sparse_vector:
+                inserted_data["sparse_vector"] = embed_result.sparse_vector
+                logger.debug(
+                    f"Generated sparse vector with {len(embed_result.sparse_vector)} terms"
+                )
+
+            uri = inserted_data.get("uri")
+            account_id = inserted_data.get("account_id", "default")
+            if uri:
+                seed_uri = self._seed_uri_for_id(uri, inserted_data.get("level", 2))
+                id_seed = f"{account_id}:{seed_uri}"
+                inserted_data["id"] = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
+            pending_records.append((idx, data, embedding_msg, inserted_data))
+
+        BatchRecord = tuple[int, Dict[str, Any], EmbeddingMsg, Dict[str, Any]]
+        records_by_account: Dict[str, List[BatchRecord]] = {}
+        for item in pending_records:
+            account_id = str(item[3].get("account_id", "default"))
+            records_by_account.setdefault(account_id, []).append(item)
+
+        for account_id, account_items in records_by_account.items():
+            user = UserIdentifier(account_id=account_id, user_id="default")
+            ctx = RequestContext(user=user, role=Role.ROOT)
+            records = [item[3] for item in account_items]
+            try:
+                await self._call_upsert_batch(records, ctx)
+            except CollectionNotFoundError as db_err:
+                if self._vikingdb.is_closing:
+                    for idx, _, embedding_msg, _ in account_items:
+                        await self._finish_batch_success(embedding_msg)
+                        results[idx] = None
+                    continue
+                for _, data, embedding_msg, _ in account_items:
+                    error_msg = self._embedding_error_msg(
+                        embedding_msg,
+                        f"Failed to write to vector database: {db_err}",
+                    )
+                    logger.error(error_msg)
+                    await self._finish_batch_error(embedding_msg, error_msg, data)
+                continue
+            except Exception as db_err:
+                logger.warning(
+                    "Batch vector upsert failed, falling back to per-record writes",
+                    exc_info=True,
+                )
+                for idx, data, embedding_msg, record in account_items:
+                    try:
+                        await self._call_upsert_single(record, ctx)
+                    except Exception as single_err:
+                        if self._vikingdb.is_closing:
+                            await self._finish_batch_success(embedding_msg)
+                            results[idx] = None
+                            continue
+                        error_msg = self._embedding_error_msg(
+                            embedding_msg,
+                            f"Failed to write to vector database: {single_err}",
+                        )
+                        logger.error(error_msg)
+                        await self._finish_batch_error(embedding_msg, error_msg, data)
+                        continue
+
+                    self._circuit_breaker.record_success()
+                    await self._finish_batch_success(embedding_msg)
+                    results[idx] = record
+                continue
+
+            for idx, _, embedding_msg, record in account_items:
+                self._circuit_breaker.record_success()
+                await self._finish_batch_success(embedding_msg)
+                results[idx] = record
+
+        return results
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued message and add embedding vector(s)."""

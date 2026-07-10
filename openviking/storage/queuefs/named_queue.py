@@ -61,6 +61,7 @@ class DequeueHandlerBase(abc.ABC):
     _success_callback: Optional[Callable[[], None]] = None
     _requeue_callback: Optional[Callable[[], None]] = None
     _error_callback: Optional[Callable[[str, Optional[Dict[str, Any]]], None]] = None
+    supports_batch_dequeue: bool = False
 
     def set_callbacks(
         self,
@@ -94,6 +95,13 @@ class DequeueHandlerBase(abc.ABC):
         if not data:
             return None
         return data
+
+    async def on_dequeue_batch(
+        self,
+        items: List[Dict[str, Any]],
+    ) -> List[Optional[Dict[str, Any]]]:
+        """Called after a batch dequeue. Default preserves one-by-one behavior."""
+        return [await self.on_dequeue(item) for item in items]
 
 
 class NamedQueue:
@@ -189,6 +197,13 @@ class NamedQueue:
     def has_dequeue_handler(self) -> bool:
         """Check if dequeue handler exists."""
         return self._dequeue_handler is not None
+
+    def supports_batch_dequeue(self) -> bool:
+        """Check if dequeue handler can process a batch efficiently."""
+        return bool(
+            self._dequeue_handler is not None
+            and getattr(self._dequeue_handler, "supports_batch_dequeue", False)
+        )
 
     async def _ensure_initialized(self):
         """Ensure queue directory is created in AGFS."""
@@ -296,6 +311,19 @@ class NamedQueue:
         if self._dequeue_handler:
             return await self._dequeue_handler.on_dequeue(data)
         return data
+
+    async def process_dequeued_batch(
+        self,
+        items: List[Dict[str, Any]],
+    ) -> List[Optional[Dict[str, Any]]]:
+        """Invoke the dequeue handler on a batch of already-fetched raw data.
+
+        NOTE: caller must call _on_dequeue_start() once per item before invoking
+        this method so that in_progress is incremented atomically with dequeue.
+        """
+        if self._dequeue_handler:
+            return await self._dequeue_handler.on_dequeue_batch(items)
+        return list(items)
 
     async def peek(self) -> Optional[Dict[str, Any]]:
         """Peek at head message without removing."""
