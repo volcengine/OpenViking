@@ -102,6 +102,11 @@ impl HttpClient {
         }
     }
 
+    pub fn with_gateway_token(mut self, gateway_token: Option<String>) -> Self {
+        self.base = self.base.with_gateway_token(gateway_token);
+        self
+    }
+
     pub fn user_id(&self) -> Option<&str> {
         self.base.user_id()
     }
@@ -1824,6 +1829,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gateway_token_is_not_sent_without_a_gateway_challenge() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        let _: serde_json::Value = client
+            .get("/health", &[])
+            .await
+            .expect("direct OpenViking request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(!request.to_ascii_lowercase().contains("x-gateway-token"));
+    }
+
+    #[tokio::test]
+    async fn gateway_token_is_retried_for_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        let _: serde_json::Value = client
+            .get("/health", &[])
+            .await
+            .expect("gateway retry should succeed");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_eq!(requests.len(), 2);
+        assert!(!requests[0].to_ascii_lowercase().contains("x-gateway-token"));
+        assert!(
+            requests[1]
+                .to_ascii_lowercase()
+                .contains("x-gateway-token: gateway-secret")
+        );
+    }
+
+    #[tokio::test]
     async fn tree_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
@@ -1957,6 +1998,46 @@ mod tests {
                 body
             );
             let _ = stream.write_all(response.as_bytes()).await;
+        });
+
+        (format!("http://{addr}"), request_rx)
+    }
+
+    async fn spawn_gateway_challenge_server() -> (String, oneshot::Receiver<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        let (request_tx, request_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for attempt in 0..2 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                requests.push(String::from_utf8_lossy(&buffer[..read]).to_string());
+
+                let (status, marker, body) = if attempt == 0 {
+                    (
+                        "401 Unauthorized",
+                        "X-VikingBot-Gateway: true\r\n",
+                        r#"{"detail":"X-Gateway-Token header required"}"#,
+                    )
+                } else {
+                    ("200 OK", "", r#"{"status":"ok","result":{"ok":true}}"#)
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n{marker}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+            let _ = request_tx.send(requests);
         });
 
         (format!("http://{addr}"), request_rx)

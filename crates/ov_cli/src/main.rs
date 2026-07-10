@@ -104,6 +104,7 @@ impl CliContext {
             self.profile.unwrap_or(self.config.profile),
             self.config.effective_extra_headers(),
         )
+        .with_gateway_token(self.config.effective_gateway_token())
     }
 }
 

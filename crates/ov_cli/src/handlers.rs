@@ -90,7 +90,8 @@ pub async fn handle_add_resource(
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.effective_extra_headers(),
-    );
+    )
+    .with_gateway_token(ctx.config.effective_gateway_token());
     commands::resources::add_resource(
         &client,
         &path,

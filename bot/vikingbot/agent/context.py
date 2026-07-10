@@ -6,7 +6,7 @@ import platform
 import time as _time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -15,6 +15,9 @@ from vikingbot.agent.skills import SkillsLoader
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
+
+if TYPE_CHECKING:
+    from vikingbot.config.schema import Config
 
 
 class ContextBuilder:
@@ -38,6 +41,7 @@ class ContextBuilder:
         eval: bool = False,
         openviking_connection: dict[str, Any] | None = None,
         enable_subagents: bool = True,
+        config: "Config | None" = None,
     ):
         self.workspace = workspace
         self._templates_ensured = False
@@ -50,13 +54,14 @@ class ContextBuilder:
         self._eval = eval
         self._openviking_connection = openviking_connection
         self._enable_subagents = enable_subagents
+        self._config = config
         self.latest_relevant_memories: str | None = None
 
     @property
     def memory(self):
         """Lazy-load MemoryStore when first needed."""
         if self._memory is None:
-            self._memory = MemoryStore(self.workspace)
+            self._memory = MemoryStore(self.workspace, config=self._config)
         return self._memory
 
     @property
@@ -268,8 +273,6 @@ Skills with available="false" need dependencies installed first - you can try in
                 "- Injected memory entries use three types: full means the full memory content is already shown; summary means only a summary is shown and the URI has more detail; uri means only the URI is shown and it may still point to key facts.\n"
                 "- For relevant summary or uri entries, use openviking_multi_read on their URIs to fetch full details to help you to resolve the query. "
             )
-
-
 
         parts.append(
             "Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:"

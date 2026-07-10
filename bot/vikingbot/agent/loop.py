@@ -8,8 +8,8 @@ import re
 import time
 import uuid
 from contextlib import AsyncExitStack
-from datetime import datetime
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +22,6 @@ from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
-from vikingbot.config import load_config
 from vikingbot.config.schema import BotMode, Config, SessionKey
 from vikingbot.heartbeat.service import HEARTBEAT_METADATA_KEY, is_heartbeat_noop_response
 from vikingbot.hooks import HookContext
@@ -85,8 +84,6 @@ class _PlainTextFinal:
     """Signal that the text should be treated as the final reply; exit the loop."""
 
     content: str | None = None
-
-
 
 
 class AgentLoop:
@@ -175,13 +172,14 @@ class AgentLoop:
             workspace,
             sandbox_manager=sandbox_manager,
             enable_subagents=self._subagents_enabled(),
+            config=self.config,
         )
 
         self._register_builtin_hooks()
         self.sessions = session_manager or SessionManager(
             self.config.bot_data_path, sandbox_manager=sandbox_manager
         )
-        self.tools = ToolRegistry()
+        self.tools = ToolRegistry(config=self.config)
         self._eval = eval
         self.subagents = SubagentManager(
             provider=provider,
@@ -376,6 +374,7 @@ class AgentLoop:
             subagent_manager=self.subagents,
             cron_service=self.cron_service,
             include_spawn_tool=self._subagents_enabled(),
+            include_viking_tools=self.config.ov_server.is_available(),
         )
 
     def _subagents_enabled(self) -> bool:
@@ -384,7 +383,11 @@ class AgentLoop:
 
     def _ov_session_context_enabled(self) -> bool:
         agents_config = getattr(self.config, "agents", None)
-        return bool(agents_config and getattr(agents_config, "session_context_enabled", False))
+        return bool(
+            self.config.ov_server.is_available()
+            and agents_config
+            and getattr(agents_config, "session_context_enabled", False)
+        )
 
     def _get_ov_workspace_id(self, session_key: SessionKey) -> str:
         if self.sandbox_manager:
@@ -405,13 +408,14 @@ class AgentLoop:
                 workspace_id,
                 connection=openviking_connection,
                 actor_peer_id=actor_peer_id,
+                config=self.config,
             )
 
         client = self._ov_clients.get(workspace_id)
         if client is None:
             from vikingbot.openviking_mount.ov_server import VikingClient
 
-            client = await VikingClient.create(workspace_id)
+            client = await VikingClient.create(workspace_id, config=self.config)
             self._ov_clients[workspace_id] = client
         return client
 
@@ -563,6 +567,8 @@ class AgentLoop:
                 session_id=get_openviking_session_id(session),
                 workspace_id=self._get_ov_workspace_id(session.key),
                 session_key=session.key,
+                config=self.config,
+                openviking_connection=openviking_connection,
             ),
             **kwargs,
         )
@@ -787,7 +793,7 @@ class AgentLoop:
             if response.has_tool_calls:
                 # Inject experience memory before write-related tool calls (once per session)
                 if not write_exp_injected:
-                    _ov_cfg = load_config().ov_server
+                    _ov_cfg = self.config.ov_server
                     _write_tools = set(_ov_cfg.exp_write_tools)
                     if any(tc.name in _write_tools for tc in response.tool_calls):
                         write_exp_injected = True
@@ -908,8 +914,7 @@ class AgentLoop:
                     tools_used.append(tool_used_dict)
 
                 if any(
-                    tool_call.name in stop_tools
-                    for _idx, tool_call, _result, _duration in results
+                    tool_call.name in stop_tools for _idx, tool_call, _result, _duration in results
                 ):
                     final_content = ""
                     break
@@ -969,7 +974,9 @@ class AgentLoop:
 
         if final_content == "" and tools_used and tools_used[-1].get("tool_name") in stop_tools:
             pass
-        elif final_content is None or (isinstance(final_content, str) and not final_content.strip()):
+        elif final_content is None or (
+            isinstance(final_content, str) and not final_content.strip()
+        ):
             if iteration >= self.max_iterations:
                 messages.append(
                     {
@@ -983,7 +990,11 @@ class AgentLoop:
                         ),
                     }
                 )
-                response, _streamed_content, streamed_reasoning = await self._chat_with_stream_events(
+                (
+                    response,
+                    _streamed_content,
+                    streamed_reasoning,
+                ) = await self._chat_with_stream_events(
                     messages=messages,
                     tools=[],
                     session_key=session_key,
@@ -1084,8 +1095,6 @@ class AgentLoop:
             if not isinstance(disabled_tools, list):
                 disabled_tools = []
             openviking_connection = getattr(msg, "openviking_connection", None)
-            if openviking_connection is None and msg.metadata:
-                openviking_connection = msg.metadata.get("openviking_connection")
             if not isinstance(openviking_connection, dict):
                 openviking_connection = None
             msg.openviking_connection = openviking_connection
@@ -1152,7 +1161,11 @@ class AgentLoop:
                     session.clear()
                     await self.sessions.save(session)
                     # Run consolidation in background
-                    await self._safe_consolidate_memory(session_clone, archive_all=True)
+                    await self._safe_consolidate_memory(
+                        session_clone,
+                        archive_all=True,
+                        openviking_connection=openviking_connection,
+                    )
                 return OutboundMessage(
                     session_key=msg.session_key,
                     content="🐈 New session started. Memory consolidated.",
@@ -1179,7 +1192,10 @@ class AgentLoop:
                         )
                 elif ov_tools_enable:
                     session_clone = session.clone()
-                    await self._consolidate_viking_memory(session_clone)
+                    await self._consolidate_viking_memory(
+                        session_clone,
+                        openviking_connection=openviking_connection,
+                    )
                 return OutboundMessage(
                     session_key=msg.session_key,
                     content="This conversation has been submitted to memory storage.",
@@ -1223,7 +1239,11 @@ class AgentLoop:
                 session.messages = session.messages[-keep_count:] if keep_count else []
                 await self.sessions.save(session)
                 # Run consolidation in background
-                await self._safe_consolidate_memory(session_clone, archive_all=False)
+                await self._safe_consolidate_memory(
+                    session_clone,
+                    archive_all=False,
+                    openviking_connection=openviking_connection,
+                )
 
             if self.sandbox_manager:
                 message_workspace = self.sandbox_manager.get_workspace_path(session_key)
@@ -1241,6 +1261,7 @@ class AgentLoop:
                 eval=self._eval,
                 openviking_connection=openviking_connection,
                 enable_subagents=self._subagents_enabled(),
+                config=self.config,
             )
 
             # Build initial messages (use OpenViking session context when enabled)
@@ -1280,9 +1301,7 @@ class AgentLoop:
 
             # Track newly recalled experience URIs for deduplication
             newly_recalled_exp_uris = getattr(message_context, "latest_recalled_exp_uris", [])
-            newly_recalled_exp_content = getattr(
-                message_context, "latest_recalled_exp_content", ""
-            )
+            newly_recalled_exp_content = getattr(message_context, "latest_recalled_exp_content", "")
             if newly_recalled_exp_uris:
                 existing_uris = set(exp_exclude_uris)
                 for uri in newly_recalled_exp_uris:
@@ -1533,6 +1552,8 @@ class AgentLoop:
         Returns:
             True if ov tools should be enabled, False otherwise
         """
+        if not self.config.ov_server.is_available():
+            return False
         channel_config = self._get_channel_config(session_key)
         return getattr(channel_config, "ov_tools_enable", True) if channel_config else True
 
@@ -1559,9 +1580,25 @@ class AgentLoop:
         history = await self._build_prompt_history(
             session,
             provider_name=provider_name,
+            openviking_connection=msg.openviking_connection,
             actor_peer_id=msg.sender_id,
         )
-        messages = await self.context.build_messages(
+        from vikingbot.agent.context import ContextBuilder
+
+        message_workspace = (
+            self.sandbox_manager.get_workspace_path(msg.session_key)
+            if self.sandbox_manager
+            else self.workspace
+        )
+        message_context = ContextBuilder(
+            message_workspace,
+            sandbox_manager=self.sandbox_manager,
+            sender_id=msg.sender_id,
+            openviking_connection=msg.openviking_connection,
+            enable_subagents=self._subagents_enabled(),
+            config=self.config,
+        )
+        messages = await message_context.build_messages(
             history=history,
             current_message=msg.content,
             session_key=msg.session_key,
@@ -1582,6 +1619,7 @@ class AgentLoop:
             publish_events=False,
             ov_tools_enable=ov_tools_enable,
             memory_peer_ids=None,
+            openviking_connection=msg.openviking_connection,
             channel_metadata=msg.metadata,
         )
 
@@ -1604,7 +1642,12 @@ class AgentLoop:
             metadata=dict(msg.metadata or {}),
         )
 
-    async def _consolidate_memory(self, session, archive_all: bool = False) -> None:
+    async def _consolidate_memory(
+        self,
+        session,
+        archive_all: bool = False,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> None:
         """Consolidate old messages into MEMORY.md + HISTORY.md. Works on a cloned session."""
         try:
             if not session.messages:
@@ -1622,14 +1665,18 @@ class AgentLoop:
                             allow_from.extend(channel_config.allow_from)
                 messages = [msg for msg in session.messages if msg.get("sender_id") in allow_from]
                 session.messages = messages
-            await self._consolidate_viking_memory(session)
+            if self.config.ov_server.is_available():
+                await self._consolidate_viking_memory(
+                    session,
+                    openviking_connection=openviking_connection,
+                )
 
             if self.sandbox_manager:
                 memory_workspace = self.sandbox_manager.get_workspace_path(session.key)
             else:
                 memory_workspace = self.workspace
 
-            memory = MemoryStore(memory_workspace)
+            memory = MemoryStore(memory_workspace, config=self.config)
             if archive_all:
                 old_messages = session.messages
                 keep_count = 0
@@ -1695,7 +1742,7 @@ Respond with ONLY valid JSON, no markdown fences."""
             if entry := result.get("history_entry"):
                 memory.append_history(entry)
             if update := result.get("memory_update"):
-                if load_config().use_local_memory and update != current_memory:
+                if self.config.use_local_memory and update != current_memory:
                     memory.write_long_term(update)
 
             # Session trimming and saving is handled by the caller before calling _consolidate_memory
@@ -1704,7 +1751,11 @@ Respond with ONLY valid JSON, no markdown fences."""
         except Exception as e:
             logger.exception(f"Memory consolidation failed: {e}")
 
-    async def _consolidate_viking_memory(self, session) -> None:
+    async def _consolidate_viking_memory(
+        self,
+        session,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> None:
         """Consolidate old messages into MEMORY.md + HISTORY.md. Works on a cloned session."""
         try:
             if not session.messages:
@@ -1718,18 +1769,30 @@ Respond with ONLY valid JSON, no markdown fences."""
                 context=HookContext(
                     event_type="message.compact",
                     session_id=session.key.safe_name(),
-                    workspace_id=self.sandbox_manager.to_workspace_id(session.key),
+                    workspace_id=self._get_ov_workspace_id(session.key),
                     session_key=session.key,
+                    config=self.config,
+                    openviking_connection=openviking_connection,
                 ),
                 session=session,
+                openviking_connection=openviking_connection,
             )
         except Exception as e:
             logger.exception(f"Memory consolidation failed: {e}")
 
-    async def _safe_consolidate_memory(self, session, archive_all: bool = False) -> None:
+    async def _safe_consolidate_memory(
+        self,
+        session,
+        archive_all: bool = False,
+        openviking_connection: dict[str, Any] | None = None,
+    ) -> None:
         """Safe wrapper for _consolidate_memory that ensures all exceptions are caught."""
         try:
-            await self._consolidate_memory(session, archive_all)
+            await self._consolidate_memory(
+                session,
+                archive_all,
+                openviking_connection=openviking_connection,
+            )
         except Exception as e:
             logger.exception(f"Background memory consolidation task failed: {e}")
 

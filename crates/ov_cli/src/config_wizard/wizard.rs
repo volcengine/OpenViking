@@ -925,7 +925,8 @@ async fn status_box_runtime(active: Option<&Config>) -> StatusBoxRuntime {
         STATUS_BOX_PROBE_TIMEOUT_SECS,
         config.profile,
         config.effective_extra_headers(),
-    );
+    )
+    .with_gateway_token(config.effective_gateway_token());
 
     match client.get::<Value>("/api/v1/system/status", &[]).await {
         Ok(status) => {
@@ -4605,6 +4606,7 @@ fn root_admin_client(config: &Config, root_api_key: &str) -> BaseClient {
         config.profile,
         config.effective_extra_headers(),
     )
+    .with_gateway_token(config.effective_gateway_token())
 }
 
 async fn list_root_accounts(client: &BaseClient) -> Result<Vec<RootAccountSummary>> {

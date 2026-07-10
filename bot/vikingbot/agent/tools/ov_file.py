@@ -6,7 +6,7 @@ import json
 import time
 from abc import ABC
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 from loguru import logger
@@ -14,13 +14,17 @@ from loguru import logger
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.openviking_mount.ov_server import VikingClient
 
+if TYPE_CHECKING:
+    from vikingbot.config.schema import Config
+
 
 class OVFileTool(Tool, ABC):
     _memory_commit_counter = itertools.count(1)
 
-    def __init__(self):
+    def __init__(self, config: "Config | None" = None):
         super().__init__()
         self._clients = {}
+        self._config = config
 
     @staticmethod
     def _has_request_connection(tool_context: ToolContext) -> bool:
@@ -33,16 +37,18 @@ class OVFileTool(Tool, ABC):
                 tool_context.workspace_id,
                 connection=tool_context.openviking_connection,
                 actor_peer_id=actor_peer_id,
+                config=self._config,
             )
         if actor_peer_id:
             return await VikingClient.create(
                 tool_context.workspace_id,
                 actor_peer_id=actor_peer_id,
+                config=self._config,
             )
         cache_key = str(tool_context.workspace_id or "__default__")
         client = self._clients.get(cache_key)
         if client is None:
-            client = await VikingClient.create(tool_context.workspace_id)
+            client = await VikingClient.create(tool_context.workspace_id, config=self._config)
             self._clients[cache_key] = client
         return client
 

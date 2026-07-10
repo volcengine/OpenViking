@@ -98,9 +98,7 @@ def _redirect_openviking_logs_to_stderr() -> None:
         # If it already has handlers, swap any stdout StreamHandlers to stderr.
         if not root_logger.handlers:
             handler = logging.StreamHandler(sys.stderr)
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
+            formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
             handler.setFormatter(formatter)
             root_logger.addHandler(handler)
             root_logger.propagate = False
@@ -399,9 +397,10 @@ def gateway(
     bus = MessageBus()
     path = Path(config_path).expanduser() if config_path is not None else None
     config = ensure_config(path)
-    validate_openviking_auth(config)
     effective_host = host if host is not None else config.gateway.host
     effective_port = port if port is not None else config.gateway.port
+    config.gateway.host = effective_host
+    config.gateway.port = effective_port
     gateway_token = _get_gateway_token(config)
     if requires_gateway_token(effective_host, gateway_token):
         print(
@@ -410,9 +409,8 @@ def gateway(
             file=sys.stderr,
         )
         sys.exit(1)
+    validate_openviking_auth(config)
     console.print(f"[green]✓[/green] Gateway mode: {_gateway_startup_mode(config, effective_host)}")
-    config.gateway.host = effective_host
-    config.gateway.port = effective_port
     _abort_if_port_in_use(effective_port, "vikingbot gateway")
     _init_bot_data(config)
     session_manager = SessionManager(config.bot_data_path)

@@ -582,7 +582,8 @@ pub(crate) async fn validate_candidate_config_with_role(
         timeout,
         config.profile,
         config.effective_extra_headers(),
-    );
+    )
+    .with_gateway_token(config.effective_gateway_token());
 
     let value: Value = client.get("/health", &[]).await?;
     if value

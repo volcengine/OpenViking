@@ -21,9 +21,10 @@ class ToolRegistry:
     Allows dynamic registration and execution of tools.
     """
 
-    def __init__(self):
+    def __init__(self, config: Any = None):
         self._tools: dict[str, Tool] = {}
         self.langfuse = LangfuseClient.get_instance()
+        self.config = config
 
     def register(self, tool: Tool) -> None:
         """
@@ -234,7 +235,11 @@ class ToolRegistry:
             context=HookContext(
                 event_type="tool.post_call",
                 session_key=session_key,
-                workspace_id=sandbox_manager.to_workspace_id(session_key),
+                workspace_id=(
+                    sandbox_manager.to_workspace_id(session_key) if sandbox_manager else "shared"
+                ),
+                config=self.config,
+                openviking_connection=openviking_connection,
             ),
             tool_name=name,
             params=params,

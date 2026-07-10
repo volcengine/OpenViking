@@ -43,9 +43,9 @@ pub struct Config {
     pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_api_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", alias = "account_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", alias = "user_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_peer_id: Option<String>,
@@ -271,21 +271,27 @@ impl Config {
         self.actor_peer_id.clone().or_else(|| self.agent_id.clone())
     }
 
-    pub(crate) fn effective_extra_headers(&self) -> Option<HashMap<String, String>> {
-        let mut headers = self.extra_headers.clone().unwrap_or_default();
-        if let Some(token) = self
-            .gateway_token
+    pub(crate) fn effective_gateway_token(&self) -> Option<String> {
+        self.gateway_token
             .as_deref()
             .map(str::trim)
             .filter(|token| !token.is_empty())
-        {
-            let has_gateway_header = headers
-                .keys()
-                .any(|key| key.eq_ignore_ascii_case(GATEWAY_TOKEN_HEADER));
-            if !has_gateway_header {
-                headers.insert(GATEWAY_TOKEN_HEADER.to_string(), token.to_string());
-            }
-        }
+            .map(ToString::to_string)
+            .or_else(|| {
+                self.extra_headers.as_ref().and_then(|headers| {
+                    headers
+                        .iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case(GATEWAY_TOKEN_HEADER))
+                        .map(|(_, value)| value.trim())
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string)
+                })
+            })
+    }
+
+    pub(crate) fn effective_extra_headers(&self) -> Option<HashMap<String, String>> {
+        let mut headers = self.extra_headers.clone().unwrap_or_default();
+        headers.retain(|key, _| !key.eq_ignore_ascii_case(GATEWAY_TOKEN_HEADER));
         if headers.is_empty() {
             None
         } else {
@@ -312,21 +318,17 @@ impl Config {
         let api_key = if sudo {
             self.root_api_key.clone()
         } else {
-            api_key_override.or_else(|| self.api_key.clone())
+            api_key_override
+                .or_else(|| self.api_key.clone())
+                .or_else(|| self.root_api_key.clone())
         };
         let account = account_override.or_else(|| self.account.clone());
         let user = user_override.or_else(|| self.user.clone());
 
-        let send_identity = if sudo {
-            true
-        } else {
-            api_key.is_none() || api_key.as_deref() == self.root_api_key.as_deref()
-        };
-
         EffectiveAuth {
             api_key,
-            account: send_identity.then_some(account).flatten(),
-            user: send_identity.then_some(user).flatten(),
+            account,
+            user,
         }
     }
 }
@@ -367,7 +369,7 @@ pub fn get_or_create_machine_id() -> Result<String> {
 mod tests {
     use crate::error::Error;
 
-    use super::{Config, GATEWAY_TOKEN_HEADER, merge_csv_options};
+    use super::{Config, merge_csv_options};
 
     #[test]
     fn load_required_from_path_reports_missing_cli_config() {
@@ -472,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_auth_omits_stale_identity_for_regular_user_key() {
+    fn effective_auth_forwards_explicit_identity_with_regular_user_key() {
         let config = Config {
             api_key: Some("user-key".to_string()),
             root_api_key: Some("root-key".to_string()),
@@ -484,8 +486,8 @@ mod tests {
         let auth = config.effective_auth(false);
 
         assert_eq!(auth.api_key.as_deref(), Some("user-key"));
-        assert!(auth.account.is_none());
-        assert!(auth.user.is_none());
+        assert_eq!(auth.account.as_deref(), Some("stale-account"));
+        assert_eq!(auth.user.as_deref(), Some("stale-user"));
     }
 
     #[test]
@@ -521,6 +523,54 @@ mod tests {
     }
 
     #[test]
+    fn effective_auth_sends_explicit_identity_independently_of_gateway_token() {
+        let config = Config {
+            api_key: Some("trusted-root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            gateway_token: Some("gateway-secret".to_string()),
+            ..Config::default()
+        };
+
+        let auth = config.effective_auth(false);
+
+        assert_eq!(auth.api_key.as_deref(), Some("trusted-root-key"));
+        assert_eq!(auth.account.as_deref(), Some("acme"));
+        assert_eq!(auth.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn effective_auth_uses_root_key_for_trusted_identity_without_gateway_token() {
+        let config = Config {
+            root_api_key: Some("trusted-root-key".to_string()),
+            account: Some("acme".to_string()),
+            user: Some("alice".to_string()),
+            ..Config::default()
+        };
+
+        let auth = config.effective_auth(false);
+
+        assert_eq!(auth.api_key.as_deref(), Some("trusted-root-key"));
+        assert_eq!(auth.account.as_deref(), Some("acme"));
+        assert_eq!(auth.user.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn effective_auth_does_not_invent_missing_gateway_identity() {
+        let config = Config {
+            api_key: Some("trusted-root-key".to_string()),
+            gateway_token: Some("gateway-secret".to_string()),
+            ..Config::default()
+        };
+
+        let auth = config.effective_auth(false);
+
+        assert_eq!(auth.api_key.as_deref(), Some("trusted-root-key"));
+        assert_eq!(auth.account, None);
+        assert_eq!(auth.user, None);
+    }
+
+    #[test]
     fn effective_auth_uses_root_key_and_identity_for_sudo() {
         let config = Config {
             api_key: Some("user-key".to_string()),
@@ -535,21 +585,6 @@ mod tests {
         assert_eq!(auth.api_key.as_deref(), Some("root-key"));
         assert_eq!(auth.account.as_deref(), Some("acme"));
         assert_eq!(auth.user.as_deref(), Some("alice"));
-    }
-
-    #[test]
-    fn config_deserializes_account_id_and_user_id_aliases() {
-        let config: Config = serde_json::from_str(
-            r#"{
-                "url": "http://127.0.0.1:1933",
-                "account_id": "acme",
-                "user_id": "alice"
-            }"#,
-        )
-        .expect("config should deserialize aliases");
-
-        assert_eq!(config.account.as_deref(), Some("acme"));
-        assert_eq!(config.user.as_deref(), Some("alice"));
     }
 
     #[test]
@@ -699,40 +734,32 @@ mod tests {
     }
 
     #[test]
-    fn effective_extra_headers_adds_gateway_token() {
+    fn gateway_token_is_kept_out_of_general_headers() {
         let config = Config {
             gateway_token: Some("gateway-secret".to_string()),
             ..Config::default()
         };
 
-        let headers = config
-            .effective_extra_headers()
-            .expect("gateway header should be present");
-
         assert_eq!(
-            headers.get(GATEWAY_TOKEN_HEADER).map(String::as_str),
+            config.effective_gateway_token().as_deref(),
             Some("gateway-secret")
         );
+        assert!(config.effective_extra_headers().is_none());
     }
 
     #[test]
-    fn effective_extra_headers_does_not_override_existing_gateway_header() {
+    fn legacy_gateway_header_is_extracted_from_general_headers() {
         let mut extra_headers = std::collections::HashMap::new();
         extra_headers.insert("x-gateway-token".to_string(), "manual-secret".to_string());
         let config = Config {
             extra_headers: Some(extra_headers),
-            gateway_token: Some("gateway-secret".to_string()),
             ..Config::default()
         };
 
-        let headers = config
-            .effective_extra_headers()
-            .expect("headers should be present");
-
         assert_eq!(
-            headers.get("x-gateway-token").map(String::as_str),
+            config.effective_gateway_token().as_deref(),
             Some("manual-secret")
         );
-        assert!(!headers.contains_key(GATEWAY_TOKEN_HEADER));
+        assert!(config.effective_extra_headers().is_none());
     }
 }

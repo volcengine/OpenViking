@@ -16,6 +16,7 @@ use rustyline::error::ReadlineError;
 use serde::{Deserialize, Serialize};
 use termimad::MadSkin;
 use unicode_width::UnicodeWidthStr;
+use uuid::Uuid;
 
 use crate::config::Config;
 use crate::i18n::{Language, copy};
@@ -112,7 +113,7 @@ struct ChatStreamEvent {
     data: serde_json::Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct OpenVikingHealth {
     #[serde(default)]
     auth_mode: Option<String>,
@@ -122,6 +123,14 @@ struct OpenVikingHealth {
     account_id: Option<String>,
     #[serde(default)]
     user_id: Option<String>,
+    #[serde(default)]
+    gateway: Option<String>,
+    #[serde(default)]
+    upstream_configured: Option<bool>,
+    #[serde(default)]
+    upstream_url: Option<String>,
+    #[serde(default)]
+    gateway_token_required: bool,
 }
 
 struct ChatAuth {
@@ -130,6 +139,8 @@ struct ChatAuth {
     user: Option<String>,
     actor_peer_id: Option<String>,
     extra_headers: HashMap<String, String>,
+    gateway_token: Option<String>,
+    gateway_token_required: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +149,12 @@ enum ChatAuthWarning {
     CannotValidateKey,
     RootKey,
     InvalidUserKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChatOpenVikingInfo {
+    enabled: bool,
+    server_url: Option<String>,
 }
 
 impl ChatCommand {
@@ -151,8 +168,19 @@ impl ChatCommand {
 
         let config = Config::load()?;
         let endpoint = self.resolve_endpoint_from_config(&config);
-        let health = self.fetch_openviking_health(&client, &endpoint, None).await;
-        let auth = self.resolve_auth_from_config(config, health.as_ref().map(health_auth_mode));
+        let probe_auth = self.health_probe_auth_from_config(&config);
+        let health = self
+            .fetch_openviking_health(&client, &endpoint, Some(&probe_auth))
+            .await;
+        let openviking_info = openviking_info_from_health(&endpoint, health.as_ref());
+        let gateway_token_required = health.as_ref().is_some_and(|health| {
+            health.gateway.as_deref() == Some("vikingbot") && health.gateway_token_required
+        });
+        let auth = self.resolve_auth_from_config(
+            config,
+            health.as_ref().map(health_auth_mode),
+            gateway_token_required,
+        );
         let auth_warning = self
             .openviking_chat_auth_warning(&client, &endpoint, health.as_ref(), &auth)
             .await;
@@ -165,8 +193,15 @@ impl ChatCommand {
             self.send_message(&client, &endpoint, message, &auth).await
         } else {
             // Interactive mode
-            self.run_interactive(&client, &endpoint, &auth, auth_warning, language)
-                .await
+            self.run_interactive(
+                &client,
+                &endpoint,
+                &auth,
+                auth_warning,
+                &openviking_info,
+                language,
+            )
+            .await
         }
     }
 
@@ -177,7 +212,13 @@ impl ChatCommand {
         chat_endpoint_from_base_url(&config.url)
     }
 
-    fn resolve_auth_from_config(&self, config: Config, server_auth_mode: Option<&str>) -> ChatAuth {
+    fn resolve_auth_from_config(
+        &self,
+        config: Config,
+        server_auth_mode: Option<&str>,
+        gateway_token_required: bool,
+    ) -> ChatAuth {
+        let gateway_token = config.effective_gateway_token();
         if server_auth_mode
             .map(|mode| mode.trim().eq_ignore_ascii_case("trusted"))
             .unwrap_or(false)
@@ -193,6 +234,8 @@ impl ChatCommand {
                 actor_peer_id: non_empty_string(self.actor_peer_id.clone())
                     .or_else(|| config.effective_actor_peer_id()),
                 extra_headers: config.effective_extra_headers().unwrap_or_default(),
+                gateway_token,
+                gateway_token_required,
             };
         }
 
@@ -205,11 +248,30 @@ impl ChatCommand {
 
         ChatAuth {
             api_key: auth.api_key,
-            account: auth.account,
-            user: auth.user,
+            account: None,
+            user: None,
             actor_peer_id: non_empty_string(self.actor_peer_id.clone())
                 .or_else(|| config.effective_actor_peer_id()),
             extra_headers: config.effective_extra_headers().unwrap_or_default(),
+            gateway_token,
+            gateway_token_required,
+        }
+    }
+
+    fn health_probe_auth_from_config(&self, config: &Config) -> ChatAuth {
+        ChatAuth {
+            api_key: non_empty_string(self.api_key.clone())
+                .or_else(|| non_empty_string(config.root_api_key.clone()))
+                .or_else(|| non_empty_string(config.api_key.clone())),
+            account: non_empty_string(self.account.clone())
+                .or_else(|| non_empty_string(config.account.clone())),
+            user: non_empty_string(self.user.clone())
+                .or_else(|| non_empty_string(config.user.clone())),
+            actor_peer_id: non_empty_string(self.actor_peer_id.clone())
+                .or_else(|| config.effective_actor_peer_id()),
+            extra_headers: config.effective_extra_headers().unwrap_or_default(),
+            gateway_token: config.effective_gateway_token(),
+            gateway_token_required: false,
         }
     }
 
@@ -233,6 +295,11 @@ impl ChatCommand {
         for (key, value) in &auth.extra_headers {
             req_builder = req_builder.header(key.as_str(), value);
         }
+        if auth.gateway_token_required {
+            if let Some(gateway_token) = &auth.gateway_token {
+                req_builder = req_builder.header("X-Gateway-Token", gateway_token);
+            }
+        }
         req_builder
     }
 
@@ -254,7 +321,22 @@ impl ChatCommand {
         if let Some(auth) = auth {
             req_builder = self.apply_auth_headers(req_builder, auth);
         }
-        let response = req_builder.send().await.ok()?;
+        let retry = req_builder.try_clone();
+        let mut response = req_builder.send().await.ok()?;
+        let is_gateway_challenge = response.status() == reqwest::StatusCode::UNAUTHORIZED
+            && response
+                .headers()
+                .get("X-VikingBot-Gateway")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        if is_gateway_challenge {
+            let gateway_token = auth.and_then(|auth| auth.gateway_token.as_deref())?;
+            response = retry?
+                .header("X-Gateway-Token", gateway_token)
+                .send()
+                .await
+                .ok()?;
+        }
         if !response.status().is_success() {
             return None;
         }
@@ -469,6 +551,7 @@ impl ChatCommand {
         endpoint: &str,
         auth: &ChatAuth,
         auth_warning: Option<ChatAuthWarning>,
+        openviking_info: &ChatOpenVikingInfo,
         language: Language,
     ) -> Result<()> {
         print!(
@@ -478,6 +561,7 @@ impl ChatCommand {
                 self.session.as_deref(),
                 &self.sender,
                 auth_warning,
+                openviking_info,
                 language,
             )
         );
@@ -643,7 +727,10 @@ impl ChatCommand {
         auth: &ChatAuth,
     ) -> Result<()> {
         let url = format!("{}/chat/stream", endpoint);
-        let request_session_id = session_id.clone().or_else(|| self.session.clone());
+        let request_session_id = session_id
+            .clone()
+            .or_else(|| self.session.clone())
+            .or_else(|| Some(Uuid::new_v4().to_string()));
 
         let request = ChatRequest {
             message: input.to_string(),
@@ -666,13 +753,19 @@ impl ChatCommand {
             return Err(Error::api(format!("Request failed ({}): {}", status, text)));
         }
 
+        let response_session_id = response
+            .headers()
+            .get("X-VikingBot-Session-ID")
+            .and_then(|value| value.to_str().ok())
+            .and_then(non_empty_str)
+            .map(ToString::to_string);
         let mut response = response;
         let mut buffer = String::new();
         let mut final_message = String::new();
         let mut response_id: Option<String> = None;
 
         if session_id.is_none() {
-            *session_id = request_session_id;
+            *session_id = response_session_id.or(request_session_id);
         }
 
         while let Some(chunk) = response
@@ -845,6 +938,7 @@ fn render_chat_banner(
     session: Option<&str>,
     sender: &str,
     warning: Option<ChatAuthWarning>,
+    openviking_info: &ChatOpenVikingInfo,
     language: Language,
 ) -> String {
     let mut lines = vec![chat_title(language)];
@@ -860,6 +954,17 @@ fn render_chat_banner(
     lines.push(chat_detail_line(
         copy(language, "Endpoint", "端点"),
         value_text(endpoint),
+    ));
+    lines.push(chat_detail_line(
+        "OpenViking",
+        enabled_value(openviking_info.enabled, language),
+    ));
+    lines.push(chat_detail_line(
+        copy(language, "OV Server", "OV Server"),
+        match openviking_info.server_url.as_deref() {
+            Some(server_url) => value_text(server_url),
+            None => muted_value(copy(language, "not configured", "未配置")),
+        },
     ));
     lines.push(chat_detail_line(
         copy(language, "Session", "会话"),
@@ -906,8 +1011,8 @@ fn chat_warning_copy(warning: ChatAuthWarning, language: Language) -> (&'static 
         ChatAuthWarning::MissingUserKey => (
             copy(
                 language,
-                "api_key mode has no User/Admin API key",
-                "api_key 模式缺少 User/Admin API Key",
+                "OpenViking server is in api_key mode and requires a User/Admin API key",
+                "OpenViking server 是 api_key 模式，需使用 User/Admin API Key 访问",
             ),
             copy(
                 language,
@@ -930,13 +1035,13 @@ fn chat_warning_copy(warning: ChatAuthWarning, language: Language) -> (&'static 
         ChatAuthWarning::RootKey => (
             copy(
                 language,
-                "OpenViking server is in api_key mode and requires a User API Key. The current config uses root_api_key, so VikingBot cannot use OpenViking features correctly.",
-                "OpenViking server 是 api_key 模式，需使用 User API Key 访问。当前使用的是 root_api_key，bot 将无法正常使用 OpenViking 功能",
+                "OpenViking server is in api_key mode and requires a User/Admin API key. The current request uses root_api_key, so VikingBot cannot use OpenViking features correctly.",
+                "OpenViking server 是 api_key 模式，需使用 User/Admin API Key 访问。当前请求实际使用的是 root_api_key，bot 将无法正常使用 OpenViking 功能。",
             ),
             copy(
                 language,
-                "Set api_key in ovcli.conf to a User API Key.",
-                "请在 ovcli.conf 中配置 api_key 为 User API Key。",
+                "Set api_key in ovcli.conf to a User/Admin API key.",
+                "请在 ovcli.conf 中配置 api_key 为 User/Admin API Key。",
             ),
         ),
         ChatAuthWarning::InvalidUserKey => (
@@ -988,6 +1093,16 @@ fn muted_value(value: &str) -> String {
 
 fn warning_value(value: &str) -> String {
     theme::warning(value).bold().to_string()
+}
+
+fn enabled_value(enabled: bool, language: Language) -> String {
+    if enabled {
+        theme::success(copy(language, "Yes", "是"))
+            .bold()
+            .to_string()
+    } else {
+        theme::muted(copy(language, "No", "否")).to_string()
+    }
 }
 
 fn pad_to_display_width(value: &str, width: usize) -> String {
@@ -1065,8 +1180,62 @@ fn health_has_user_identity(health: &OpenVikingHealth) -> bool {
     matches!(role, "user" | "admin") && !account_id.is_empty() && !user_id.is_empty()
 }
 
+fn openviking_info_from_health(
+    endpoint: &str,
+    health: Option<&OpenVikingHealth>,
+) -> ChatOpenVikingInfo {
+    let server_url_from_endpoint = openviking_server_url_from_endpoint(endpoint);
+    let Some(health) = health else {
+        return ChatOpenVikingInfo {
+            enabled: false,
+            server_url: None,
+        };
+    };
+
+    if health_is_vikingbot_gateway(health) {
+        let upstream_url = health
+            .upstream_url
+            .as_deref()
+            .and_then(non_empty_str)
+            .map(ToString::to_string);
+        let upstream_configured = health
+            .upstream_configured
+            .unwrap_or_else(|| upstream_url.is_some());
+        return ChatOpenVikingInfo {
+            enabled: upstream_configured,
+            server_url: upstream_configured.then_some(upstream_url).flatten(),
+        };
+    }
+
+    ChatOpenVikingInfo {
+        enabled: true,
+        server_url: server_url_from_endpoint,
+    }
+}
+
+fn health_is_vikingbot_gateway(health: &OpenVikingHealth) -> bool {
+    health
+        .gateway
+        .as_deref()
+        .map(|gateway| gateway.trim().eq_ignore_ascii_case("vikingbot"))
+        .unwrap_or(false)
+}
+
+fn openviking_server_url_from_endpoint(endpoint: &str) -> Option<String> {
+    endpoint
+        .trim_end_matches('/')
+        .strip_suffix("/bot/v1")
+        .and_then(non_empty_str)
+        .map(ToString::to_string)
+}
+
 fn chat_endpoint_from_base_url(url: &str) -> String {
     format!("{}/bot/v1", url.trim_end_matches('/'))
+}
+
+fn non_empty_str(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn non_empty_string(value: Option<String>) -> Option<String> {
@@ -1107,7 +1276,7 @@ mod tests {
             ..Config::default()
         };
 
-        let auth = command.resolve_auth_from_config(config, None);
+        let auth = command.resolve_auth_from_config(config, None, false);
 
         assert_eq!(auth.api_key.as_deref(), Some("user-key"));
     }
@@ -1120,7 +1289,7 @@ mod tests {
             ..Config::default()
         };
 
-        let auth = command.resolve_auth_from_config(config, None);
+        let auth = command.resolve_auth_from_config(config, None, false);
 
         assert_eq!(auth.api_key.as_deref(), Some("override-key"));
     }
@@ -1136,7 +1305,7 @@ mod tests {
             ..Config::default()
         };
 
-        let auth = command.resolve_auth_from_config(config, Some("trusted"));
+        let auth = command.resolve_auth_from_config(config, Some("trusted"), false);
 
         assert_eq!(auth.api_key.as_deref(), Some("root-key"));
         assert_eq!(auth.account.as_deref(), Some("acme"));
@@ -1154,7 +1323,7 @@ mod tests {
             ..Config::default()
         };
 
-        let auth = command.resolve_auth_from_config(config, Some("trusted"));
+        let auth = command.resolve_auth_from_config(config, Some("trusted"), false);
 
         assert_eq!(auth.api_key.as_deref(), Some("override-root-key"));
         assert_eq!(auth.account.as_deref(), Some("acme"));
@@ -1172,7 +1341,7 @@ mod tests {
             ..Config::default()
         };
 
-        let auth = command.resolve_auth_from_config(config, Some("api_key"));
+        let auth = command.resolve_auth_from_config(config, Some("api_key"), false);
 
         assert_eq!(auth.api_key.as_deref(), Some("user-key"));
         assert!(auth.account.is_none());
@@ -1227,7 +1396,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_includes_actor_peer_and_gateway_token_headers() {
+    fn auth_keeps_gateway_token_separate_from_general_headers() {
         let command = command_with_api_key(None);
         let config = Config {
             api_key: Some("user-key".to_string()),
@@ -1236,24 +1405,26 @@ mod tests {
             ..Config::default()
         };
 
-        let auth = command.resolve_auth_from_config(config, Some("api_key"));
+        let auth = command.resolve_auth_from_config(config, Some("api_key"), false);
 
         assert_eq!(auth.actor_peer_id.as_deref(), Some("peer-a"));
-        assert_eq!(
-            auth.extra_headers
-                .get("X-Gateway-Token")
-                .map(String::as_str),
-            Some("gateway-secret")
-        );
+        assert_eq!(auth.gateway_token.as_deref(), Some("gateway-secret"));
+        assert!(!auth.gateway_token_required);
+        assert!(!auth.extra_headers.contains_key("X-Gateway-Token"));
     }
 
     #[test]
     fn chat_banner_renders_aligned_english_summary() {
+        let openviking_info = ChatOpenVikingInfo {
+            enabled: true,
+            server_url: Some("http://localhost:18791".to_string()),
+        };
         let rendered = render_chat_banner(
             "http://localhost:18791/bot/v1",
             Some("session-1"),
             "user",
             Some(ChatAuthWarning::RootKey),
+            &openviking_info,
             Language::En,
         );
         let plain = strip_ansi(&rendered);
@@ -1261,10 +1432,13 @@ mod tests {
         assert!(plain.contains("VIKINGBOT CHAT"));
         assert!(plain.contains("Warning"));
         assert!(plain.contains("Issue       OpenViking server is in api_key mode"));
-        assert!(plain.contains("The current config uses root_api_key"));
-        assert!(plain.contains("Fix         Set api_key in ovcli.conf to a User API Key."));
+        assert!(plain.contains("The current request uses root_api_key"));
+        assert!(plain.contains("Fix         Set api_key in ovcli.conf to a User/Admin API key."));
         assert!(plain.contains("Connection"));
         assert!(plain.contains("Endpoint    http://localhost:18791/bot/v1"));
+        assert!(plain.contains("OpenViking"));
+        assert!(plain.contains("Yes"));
+        assert!(plain.contains("OV Server   http://localhost:18791"));
         assert!(plain.contains("Session     session-1"));
         assert!(plain.contains("Controls"));
         assert!(plain.contains("exit / quit     End the chat"));
@@ -1272,20 +1446,28 @@ mod tests {
 
     #[test]
     fn chat_banner_renders_chinese_copy() {
+        let openviking_info = ChatOpenVikingInfo {
+            enabled: false,
+            server_url: None,
+        };
         let rendered = render_chat_banner(
             "http://localhost:18791/bot/v1",
             None,
             "user",
             Some(ChatAuthWarning::MissingUserKey),
+            &openviking_info,
             Language::ZhCn,
         );
         let plain = strip_ansi(&rendered);
 
         assert!(plain.contains("VIKINGBOT 对话"));
         assert!(plain.contains("警告"));
-        assert!(plain.contains("api_key 模式缺少 User/Admin API Key"));
+        assert!(plain.contains("OpenViking server 是 api_key 模式"));
         assert!(plain.contains("连接"));
         assert!(plain.contains("端点"));
+        assert!(plain.contains("OpenViking"));
+        assert!(plain.contains("否"));
+        assert!(plain.contains("OV Server   未配置"));
         assert!(plain.contains("新会话"));
         assert!(plain.contains("操作"));
         assert!(plain.contains("退出对话"));
@@ -1298,10 +1480,48 @@ mod tests {
 
         assert!(plain.contains("问题"));
         assert!(plain.contains("OpenViking server 是 api_key 模式"));
-        assert!(plain.contains("当前使用的是 root_api_key"));
+        assert!(plain.contains("当前请求实际使用的是 root_api_key"));
         assert!(plain.contains("bot 将无法正常使用 OpenViking 功能"));
         assert!(plain.contains("处理"));
-        assert!(plain.contains("请在 ovcli.conf 中配置 api_key 为 User API Key。"));
+        assert!(plain.contains("请在 ovcli.conf 中配置 api_key 为 User/Admin API Key。"));
+    }
+
+    #[test]
+    fn openviking_info_uses_gateway_upstream() {
+        let health = OpenVikingHealth {
+            auth_mode: Some("api_key".to_string()),
+            role: None,
+            account_id: None,
+            user_id: None,
+            gateway: Some("vikingbot".to_string()),
+            upstream_configured: Some(true),
+            upstream_url: Some("http://ov.local:1935".to_string()),
+            gateway_token_required: false,
+        };
+
+        let info = openviking_info_from_health("http://gateway.local:18791/bot/v1", Some(&health));
+
+        assert!(info.enabled);
+        assert_eq!(info.server_url.as_deref(), Some("http://ov.local:1935"));
+    }
+
+    #[test]
+    fn openviking_info_marks_standalone_gateway_disabled() {
+        let health = OpenVikingHealth {
+            auth_mode: None,
+            role: None,
+            account_id: None,
+            user_id: None,
+            gateway: Some("vikingbot".to_string()),
+            upstream_configured: Some(false),
+            upstream_url: None,
+            gateway_token_required: false,
+        };
+
+        let info = openviking_info_from_health("http://gateway.local:18791/bot/v1", Some(&health));
+
+        assert!(!info.enabled);
+        assert!(info.server_url.is_none());
     }
 
     #[test]
@@ -1311,24 +1531,28 @@ mod tests {
             role: Some("user".to_string()),
             account_id: Some("default".to_string()),
             user_id: Some("alice".to_string()),
+            ..OpenVikingHealth::default()
         };
         let admin_health = OpenVikingHealth {
             auth_mode: Some("api_key".to_string()),
             role: Some("admin".to_string()),
             account_id: Some("default".to_string()),
             user_id: Some("alice".to_string()),
+            ..OpenVikingHealth::default()
         };
         let root_health = OpenVikingHealth {
             auth_mode: Some("api_key".to_string()),
             role: Some("root".to_string()),
             account_id: Some("default".to_string()),
             user_id: Some("root".to_string()),
+            ..OpenVikingHealth::default()
         };
         let missing_identity = OpenVikingHealth {
             auth_mode: Some("api_key".to_string()),
             role: Some("user".to_string()),
             account_id: None,
             user_id: Some("alice".to_string()),
+            ..OpenVikingHealth::default()
         };
 
         assert!(health_has_user_identity(&user_health));
