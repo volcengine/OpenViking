@@ -76,11 +76,12 @@ class TestOpenAIRerankClient:
 
         assert result is None
 
-    def test_rerank_batch_length_mismatch_returns_none(self):
+    def test_rerank_batch_sparse_results_fill_missing_scores_with_zero(self):
         client = self._make_client()
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "results": [
+                {"index": 2, "relevance_score": 0.7},
                 {"index": 0, "relevance_score": 0.9},
             ]
         }
@@ -89,9 +90,9 @@ class TestOpenAIRerankClient:
         with patch(
             "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
         ):
-            result = client.rerank_batch("query", ["doc1", "doc2"])
+            result = client.rerank_batch("query", ["doc1", "doc2", "doc3"])
 
-        assert result is None
+        assert result == [0.9, 0.0, 0.7]
 
     def test_rerank_batch_out_of_bounds_index_returns_none(self):
         """An index that is >= len(documents) should return None."""
