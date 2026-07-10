@@ -99,8 +99,7 @@ SMOKE_CASES: dict[SmokeSplit, list[dict[str, Any]]] = {
                 "B 段取消后只能退差额 68.50 美元。请完成处理，并回复新票券和退款码。"
             ),
             "expected_answer": (
-                "已将票据 T-900 的 A 段换成 OPEN-A-NEW，B 段已退差额 68.50 美元，"
-                "退款码是 RF-900B。"
+                "已将票据 T-900 的 A 段换成 OPEN-A-NEW，B 段已退差额 68.50 美元，退款码是 RF-900B。"
             ),
             "actual_answer": "已取消票据 T-900 并退款 120.00 美元，退款码是 RF-900。",
             "expected_actions": [
@@ -133,7 +132,12 @@ SMOKE_CASES: dict[SmokeSplit, list[dict[str, Any]]] = {
                 "应沉淀经验：复杂联程退款先换券再退差额；先对保留航段调用 exchange_coupon，"
                 "再只对退票航段调用 issue_partial_refund，并在回复里同时说明新票券和退款码。"
             ],
-            "experience_markers": ["复杂联程退款先换券再退差额"],
+            "experience_markers": [
+                "复杂联程退款先换券再退差额",
+                "联程票分段操作先换保留段再退差额",
+                "先换保留段再退差额",
+                "联程票",
+            ],
         },
     ],
     "test": [
@@ -195,8 +199,7 @@ SMOKE_CASES: dict[SmokeSplit, list[dict[str, Any]]] = {
                 "返程取消后只退差额 72.25 美元。请处理并告知新票券和退款码。"
             ),
             "expected_answer": (
-                "已将票据 E-900 的去程换成 OPEN-E-NEW，返程已退差额 72.25 美元，"
-                "退款码是 ERF-900R。"
+                "已将票据 E-900 的去程换成 OPEN-E-NEW，返程已退差额 72.25 美元，退款码是 ERF-900R。"
             ),
             "actual_answer": "已取消票据 E-900 并退款 140.00 美元，退款码是 ERF-900。",
             "expected_actions": [
@@ -232,7 +235,12 @@ SMOKE_CASES: dict[SmokeSplit, list[dict[str, Any]]] = {
             "feedback": [
                 "缺少复杂联程退款经验提示时，rollout 错误地整票取消；需要先换券再按航段退差额。"
             ],
-            "experience_markers": ["复杂联程退款先换券再退差额"],
+            "experience_markers": [
+                "复杂联程退款先换券再退差额",
+                "联程票分段操作先换保留段再退差额",
+                "先换保留段再退差额",
+                "联程票",
+            ],
         },
     ],
 }

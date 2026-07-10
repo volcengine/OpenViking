@@ -44,3 +44,22 @@ Notes:
   positive and negative training signals.
 - For manual rollout checks, direct experience or policy content containing
   `smoke_pass_all` or `smoke_pass:<task_id>` forces matching scripted failures to pass.
+
+
+## Experience-dependent complex case
+
+The harder Chinese smoke case is `complex_multi_leg_refund` /
+`eval_complex_multi_leg_refund`. Without a learned experience containing
+`复杂联程退款先换券再退差额`, the scripted rollout incorrectly cancels the whole
+ticket. After training collects the failure as OpenViking memory, later eval rollouts can detect
+the marker in memory and switch to the expected exchange-then-partial-refund path.
+
+Focused run:
+
+```bash
+bash benchmark/smoke/train/restart_smoke_train_eval.sh \
+  --slot 1 \
+  --train-index 3 \
+  --eval-index 2 \
+  --force-baseline-recompute
+```

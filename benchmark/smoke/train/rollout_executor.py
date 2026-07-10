@@ -61,7 +61,7 @@ class SmokeRolloutExecutor:
             async with semaphore:
                 progress.start_one()
                 try:
-                    rollout = self._execute_one(case, policy_set, context)
+                    rollout = await self._execute_one(case, policy_set, context)
                     progress.complete_one()
                     return rollout
                 except Exception:
@@ -73,7 +73,7 @@ class SmokeRolloutExecutor:
         finally:
             progress.finish()
 
-    def _execute_one(
+    async def _execute_one(
         self,
         case: Case,
         policy_set: ExperienceSet,
@@ -81,8 +81,9 @@ class SmokeRolloutExecutor:
     ) -> Rollout:
         smoke_case = _smoke_case_payload(case)
         task_id = str(case.input.get("task_id") or smoke_case.get("task_id") or case.name)
-        forced_success = _policy_forces_success(
+        forced_success, success_source = await _policy_forces_success(
             task_id=task_id,
+            smoke_case=smoke_case,
             policy_set=policy_set,
             direct_experience_content=self.direct_experience_content,
         )
@@ -129,6 +130,7 @@ class SmokeRolloutExecutor:
                 "soft": 1.0 if passed else 0.0,
                 "agent_ok": True,
                 "forced_success": forced_success,
+                "forced_success_source": success_source,
                 "policy_count": len(policy_set.policies),
                 "execution_metadata": dict(context.metadata),
             },
@@ -269,18 +271,81 @@ def _smoke_evaluation(
     )
 
 
-def _policy_forces_success(
+async def _policy_forces_success(
     *,
     task_id: str,
+    smoke_case: dict[str, Any],
     policy_set: ExperienceSet,
     direct_experience_content: str | None,
-) -> bool:
+) -> tuple[bool, str]:
     markers = ["smoke_pass_all", f"smoke_pass:{task_id}"]
-    haystacks = [policy.content for policy in policy_set.policies]
+    markers.extend(str(item) for item in smoke_case.get("experience_markers") or [])
+    local_haystacks = [policy.content for policy in policy_set.policies]
     if direct_experience_content:
-        haystacks.append(direct_experience_content)
+        local_haystacks.append(direct_experience_content)
+    if _contains_marker(local_haystacks, markers):
+        return True, "policy_or_direct_experience"
+    if await _remote_memory_contains_marker(policy_set=policy_set, markers=markers):
+        return True, "remote_openviking_memory"
+    return False, "none"
+
+
+def _contains_marker(haystacks: list[Any], markers: list[str]) -> bool:
     combined = "\n".join(str(item) for item in haystacks).lower()
-    return any(marker.lower() in combined for marker in markers)
+    return any(marker and marker.lower() in combined for marker in markers)
+
+
+async def _remote_memory_contains_marker(
+    *,
+    policy_set: ExperienceSet,
+    markers: list[str],
+) -> bool:
+    metadata = dict(policy_set.metadata or {})
+    openviking_url = str(metadata.get("openviking_url") or "").strip()
+    openviking_api_key = metadata.get("openviking_api_key")
+    if not openviking_url or not openviking_api_key:
+        return False
+    searchable_markers = [
+        marker for marker in markers if marker and not marker.startswith("smoke_pass")
+    ]
+    if not searchable_markers:
+        return False
+
+    try:
+        from openviking_cli.client.http import AsyncHTTPClient
+
+        client = AsyncHTTPClient(
+            url=openviking_url,
+            api_key=str(openviking_api_key),
+            account=str(metadata.get("openviking_account") or "default"),
+            user=str(metadata.get("openviking_user") or "default"),
+            profile_enabled=False,
+            timeout=30.0,
+        )
+        await client.initialize()
+        try:
+            for marker in searchable_markers:
+                for root_uri in (
+                    "viking://user/memories/experiences",
+                    "viking://user/memories/trajectories",
+                    "viking://user/memories/cases",
+                ):
+                    try:
+                        result = await client.grep(
+                            root_uri,
+                            marker,
+                            case_insensitive=False,
+                            node_limit=20,
+                        )
+                    except Exception:
+                        continue
+                    if marker in json.dumps(result, ensure_ascii=False):
+                        return True
+        finally:
+            await client.close()
+    except Exception:
+        return False
+    return False
 
 
 def _progress_stage_label(stage: Any, *, default: str) -> str:

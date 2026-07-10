@@ -93,3 +93,36 @@ def test_smoke_rollout_executor_policy_marker_forces_success():
     assert rollouts[0].evaluation is not None
     assert rollouts[0].evaluation.passed is True
     assert rollouts[0].metadata["forced_success"] is True
+
+
+def test_smoke_complex_case_requires_experience_marker():
+    from benchmark.smoke.train.case_loader import SmokeCaseLoader
+    from benchmark.smoke.train.rollout_executor import SmokeRolloutExecutor
+    from openviking.session.train import ExecutionContext, ExperienceSet
+
+    case = SmokeCaseLoader(domain="tickets", split="test", task_indices=[2]).load_cases()[0]
+
+    baseline = asyncio.run(
+        SmokeRolloutExecutor().execute(
+            [case],
+            ExperienceSet(root_uri="viking://user/memories/experiences", policies=[]),
+            ExecutionContext(policy_snapshot_id="snapshot-1"),
+        )
+    )[0]
+    assert baseline.evaluation is not None
+    assert baseline.evaluation.passed is False
+    assert baseline.metadata["forced_success_source"] == "none"
+
+    with_experience = asyncio.run(
+        SmokeRolloutExecutor(
+            direct_experience_content="经验：复杂联程退款先换券再退差额。"
+        ).execute(
+            [case],
+            ExperienceSet(root_uri="viking://user/memories/experiences", policies=[]),
+            ExecutionContext(policy_snapshot_id="snapshot-1"),
+        )
+    )[0]
+    assert with_experience.evaluation is not None
+    assert with_experience.evaluation.passed is True
+    assert with_experience.metadata["forced_success"] is True
+    assert with_experience.metadata["forced_success_source"] == "policy_or_direct_experience"
