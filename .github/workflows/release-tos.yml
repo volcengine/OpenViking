@@ -90,6 +90,7 @@ jobs:
             examples/opencode-plugin examples/pi-coding-agent-extension \
             examples/memory-plugin-shared "${STAGE}/"
           for required in \
+            claude-code-memory-plugin/scripts/hook-dispatch.mjs \
             cursor-memory-plugin/scripts/cursor-hook.mjs \
             cursor-memory-plugin/scripts/cursor-transcript.mjs \
             cursor-memory-plugin/servers/mcp-proxy.mjs \

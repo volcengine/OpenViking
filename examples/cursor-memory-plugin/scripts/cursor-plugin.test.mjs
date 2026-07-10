@@ -54,13 +54,15 @@ test("Cursor transcript parser keeps only user and assistant text", () => {
   ]);
 });
 
-test("Cursor prefetch injects after the first tool and Stop captures transcript deltas", async () => {
+test("Cursor injects recall before the request and Stop captures transcript deltas", async () => {
   const messages = [];
+  const actorPeers = [];
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", () => {
       if (request.url === "/api/v1/search/recall") {
+        actorPeers.push(request.headers["x-openviking-actor-peer"]);
         response.end(JSON.stringify({ result: { rendered: "remembered context" } }));
       } else if (request.url?.includes("/messages")) {
         messages.push(JSON.parse(body));
@@ -82,13 +84,13 @@ test("Cursor prefetch injects after the first tool and Stop captures transcript 
     OPENVIKING_MEMORY_ENABLED: "1",
   };
   try {
-    const base = { conversation_id: "cursor-test", cwd: "/workspace" };
-    assert.deepEqual(await runHook("beforeSubmitPrompt", { ...base, prompt: "what did we decide?" }, env), { continue: true });
+    const base = { conversation_id: "cursor-test", workspace_roots: ["/workspace"] };
     const injections = await Promise.all([
-      runHook("postToolUse", { ...base, tool_name: "Read" }, env),
-      runHook("postToolUse", { ...base, tool_name: "Read" }, env),
+      runHook("beforeSubmitPrompt", { ...base, prompt: "what did we decide?", generation_id: "prompt-1" }, env),
+      runHook("beforeSubmitPrompt", { ...base, prompt: "what did we decide?", generation_id: "prompt-1" }, env),
     ]);
     assert.equal(injections.filter((item) => /remembered context/.test(item.additional_context || "")).length, 1);
+    assert.deepEqual(actorPeers, ["-workspace"]);
 
     const transcript = join(root, "cursor-test.jsonl");
     writeFileSync(transcript, [

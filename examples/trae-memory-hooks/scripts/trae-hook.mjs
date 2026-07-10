@@ -12,6 +12,7 @@ import {
   readHookState,
   recallForPrompt,
   replayAgentPending,
+  resolveAgentCwd,
   resolveNativeSessionId,
   shouldBypassAgent,
   stableHash,
@@ -44,7 +45,7 @@ function approve(additionalContext = "") {
 const input = await readHookInput();
 const nativeSessionId = resolveNativeSessionId(input);
 const sessionId = deriveAgentSessionId(prefix, input);
-const cwd = input.cwd || process.cwd();
+const cwd = resolveAgentCwd(input);
 const { fetchJSON } = makeAgentFetchJSON(cfg, cwd);
 
 async function main() {
@@ -116,9 +117,8 @@ async function main() {
           captured += 1;
         }
       }
-      const capturedSinceCommit = Number(state.capturedSinceCommit || 0) + captured;
-      let nextCount = capturedSinceCommit;
-      if (capturedSinceCommit >= cfg.commitTurnThreshold) {
+      let nextCount = Number(state.capturedSinceCommit || 0) + captured;
+      if (captured > 0) {
         const committed = await commitAgentSession(fetchJSON, sessionId);
         if (committed.ok) nextCount = 0;
       }

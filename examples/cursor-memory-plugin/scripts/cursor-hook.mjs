@@ -15,6 +15,7 @@ import {
   readHookState,
   recallForPrompt,
   replayAgentPending,
+  resolveAgentCwd,
   resolveNativeSessionId,
   shouldBypassAgent,
   stableHash,
@@ -65,7 +66,7 @@ async function captureTranscript(input, state, sessionId) {
 const input = await readHookInput();
 const nativeSessionId = resolveNativeSessionId(input);
 const sessionId = deriveAgentSessionId(PREFIX, input);
-const cwd = input.cwd || process.cwd();
+const cwd = resolveAgentCwd(input);
 const { fetchJSON } = makeAgentFetchJSON(cfg, cwd);
 
 async function main() {
@@ -94,32 +95,31 @@ async function main() {
   }
 
   if (eventName === "beforeSubmitPrompt") {
-    await withAgentHookLock(CLIENT_ID, nativeSessionId, async () => {
+    const response = await withAgentHookLock(CLIENT_ID, nativeSessionId, async () => {
       state = await readHookState(CLIENT_ID, nativeSessionId);
       const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
       const promptHash = stableHash(prompt);
-      if (prompt && (state.promptHash !== promptHash || !state.recallBlock || state.recallInjected)) {
+      if (!prompt) return { continue: true };
+      const now = Date.now();
+      const promptEventId = input.generation_id || input.request_id || input.message_id || input.prompt_id || "";
+      const duplicateEvent = promptEventId
+        ? state.promptEventId === promptEventId
+        : state.promptHash === promptHash && now - Number(state.promptAt || 0) < 500;
+      if (duplicateEvent) return { continue: true };
+      if (state.promptHash !== promptHash || !state.recallBlock) {
         const recallBlock = await recallForPrompt(fetchJSON, cfg, prompt, cwd, log).catch((error) => {
           logError("recall", error);
           return null;
         });
-        state = { ...state, promptHash, recallBlock, recallInjected: false, promptAt: Date.now() };
-        await writeHookState(CLIENT_ID, nativeSessionId, state);
+        state = { ...state, promptHash, recallBlock };
       }
-    });
-    output({ continue: true });
-    return;
-  }
-
-  if (eventName === "postToolUse") {
-    const response = await withAgentHookLock(CLIENT_ID, nativeSessionId, async () => {
-      state = await readHookState(CLIENT_ID, nativeSessionId);
-      if (!state.recallBlock || state.recallInjected) return {};
-      state = { ...state, recallInjected: true };
+      state = { ...state, promptEventId, promptAt: now };
       await writeHookState(CLIENT_ID, nativeSessionId, state);
-      return { additional_context: state.recallBlock };
+      return state.recallBlock
+        ? { continue: true, additional_context: state.recallBlock }
+        : { continue: true };
     });
-    output(response || {});
+    output(response || { continue: true });
     return;
   }
 

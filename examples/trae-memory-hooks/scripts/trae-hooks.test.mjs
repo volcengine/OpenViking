@@ -44,6 +44,7 @@ test("TRAE capture removes previously injected memory blocks", () => {
 
 test("TRAE prompt hook injects recall and Stop captures dedicated event fields", async () => {
   const messages = [];
+  const commits = [];
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => { body += chunk; });
@@ -52,6 +53,9 @@ test("TRAE prompt hook injects recall and Stop captures dedicated event fields",
         response.end(JSON.stringify({ result: { rendered: "trae memory" } }));
       } else if (request.url?.includes("/messages")) {
         messages.push({ url: request.url, body: JSON.parse(body) });
+        response.end(JSON.stringify({ result: { ok: true } }));
+      } else if (request.url?.endsWith("/commit")) {
+        commits.push(request.url);
         response.end(JSON.stringify({ result: { ok: true } }));
       } else {
         response.end(JSON.stringify({ result: { ok: true } }));
@@ -79,11 +83,13 @@ test("TRAE prompt hook injects recall and Stop captures dedicated event fields",
       runHook("stop", "trae-cn", { ...base, last_assistant_message: "done" }, env),
     ]);
     assert.equal(messages.length, 2);
+    assert.equal(commits.length, 1, "the completed TRAE turn must be committed immediately");
     assert.ok(messages.every((item) => item.url.includes("trcn-same-session")));
 
     await runHook("user-prompt-submit", "trae-cn", { ...base, prompt: "remember this", generation_id: "prompt-2" }, env);
     await runHook("stop", "trae-cn", { ...base, last_assistant_message: "done" }, env);
     assert.equal(messages.length, 4, "a later identical turn must not be mistaken for a duplicate Hook run");
+    assert.equal(commits.length, 2);
   } finally {
     server.close();
     rmSync(root, { recursive: true, force: true });

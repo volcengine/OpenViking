@@ -7,38 +7,39 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 const installer = join(dirname(fileURLToPath(import.meta.url)), "install.sh");
+const installedNode = spawnSync("bash", ["-c", "command -v node"], { encoding: "utf8" }).stdout.trim();
 
 function writeJson(file, value) {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function runInstall(home) {
-  const result = spawnSync("bash", [installer,
-    "--harness", "cursor,trae,trae-cn",
+function runInstaller(home, args) {
+  return spawnSync("bash", [installer, ...args], {
+    cwd: resolve(dirname(installer), "..", ".."),
+    env: { ...process.env, HOME: home, OPENVIKING_HOME: join(home, ".openviking") },
+    encoding: "utf8",
+  });
+}
+
+function runInstall(home, harnesses = "cursor,trae,trae-cn") {
+  const result = runInstaller(home, [
+    "--harness", harnesses,
     "--source", "dev",
     "--lang", "en",
     "--url", "http://127.0.0.1:1933",
     "--api-key", "",
     "--yes",
-  ], {
-    cwd: resolve(dirname(installer), "..", ".."),
-    env: { ...process.env, HOME: home, OPENVIKING_HOME: join(home, ".openviking") },
-    encoding: "utf8",
-  });
+  ]);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 }
 
 function runUninstall(home) {
-  const result = spawnSync("bash", [installer,
+  const result = runInstaller(home, [
     "--harness", "cursor,trae,trae-cn",
     "--uninstall",
     "--yes",
-  ], {
-    cwd: resolve(dirname(installer), "..", ".."),
-    env: { ...process.env, HOME: home, OPENVIKING_HOME: join(home, ".openviking") },
-    encoding: "utf8",
-  });
+  ]);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 }
 
@@ -48,7 +49,10 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     const cursorHooks = join(home, ".cursor", "hooks.json");
     const traeHooks = join(home, ".trae", "hooks.json");
     const traeCnHooks = join(home, ".trae-cn", "hooks.json");
-    writeJson(cursorHooks, { version: 1, hooks: { stop: [{ command: "third-party stop" }] } });
+    writeJson(cursorHooks, { version: 1, hooks: {
+      stop: [{ command: "third-party stop" }],
+      postToolUse: [{ command: "node /tmp/openviking/cursor-hook.mjs postToolUse # openviking-memory" }],
+    } });
     writeJson(traeHooks, { version: 1, hooks: { Stop: [
       { hooks: [{ type: "command", command: "third-party trae" }] },
       { hooks: [{ type: "command", command: "OPENVIKING_HOOK_SOURCE=trae node /tmp/openviking/claude-code-memory-plugin/scripts/trae-auto-capture.mjs" }] },
@@ -68,6 +72,8 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     const cursor = JSON.parse(readFileSync(cursorHooks, "utf8"));
     assert.equal(cursor.hooks.stop.filter((entry) => entry.command.includes("cursor-hook.mjs")).length, 1);
     assert.ok(cursor.hooks.stop.some((entry) => entry.command === "third-party stop"));
+    assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes(installedNode)));
+    assert.equal(Boolean(cursor.hooks.postToolUse), false);
 
     for (const [file, label] of [[traeHooks, "trae"], [traeCnHooks, "trae-cn"]]) {
       const config = JSON.parse(readFileSync(file, "utf8"));
@@ -76,7 +82,8 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
       assert.equal(config.hooks.Stop.some((entry) => JSON.stringify(entry).includes("trae-auto-capture.mjs")), false, label);
     }
 
-    assert.ok(JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")).mcpServers.openviking);
+    const cursorMcp = JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")).mcpServers.openviking;
+    assert.equal(cursorMcp.command, installedNode);
     assert.match(readFileSync(join(home, ".cursor", "rules", "openviking-memory.mdc"), "utf8"), /OpenViking/);
     assert.match(readFileSync(join(home, ".cursor", "skills", "openviking-memory", "SKILL.md"), "utf8"), /OpenViking Memory/);
     const shared = join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib");
@@ -114,6 +121,51 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     assert.equal(Boolean(JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers.openviking), false);
     assert.ok(JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers["third-party"]);
     assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared")), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Cursor-only install does not clean Claude or Codex shell configuration", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-agent-scope-"));
+  try {
+    const rc = join(home, ".zshrc");
+    writeFileSync(rc, [
+      "before",
+      "# >>> openviking claude-code memory plugin >>>",
+      "legacy claude",
+      "# <<< openviking claude-code memory plugin <<<",
+      "# >>> openviking-codex-plugin >>>",
+      "legacy codex",
+      "# <<< openviking-codex-plugin <<<",
+      "after",
+      "",
+    ].join("\n"));
+    runInstall(home, "cursor");
+    assert.match(readFileSync(rc, "utf8"), /legacy claude/);
+    assert.match(readFileSync(rc, "utf8"), /legacy codex/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("malformed existing agent JSON fails without overwriting user configuration", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-agent-invalid-json-"));
+  try {
+    const hooks = join(home, ".cursor", "hooks.json");
+    mkdirSync(dirname(hooks), { recursive: true });
+    const original = '{"hooks":{"stop":[{"command":"third-party"}]},}';
+    writeFileSync(hooks, original);
+    const result = runInstaller(home, [
+      "--harness", "cursor",
+      "--source", "dev",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:1933",
+      "--api-key", "",
+      "--yes",
+    ]);
+    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(readFileSync(hooks, "utf8"), original);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

@@ -76,6 +76,18 @@ export async function readHookInput() {
   try { return JSON.parse(raw); } catch { return {}; }
 }
 
+export function resolveAgentCwd(input = {}) {
+  const workspaceRoots = Array.isArray(input.workspace_roots)
+    ? input.workspace_roots
+    : Array.isArray(input.workspaceRoots) ? input.workspaceRoots : [];
+  return String(
+    input.cwd
+      || workspaceRoots.find((value) => typeof value === "string" && value.trim())
+      || process.env.CURSOR_PROJECT_DIR
+      || process.cwd(),
+  );
+}
+
 export function resolveNativeSessionId(input = {}) {
   const direct = input.conversation_id || input.session_id || input.sessionId || input.generation_id;
   if (direct) return safePart(direct);
@@ -84,7 +96,7 @@ export function resolveNativeSessionId(input = {}) {
     const match = String(transcript).match(/([0-9a-f]{8}-[0-9a-f-]{20,})/i);
     return safePart(match?.[1] || stableHash(transcript).slice(0, 24));
   }
-  const cwd = input.cwd || process.cwd();
+  const cwd = resolveAgentCwd(input);
   return `cwd-${stableHash(cwd).slice(0, 20)}`;
 }
 
@@ -217,5 +229,5 @@ export async function buildAgentProfile(fetchJSON, cfg, cwd) {
 }
 
 export function shouldBypassAgent(cfg, input = {}) {
-  return isBypassed(cfg, { sessionId: resolveNativeSessionId(input), cwd: input.cwd || process.cwd() });
+  return isBypassed(cfg, { sessionId: resolveNativeSessionId(input), cwd: resolveAgentCwd(input) });
 }

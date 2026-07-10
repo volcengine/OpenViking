@@ -1,6 +1,6 @@
 ## Install the TRAE Integration
 
-Run the command for your client:
+Requires macOS/Linux and Node.js 18+. Run the command for your client; Hooks and MCP are configured together:
 
 ```bash
 # TRAE
@@ -18,6 +18,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 1. Restart TRAE after installation.
 2. Confirm that `openviking` is connected in TRAE settings.
 3. Start a new session and ask about a previous project or preference.
+4. Share a temporary preference and ask for it in the next session to verify capture and commit.
 
 See the complete [TRAE integration guide](https://github.com/volcengine/OpenViking/blob/main/docs/en/agent-integrations/13-trae.md).
 
@@ -26,5 +27,5 @@ See the complete [TRAE integration guide](https://github.com/volcengine/OpenViki
 | Problem | Suggested fix |
 |---|---|
 | Automatic recall does not run after installation | Quit TRAE completely, restart it, and create a new Agent session. |
-| Recall runs more than once | Re-run the install command and restart TRAE. |
+| A new session cannot recall the previous turn | Check `~/.openviking/logs/trae-hooks.log` or `trae-cn-hooks.log` and confirm that Stop committed successfully. |
 | Connection/authentication fails | Check `~/.openviking/ovcli.conf` and restart TRAE. |
