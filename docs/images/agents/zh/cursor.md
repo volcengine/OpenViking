@@ -6,10 +6,12 @@
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos
 ```
 
+安装器询问连接方式时，请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。只有本机已运行 OpenViking 服务时才选择 **自建 / 本地**。
+
 ## 验证
 
 1. 重启 Cursor 并新建 Agent 会话。
-2. 在 **Cursor Settings → Hooks** 中确认 `sessionStart`、`beforeSubmitPrompt` 已执行 `cursor-hook.mjs`，且 prompt Hook 返回 `additional_context`。
+2. 在 **Cursor Settings → Hooks** 中确认生命周期 Hook 执行了 `cursor-hook.mjs`、URI 保护 Hook 执行了 `uri-guard.mjs`，且 prompt Hook 返回 `additional_context`。
 3. 在 **Cursor Settings → Tools & MCPs** 中确认 `openviking` 已连接。
 
 完整说明见 [Cursor 接入文档](https://github.com/volcengine/OpenViking/blob/main/docs/zh/agent-integrations/12-cursor.md)。

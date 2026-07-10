@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { buildTraeTurns, cleanTraeText } from "./trae-turns.mjs";
+import { evaluateTraeUriGuard } from "./uri-guard.mjs";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -20,13 +21,36 @@ test("TRAE integration contains native Hook and MCP declarations", () => {
     "scripts/session-start.mjs",
     "scripts/auto-recall.mjs",
     "scripts/auto-capture.mjs",
+    "scripts/uri-guard.mjs",
   ]) {
     assert.ok(existsSync(join(pluginRoot, file)), `${file} must exist`);
   }
   const integration = JSON.parse(readFileSync(join(pluginRoot, "openviking.integration.json"), "utf8"));
   const hooks = JSON.parse(readFileSync(join(pluginRoot, "hooks", "hooks.json"), "utf8"));
   assert.deepEqual(integration.clients, ["trae", "trae-cn"]);
-  assert.deepEqual(Object.keys(hooks.hooks), ["SessionStart", "UserPromptSubmit", "Stop"]);
+  assert.deepEqual(Object.keys(hooks.hooks), [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "Stop",
+  ]);
+});
+
+test("TRAE URI guard follows the Claude Code PreToolUse response contract", () => {
+  const denied = evaluateTraeUriGuard({
+    tool_name: "Read",
+    tool_input: { file_path: "viking://resources/project/file.md" },
+  });
+  assert.equal(denied.hookSpecificOutput?.hookEventName, "PreToolUse");
+  assert.equal(denied.hookSpecificOutput?.permissionDecision, "deny");
+  assert.match(
+    denied.hookSpecificOutput?.permissionDecisionReason ?? "",
+    /OpenViking MCP read/,
+  );
+  assert.deepEqual(evaluateTraeUriGuard({
+    tool_name: "Read",
+    tool_input: { file_path: "/tmp/file.md" },
+  }), {});
 });
 
 function runHook(event, client, input, env) {

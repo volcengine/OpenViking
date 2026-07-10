@@ -4,7 +4,9 @@
 
 ## 安装
 
-前置条件：macOS 或 Linux、Node.js 18+，以及支持 `SessionStart`、`UserPromptSubmit`、`Stop` Hook 的 TRAE/TRAE CN 版本。安装过程中会引导配置 OpenViking 连接信息。
+前置条件：macOS 或 Linux、Node.js 18+，以及支持 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`Stop` Hook 的 TRAE/TRAE CN 版本。安装过程中会引导配置 OpenViking 连接信息。
+
+安装器询问连接方式时，火山引擎云服务用户请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。只有本机已运行 OpenViking 服务时才选择 **自建 / 本地**。
 
 ```bash
 # TRAE
@@ -33,8 +35,9 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 - `SessionStart`：加载用户画像和当前项目记忆。
 - `UserPromptSubmit`：根据当前问题召回并注入相关内容。
+- `PreToolUse`：阻止把 `viking://` 虚拟路径当作本地文件访问，并提示改用 OpenViking MCP 工具。
 - `Stop`：捕获本轮消息并立即提交，使短会话也能进入记忆抽取流程。
-- OpenViking MCP Server：提供 `search`、`recall`、`read`、`store` 等主动记忆工具。
+- OpenViking MCP Server：提供 `search`、`recall`、`read`、`remember` 等主动记忆工具。
 
 ## 验证
 

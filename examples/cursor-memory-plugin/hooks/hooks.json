@@ -13,6 +13,18 @@
         "timeout": 20
       }
     ],
+    "beforeReadFile": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/uri-guard.mjs",
+        "timeout": 5
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/uri-guard.mjs",
+        "timeout": 5
+      }
+    ],
     "stop": [
       {
         "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/auto-capture.mjs",

@@ -101,6 +101,7 @@ jobs:
             cursor-memory-plugin/scripts/pre-compact.mjs \
             cursor-memory-plugin/scripts/session-end.mjs \
             cursor-memory-plugin/scripts/cursor-transcript.mjs \
+            cursor-memory-plugin/scripts/uri-guard.mjs \
             cursor-memory-plugin/servers/mcp-proxy.mjs \
             cursor-memory-plugin/rules/openviking-memory.mdc \
             cursor-memory-plugin/skills/openviking-memory/SKILL.md \
@@ -112,8 +113,11 @@ jobs:
             trae-memory-hooks/scripts/auto-recall.mjs \
             trae-memory-hooks/scripts/auto-capture.mjs \
             trae-memory-hooks/scripts/trae-turns.mjs \
+            trae-memory-hooks/scripts/uri-guard.mjs \
             trae-memory-hooks/servers/mcp-proxy.mjs \
             memory-plugin-shared/lib/agent-hook-runtime.mjs \
+            memory-plugin-shared/lib/agent-uri-guard.mjs \
+            memory-plugin-shared/lib/uri-guard.mjs \
             memory-plugin-shared/lib/mcp-proxy-core.mjs; do
             test -f "${STAGE}/${required}" || {
               echo "::error::Marketplace archive is missing ${required}"

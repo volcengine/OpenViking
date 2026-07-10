@@ -24,6 +24,18 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Glob|Grep|Bash|RunCommand",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node __OPENVIKING_TRAE_ROOT__/scripts/uri-guard.mjs __OPENVIKING_CLIENT_ID__",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

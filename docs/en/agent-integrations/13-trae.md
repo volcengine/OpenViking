@@ -4,7 +4,9 @@ Give TRAE and TRAE CN long-term memory across projects and sessions. OpenViking 
 
 ## Install
 
-Prerequisites: macOS or Linux, Node.js 18+, and a TRAE/TRAE CN release that supports the `SessionStart`, `UserPromptSubmit`, and `Stop` Hooks. The installer guides you through the OpenViking connection settings.
+Prerequisites: macOS or Linux, Node.js 18+, and a TRAE/TRAE CN release that supports the `SessionStart`, `UserPromptSubmit`, `PreToolUse`, and `Stop` Hooks. The installer guides you through the OpenViking connection settings.
+
+When prompted for the connection, Volcengine Cloud users should select **Volcengine OpenViking Cloud** and enter their API key. Select **Self-hosted / local** only when an OpenViking server is running locally.
 
 ```bash
 # TRAE
@@ -33,8 +35,9 @@ Quit and restart the corresponding client after installation.
 
 - `SessionStart` loads your profile and current project memory.
 - `UserPromptSubmit` recalls and injects context for the current request.
+- `PreToolUse` redirects accidental local access to `viking://` paths back to OpenViking MCP tools.
 - `Stop` captures and immediately commits the completed turn, including short sessions.
-- The OpenViking MCP server provides explicit tools such as `search`, `recall`, `read`, and `store`.
+- The OpenViking MCP server provides explicit tools such as `search`, `recall`, `read`, and `remember`.
 
 ## Verify
 

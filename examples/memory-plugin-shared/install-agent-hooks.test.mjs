@@ -47,6 +47,7 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
   const home = mkdtempSync(join(tmpdir(), "openviking-agent-hooks-"));
   try {
     const cursorHooks = join(home, ".cursor", "hooks.json");
+    const cursorMcpPath = join(home, ".cursor", "mcp.json");
     const traeHooks = join(home, ".trae", "hooks.json");
     const traeCnHooks = join(home, ".trae-cn", "hooks.json");
     writeJson(cursorHooks, { version: 1, hooks: {
@@ -58,11 +59,15 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
       { hooks: [{ type: "command", command: "OPENVIKING_HOOK_SOURCE=trae node /tmp/openviking/claude-code-memory-plugin/scripts/trae-auto-capture.mjs" }] },
     ] } });
     writeJson(traeCnHooks, { version: 1, hooks: { Stop: [{ hooks: [{ type: "command", command: "third-party trae-cn" }] }] } });
+    writeJson(cursorMcpPath, { mcpServers: {
+      "ov-mcp-server": { url: "https://example.com/mcp" },
+      "third-party": { url: "https://third-party.example/mcp" },
+    } });
     const traeCnMcp = process.platform === "darwin"
       ? join(home, "Library", "Application Support", "Trae CN", "User", "mcp.json")
       : join(home, ".trae-cn", "mcp.json");
     writeJson(traeCnMcp, { mcpServers: {
-      "ov-mcp-server": { url: "http://127.0.0.1:1933/mcp" },
+      "ov-mcp-server": { url: "https://api.vikingdb.cn-beijing.volces.com/openviking/mcp" },
       "third-party": { url: "http://127.0.0.1:3000/mcp" },
     } });
 
@@ -79,6 +84,8 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes(installedNode)));
     assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes("OPENVIKING_INTEGRATION_ID='openviking-memory'")));
     assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes("OPENVIKING_HOOK_SOURCE='cursor'")));
+    assert.equal(cursor.hooks.beforeReadFile.filter((entry) => entry.command.includes("uri-guard.mjs")).length, 1);
+    assert.equal(cursor.hooks.beforeShellExecution.filter((entry) => entry.command.includes("uri-guard.mjs")).length, 1);
     assert.equal(Boolean(cursor.hooks.postToolUse), false);
 
     for (const [file, label] of [[traeHooks, "trae"], [traeCnHooks, "trae-cn"]]) {
@@ -87,17 +94,27 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
       assert.ok(config.hooks.Stop.some((entry) => JSON.stringify(entry).includes(`third-party ${label}`)), label);
       assert.equal(config.hooks.Stop.some((entry) => JSON.stringify(entry).includes("trae-auto-capture.mjs")), false, label);
       assert.ok(config.hooks.Stop.some((entry) => JSON.stringify(entry).includes(`OPENVIKING_HOOK_SOURCE='${label}'`)), label);
+      assert.equal(
+        config.hooks.PreToolUse.filter((entry) => JSON.stringify(entry).includes("uri-guard.mjs")).length,
+        1,
+        label,
+      );
     }
 
-    const cursorMcp = JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")).mcpServers.openviking;
+    const cursorServers = JSON.parse(readFileSync(cursorMcpPath, "utf8")).mcpServers;
+    const cursorMcp = cursorServers.openviking;
     assert.equal(cursorMcp.command, installedNode);
     assert.equal(cursorMcp.env.OPENVIKING_INTEGRATION_ID, "openviking-memory");
     assert.equal(cursorMcp.env.OPENVIKING_HOOK_SOURCE, "cursor");
+    assert.ok(cursorServers["ov-mcp-server"], "unknown legacy aliases must be preserved");
+    assert.ok(cursorServers["third-party"]);
     assert.match(readFileSync(join(home, ".cursor", "rules", "openviking-memory.mdc"), "utf8"), /OpenViking/);
     assert.match(readFileSync(join(home, ".cursor", "skills", "openviking-memory", "SKILL.md"), "utf8"), /OpenViking Memory/);
     const shared = join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib");
     assert.ok(existsSync(join(shared, "agent-hook-runtime.mjs")));
+    assert.ok(existsSync(join(shared, "agent-uri-guard.mjs")));
     assert.ok(existsSync(join(shared, "mcp-proxy-core.mjs")));
+    assert.ok(existsSync(join(shared, "uri-guard.mjs")));
     for (const client of ["cursor", "trae", "trae-cn"]) {
       const manifest = JSON.parse(readFileSync(join(home, ".openviking", "agent-integrations", client, "integration.json"), "utf8"));
       assert.equal(manifest.id, "openviking-memory");
@@ -123,6 +140,26 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
       });
       assert.equal(smoke.status, 0, `${client}: ${smoke.stderr}`);
     }
+    for (const client of ["cursor", "trae", "trae-cn"]) {
+      const guard = join(
+        home,
+        ".openviking",
+        "agent-integrations",
+        client,
+        "scripts",
+        "uri-guard.mjs",
+      );
+      const input = client === "cursor"
+        ? { file_path: "viking://resources/project/file.md" }
+        : { tool_name: "Read", tool_input: { file_path: "viking://resources/project/file.md" } };
+      const guarded = spawnSync(process.execPath, [guard], {
+        env: { ...process.env, HOME: home },
+        input: JSON.stringify(input),
+        encoding: "utf8",
+      });
+      assert.equal(guarded.status, 0, `${client}: ${guarded.stderr}`);
+      assert.match(guarded.stdout, /deny/, `${client}: ${guarded.stderr}`);
+    }
     const traeMcp = process.platform === "darwin"
       ? join(home, "Library", "Application Support", "Trae", "User", "mcp.json")
       : join(home, ".trae", "mcp.json");
@@ -137,6 +174,10 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     runUninstall(home);
     assert.ok(JSON.parse(readFileSync(cursorHooks, "utf8")).hooks.stop.some((entry) => entry.command === "third-party stop"));
     assert.equal(JSON.parse(readFileSync(cursorHooks, "utf8")).hooks.stop.some((entry) => entry.command.includes("auto-capture.mjs")), false);
+    const cursorServersAfterUninstall = JSON.parse(readFileSync(cursorMcpPath, "utf8")).mcpServers;
+    assert.ok(cursorServersAfterUninstall["ov-mcp-server"]);
+    assert.ok(cursorServersAfterUninstall["third-party"]);
+    assert.equal(Boolean(cursorServersAfterUninstall.openviking), false);
     assert.equal(existsSync(join(home, ".cursor", "rules", "openviking-memory.mdc")), false);
     assert.equal(existsSync(join(home, ".cursor", "skills", "openviking-memory")), false);
     assert.equal(Boolean(JSON.parse(readFileSync(traeMcp, "utf8")).mcpServers.openviking), false);

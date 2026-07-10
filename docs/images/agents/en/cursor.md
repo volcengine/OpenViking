@@ -6,10 +6,12 @@ Requires macOS/Linux and Node.js 18+. The command installs Hooks, MCP, Rule, and
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos
 ```
 
+When asked where to connect, select **Volcengine OpenViking Cloud** and enter your API key. Choose **Self-hosted / local** only for a locally running OpenViking server.
+
 ## Verify
 
 1. Restart Cursor and start a new Agent session.
-2. In **Cursor Settings → Hooks**, confirm that `sessionStart` and `beforeSubmitPrompt` ran `cursor-hook.mjs`, and that the prompt Hook returned `additional_context`.
+2. In **Cursor Settings → Hooks**, confirm that the lifecycle Hooks ran `cursor-hook.mjs`, the URI protection Hooks ran `uri-guard.mjs`, and the prompt Hook returned `additional_context`.
 3. In **Cursor Settings → Tools & MCPs**, confirm that `openviking` is connected.
 
 See the complete [Cursor integration guide](https://github.com/volcengine/OpenViking/blob/main/docs/en/agent-integrations/12-cursor.md).

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { parseCursorTranscript } from "./cursor-transcript.mjs";
+import { evaluateCursorUriGuard } from "./uri-guard.mjs";
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -50,6 +51,7 @@ test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP e
     "scripts/pre-compact.mjs",
     "scripts/session-end.mjs",
     "scripts/cursor-transcript.mjs",
+    "scripts/uri-guard.mjs",
     "servers/mcp-proxy.mjs",
     "rules/openviking-memory.mdc",
     "skills/openviking-memory/SKILL.md",
@@ -61,7 +63,31 @@ test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP e
   const hooks = JSON.parse(readFileSync(join(pluginRoot, "hooks", "hooks.json"), "utf8"));
   assert.equal(plugin.name, integration.id);
   assert.equal(plugin.version, integration.version);
-  assert.deepEqual(Object.keys(hooks.hooks), ["sessionStart", "beforeSubmitPrompt", "stop", "preCompact", "sessionEnd"]);
+  assert.deepEqual(Object.keys(hooks.hooks), [
+    "sessionStart",
+    "beforeSubmitPrompt",
+    "beforeReadFile",
+    "beforeShellExecution",
+    "stop",
+    "preCompact",
+    "sessionEnd",
+  ]);
+});
+
+test("Cursor URI guard redirects virtual paths to OpenViking MCP tools", () => {
+  const readDecision = evaluateCursorUriGuard({
+    file_path: "viking://resources/project/file.md",
+  });
+  assert.equal(readDecision.permission, "deny");
+  assert.match(readDecision.user_message, /OpenViking MCP read/);
+
+  const shellDecision = evaluateCursorUriGuard({
+    command: "cat viking://resources/project/file.md",
+  });
+  assert.equal(shellDecision.permission, "deny");
+  assert.match(shellDecision.agent_message, /OpenViking MCP read or search/);
+
+  assert.deepEqual(evaluateCursorUriGuard({ file_path: "/tmp/file.md" }), {});
 });
 
 test("Cursor transcript parser keeps only user and assistant text", () => {

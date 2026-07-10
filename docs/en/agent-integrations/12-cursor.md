@@ -6,6 +6,8 @@ Give Cursor long-term memory across projects and sessions. After installation, O
 
 Prerequisites: macOS or Linux, Node.js 18+, and preferably the latest stable Cursor release. The installer guides you through the OpenViking connection settings.
 
+When prompted for the connection, Volcengine Cloud users should select **Volcengine OpenViking Cloud** and enter their API key. Select **Self-hosted / local** only when an OpenViking server is running locally.
+
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
   --harness cursor
@@ -22,14 +24,14 @@ Quit Cursor completely and restart it after installation.
 
 ## What gets installed
 
-- Lifecycle Hooks for profile loading, prompt recall, conversation capture, and session commit.
-- The OpenViking MCP server with tools such as `search`, `recall`, `read`, and `store`.
+- Lifecycle Hooks for profile loading, prompt recall, conversation capture, session commit, and `viking://` URI protection.
+- The OpenViking MCP server with tools such as `search`, `recall`, `read`, and `remember`.
 - An always-on Rule and memory Skill that tell the Agent how to use injected context and memory tools.
 
 ## Verify
 
 1. Restart Cursor and create a new Agent session.
-2. Open **Cursor Settings → Hooks** and confirm that `sessionStart` and `beforeSubmitPrompt` execute `cursor-hook.mjs`.
+2. Open **Cursor Settings → Hooks** and confirm that the OpenViking lifecycle Hooks execute `cursor-hook.mjs` and its URI protection Hooks execute `uri-guard.mjs`.
 3. Check that the `beforeSubmitPrompt` output contains `additional_context`. This confirms that recall reaches the Agent without requiring an MCP call first.
 4. Open **Cursor Settings → Tools & MCPs** and confirm that `openviking` is connected.
 5. Tell Cursor a temporary preference, wait for the response to finish, then create a new session and ask for that preference to verify capture and cross-session recall.
@@ -38,6 +40,7 @@ Quit Cursor completely and restart it after installation.
 
 - `sessionStart` loads your profile and the current project's memory index.
 - `beforeSubmitPrompt` recalls context for the current request and injects it through `additional_context`.
+- `beforeReadFile` and `beforeShellExecution` redirect accidental local access to `viking://` paths back to OpenViking MCP tools.
 - `stop` incrementally captures new user and assistant messages.
 - `preCompact` and `sessionEnd` commit pending messages for memory extraction.
 

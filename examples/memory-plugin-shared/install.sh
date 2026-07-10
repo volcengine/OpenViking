@@ -1721,9 +1721,9 @@ assemble_agent_integration() { # assemble_agent_integration <source-subdir> <des
   rm -rf "$shared_dest.tmp"
   mkdir -p "$shared_dest.tmp"
   for file in \
-    agent-hook-runtime.mjs credentials.mjs debug-log.mjs mcp-proxy-core.mjs \
-    pending-queue.mjs profile-inject.mjs recall-core.mjs session-model.mjs \
-    workspace-peer.mjs; do
+    agent-hook-runtime.mjs agent-uri-guard.mjs credentials.mjs debug-log.mjs \
+    mcp-proxy-core.mjs pending-queue.mjs profile-inject.mjs recall-core.mjs \
+    session-model.mjs uri-guard.mjs workspace-peer.mjs; do
     cp "$shared/lib/$file" "$shared_dest.tmp/$file"
   done
   rm -rf "$shared_dest"
@@ -1855,9 +1855,26 @@ if (!templateServer || typeof templateServer !== "object" || Array.isArray(templ
 const mcp = readJson(mcpPath);
 mcp.mcpServers = mcp.mcpServers && typeof mcp.mcpServers === "object" && !Array.isArray(mcp.mcpServers)
   ? mcp.mcpServers : {};
-// Migrate the server name used by the earlier manual TRAE/Cursor guide. The
-// key itself is the OpenViking marker; leave every other MCP server untouched.
-delete mcp.mcpServers["ov-mcp-server"];
+function isKnownLegacyOpenVikingServer(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (value.env?.OPENVIKING_INTEGRATION_ID === "openviking-memory") return true;
+  if (typeof value.url !== "string") return false;
+  try {
+    const url = new URL(value.url);
+    const local = ["127.0.0.1", "localhost", "::1"].includes(url.hostname)
+      && url.port === "1933" && url.pathname.replace(/\/$/u, "") === "/mcp";
+    const cloud = url.hostname === "api.vikingdb.cn-beijing.volces.com"
+      && url.pathname.replace(/\/$/u, "") === "/openviking/mcp";
+    return local || cloud;
+  } catch {
+    return false;
+  }
+}
+// Migrate only the exact OpenViking endpoints published by the earlier manual
+// guides. A coincidentally named third-party server must remain untouched.
+if (isKnownLegacyOpenVikingServer(mcp.mcpServers["ov-mcp-server"])) {
+  delete mcp.mcpServers["ov-mcp-server"];
+}
 const server = {
   ...templateServer,
   command: nodeBin,
@@ -2492,7 +2509,7 @@ install_pi() {
 
 validate_install() {
   heading "$(t '5. Validation' '5. 安装校验')"
-  local ok=1 cached list bin
+  local ok=1 agent_fatal=0 cached list bin
   if contains_harness claude; then
     while IFS= read -r bin; do
       [ -n "$bin" ] || continue
@@ -2537,25 +2554,31 @@ EOF
     if grep -q 'scripts/session-start.mjs' "$HOME/.cursor/hooks.json" 2>/dev/null \
       && grep -q 'scripts/auto-recall.mjs' "$HOME/.cursor/hooks.json" 2>/dev/null \
       && grep -q 'scripts/auto-capture.mjs' "$HOME/.cursor/hooks.json" 2>/dev/null \
+      && grep -q 'scripts/uri-guard.mjs' "$HOME/.cursor/hooks.json" 2>/dev/null \
       && grep -q 'OPENVIKING_INTEGRATION_ID' "$HOME/.cursor/hooks.json" 2>/dev/null \
       && grep -q 'mcp-proxy.mjs' "$HOME/.cursor/mcp.json" 2>/dev/null \
       && [ -f "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/cursor/scripts/uri-guard.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/memory-plugin-shared/lib/agent-uri-guard.mjs" ] \
       && [ -f "$OV_HOME/agent-integrations/cursor/.cursor-plugin/plugin.json" ] \
       && [ -f "$OV_HOME/agent-integrations/cursor/integration.json" ] \
       && [ -f "$HOME/.cursor/rules/openviking-memory.mdc" ] \
       && [ -f "$HOME/.cursor/skills/openviking-memory/SKILL.md" ]; then
-      "$NODE_BIN" --check "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" || ok=0
+      "$NODE_BIN" --check "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" \
+        || { ok=0; agent_fatal=1; }
+      "$NODE_BIN" --check "$OV_HOME/agent-integrations/cursor/scripts/uri-guard.mjs" \
+        || { ok=0; agent_fatal=1; }
       if printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
         "$NODE_BIN" "$OV_HOME/agent-integrations/cursor/scripts/session-start.mjs" >/dev/null; then
         info "cursor: $(t 'installed Hook runtime passed its smoke test' '已安装的 Hook 运行时通过 smoke test')"
       else
         warn "cursor: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
-        ok=0
+        ok=0; agent_fatal=1
       fi
       info "cursor: $(t 'integration installed (Hooks, MCP, Rule, Skill)' '集成已安装（Hook、MCP、Rule、Skill）')"
     else
       warn "cursor: $(t 'OpenViking integration installation is incomplete' 'OpenViking 集成安装不完整')"
-      ok=0
+      ok=0; agent_fatal=1
     fi
   fi
   if contains_harness trae; then
@@ -2564,20 +2587,25 @@ EOF
     if grep -q 'scripts/session-start.mjs' "$HOME/.trae/hooks.json" 2>/dev/null \
       && grep -q 'scripts/auto-recall.mjs' "$HOME/.trae/hooks.json" 2>/dev/null \
       && grep -q 'scripts/auto-capture.mjs' "$HOME/.trae/hooks.json" 2>/dev/null \
+      && grep -q 'scripts/uri-guard.mjs' "$HOME/.trae/hooks.json" 2>/dev/null \
       && grep -q 'OPENVIKING_INTEGRATION_ID' "$HOME/.trae/hooks.json" 2>/dev/null \
       && grep -q 'mcp-proxy.mjs' "$trae_mcp" 2>/dev/null \
       && [ -f "$OV_HOME/agent-integrations/trae/scripts/trae-hook.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/trae/scripts/uri-guard.mjs" ] \
       && [ -f "$OV_HOME/agent-integrations/trae/integration.json" ]; then
-      "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae/scripts/trae-hook.mjs" || ok=0
+      "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae/scripts/trae-hook.mjs" \
+        || { ok=0; agent_fatal=1; }
+      "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae/scripts/uri-guard.mjs" \
+        || { ok=0; agent_fatal=1; }
       if ! printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
         "$NODE_BIN" "$OV_HOME/agent-integrations/trae/scripts/session-start.mjs" trae >/dev/null; then
         warn "trae: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
-        ok=0
+        ok=0; agent_fatal=1
       fi
       info "trae: $(t 'hooks and MCP are configured' 'hooks 与 MCP 已配置')"
     else
       warn "trae: $(t 'OpenViking hook or MCP config is incomplete' 'OpenViking hook 或 MCP 配置不完整')"
-      ok=0
+      ok=0; agent_fatal=1
     fi
   fi
   if contains_harness trae-cn; then
@@ -2586,20 +2614,25 @@ EOF
     if grep -q 'scripts/session-start.mjs' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
       && grep -q 'scripts/auto-recall.mjs' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
       && grep -q 'scripts/auto-capture.mjs' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
+      && grep -q 'scripts/uri-guard.mjs' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
       && grep -q 'OPENVIKING_INTEGRATION_ID' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
       && grep -q 'mcp-proxy.mjs' "$trae_cn_mcp" 2>/dev/null \
       && [ -f "$OV_HOME/agent-integrations/trae-cn/scripts/trae-hook.mjs" ] \
+      && [ -f "$OV_HOME/agent-integrations/trae-cn/scripts/uri-guard.mjs" ] \
       && [ -f "$OV_HOME/agent-integrations/trae-cn/integration.json" ]; then
-      "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae-cn/scripts/trae-hook.mjs" || ok=0
+      "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae-cn/scripts/trae-hook.mjs" \
+        || { ok=0; agent_fatal=1; }
+      "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae-cn/scripts/uri-guard.mjs" \
+        || { ok=0; agent_fatal=1; }
       if ! printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
         "$NODE_BIN" "$OV_HOME/agent-integrations/trae-cn/scripts/session-start.mjs" trae-cn >/dev/null; then
         warn "trae-cn: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
-        ok=0
+        ok=0; agent_fatal=1
       fi
       info "trae-cn: $(t 'hooks and MCP are configured' 'hooks 与 MCP 已配置')"
     else
       warn "trae-cn: $(t 'OpenViking hook or MCP config is incomplete' 'OpenViking hook 或 MCP 配置不完整')"
-      ok=0
+      ok=0; agent_fatal=1
     fi
   fi
   if contains_harness opencode; then
@@ -2655,9 +2688,12 @@ EOF
     node --test "$MKT_DIR/claude-code-memory-plugin/scripts/marketplace.test.mjs" \
       "$MKT_DIR/codex-memory-plugin/scripts/marketplace.test.mjs" || ok=0
   fi
-  if [ "$ok" -ne 1 ]; then
+  if [ "$agent_fatal" -ne 0 ]; then
     err "$(t 'Installation validation failed. No success result will be reported.' '安装校验失败，不会报告安装成功。')"
     return 1
+  fi
+  if [ "$ok" -ne 1 ]; then
+    warn "$(t 'Validation reported issues — the install may still work; check the messages above.' '校验发现问题——安装可能仍然可用，请检查上方输出。')"
   fi
 }
 

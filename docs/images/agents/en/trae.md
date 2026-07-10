@@ -13,6 +13,8 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae,trae-cn --dist tos
 ```
 
+When asked where to connect, select **Volcengine OpenViking Cloud** and enter your API key. Choose **Self-hosted / local** only for a locally running OpenViking server.
+
 ## Verify
 
 1. Restart TRAE after installation.
