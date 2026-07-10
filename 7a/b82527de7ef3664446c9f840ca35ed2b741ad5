@@ -1,0 +1,47 @@
+docs/images/agents/en/cursor.md
+  s_5e17b6c73ed8ec::t_cbb54ac14a8a15 3,12,22
+docs/images/agents/en/trae.md
+  s_5e17b6c73ed8ec::t_881ae53b52efd7 3,21,30
+docs/images/agents/zh/cursor.md
+  s_5e17b6c73ed8ec::t_51e746db29e29d 3,12,22
+docs/images/agents/zh/trae.md
+  s_5e17b6c73ed8ec::t_b43172326e1f5c 3,21,30
+examples/claude-code-memory-plugin/hooks/hooks.json
+  s_5e17b6c73ed8ec::t_5f6b0dd3ae2610 8,20,32,44,56,68,80,91,103
+examples/claude-code-memory-plugin/scripts/hook-dispatch.mjs
+  s_5e17b6c73ed8ec::t_3a2e77c3da33f8 1-57
+examples/claude-code-memory-plugin/scripts/marketplace.test.mjs
+  s_5e17b6c73ed8ec::t_ffdd07ac74c5f3 4-5,67,80,84-99
+examples/cursor-memory-plugin/README.md
+  s_5e17b6c73ed8ec::t_ec35d841917ae1 5
+examples/cursor-memory-plugin/rules/openviking-memory.mdc
+  s_5e17b6c73ed8ec::t_78d9c1ecd07f49 6
+examples/cursor-memory-plugin/scripts/cursor-hook.mjs
+  s_5e17b6c73ed8ec::t_b0f1ae0fb02cca 18,69,98,102-109,114,116,118-120,122
+examples/cursor-memory-plugin/scripts/cursor-plugin.test.mjs
+  s_5e17b6c73ed8ec::t_ac3b4e3e5f8a29 57,59,65,87,89-90,93
+examples/memory-plugin-shared/lib/agent-hook-runtime.mjs
+  s_5e17b6c73ed8ec::t_122193cca469b6 79-90,99,232
+examples/trae-memory-hooks/scripts/trae-hook.mjs
+  s_5e17b6c73ed8ec::t_8f148533cbc44c 15,48,120-121
+examples/trae-memory-hooks/scripts/trae-hooks.test.mjs
+  s_5e17b6c73ed8ec::t_9d1297d26729a8 47,57-59,86,92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "7ab82527de7ef3664446c9f840ca35ed2b741ad5",
+  "prompts": {},
+  "sessions": {
+    "s_5e17b6c73ed8ec": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f49b4-d234-7ae0-a95d-b3a3014392cd",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
