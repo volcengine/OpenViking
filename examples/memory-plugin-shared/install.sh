@@ -1773,6 +1773,11 @@ function isOpenVikingHook(value) {
   return text.includes("OPENVIKING_INTEGRATION_ID") || (text.includes("openviking") && [
     "cursor-hook.mjs",
     "trae-hook.mjs",
+    "session-start.mjs",
+    "auto-recall.mjs",
+    "auto-capture.mjs",
+    "pre-compact.mjs",
+    "session-end.mjs",
     "trae-auto-recall.mjs",
     "trae-auto-capture.mjs",
     "claude-code-memory-plugin/scripts/session-start.mjs",
@@ -1913,6 +1918,11 @@ function ownsHook(value) {
   return text.includes("openviking") && [
     "cursor-hook.mjs",
     "trae-hook.mjs",
+    "session-start.mjs",
+    "auto-recall.mjs",
+    "auto-capture.mjs",
+    "pre-compact.mjs",
+    "session-end.mjs",
     "trae-auto-recall.mjs",
     "trae-auto-capture.mjs",
     "claude-code-memory-plugin/scripts/session-start.mjs",
@@ -2001,7 +2011,6 @@ install_cursor() {
   hooks_path="$HOME/.cursor/hooks.json"
   mcp_path="$(cursor_mcp_path)"
   agent_write_json_configs cursor "$hooks_path" "$mcp_path" "$root" cursor "$NODE_BIN"
-  : > "$root/.native-hooks"
   mkdir -p "$HOME/.cursor/rules" "$HOME/.cursor/skills"
   cp "$root/rules/openviking-memory.mdc" "$HOME/.cursor/rules/openviking-memory.mdc"
   skill_tmp="$HOME/.cursor/skills/openviking-memory.tmp"
@@ -2525,7 +2534,9 @@ $CODEX_BINS
 EOF
   fi
   if contains_harness cursor; then
-    if grep -q 'cursor-hook.mjs' "$HOME/.cursor/hooks.json" 2>/dev/null \
+    if grep -q 'scripts/session-start.mjs' "$HOME/.cursor/hooks.json" 2>/dev/null \
+      && grep -q 'scripts/auto-recall.mjs' "$HOME/.cursor/hooks.json" 2>/dev/null \
+      && grep -q 'scripts/auto-capture.mjs' "$HOME/.cursor/hooks.json" 2>/dev/null \
       && grep -q 'OPENVIKING_INTEGRATION_ID' "$HOME/.cursor/hooks.json" 2>/dev/null \
       && grep -q 'mcp-proxy.mjs' "$HOME/.cursor/mcp.json" 2>/dev/null \
       && [ -f "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" ] \
@@ -2535,7 +2546,7 @@ EOF
       && [ -f "$HOME/.cursor/skills/openviking-memory/SKILL.md" ]; then
       "$NODE_BIN" --check "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" || ok=0
       if printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
-        "$NODE_BIN" "$OV_HOME/agent-integrations/cursor/scripts/cursor-hook.mjs" sessionStart >/dev/null; then
+        "$NODE_BIN" "$OV_HOME/agent-integrations/cursor/scripts/session-start.mjs" >/dev/null; then
         info "cursor: $(t 'installed Hook runtime passed its smoke test' '已安装的 Hook 运行时通过 smoke test')"
       else
         warn "cursor: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
@@ -2550,14 +2561,16 @@ EOF
   if contains_harness trae; then
     local trae_mcp
     trae_mcp="$(trae_mcp_path trae)"
-    if grep -q 'trae-hook.mjs' "$HOME/.trae/hooks.json" 2>/dev/null \
+    if grep -q 'scripts/session-start.mjs' "$HOME/.trae/hooks.json" 2>/dev/null \
+      && grep -q 'scripts/auto-recall.mjs' "$HOME/.trae/hooks.json" 2>/dev/null \
+      && grep -q 'scripts/auto-capture.mjs' "$HOME/.trae/hooks.json" 2>/dev/null \
       && grep -q 'OPENVIKING_INTEGRATION_ID' "$HOME/.trae/hooks.json" 2>/dev/null \
       && grep -q 'mcp-proxy.mjs' "$trae_mcp" 2>/dev/null \
       && [ -f "$OV_HOME/agent-integrations/trae/scripts/trae-hook.mjs" ] \
       && [ -f "$OV_HOME/agent-integrations/trae/integration.json" ]; then
       "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae/scripts/trae-hook.mjs" || ok=0
       if ! printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
-        "$NODE_BIN" "$OV_HOME/agent-integrations/trae/scripts/trae-hook.mjs" session-start trae >/dev/null; then
+        "$NODE_BIN" "$OV_HOME/agent-integrations/trae/scripts/session-start.mjs" trae >/dev/null; then
         warn "trae: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
         ok=0
       fi
@@ -2570,14 +2583,16 @@ EOF
   if contains_harness trae-cn; then
     local trae_cn_mcp
     trae_cn_mcp="$(trae_mcp_path trae-cn)"
-    if grep -q 'trae-hook.mjs' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
+    if grep -q 'scripts/session-start.mjs' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
+      && grep -q 'scripts/auto-recall.mjs' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
+      && grep -q 'scripts/auto-capture.mjs' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
       && grep -q 'OPENVIKING_INTEGRATION_ID' "$HOME/.trae-cn/hooks.json" 2>/dev/null \
       && grep -q 'mcp-proxy.mjs' "$trae_cn_mcp" 2>/dev/null \
       && [ -f "$OV_HOME/agent-integrations/trae-cn/scripts/trae-hook.mjs" ] \
       && [ -f "$OV_HOME/agent-integrations/trae-cn/integration.json" ]; then
       "$NODE_BIN" --check "$OV_HOME/agent-integrations/trae-cn/scripts/trae-hook.mjs" || ok=0
       if ! printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
-        "$NODE_BIN" "$OV_HOME/agent-integrations/trae-cn/scripts/trae-hook.mjs" session-start trae-cn >/dev/null; then
+        "$NODE_BIN" "$OV_HOME/agent-integrations/trae-cn/scripts/session-start.mjs" trae-cn >/dev/null; then
         warn "trae-cn: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
         ok=0
       fi

@@ -12,7 +12,15 @@ import { buildTraeTurns, cleanTraeText } from "./trae-turns.mjs";
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 test("TRAE integration contains native Hook and MCP declarations", () => {
-  for (const file of ["hooks/hooks.json", ".mcp.json", "openviking.integration.json"]) {
+  for (const file of [
+    "hooks/hooks.json",
+    ".mcp.json",
+    "openviking.integration.json",
+    "scripts/trae-hook.mjs",
+    "scripts/session-start.mjs",
+    "scripts/auto-recall.mjs",
+    "scripts/auto-capture.mjs",
+  ]) {
     assert.ok(existsSync(join(pluginRoot, file)), `${file} must exist`);
   }
   const integration = JSON.parse(readFileSync(join(pluginRoot, "openviking.integration.json"), "utf8"));
@@ -22,8 +30,13 @@ test("TRAE integration contains native Hook and MCP declarations", () => {
 });
 
 function runHook(event, client, input, env) {
+  const entrypoint = {
+    "session-start": "session-start.mjs",
+    "user-prompt-submit": "auto-recall.mjs",
+    stop: "auto-capture.mjs",
+  }[event];
   return new Promise((resolveRun, reject) => {
-    const child = spawn(process.execPath, [join(pluginRoot, "scripts", "trae-hook.mjs"), event, client], {
+    const child = spawn(process.execPath, [join(pluginRoot, "scripts", entrypoint), client], {
       env: { ...process.env, ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });

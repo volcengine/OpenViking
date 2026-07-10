@@ -1,8 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -64,7 +63,7 @@ test("Claude hooks include optional skill experience PostToolUse Read hook", () 
   assert.ok(readHook, "PostToolUse must include a Read matcher");
   assert.equal(
     readHook.hooks?.[0]?.command,
-    "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.mjs skill-experience.mjs",
+    "node ${CLAUDE_PLUGIN_ROOT}/scripts/skill-experience.mjs",
   );
   execFileSync("node", ["--check", join(pluginDir, "scripts", "skill-experience.mjs")], { stdio: "pipe" });
 });
@@ -77,23 +76,7 @@ test("Claude hooks include PreToolUse URI guard for filesystem tools", () => {
   assert.ok(guardHook, "PreToolUse must guard Read|Glob|Grep");
   assert.equal(
     guardHook.hooks?.[0]?.command,
-    "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.mjs uri-guard.mjs",
+    "node ${CLAUDE_PLUGIN_ROOT}/scripts/uri-guard.mjs",
   );
   execFileSync("node", ["--check", join(pluginDir, "scripts", "uri-guard.mjs")], { stdio: "pipe" });
-});
-
-test("Claude Hook dispatcher yields to the native Cursor integration", () => {
-  const home = mkdtempSync(join(tmpdir(), "openviking-cursor-dispatch-"));
-  try {
-    mkdirSync(join(home, ".openviking", "agent-integrations", "cursor"), { recursive: true });
-    writeFileSync(join(home, ".openviking", "agent-integrations", "cursor", ".native-hooks"), "");
-    const output = execFileSync("node", [join(pluginDir, "scripts", "hook-dispatch.mjs"), "auto-recall.mjs"], {
-      env: { ...process.env, HOME: home },
-      input: JSON.stringify({ cursor_version: "3.10.20", prompt: "test" }),
-      encoding: "utf8",
-    });
-    assert.deepEqual(JSON.parse(output), {});
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
 });

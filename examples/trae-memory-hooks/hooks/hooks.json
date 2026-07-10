@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node __OPENVIKING_TRAE_ROOT__/scripts/trae-hook.mjs session-start __OPENVIKING_CLIENT_ID__",
+            "command": "node __OPENVIKING_TRAE_ROOT__/scripts/session-start.mjs __OPENVIKING_CLIENT_ID__",
             "timeout": 30
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node __OPENVIKING_TRAE_ROOT__/scripts/trae-hook.mjs user-prompt-submit __OPENVIKING_CLIENT_ID__",
+            "command": "node __OPENVIKING_TRAE_ROOT__/scripts/auto-recall.mjs __OPENVIKING_CLIENT_ID__",
             "timeout": 20
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node __OPENVIKING_TRAE_ROOT__/scripts/trae-hook.mjs stop __OPENVIKING_CLIENT_ID__",
+            "command": "node __OPENVIKING_TRAE_ROOT__/scripts/auto-capture.mjs __OPENVIKING_CLIENT_ID__",
             "timeout": 30
           }
         ]

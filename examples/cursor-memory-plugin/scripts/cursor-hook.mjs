@@ -25,7 +25,7 @@ import {
 
 const CLIENT_ID = "cursor";
 const PREFIX = "cu-";
-const eventName = process.argv[2] || "";
+const eventName = process.env.OPENVIKING_HOOK_EVENT || process.argv[2] || "";
 const cfg = loadAgentHookConfig(CLIENT_ID);
 const { log, logError } = createAgentLogger(CLIENT_ID, eventName, cfg);
 

@@ -3,31 +3,31 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs sessionStart",
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/session-start.mjs",
         "timeout": 30
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs beforeSubmitPrompt",
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/auto-recall.mjs",
         "timeout": 20
       }
     ],
     "stop": [
       {
-        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs stop",
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/auto-capture.mjs",
         "timeout": 30
       }
     ],
     "preCompact": [
       {
-        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs preCompact",
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/pre-compact.mjs",
         "timeout": 30
       }
     ],
     "sessionEnd": [
       {
-        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/cursor-hook.mjs sessionEnd",
+        "command": "node ${CURSOR_PLUGIN_ROOT}/scripts/session-end.mjs",
         "timeout": 30
       }
     ]

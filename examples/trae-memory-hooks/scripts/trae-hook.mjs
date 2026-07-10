@@ -21,8 +21,9 @@ import {
 } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { buildTraeTurns, cleanTraeText } from "./trae-turns.mjs";
 
-const eventName = process.argv[2] || "";
-const requestedClient = process.argv[3] === "trae-cn" ? "trae-cn" : "trae";
+const eventName = process.env.OPENVIKING_HOOK_EVENT || process.argv[2] || "";
+const requestedSource = process.env.OPENVIKING_HOOK_SOURCE || process.argv[3];
+const requestedClient = requestedSource === "trae-cn" ? "trae-cn" : "trae";
 const prefix = requestedClient === "trae-cn" ? "trcn-" : "tr-";
 const cfg = loadAgentHookConfig(requestedClient);
 const { log, logError } = createAgentLogger(requestedClient, eventName, cfg);

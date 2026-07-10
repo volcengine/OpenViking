@@ -74,7 +74,7 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     runInstall(home);
 
     const cursor = JSON.parse(readFileSync(cursorHooks, "utf8"));
-    assert.equal(cursor.hooks.stop.filter((entry) => entry.command.includes("cursor-hook.mjs")).length, 1);
+    assert.equal(cursor.hooks.stop.filter((entry) => entry.command.includes("auto-capture.mjs")).length, 1);
     assert.ok(cursor.hooks.stop.some((entry) => entry.command === "third-party stop"));
     assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes(installedNode)));
     assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes("OPENVIKING_INTEGRATION_ID='openviking-memory'")));
@@ -83,7 +83,7 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
 
     for (const [file, label] of [[traeHooks, "trae"], [traeCnHooks, "trae-cn"]]) {
       const config = JSON.parse(readFileSync(file, "utf8"));
-      assert.equal(config.hooks.Stop.filter((entry) => JSON.stringify(entry).includes("trae-hook.mjs")).length, 1, label);
+      assert.equal(config.hooks.Stop.filter((entry) => JSON.stringify(entry).includes("auto-capture.mjs")).length, 1, label);
       assert.ok(config.hooks.Stop.some((entry) => JSON.stringify(entry).includes(`third-party ${label}`)), label);
       assert.equal(config.hooks.Stop.some((entry) => JSON.stringify(entry).includes("trae-auto-capture.mjs")), false, label);
       assert.ok(config.hooks.Stop.some((entry) => JSON.stringify(entry).includes(`OPENVIKING_HOOK_SOURCE='${label}'`)), label);
@@ -111,12 +111,11 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
       );
     }
     for (const [client, args] of [
-      ["cursor", ["sessionStart"]],
-      ["trae", ["session-start", "trae"]],
-      ["trae-cn", ["session-start", "trae-cn"]],
+      ["cursor", []],
+      ["trae", ["trae"]],
+      ["trae-cn", ["trae-cn"]],
     ]) {
-      const hook = join(home, ".openviking", "agent-integrations", client, "scripts",
-        client === "cursor" ? "cursor-hook.mjs" : "trae-hook.mjs");
+      const hook = join(home, ".openviking", "agent-integrations", client, "scripts", "session-start.mjs");
       const smoke = spawnSync(process.execPath, [hook, ...args], {
         env: { ...process.env, HOME: home, OPENVIKING_MEMORY_ENABLED: "0" },
         input: "{}",
@@ -137,7 +136,7 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
 
     runUninstall(home);
     assert.ok(JSON.parse(readFileSync(cursorHooks, "utf8")).hooks.stop.some((entry) => entry.command === "third-party stop"));
-    assert.equal(JSON.parse(readFileSync(cursorHooks, "utf8")).hooks.stop.some((entry) => entry.command.includes("cursor-hook.mjs")), false);
+    assert.equal(JSON.parse(readFileSync(cursorHooks, "utf8")).hooks.stop.some((entry) => entry.command.includes("auto-capture.mjs")), false);
     assert.equal(existsSync(join(home, ".cursor", "rules", "openviking-memory.mdc")), false);
     assert.equal(existsSync(join(home, ".cursor", "skills", "openviking-memory")), false);
     assert.equal(Boolean(JSON.parse(readFileSync(traeMcp, "utf8")).mcpServers.openviking), false);
