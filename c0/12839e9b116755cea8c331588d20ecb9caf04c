@@ -1,0 +1,30 @@
+openviking/parse/accessors/git_accessor.py
+  s_4044591b15acde::t_2fc82aa31f8842 19,340-341,378,446-447
+openviking/parse/parsers/code/code.py
+  s_4044591b15acde::t_69aaa9e654eb10 470
+tests/unit/test_accessors_git.py
+  s_4044591b15acde::t_52dc87e7ff5579 7,155-194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c012839e9b116755cea8c331588d20ecb9caf04c",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_4044591b15acde": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f46d6-825b-76b1-af2a-5f0fd92a741b",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
