@@ -17,7 +17,12 @@ from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop, PostValidationRetryDecision
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.train.domain import ExperienceSet, RolloutAnalysis, Trajectory
-from openviking.session.train.gates import build_gate_retry_instruction, default_policy_gate_runner
+from openviking.session.train.gates import (
+    ExperienceRootCausePreventionGate,
+    GateRunner,
+    build_gate_retry_instruction,
+    default_policy_gate_runner,
+)
 from openviking.session.train.gradients import PatchSemanticGradient
 from openviking.session.train.utils import first_uri, safe_int
 from openviking.storage.viking_fs import get_viking_fs
@@ -26,6 +31,8 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
+
+_EXPERIENCE_POST_VALIDATION_MAX_RETRIES = 2
 
 
 @dataclass(slots=True)
@@ -142,8 +149,6 @@ class ExperienceGradientEstimator:
             messages: list[dict[str, Any]] | None = None,
             latest_draft: Any = None,
         ):
-            if retry_count >= 1:
-                return None
             analysis_obj = _analysis_from_context_metadata(context)
             experience_set = _experience_set_from_context_metadata(context)
             gradients = _operations_to_gradients(
@@ -156,22 +161,35 @@ class ExperienceGradientEstimator:
                 gradients=gradients,
                 analysis=analysis_obj,
                 experience_set=experience_set,
+                semantic_vlm=vlm,
             )
             instruction = build_gate_retry_instruction(report)
             if not instruction:
                 return None
             report_dict = report.to_dict()
             context.metadata.setdefault("gate_retry_reports", []).append(report_dict)
+            final_outcome = (
+                "discarded_after_max_retries"
+                if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES
+                else "retry_requested"
+            )
             event = _post_validation_retry_event(
                 stage="post_gradient",
                 retry_index=retry_count,
                 report=report_dict,
                 instruction=instruction,
+                final_outcome=final_outcome,
             )
             context.metadata.setdefault("post_validation_retries", []).append(event)
             analysis_obj.metadata.setdefault("post_validation_retries", []).append(event)
             trajectory.metadata.setdefault("post_validation_retries", []).append(event)
-            return PostValidationRetryDecision(retry=True, instruction=instruction)
+            if retry_count >= _EXPERIENCE_POST_VALIDATION_MAX_RETRIES:
+                return PostValidationRetryDecision(discard=True)
+            return PostValidationRetryDecision(
+                retry=True,
+                instruction=instruction,
+                include_latest_draft=True,
+            )
 
         orchestrator = ExtractLoop(
             vlm=vlm,
@@ -181,7 +199,7 @@ class ExperienceGradientEstimator:
             isolation_handler=isolation_handler,
             thinking=True,
             post_validation_hook=post_validation_hook,
-            max_post_validation_retries=1,
+            max_post_validation_retries=_EXPERIENCE_POST_VALIDATION_MAX_RETRIES,
         )
         operations, _ = await orchestrator.run()
         return operations
@@ -192,12 +210,28 @@ async def _evaluate_experience_gradients(
     gradients: list[PatchSemanticGradient],
     analysis: RolloutAnalysis,
     experience_set: ExperienceSet,
+    semantic_vlm: Any = None,
 ) -> tuple[list[PatchSemanticGradient], Any]:
-    gate_runner = default_policy_gate_runner()
-    return await gate_runner.filter_gradients(
+    deterministic_runner = default_policy_gate_runner()
+    gated, report = await deterministic_runner.filter_gradients(
         list(gradients),
         analyses=[analysis],
         policy_set=experience_set,
+    )
+    if semantic_vlm is None or report.rejected_count:
+        return gated, report
+    return await _experience_extract_gate_runner(semantic_vlm).filter_gradients(
+        gated,
+        analyses=[analysis],
+        policy_set=experience_set,
+    )
+
+
+def _experience_extract_gate_runner(vlm: Any) -> GateRunner:
+    return GateRunner(
+        gates=[
+            ExperienceRootCausePreventionGate(mode="enforce", vlm=vlm),
+        ]
     )
 
 
@@ -207,6 +241,7 @@ def _post_validation_retry_event(
     retry_index: int,
     report: dict[str, Any],
     instruction: str,
+    final_outcome: str = "retry_requested",
 ) -> dict[str, Any]:
     return {
         "stage": stage,
@@ -216,7 +251,7 @@ def _post_validation_retry_event(
         "rejected_count": int(report.get("rejected_count") or 0),
         "warning_count": int(report.get("warning_count") or 0),
         "retriable": bool(str(instruction or "").strip()),
-        "final_outcome": "retry_requested",
+        "final_outcome": final_outcome,
         "instruction_preview": _preview_instruction(instruction),
     }
 

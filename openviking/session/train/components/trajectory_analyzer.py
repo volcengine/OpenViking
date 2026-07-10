@@ -31,7 +31,6 @@ from openviking.session.skill.session_skill_context_provider import (
 from openviking.session.train.components.experience_feedback import (
     record_experience_feedback_stats,
 )
-from openviking.session.train.components.root_cause_gate import RootCauseGate
 from openviking.session.train.domain import (
     CriterionResult,
     Rollout,
@@ -259,8 +258,6 @@ class TrajectoryRolloutAnalyzer:
         provider._ctx = ctx
         provider._viking_fs = viking_fs
 
-        root_cause_gate = RootCauseGate(vlm=vlm, thinking=True, max_followups=2)
-
         async def post_validation_hook(
             operations: Any,
             retry_count: int,
@@ -270,12 +267,7 @@ class TrajectoryRolloutAnalyzer:
         ):
             issues = _trajectory_validation_issues(operations)
             if not issues:
-                return await root_cause_gate(
-                    operations,
-                    retry_count,
-                    messages=messages,
-                    latest_draft=latest_draft,
-                )
+                return None
             return PostValidationRetryDecision(
                 retry=True,
                 instruction=_trajectory_validation_retry_instruction(issues),

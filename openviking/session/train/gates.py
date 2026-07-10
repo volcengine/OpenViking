@@ -226,15 +226,12 @@ class GateRunner:
 
 
 def default_policy_gate_runner() -> GateRunner:
-    """Default hard-coded gates used by session policy training."""
+    """Default hard-coded deterministic gates used by session policy training."""
 
     return GateRunner(
         gates=[
             ExperienceCausalSignalGate(mode="enforce"),
-            ExperienceRuntimeWordingGate(mode="enforce"),
-            ExperienceToolAlignmentGate(mode="enforce"),
             ExperienceTriggerRuntimeGate(mode="enforce"),
-            ExperienceCounterfactualReflectionGate(mode="enforce"),
         ]
     )
 
@@ -257,24 +254,9 @@ Your experience output will be rejected unless every experience satisfies these 
   or when the first reward-changing mistake is reusable and preventable.
 - Do not output experiences for Outcome=success.
 
-2. Tool boundary alignment
-- trigger_code must bind exactly one candidate_tool.
-- The candidate_tool must match the trajectory's First Wrong Tool Call.Tool or Trigger boundary.
-- Do not choose earlier setup tools, later recovery tools, or multi-tool workflow triggers.
-
-3. Runtime wording hygiene
-- Runtime-facing experience content must use task/runtime semantics, not evaluator or
-  control-plane terms.
-- Do not mention evaluation, evaluator, communicate_checks, action_checks, db_check,
-  reward, rubric, 评估, or 奖励 in the injected experience text.
-
-4. Trigger runtime compatibility
-- trigger_code must compile under the VikingBot constraint runtime used by tau2 constraint mode.
+2. Trigger runtime compatibility
+- trigger_code must compile under the VikingBot constraint runtime used by pre-tool reminder injection.
 - Do not use imports, file/network/process access, mutation of ctx/messages, or other forbidden syntax.
-
-5. Counterfactual reflection
-- Reflect on whether injecting this experience before the original First Wrong Tool Call would likely improve the source rollout.
-- Reject experiences that would not address the first reward-changing mistake, only summarize a successful workflow, require unavailable information, or likely make the original rollout worse.
 
 If you cannot satisfy this contract, output no experience changes."""
 
@@ -451,36 +433,34 @@ class ExperienceTriggerRuntimeGate:
 
 
 @dataclass(slots=True)
-class ExperienceCounterfactualReflectionGate:
-    """LLM reflection gate for whether a planned experience should improve its source rollout.
+class ExperienceRootCausePreventionGate:
+    """LLM gate for extracted experience prevention quality.
 
-    This gate intentionally does not replay trigger code or run deterministic
-    candidate-shape checks.  It asks the configured VLM to judge the
-    counterfactual: if the proposed experience were injected before the source
-    trajectory's first reward-changing mistake, would the original rollout most
-    likely execute better?
+    This gate is intended for the experience extraction loop only.  It reviews
+    the concrete experience draft that would become an injectable pre-tool
+    reminder, rather than reviewing compact trajectory evidence or merged plan
+    items.  Later merge stages should keep using deterministic gates to avoid
+    repeated semantic LLM calls.
     """
 
     mode: GateMode = "enforce"
-    name: str = "experience_counterfactual_reflection"
+    name: str = "experience_root_cause_prevention"
     vlm: Any = None
-    confidence_threshold: float = 0.5
     max_trajectory_chars: int = 8000
-    max_policy_chars: int = 4000
+    max_policy_chars: int = 5000
 
     def applies_to(self, target: GateTarget) -> bool:
         return (
-            target.stage == "post_plan"
+            target.stage == "post_gradient"
             and target.memory_type == "experiences"
-            and target.target_kind == "plan_item"
-            and target.plan_item is not None
-            and target.plan_item.kind == "upsert"
+            and target.target_kind == "gradient"
+            and target.gradient is not None
             and target.after_content.strip() != ""
             and target.trajectory is not None
         )
 
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
-        prompt = _counterfactual_reflection_prompt(
+        prompt = _experience_root_cause_prevention_prompt(
             target,
             max_trajectory_chars=self.max_trajectory_chars,
             max_policy_chars=self.max_policy_chars,
@@ -492,11 +472,15 @@ class ExperienceCounterfactualReflectionGate:
             )
             parsed = parse_json_from_response(response)
         except Exception as exc:
-            logger.warning("counterfactual reflection gate failed open: %s", exc, exc_info=True)
+            logger.warning(
+                "experience root-cause prevention gate failed open: %s",
+                exc,
+                exc_info=True,
+            )
             return GateDecision(
                 gate_name=self.name,
                 action="warn",
-                reason="counterfactual reflection failed open",
+                reason="experience root-cause prevention gate failed open",
                 evidence={
                     "target_name": target.target_name,
                     "error": str(exc),
@@ -507,30 +491,28 @@ class ExperienceCounterfactualReflectionGate:
             return GateDecision(
                 gate_name=self.name,
                 action="warn",
-                reason="counterfactual reflection returned non-JSON or non-object output",
+                reason="experience root-cause prevention gate returned non-object output",
                 evidence={
                     "target_name": target.target_name,
                     "raw_response_preview": _preview_text(str(response), limit=500),
                 },
             )
 
-        result = _normalize_reflection_result(parsed)
+        result = _normalize_experience_prevention_result(parsed)
         evidence = {
             "target_name": target.target_name,
-            "would_improve_original_rollout": result["would_improve_original_rollout"],
-            "confidence": result["confidence"],
-            "failure_mode_addressed": result["failure_mode_addressed"],
+            "pass": result["pass"],
+            "root_cause_quality": result["root_cause_quality"],
+            "reason": result["reason"],
             "expected_behavior_change": result["expected_behavior_change"],
-            "reject_reason": result["reject_reason"],
             "risks": result["risks"],
         }
-        confidence = result["confidence"]
-        if result["would_improve_original_rollout"] and confidence >= self.confidence_threshold:
+        if result["pass"]:
             if result["risks"]:
                 return GateDecision(
                     gate_name=self.name,
                     action="warn",
-                    reason="counterfactual reflection allowed with risks",
+                    reason="experience prevention gate allowed with risks",
                     evidence=evidence,
                 )
             return None
@@ -538,16 +520,16 @@ class ExperienceCounterfactualReflectionGate:
         return GateDecision(
             gate_name=self.name,
             action="reject",
-            reason=(
-                result["reject_reason"]
-                or "LLM reflection judged the proposed experience unlikely to improve the original rollout"
-            ),
+            reason=result["reason"] or "experience does not pass counterfactual prevention review",
             evidence=evidence,
             retriable=True,
             repair_prompt=(
-                "Revise or remove this experience. It must directly address the source "
-                "trajectory's first reward-changing mistake and plausibly improve the "
-                "original rollout if injected before that mistake."
+                result["repair_prompt"]
+                or "Rewrite or remove this experience. The repaired experience must be supported "
+                "by the source trajectory, trigger before the first preventable wrong decision, "
+                "state the narrow runtime rule that replaces the mistaken decision rule, and "
+                "explain what future behavior changes so the next similar session succeeds "
+                "without blocking nearby correct behavior."
             ),
         )
 
@@ -839,7 +821,7 @@ class _TriggerProfileVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def _counterfactual_reflection_prompt(
+def _experience_root_cause_prevention_prompt(
     target: GateTarget,
     *,
     max_trajectory_chars: int,
@@ -850,13 +832,7 @@ def _counterfactual_reflection_prompt(
     evaluation_summary = _evaluation_summary(analysis) if analysis is not None else ""
     before = _preview_text(target.before_content or "", limit=max_policy_chars)
     after = _preview_text(target.after_content or "", limit=max_policy_chars)
-    fields: dict[str, Any] = {}
-    if target.plan_item is not None and isinstance(target.plan_item.metadata, dict):
-        for key in ("merge_memory_fields", "patch_metadata"):
-            value = target.plan_item.metadata.get(key)
-            if isinstance(value, dict):
-                fields.update(value)
-    trigger_code = str(fields.get("trigger_code") or "")
+    _, trigger_code = _experience_constraint_and_trigger(target.after_content, target)
     trajectory_content = _preview_text(
         trajectory.content if trajectory is not None else "",
         limit=max_trajectory_chars,
@@ -864,31 +840,47 @@ def _counterfactual_reflection_prompt(
     trajectory_uri = trajectory.uri if trajectory is not None else ""
     trajectory_outcome = trajectory.outcome if trajectory is not None else ""
 
-    return f"""You are a strict policy-training gate.
+    return f"""You are a senior counterfactual failure diagnostician for agent experience extraction.
 
-Judge one proposed experience update by counterfactual reflection only.
+Review ONE proposed experience update.  The proposed experience will be injected
+as a runtime pre-tool reminder in future sessions.
 
-Question:
-If the proposed experience below had been injected into the agent context immediately before the source trajectory's original first reward-changing mistake, would the original rollout likely execute better?
+Main question:
+If this exact experience had been injected before the source trajectory's first
+preventable wrong decision, would it change the future agent's behavior enough
+for the next similar session to succeed, without breaking nearby correct cases?
 
-Reject if the proposed experience:
-- does not directly address the source trajectory's first material divergence / first wrong tool call;
-- only summarizes a successful workflow or broad SOP;
-- targets a later recovery step rather than the first reward-changing mistake;
-- requires facts that were unavailable at that point in the original rollout;
-- is likely to make correct parts of the original rollout worse.
+Pass only when all are true:
+1. The source trajectory supports the causal failure: first preventable wrong
+   decision, mistaken runtime rule, visible trigger/source evidence, and success link.
+2. The experience is directly preventive: it changes a future tool call, missing
+   tool call, confirmation, calculation, policy branch, write, communication, or
+   final answer before or at the failing boundary.
+3. The experience is injectable: it is a runtime reminder, not a case audit,
+   evaluator diagnosis, broad SOP, hidden answer, or generic "check everything" rule.
+4. The trigger/runtime condition is narrow enough to preserve correct behavior.
 
-Return JSON only, with exactly these fields:
+Fail when the proposed experience only summarizes the task, fires too late,
+uses unsupported or hidden facts, overfits case literals, misses the root
+decision rule, lacks a concrete future behavior change, or would likely harm
+correct behavior.
+
+Return JSON only:
 {{
-  "would_improve_original_rollout": true,
-  "confidence": 0.0,
-  "failure_mode_addressed": "short string",
-  "expected_behavior_change": "short string",
-  "reject_reason": null,
+  "pass": true,
+  "root_cause_quality": "sufficient",
+  "reason": "brief trigger -> changed behavior -> success explanation",
+  "expected_behavior_change": "what the future agent would do differently",
+  "repair_prompt": "",
   "risks": []
 }}
 
-Use confidence from 0.0 to 1.0. If uncertain, set would_improve_original_rollout=false.
+If failing, set "pass": false, choose root_cause_quality from:
+surface_level, unsupported, not_preventive, too_late_boundary,
+wrong_scope, missing_source_binding, missing_behavior_change,
+not_injectable, over_broad, unsafe, unclear.
+Set repair_prompt to one concise instruction for rewriting or removing this
+specific experience. Do not ask for any output schema.
 
 ## Source trajectory
 uri: {trajectory_uri}
@@ -939,24 +931,19 @@ def _evaluation_summary(analysis: RolloutAnalysis | None) -> str:
     return "\n".join(lines)
 
 
-def _normalize_reflection_result(parsed: dict[str, Any]) -> dict[str, Any]:
-    raw_confidence = parsed.get("confidence", 0.0)
-    try:
-        confidence = float(raw_confidence)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    confidence = max(0.0, min(1.0, confidence))
+def _normalize_experience_prevention_result(parsed: dict[str, Any]) -> dict[str, Any]:
     risks = parsed.get("risks") or []
     if not isinstance(risks, list):
         risks = [str(risks)]
+    repair_prompt = parsed.get("repair_prompt")
+    if repair_prompt is None:
+        repair_prompt = parsed.get("followup_message")
     return {
-        "would_improve_original_rollout": bool(parsed.get("would_improve_original_rollout")),
-        "confidence": confidence,
-        "failure_mode_addressed": str(parsed.get("failure_mode_addressed") or ""),
+        "pass": bool(parsed.get("pass")),
+        "root_cause_quality": str(parsed.get("root_cause_quality") or "unclear"),
+        "reason": str(parsed.get("reason") or ""),
         "expected_behavior_change": str(parsed.get("expected_behavior_change") or ""),
-        "reject_reason": (
-            str(parsed.get("reject_reason")) if parsed.get("reject_reason") is not None else ""
-        ),
+        "repair_prompt": str(repair_prompt or ""),
         "risks": [str(item) for item in risks if str(item)],
     }
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from openviking.session.memory.dataclass import StoredLink
+from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.train.domain import (
     CriterionResult,
     ExperienceSet,
@@ -16,7 +16,7 @@ from openviking.session.train.domain import (
 )
 from openviking.session.train.gates import (
     ExperienceCausalSignalGate,
-    ExperienceCounterfactualReflectionGate,
+    ExperienceRootCausePreventionGate,
     ExperienceRuntimeWordingGate,
     ExperienceToolAlignmentGate,
     ExperienceTriggerRuntimeGate,
@@ -24,6 +24,7 @@ from openviking.session.train.gates import (
     default_experience_gate_contract,
     default_policy_gate_runner,
 )
+from openviking.session.train.gradients import PatchSemanticGradient
 
 
 class FakeVLM:
@@ -139,17 +140,36 @@ def _plan_item() -> PolicyPlanItem:
     )
 
 
-def _target(
+def _gradient_target(
     vlm_response: str | Exception,
-) -> tuple[GateTarget, ExperienceCounterfactualReflectionGate]:
+) -> tuple[GateTarget, ExperienceRootCausePreventionGate]:
     analysis = _analysis()
     item = _plan_item()
-    gate = ExperienceCounterfactualReflectionGate(vlm=FakeVLM(vlm_response))
-    target = GateTarget(
-        stage="post_plan",
+    after_file = MemoryFile(
+        uri=item.target_uri,
+        content=item.after_content,
         memory_type="experiences",
-        target_kind="plan_item",
-        plan_item=item,
+        extra_fields={
+            "memory_type": "experiences",
+            "experience_name": item.target_name,
+            "constraint": item.after_content,
+            "trigger_code": item.metadata["merge_memory_fields"]["trigger_code"],
+        },
+    )
+    gradient = PatchSemanticGradient(
+        before_file=None,
+        after_file=after_file,
+        base_version=None,
+        rationale="test",
+        links=item.links,
+        confidence=0.8,
+    )
+    gate = ExperienceRootCausePreventionGate(vlm=FakeVLM(vlm_response))
+    target = GateTarget(
+        stage="post_gradient",
+        memory_type="experiences",
+        target_kind="gradient",
+        gradient=gradient,
         analysis=analysis,
         trajectory=analysis.trajectories[0],
         policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
@@ -157,12 +177,14 @@ def _target(
     return target, gate
 
 
-def test_default_policy_gate_runner_uses_reflection_not_shape_or_narrowing_gate():
+def test_default_policy_gate_runner_uses_deterministic_experience_gates_only():
     names = [gate.name for gate in default_policy_gate_runner().gates]
 
-    assert "experience_counterfactual_reflection" in names
-    assert "experience_runtime_wording" in names
-    assert "experience_trigger_runtime" in names
+    assert names == ["experience_causal_signal", "experience_trigger_runtime"]
+    assert "experience_counterfactual_reflection" not in names
+    assert "experience_root_cause_prevention" not in names
+    assert "experience_runtime_wording" not in names
+    assert "experience_tool_alignment" not in names
     assert "experience_content_format" not in names
     assert "experience_trigger_shape" not in names
     assert "experience_update_narrowing" not in names
@@ -170,8 +192,8 @@ def test_default_policy_gate_runner_uses_reflection_not_shape_or_narrowing_gate(
     contract = default_experience_gate_contract()
     assert "Content format" not in contract
     assert "Use exactly these headings" not in contract
-    assert "Counterfactual reflection" in contract
-    assert "Runtime wording hygiene" in contract
+    assert "Counterfactual reflection" not in contract
+    assert "Runtime wording hygiene" not in contract
     assert "Trigger runtime compatibility" in contract
     assert "eligible for experience learning by default" in contract
     assert "Recommended operation=skip" in contract
@@ -497,42 +519,44 @@ async def test_causal_signal_gate_still_rejects_success_trajectory():
 
 
 @pytest.mark.asyncio
-async def test_counterfactual_reflection_gate_allows_likely_improvement():
-    target, gate = _target(
-        '{"would_improve_original_rollout": true, "confidence": 0.82, '
-        '"failure_mode_addressed": "missing_communication", '
+async def test_experience_root_cause_prevention_gate_allows_preventive_experience():
+    target, gate = _gradient_target(
+        '{"pass": true, "root_cause_quality": "sufficient", '
+        '"reason": "final communication trigger changes answer to include required total", '
         '"expected_behavior_change": "include required total", '
-        '"reject_reason": null, "risks": []}'
+        '"repair_prompt": "", "risks": []}'
     )
 
     decision = await gate.evaluate(target)
 
     assert decision is None
     assert len(gate.vlm.calls) == 1
-    assert "would the original rollout likely execute better" in gate.vlm.calls[0]["prompt"]
+    assert "preventable wrong decision" in gate.vlm.calls[0]["prompt"]
 
 
 @pytest.mark.asyncio
-async def test_counterfactual_reflection_gate_rejects_unlikely_improvement():
-    target, gate = _target(
-        '{"would_improve_original_rollout": false, "confidence": 0.9, '
-        '"failure_mode_addressed": "broad workflow", '
+async def test_experience_root_cause_prevention_gate_rejects_non_preventive_experience():
+    target, gate = _gradient_target(
+        '{"pass": false, "root_cause_quality": "not_preventive", '
+        '"reason": "only summarizes a broad workflow", '
         '"expected_behavior_change": "", '
-        '"reject_reason": "only summarizes a workflow", "risks": []}'
+        '"repair_prompt": "Rewrite it around the missing final total communication.", '
+        '"risks": []}'
     )
 
     decision = await gate.evaluate(target)
 
     assert decision is not None
     assert decision.action == "reject"
-    assert decision.gate_name == "experience_counterfactual_reflection"
+    assert decision.gate_name == "experience_root_cause_prevention"
+    assert decision.retriable is True
     assert "workflow" in decision.reason
-    assert decision.evidence["would_improve_original_rollout"] is False
+    assert "missing final total" in decision.repair_prompt
 
 
 @pytest.mark.asyncio
-async def test_counterfactual_reflection_gate_fails_open_on_llm_error():
-    target, gate = _target(RuntimeError("model unavailable"))
+async def test_experience_root_cause_prevention_gate_fails_open_on_llm_error():
+    target, gate = _gradient_target(RuntimeError("model unavailable"))
 
     decision = await gate.evaluate(target)
 
