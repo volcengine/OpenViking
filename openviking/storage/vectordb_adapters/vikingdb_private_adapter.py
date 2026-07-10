@@ -18,6 +18,7 @@ class VikingDBPrivateCollectionAdapter(CollectionAdapter):
 
     _DATA_BATCH_SIZE = 100
     _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
+    USE_CONTENT_FIELD = True
 
     def __init__(
         self,
