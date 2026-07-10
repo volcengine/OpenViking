@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from difflib import get_close_matches
 from dataclasses import dataclass
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Optional
 
@@ -104,20 +104,6 @@ def _unknown_field_error(path: str, key: str, allowed_keys: set[str]) -> ValueEr
     return ValueError(message)
 
 
-def _merge_gateway_token_header(
-    headers: dict[str, str],
-    gateway_token: Optional[str],
-) -> dict[str, str]:
-    merged = dict(headers)
-    token = (gateway_token or "").strip()
-    if not token:
-        return merged
-    has_gateway_header = any(key.lower() == "x-gateway-token" for key in merged)
-    if not has_gateway_header:
-        merged["X-Gateway-Token"] = token
-    return merged
-
-
 def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig]:
     path = Path(config_path).expanduser() if config_path else _resolve_ovcli_config_path()
     if path is None or not path.exists():
@@ -185,9 +171,7 @@ def load_ovcli_config(config_path: Optional[str] = None) -> Optional[OVCLIConfig
             timeout=60.0 if timeout is None else timeout,
             profile=False if profile is None else profile,
             extra_headers=_parse_extra_headers(extra_headers_value, path="ovcli.extra_headers"),
-            gateway_token=_optional_string(
-                data.get("gateway_token"), path="ovcli.gateway_token"
-            ),
+            gateway_token=_optional_string(data.get("gateway_token"), path="ovcli.gateway_token"),
             upload_mode=upload_mode,
             output=_optional_string(data.get("output"), path="ovcli.output"),
         )
@@ -242,11 +226,14 @@ def resolve_client_config(
     resolved_extra_headers = dict(extra_headers) if extra_headers is not None else {}
     if extra_headers is None and cli_config is not None:
         resolved_extra_headers = dict(cli_config.extra_headers)
-    resolved_gateway_token = cli_config.gateway_token if cli_config else None
-    resolved_extra_headers = _merge_gateway_token_header(
-        resolved_extra_headers,
-        resolved_gateway_token,
-    )
+    resolved_gateway_token = None
+    if (
+        cli_config is not None
+        and cli_config.url
+        and resolved_url
+        and cli_config.url.rstrip("/") == resolved_url.rstrip("/")
+    ):
+        resolved_gateway_token = cli_config.gateway_token
 
     resolved_upload_mode = upload_mode
     if resolved_upload_mode is None and cli_config is not None:

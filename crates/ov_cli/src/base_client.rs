@@ -271,7 +271,7 @@ impl BaseClient {
                 .is_some_and(|value| value.eq_ignore_ascii_case("true"))
     }
 
-    async fn send_request(
+    pub(crate) async fn send_request(
         &self,
         request: reqwest::RequestBuilder,
         error_context: &str,

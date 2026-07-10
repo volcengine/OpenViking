@@ -2632,17 +2632,21 @@ async def test_openviking_search_actor_client_expands_current_peer_scope(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_openviking_tool_sender_uses_actor_scoped_one_shot_client(monkeypatch):
+async def test_openviking_tool_uses_authenticated_actor_instead_of_display_sender(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
     tool = VikingSearchTool()
 
     result = await tool.execute(
-        SimpleNamespace(workspace_id="workspace", sender_id="sender-1"),
+        SimpleNamespace(
+            workspace_id="workspace",
+            sender_id="display-user",
+            actor_peer_id="peer-a",
+        ),
         query="hello",
     )
 
     first = _DummyHTTPClient.instances[0]
-    assert first.kwargs["actor_peer_id"] == "sender-1"
+    assert first.kwargs["actor_peer_id"] == "peer-a"
     assert first.closed is True
     assert "No results found" in result
 

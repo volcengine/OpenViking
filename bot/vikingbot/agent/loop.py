@@ -703,6 +703,7 @@ class AgentLoop:
         session_key: SessionKey,
         publish_events: bool = True,
         sender_id: str | None = None,
+        actor_peer_id: str | None = None,
         ov_tools_enable: bool = True,
         memory_peer_ids: list[str] | None = None,
         memory_owner_user_ids: list[str] | None = None,
@@ -719,6 +720,7 @@ class AgentLoop:
             messages: Initial message list
             session_key: Session key for tool execution context
             publish_events: Whether to publish ITERATION/REASONING/TOOL_CALL events to the bus
+            actor_peer_id: Authenticated OpenViking peer identity for tools
             ov_tools_enable: Whether to enable OpenViking tools for this session
             memory_peer_ids: List of peer IDs for memory retrieval
             memory_owner_user_ids: List of explicit OpenViking user IDs for
@@ -859,6 +861,7 @@ class AgentLoop:
                         session_key=session_key,
                         sandbox_manager=self.sandbox_manager,
                         sender_id=sender_id,
+                        actor_peer_id=actor_peer_id or sender_id,
                         memory_peer_ids=memory_peer_ids,
                         memory_owner_user_ids=memory_owner_user_ids,
                         openviking_connection=openviking_connection,
@@ -1098,6 +1101,8 @@ class AgentLoop:
             if not isinstance(openviking_connection, dict):
                 openviking_connection = None
             msg.openviking_connection = openviking_connection
+            actor_peer_id = getattr(msg, "actor_peer_id", None) or msg.sender_id
+            msg.actor_peer_id = actor_peer_id
             profile_user_list = []
             memory_peer_ids = self._metadata_memory_peer_ids(msg.metadata)
             memory_owner_user_ids = self._metadata_memory_owner_user_ids(msg.metadata)
@@ -1256,6 +1261,7 @@ class AgentLoop:
                 message_workspace,
                 sandbox_manager=self.sandbox_manager,
                 sender_id=msg.sender_id,
+                actor_peer_id=actor_peer_id,
                 sender_name=msg.sender_name,
                 is_group_chat=is_group_chat,
                 eval=self._eval,
@@ -1270,7 +1276,7 @@ class AgentLoop:
                 session,
                 provider_name=provider_name,
                 openviking_connection=openviking_connection,
-                actor_peer_id=msg.sender_id,
+                actor_peer_id=actor_peer_id,
             )
 
             # Experience recall deduplication: URIs already recalled in this session
@@ -1324,6 +1330,7 @@ class AgentLoop:
                     session_key=session_key,
                     publish_events=True,
                     sender_id=msg.sender_id,
+                    actor_peer_id=actor_peer_id,
                     ov_tools_enable=ov_tools_enable,
                     memory_peer_ids=memory_peer_ids,
                     memory_owner_user_ids=memory_owner_user_ids,
@@ -1577,11 +1584,12 @@ class AgentLoop:
 
         # Build messages with the announce content
         provider_name = self.config.get_provider_name(self.model) if self.config else None
+        actor_peer_id = getattr(msg, "actor_peer_id", None) or msg.sender_id
         history = await self._build_prompt_history(
             session,
             provider_name=provider_name,
             openviking_connection=msg.openviking_connection,
-            actor_peer_id=msg.sender_id,
+            actor_peer_id=actor_peer_id,
         )
         from vikingbot.agent.context import ContextBuilder
 
@@ -1594,6 +1602,7 @@ class AgentLoop:
             message_workspace,
             sandbox_manager=self.sandbox_manager,
             sender_id=msg.sender_id,
+            actor_peer_id=actor_peer_id,
             openviking_connection=msg.openviking_connection,
             enable_subagents=self._subagents_enabled(),
             config=self.config,
@@ -1617,6 +1626,8 @@ class AgentLoop:
             messages=messages,
             session_key=msg.session_key,
             publish_events=False,
+            sender_id=msg.sender_id,
+            actor_peer_id=actor_peer_id,
             ov_tools_enable=ov_tools_enable,
             memory_peer_ids=None,
             openviking_connection=msg.openviking_connection,

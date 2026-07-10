@@ -1080,8 +1080,6 @@ class OpenAPIChannel(BaseChannel):
             lower = key.lower()
             if lower in HOP_BY_HOP_HEADERS:
                 continue
-            if lower in {"content-length", "content-encoding", "transfer-encoding"}:
-                continue
             forwarded[key] = value
         return forwarded
 
@@ -1098,25 +1096,39 @@ class OpenAPIChannel(BaseChannel):
         if request.url.query:
             upstream_url = f"{upstream_url}?{request.url.query}"
 
+        client = httpx.AsyncClient(
+            timeout=OPENVIKING_PROXY_TIMEOUT_SECONDS,
+            trust_env=False,
+        )
         try:
-            async with httpx.AsyncClient(
-                timeout=OPENVIKING_PROXY_TIMEOUT_SECONDS,
-                trust_env=False,
-            ) as client:
-                upstream_response = await client.request(
-                    request.method,
-                    upstream_url,
-                    content=await request.body(),
-                    headers=self._proxy_request_headers(request),
-                )
+            content = None if request.method in {"GET", "HEAD"} else request.stream()
+            upstream_request = client.build_request(
+                request.method,
+                upstream_url,
+                content=content,
+                headers=self._proxy_request_headers(request),
+            )
+            upstream_response = await client.send(upstream_request, stream=True)
         except httpx.HTTPError as exc:
+            await client.aclose()
             raise HTTPException(
                 status_code=502,
                 detail=f"OpenViking upstream proxy request failed: {exc.__class__.__name__}",
             ) from exc
+        except BaseException:
+            await client.aclose()
+            raise
 
-        return Response(
-            content=upstream_response.content,
+        async def stream_upstream_response():
+            try:
+                async for chunk in upstream_response.aiter_raw():
+                    yield chunk
+            finally:
+                await upstream_response.aclose()
+                await client.aclose()
+
+        return StreamingResponse(
+            content=stream_upstream_response(),
             status_code=upstream_response.status_code,
             headers=self._proxy_response_headers(upstream_response.headers),
             media_type=upstream_response.headers.get("content-type"),
@@ -1154,6 +1166,10 @@ class OpenAPIChannel(BaseChannel):
             if connection:
                 return connection
         return None
+
+    def _request_actor_peer_id(self, request: ChatRequest, fallback: str) -> str:
+        connection = self._request_openviking_connection(request) or {}
+        return str(connection.get("actor_peer_id") or fallback)
 
     async def _handle_chat(self, request: ChatRequest) -> ChatResponse:
         """Handle a chat request."""
@@ -1199,6 +1215,7 @@ class OpenAPIChannel(BaseChannel):
             msg = InboundMessage(
                 session_key=session_key,
                 sender_id=user_id,
+                actor_peer_id=self._request_actor_peer_id(request, user_id),
                 content=content,
                 metadata=self._request_metadata(request),
                 openviking_connection=self._request_openviking_connection(request),
@@ -1269,6 +1286,7 @@ class OpenAPIChannel(BaseChannel):
                 msg = InboundMessage(
                     session_key=session_key,
                     sender_id=user_id,
+                    actor_peer_id=self._request_actor_peer_id(request, user_id),
                     content=request.message,
                     metadata=self._request_metadata(request),
                     openviking_connection=self._request_openviking_connection(request),
@@ -1352,6 +1370,7 @@ class OpenAPIChannel(BaseChannel):
             msg = InboundMessage(
                 session_key=session_key,
                 sender_id=user_id,
+                actor_peer_id=self._request_actor_peer_id(request, user_id),
                 content=content,
                 need_reply=request.need_reply,
                 metadata=self._request_metadata(request),
@@ -1430,6 +1449,7 @@ class OpenAPIChannel(BaseChannel):
                 msg = InboundMessage(
                     session_key=session_key,
                     sender_id=user_id,
+                    actor_peer_id=self._request_actor_peer_id(request, user_id),
                     content=request.message,
                     metadata=self._request_metadata(request),
                     openviking_connection=self._request_openviking_connection(request),

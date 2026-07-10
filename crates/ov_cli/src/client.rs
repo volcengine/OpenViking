@@ -373,15 +373,16 @@ impl HttpClient {
             ("profile".to_string(), "0".to_string()),
         ];
 
-        let response = self
+        let request = self
             .base
             .http
             .get(&url)
             .headers(self.base.build_headers())
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&params);
+        let response = self
+            .base
+            .send_request(request, "HTTP request failed")
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -1139,16 +1140,17 @@ impl HttpClient {
         default_name: &str,
     ) -> Result<String> {
         let url = format!("{}{}", self.base.base_url, endpoint);
-        let response = self
+        let request = self
             .base
             .http
             .post(&url)
             .headers(self.base.build_headers())
             .json(&body)
-            .query(&[("profile", "0")])
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&[("profile", "0")]);
+        let response = self
+            .base
+            .send_request(request, "HTTP request failed")
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -1637,15 +1639,16 @@ impl HttpClient {
             query.push(("path".to_string(), p.to_string()));
         }
 
-        let response = self
+        let request = self
             .base
             .http
             .get(&url)
             .headers(self.base.build_headers())
-            .query(&query)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&query);
+        let response = self
+            .base
+            .send_request(request, "HTTP request failed")
+            .await?;
 
         let status = response.status();
         let content_type = response
@@ -1889,6 +1892,63 @@ mod tests {
             .expect("gateway retry should succeed");
 
         let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn file_download_retries_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        client
+            .get_bytes("viking://resources/file.bin")
+            .await
+            .expect("file download should retry through gateway");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn pack_download_retries_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+        let output = tempfile::tempdir().expect("tempdir should be created");
+
+        client
+            .export_ovpack(
+                "viking://resources",
+                output
+                    .path()
+                    .to_str()
+                    .expect("tempdir path should be valid"),
+                false,
+            )
+            .await
+            .expect("pack export should retry through gateway");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn snapshot_show_retries_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        client
+            .snapshot_show("HEAD", None)
+            .await
+            .expect("snapshot show should retry through gateway");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    fn assert_gateway_token_retry(requests: &[String]) {
         assert_eq!(requests.len(), 2);
         assert!(!requests[0].to_ascii_lowercase().contains("x-gateway-token"));
         assert!(

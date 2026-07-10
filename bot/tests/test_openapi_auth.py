@@ -36,6 +36,19 @@ def _make_client(channel: OpenAPIChannel) -> TestClient:
     return TestClient(app)
 
 
+class _AsyncBytesStream(httpx.AsyncByteStream):
+    def __init__(self, *chunks: bytes):
+        self.chunks = chunks
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 class TestOpenAPIAuth:
     def test_health_remains_available_without_api_key(self, message_bus, temp_workspace):
         channel = OpenAPIChannel(
@@ -363,6 +376,10 @@ class TestOpenAPIAuth:
 
         async def fake_handle_chat(request):
             captured["connection"] = request.openviking_connection.model_dump(exclude_none=True)
+            captured["sender_id"] = channel._request_user_id(request)
+            captured["actor_peer_id"] = channel._request_actor_peer_id(
+                request, captured["sender_id"]
+            )
             return ChatResponse(
                 session_id=request.session_id or "default", message="ok", events=None
             )
@@ -374,12 +391,14 @@ class TestOpenAPIAuth:
         response = client.post(
             "/bot/v1/chat",
             headers={"X-API-Key": "user-key", "X-OpenViking-Actor-Peer": "peer-a"},
-            json={"message": "hello"},
+            json={"message": "hello", "user_id": "display-user"},
         )
 
         assert response.status_code == 200
         assert captured["health_url"] == "http://ov.local/health"
         assert captured["health_headers"]["X-API-Key"] == "user-key"
+        assert captured["sender_id"] == "display-user"
+        assert captured["actor_peer_id"] == "peer-a"
         assert captured["connection"] == {
             "api_key": "user-key",
             "account_id": "acct",
@@ -821,16 +840,25 @@ class TestOpenAPIAuth:
                     headers={"content-type": "application/json"},
                 )
 
-            async def request(self, method, url, content=None, headers=None):
+            def build_request(self, method, url, content=None, headers=None):
                 captured["method"] = method
                 captured["url"] = url
-                captured["content"] = content
                 captured["headers"] = headers
+                return httpx.Request(method, url, content=content, headers=headers)
+
+            async def send(self, request, stream=False):
+                captured["content"] = b"".join([chunk async for chunk in request.stream])
+                upstream_stream = _AsyncBytesStream(b'{"ok":', b"true}")
+                captured["upstream_stream"] = upstream_stream
                 return httpx.Response(
                     201,
-                    json={"ok": True},
+                    stream=upstream_stream,
                     headers={"content-type": "application/json"},
+                    request=request,
                 )
+
+            async def aclose(self):
+                captured["proxy_client_closed"] = True
 
         monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
         app = FastAPI()
@@ -858,6 +886,8 @@ class TestOpenAPIAuth:
         assert forwarded_headers["x-api-key"] == "user-key"
         assert forwarded_headers["x-openviking-account"] == "acct"
         assert "x-gateway-token" not in forwarded_headers
+        assert captured["upstream_stream"].closed is True
+        assert captured["proxy_client_closed"] is True
 
     def test_gateway_proxy_does_not_add_trusted_identity_from_config(
         self, message_bus, temp_workspace, monkeypatch
@@ -891,6 +921,9 @@ class TestOpenAPIAuth:
             async def __aexit__(self, exc_type, exc, tb):
                 return None
 
+            async def aclose(self):
+                captured["proxy_client_closed"] = True
+
             async def get(self, url, headers=None):
                 captured["health_headers"] = headers
                 return httpx.Response(
@@ -899,12 +932,19 @@ class TestOpenAPIAuth:
                     headers={"content-type": "application/json"},
                 )
 
-            async def request(self, method, url, content=None, headers=None):
+            def build_request(self, method, url, content=None, headers=None):
+                captured["content"] = content
                 captured["headers"] = headers
+                return httpx.Request(method, url, content=content, headers=headers)
+
+            async def send(self, request, stream=False):
+                upstream_stream = _AsyncBytesStream(b'{"ok":true}')
+                captured["upstream_stream"] = upstream_stream
                 return httpx.Response(
                     200,
-                    json={"ok": True},
+                    stream=upstream_stream,
                     headers={"content-type": "application/json"},
+                    request=request,
                 )
 
         monkeypatch.setattr("vikingbot.channels.openapi.httpx.AsyncClient", FakeAsyncClient)
@@ -915,12 +955,15 @@ class TestOpenAPIAuth:
         response = client.get("/api/v1/system/status")
 
         assert response.status_code == 200
+        assert captured["content"] is None
         assert captured["health_headers"] == {}
         forwarded_headers = {key.lower(): value for key, value in captured["headers"].items()}
         assert "x-api-key" not in forwarded_headers
         assert "authorization" not in forwarded_headers
         assert "x-openviking-account" not in forwarded_headers
         assert "x-openviking-user" not in forwarded_headers
+        assert captured["upstream_stream"].closed is True
+        assert captured["proxy_client_closed"] is True
 
     def test_gateway_proxy_rejects_runtime_upstream_dev_on_public_gateway(
         self, message_bus, temp_workspace, monkeypatch

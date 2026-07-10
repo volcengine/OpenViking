@@ -36,6 +36,7 @@ class ContextBuilder:
         workspace: Path,
         sandbox_manager: SandboxManager | None = None,
         sender_id: str = None,
+        actor_peer_id: str = None,
         sender_name: str = None,
         is_group_chat: bool = False,
         eval: bool = False,
@@ -49,6 +50,7 @@ class ContextBuilder:
         self._memory = None
         self._skills = None
         self._sender_id = sender_id
+        self._actor_peer_id = actor_peer_id or sender_id
         self._sender_name = sender_name
         self._is_group_chat = is_group_chat
         self._eval = eval
@@ -170,13 +172,13 @@ Skills with available="false" need dependencies installed first - you can try in
         # OpenViking identity model, the bot API key owns the User, and the
         # message sender is represented as a peer under that User.
         if ov_tools_enable:
-            # Fetch current sender's peer profile
+            # Fetch the authenticated actor's peer profile.
             start = _time.time()
             profile = await self.memory.get_viking_peer_profile(
                 workspace_id=workspace_id,
-                peer_id=self._sender_id,
+                peer_id=self._actor_peer_id,
                 openviking_connection=self._openviking_connection,
-                actor_peer_id=self._sender_id,
+                actor_peer_id=self._actor_peer_id,
             )
             cost = round(_time.time() - start, 2)
             logger.info(
@@ -190,14 +192,14 @@ Skills with available="false" need dependencies installed first - you can try in
             # is retained for compatibility with older deployments.
             additional_peer_ids = self._dedupe_ids(
                 [*(profile_user_list or []), *(memory_peer_ids or [])],
-                exclude={self._sender_id} if self._sender_id else set(),
+                exclude={self._actor_peer_id} if self._actor_peer_id else set(),
             )
             if additional_peer_ids:
                 profiles = await self.memory.get_viking_peer_profiles(
                     workspace_id=workspace_id,
                     peer_ids=additional_peer_ids,
                     openviking_connection=self._openviking_connection,
-                    use_peer_actor_scope=bool(self._sender_id),
+                    use_peer_actor_scope=bool(self._actor_peer_id),
                 )
                 if profiles:
                     parts.append(profiles)
@@ -245,7 +247,7 @@ Skills with available="false" need dependencies installed first - you can try in
         if ov_tools_enable:
             start = _time.time()
             # Default recall runs under the configured/request OpenViking user.
-            # sender_id is passed separately as peer identity.
+            # actor_peer_id is passed separately as peer identity.
             search_peer_ids = memory_peer_ids if memory_peer_ids else None
             viking_memory = await self.memory.get_viking_memory_context(
                 current_message=current_message,
@@ -426,7 +428,7 @@ IMPORTANT:
         user_info = await self._build_user_memory(
             session_key,
             current_message,
-            self._sender_id,
+            self._actor_peer_id,
             memory_peer_ids,
             memory_owner_user_ids,
             ov_tools_enable=ov_tools_enable,
