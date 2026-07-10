@@ -1792,6 +1792,9 @@ atomicWrite(hooksPath, hooksConfig);
 const mcp = readJson(mcpPath);
 mcp.mcpServers = mcp.mcpServers && typeof mcp.mcpServers === "object" && !Array.isArray(mcp.mcpServers)
   ? mcp.mcpServers : {};
+// Migrate the server name used by the earlier manual TRAE/Cursor guide. The
+// key itself is the OpenViking marker; leave every other MCP server untouched.
+delete mcp.mcpServers["ov-mcp-server"];
 const server = {
   command: "node",
   args: [path.join(root, "servers", "mcp-proxy.mjs")],

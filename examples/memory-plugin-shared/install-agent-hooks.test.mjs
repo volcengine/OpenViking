@@ -54,6 +54,13 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
       { hooks: [{ type: "command", command: "OPENVIKING_HOOK_SOURCE=trae node /tmp/openviking/claude-code-memory-plugin/scripts/trae-auto-capture.mjs" }] },
     ] } });
     writeJson(traeCnHooks, { version: 1, hooks: { Stop: [{ hooks: [{ type: "command", command: "third-party trae-cn" }] }] } });
+    const traeCnMcp = process.platform === "darwin"
+      ? join(home, "Library", "Application Support", "Trae CN", "User", "mcp.json")
+      : join(home, ".trae-cn", "mcp.json");
+    writeJson(traeCnMcp, { mcpServers: {
+      "ov-mcp-server": { url: "http://127.0.0.1:1933/mcp" },
+      "third-party": { url: "http://127.0.0.1:3000/mcp" },
+    } });
 
     runInstall(home);
     runInstall(home);
@@ -92,11 +99,11 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     const traeMcp = process.platform === "darwin"
       ? join(home, "Library", "Application Support", "Trae", "User", "mcp.json")
       : join(home, ".trae", "mcp.json");
-    const traeCnMcp = process.platform === "darwin"
-      ? join(home, "Library", "Application Support", "Trae CN", "User", "mcp.json")
-      : join(home, ".trae-cn", "mcp.json");
     assert.ok(JSON.parse(readFileSync(traeMcp, "utf8")).mcpServers.openviking);
-    assert.ok(JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers.openviking);
+    const traeCnServers = JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers;
+    assert.ok(traeCnServers.openviking);
+    assert.ok(traeCnServers["third-party"]);
+    assert.equal(Boolean(traeCnServers["ov-mcp-server"]), false);
 
     runUninstall(home);
     assert.ok(JSON.parse(readFileSync(cursorHooks, "utf8")).hooks.stop.some((entry) => entry.command === "third-party stop"));
@@ -105,6 +112,7 @@ test("combined Cursor and TRAE install preserves unrelated hooks and is idempote
     assert.equal(existsSync(join(home, ".cursor", "skills", "openviking-memory")), false);
     assert.equal(Boolean(JSON.parse(readFileSync(traeMcp, "utf8")).mcpServers.openviking), false);
     assert.equal(Boolean(JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers.openviking), false);
+    assert.ok(JSON.parse(readFileSync(traeCnMcp, "utf8")).mcpServers["third-party"]);
     assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared")), false);
   } finally {
     rmSync(home, { recursive: true, force: true });
