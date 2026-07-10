@@ -1,76 +1,54 @@
 # Cursor Memory Integration
 
-Give Cursor cross-project and cross-session long-term memory. One command installs automatic recall, turn capture, and explicit memory tools without relying on Cursor Marketplace or requiring separate MCP setup.
-
-Source: [examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)
+Add long-term memory across Cursor projects and sessions. Once installed, Cursor automatically recalls relevant memories, captures new conversations, and provides OpenViking memory tools.
 
 ## Install
-
-Install the complete Cursor integration with one command. The installer is idempotent and configures its Hooks, MCP server, Rule, and Skill together:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
   --harness cursor
 ```
 
-In regions where GitHub is hard to reach, use the same installer from the Volcengine TOS mirror:
+If GitHub is unavailable, use the Volcengine TOS mirror:
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
   --harness cursor --dist tos
 ```
 
-No additional Cursor or MCP configuration is required. Restart Cursor after installation.
+Restart Cursor after installation.
 
-## How it works
+## Features
 
-The command configures these capabilities as one integration:
-
-```text
-OpenViking Cursor integration
-├── Hooks        automatic recall and capture
-├── MCP server   explicit OpenViking tools
-├── Rule         always-on usage guidance
-└── Skill        memory operation guidance
-```
-
-| Event | Behavior |
-|-------|----------|
-| `sessionStart` | Replays failed writes and injects profile/project context. |
-| `beforeSubmitPrompt` | Prefetches memories relevant to the prompt into local hook state. |
-| First `postToolUse` | Injects the prefetched context through `additional_context`. |
-| `stop` | Reads new user/assistant turns from Cursor's `transcript_path`. |
-| `preCompact` / `sessionEnd` | Captures remaining turns and commits the OpenViking session. |
-
-Cursor's currently documented `beforeSubmitPrompt` output can allow or block submission but does not provide a stable direct context-injection field. Therefore prompt-specific recall is injected after the first tool result. A no-tool answer receives the baseline `sessionStart` context; the always-on rule tells Cursor to use the recall/search MCP tools when exact history is needed.
+- Loads your profile and project memory when a new session starts.
+- Automatically recalls relevant context for the current request.
+- Saves new user and assistant messages after each conversation.
+- Provides OpenViking tools for searching and managing memory.
 
 ## Verify
 
-1. Check `~/.cursor/hooks.json` for `cursor-hook.mjs`.
-2. Check `~/.cursor/mcp.json` for the `openviking` server.
-3. Check `~/.cursor/rules/openviking-memory.mdc` and `~/.cursor/skills/openviking-memory/SKILL.md`.
-4. Start a new Agent chat, make one tool-using request, and inspect `~/.openviking/logs/cursor-hooks.log` with `OPENVIKING_DEBUG=1`.
-
-Hook state is isolated under `~/.openviking/hook-state/cursor/`; OpenViking session IDs use the `cu-` prefix.
+1. Restart Cursor and start a new Agent session.
+2. Open **Cursor Settings → Hooks** and confirm that `cursor-hook.mjs` appears in the Execution Log.
+3. Open **Cursor Settings → Tools & MCPs** and confirm that `openviking` is connected.
+4. Ask about a previous project or preference and confirm that Cursor can use existing memory.
 
 ## Upgrade and uninstall
 
-Re-run the install command to upgrade. To uninstall the integration:
+Re-run the install command to upgrade.
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
   --harness cursor --uninstall --yes
 ```
 
-The uninstall command removes only OpenViking-managed Cursor entries and files.
-
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| Two OpenViking MCP servers or duplicate recall | Re-run the installer to migrate old OpenViking entries, then restart Cursor. |
-| Hook command cannot find Node | Ensure `node` is available in Cursor's process PATH, then restart Cursor. |
-| Connection/authentication fails | Check `~/.openviking/ovcli.conf`; hooks and MCP read the same active config. |
+| Hooks do not run after installation | Quit Cursor completely, restart it, and create a new Agent session. |
+| The Plugins page shows a `Get` button for `openviking-memory` | No action is required. Use the Hooks and Tools & MCPs checks above to verify the installation. |
+| Recall runs more than once | Re-run the install command and restart Cursor. |
+| Connection or authentication fails | Check the server URL and API key in `~/.openviking/ovcli.conf`. |
 
 ## See also
 

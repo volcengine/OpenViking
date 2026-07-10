@@ -1,6 +1,6 @@
 ## Install the TRAE Integration
 
-The shared installer configures native lifecycle Hooks and the OpenViking MCP server together. One command completes the setup.
+Run the command for your client:
 
 ```bash
 # TRAE
@@ -16,9 +16,8 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 ## Verify
 
 1. Restart TRAE after installation.
-2. Confirm `SessionStart`, `UserPromptSubmit`, and `Stop` in `~/.trae/hooks.json` or `~/.trae-cn/hooks.json`.
-3. Confirm the `openviking` MCP server is enabled in TRAE settings.
-4. Start a new chat and submit a prompt that should recall prior context.
+2. Confirm that `openviking` is connected in TRAE settings.
+3. Start a new session and ask about a previous project or preference.
 
 See the complete [TRAE integration guide](https://github.com/volcengine/OpenViking/blob/main/docs/en/agent-integrations/13-trae.md).
 
@@ -26,6 +25,6 @@ See the complete [TRAE integration guide](https://github.com/volcengine/OpenViki
 
 | Problem | Suggested fix |
 |---|---|
-| Hooks or MCP are missing | Re-run the shared installer for the correct `trae` or `trae-cn` harness. |
-| Recall/capture runs twice | Remove the old OpenViking Hook entries, then re-run the installer. |
+| Automatic recall does not run after installation | Quit TRAE completely, restart it, and create a new Agent session. |
+| Recall runs more than once | Re-run the install command and restart TRAE. |
 | Connection/authentication fails | Check `~/.openviking/ovcli.conf` and restart TRAE. |

@@ -18,17 +18,6 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **Manus / Claude Desktop / ChatGPT / other MCP clients** | [MCP Clients](./06-mcp-clients.md) — point any MCP-compatible client at the built-in `/mcp` endpoint |
 | **AstrBot / …** | [Community Plugins](./08-community-plugins.md) — community-maintained integrations for various runtimes |
 
-## Packaging and runtime capabilities
-
-Plugin and Hook/MCP describe different layers. A plugin is the installable package; hooks, MCP servers, rules, and skills are capabilities that may be bundled inside it.
-
-- **Plugins / extensions / installers** package and distribute the integration. For example, the Cursor installer configures Hooks, an MCP server, Rules, and Skills together.
-- **Lifecycle hooks** drive automatic recall and capture from runtime events. The model does not need to remember to call MCP for those lifecycle steps.
-- **MCP servers** expose explicit tools the model can call. A generic MCP-only client has these tools but no automatic lifecycle behavior.
-- **SDK integrations** (LangChain/LangGraph) wire OpenViking into framework-native abstractions such as retrievers, tools, chat history, stores, and middleware.
-
-For agents whose runtime exposes hooks, middleware, or a context-engine slot, the native integration path is usually the better default.
-
 ## Prerequisite for all integrations
 
 Every integration on this page connects to a running OpenViking server. If you don't have one yet, follow the [Quickstart Guide](../getting-started/02-quickstart.md). The default endpoint is `http://localhost:1933`; remote use requires an API key (see [Authentication](../guides/04-authentication.md)).

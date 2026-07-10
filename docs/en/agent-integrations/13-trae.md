@@ -1,12 +1,8 @@
 # TRAE and TRAE CN Memory Integration
 
-Give TRAE and TRAE CN cross-project and cross-session long-term memory. Run one installer; automatic prompt recall, turn capture, and explicit OpenViking tools are configured together.
-
-Source: [examples/trae-memory-hooks](https://github.com/volcengine/OpenViking/tree/main/examples/trae-memory-hooks)
+Add long-term memory across TRAE and TRAE CN projects and sessions. Once installed, the integration automatically recalls relevant memories, captures new conversations, and provides OpenViking memory tools.
 
 ## Install
-
-Install either or both variants:
 
 ```bash
 # TRAE
@@ -19,55 +15,43 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) --harness trae,trae-cn
 ```
 
-For the TOS mirror, replace the URL and add `--dist tos`:
+If GitHub is unavailable, use the Volcengine TOS mirror:
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
   --harness trae,trae-cn --dist tos
 ```
 
-The installer configures the complete integration, including native Hooks and the OpenViking MCP server. No additional setup is required.
+Restart TRAE after installation.
 
-## How it works
+## Features
 
-| Event | Behavior |
-|-------|----------|
-| `SessionStart` | Replays pending writes and injects profile/project context. |
-| `UserPromptSubmit` | Searches OpenViking and injects relevant memory before the model runs. |
-| `Stop` | Captures `prompt` plus `last_assistant_message` or `text_content`. |
-
-TRAE and TRAE CN use separate state/log directories and `tr-` / `trcn-` session prefixes. A turn threshold commits long-running sessions; failed writes use the shared pending queue and replay on the next `SessionStart`.
-
-## Configuration paths
-
-| Client | Hooks | MCP on macOS | Portable MCP fallback |
-|--------|-------|--------------|-----------------------|
-| TRAE | `~/.trae/hooks.json` | `~/Library/Application Support/Trae/User/mcp.json` | `~/.trae/mcp.json` |
-| TRAE CN | `~/.trae-cn/hooks.json` | `~/Library/Application Support/Trae CN/User/mcp.json` | `~/.trae-cn/mcp.json` |
-
-The installer merges only OpenViking entries and preserves other hooks and MCP servers.
+- Loads your profile and project memory when a new session starts.
+- Automatically recalls relevant context for the current request.
+- Saves new user and assistant messages after each conversation.
+- Provides OpenViking tools for searching and managing memory.
 
 ## Verify
 
-1. Restart TRAE after installation.
-2. Confirm `SessionStart`, `UserPromptSubmit`, and `Stop` in the relevant `hooks.json`.
-3. Confirm the `openviking` MCP server in `mcp.json`.
-4. With `OPENVIKING_DEBUG=1`, inspect `~/.openviking/logs/trae-hooks.log` or `trae-cn-hooks.log`.
+1. Restart TRAE and start a new Agent session.
+2. Ask about a previous project or preference and confirm that TRAE can use existing memory.
+3. Confirm that `openviking` is connected in the TRAE MCP settings.
 
 ## Upgrade and uninstall
 
-Re-run the installation command to upgrade. To remove one variant:
+Re-run the corresponding install command to upgrade.
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
   --harness trae-cn --uninstall --yes
 ```
 
+Replace `trae-cn` with `trae` to uninstall the TRAE integration.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| Stop fires but no session is stored | Confirm the dedicated TRAE adapter is installed; Claude's transcript parser is incompatible. |
-| Memory appears under the wrong client | Check the hook command's final argument (`trae` or `trae-cn`). |
-| Recall/capture runs twice | Remove older OpenViking hook entries and re-run the installer; the installer keeps one managed entry per event. |
-| MCP works but recall is not automatic | Verify `UserPromptSubmit`; MCP alone remains model-invoked. |
+| Automatic recall does not run after installation | Quit TRAE completely, restart it, and create a new Agent session. |
+| Recall runs more than once | Re-run the install command and restart TRAE. |
+| Connection or authentication fails | Check the server URL and API key in `~/.openviking/ovcli.conf`. |

@@ -1,6 +1,6 @@
 ## Install the Cursor integration
 
-One command installs lifecycle Hooks, the OpenViking MCP server, an always-on Rule, and a memory Skill. It does not rely on Cursor Marketplace or require manual MCP setup:
+Run the following command:
 
 ```bash
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos
@@ -8,10 +8,9 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ## Verify
 
-1. Confirm `cursor-hook.mjs` exists in `~/.cursor/hooks.json`.
-2. Confirm the `openviking` server exists in `~/.cursor/mcp.json`.
-3. Confirm `~/.cursor/rules/openviking-memory.mdc` and `~/.cursor/skills/openviking-memory/SKILL.md` exist.
-4. Restart Cursor and start a new Agent chat.
+1. Restart Cursor and start a new Agent session.
+2. In **Cursor Settings → Hooks**, confirm that `cursor-hook.mjs` ran.
+3. In **Cursor Settings → Tools & MCPs**, confirm that `openviking` is connected.
 
 See the complete [Cursor integration guide](https://github.com/volcengine/OpenViking/blob/main/docs/en/agent-integrations/12-cursor.md).
 
@@ -19,6 +18,8 @@ See the complete [Cursor integration guide](https://github.com/volcengine/OpenVi
 
 | Problem | Suggested fix |
 |---|---|
-| Two OpenViking MCP servers or duplicate recall | Re-run the installer to migrate old OpenViking entries, then restart Cursor. |
+| Hooks do not run after installation | Quit Cursor completely, restart it, and create a new Agent session. |
+| The Plugins page shows `Get` | No action is required. Use the Hooks and Tools & MCPs checks above. |
+| Recall runs more than once | Re-run the install command and restart Cursor. |
 | Connection/authentication fails | Check `~/.openviking/ovcli.conf` and restart Cursor. |
 | Hook cannot find Node.js | Ensure `node` is available in Cursor's process `PATH`. |
