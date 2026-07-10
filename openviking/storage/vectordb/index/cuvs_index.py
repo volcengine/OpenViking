@@ -22,7 +22,9 @@ import math
 import re
 import threading
 import time
+import traceback
 from collections import OrderedDict
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -80,9 +82,9 @@ class CuVSSearchTelemetry:
     eligible_count: Optional[int] = None
     records_generation: int = 0
     index_size: int = 0
-    memory_estimated_peak_bytes: int = 0
-    memory_free_bytes: int = 0
-    memory_usable_bytes: int = 0
+    memory_estimated_peak_bytes: Optional[int] = None
+    memory_free_bytes: Optional[int] = None
+    memory_usable_bytes: Optional[int] = None
     total_ms: float = 0.0
     preflight_ms: float = 0.0
     queue_ms: float = 0.0
@@ -130,10 +132,10 @@ def estimate_cuvs_memory(
 ) -> CuVSMemoryEstimate:
     """Estimate peak VRAM without changing the explicit cuVS backend behavior.
 
-    The estimate accounts for the float32 dataset, retained and intermediate
-    CAGRA graphs, and the configured number of cached filter bitsets.  cuVS and
-    allocator workspaces vary by release and build algorithm, so the configured
-    safety factor intentionally covers the remaining uncertainty.
+    The estimate accounts for the configured device-dataset dtype, retained and
+    intermediate CAGRA graphs, and the configured number of cached filter bitsets.
+    cuVS and allocator workspaces vary by release and build algorithm, so the
+    configured safety factor intentionally covers the remaining uncertainty.
     """
 
     vector_count = max(0, int(vector_count))
@@ -391,21 +393,42 @@ class _CuVSRuntime:
         self.metric = metric
         self.build_params = dict(build_params)
         self.search_params = dict(search_params)
-        self._thread_resources = threading.local()
+        # Resources are borrowed per admitted search rather than retained by
+        # worker thread. This keeps their lifetime on device_id and bounds the
+        # registry even when callers churn short-lived host threads.
+        self._resource_condition = threading.Condition(threading.Lock())
+        self._available_resources: List[Any] = []
+        self._owned_resources: List[Any] = []
+        self._resource_limit = 1
+        self._resources_closed = False
         self._use_explicit_resources = False
 
     def set_max_concurrent_searches(self, value: int) -> None:
-        self._use_explicit_resources = int(value) > 1
+        limit = max(1, int(value))
+        with self._resource_condition:
+            self._resource_limit = limit
+            self._use_explicit_resources = limit > 1
+            self._resource_condition.notify_all()
+
+    def device_scope(self):
+        """Activate the device captured when this runtime was constructed."""
+
+        return self.cp.cuda.Device(self.device_id)
 
     def memory_info(self) -> Tuple[int, int]:
-        free_bytes, total_bytes = self.cp.cuda.runtime.memGetInfo()
-        return int(free_bytes), int(total_bytes)
+        # CUDA's current device is thread-local.  Searches and background
+        # rebuilds can run on threads other than the one which constructed the
+        # runtime, so every CUDA entry point must restore the captured device.
+        with self.device_scope():
+            free_bytes, total_bytes = self.cp.cuda.runtime.memGetInfo()
+            return int(free_bytes), int(total_bytes)
 
     def release_index(self) -> None:
-        try:
-            self.cp.get_default_memory_pool().free_all_blocks()
-        except Exception:
-            logger.debug("Could not release unused CuPy memory-pool blocks", exc_info=True)
+        with self.device_scope():
+            try:
+                self.cp.get_default_memory_pool().free_all_blocks()
+            except Exception:
+                logger.debug("Could not release unused CuPy memory-pool blocks", exc_info=True)
 
     def is_out_of_memory(self, exc: Exception) -> bool:
         out_of_memory_type = getattr(self.cp.cuda.memory, "OutOfMemoryError", ())
@@ -417,38 +440,75 @@ class _CuVSRuntime:
         )
 
     def build(self, dataset: Sequence[Sequence[float]]):
-        device_dataset = self.cp.asarray(dataset, dtype=self.device_dtype)
-        if self.algorithm == "brute_force":
-            index = self.brute_force.build(device_dataset, metric=self.metric)
-            return _CuVSRuntimeIndex(index=index, dataset=device_dataset)
-        params = self.cagra.IndexParams(metric=self.metric, **self.build_params)
-        index = self.cagra.build(params, device_dataset)
-        return _CuVSRuntimeIndex(index=index, dataset=device_dataset)
+        with self.device_scope():
+            device_dataset = None
+            index = None
+            try:
+                device_dataset = self.cp.asarray(dataset, dtype=self.device_dtype)
+                if self.algorithm == "brute_force":
+                    index = self.brute_force.build(device_dataset, metric=self.metric)
+                    return _CuVSRuntimeIndex(index=index, dataset=device_dataset)
+                params = self.cagra.IndexParams(metric=self.metric, **self.build_params)
+                index = self.cagra.build(params, device_dataset)
+                return _CuVSRuntimeIndex(index=index, dataset=device_dataset)
+            except Exception as exc:
+                # These can be the last Python references after a partial build.
+                # Drop them before Device.__exit__ restores the caller's device.
+                index = None
+                device_dataset = None
+                # Python/Cython exception frames can retain CUDA arguments even
+                # after the locals above are cleared. Preserve stack locations
+                # while releasing frame locals under the captured device.
+                traceback.clear_frames(exc.__traceback__)
+                raise
 
-    def _resources(self):
-        resources = getattr(self._thread_resources, "resources", None)
-        if resources is None:
-            resources = self.Resources()
-            self._thread_resources.resources = resources
-        return resources
+    def _acquire_resources(self):
+        with self.device_scope():
+            with self._resource_condition:
+                while not self._resources_closed:
+                    if self._available_resources:
+                        return self._available_resources.pop()
+                    if len(self._owned_resources) < self._resource_limit:
+                        resources = self.Resources()
+                        self._owned_resources.append(resources)
+                        return resources
+                    self._resource_condition.wait()
+                raise RuntimeError("cuVS runtime is closed")
+
+    def _return_resources(self, resources: Any, *, reusable: bool) -> None:
+        with self._resource_condition:
+            owned_index = next(
+                (index for index, owned in enumerate(self._owned_resources) if owned is resources),
+                None,
+            )
+            if owned_index is None:
+                return
+            if reusable and not self._resources_closed:
+                self._available_resources.append(resources)
+            else:
+                self._owned_resources.pop(owned_index)
+            self._resource_condition.notify()
 
     def _prefilter(self, mask: Sequence[bool]):
-        return self.filters.from_bitset(self.prepare_filter(mask))
+        with self.device_scope():
+            return self.filters.from_bitset(self.prepare_filter(mask))
 
     def prepare_filter(self, mask: Sequence[bool]):
         """Pack a host mask once and retain its device allocation for reuse."""
 
-        word_count = (len(mask) + 31) // 32
-        words = [0] * word_count
-        for index, included in enumerate(mask):
-            if included:
-                words[index // 32] |= 1 << (index % 32)
-        return self.cp.asarray(words, dtype=self.cp.uint32)
+        with self.device_scope():
+            word_count = (len(mask) + 31) // 32
+            words = [0] * word_count
+            for index, included in enumerate(mask):
+                if included:
+                    words[index // 32] |= 1 << (index % 32)
+            return self.cp.asarray(words, dtype=self.cp.uint32)
 
     def prepare_filter_words(self, words: Sequence[int]):
         """Copy an already packed native filter bitmap to the device."""
 
-        return self.cp.asarray(words, dtype=self.cp.uint32)
+        with self.device_scope():
+            return self.cp.asarray(words, dtype=self.cp.uint32)
 
     def search(
         self,
@@ -457,46 +517,82 @@ class _CuVSRuntime:
         limit: int,
         mask: Optional[Any],
     ) -> Tuple[List[int], List[float]]:
-        index = runtime_index.index
-        resources = self._resources() if self._use_explicit_resources else None
-        resource_kwargs = {"resources": resources} if resources is not None else {}
-        queries = self.cp.asarray([query], dtype=self.device_dtype)
-        if mask is None:
+        with self.device_scope():
+            queries = None
             prefilter = None
-        elif isinstance(mask, self.cp.ndarray) and mask.dtype == self.cp.uint32:
-            prefilter = self.filters.from_bitset(mask)
-        else:
-            prefilter = self._prefilter(mask)
-        if self.algorithm == "brute_force":
-            distances, neighbors = self.brute_force.search(
-                index,
-                queries,
-                limit,
-                prefilter=prefilter,
-                **resource_kwargs,
-            )
-        else:
-            search_params = dict(self.search_params)
-            configured_itopk = int(search_params.get("itopk_size", 64))
-            minimum_itopk = ((limit + 31) // 32) * 32
-            search_params["itopk_size"] = max(configured_itopk, minimum_itopk)
-            params = self.cagra.SearchParams(**search_params)
-            distances, neighbors = self.cagra.search(
-                params,
-                index,
-                queries,
-                limit,
-                filter=prefilter,
-                **resource_kwargs,
-            )
-        if resources is not None:
-            resources.sync()
-        host_neighbors = self.cp.asnumpy(neighbors)[0].tolist()
-        host_distances = self.cp.asnumpy(distances)[0].tolist()
-        return [int(item) for item in host_neighbors], [float(item) for item in host_distances]
+            distances = None
+            neighbors = None
+            resources = None
+            resource_kwargs = None
+            resource_reusable = False
+            try:
+                index = runtime_index.index
+                resources = self._acquire_resources() if self._use_explicit_resources else None
+                resource_kwargs = {"resources": resources} if resources is not None else {}
+                queries = self.cp.asarray([query], dtype=self.device_dtype)
+                if mask is None:
+                    prefilter = None
+                elif isinstance(mask, self.cp.ndarray) and mask.dtype == self.cp.uint32:
+                    prefilter = self.filters.from_bitset(mask)
+                else:
+                    prefilter = self._prefilter(mask)
+                if self.algorithm == "brute_force":
+                    distances, neighbors = self.brute_force.search(
+                        index,
+                        queries,
+                        limit,
+                        prefilter=prefilter,
+                        **resource_kwargs,
+                    )
+                else:
+                    search_params = dict(self.search_params)
+                    configured_itopk = int(search_params.get("itopk_size", 64))
+                    minimum_itopk = ((limit + 31) // 32) * 32
+                    search_params["itopk_size"] = max(configured_itopk, minimum_itopk)
+                    params = self.cagra.SearchParams(**search_params)
+                    distances, neighbors = self.cagra.search(
+                        params,
+                        index,
+                        queries,
+                        limit,
+                        filter=prefilter,
+                        **resource_kwargs,
+                    )
+                if resources is not None:
+                    resources.sync()
+                    resource_reusable = True
+                host_neighbors = self.cp.asnumpy(neighbors)[0].tolist()
+                host_distances = self.cp.asnumpy(distances)[0].tolist()
+                return [int(item) for item in host_neighbors], [
+                    float(item) for item in host_distances
+                ]
+            except Exception as exc:
+                traceback.clear_frames(exc.__traceback__)
+                raise
+            finally:
+                # Search temporaries otherwise outlive Device.__exit__ as frame
+                # locals and may free allocations on the worker's prior device.
+                queries = None
+                prefilter = None
+                distances = None
+                neighbors = None
+                try:
+                    if resources is not None:
+                        self._return_resources(resources, reusable=resource_reusable)
+                finally:
+                    resource_kwargs = None
+                    resources = None
 
     def close(self) -> None:
-        self.release_index()
+        with self.device_scope():
+            with self._resource_condition:
+                self._resources_closed = True
+                self._available_resources.clear()
+                owned_resources = self._owned_resources
+                self._owned_resources = []
+                self._resource_condition.notify_all()
+            owned_resources.clear()
+            self.release_index()
 
 
 @dataclass(frozen=True)
@@ -518,11 +614,12 @@ class _CuVSIndexSnapshot:
     generation: int
 
 
-@dataclass(frozen=True)
+@dataclass
 class _CuVSBuildCandidate:
     runtime_index: Any
     labels: Tuple[int, ...]
     generation: int
+    consumed: bool = False
 
 
 @dataclass(frozen=True)
@@ -619,9 +716,7 @@ class CuVSDenseIndex:
             search_params,
             self.dtype,
         )
-        set_max_concurrent_searches = getattr(
-            self._runtime, "set_max_concurrent_searches", None
-        )
+        set_max_concurrent_searches = getattr(self._runtime, "set_max_concurrent_searches", None)
         if set_max_concurrent_searches is not None:
             set_max_concurrent_searches(self.max_concurrent_gpu_searches)
         self._records: Dict[int, _Record] = {}
@@ -642,6 +737,10 @@ class CuVSDenseIndex:
             self._metric,
             self.dimension,
         )
+
+    def _runtime_device_scope(self):
+        device_scope = getattr(self._runtime, "device_scope", None)
+        return device_scope() if callable(device_scope) else nullcontext()
 
     @property
     def size(self) -> int:
@@ -708,7 +807,8 @@ class CuVSDenseIndex:
     def _invalidate(self) -> None:
         self._records_generation += 1
         self._dirty = True
-        self._filter_cache.clear()
+        with self._runtime_device_scope():
+            self._filter_cache.clear()
         self._preflight_filter_cache.clear()
 
     @staticmethod
@@ -730,9 +830,10 @@ class CuVSDenseIndex:
         if cache_key is None or self.filter_cache_size <= 0:
             return
         self._preflight_filter_cache.pop(cache_key, None)
-        self._filter_cache[cache_key] = cached
-        while len(self._filter_cache) > self.filter_cache_size:
-            self._filter_cache.popitem(last=False)
+        with self._runtime_device_scope():
+            self._filter_cache[cache_key] = cached
+            while len(self._filter_cache) > self.filter_cache_size:
+                self._filter_cache.popitem(last=False)
 
     def _get_preflight_filter(self, cache_key: Optional[str]) -> Optional[_ResolvedNativeFilter]:
         if cache_key is None:
@@ -903,7 +1004,7 @@ class CuVSDenseIndex:
             eligible_count = resolved.eligible_count
             native_threshold = resolved.native_threshold
             route_native = resolved.route_native
-            if route_native:
+            if route_native or eligible_count == 0:
                 prepared = None
             else:
                 prepare_filter_words = getattr(self._runtime, "prepare_filter_words", None)
@@ -919,9 +1020,14 @@ class CuVSDenseIndex:
                 matches_filter(self._records[label].fields, filters, self.field_types)
                 for label in labels
             ]
-            prepare_filter = getattr(self._runtime, "prepare_filter", None)
-            prepared = prepare_filter(mask) if prepare_filter is not None else tuple(mask)
             eligible_count = sum(mask)
+            prepare_filter = getattr(self._runtime, "prepare_filter", None)
+            if eligible_count == 0:
+                prepared = None
+            elif prepare_filter is not None:
+                prepared = prepare_filter(mask)
+            else:
+                prepared = tuple(mask)
             route_native = False
             native_threshold = 0
         cached = _CachedFilter(
@@ -950,7 +1056,8 @@ class CuVSDenseIndex:
             dataset = [self._records[label].vector for label in labels]
             can_release_unused = self._active_searches == 0
             if can_release_unused:
-                self._snapshot = None
+                with self._runtime_device_scope():
+                    self._snapshot = None
 
         build_started = time.perf_counter()
         try:
@@ -1022,23 +1129,36 @@ class CuVSDenseIndex:
         native_filter_layout_registrar: Optional[Callable[[Sequence[int]], None]] = None,
     ) -> bool:
         with self._lock:
-            if self._records_generation != candidate.generation:
-                return False
-            if (
-                native_filter_layout_registrar is not None
-                and self._filter_layout_generation != candidate.generation
-            ):
-                native_filter_layout_registrar(candidate.labels)
-                self._filter_layout_generation = candidate.generation
-            self._snapshot = (
-                _CuVSIndexSnapshot(
-                    runtime_index=candidate.runtime_index,
-                    labels=candidate.labels,
-                    generation=candidate.generation,
+            with self._runtime_device_scope():
+                if candidate.consumed:
+                    raise RuntimeError("cuVS rebuild candidate has already been consumed")
+                if self._records_generation != candidate.generation:
+                    candidate.consumed = True
+                    candidate.runtime_index = None
+                    return False
+                if (
+                    native_filter_layout_registrar is not None
+                    and self._filter_layout_generation != candidate.generation
+                ):
+                    try:
+                        native_filter_layout_registrar(candidate.labels)
+                    except Exception:
+                        candidate.consumed = True
+                        candidate.runtime_index = None
+                        raise
+                    self._filter_layout_generation = candidate.generation
+                runtime_index = candidate.runtime_index
+                candidate.consumed = True
+                candidate.runtime_index = None
+                self._snapshot = (
+                    _CuVSIndexSnapshot(
+                        runtime_index=runtime_index,
+                        labels=candidate.labels,
+                        generation=candidate.generation,
+                    )
+                    if runtime_index is not None
+                    else None
                 )
-                if candidate.runtime_index is not None
-                else None
-            )
             self._dirty = False
             logger.info(
                 "Built cuVS %s index with %d vectors",
@@ -1046,6 +1166,16 @@ class CuVSDenseIndex:
                 len(candidate.labels),
             )
             return True
+
+    def discard_rebuild(self, candidate: _CuVSBuildCandidate) -> None:
+        """Release an uncommitted GPU build candidate on the runtime device."""
+
+        with self._lock:
+            with self._runtime_device_scope():
+                if candidate.consumed:
+                    return
+                candidate.consumed = True
+                candidate.runtime_index = None
 
     def _rebuild_if_needed(
         self,
@@ -1202,35 +1332,49 @@ class CuVSDenseIndex:
                 result_limit = min(limit, len(snapshot.labels))
             self._active_searches += 1
 
-        gpu_started = time.perf_counter()
-        try:
-            offsets, distances = self._runtime.search(
-                snapshot.runtime_index,
-                query,
-                result_limit,
-                mask,
-            )
-        finally:
-            if telemetry is not None:
-                telemetry.gpu_search_ms += (time.perf_counter() - gpu_started) * 1000.0
-            with self._lock:
-                self._active_searches -= 1
-                if self._active_searches == 0:
-                    self._idle_condition.notify_all()
         labels: List[int] = []
         scores: List[float] = []
-        for offset, distance in zip(offsets, distances, strict=True):
-            if offset < 0 or offset >= len(snapshot.labels):
-                continue
-            labels.append(snapshot.labels[offset])
-            scores.append(1.0 - distance if self.distance == "l2" else distance)
+        try:
+            gpu_started = time.perf_counter()
+            try:
+                offsets, distances = self._runtime.search(
+                    snapshot.runtime_index,
+                    query,
+                    result_limit,
+                    mask,
+                )
+            finally:
+                if telemetry is not None:
+                    telemetry.gpu_search_ms += (time.perf_counter() - gpu_started) * 1000.0
+            for offset, distance in zip(offsets, distances, strict=True):
+                if offset < 0 or offset >= len(snapshot.labels):
+                    continue
+                labels.append(snapshot.labels[offset])
+                scores.append(1.0 - distance if self.distance == "l2" else distance)
+        finally:
+            try:
+                # A concurrent rebuild can remove the index/cache's owning
+                # references while this search still holds its immutable snapshot
+                # and prepared filter. Release those last local references before
+                # advertising the search as idle or restoring another CUDA device.
+                with self._runtime_device_scope():
+                    mask = None
+                    cached_filter = None
+                    resolved_native_filter = None
+                    snapshot = None
+            finally:
+                with self._lock:
+                    self._active_searches -= 1
+                    if self._active_searches == 0:
+                        self._idle_condition.notify_all()
         return labels, scores
 
     def close(self) -> None:
         with self._lock:
             while self._active_searches:
                 self._idle_condition.wait()
-            self._snapshot = None
-            self._filter_cache.clear()
-            self._preflight_filter_cache.clear()
-            self._runtime.close()
+            with self._runtime_device_scope():
+                self._snapshot = None
+                self._filter_cache.clear()
+                self._preflight_filter_cache.clear()
+                self._runtime.close()

@@ -176,32 +176,32 @@ Only fields that are actually produced by an operation are returned. Missing gro
 | `summary.vector.scanned` | Number of vectors scanned by the backend |
 | `summary.vector.scan_reason` | Text description of the scan strategy or reason |
 
-When cuVS is configured, `summary.vector.cuvs` can also report the selected
-route and its component timings. It never includes the query vector, filter
-values, or URI contents.
+When cuVS is configured, `summary.vector.cuvs` aggregates routing and timing
+information across every dense search in the operation. The aggregation is
+independent of concurrent-query completion order. It never includes the query
+vector, filter values, or URI contents, and unknown dimension values are
+coalesced into the bounded `other` bucket.
 
 | Field | Meaning |
 | --- | --- |
-| `summary.vector.cuvs.algorithm` | cuVS algorithm, such as `brute_force` or `cagra` |
-| `summary.vector.cuvs.dtype` | GPU dataset and query dtype, `float32` or `float16` |
-| `summary.vector.cuvs.max_concurrent_gpu_searches` | Configured per-index in-flight GPU search limit |
-| `summary.vector.cuvs.auto_mode` | Whether automatic CPU/GPU routing was enabled |
-| `summary.vector.cuvs.route_reason` | Selected route, such as `cuvs`, `native_filter_threshold`, `native_rebuild_pending`, or `native_memory_budget` |
-| `summary.vector.cuvs.filter_kind` | Low-cardinality filter class: `none`, `scalar`, or `path` |
-| `summary.vector.cuvs.filter_cache_hit` | Whether a prepared or preflight filter was reused |
-| `summary.vector.cuvs.native_filter_reused` | Whether native recall reused the preflight bitmap |
-| `summary.vector.cuvs.eligible_count` | Number of rows eligible after native filtering |
-| `summary.vector.cuvs.index_size` | Number of rows in the cuVS host snapshot |
-| `summary.vector.cuvs.memory_estimated_peak_bytes` | Estimated peak bytes used for this auto-build admission |
-| `summary.vector.cuvs.memory_free_bytes` | Free device bytes observed inside the per-GPU admission coordinator |
-| `summary.vector.cuvs.memory_usable_bytes` | Free bytes left after applying the configured reserve |
-| `summary.vector.cuvs.total_ms` | Total dense routing and search time |
-| `summary.vector.cuvs.preflight_ms` | Native filter preflight time |
-| `summary.vector.cuvs.queue_ms` | Time waiting for the per-index GPU search gate |
-| `summary.vector.cuvs.build_ms` | GPU admission and index build time, when a build occurred |
-| `summary.vector.cuvs.filter_prepare_ms` | Time preparing or retrieving the device filter |
-| `summary.vector.cuvs.gpu_search_ms` | cuVS search time |
-| `summary.vector.cuvs.native_search_ms` | Native fallback search time |
+| `summary.vector.cuvs.searches` | Number of dense searches represented by this aggregate |
+| `summary.vector.cuvs.algorithms.<algorithm>` | Search count by cuVS algorithm, such as `brute_force` or `cagra` |
+| `summary.vector.cuvs.dtypes.<dtype>` | Search count by GPU dataset/query dtype, `float32` or `float16` |
+| `summary.vector.cuvs.max_concurrent_gpu_searches` | Maximum configured per-index in-flight GPU search limit observed |
+| `summary.vector.cuvs.auto_mode_searches` | Number of searches with automatic CPU/GPU routing enabled |
+| `summary.vector.cuvs.routes.<reason>` | Search count by route, such as `cuvs`, `native_filter_threshold`, `native_rebuild_pending`, or `native_memory_budget` |
+| `summary.vector.cuvs.filter_kinds.<kind>` | Search count by low-cardinality filter class: `none`, `scalar`, or `path` |
+| `summary.vector.cuvs.filter_cache_hits` | Number of searches that reused a prepared or preflight filter |
+| `summary.vector.cuvs.native_filter_reuses` | Number of native recalls that reused the preflight bitmap |
+| `summary.vector.cuvs.builds` | Number of searches that performed a GPU index build |
+| `summary.vector.cuvs.eligible_count_max` | Maximum candidate count observed after native filtering |
+| `summary.vector.cuvs.records_generation_max` | Maximum record generation observed |
+| `summary.vector.cuvs.index_size_max` | Maximum cuVS host-snapshot size observed |
+| `summary.vector.cuvs.memory.estimated_peak_bytes_max` | Maximum estimated peak bytes used for auto-build admission |
+| `summary.vector.cuvs.memory.free_bytes_min` | Minimum free device bytes observed inside the per-GPU admission coordinator |
+| `summary.vector.cuvs.memory.usable_bytes_min` | Minimum free bytes observed after applying the configured reserve |
+| `summary.vector.cuvs.timings_ms.<stage>.sum` | Sum across searches for `total`, `preflight`, `queue`, `build`, `filter_prepare`, `gpu_search`, or `native_search` |
+| `summary.vector.cuvs.timings_ms.<stage>.max` | Maximum single-search time for the same stage |
 
 ### `summary.resource`
 

@@ -63,10 +63,11 @@ idle GPU memory without changing the default behavior for other installations:
 ```
 
 Before each lazy build or rebuild, auto mode reads free device memory and
-estimates the float32 vector payload, CAGRA graph and intermediate graph when
-applicable, and the configured filter-bitset cache. It multiplies those known
-allocations by `auto_memory_safety_factor` and then preserves
-`auto_memory_reserve_mb`. If the estimate does not fit, or cuVS/GPU discovery
+estimates the device vector payload for the configured `dtype`, the CAGRA graph
+and intermediate graph when applicable, and the configured filter-bitset
+cache. It multiplies those known allocations by
+`auto_memory_safety_factor` and then preserves `auto_memory_reserve_mb`. If the
+estimate does not fit, or cuVS/GPU discovery
 is unavailable, that query uses the unchanged native index. The cuVS index
 remains dirty so a later query can retry after GPU memory becomes available.
 An allocation failure after admission also falls back to native. Explicit
@@ -96,9 +97,9 @@ current; otherwise it discards that build and rebuilds the newest generation.
 
 ## GPU memory footprint
 
-The default GPU shadow is float32, so brute-force's dominant retained payload
-is `N * dimension * 4` bytes. Opt-in `dtype: "float16"` reduces that vector
-payload to `N * dimension * 2` bytes. CAGRA additionally retains approximately
+With the default `dtype: "float32"`, brute-force's dominant retained device
+payload is `N * dimension * 4` bytes. Opt-in `dtype: "float16"` reduces that
+device payload to `N * dimension * 2` bytes. CAGRA additionally retains approximately
 `N * graph_degree * 4` bytes for the graph and can require an intermediate
 `N * intermediate_graph_degree * 4` bytes while building. Each cached filter
 bitset costs approximately `ceil(N / 32) * 4` bytes.
@@ -128,16 +129,21 @@ rather than admitting from the vector payload alone.
 Enabling cuVS does not change OpenViking's default backend or rewrite the
 native CPU index. The normal collection metadata remains
 `VectorIndex.Quant=int8`, so native fallback searches keep the existing
-per-vector-scale int8 quantization. In parallel, the current cuVS runtime keeps
-its GPU shadow in float32 because the cuVS Python brute-force API accepts
-float32/float16 rather than OpenViking's scaled int8 record format.
+per-vector-scale int8 quantization. In parallel, the cuVS device dataset and
+queries use the configured `dtype`: float32 by default, or float16 when
+explicitly selected. The host record shadow retains prepared Python
+floating-point values; only the device dataset and queries are cast to the
+configured dtype when each is created. The cuVS Python brute-force API accepts
+those two device representations rather than OpenViking's scaled int8 record
+format.
 
 The two dense paths therefore do not have equal memory or numerical semantics:
 native results are exact within the quantized CPU representation, while cuVS
-brute-force is exact over the retained float32 vectors. Small score or neighbor
-ordering differences are expected. Benchmarks must report the two data types
-and include Recall@K instead of presenting the comparison as equal-dtype or
-equal-memory. This separation is intentional for the initial opt-in
+brute-force is exact over its retained float32 or float16 device
+representation. Small score or neighbor ordering differences are expected.
+Benchmarks must report the two data types and include Recall@K instead of
+presenting the comparison as equal-dtype or equal-memory. This separation is
+intentional for the initial opt-in
 integration and leaves existing CPU behavior unchanged. In auto mode, the
 filter candidate thresholds can select either representation per query, so
 applications that require one fixed numerical representation should use an

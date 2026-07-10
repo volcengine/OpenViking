@@ -176,31 +176,30 @@ summary 顶层这 3 个基础字段总会存在：
 | `summary.vector.scanned` | 底层实际扫描的向量数量 |
 | `summary.vector.scan_reason` | 本次扫描策略或扫描原因说明 |
 
-配置 cuVS 后，`summary.vector.cuvs` 还会给出 CPU/GPU 路由和分阶段耗时。
-其中不会包含查询向量、filter 值或 URI 内容。
+配置 cuVS 后，`summary.vector.cuvs` 会聚合本次 operation 内所有 dense search 的
+CPU/GPU 路由和分阶段耗时；并发 query 的完成顺序不会改变结果。其中不会包含
+查询向量、filter 值或 URI 内容，未知的维度值会统一归入有界的 `other` bucket。
 
 | 字段 | 含义 |
 | --- | --- |
-| `summary.vector.cuvs.algorithm` | cuVS 算法，例如 `brute_force` 或 `cagra` |
-| `summary.vector.cuvs.dtype` | GPU dataset 和 query dtype：`float32` 或 `float16` |
-| `summary.vector.cuvs.max_concurrent_gpu_searches` | 单 index 配置的 in-flight GPU search 上限 |
-| `summary.vector.cuvs.auto_mode` | 是否启用了自动 CPU/GPU 路由 |
-| `summary.vector.cuvs.route_reason` | 最终路由，例如 `cuvs`、`native_filter_threshold`、`native_rebuild_pending` 或 `native_memory_budget` |
-| `summary.vector.cuvs.filter_kind` | 低基数 filter 类型：`none`、`scalar` 或 `path` |
-| `summary.vector.cuvs.filter_cache_hit` | 是否复用了已准备或 preflight 的 filter |
-| `summary.vector.cuvs.native_filter_reused` | native recall 是否复用了 preflight bitmap |
-| `summary.vector.cuvs.eligible_count` | native filter 后的候选行数 |
-| `summary.vector.cuvs.index_size` | cuVS host snapshot 的行数 |
-| `summary.vector.cuvs.memory_estimated_peak_bytes` | 本次 auto build 准入使用的峰值显存估算 |
-| `summary.vector.cuvs.memory_free_bytes` | 在单 GPU 准入协调器内观测到的空闲显存 |
-| `summary.vector.cuvs.memory_usable_bytes` | 扣除配置 reserve 后可用于 build 的显存 |
-| `summary.vector.cuvs.total_ms` | dense 路由与检索总耗时 |
-| `summary.vector.cuvs.preflight_ms` | native filter preflight 耗时 |
-| `summary.vector.cuvs.queue_ms` | 等待单 index GPU search gate 的耗时 |
-| `summary.vector.cuvs.build_ms` | 发生 build 时的 GPU 准入与建索引耗时 |
-| `summary.vector.cuvs.filter_prepare_ms` | 准备或读取 device filter 的耗时 |
-| `summary.vector.cuvs.gpu_search_ms` | cuVS search 耗时 |
-| `summary.vector.cuvs.native_search_ms` | native fallback search 耗时 |
+| `summary.vector.cuvs.searches` | 本次聚合包含的 dense search 数量 |
+| `summary.vector.cuvs.algorithms.<algorithm>` | 按 cuVS 算法统计的 search 数，例如 `brute_force` 或 `cagra` |
+| `summary.vector.cuvs.dtypes.<dtype>` | 按 GPU dataset/query dtype 统计的 search 数：`float32` 或 `float16` |
+| `summary.vector.cuvs.max_concurrent_gpu_searches` | 观测到的单 index in-flight GPU search 配置上限最大值 |
+| `summary.vector.cuvs.auto_mode_searches` | 启用自动 CPU/GPU 路由的 search 数量 |
+| `summary.vector.cuvs.routes.<reason>` | 按路由原因统计的 search 数，例如 `cuvs`、`native_filter_threshold`、`native_rebuild_pending` 或 `native_memory_budget` |
+| `summary.vector.cuvs.filter_kinds.<kind>` | 按低基数 filter 类型统计的 search 数：`none`、`scalar` 或 `path` |
+| `summary.vector.cuvs.filter_cache_hits` | 复用 prepared/preflight filter 的 search 数量 |
+| `summary.vector.cuvs.native_filter_reuses` | native recall 复用 preflight bitmap 的次数 |
+| `summary.vector.cuvs.builds` | 执行 GPU index build 的 search 数量 |
+| `summary.vector.cuvs.eligible_count_max` | native filter 后观测到的最大候选数 |
+| `summary.vector.cuvs.records_generation_max` | 观测到的最大 record generation |
+| `summary.vector.cuvs.index_size_max` | 观测到的最大 cuVS host snapshot 行数 |
+| `summary.vector.cuvs.memory.estimated_peak_bytes_max` | auto build 准入使用的最大峰值显存估算 |
+| `summary.vector.cuvs.memory.free_bytes_min` | 单 GPU 准入协调器内观测到的最小空闲显存 |
+| `summary.vector.cuvs.memory.usable_bytes_min` | 扣除配置 reserve 后观测到的最小可用显存 |
+| `summary.vector.cuvs.timings_ms.<stage>.sum` | `total`、`preflight`、`queue`、`build`、`filter_prepare`、`gpu_search` 或 `native_search` 阶段跨 search 的耗时总和 |
+| `summary.vector.cuvs.timings_ms.<stage>.max` | 同一阶段单次 search 的最大耗时 |
 
 ### `summary.resource`
 

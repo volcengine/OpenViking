@@ -739,6 +739,8 @@ def print_summary(results: Sequence[dict[str, Any]]) -> None:
     for result in results:
         search = result["search"]
         label = result["backend"]
+        recall_at_k_value = result.get("recall_at_k")
+        recall_text = f"{float(recall_at_k_value):.4f}" if recall_at_k_value is not None else "N/A"
         if result.get("cagra_search_params"):
             itopk_size = result["cagra_search_params"].get("itopk_size")
             search_width = result["cagra_search_params"].get("search_width", "auto")
@@ -750,7 +752,7 @@ def print_summary(results: Sequence[dict[str, Any]]) -> None:
             f"{search['per_query_latency_ms']['p50']:>7.3f}  "
             f"{search['per_query_latency_ms']['p95']:>7.3f}  "
             f"{search['qps']:>8.1f}  "
-            f"{result.get('recall_at_k', 1.0):>7.4f}"
+            f"{recall_text:>7}"
         )
 
 
@@ -859,6 +861,26 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     return backends
 
 
+def validate_reference_requirement(
+    parser: argparse.ArgumentParser,
+    backends: Sequence[str],
+    *,
+    has_supplied_ground_truth: bool,
+) -> None:
+    """Require an exact reference for every lossy or approximate backend."""
+
+    reference_required_backends = [name for name in backends if name not in EXACT_BACKENDS]
+    if (
+        reference_required_backends
+        and not has_supplied_ground_truth
+        and not set(backends).intersection(EXACT_BACKENDS)
+    ):
+        parser.error(
+            f"{', '.join(reference_required_backends)} requires native/cuvs_brute_force "
+            "or a full ann-benchmarks dataset with supplied ground truth"
+        )
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -906,15 +928,11 @@ def main() -> None:
             )
         reference_neighbors = supplied_ground_truth[:, : args.k]
         reference_backend = "ann-benchmarks_ground_truth"
-    if (
-        any(name.startswith("cuvs_cagra") for name in backends)
-        and reference_neighbors is None
-        and not set(backends).intersection(EXACT_BACKENDS)
-    ):
-        parser.error(
-            "CAGRA requires native/cuvs_brute_force or a full ann-benchmarks dataset "
-            "with supplied ground truth"
-        )
+    validate_reference_requirement(
+        parser,
+        backends,
+        has_supplied_ground_truth=reference_neighbors is not None,
+    )
 
     cagra_variants = cagra_search_variants(args)
     variant_keys = [json.dumps(value, sort_keys=True) for value in cagra_variants]

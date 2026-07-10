@@ -49,7 +49,7 @@
 | 过滤 | native bitmap 投影为 cuVS row bitset | 复用既有 DSL 和 scalar/path index，不重复实现语义 |
 | 持久化 | 不持久化 cuVS index | 避免绑定 GPU、CUDA/cuVS 版本和序列化兼容性 |
 | 默认 CPU dtype | 保持现有 per-vector-scale int8 | cuVS opt-in 不能改变未启用用户的行为 |
-| GPU dtype | 当前使用 float32 shadow | 先建立正确性和性能基线；低精度作为独立能力评估 |
+| GPU dtype | device dataset/query 默认 float32，可显式配置 float16 | host shadow 保存预处理后的 Python 浮点值；仅 device dataset/query 在创建时 cast 为配置 dtype；低精度按独立能力报告 Recall@K 和显存 |
 
 ## 4. 总体架构
 
@@ -223,7 +223,9 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 ### 7.1 当前边界
 
 - native collection 默认保持 per-vector-scale int8；
-- cuVS host/device shadow 当前为 float32；
+- cuVS host shadow 保存预处理后的 Python 浮点值，不随 `dtype` 改写；
+- 仅 cuVS device dataset/query 在创建时 cast 为配置的 `dtype`，默认是 float32，
+  可显式配置为 float16；
 - 启用 cuVS 不迁移、不重写 native index metadata；
 - native fallback 始终使用原有 CPU representation；
 - auto 模式可能按 query 在两种 representation 间路由。
@@ -231,7 +233,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 因此：
 
 - index-only exact benchmark 可显式使用 FP32 CPU / FP32 GPU 隔离 kernel；
-- collection/service benchmark 必须说明是 native int8 / cuVS float32；
+- collection/service benchmark 必须说明是 native int8 / cuVS 配置的 float32 或 float16；
 - 结果必须同时报告 Recall@K、显存和 host memory，不能声称 equal-dtype 或 equal-memory；
 - 要求固定 numerical representation 的应用应选择显式 backend，或关闭 native 候选路由。
 
@@ -248,7 +250,8 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 
 当前保守估算包含：
 
-- float32 vector payload：`N * dimension * 4`；
+- device vector payload 跟随配置的 dtype：float32 为 `N * dimension * 4`，
+  float16 为 `N * dimension * 2`；
 - CAGRA retained graph：约 `N * graph_degree * 4`；
 - CAGRA build intermediate graph：约 `N * intermediate_graph_degree * 4`；
 - device filter cache：每个 bitset 约 `N / 8`；
@@ -387,7 +390,7 @@ URI/path 使用更低阈值，是因为宽路径需要 native Trie traversal 和
 | Python/CuPy 数据面 | 对象构造、复制和同步有固定开销 | 先 profiling，再决定是否下沉 C++ cuVS C API |
 | 重启后 lazy rebuild | 大 collection 的首次查询延迟高 | 后台预热、版本化派生 cache |
 | native dense 与 GPU shadow 并存 | CPU 内存和写放大 | 覆盖率和回退策略稳定后再评估裁剪 |
-| CPU int8 / GPU float32 | 数值和内存语义不同 | 明确报告 dtype、Recall@K 和两侧 memory |
+| CPU int8 / GPU float32 或 float16 | 数值和内存语义不同 | 明确报告 dtype、Recall@K 和两侧 memory |
 | auto admission 是估算 | 实际 peak 随 allocator 和 workload 波动 | telemetry、校准 safety factor、OOM fallback |
 | 路由阈值来自当前 workload | 不能直接泛化 | 按规模、维度、filter type 做自适应或离线调参 |
 

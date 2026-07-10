@@ -4,6 +4,8 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from openviking.storage.vectordb.collection.local_collection import (
     get_or_create_local_collection,
 )
@@ -219,13 +221,14 @@ def test_local_collection_records_cuvs_route_telemetry(monkeypatch):
 
         assert [item.id for item in result.data] == ["first"]
         cuvs = telemetry.finish().summary["vector"]["cuvs"]
-        assert cuvs["algorithm"] == "brute_force"
-        assert cuvs["dtype"] == "float32"
+        assert cuvs["searches"] == 1
+        assert cuvs["algorithms"] == {"brute_force": 1}
+        assert cuvs["dtypes"] == {"float32": 1}
         assert cuvs["max_concurrent_gpu_searches"] == 1
-        assert cuvs["route_reason"] == "cuvs"
-        assert cuvs["filter_kind"] == "none"
-        assert cuvs["build_performed"] is True
-        assert cuvs["index_size"] == 1
+        assert cuvs["routes"] == {"cuvs": 1}
+        assert cuvs["filter_kinds"] == {"none": 1}
+        assert cuvs["builds"] == 1
+        assert cuvs["index_size_max"] == 1
     finally:
         collection.close()
 
@@ -533,6 +536,304 @@ def test_auto_cuvs_background_rebuild_coalesces_mutations_and_routes_native(
         collection.close()
 
 
+def test_auto_cuvs_background_debounce_is_not_extended_by_dirty_reads(monkeypatch):
+    class BuildStartedRuntime(MemoryAwareFakeCuVSRuntime):
+        def __init__(self):
+            super().__init__("inner_product", free_memory_bytes=1 << 20)
+            self.build_started = threading.Event()
+
+        def build(self, dataset):
+            self.build_started.set()
+            return super().build(dataset)
+
+    runtime = BuildStartedRuntime()
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_read_safe_debounce",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 200,
+            }
+        },
+    )
+    stop_reads = threading.Event()
+    reader_started = threading.Event()
+
+    try:
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        assert index.wait_for_background_rebuild(timeout=5)
+
+        def keep_reading():
+            reader_started.set()
+            while not stop_reads.wait(0.005):
+                collection.search_by_vector(
+                    "default",
+                    dense_vector=[1.0, 0.0, 0.0, 0.0],
+                    limit=1,
+                )
+
+        reader = threading.Thread(target=keep_reading)
+        reader.start()
+        assert reader_started.wait(timeout=1)
+        collection.upsert_data([{"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]}])
+
+        # Reads continue throughout the non-zero trailing-edge mutation debounce.
+        # They must not keep pushing its deadline out indefinitely.
+        assert runtime.build_started.wait(timeout=1)
+        assert reader.is_alive()
+        assert index.wait_for_background_rebuild(timeout=5)
+        assert runtime.build_count == 1
+    finally:
+        stop_reads.set()
+        if "reader" in locals():
+            reader.join(timeout=5)
+        collection.close()
+
+
+def test_auto_cuvs_clean_to_dirty_race_never_rebuilds_on_query_thread(monkeypatch):
+    class RaceBuildRuntime(MemoryAwareFakeCuVSRuntime):
+        def __init__(self):
+            super().__init__("inner_product", free_memory_bytes=1 << 20)
+            self.build_attempts = 0
+            self.block_build = False
+            self.build_started = threading.Event()
+            self.resume_build = threading.Event()
+
+        def build(self, dataset):
+            self.build_attempts += 1
+            if self.block_build:
+                self.build_started.set()
+                assert self.resume_build.wait(timeout=5)
+            return super().build(dataset)
+
+    runtime = RaceBuildRuntime()
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_clean_dirty_race",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 0,
+            }
+        },
+    )
+    try:
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        collection.upsert_data([{"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]}])
+        assert index.wait_for_background_rebuild(timeout=5)
+        assert runtime.build_attempts == 1
+
+        original_search_cuvs = index._search_cuvs
+        mutation_injected = threading.Event()
+        runtime.block_build = True
+
+        def inject_mutation_after_clean_check(*args, **kwargs):
+            if not mutation_injected.is_set():
+                mutation_injected.set()
+                collection.update_data([{"id": "first", "vector": [0.0, 1.0, 0.0, 0.0]}])
+                assert runtime.build_started.wait(timeout=5)
+            return original_search_cuvs(*args, **kwargs)
+
+        monkeypatch.setattr(index, "_search_cuvs", inject_mutation_after_clean_check)
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(
+                collection.search_by_vector,
+                "default",
+                dense_vector=[0.0, 1.0, 0.0, 0.0],
+                limit=1,
+            )
+            # The request routes to the current native index even while the sole
+            # rebuild for this generation is blocked in the background worker.
+            assert [item.id for item in future.result(timeout=1).data] == ["first"]
+        finally:
+            runtime.resume_build.set()
+            executor.shutdown(wait=True)
+
+        assert runtime.build_attempts == 2
+        assert index.wait_for_background_rebuild(timeout=5)
+        assert runtime.build_attempts == 2
+    finally:
+        runtime.resume_build.set()
+        collection.close()
+
+
+def test_auto_cuvs_background_failure_surfaces_to_wait_and_query(monkeypatch):
+    class FailingBuildRuntime(MemoryAwareFakeCuVSRuntime):
+        def __init__(self):
+            super().__init__("inner_product", free_memory_bytes=1 << 20)
+            self.fail_build = True
+
+        def build(self, dataset):
+            if self.fail_build:
+                raise RuntimeError("injected background build failure")
+            return super().build(dataset)
+
+    runtime = FailingBuildRuntime()
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_background_failure",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 0,
+            }
+        },
+    )
+    try:
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        collection.upsert_data([{"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]}])
+
+        with pytest.raises(RuntimeError, match="injected background build failure"):
+            index.wait_for_background_rebuild(timeout=5)
+        with pytest.raises(RuntimeError, match="injected background build failure"):
+            collection.search_by_vector(
+                "default",
+                dense_vector=[1.0, 0.0, 0.0, 0.0],
+                limit=1,
+            )
+
+        # A later mutation is a new rebuild generation and clears the stale
+        # failure, allowing a transient runtime problem to recover.
+        runtime.fail_build = False
+        collection.update_data([{"id": "first", "vector": [0.0, 1.0, 0.0, 0.0]}])
+        assert index.wait_for_background_rebuild(timeout=5)
+        assert (
+            collection.search_by_vector(
+                "default",
+                dense_vector=[0.0, 1.0, 0.0, 0.0],
+                limit=1,
+            )
+            .data[0]
+            .id
+            == "first"
+        )
+    finally:
+        collection.close()
+
+
+def test_auto_cuvs_background_memory_fallback_retries_on_later_query(monkeypatch):
+    runtime = MemoryAwareFakeCuVSRuntime("inner_product", free_memory_bytes=31)
+    monkeypatch.setattr(
+        cuvs_index,
+        "_CuVSRuntime",
+        lambda _algorithm, _metric, _build_params, _search_params, _dtype: runtime,
+    )
+    collection = get_or_create_local_collection(
+        meta_data={
+            "CollectionName": "auto_cuvs_background_memory_retry",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            ],
+        },
+        config={
+            "dense_search": {
+                "backend": "auto_cuvs",
+                "algorithm": "brute_force",
+                "filter_cache_size": 0,
+                "auto_memory_reserve_mb": 0,
+                "auto_memory_safety_factor": 1.0,
+                "auto_background_rebuild": True,
+                "auto_rebuild_debounce_ms": 0,
+            }
+        },
+    )
+    try:
+        index = collection.create_index(
+            "default",
+            {
+                "IndexName": "default",
+                "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+            },
+        )
+        collection.upsert_data(
+            [
+                {"id": "first", "vector": [1.0, 0.0, 0.0, 0.0]},
+                {"id": "second", "vector": [0.0, 1.0, 0.0, 0.0]},
+            ]
+        )
+        assert index._dense_rebuild_completed.wait(timeout=5)
+        assert index.dense_search.needs_rebuild
+        assert runtime.build_count == 0
+
+        runtime.free_memory_bytes = 32
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+        assert [item.id for item in result.data] == ["first"]
+        assert index.wait_for_background_rebuild(timeout=5)
+        assert runtime.build_count == 1
+
+        result = collection.search_by_vector("default", dense_vector=[1.0, 0.0, 0.0, 0.0], limit=1)
+        assert [item.id for item in result.data] == ["first"]
+        assert runtime.search_count == 1
+    finally:
+        collection.close()
+
+
 def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
     runtimes = []
     dense_search_calls = 0
@@ -605,8 +906,8 @@ def test_auto_cuvs_selective_first_query_skips_gpu_build(monkeypatch):
             )
         assert [item.id for item in result.data] == ["first"]
         cuvs = telemetry.finish().summary["vector"]["cuvs"]
-        assert cuvs["route_reason"] == "native_filter_threshold"
-        assert cuvs["native_filter_reused"] is True
+        assert cuvs["routes"] == {"native_filter_threshold": 1}
+        assert cuvs["native_filter_reuses"] == 1
         assert dense_search_calls == 0
         assert runtimes[0].build_count == 0
         assert runtimes[0].search_count == 0

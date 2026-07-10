@@ -14,6 +14,7 @@ from openviking.storage.vectordb.index.cuvs_index import (
     CuVSSearchTelemetry,
     CuVSUnavailableError,
     UnsupportedCuVSFilterError,
+    _CuVSRuntime,
     estimate_cuvs_memory,
     matches_filter,
 )
@@ -75,6 +76,274 @@ class FakeCuVSRuntime:
         self.closed = True
 
 
+def test_cuvs_runtime_uses_captured_device_from_worker_thread():
+    """Every CUDA call must select the device captured by the runtime."""
+
+    class DeviceSpy:
+        def __init__(self, expected_device):
+            self.expected_device = expected_device
+            self.local = threading.local()
+            self.lock = threading.Lock()
+            self.operations = []
+            self.releases = []
+            self.temporary_releases = []
+            self.track_temporaries = False
+            self.temporary_count = 0
+            self.resource_count = 0
+            self.fail_build = False
+            self.fail_search = False
+
+        def set_current(self, device_id):
+            self.local.current = device_id
+
+        def current(self):
+            return getattr(self.local, "current", None)
+
+        def require_captured_device(self, operation):
+            assert self.current() == self.expected_device, operation
+            with self.lock:
+                self.operations.append(operation)
+
+        def device(self, device_id):
+            spy = self
+
+            class DeviceContext:
+                def __enter__(self):
+                    self.previous = spy.current()
+                    spy.set_current(device_id)
+                    return self
+
+                def __exit__(self, _exc_type, _exc, _traceback):
+                    spy.set_current(self.previous)
+
+            return DeviceContext()
+
+    spy = DeviceSpy(expected_device=3)
+
+    class FakeArray:
+        def __init__(self, values, dtype, release_name=None):
+            self.values = values
+            self.dtype = dtype
+            self.release_name = release_name
+
+        def __getitem__(self, offset):
+            value = self.values[offset]
+
+            class HostRow(list):
+                def tolist(self):
+                    return list(self)
+
+            return HostRow(value) if isinstance(value, list) else value
+
+        def __del__(self):
+            if self.release_name is not None:
+                spy.temporary_releases.append((self.release_name, spy.current()))
+
+    class FakeRuntimeAPI:
+        @staticmethod
+        def memGetInfo():
+            spy.require_captured_device("memory_info")
+            return 100, 200
+
+    class FakeMemory:
+        class OutOfMemoryError(Exception):
+            pass
+
+    class FakeCuda:
+        runtime = FakeRuntimeAPI()
+        memory = FakeMemory()
+
+        @staticmethod
+        def Device(device_id):
+            return spy.device(device_id)
+
+    class FakeMemoryPool:
+        @staticmethod
+        def free_all_blocks():
+            spy.require_captured_device("release_index")
+
+    class FakeCuPy:
+        float16 = "float16"
+        float32 = "float32"
+        uint32 = "uint32"
+        ndarray = FakeArray
+        cuda = FakeCuda()
+
+        @staticmethod
+        def asarray(values, dtype):
+            spy.require_captured_device("asarray")
+            release_name = None
+            if spy.track_temporaries:
+                spy.temporary_count += 1
+                release_name = f"array-{spy.temporary_count}"
+            return FakeArray(values, dtype, release_name)
+
+        @staticmethod
+        def asnumpy(values):
+            spy.require_captured_device("asnumpy")
+            return values
+
+        @staticmethod
+        def get_default_memory_pool():
+            spy.require_captured_device("memory_pool")
+            return FakeMemoryPool()
+
+    class FakeResources:
+        def __init__(self):
+            spy.require_captured_device("resources_create")
+            spy.resource_count += 1
+            self.name = f"resources-{spy.resource_count}"
+            self.device_id = spy.current()
+
+        def sync(self):
+            spy.require_captured_device("resources_sync")
+            assert spy.current() == self.device_id
+
+        def __del__(self):
+            spy.releases.append((self.name, spy.current()))
+
+    class FakeBruteForce:
+        @staticmethod
+        def build(_dataset, metric):
+            spy.require_captured_device("build")
+            assert metric == "inner_product"
+            if spy.fail_build:
+                raise RuntimeError("injected build failure")
+            return object()
+
+        @staticmethod
+        def search(_index, _queries, limit, prefilter, resources):
+            spy.require_captured_device("search")
+            assert limit == 1
+            assert prefilter is not None
+            assert resources.device_id == spy.expected_device
+            if spy.fail_search:
+                raise RuntimeError("injected search failure")
+            return FakeArray([[0.25]], "float32", "distances"), FakeArray(
+                [[0]], "int64", "neighbors"
+            )
+
+    class FakeFilters:
+        @staticmethod
+        def from_bitset(bitset):
+            spy.require_captured_device("filter")
+            return bitset
+
+    runtime = _CuVSRuntime.__new__(_CuVSRuntime)
+    runtime.cp = FakeCuPy()
+    runtime.brute_force = FakeBruteForce()
+    runtime.cagra = object()
+    runtime.filters = FakeFilters()
+    runtime.Resources = FakeResources
+    runtime.device_id = spy.expected_device
+    runtime.dtype = "float32"
+    runtime.device_dtype = FakeCuPy.float32
+    runtime.algorithm = "brute_force"
+    runtime.metric = "inner_product"
+    runtime.build_params = {}
+    runtime.search_params = {}
+    runtime._resource_condition = threading.Condition(threading.Lock())
+    runtime._available_resources = []
+    runtime._owned_resources = []
+    runtime._resource_limit = 1
+    runtime._resources_closed = False
+    runtime._use_explicit_resources = False
+    runtime.set_max_concurrent_searches(2)
+    constructing_thread = threading.get_ident()
+
+    def use_runtime_from_worker():
+        assert threading.get_ident() != constructing_thread
+        spy.set_current(9)
+
+        assert runtime.memory_info() == (100, 200)
+        assert spy.current() == 9
+        runtime_index = runtime.build([[1.0, 0.0]])
+        assert spy.current() == 9
+        runtime.prepare_filter([True])
+        runtime.prepare_filter_words([1])
+        runtime._prefilter([True])
+        assert spy.current() == 9
+        spy.track_temporaries = True
+        assert runtime.search(runtime_index, [1.0, 0.0], 1, [True]) == ([0], [0.25])
+        spy.track_temporaries = False
+        assert {name for name, _device in spy.temporary_releases} == {
+            "array-1",
+            "array-2",
+            "distances",
+            "neighbors",
+        }
+        assert all(device == 3 for _name, device in spy.temporary_releases)
+        assert spy.current() == 9
+        spy.fail_build = True
+        spy.track_temporaries = True
+        with pytest.raises(RuntimeError, match="injected build failure"):
+            runtime.build([[0.0, 1.0]])
+        spy.fail_build = False
+        spy.track_temporaries = False
+        assert ("array-3", 3) in spy.temporary_releases
+        assert spy.current() == 9
+        spy.fail_search = True
+        spy.track_temporaries = True
+        with pytest.raises(RuntimeError, match="injected search failure"):
+            runtime.search(runtime_index, [0.0, 1.0], 1, [True])
+        spy.fail_search = False
+        spy.track_temporaries = False
+        assert ("array-4", 3) in spy.temporary_releases
+        assert ("array-5", 3) in spy.temporary_releases
+        assert spy.current() == 9
+        assert spy.releases == [("resources-1", 3)]
+        assert runtime.search(runtime_index, [1.0, 0.0], 1, [True]) == ([0], [0.25])
+        runtime.release_index()
+        assert spy.current() == 9
+        return runtime_index
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        runtime_index = executor.submit(use_runtime_from_worker).result(timeout=5)
+
+    churn_errors = []
+
+    def search_from_short_lived_thread():
+        try:
+            spy.set_current(9)
+            assert runtime.search(runtime_index, [1.0, 0.0], 1, [True]) == ([0], [0.25])
+            assert spy.current() == 9
+        except BaseException as exc:
+            churn_errors.append(exc)
+
+    for _ in range(8):
+        thread = threading.Thread(target=search_from_short_lived_thread)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert churn_errors == []
+    assert spy.resource_count == 2
+    assert len(runtime._owned_resources) <= 2
+    assert len(runtime._available_resources) == 1
+
+    # A failed search discarded the first resource under device 3. The bounded
+    # pool reused the replacement across short-lived threads and retains it
+    # until close can also destroy it on the captured device.
+    assert spy.releases == [("resources-1", 3)]
+    spy.set_current(9)
+    runtime.close()
+    assert spy.current() == 9
+    assert spy.releases == [("resources-1", 3), ("resources-2", 3)]
+
+    assert {
+        "memory_info",
+        "memory_pool",
+        "release_index",
+        "asarray",
+        "build",
+        "resources_create",
+        "resources_sync",
+        "filter",
+        "search",
+        "asnumpy",
+    } <= set(spy.operations)
+
+
 def candidate(label, vector, **fields):
     import json
 
@@ -85,6 +354,215 @@ def delta(label, vector, **fields):
     import json
 
     return DeltaRecord(label=label, vector=vector, fields=json.dumps(fields))
+
+
+def test_cuvs_rebuild_objects_are_released_on_the_captured_device():
+    class DeviceOwned:
+        def __init__(self, runtime, name):
+            self.runtime = runtime
+            self.name = name
+
+        def __del__(self):
+            self.runtime.released.append((self.name, self.runtime.current_device))
+
+    class LifecycleRuntime:
+        def __init__(self):
+            self.current_device = 9
+            self.build_count = 0
+            self.released = []
+            self.closed = False
+
+        def device_scope(self):
+            runtime = self
+
+            class DeviceContext:
+                def __enter__(self):
+                    self.previous = runtime.current_device
+                    runtime.current_device = 3
+
+                def __exit__(self, _exc_type, _exc, _traceback):
+                    runtime.current_device = self.previous
+
+            return DeviceContext()
+
+        def build(self, _dataset):
+            self.build_count += 1
+            return DeviceOwned(self, f"build-{self.build_count}")
+
+        def close(self):
+            assert self.current_device == 3
+            self.closed = True
+
+    runtime = LifecycleRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0])])
+
+    first = index.prepare_rebuild()
+    assert first is not None and index.commit_rebuild(first)
+
+    # Preparing a replacement drops the unused snapshot in the device scope.
+    index.upsert([delta(2, [0.0, 1.0])])
+    stale = index.prepare_rebuild()
+    assert stale is not None
+    assert ("build-1", 3) in runtime.released
+
+    # A mutation makes the candidate stale; rejecting it releases its GPU data
+    # on the captured device rather than whichever device this thread inherited.
+    index.upsert([delta(3, [1.0, 1.0])])
+    assert index.commit_rebuild(stale) is False
+    assert ("build-2", 3) in runtime.released
+
+    abandoned = index.prepare_rebuild()
+    assert abandoned is not None
+    index.discard_rebuild(abandoned)
+    assert ("build-3", 3) in runtime.released
+
+    final = index.prepare_rebuild()
+    assert final is not None and index.commit_rebuild(final)
+    index.close()
+    assert runtime.closed is True
+    assert ("build-4", 3) in runtime.released
+    assert runtime.current_device == 9
+
+
+def test_inflight_snapshot_is_released_on_captured_device_after_replacement():
+    class DeviceOwned:
+        def __init__(self, runtime, name):
+            self.runtime = runtime
+            self.name = name
+
+        def __del__(self):
+            self.runtime.released.append((self.name, self.runtime.current_device()))
+
+    class ConcurrentLifecycleRuntime:
+        def __init__(self):
+            self.local = threading.local()
+            self.build_count = 0
+            self.released = []
+            self.search_started = threading.Event()
+            self.resume_search = threading.Event()
+
+        def set_current_device(self, device_id):
+            self.local.current_device = device_id
+
+        def current_device(self):
+            return getattr(self.local, "current_device", None)
+
+        def device_scope(self):
+            runtime = self
+
+            class DeviceContext:
+                def __enter__(self):
+                    self.previous = runtime.current_device()
+                    runtime.set_current_device(3)
+
+                def __exit__(self, _exc_type, _exc, _traceback):
+                    runtime.set_current_device(self.previous)
+
+            return DeviceContext()
+
+        def build(self, _dataset):
+            self.build_count += 1
+            return DeviceOwned(self, f"build-{self.build_count}")
+
+        def search(self, _index, _query, _limit, _mask):
+            self.search_started.set()
+            assert self.resume_search.wait(timeout=5)
+            return [0], [1.0]
+
+        def close(self):
+            assert self.current_device() == 3
+
+    runtime = ConcurrentLifecycleRuntime()
+    runtime.set_current_device(9)
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={"max_concurrent_gpu_searches": 2},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0])])
+    first = index.prepare_rebuild()
+    assert first is not None and index.commit_rebuild(first)
+
+    def search_from_other_device():
+        runtime.set_current_device(9)
+        result = index.search([1.0, 0.0], 1, None)
+        assert runtime.current_device() == 9
+        return result
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        inflight = executor.submit(search_from_other_device)
+        assert runtime.search_started.wait(timeout=5)
+        index.upsert([delta(2, [0.0, 1.0])])
+        replacement = index.prepare_rebuild()
+        assert replacement is not None and index.commit_rebuild(replacement)
+        assert runtime.released == []
+        runtime.resume_search.set()
+        assert inflight.result(timeout=5)[0] == [1]
+
+    assert ("build-1", 3) in runtime.released
+    index.close()
+    assert ("build-2", 3) in runtime.released
+    assert runtime.current_device() == 9
+
+
+def test_cuvs_rebuild_candidate_cannot_be_committed_twice():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0])])
+    rebuild = index.prepare_rebuild()
+    assert rebuild is not None and index.commit_rebuild(rebuild)
+
+    with pytest.raises(RuntimeError, match="already been consumed"):
+        index.commit_rebuild(rebuild)
+
+    assert index.needs_rebuild is False
+    assert index.search([1.0, 0.0], 1, None)[0] == [1]
+
+
+def test_cuvs_registrar_failure_consumes_candidate_without_marking_clean():
+    runtime = FakeCuVSRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={},
+        config={},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0])])
+    rebuild = index.prepare_rebuild()
+    assert rebuild is not None
+
+    def fail_registration(_labels):
+        raise RuntimeError("injected registrar failure")
+
+    with pytest.raises(RuntimeError, match="injected registrar failure"):
+        index.commit_rebuild(rebuild, fail_registration)
+    assert index.needs_rebuild is True
+    with pytest.raises(RuntimeError, match="already been consumed"):
+        index.commit_rebuild(rebuild)
+
+    replacement = index.prepare_rebuild()
+    assert replacement is not None and index.commit_rebuild(replacement)
+    assert index.search([1.0, 0.0], 1, None)[0] == [1]
 
 
 def test_cuvs_dense_search_handles_filter_upsert_delete_and_lazy_rebuild():
@@ -129,6 +607,36 @@ def test_cuvs_dense_search_handles_filter_upsert_delete_and_lazy_rebuild():
     index.delete([DeltaRecord(label=10)])
     assert index.search([1.0, 0.0], 3, None)[0] == [30, 20]
     assert runtime.build_count == 3
+
+
+def test_empty_filter_does_not_allocate_a_device_bitset():
+    class SearchCountingRuntime(FakeCuVSRuntime):
+        def __init__(self):
+            super().__init__()
+            self.search_count = 0
+
+        def search(self, index, query, limit, mask):
+            self.search_count += 1
+            return super().search(index, query, limit, mask)
+
+    runtime = SearchCountingRuntime()
+    index = CuVSDenseIndex(
+        dimension=2,
+        distance="ip",
+        normalize_vectors=False,
+        field_types={"tenant": "string"},
+        config={"filter_cache_size": 0},
+        runtime=runtime,
+    )
+    index.add_candidates([candidate(1, [1.0, 0.0], tenant="a")])
+
+    assert index.search(
+        [1.0, 0.0],
+        1,
+        {"op": "must", "field": "tenant", "conds": ["missing"]},
+    ) == ([], [])
+    assert runtime.prepare_filter_count == 0
+    assert runtime.search_count == 0
 
 
 def test_cuvs_search_telemetry_records_build_filter_cache_and_search():

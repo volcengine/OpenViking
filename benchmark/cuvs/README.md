@@ -84,6 +84,10 @@ measuring cold storage reads.
 - `cuvs_cagra_fp16` combines CAGRA approximation with float16 storage/query
   casts and must be compared on both recall and retained VRAM.
 
+The harness rejects any FP16 or CAGRA-only run that has neither supplied
+ground truth nor an exact `native`/`cuvs_brute_force` backend. A missing recall
+value is displayed as `N/A`; it is never treated as perfect recall.
+
 Run the dtype frontier in one clean process with:
 
 ```bash
@@ -99,10 +103,13 @@ The index-only harness constructs the native index without an explicit
 `Quant`, so both native and cuVS brute-force use float32 there. The collection
 and async service harnesses deliberately retain normal application behavior:
 the native CPU index uses its default per-vector-scale int8 quantization while
-the cuVS GPU shadow uses float32. Enabling cuVS does not mutate the native
-index metadata. Collection/service results are therefore application-path
-comparisons, not equal-dtype or equal-memory comparisons, and must be reported
-with Recall@K and the dtype caveat.
+the cuVS device dataset and queries use the configured dtype (float32 by
+default, or explicitly selected float16). The host record shadow retains
+prepared Python floating-point values; only the device dataset and queries are
+cast to the configured dtype when each is created. `dtype` does not rewrite the
+host shadow or the native index metadata. Collection/service results are
+therefore application-path comparisons, not equal-dtype or equal-memory
+comparisons, and must be reported with Recall@K and the dtype caveat.
 
 The native measurement uses the current OpenViking single-query call path; it
 is not a claim about the maximum throughput of a separately tuned,
