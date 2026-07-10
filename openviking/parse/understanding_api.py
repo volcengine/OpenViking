@@ -32,8 +32,6 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_PARSER_API_DOC_TYPE_ALIASES = {"md": "markdown"}
-
 # 轮询 GET 遇到瞬时错误（网络抖动 / 5xx / 429）时的最大连续重试次数与退避上限；
 # base server 内部调 pre_process 已有重试，这里为 OV -> base server 这一跳补上重试，
 # 避免单次抖动让整个解析任务失败。
@@ -146,8 +144,6 @@ class UnderstandingAPI(BaseParser):
             doc_name = local_path.stem or "resource"
             doc_type = local_path.suffix.lower().lstrip(".") or "unknown"
 
-        doc_type = self._normalize_parser_api_doc_type(doc_type)
-
         # 优先用上游（MediaProcessor）算好的资源名作为目录名/标题；URL stem 或本地临时文件名
         # （如 temp 上传的 upload_<hash>）仅作 fallback。resource_name 已由 MediaProcessor 处理；
         # source_name 是原始文件名，需去掉扩展名。
@@ -254,11 +250,6 @@ class UnderstandingAPI(BaseParser):
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
     ) -> ParseResult:
         raise NotImplementedError("UnderstandingAPI.parse_content is not supported")
-
-    @staticmethod
-    def _normalize_parser_api_doc_type(doc_type: str) -> str:
-        normalized = (doc_type or "").strip().lower().lstrip(".")
-        return _PARSER_API_DOC_TYPE_ALIASES.get(normalized, normalized)
 
     def _json_bytes(self, obj: Any) -> bytes:
         return json.dumps(obj, ensure_ascii=False).encode("utf-8")

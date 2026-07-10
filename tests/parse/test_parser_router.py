@@ -114,7 +114,7 @@ async def test_doc_name_falls_back_to_filename_stem(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_extensionless_original_url_uses_local_markdown_type(tmp_path):
+async def test_extensionless_original_url_uses_local_markdown_file(tmp_path):
     temp_file = tmp_path / "ov_feishu_ssm79cvh.md"
     temp_file.write_text("# Feishu doc\n\ncontent", encoding="utf-8")
 
@@ -130,8 +130,9 @@ async def test_extensionless_original_url_uses_local_markdown_type(tmp_path):
     assert result.root.title == "Feishu Doc"
     captured["create_file"].assert_awaited_once_with(
         local_path=temp_file,
-        upload_name="Feishu Doc.markdown",
+        upload_name="Feishu Doc.md",
     )
+    assert result.source_format == "md"
     captured["create_response_for_url"].assert_not_awaited()
 
 
