@@ -1,4 +1,4 @@
-为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆。一次安装，即可实现：在用户每次输入前自动召回记忆，每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将记忆提交给抽取器。该插件还将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 search、store 等工具来管理记忆。
+为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆。一次安装，即可实现：在用户每次输入前自动召回记忆，每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将记忆提交给抽取器。该插件还将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 find、search、recall、remember 等工具来管理记忆。
 
 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 

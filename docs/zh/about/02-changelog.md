@@ -3,6 +3,55 @@
 OpenViking 的所有重要变更都将记录在此文件中。
 此更新日志从 [GitHub Releases](https://github.com/volcengine/OpenViking/releases) 自动生成。
 
+## v0.4.9 (2026-07-10)
+
+### 重点更新
+
+- **Agent 工作区隔离**：Codex、Claude Code、OpenCode 和 Pi 集成支持从工作区派生 peer identity，实现项目级记忆隔离，并扩展共享安装器与混合 MCP 支持。
+- **检索与记忆正确性**：新增图片搜索，正确处理 agent-only / peer-only 记忆范围，并避免生成嵌套的记忆链接。
+- **存储与安全加固**：串行化本地 collection 懒加载，按后端约束 VikingDB content 写入，并阻止 Git submodule SSRF。
+- **VikingBot 与平台修复**：新增统一 gateway 路由和 OpenViking 鉴权，并修复渠道 sender metadata、仅 VLM 配置、Windows 向量后端和 benchmark 并发问题。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.8...v0.4.9)
+
+## v0.4.8 (2026-07-08)
+
+### 重点更新
+
+- **NVIDIA cuVS 向量后端**：支持 opt-in 的 GPU 精确/近似检索，以及本地后端的显存感知回退。
+- **递归网页导入**：基于 Scrapy 和 trafilatura，支持深度、页数、路径和下载链接限制的同站爬取。
+- **记忆 v3 与训练**：启用 v3 抽取链路、流式 patch-merge 更新和 session train/eval。
+- **Agent 插件安装**：Codex / Claude Code 支持远程 marketplace，stdio MCP 代理与 hooks 共享 `ovcli.conf` 凭据。
+- **文件系统与 RAGFS**：支持后端分页 glob、稳定的目录优先排序和标准相对路径匹配。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.7...v0.4.8)
+
+## v0.4.7 (2026-07-02)
+
+### 重点更新
+
+- **MCP 本地文件链路**：compact 工具描述降低上下文开销，签名 `temp_upload` token 支持本地文件自动入库。
+- **文件系统与版本管理**：新增 filesystem attrs 和账号级 `.ovgitignore` 规则。
+- **SDK 与鉴权**：Go SDK 新增 skill scope 和 grep 深度控制，OAuth client scope 持久化，并支持 seeded API key。
+- **Studio 与初始化体验**：重做 Connection & Identity 页面，修正 assumed account，并新增 TUI 风格初始化向导。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.6...v0.4.7)
+
+## v0.4.6 (2026-06-29)
+
+### 重点更新
+
+- **VikingFS 快照版本管理**：HTTP、Python SDK 和 CLI 支持 Git-backed `commit`、`log`、`show`、`restore`。
+- **整站导入**：支持 sitemap、sitemap index、RSS 和 Atom，并可生成持续刷新的资源树。
+- **共享 Agent Skills**：恢复 `viking://agent/skills` 账号级共享根，用户私有 skill 仍为默认目标。
+- **VikingDB BM25 grep 与 Studio 指标**：增强关键词检索与用户可见的使用指标。
+
+### 升级说明
+
+- 从 0.3.x 升级且仍有 legacy agent/session 数据时，应先在 v0.4.5 完成迁移和 cleanup，再升级到 v0.4.6 或更高版本。
+
+[完整变更记录](https://github.com/volcengine/OpenViking/compare/v0.4.5...v0.4.6)
+
 ## v0.4.5 (2026-06-24)
 
 ### 重点更新

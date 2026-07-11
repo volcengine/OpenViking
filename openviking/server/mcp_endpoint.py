@@ -957,7 +957,9 @@ async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
         logger.info(
-            "MCP endpoint ready (13 tools: find, search, read, list, remember, add_resource, grep, glob, code_outline, code_search, code_expand, forget, health)"
+            "MCP endpoint ready (16 tools: find, search, recall, read, list, remember, "
+            "add_resource, list_watches, cancel_watch, grep, glob, forget, code_outline, "
+            "code_search, code_expand, health)"
         )
         yield
 

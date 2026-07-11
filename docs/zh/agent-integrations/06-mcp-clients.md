@@ -37,9 +37,13 @@ claude mcp add --transport http openviking \
 
 > 如果你需要免工具调用的自动召回与自动捕获，请使用 [Claude Code 记忆插件](./02-claude-code.md)。
 
-### Trae / Cursor / ChatGPT / Codex
+### Trae / Cursor / ChatGPT
 
 使用上面的标准 `mcpServers` 配置即可——均已通过 API Key 鉴权验证。
+
+### Codex
+
+Codex 请使用 [Codex 记忆插件](./04-codex.md)。插件通过 manifest 提供 stdio MCP 代理，并让 MCP 与生命周期 hooks 共用同一套凭据配置。
 
 ### OpenCode
 
@@ -71,14 +75,16 @@ HTTPS 配置、部署模板和完整授权流程详见 [OAuth 2.1 指南](../gui
 
 ## 可用工具
 
-连接后 OpenViking 暴露 14 个工具：
+连接后 OpenViking 暴露 16 个工具：
 
 | 工具 | 说明 |
 |------|------|
+| `find` | 无 session 上下文的快速语义检索 |
 | `search` | 跨记忆、资源、技能的语义搜索 |
+| `recall` | 按记忆类别配额召回 |
 | `read` | 读取一个或多个 `viking://` URI |
 | `list` | 列出 `viking://` 目录下的条目 |
-| `store` | 存储消息到长期记忆 |
+| `remember` | 存储消息到长期记忆 |
 | `add_resource` | 添加本地文件或 URL 作为资源 |
 | `grep` | 正则内容搜索 |
 | `glob` | 按 glob 模式查找文件 |

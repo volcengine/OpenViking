@@ -9,7 +9,7 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionStart` (source=startup|clear)**: active-window heuristic — if exactly one *other* state file was touched within the last 2 min, commit it (the just-ended session). On `≥2`, defer to idle-TTL sweep at the tail. `source=resume` never commits or sweeps; if the live OV session was already committed, it may inject the latest archive summary for continuity. See `DESIGN.md` for the full decision tree.
 
-It also starts a local stdio MCP proxy that forwards to OpenViking's native `/mcp` endpoint with credentials resolved from env / `ovcli.conf`, so the model has direct access to the `search`, `store`, `read`, `list`, `grep`, `glob`, `forget`, `add_resource`, and `health` tools.
+It also starts a local stdio MCP proxy that forwards to OpenViking's native `/mcp` endpoint with credentials resolved from env / `ovcli.conf`, so the model has direct access to the server's retrieval, memory, resource, watch, filesystem, and code-navigation tools.
 
 ## Quick Start
 

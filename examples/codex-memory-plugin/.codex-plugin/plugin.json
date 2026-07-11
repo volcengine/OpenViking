@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "OpenViking Memory",
     "shortDescription": "Long-term semantic memory for Codex",
-    "longDescription": "Hooks Codex's lifecycle to keep an external semantic memory: recall relevant memories on each UserPromptSubmit; on every Stop (turn end) append the new user/assistant turns to a long-lived OpenViking session keyed by codex session_id; on PreCompact commit that session so OV's extractor produces durable memories before context is summarized; on SessionStart(source=clear) commit any orphaned prior session before /clear discards it. Also exposes explicit MCP tools (recall, search, store, read, list, grep, glob, forget, add_resource, health) through a local stdio proxy to OpenViking's native streamable-HTTP /mcp endpoint for manual use.",
+    "longDescription": "Hooks Codex's lifecycle to keep an external semantic memory: recall relevant memories on each UserPromptSubmit; on every Stop (turn end) append the new user/assistant turns to a long-lived OpenViking session keyed by codex session_id; on PreCompact commit that session so OV's extractor produces durable memories before context is summarized; on SessionStart(source=startup|clear) commit eligible orphaned sessions using the active-window and idle-TTL rules. Also exposes OpenViking's native MCP tools through a local stdio proxy to the streamable-HTTP /mcp endpoint for manual use.",
     "developerName": "OpenViking",
     "category": "Productivity",
     "capabilities": [
@@ -30,7 +30,7 @@
       "Pre-compaction memory extraction",
       "Session archive search and original-text read-back",
       "Resource ingestion for RAG (add_resource)",
-      "Explicit MCP tools: recall, search, store, read, list, grep, glob, forget, add_resource, health"
+      "Explicit MCP tools for retrieval, memory, resources, watches, filesystem, and code navigation"
     ],
     "websiteURL": "https://github.com/volcengine/OpenViking"
   }

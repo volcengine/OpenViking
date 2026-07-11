@@ -37,9 +37,13 @@ Add `--scope user` to make the config global across all projects.
 
 > For auto-recall and auto-capture without manual tool calls, use the [Claude Code Memory Plugin](./02-claude-code.md) instead.
 
-### Trae / Cursor / ChatGPT / Codex
+### Trae / Cursor / ChatGPT
 
 Standard `mcpServers` config as shown above — all verified with API key auth.
+
+### Codex
+
+For Codex, use the [Codex Memory Plugin](./04-codex.md). It supplies a stdio MCP proxy through the plugin manifest and keeps MCP credentials aligned with the lifecycle hooks.
 
 ### OpenCode
 
@@ -71,14 +75,16 @@ See the [OAuth 2.1 Guide](../guides/11-oauth.md) and [Public Access Guide](../gu
 
 ## Available tools
 
-Once connected, OpenViking exposes 14 tools:
+Once connected, OpenViking exposes 16 tools:
 
 | Tool | Description |
 |------|-------------|
+| `find` | Fast semantic retrieval without session context |
 | `search` | Semantic search across memories, resources, and skills |
+| `recall` | Type-quota recall across memory categories |
 | `read` | Read one or more `viking://` URIs |
 | `list` | List entries under a `viking://` directory |
-| `store` | Store messages into long-term memory |
+| `remember` | Store messages into long-term memory |
 | `add_resource` | Add a local file or URL as a resource |
 | `grep` | Regex content search across `viking://` files |
 | `glob` | Find files matching a glob pattern |
