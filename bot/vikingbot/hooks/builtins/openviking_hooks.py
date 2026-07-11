@@ -256,10 +256,11 @@ class OpenVikingCompactHook(Hook):
 
 class OpenVikingPostCallHook(Hook):
     name = "openviking_post_call"
-    # Hook execute() is genuinely async (it awaits ov_client search/read). Mark it
-    # async so the hook manager routes it through asyncio.gather with other async
-    # hooks instead of the sequential sync_hooks path.
-    is_sync = False
+    # Hook execute() is genuinely async (it awaits ov_client search/read), but it
+    # MUST return its mutated kwargs dict to the caller so result transformations
+    # (like experience injection) reach tool.post_call.  Route it through the sync
+    # path so the hook manager threads the return value back into kwargs.
+    is_sync = True
 
     async def _get_client(self, workspace_id: str, config: Any = None) -> VikingClient:
         return await get_global_client(workspace_id, config=config)
