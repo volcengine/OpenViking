@@ -1,10 +1,19 @@
 import { OpenVikingError } from "./errors.js";
-import { zipSync } from "fflate";
+import {
+  nodeImagePathToDataURI,
+  nodePathToBlob,
+  packOutputPath,
+  writeResponseToFile,
+} from "./node-files.js";
+import { OpenVikingTransport, type TransportOptions } from "./transport.js";
 import type {
   AddResourceOptions,
   ClientConfig,
   CreateSessionOptions,
   FindResult,
+  GitBlob,
+  GitCommitOptions,
+  GitRestoreOptions,
   JsonObject,
   ListOptions,
   GetSkillOptions,
@@ -12,7 +21,6 @@ import type {
   ImportPackOptions,
   Message,
   RequestOptions,
-  ResponseEnvelope,
   SearchOptions,
   TaskListOptions,
   TreeOptions,
@@ -27,83 +35,6 @@ const compact = (value: JsonObject): JsonObject =>
     ),
   );
 const pathPart = (value: string): string => encodeURIComponent(value);
-const bytesToDataURI = (bytes: Uint8Array, mimeType: string): string => {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return `data:${mimeType};base64,${btoa(binary)}`;
-};
-
-const imageMimeType = (path: string): string => {
-  const extension = path.toLowerCase().match(/\.[^.\\/]+$/)?.[0];
-  const mimeTypes: Record<string, string> = {
-    ".gif": "image/gif",
-    ".jpeg": "image/jpeg",
-    ".jpg": "image/jpeg",
-    ".png": "image/png",
-    ".webp": "image/webp",
-  };
-  return (extension && mimeTypes[extension]) || "image/png";
-};
-
-async function nodeImagePathToDataURI(
-  path: string,
-): Promise<string | undefined> {
-  if (typeof process === "undefined" || !process.versions?.node)
-    return undefined;
-  const fsSpecifier = "node:fs/promises";
-  const fs = await import(fsSpecifier);
-  try {
-    const stat = await fs.stat(path);
-    if (!stat.isFile()) return undefined;
-    return bytesToDataURI(await fs.readFile(path), imageMimeType(path));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-}
-
-async function nodePathToBlob(
-  path: string,
-): Promise<{ blob: Blob; filename: string; sourceName?: string } | undefined> {
-  if (typeof process === "undefined" || !process.versions?.node)
-    return undefined;
-  // Keep built-in specifiers dynamic so the bundled ESM and CommonJS outputs
-  // can share this implementation without eager filesystem initialization.
-  const fsSpecifier = "node:fs/promises";
-  const pathSpecifier = "node:path";
-  const fs = await import(fsSpecifier);
-  const nodePath = await import(pathSpecifier);
-  let stat;
-  try {
-    stat = await fs.stat(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  if (stat.isFile())
-    return {
-      blob: new Blob([await fs.readFile(path)]),
-      filename: nodePath.basename(path),
-      sourceName: nodePath.basename(path),
-    };
-  if (!stat.isDirectory()) return undefined;
-  const files: Record<string, Uint8Array> = {};
-  const walk = async (directory: string, prefix = ""): Promise<void> => {
-    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      if (entry.isSymbolicLink()) continue;
-      const fullPath = nodePath.join(directory, entry.name);
-      const archivePath = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) await walk(fullPath, archivePath);
-      else if (entry.isFile()) files[archivePath] = await fs.readFile(fullPath);
-    }
-  };
-  await walk(path);
-  return {
-    blob: new Blob([zipSync(files)]),
-    filename: `${nodePath.basename(path)}.zip`,
-    sourceName: nodePath.basename(path),
-  };
-}
 
 /** Normalize a short OpenViking URI to the canonical `viking://` form. */
 export const normalizeURI = (uri: string): string =>
@@ -112,117 +43,27 @@ export const normalizeURI = (uri: string): string =>
 /** HTTP client for an existing OpenViking server. */
 export class OpenVikingClient {
   readonly baseUrl: string;
-  private readonly fetcher: typeof globalThis.fetch;
-  private readonly headers: Headers;
-  private readonly timeout: number;
-  private readonly profile: boolean;
-  private readonly uploadMode: string | undefined;
+  private readonly transport: OpenVikingTransport;
 
   /** Create a client with explicit connection and identity configuration. */
   constructor(config: ClientConfig) {
-    if (!config.baseUrl?.trim())
-      throw new TypeError("OpenViking: baseUrl is required");
-    const url = new URL(config.baseUrl);
-    if (!/^https?:$/.test(url.protocol))
-      throw new TypeError("OpenViking: baseUrl must use http or https");
-    this.baseUrl = config.baseUrl.replace(/\/+$/, "");
-    this.fetcher = config.fetch ?? globalThis.fetch;
-    if (!this.fetcher)
-      throw new TypeError("OpenViking: fetch is not available");
-    this.timeout = config.timeout ?? 60_000;
-    this.profile = config.profile ?? false;
-    this.uploadMode = config.uploadMode;
-    this.headers = new Headers(config.headers);
-    if (config.apiKey) this.headers.set("X-API-Key", config.apiKey);
-    if (config.account)
-      this.headers.set("X-OpenViking-Account", config.account);
-    if (config.user) this.headers.set("X-OpenViking-User", config.user);
-    if (config.actorPeerId)
-      this.headers.set("X-OpenViking-Actor-Peer", config.actorPeerId);
+    this.transport = new OpenVikingTransport(config);
+    this.baseUrl = this.transport.baseUrl;
   }
 
-  private async request<T>(
+  private request<T>(
     method: string,
     path: string,
-    options: {
-      query?: JsonObject;
-      body?: unknown;
-      form?: FormData;
-      signal?: AbortSignal;
-    } = {},
+    options: TransportOptions = {},
   ): Promise<T> {
-    const url = new URL(
-      `${this.baseUrl}${path.startsWith("/") ? path : `/${path}`}`,
-    );
-    for (const [key, value] of Object.entries(options.query ?? {})) {
-      if (value !== undefined && value !== null && value !== "")
-        url.searchParams.set(key, String(value));
-    }
-    if (this.profile) url.searchParams.set("profile", "1");
-    const headers = new Headers(this.headers);
-    let body: string | FormData | undefined;
-    if (options.form) body = options.form;
-    else if (options.body !== undefined) {
-      headers.set("Content-Type", "application/json");
-      body = JSON.stringify(options.body);
-    }
-    const controller = new AbortController();
-    const abort = () => controller.abort(options.signal?.reason);
-    options.signal?.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(
-      () =>
-        controller.abort(new DOMException("Request timed out", "TimeoutError")),
-      this.timeout,
-    );
-    try {
-      const init: RequestInit = { method, headers, signal: controller.signal };
-      if (body !== undefined) init.body = body;
-      const response = await this.fetcher(url, init);
-      const text = await response.text();
-      let envelope: ResponseEnvelope<T> = {};
-      if (text) {
-        try {
-          envelope = JSON.parse(text) as ResponseEnvelope<T>;
-        } catch (cause) {
-          throw new OpenVikingError(`HTTP ${response.status}: ${text}`, {
-            statusCode: response.status,
-            cause,
-          });
-        }
-      }
-      if (envelope.error || envelope.status === "error" || !response.ok) {
-        const info = envelope.error;
-        throw new OpenVikingError(
-          info?.message ?? String(envelope.detail ?? `HTTP ${response.status}`),
-          compact({
-            code: info?.code,
-            details: info?.details,
-            statusCode: response.status,
-          }) as { code?: string; details?: JsonObject; statusCode?: number },
-        );
-      }
-      return envelope.result as T;
-    } catch (error) {
-      if (error instanceof OpenVikingError) throw error;
-      if (controller.signal.aborted)
-        throw new OpenVikingError("Request timed out or was aborted", {
-          code: "DEADLINE_EXCEEDED",
-          cause: error,
-        });
-      throw new OpenVikingError(
-        error instanceof Error ? error.message : "Network request failed",
-        { code: "UNAVAILABLE", cause: error },
-      );
-    } finally {
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", abort);
-    }
+    return this.transport.request<T>(method, path, options);
   }
 
   private async upload(file: Blob, filename = "upload"): Promise<string> {
     const form = new FormData();
     form.set("file", file, filename);
-    if (this.uploadMode) form.set("upload_mode", this.uploadMode);
+    if (this.transport.uploadMode)
+      form.set("upload_mode", this.transport.uploadMode);
     const result = await this.request<{ temp_file_id: string }>(
       "POST",
       "/api/v1/resources/temp_upload",
@@ -236,58 +77,25 @@ export class OpenVikingClient {
     return result.temp_file_id;
   }
 
-  private async download(path: string, body: JsonObject): Promise<Blob> {
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () =>
-        controller.abort(new DOMException("Request timed out", "TimeoutError")),
-      this.timeout,
+  private async downloadToFile(
+    path: string,
+    body: JsonObject,
+    output: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    return this.transport.consume(
+      "POST",
+      path,
+      { body, ...(signal ? { signal } : {}) },
+      async (response) => {
+        if (
+          !response.ok ||
+          response.headers.get("content-type")?.includes("json")
+        )
+          return this.transport.parseResponse<never>(response);
+        return writeResponseToFile(response, output);
+      },
     );
-    try {
-      const headers = new Headers(this.headers);
-      headers.set("Content-Type", "application/json");
-      const response = await this.fetcher(`${this.baseUrl}${path}`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        try {
-          const envelope = JSON.parse(text) as ResponseEnvelope<never>;
-          throw new OpenVikingError(
-            envelope.error?.message ??
-              String(envelope.detail ?? `HTTP ${response.status}`),
-            compact({
-              code: envelope.error?.code,
-              details: envelope.error?.details,
-              statusCode: response.status,
-            }) as { code?: string; details?: JsonObject; statusCode?: number },
-          );
-        } catch (error) {
-          if (error instanceof OpenVikingError) throw error;
-          throw new OpenVikingError(`HTTP ${response.status}: ${text}`, {
-            statusCode: response.status,
-            cause: error,
-          });
-        }
-      }
-      return response.blob();
-    } catch (error) {
-      if (error instanceof OpenVikingError) throw error;
-      if (controller.signal.aborted)
-        throw new OpenVikingError("Request timed out", {
-          code: "DEADLINE_EXCEEDED",
-          cause: error,
-        });
-      throw new OpenVikingError(
-        error instanceof Error ? error.message : "Network request failed",
-        { code: "UNAVAILABLE", cause: error },
-      );
-    } finally {
-      clearTimeout(timer);
-    }
   }
 
   /** Add a remote URL or Node.js local file/directory as a resource. */
@@ -526,7 +334,7 @@ export class OpenVikingClient {
     return this.request("POST", `/api/v1/search/${kind}`, {
       body: compact({
         query,
-        target_uri: options.targetUri ?? "viking://",
+        target_uri: options.targetUri ?? "",
         image_url: imageUrl,
         session_id: kind === "search" ? options.sessionId : undefined,
         limit: options.nodeLimit ?? options.limit ?? 10,
@@ -569,6 +377,37 @@ export class OpenVikingClient {
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/search/glob", {
       body: { pattern, uri: normalizeURI(uri), node_limit: nodeLimit },
+    });
+  }
+  /** Return relations associated with a resource. */
+  relations(uri: string): Promise<unknown[]> {
+    return this.request("GET", "/api/v1/relations", {
+      query: { uri: normalizeURI(uri) },
+    });
+  }
+  /** Create one or more resource relations. */
+  async link(
+    fromUri: string,
+    toUris: string | string[],
+    reason = "",
+  ): Promise<void> {
+    await this.request("POST", "/api/v1/relations/link", {
+      body: {
+        from_uri: normalizeURI(fromUri),
+        to_uris: Array.isArray(toUris)
+          ? toUris.map(normalizeURI)
+          : normalizeURI(toUris),
+        reason,
+      },
+    });
+  }
+  /** Remove a resource relation. */
+  async unlink(fromUri: string, toUri: string): Promise<void> {
+    await this.request("DELETE", "/api/v1/relations/link", {
+      body: {
+        from_uri: normalizeURI(fromUri),
+        to_uri: normalizeURI(toUri),
+      },
     });
   }
 
@@ -818,18 +657,34 @@ export class OpenVikingClient {
       { body: compact({ keep_recent_count: keepRecentCount, telemetry }) },
     );
   }
-  /** Export a resource subtree as an OVPack blob. */
-  exportOVPack(uri: string, includeVectors = false): Promise<Blob> {
-    return this.download("/api/v1/pack/export", {
-      uri: normalizeURI(uri),
-      include_vectors: includeVectors,
-    });
+  /** Export a resource subtree to a local OVPack file. */
+  async exportOVPack(
+    uri: string,
+    to: string,
+    includeVectors = false,
+    options: RequestOptions = {},
+  ): Promise<string> {
+    const output = await packOutputPath(to, uri, "export");
+    return this.downloadToFile(
+      "/api/v1/pack/export",
+      { uri: normalizeURI(uri), include_vectors: includeVectors },
+      output,
+      options.signal,
+    );
   }
-  /** Back up public scopes as a restore-only OVPack blob. */
-  backupOVPack(includeVectors = false): Promise<Blob> {
-    return this.download("/api/v1/pack/backup", {
-      include_vectors: includeVectors,
-    });
+  /** Back up public scopes to a local restore-only OVPack file. */
+  async backupOVPack(
+    to: string,
+    includeVectors = false,
+    options: RequestOptions = {},
+  ): Promise<string> {
+    const output = await packOutputPath(to, undefined, "openviking-backup");
+    return this.downloadToFile(
+      "/api/v1/pack/backup",
+      { include_vectors: includeVectors },
+      output,
+      options.signal,
+    );
   }
   /** Import a local OVPack file under a parent URI. */
   async importOVPack(
@@ -837,7 +692,7 @@ export class OpenVikingClient {
     parent: string,
     options: ImportPackOptions = {},
   ): Promise<string> {
-    const local = await nodePathToBlob(source);
+    const local = await nodePathToBlob(source, false);
     if (!local)
       throw new TypeError(
         "OpenViking: importOVPack requires an existing Node.js local file",
@@ -861,7 +716,7 @@ export class OpenVikingClient {
     source: string,
     options: ImportPackOptions = {},
   ): Promise<string> {
-    const local = await nodePathToBlob(source);
+    const local = await nodePathToBlob(source, false);
     if (!local)
       throw new TypeError(
         "OpenViking: restoreOVPack requires an existing Node.js local file",
@@ -912,21 +767,14 @@ export class OpenVikingClient {
   }
   /** Check the raw server health endpoint. */
   async health(options: RequestOptions = {}): Promise<boolean> {
-    const controller = new AbortController();
-    const abort = () => controller.abort(options.signal?.reason);
-    options.signal?.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(() => controller.abort(), this.timeout);
-    try {
-      const response = await this.fetcher(`${this.baseUrl}/health`, {
-        headers: this.headers,
-        signal: controller.signal,
-      });
-      if (!response.ok) return false;
-      return ((await response.json()) as { status?: string }).status === "ok";
-    } finally {
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", abort);
-    }
+    return this.transport.consume(
+      "GET",
+      "/health",
+      options,
+      async (response) =>
+        response.ok &&
+        ((await response.json()) as { status?: string }).status === "ok",
+    );
   }
   /** Check filesystem/index consistency. */
   checkConsistency(uri: string): Promise<JsonObject> {
@@ -949,6 +797,86 @@ export class OpenVikingClient {
   /** Return model observer status. */
   modelsStatus(): Promise<JsonObject> {
     return this.request("GET", "/api/v1/observer/models");
+  }
+  /** Return whether the observer system reports healthy. */
+  async isHealthy(): Promise<boolean> {
+    return (await this.getStatus()).is_healthy === true;
+  }
+  /** Create a filesystem snapshot. */
+  gitCommit(options: GitCommitOptions): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/snapshot/commit", {
+      body: compact({
+        message: options.message,
+        paths: options.paths,
+        branch: options.branch ?? "main",
+        author_name: options.authorName,
+        author_email: options.authorEmail,
+      }),
+    });
+  }
+  /** Restore filesystem content from a previous snapshot. */
+  gitRestore(options: GitRestoreOptions): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/snapshot/restore", {
+      body: compact({
+        project_dir: options.projectDir,
+        source_commit: options.sourceCommit,
+        branch: options.branch ?? "main",
+        dry_run: options.dryRun ?? false,
+        message: options.message,
+        author_name: options.authorName,
+        author_email: options.authorEmail,
+      }),
+    });
+  }
+  /** Return snapshot metadata or a raw file from a snapshot. */
+  gitShow(targetRef: string, path?: string): Promise<JsonObject | GitBlob> {
+    return this.transport.consume(
+      "GET",
+      "/api/v1/snapshot/show",
+      { query: { target_ref: targetRef, path } },
+      async (response) => {
+        if (
+          response.ok &&
+          response.headers
+            .get("content-type")
+            ?.startsWith("application/octet-stream")
+        ) {
+          const bytes = new Uint8Array(await response.arrayBuffer());
+          return {
+            oid: response.headers.get("x-snapshot-oid") ?? "",
+            size: Number(
+              response.headers.get("x-snapshot-size") ?? bytes.length,
+            ),
+            bytes,
+          };
+        }
+        return this.transport.parseResponse<JsonObject>(response);
+      },
+    );
+  }
+  /** Return snapshot history from newest to oldest. */
+  gitLog(branch = "main", limit = 20): Promise<JsonObject[]> {
+    return this.request("GET", "/api/v1/snapshot/log", {
+      query: { branch, limit },
+    });
+  }
+  /** Return the account `.ovgitignore` content. */
+  async gitGetIgnore(): Promise<string> {
+    const result = await this.request<unknown>(
+      "GET",
+      "/api/v1/snapshot/ignore",
+    );
+    return typeof result === "string" ? result : "";
+  }
+  /** Set the account `.ovgitignore` content. */
+  async gitSetIgnore(content: string): Promise<void> {
+    await this.request("PUT", "/api/v1/snapshot/ignore", {
+      body: { content },
+    });
+  }
+  /** Delete the account `.ovgitignore` file. */
+  async gitDeleteIgnore(): Promise<void> {
+    await this.request("DELETE", "/api/v1/snapshot/ignore");
   }
   /** Create a tenant account and its first administrator. */
   adminCreateAccount(

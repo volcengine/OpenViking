@@ -7,6 +7,10 @@ export type ClientHeaders =
   Headers | Record<string, string> | [string, string][];
 /** Temporary upload storage mode supported by the OpenViking server. */
 export type UploadMode = "local" | "shared";
+/** Conflict policy accepted when importing an OVPack. */
+export type PackConflictPolicy = "fail" | "overwrite" | "skip";
+/** Vector handling strategy accepted when importing an OVPack. */
+export type PackVectorMode = "auto" | "recompute" | "require";
 
 /** Connection, identity and transport configuration. */
 export interface ClientConfig {
@@ -27,8 +31,33 @@ export type UploadSource = string;
 
 /** Options shared by OVPack import and restore operations. */
 export interface ImportPackOptions {
-  onConflict?: string;
-  vectorMode?: string;
+  onConflict?: PackConflictPolicy;
+  vectorMode?: PackVectorMode;
+}
+
+/** Options for creating a filesystem snapshot. */
+export interface GitCommitOptions {
+  message: string;
+  paths?: string[];
+  branch?: string;
+  authorName?: string;
+  authorEmail?: string;
+}
+/** Options for restoring a filesystem snapshot. */
+export interface GitRestoreOptions {
+  sourceCommit: string;
+  projectDir?: string;
+  branch?: string;
+  dryRun?: boolean;
+  message?: string;
+  authorName?: string;
+  authorEmail?: string;
+}
+/** Raw file returned by a snapshot lookup. */
+export interface GitBlob {
+  oid: string;
+  size: number;
+  bytes: Uint8Array;
 }
 
 /** Per-request cancellation options. */
