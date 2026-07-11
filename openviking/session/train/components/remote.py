@@ -26,7 +26,7 @@ from openviking.session.train.domain import (
     Rollout,
 )
 
-DEFAULT_REMOTE_CASE_PAGE_SIZE = 200
+DEFAULT_REMOTE_CASE_PAGE_SIZE = 1000
 
 
 @dataclass(slots=True)

@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "Train/eval batch size. Default uses the remote case loader page size (currently 200)."
+            "Train/eval batch size. Default uses the remote case loader page size (currently 1000)."
         ),
     )
     parser.add_argument(

@@ -14,7 +14,7 @@ from openviking.session.train.components.remote import (
 )
 
 
-def test_remote_case_loader_default_page_size_is_200(monkeypatch):
+def test_remote_case_loader_default_page_size_is_1000(monkeypatch):
     requests: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -43,7 +43,7 @@ def test_remote_case_loader_default_page_size_is_200(monkeypatch):
         return [batch async for batch in loader.batches()]
 
     assert asyncio.run(collect()) == []
-    assert requests[0]["limit"] == DEFAULT_REMOTE_CASE_PAGE_SIZE == 200
+    assert requests[0]["limit"] == DEFAULT_REMOTE_CASE_PAGE_SIZE == 1000
 
 
 def test_remote_case_loader_batch_size_overrides_default_page_size(monkeypatch):

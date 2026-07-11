@@ -91,7 +91,7 @@ class CasesQueryRequest(BaseModel):
     domain: str
     split: str
     cursor: str | None = None
-    limit: int = Field(default=200, gt=0)
+    limit: int = Field(default=1000, gt=0)
     filters: dict[str, Any] = Field(default_factory=dict)
 
 
