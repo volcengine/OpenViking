@@ -318,7 +318,7 @@ Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** 
      │                               │           │     │  (Python)    │
      │                  ┌────────────▼───────────▼───►│              │
      │                  │  MCP tools (stdio proxy → /mcp)            │
-     │                  │  search / read / store / …  │              │
+     │                  │ find/search/recall/remember/… │              │
      └─────────────────►│                             │              │
         OV session      └─────────────────────────────►              │
         context inject                                └──────────────┘
@@ -352,21 +352,9 @@ Disable with `claude_code.writePathAsync: false` if you need deterministic order
 
 ### MCP tools available from the server
 
-The plugin's `.mcp.json` starts a local stdio proxy, which connects to the OpenViking server's native HTTP MCP endpoint at `/mcp`. The server exposes 9 tools that Claude can call on demand:
+The plugin's `.mcp.json` starts a local stdio proxy, which connects to the OpenViking server's native HTTP MCP endpoint at `/mcp`. Claude can call the server's retrieval, memory, resource, watch, filesystem, and code-navigation tools on demand.
 
-| Tool           | Description                                                 |
-|----------------|-------------------------------------------------------------|
-| `search`       | Semantic search across memories, resources, and skills      |
-| `read`         | Read one or more `viking://` URIs                           |
-| `list`         | List entries under a `viking://` directory                  |
-| `store`        | Store messages into long-term memory (triggers extraction)  |
-| `add_resource` | Add a local file or URL as a resource                       |
-| `grep`         | Regex content search across `viking://` files               |
-| `glob`         | Find files matching a glob pattern                          |
-| `forget`       | Delete any `viking://` URI                                  |
-| `health`       | Check OpenViking server health                              |
-
-See the [MCP integration guide](../../docs/en/guides/06-mcp-integration.md) for tool parameters.
+See the [MCP integration guide](../../docs/en/guides/06-mcp-integration.md) for the canonical tool list and parameters.
 
 ### Plugin structure
 

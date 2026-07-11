@@ -75,28 +75,7 @@ See the [OAuth 2.1 Guide](../guides/11-oauth.md) and [Public Access Guide](../gu
 
 ## Available tools
 
-Once connected, OpenViking exposes 16 tools:
-
-| Tool | Description |
-|------|-------------|
-| `find` | Fast semantic retrieval without session context |
-| `search` | Semantic search across memories, resources, and skills |
-| `recall` | Type-quota recall across memory categories |
-| `read` | Read one or more `viking://` URIs |
-| `list` | List entries under a `viking://` directory |
-| `remember` | Store messages into long-term memory |
-| `add_resource` | Add a local file or URL as a resource |
-| `grep` | Regex content search across `viking://` files |
-| `glob` | Find files matching a glob pattern |
-| `forget` | Delete a `viking://` URI |
-| `code_outline` | Show a file's symbol structure |
-| `code_search` | Search symbol names across a directory |
-| `code_expand` | Return the full source of a single named symbol |
-| `health` | Check OpenViking service health |
-| `list_watches` | List auto-refresh subscriptions |
-| `cancel_watch` | Cancel a watch task |
-
-For tool parameters, progressive file upload, and advanced configuration, see the [MCP Integration Guide](../guides/06-mcp-integration.md).
+Once connected, OpenViking exposes retrieval, memory, resource, watch, filesystem, and code-navigation tools. See the [MCP Integration Guide](../guides/06-mcp-integration.md#available-mcp-tools) for the canonical tool list, parameters, progressive file upload, and advanced configuration.
 
 ## Troubleshooting
 

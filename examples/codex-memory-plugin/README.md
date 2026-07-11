@@ -159,9 +159,9 @@ Earlier plugin versions configured tuning fields under a `codex` block in `~/.op
                     │ /api/v1/content/read                      │
                     └─────────────────┬─────────────────────────┘
                                       │
-   Codex ◄── stdio MCP proxy ──► /mcp (search, store, read, list,
-              (env/ovcli.conf)      grep, glob, forget,
-                                  add_resource, health)
+   Codex ◄── stdio MCP proxy ──► /mcp (find, search, recall,
+              (env/ovcli.conf)      remember, resources, watches,
+                                  filesystem, code navigation)
 ```
 
 The checked-in `.mcp.json` starts `servers/mcp-proxy.mjs` with `node`. The proxy keeps stdout protocol-clean, reads the same credential sources as the hooks, sends auth and identity headers to `/mcp`, caches the server `mcp-session-id`, and transparently reinitializes once if the server restarts.
