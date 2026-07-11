@@ -1,0 +1,39 @@
+docs/en/agent-integrations/03-openclaw.md
+  s_fc57356f120c42::t_67f38e4e9221bb 12
+docs/en/api/07-system.md
+  s_fc57356f120c42::t_1bc8ab685176d2 863
+docs/en/guides/05-observability.md
+  s_fc57356f120c42::t_1488faa9960678 61-66,78-81
+docs/en/guides/08-encryption.md
+  s_fc57356f120c42::t_4f08570f0206f1 61,68-71,400,402,404-406,408-409,411-413,415,417
+docs/zh/agent-integrations/03-openclaw.md
+  s_fc57356f120c42::t_ca537b2466d333 12
+docs/zh/api/07-system.md
+  s_fc57356f120c42::t_7ddcbd2f743764 857
+docs/zh/guides/05-observability.md
+  s_fc57356f120c42::t_540869fc4dea7d 61-66,78-81
+docs/zh/guides/08-encryption.md
+  s_fc57356f120c42::t_11579cf65034ab 61,68-71,400,402,404-406,408-409,411-413,415,417
+examples/openclaw-plugin/docs/openviking-openclaw-plugin-guide.md
+  s_fc57356f120c42::t_e4adbe2b558aad 255
+examples/pi-coding-agent-extension/README.md
+  s_fc57356f120c42::t_51a77e2fdfe570 246
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "486740c6ee4c1b4877249a14b52ec97084cebf74",
+  "prompts": {},
+  "sessions": {
+    "s_fc57356f120c42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4f34-5c5b-7133-8a69-0411a64c2b5b",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
