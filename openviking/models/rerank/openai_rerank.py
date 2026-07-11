@@ -100,7 +100,7 @@ class OpenAIRerankClient(RerankBase):
                 return None
 
             if len(results) != len(documents):
-                logger.debug(
+                logger.warning(
                     "[OpenAIRerankClient] Sparse rerank results: expected=%s actual=%s",
                     len(documents),
                     len(results),

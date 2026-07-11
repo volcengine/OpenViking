@@ -89,10 +89,13 @@ class TestOpenAIRerankClient:
 
         with patch(
             "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
-        ):
+        ), patch("openviking.models.rerank.openai_rerank.logger.warning") as warning:
             result = client.rerank_batch("query", ["doc1", "doc2", "doc3"])
 
         assert result == [0.9, 0.0, 0.7]
+        warning.assert_called_once_with(
+            "[OpenAIRerankClient] Sparse rerank results: expected=%s actual=%s", 3, 2
+        )
 
     def test_rerank_batch_out_of_bounds_index_returns_none(self):
         """An index that is >= len(documents) should return None."""
