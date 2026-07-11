@@ -61,10 +61,7 @@ _SENSITIVE_TEXT_RE = re.compile(
 
 def _redact_sensitive_text(text: str) -> str:
     def _replace(match: re.Match[str]) -> str:
-        return (
-            f"{match.group(1)}{match.group(2)}"
-            f"{match.group(3)}<redacted>{match.group(5)}"
-        )
+        return f"{match.group(1)}{match.group(2)}{match.group(3)}<redacted>{match.group(5)}"
 
     return _SENSITIVE_TEXT_RE.sub(_replace, text)
 
@@ -94,7 +91,7 @@ class CasesQueryRequest(BaseModel):
     domain: str
     split: str
     cursor: str | None = None
-    limit: int = Field(default=100, gt=0)
+    limit: int = Field(default=200, gt=0)
     filters: dict[str, Any] = Field(default_factory=dict)
 
 

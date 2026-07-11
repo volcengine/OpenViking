@@ -22,7 +22,9 @@ def parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=None,
-        help="Train/eval batch size. Default uses the whole split as one batch.",
+        help=(
+            "Train/eval batch size. Default uses the remote case loader page size (currently 200)."
+        ),
     )
     parser.add_argument(
         "--concurrency",
