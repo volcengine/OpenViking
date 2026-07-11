@@ -110,6 +110,32 @@ deployments or gateways that explicitly forward tenant identity.
 It does not implement Python embedded mode or legacy `agent_id` compatibility.
 See [`sdk/go/README.md`](../../../sdk/go/README.md) for package-level examples.
 
+#### JavaScript/TypeScript SDK Client
+
+The JavaScript/TypeScript SDK is an HTTP-only client for Node.js 18+ and modern
+browsers. It ships ESM, CommonJS and TypeScript declarations.
+
+```bash
+npm install @openviking/sdk
+```
+
+```ts
+import { OpenVikingClient } from "@openviking/sdk";
+
+const client = new OpenVikingClient({
+  baseUrl: "http://localhost:1933",
+  apiKey: "your-key",
+});
+
+const results = await client.search("deployment guide", {
+  targetUri: "viking://resources",
+});
+```
+
+It uses the same identity headers and response envelope as the Python and Go
+HTTP clients. See [`sdk/typescript/README.md`](../../../sdk/typescript/README.md)
+for package-level examples.
+
 When `url` is not explicitly provided, the HTTP client automatically reads connection information from `ovcli.conf`. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
 
 ```bash
