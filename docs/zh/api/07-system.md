@@ -605,7 +605,6 @@ Observer API 提供详细的组件级监控。
 - `openviking/server/routers/observer.py:observer_queue` - HTTP 路由
 - `openviking/service/debug_service.py:ObserverService.queue` - 核心实现
 - `openviking/storage/observers/queue_observer.py` - 队列观察者
-- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
 
 #### 2. 接口和参数说明
 
@@ -855,11 +854,7 @@ curl -X GET http://localhost:1933/api/v1/observer/lock \
 print(client.observer.lock)
 ```
 
-**CLI**
-
-```bash
-ov observer transaction
-```
+CLI 目前没有单独的 lock observer 子命令。请使用 HTTP API 或 Python SDK 查询该组件；`ov observer system` 会在汇总状态中包含它。
 
 **响应示例**
 
