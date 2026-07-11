@@ -120,6 +120,7 @@ EXPLICIT_LITELLM_PREFIXES: tuple[str, ...] = (
     "sagemaker_chat/",
     "sagemaker_nova/",
     "vertex_ai/",
+    "github_copilot/",
 )
 
 # These explicit routes normally authenticate through cloud-native credential
