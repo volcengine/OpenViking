@@ -268,6 +268,11 @@ Your experience output will be rejected unless every experience satisfies these 
 - For information/aggregate/list/summary/value requests affected by later
   writes, the experience must preserve the original request-time scope and
   label any post-action/current remaining scope separately.
+- Relative wording such as "other", "remaining", "those", "其他", or "剩余" is
+  not an explicit exclusion by itself when writes are also being discussed.
+- Monetary/value aggregates must bind to the canonical runtime value field when
+  available: total/paid/charged/order/payment-history amount fields take
+  precedence over reconstructed line-item sums.
 
 If you cannot satisfy this contract, output no experience changes."""
 
@@ -471,7 +476,9 @@ class ExperienceSkillReadabilityGate:
                 "state applies-when, does-not-apply-when, and the runtime source binding "
                 "used to decide applicability. `Does not apply when` must be a task-pattern "
                 "mismatch, not a temporal stage such as still reading/writing or before "
-                "final_response. Do not add trigger_code."
+                "final_response. Put the complete four-section Markdown body in the "
+                "`constraint` field (or `content` if that is the only available field); do not "
+                "return a production `# name` / `## 规则` block. Do not add trigger_code."
             ),
         )
 
@@ -963,7 +970,16 @@ Pass only when all are true:
    later modified, canceled, upgraded, consumed, split, or otherwise changed,
    unless the user's own words explicitly excluded that semantic role from the
    earlier information request.
-9. `Does not apply when` names a real task-pattern mismatch, not a temporal
+9. Relative wording such as "other", "remaining", "those", "其他", or "剩余" is
+   not treated as an explicit exclusion by itself when writes are also being
+   discussed; the experience either preserves both labeled scopes or cites the
+   user's explicit exclusion wording.
+10. For money, total cost, paid amount, balance, refund, or similar value
+   obligations, the experience identifies the canonical source field when one
+   exists. Explicit total/paid/charged/order/payment amount fields take
+   precedence over reconstructed line-item sums; line items are a fallback or
+   cross-check.
+11. `Does not apply when` names a real task-pattern mismatch, not a temporal
    loader stage such as still reading/writing, before final_response, or before
    writes complete. Temporal wording would make the future agent skip reading an
    experience that must be available from task start.
@@ -974,7 +990,8 @@ decision rule, splits a coupled causal chain, treats agent-proposed expansion as
 user-initiated scope, lets a later-write/current-state scope overwrite an
 earlier information request scope, silently drops later-modified records from an
 earlier request-time aggregate, uses temporal non-applicability to avoid skill
-loading, lacks a concrete future behavior change, or would likely harm correct
+loading, uses a wrong value source field where a canonical total/payment field
+exists, lacks a concrete future behavior change, or would likely harm correct
 behavior.
 
 Return JSON only:
@@ -992,7 +1009,7 @@ surface_level, unsupported, not_preventive, too_late_boundary,
 wrong_scope, split_causal_chain, agent_initiated_scope_expansion,
 missing_source_binding, missing_behavior_change, not_injectable,
 over_broad, later_write_scope_substitution, implicit_later_write_exclusion,
-temporal_non_applicability, unsafe, unclear.
+wrong_source_field, temporal_non_applicability, unsafe, unclear.
 Set repair_prompt to one concise instruction for rewriting or removing this
 specific experience. Do not ask for any output schema.
 

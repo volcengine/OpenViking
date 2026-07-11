@@ -94,6 +94,10 @@ fields:
       - If the user's wording is ambiguous between the original requested set and a post-action
         remaining/current-state set, the experience should instruct the future agent to include
         both scopes with explicit labels, not only the narrower post-action scope.
+      - Do not treat relative words like "other", "remaining", "those", "the rest", "其他", or
+        "剩余" as explicit exclusions when the user is also discussing writes. They are ambiguous
+        unless the user's own wording says to exclude a named object or semantic role (for example
+        "except/excluding X"). In ambiguous cases, `Scope ambiguity` must name both scopes.
       - Do not exclude records from a request-time information/aggregate/list/summary/value
         merely because they are later modified, canceled, upgraded, consumed, split, or otherwise
         changed. Exclude them only when the user's own wording explicitly excluded that semantic
@@ -101,6 +105,11 @@ fields:
       - If later writes affect records that could belong to a requested information/list/aggregate
         value, `Scope ambiguity` must name both the original request-time scope and the
         post-action/current remaining scope; do not write none/无.
+      - For total cost, paid amount, balance, refund, or similar monetary aggregates, bind the
+        answer to the canonical runtime value field when one exists: explicit total/paid/charged/
+        order/payment-history amount fields beat a reconstructed line-item sum. Use line items
+        only when no canonical total exists, or as a cross-check. If those values differ, the
+        experience must tell the future agent which source field to prefer.
       - State when the scope is frozen, the semantic roles included/excluded, the source fields
         used for derivation, and whether later writes change the previously requested scope.
       - `Does not apply when` must describe a task-pattern mismatch, not the current temporal

@@ -127,7 +127,9 @@ fields:
       - Communication/Value Diagnosis:
         - Required value role: <semantic role of the required answer/list/count/summary/value, or none>
         - Expected source scope: <object set/value scope implied by the user's request at request time, or none>
+        - Expected source field: <canonical runtime field/tool text that should supply the value, or none>
         - Observed communicated value role: <semantic role and scope of what was actually communicated, or none>
+        - Observed source field: <runtime field or derivation the agent actually used, or none>
         - Difference type: <omitted|calculation_error|scope_substitution|wrong_source_field|none|unknown>
         - Substituted scope: <post-action/current/narrower/broader scope used instead, or none>
         - Later write effect: <how later modifications/cancellations/upgrades changed a current-state value, or none>
@@ -220,11 +222,22 @@ fields:
         set, Candidate C1 should say to communicate both scopes with explicit labels rather than
         choosing only the narrower scope. Keep this domain-agnostic; do not mention dataset names,
         fixed IDs, exact amounts, or task-specific values in the reusable lesson.
+      - Words such as "other", "remaining", "those", "the rest", "其他", "剩余", or similar
+        relative references are not explicit exclusions by themselves when the user is also
+        discussing writes. Treat them as ambiguous unless the user independently says in their own
+        words to exclude a named object/semantic role, such as "except/excluding X". Do not write
+        `Scope ambiguity: none` for that situation.
       - If the expected answer/list/count/summary/value differs from a similar value the agent
         communicated, do not call it a simple omission until you diagnose the difference as
         `scope_substitution`, `calculation_error`, `wrong_source_field`, or true `omitted`.
         A later-write/current-state aggregate replacing an earlier request-time aggregate is
         `scope_substitution`.
+      - For money, total cost, paid amount, balance, refund, or other aggregate value requests,
+        identify the canonical source field before deriving from line items. If retrieved records
+        include explicit total/paid/charged/payment/order amount fields, prefer those fields for
+        user-visible "total cost" answers and use line-item sums only as a fallback or cross-check.
+        If the agent used line-item derivation while a canonical total/payment field was available
+        and the values differ, diagnose `wrong_source_field`, not just `calculation_error`.
       - Do not exclude records from a request-time information/aggregate/list/summary/value
         solely because they are later modified, canceled, upgraded, consumed, split, or otherwise
         changed. Exclude them only when the user's own wording explicitly excludes that semantic
@@ -254,10 +267,17 @@ fields:
         `Derivation`, and `Later write effect`. The freeze point must be when the user asked
         for the aggregate/list/summary, not after later writes. If multiple runtime scopes are
         plausible, fill `Ambiguous alternate scopes` with explicit labels for each scope.
+      - For total-cost/paid-amount style values, `Source field` must say whether the value comes
+        from canonical total/paid/charged/payment fields or from a line-item derivation. When both
+        exist, Candidate C1 should instruct the future agent to prefer the canonical total field
+        and cross-check any derivation.
       - If `Communication/Value Diagnosis.Difference type` is `scope_substitution`, Candidate C1
         must name the substituted scope and the preserved request-time scope. Do not write
         `Scope ambiguity: none` or `Ambiguous alternate scopes: none` when trajectory evidence
         shows both an original/request-time scope and a later post-action/current scope.
+      - If `Communication/Value Diagnosis.Difference type` is `wrong_source_field`, Candidate C1
+        must name the expected canonical source field, the incorrect field/derivation used, and
+        the future source-selection rule that would prevent recurrence.
       - `Runtime Facts` may contain `db_check`, `action_checks`, and `communicate_checks` for OV
         parsing. Do not put those control-plane terms inside Candidate C1, `Repair principle`, or
         `Runtime experience content`.

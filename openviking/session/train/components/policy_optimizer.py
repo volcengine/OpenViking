@@ -202,7 +202,11 @@ class PatchMergePolicyOptimizer:
                     instruction=instruction,
                 )
             )
-            return PostValidationRetryDecision(retry=True, instruction=instruction)
+            return PostValidationRetryDecision(
+                retry=True,
+                instruction=instruction,
+                include_latest_draft=True,
+            )
 
         orchestrator = ExtractLoop(
             vlm=vlm,

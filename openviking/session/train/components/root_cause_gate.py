@@ -126,8 +126,9 @@ class RootCauseGate:
                     "The prior trajectory draft could not be accepted because the root-cause "
                     "quality was not verified. Re-diagnose the earliest preventable boundary, "
                     "visible runtime source binding, object/value scope semantics, mutation/read "
-                    "scope separation, later-write scope substitution, injectability, preserve "
-                    "rules, and tempting wrong-scope or over-broad repairs."
+                    "scope separation, later-write scope substitution, canonical value source "
+                    "fields, injectability, preserve rules, and tempting wrong-scope or "
+                    "over-broad repairs."
                 ),
             )
         return verdict
@@ -184,9 +185,9 @@ def _default_followup_message() -> str:
         "Your previous trajectory extraction did not identify a sufficient reusable root cause. "
         "Re-diagnose the earliest preventable boundary, visible runtime source binding, "
         "object/value scope semantics, mutation/read scope separation, injectability, preserve "
-        "rules, later-write scope substitution, and tempting wrong-scope or over-broad repairs. "
-        "Do not merely improve wording; find the narrow runtime rule that would change the "
-        "future agent behavior."
+        "rules, later-write scope substitution, canonical value source fields, and tempting "
+        "wrong-scope or over-broad repairs. Do not merely improve wording; find the narrow "
+        "runtime rule that would change the future agent behavior."
     )
 
 

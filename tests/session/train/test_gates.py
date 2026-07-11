@@ -208,6 +208,7 @@ def test_default_policy_gate_runner_uses_deterministic_experience_gates_only():
     assert "Existing target experience=none only means" in contract
     assert "not a temporal" in contract
     assert "request-time scope" in contract
+    assert "canonical runtime value field" in contract
     assert "Action is create/update" not in contract
     assert "Candidate-shape trigger" not in contract
     assert "Update safety" not in contract
@@ -625,6 +626,7 @@ async def test_experience_root_cause_prevention_gate_allows_preventive_experienc
     assert "agent-proposed expansion" in prompt
     assert "later modified, canceled, upgraded" in prompt
     assert "temporal non-applicability" in prompt
+    assert "canonical total/payment field" in prompt
 
 
 @pytest.mark.asyncio

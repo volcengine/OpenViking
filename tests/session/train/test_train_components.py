@@ -22,6 +22,7 @@ from openviking.session.train import (
     PatchSemanticGradient,
     PolicyUpdatePlan,
 )
+from openviking.session.train.gates import ExperienceSkillReadabilityGate, GateRunner
 
 DEFAULT_TRIGGER_CODE = (
     'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "test_tool"\n'
@@ -990,6 +991,111 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
     assert captured["constructed"] is True
     assert plan.metadata["patch_gradient_count"] == 1
     assert plan.items[0].after_content == "merged update"
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_instruction_requires_skill_experience_sections(monkeypatch):
+    from openviking.session.memory.dataclass import ResolvedOperations
+
+    policy_set = _experience_set()
+    gradient = _patch_gradient(
+        uri=policy_set.policies[0].uri,
+        before="content",
+        after="## Situation\n- Applies when: test.\n",
+    )
+    captured = {}
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            provider = captured["context_provider"]
+            captured["instruction"] = provider.instruction()
+            return ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[]), []
+
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
+
+    await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+        [gradient],
+        policy_set,
+        PatchMergePolicyOptimizerContext(request_context=fake_request_context()),
+    )
+
+    assert (
+        "put the full runtime-facing Markdown in the `constraint` field" in captured["instruction"]
+    )
+    assert "`## Situation`, `## Reminder`, `## Procedure`, and" in captured["instruction"]
+    assert "canonical value/source-field" in captured["instruction"]
+
+
+@pytest.mark.asyncio
+async def test_patch_merge_post_plan_retry_includes_latest_draft(monkeypatch):
+    from openviking.session.memory.dataclass import (
+        ResolvedOperation,
+        ResolvedOperations,
+    )
+
+    policy_set = _experience_set()
+    root = policy_set.root_uri
+    gradient = _patch_gradient(
+        name="bad_experience",
+        uri=f"{root}/bad_experience.md",
+        before=None,
+        after="# bad_experience\n\n## 规则\n1. incomplete production reminder",
+    )
+    captured = {}
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def run(self):
+            operations = ResolvedOperations(
+                upsert_operations=[
+                    ResolvedOperation(
+                        old_memory_file_content=None,
+                        memory_fields={
+                            "experience_name": "bad_experience",
+                            "content": "# bad_experience\n\n## 规则\n1. incomplete production reminder",
+                        },
+                        memory_type="experiences",
+                        uris=[f"{root}/bad_experience.md"],
+                    )
+                ],
+                delete_file_contents=[],
+                errors=[],
+            )
+            decision = await captured["post_validation_hook"](
+                operations,
+                0,
+                messages=[{"role": "user", "content": "merge"}],
+                latest_draft=operations,
+            )
+            captured["decision"] = decision
+            return ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[]), []
+
+    monkeypatch.setattr(
+        "openviking.session.train.components.policy_optimizer.ExtractLoop", FakeExtractLoop
+    )
+
+    await PatchMergePolicyOptimizer(viking_fs=FakeVikingFS({}), vlm=object()).plan(
+        [gradient],
+        policy_set,
+        PatchMergePolicyOptimizerContext(
+            request_context=fake_request_context(),
+            gate_runner=GateRunner([ExperienceSkillReadabilityGate()]),
+        ),
+    )
+
+    assert captured["decision"].retry is True
+    assert captured["decision"].include_latest_draft is True
+    assert (
+        "Put the complete four-section Markdown body in the `constraint` field"
+        in captured["decision"].instruction
+    )
 
 
 def test_experience_memory_schema_is_skill_readable_without_trigger_fields():

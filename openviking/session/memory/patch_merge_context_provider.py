@@ -147,6 +147,14 @@ equivalent directories across singular/plural, synonym, or language/script
 variants. For new segments, use singular snake_case for English and one concise
 canonical term for Chinese; e.g. book not books, 书籍 not 书/图书. If a loser URI
 is an existing file, put it in delete_ids; if it is only a new proposal, omit it.
+
+When merging `experiences`, every upsert must keep the skill-loader format:
+put the full runtime-facing Markdown in the `constraint` field, with exactly
+these top-level sections: `## Situation`, `## Reminder`, `## Procedure`, and
+`## Anti-pattern`. Do not output only a production reminder such as
+`# name` plus `## 规则`; convert that content into the four sections. Preserve
+source-binding, applicability, scope ambiguity, canonical value/source-field
+rules, and anti-patterns from the strongest patches.
 """
 
     def get_tools(self) -> list[str]:

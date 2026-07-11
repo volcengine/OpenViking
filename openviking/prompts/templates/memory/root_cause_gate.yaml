@@ -36,10 +36,16 @@ system_prompt: |
   scope decision:
   - What exact user wording created the object/value obligation?
   - What scope or value did the agent implicitly choose?
+  - Did the draft incorrectly treat relative wording such as "other",
+    "remaining", "those", "其他", or "剩余" as an explicit exclusion even though
+    the user did not say "except/excluding X"?
   - Did a later write/current-state/remaining scope replace an earlier
     request-time scope?
   - Were records excluded only because they were later modified, canceled,
     upgraded, consumed, split, or otherwise changed?
+  - For money/total-cost/paid/refund/balance values, did the draft identify the
+    canonical source field (explicit total/paid/charged/order/payment amount)
+    rather than defaulting to a reconstructed line-item sum?
   - What runtime evidence made that choice justified or unjustified?
   - Was there another plausible interpretation that would have avoided the
     failure?
@@ -55,7 +61,9 @@ system_prompt: |
   behavior. Also fail when the Runtime experience content would make the next
   agent answer only a post-action/current/remaining subset while omitting an
   earlier requested aggregate, or when it says scope ambiguity is none despite
-  evidence for both request-time and post-action scopes.
+  evidence for both request-time and post-action scopes. Also fail when a
+  monetary/value repair would keep using the wrong source field even though the
+  retrieved record exposes a canonical total/paid/charged/payment amount field.
 
   Return JSON only.
 user_prompt: |
@@ -81,7 +89,7 @@ user_prompt: |
   {
     "pass": false,
     "need_followup": true,
-    "root_cause_quality": "<surface_level|too_late_boundary|wrong_scope|missing_scope_freeze|missing_scope_separation|later_write_scope_substitution|implicit_later_write_exclusion|missing_source_binding|missing_causal_link|not_injectable|over_broad|unsafe_runtime_wording|unclear>",
+    "root_cause_quality": "<surface_level|too_late_boundary|wrong_scope|missing_scope_freeze|missing_scope_separation|later_write_scope_substitution|implicit_later_write_exclusion|wrong_source_field|missing_source_binding|missing_causal_link|not_injectable|over_broad|unsafe_runtime_wording|unclear>",
     "reason": "<brief diagnosis of the deepest missing causal link>",
     "followup_message": "<one concise diagnostic follow-up asking the extractor to re-diagnose the missing prevention link>"
   }
@@ -94,6 +102,8 @@ user_prompt: |
   - a later-write/current-state scope is replacing an earlier request-time
     aggregate/list/value scope;
   - later-modified records are being excluded without explicit user wording;
+  - a monetary/value answer is derived from the wrong field instead of a
+    canonical total/paid/charged/payment amount source;
   - the proposed experience does not say what future behavior would change;
   - the draft cannot explain why that changed behavior would make the next
     similar session succeed;
