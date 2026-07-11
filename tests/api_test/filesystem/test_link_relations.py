@@ -1,29 +1,30 @@
 import json
+import uuid
 
 
 class TestLinkRelations:
     def test_link_relations_unlink(self, api_client):
+        random_id = uuid.uuid4().hex[:8]
+        file1 = f"viking://resources/test-link-src-{random_id}"
+        file2 = f"viking://resources/test-link-dst-{random_id}"
         try:
-            response = api_client.fs_ls("viking://")
-            print(f"\nList root directory API status code: {response.status_code}")
+            response = api_client.fs_mkdir(file1)
+            print(f"\nCreate relation source API status code: {response.status_code}")
             assert response.status_code == 200, (
-                f"Failed to list root directory: {response.status_code}"
+                f"Failed to create relation source: {response.status_code}"
             )
-
             data = response.json()
             assert data.get("status") == "ok", f"Expected status 'ok', got {data.get('status')}"
             assert data.get("error") is None, f"Expected error to be null, got {data.get('error')}"
 
-            result = data.get("result", [])
-            assert len(result) >= 2, (
-                f"Not enough files in root directory to test link/relations/unlink, found {len(result)} files"
+            response = api_client.fs_mkdir(file2)
+            print(f"\nCreate relation target API status code: {response.status_code}")
+            assert response.status_code == 200, (
+                f"Failed to create relation target: {response.status_code}"
             )
-
-            file1 = result[0].get("uri")
-            file2 = result[1].get("uri")
-
-            assert file1 is not None, "First file URI should not be None"
-            assert file2 is not None, "Second file URI should not be None"
+            data = response.json()
+            assert data.get("status") == "ok", f"Expected status 'ok', got {data.get('status')}"
+            assert data.get("error") is None, f"Expected error to be null, got {data.get('error')}"
 
             response = api_client.link(file1, [file2], "Test link")
             print(f"\nLink API status code: {response.status_code}")
@@ -61,3 +62,6 @@ class TestLinkRelations:
         except Exception as e:
             print(f"Error: {e}")
             raise
+        finally:
+            api_client.fs_rm(file1, recursive=True)
+            api_client.fs_rm(file2, recursive=True)

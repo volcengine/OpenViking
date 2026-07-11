@@ -27,6 +27,8 @@ def test_context_type_for_uri_uses_path_segments():
     assert context_type_for_uri("viking://user/memories/entities/m1.md") == "memory"
     assert context_type_for_uri("viking://user/alice/skills/demo") == "skill"
     assert context_type_for_uri("viking://user/skills/demo") == "skill"
+    assert context_type_for_uri("viking://agent/skills") == "skill"
+    assert context_type_for_uri("viking://agent/skills/demo") == "skill"
     assert (
         context_type_for_uri(
             "viking://user/support_bot/peers/web-visitor-alice/memories/profile.md"

@@ -56,3 +56,49 @@ async def test_initialize_user_directories_creates_root_and_first_level_only():
 
     assert second_count == 0
     assert set(viking_fs.contexts) == expected_uris
+
+
+@pytest.mark.asyncio
+async def test_initialize_account_directories_creates_agent_shared_roots():
+    vikingdb = _FakeVikingDB()
+    viking_fs = _FakeVikingFS()
+    initializer = DirectoryInitializer(vikingdb, viking_fs=viking_fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
+
+    count = await initializer.initialize_account_directories(ctx)
+
+    expected_uris = {
+        "viking://resources",
+        *(f"viking://agent/{child.path}" for child in PRESET_DIRECTORIES["agent"].children),
+    }
+    assert count == len(expected_uris)
+    assert set(viking_fs.contexts) == expected_uris
+    assert "viking://agent/skills" in viking_fs.contexts
+    assert "viking://agent/endpoints" not in viking_fs.contexts
+    assert "viking://agent/tools" not in viking_fs.contexts
+    assert "viking://agent/payments" not in viking_fs.contexts
+
+    second_count = await initializer.initialize_account_directories(ctx)
+
+    assert second_count == 0
+    assert set(viking_fs.contexts) == expected_uris
+
+
+@pytest.mark.asyncio
+async def test_initialize_agent_directories_creates_only_agent_shared_roots():
+    vikingdb = _FakeVikingDB()
+    viking_fs = _FakeVikingFS()
+    initializer = DirectoryInitializer(vikingdb, viking_fs=viking_fs)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
+
+    count = await initializer.initialize_agent_directories(ctx)
+
+    expected_uris = {
+        *(f"viking://agent/{child.path}" for child in PRESET_DIRECTORIES["agent"].children),
+    }
+    assert count == len(expected_uris)
+    assert set(viking_fs.contexts) == expected_uris
+    assert "viking://agent/skills" in viking_fs.contexts
+    assert "viking://agent/endpoints" not in viking_fs.contexts
+    assert "viking://agent/tools" not in viking_fs.contexts
+    assert "viking://agent/payments" not in viking_fs.contexts

@@ -138,6 +138,18 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
         overview="Globally shared resource storage, organized by project/topic. "
         "No preset subdirectory structure, users create project directories as needed.",
     ),
+    "agent": DirectoryDefinition(
+        path="",
+        abstract="Agent scope. Account-shared agent capabilities and configuration.",
+        overview="Use this directory for account-shared agent capability definitions and runtime configuration.",
+        children=[
+            DirectoryDefinition(
+                path="skills",
+                abstract="Shared agent skill registry. Stores callable skill definitions available account-wide.",
+                overview="Access when agents need shared skills that are not owned by a single user.",
+            ),
+        ],
+    ),
 }
 
 
@@ -167,20 +179,16 @@ class DirectoryInitializer:
         by ``initialize_user_directories``.
         """
         count = 0
-        scope_roots = {
-            "resources": PRESET_DIRECTORIES["resources"],
-        }
-        for scope, defn in scope_roots.items():
-            root_uri = f"viking://{scope}"
-            created = await self._ensure_directory(
-                uri=root_uri,
-                parent_uri=None,
-                defn=defn,
-                scope=scope,
-                ctx=ctx,
-            )
-            if created:
-                count += 1
+        resources_root = PRESET_DIRECTORIES["resources"]
+        if await self._ensure_directory(
+            uri="viking://resources",
+            parent_uri=None,
+            defn=resources_root,
+            scope="resources",
+            ctx=ctx,
+        ):
+            count += 1
+        count += await self.initialize_agent_directories(ctx)
         return count
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
@@ -219,8 +227,13 @@ class DirectoryInitializer:
         return count
 
     async def initialize_agent_directories(self, ctx: RequestContext) -> int:
-        """Deprecated compatibility hook; agent directories are no longer initialized."""
-        return 0
+        """Initialize account-shared agent capability roots."""
+        if "agent" not in PRESET_DIRECTORIES:
+            return 0
+        agent_tree = PRESET_DIRECTORIES["agent"]
+        return await self._initialize_children(
+            "agent", agent_tree.children, "viking://agent", ctx=ctx
+        )
 
     async def _ensure_container_directory(
         self,
