@@ -65,7 +65,7 @@ export function normalizeEndpoint(endpoint) {
 }
 
 export function effectivePeerId(config) {
-  return String(config.peerId || "").trim() || null
+  return String(config.effectivePeer?.peerId || config.peerId || "").trim() || null
 }
 
 export async function fetchJSON(config, endpoint, init = {}, options = {}) {

@@ -11,6 +11,14 @@
   "resumeContextBudget": 32000,
   "commitTokenThreshold": 20000,
   "commitKeepRecentCount": 10,
+  "takeover": {
+    "enabled": true,
+    "tokenThreshold": 30000,
+    "keepRecentTurns": 3,
+    "overviewBudget": 3000,
+    "overviewPollMs": 2000,
+    "overviewPollMax": 15
+  },
   "captureToolResults": false,
   "captureMode": "semantic",
   "captureMaxLength": 24000,

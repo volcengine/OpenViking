@@ -135,9 +135,23 @@ Create `~/.config/opencode/openviking-config.json`:
 API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty
 when using API-key mode with user/admin API keys.
-`peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource
-requests; captured session messages store it as body `peer_id`. Configure
-`peerId` explicitly when peer-scoped memory routing is needed.
+By default the plugin derives a peer from the project directory using Claude's
+project-directory naming rule: every non-letter-or-digit character becomes `-`,
+with no path normalization. For example, `/Users/x/Dev/OpenViking` becomes
+`-Users-x-Dev-OpenViking`. Data-plane memory/resource requests send the
+effective peer as `X-OpenViking-Actor-Peer`; captured session messages store it
+as body `peer_id`. Configure `peerId` or `OPENVIKING_PEER_ID` to override the
+workspace-derived peer, or set `workspacePeer=false` /
+`OPENVIKING_WORKSPACE_PEER=0` to turn workspace-derived peers off.
+
+Recall defaults to the broad mode: global memory, the current workspace, and
+other workspace memories can all be recalled, with other workspaces penalized
+and rendered later. Set `recallPeerScope="actor"` or
+`OPENVIKING_RECALL_PEER_SCOPE=actor` for the isolation mode, which only sees
+global memory plus the current workspace. In deployments where one bot serves
+multiple real people, such as zouk, vikingbot, or AstrBot, use the isolation mode
+with an explicit actor peer so one person's memories are not recalled into
+another person's session.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`,
 and `OPENVIKING_PEER_ID` take precedence over values in this file.

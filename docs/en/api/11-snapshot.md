@@ -24,10 +24,10 @@ In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/
 
 ## Implementation
 
-- HTTP routes: [snapshot.py](file:///cloudide/workspace/OpenViking/openviking/server/routers/snapshot.py), prefix `/api/v1/snapshot`.
-- SDK namespace: [snapshot_namespace.py](file:///cloudide/workspace/OpenViking/openviking/snapshot_namespace.py), exposed as `client.snapshot.*`.
-- Underlying semantics: `commit` / `restore` / `show` / `log` in [viking_fs.py](file:///cloudide/workspace/OpenViking/openviking/storage/viking_fs.py).
-- CLI: the `SnapshotCmd` in [main.rs](file:///cloudide/workspace/OpenViking/crates/ov_cli/src/main.rs), subcommands in [snapshot.rs](file:///cloudide/workspace/OpenViking/crates/ov_cli/src/commands/snapshot.rs).
+- HTTP routes: [snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py), prefix `/api/v1/snapshot`.
+- SDK namespace: [snapshot_namespace.py](https://github.com/volcengine/OpenViking/blob/main/openviking/snapshot_namespace.py), exposed as `client.snapshot.*`.
+- Underlying semantics: `commit` / `restore` / `show` / `log` in [viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py).
+- CLI: the `SnapshotCmd` in [main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs), subcommands in [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs).
 
 ## API Reference
 
@@ -544,7 +544,7 @@ client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], messag
 client.close()
 ```
 
-For more end-to-end examples, see the [examples/snapshot/](file:///cloudide/workspace/OpenViking/examples/snapshot) directory in the repository, covering the SDK, HTTP, and CLI surfaces.
+For more end-to-end examples, see the [examples/snapshot/](https://github.com/volcengine/OpenViking/tree/main/examples/snapshot) directory in the repository, covering the SDK, HTTP, and CLI surfaces.
 
 ## Error Handling
 

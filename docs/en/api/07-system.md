@@ -611,7 +611,6 @@ Get queue system status (embedding and semantic processing queues). Shows pendin
 - `openviking/server/routers/observer.py:observer_queue` - HTTP route
 - `openviking/service/debug_service.py:ObserverService.queue` - Core implementation
 - `openviking/storage/observers/queue_observer.py` - Queue observer
-- `crates/ov_cli/src/commands/observer.rs` - CLI command
 
 #### 2. Interface and Parameters
 
@@ -861,11 +860,7 @@ curl -X GET http://localhost:1933/api/v1/observer/lock \
 print(client.observer.lock)
 ```
 
-**CLI**
-
-```bash
-ov observer transaction
-```
+The CLI does not currently expose a lock-specific observer subcommand. Use the HTTP API or Python SDK for this component; `ov observer system` includes it in the aggregate status.
 
 **Response Example**
 

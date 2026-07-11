@@ -102,8 +102,9 @@ impl CliContext {
             self.config.effective_actor_peer_id(),
             timeout_secs.unwrap_or(self.config.timeout),
             self.profile.unwrap_or(self.config.profile),
-            self.config.extra_headers.clone(),
+            self.config.effective_extra_headers(),
         )
+        .with_gateway_token(self.config.effective_gateway_token())
     }
 }
 
@@ -367,7 +368,12 @@ enum Commands {
         #[arg(long, value_name = "seconds", help_heading = "Common options")]
         timeout: Option<f64>,
         /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
-        #[arg(short = 'p', long = "parent-auto-create", value_name = "uri", help_heading = "Skill options")]
+        #[arg(
+            short = 'p',
+            long = "parent-auto-create",
+            value_name = "uri",
+            help_heading = "Skill options"
+        )]
         parent: Option<String>,
         #[command(flatten)]
         upload_options: UploadCliOptions,
@@ -580,7 +586,14 @@ enum Commands {
     Find {
         /// Search query
         #[arg(value_name = "query")]
-        query: String,
+        query: Option<String>,
+        /// Image query: local path, data URI, HTTP URL, or viking:// URI
+        #[arg(
+            long = "image",
+            value_name = "path|uri",
+            help_heading = "Common options"
+        )]
+        image: Option<String>,
         /// Target URI
         #[arg(
             short,
@@ -638,7 +651,14 @@ enum Commands {
     Search {
         /// Search query
         #[arg(value_name = "query")]
-        query: String,
+        query: Option<String>,
+        /// Image query: local path, data URI, HTTP URL, or viking:// URI
+        #[arg(
+            long = "image",
+            value_name = "path|uri",
+            help_heading = "Common options"
+        )]
+        image: Option<String>,
         /// Target URI
         #[arg(
             short,
@@ -3014,11 +3034,11 @@ async fn main() {
         } => {
             let session_id = session.or_else(|| config::get_or_create_machine_id().ok());
             let endpoint = if let Ok(env_endpoint) = std::env::var("VIKINGBOT_ENDPOINT") {
-                env_endpoint
+                Some(env_endpoint)
             } else if let Ok(config_url) = std::env::var("OPENVIKING_URL") {
-                format!("{}/bot/v1", config_url)
+                Some(format!("{}/bot/v1", config_url))
             } else {
-                format!("{}/bot/v1", ctx.config.url)
+                None
             };
             let api_key = std::env::var("VIKINGBOT_API_KEY").ok();
             let cmd = commands::chat::ChatCommand {
@@ -3026,6 +3046,7 @@ async fn main() {
                 api_key,
                 account: ctx.config.account.clone(),
                 user: ctx.config.user.clone(),
+                actor_peer_id: ctx.config.effective_actor_peer_id(),
                 session: session_id,
                 sender,
                 message,
@@ -3096,6 +3117,7 @@ async fn main() {
         Commands::Get { uri, local_path } => handlers::handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
+            image,
             uri,
             node_limit,
             threshold,
@@ -3108,6 +3130,7 @@ async fn main() {
             handlers::handle_find(
                 query,
                 uri,
+                image,
                 node_limit,
                 threshold,
                 after,
@@ -3121,6 +3144,7 @@ async fn main() {
         }
         Commands::Search {
             query,
+            image,
             uri,
             session_id,
             node_limit,
@@ -3134,6 +3158,7 @@ async fn main() {
             handlers::handle_search(
                 query,
                 uri,
+                image,
                 session_id,
                 node_limit,
                 threshold,
@@ -3238,6 +3263,20 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_find_image_without_query() {
+        let cli = Cli::try_parse_from(["ov", "find", "--image", "cat.png"])
+            .expect("find image should parse");
+
+        match cli.command {
+            Commands::Find { query, image, .. } => {
+                assert_eq!(query, None);
+                assert_eq!(image.as_deref(), Some("cat.png"));
+            }
+            _ => panic!("expected find command"),
+        }
+    }
+
+    #[test]
     fn cli_parses_admin_migrate_cleanup_flag() {
         let migrate = Cli::try_parse_from(["ov", "--sudo", "admin", "migrate"])
             .expect("admin migrate should parse");
@@ -3270,6 +3309,20 @@ mod tests {
         match cli.command {
             Commands::Search { context_type, .. } => {
                 assert_eq!(context_type, Some(vec!["skill".to_string()]));
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_search_image_with_query() {
+        let cli = Cli::try_parse_from(["ov", "search", "poster", "--image", "viking://x.png"])
+            .expect("search image should parse");
+
+        match cli.command {
+            Commands::Search { query, image, .. } => {
+                assert_eq!(query.as_deref(), Some("poster"));
+                assert_eq!(image.as_deref(), Some("viking://x.png"));
             }
             _ => panic!("expected search command"),
         }
@@ -3859,9 +3912,10 @@ mod tests {
             .expect("skills remove --yes should parse");
         match remove.command {
             Commands::Skills {
-                action: SkillCommands::Remove {
-                    skills, yes, all, ..
-                },
+                action:
+                    SkillCommands::Remove {
+                        skills, yes, all, ..
+                    },
             } => {
                 assert_eq!(skills, vec!["foo", "bar"]);
                 assert!(yes);
@@ -4274,6 +4328,7 @@ mod tests {
             upload: Default::default(),
             extra_headers: None,
             profile: false,
+            gateway_token: None,
         };
 
         let ctx = CliContext::from_config(
@@ -4313,6 +4368,7 @@ mod tests {
             upload: Default::default(),
             extra_headers: None,
             profile: false,
+            gateway_token: None,
         };
 
         let ctx = CliContext::from_config(
@@ -4350,6 +4406,7 @@ mod tests {
             profile: false,
             upload: Default::default(),
             extra_headers: None,
+            gateway_token: None,
         };
 
         // Without sudo: use api_key

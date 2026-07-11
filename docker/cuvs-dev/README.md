@@ -2,9 +2,9 @@
 
 This lightweight image contains cuVS, CuPy, the OpenViking local VectorDB
 native engine, and the minimal Python dependencies needed by the cuVS smoke
-and integration tests. It deliberately excludes the server, bot, Web UI, and
-unrelated ingestion dependencies. It does not encode any cluster-specific
-configuration.
+and vector benchmark harnesses. It deliberately excludes the full server,
+bot, Web UI, and unrelated ingestion dependencies. It does not encode any
+cluster-specific configuration.
 
 Build it from the repository root:
 
@@ -40,6 +40,9 @@ Exercise CAGRA with the same image:
 docker run --rm --gpus all openviking-cuvs:dev \
   python /opt/openviking-cuvs/cuvs_smoke.py --algorithm cagra
 ```
+
+Append `--dtype float16` to either smoke command to exercise the opt-in
+lower-precision dataset and query path.
 
 For Python-only iteration, mount a worktree and point
 `OPENVIKING_SOURCE_DIR` at it. The entrypoint copies the prebuilt native

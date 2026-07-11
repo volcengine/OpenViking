@@ -38,7 +38,13 @@ METRIC_PATHS = {
     "gpu_used_delta_bytes": ("gpu_used_delta_bytes",),
 }
 
-BACKEND_ORDER = {"native": 0, "cuvs_brute_force": 1, "cuvs_cagra": 2}
+BACKEND_ORDER = {
+    "native": 0,
+    "cuvs_brute_force": 1,
+    "cuvs_brute_force_fp16": 2,
+    "cuvs_cagra": 3,
+    "cuvs_cagra_fp16": 4,
+}
 
 
 def canonical(value: Any) -> str:

@@ -292,12 +292,121 @@ class TestRenderLinks:
         )
         assert result == "她喜欢[角色扮演游戏](entities/games/rpg.md)，也喜欢开放世界游戏。"
 
+    def test_skip_match_inside_existing_link(self):
+        content = "Worked with [Frank Ocean](../../../../entities/personal/frank.md)."
+        links = [
+            {
+                "from_uri": "viking://user/Calvin/memories/profile.md",
+                "to_uri": "viking://user/Calvin/memories/entities/personal/frank.md",
+                "weight": 1.0,
+                "match_text": "Frank",
+            }
+        ]
+        result = LinkRenderer.render_links(
+            content,
+            "viking://user/Calvin/memories/profile.md",
+            links,
+        )
+        assert result == content
+
+    def test_skip_match_inside_existing_link_with_space_in_target(self):
+        # Reviewer feedback: existing links with literal spaces in their target
+        # (e.g. `[Frank Ocean](entities/frank ocean.md)`) must still be detected
+        # as an existing link span so the match inside is not double-wrapped.
+        content = "Worked with [Frank Ocean](entities/frank ocean.md)."
+        links = [
+            {
+                "from_uri": "viking://user/Calvin/memories/profile.md",
+                "to_uri": "viking://user/Calvin/memories/entities/personal/frank ocean.md",
+                "weight": 1.0,
+                "match_text": "Frank",
+            }
+        ]
+        result = LinkRenderer.render_links(
+            content,
+            "viking://user/Calvin/memories/profile.md",
+            links,
+        )
+        assert result == content
+
+    def test_render_link_with_space_in_target_is_percent_encoded(self):
+        # Generated links should escape spaces in their target so the markdown
+        # link is portable across renderers. We always emit `%20`, while still
+        # accepting the literal-space form when matching existing links.
+        content = "Saw Frank Ocean last night."
+        links = [
+            {
+                "from_uri": "viking://user/Calvin/memories/events/2023/08/22/collab.md",
+                "to_uri": "viking://user/Calvin/memories/entities/personal/frank ocean.md",
+                "weight": 1.0,
+                "match_text": "Frank Ocean",
+            }
+        ]
+        result = LinkRenderer.render_links(
+            content,
+            "viking://user/Calvin/memories/events/2023/08/22/collab.md",
+            links,
+        )
+        assert (
+            result
+            == "Saw [Frank Ocean](../../../../entities/personal/frank%20ocean.md) last night."
+        )
+
+    def test_render_link_with_percent_encoded_target_does_not_double_wrap(self):
+        # An existing link with a `%20`-encoded target is also recognized as an
+        # existing link span (since the regex matches any non-`)` chars).
+        content = "Worked with [Frank Ocean](entities/frank%20ocean.md)."
+        links = [
+            {
+                "from_uri": "viking://user/Calvin/memories/profile.md",
+                "to_uri": "viking://user/Calvin/memories/entities/personal/frank ocean.md",
+                "weight": 1.0,
+                "match_text": "Frank",
+            }
+        ]
+        result = LinkRenderer.render_links(
+            content,
+            "viking://user/Calvin/memories/profile.md",
+            links,
+        )
+        assert result == content
+
+    def test_use_later_unlinked_match_when_first_match_is_already_linked(self):
+        content = "[Frank Ocean](../../../../entities/personal/frank.md) performed. Frank stayed."
+        links = [
+            {
+                "from_uri": "viking://user/Calvin/memories/profile.md",
+                "to_uri": "viking://user/Calvin/memories/entities/personal/frank.md",
+                "weight": 1.0,
+                "match_text": "Frank",
+            }
+        ]
+        result = LinkRenderer.render_links(
+            content,
+            "viking://user/Calvin/memories/profile.md",
+            links,
+        )
+        assert (
+            result == "[Frank Ocean](../../../../entities/personal/frank.md) performed. "
+            "[Frank](entities/personal/frank.md) stayed."
+        )
+
 
 class TestStripLinks:
     def test_strip_relative_link(self):
         content = "See [support](../entities/groups/lgbtq_support_group.md) for details."
         result = LinkRenderer.strip_links(content)
         assert result == "See support for details."
+
+    def test_strip_relative_link_with_space_in_target(self):
+        content = "See [Frank Ocean](entities/frank ocean.md) for details."
+        result = LinkRenderer.strip_links(content)
+        assert result == "See Frank Ocean for details."
+
+    def test_strip_relative_link_with_percent_encoded_target(self):
+        content = "See [Frank Ocean](entities/frank%20ocean.md) for details."
+        result = LinkRenderer.strip_links(content)
+        assert result == "See Frank Ocean for details."
 
     def test_keep_absolute_link(self):
         content = "Visit [docs](https://example.com/docs) for more."
@@ -387,6 +496,52 @@ class TestRoundTrip:
         )
         stripped = LinkRenderer.strip_links(rendered)
         assert stripped == original
+
+    def test_render_then_strip_with_space_in_target(self):
+        # End-to-end round-trip: a generated link whose target has spaces
+        # (encoded as `%20`) should still strip back to the original text.
+        original = "Saw Frank Ocean last night."
+        links = [
+            {
+                "from_uri": "viking://user/Calvin/memories/events/2023/08/22/collab.md",
+                "to_uri": "viking://user/Calvin/memories/entities/personal/frank ocean.md",
+                "weight": 1.0,
+                "match_text": "Frank Ocean",
+            }
+        ]
+        rendered = LinkRenderer.render_links(
+            original,
+            "viking://user/Calvin/memories/events/2023/08/22/collab.md",
+            links,
+        )
+        stripped = LinkRenderer.strip_links(rendered)
+        assert stripped == original
+
+    def test_render_twice_with_space_in_target_does_not_nest(self):
+        # Repeated render calls must be idempotent even when an existing link
+        # already uses a literal-space target. Without the regex fix, the
+        # second render would re-wrap the inner match_text.
+        original = "Worked with [Frank Ocean](entities/frank ocean.md)."
+        links = [
+            {
+                "from_uri": "viking://user/Calvin/memories/profile.md",
+                "to_uri": "viking://user/Calvin/memories/entities/personal/frank ocean.md",
+                "weight": 1.0,
+                "match_text": "Frank",
+            }
+        ]
+        first = LinkRenderer.render_links(
+            original,
+            "viking://user/Calvin/memories/profile.md",
+            links,
+        )
+        second = LinkRenderer.render_links(
+            first,
+            "viking://user/Calvin/memories/profile.md",
+            links,
+        )
+        assert first == original
+        assert second == original
 
     def test_memory_file_plain_content_strips_markdown_links(self):
         memory_file = MemoryFile(

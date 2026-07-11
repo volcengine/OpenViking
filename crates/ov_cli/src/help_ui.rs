@@ -455,6 +455,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov find \"auth flow\" -u viking://projects/acme -L 1,2",
                 description: "Search a subtree and include overview/file results.",
             },
+            HelpItem {
+                label: "ov find --image ./query.png -u viking://resources/images",
+                description: "Search by image with a local file or image URI.",
+            },
         ],
         next_steps: &[
             HelpItem {
@@ -2818,7 +2822,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find [OPTIONS] <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] [query]"));
         assert!(rendered.contains("Examples"));
         assert!(rendered.contains("Common options"));
         assert!(rendered.contains("Next"));
@@ -2881,7 +2885,7 @@ mod tests {
         );
 
         assert!(rendered.contains("OpenViking v"));
-        assert!(rendered.contains("ov find [OPTIONS] <query>"));
+        assert!(rendered.contains("ov find [OPTIONS] [query]"));
         assert!(rendered.contains("Usage:"));
     }
 

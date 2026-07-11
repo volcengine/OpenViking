@@ -16,7 +16,7 @@ import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional, Tuple, Union
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from openviking.utils import is_github_url, is_gitlab_url, parse_code_hosting_url
 from openviking.utils.code_hosting_utils import (
@@ -337,9 +337,8 @@ class GitAccessor(DataAccessor):
                 user_msg = (
                     "Git command failed: authentication error. Check your SSH keys or credentials."
                 )
-            raise RuntimeError(
-                f"{user_msg} Command: git {' '.join(args[1:])}. Details: {error_msg}"
-            )
+            logger.warning(f"[GitAccessor] {user_msg} Details: {error_msg}")
+            raise RuntimeError(user_msg)
         return stdout.decode().strip()
 
     async def _has_commit(self, repo_dir: str, commit: str) -> bool:
@@ -376,7 +375,7 @@ class GitAccessor(DataAccessor):
             "clone",
             "--depth",
             "1",
-            "--recursive",
+            "--no-recurse-submodules",
         ]
         if branch and not commit:
             clone_args.extend(["--branch", branch])
@@ -444,10 +443,8 @@ class GitAccessor(DataAccessor):
         # Strip .git suffix for the archive URL
         repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
 
-        if branch:
-            zip_url = f"https://github.com/{owner}/{repo_slug}/archive/{branch}.zip"
-        else:
-            zip_url = f"https://github.com/{owner}/{repo_slug}/archive/HEAD.zip"
+        ref = quote(branch or "HEAD", safe="/")
+        zip_url = f"https://github.com/{owner}/{repo_slug}/archive/{ref}.zip"
 
         logger.info(f"[GitAccessor] Downloading GitHub ZIP: {zip_url}")
 

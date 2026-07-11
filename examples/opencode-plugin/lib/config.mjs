@@ -2,6 +2,7 @@ import fs from "fs"
 import path from "path"
 import { homedir } from "os"
 import { resolveOpenVikingCredentials } from "./shared/credentials.mjs"
+import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs"
 
 const DEFAULT_CONFIG = {
   endpoint: "http://127.0.0.1:1933",
@@ -9,6 +10,8 @@ const DEFAULT_CONFIG = {
   account: "",
   user: "",
   peerId: "",
+  workspacePeer: true,
+  recallPeerScope: "all",
   enabled: true,
   timeoutMs: 30000,
   runtime: {
@@ -147,6 +150,8 @@ function applyBehaviorConfig(config, fileConfig = {}) {
     "bypassSessionPatterns",
     "debug",
     "debugLogPath",
+    "workspacePeer",
+    "recallPeerScope",
   ]) {
     if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
   }
@@ -165,6 +170,10 @@ function applyEnv(config) {
   if (process.env.OPENVIKING_RECALL_TOKEN_BUDGET) config.autoRecall.tokenBudget = process.env.OPENVIKING_RECALL_TOKEN_BUDGET
   if (process.env.OPENVIKING_RECALL_PREFER_ABSTRACT !== undefined) {
     config.autoRecall.preferAbstract = envBool("OPENVIKING_RECALL_PREFER_ABSTRACT") ?? config.autoRecall.preferAbstract
+  }
+  if (process.env.OPENVIKING_RECALL_PEER_SCOPE) config.recallPeerScope = process.env.OPENVIKING_RECALL_PEER_SCOPE
+  if (process.env.OPENVIKING_WORKSPACE_PEER !== undefined) {
+    config.workspacePeer = envBool("OPENVIKING_WORKSPACE_PEER") ?? config.workspacePeer
   }
   if (process.env.OPENVIKING_MIN_QUERY_LENGTH) config.autoRecall.minQueryLength = process.env.OPENVIKING_MIN_QUERY_LENGTH
   if (process.env.OPENVIKING_AUTO_CAPTURE !== undefined) {
@@ -220,6 +229,7 @@ function normalizeConfig(config) {
   config.autoRecall.tokenBudget = Math.max(200, Math.min(50000, Math.round(Number(config.autoRecall.tokenBudget) || 2000)))
   config.autoRecall.minQueryLength = Math.max(1, Math.min(64, Math.round(Number(config.autoRecall.minQueryLength) || 3)))
   config.captureMode = config.captureMode === "keyword" ? "keyword" : "semantic"
+  config.recallPeerScope = config.recallPeerScope === "actor" ? "actor" : "all"
   config.captureMaxLength = Math.max(200, Math.min(100000, Math.round(Number(config.captureMaxLength) || 24000)))
   config.captureToolMaxChars = Math.max(200, Math.min(20000, Math.round(Number(config.captureToolMaxChars) || 2000)))
   config.commitTokenThreshold = Math.max(1000, Math.round(Number(config.commitTokenThreshold) || 20000))
@@ -262,7 +272,9 @@ export function loadConfig(pluginRoot, projectDirectory) {
   applyEnv(config)
   config.configPath = configPath
   config.legacyCredentialsUsed = legacyUsed && creds.credentialSource !== "env"
-  return normalizeConfig(config)
+  const normalized = normalizeConfig(config)
+  normalized.effectivePeer = resolveEffectivePeerId({ cfg: normalized, cwd: projectDirectory })
+  return normalized
 }
 
 export function resolveDataDir(pluginRoot, config) {

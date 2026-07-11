@@ -3401,6 +3401,7 @@ name = "ov_cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64",
  "bytes",
  "chrono",
  "clap",

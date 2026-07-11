@@ -75,17 +75,17 @@
     {
       "id": "cursor",
       "name": "Cursor",
-      "tags": ["MCP"],
+      "tags": ["Plugin", "Memory"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
-      "summary": "通过 MCP 标准协议接入，为 Cursor 提供支撑日常编码和 Agent 开发场景的上下文管理",
+      "summary": "一条命令安装 Cursor 生命周期 Hook、MCP 工具、Rules 与 Skills，实现自动记忆召回和会话捕获",
       "detailPath": "https://docs.openviking.net/agents/zh/cursor.md"
     },
     {
       "id": "trae",
       "name": "TRAE",
-      "tags": ["MCP"],
+      "tags": ["Hook", "MCP"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Trae.png",
-      "summary": "通过 MCP 标准协议接入，为 TRAE 提供支撑日常编码 和 Agent 开发场景的上下文管理，可以修改规则和命令来保证更稳定的 MCP 工具使用",
+      "summary": "通过原生 Hook 与 MCP 工具，为 TRAE 和 TRAE CN 提供 prompt 自动召回与回合捕获",
       "detailPath": "https://docs.openviking.net/agents/zh/trae.md"
     },
     {

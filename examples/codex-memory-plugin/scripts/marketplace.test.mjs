@@ -21,9 +21,14 @@ const pluginDir = resolve(scriptsDir, "..");
 const repoRoot = resolve(scriptsDir, "..", "..", "..");
 const catalogPath = join(repoRoot, ".agents", "plugins", "marketplace.json");
 const manifestPath = join(pluginDir, ".codex-plugin", "plugin.json");
+const mcpEndpointPath = join(repoRoot, "openviking", "server", "mcp_endpoint.py");
 
 const PLUGIN_NAME = "openviking-memory";
-const REAL_MCP_TOOLS = ["recall", "search", "store", "read", "list", "grep", "glob", "forget", "add_resource", "health"];
+const REAL_MCP_TOOLS = [
+  "find", "search", "recall", "read", "list", "remember", "add_resource",
+  "list_watches", "cancel_watch", "grep", "glob", "forget", "code_outline",
+  "code_search", "code_expand", "health",
+];
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
 
 function readJson(path) {
@@ -114,14 +119,11 @@ test("required plugin files are present", () => {
   }
 });
 
-test("plugin.json describes the real MCP tools, not the legacy names", () => {
+test("plugin.json does not describe legacy MCP tool names", () => {
   const manifest = readJson(manifestPath);
-  const longDesc = manifest.interface?.longDescription || "";
+  const interfaceText = JSON.stringify(manifest.interface || {});
   for (const legacy of LEGACY_TOOL_NAMES) {
-    assert.ok(!longDesc.includes(legacy), `longDescription must not reference legacy tool name "${legacy}"`);
-  }
-  for (const tool of ["recall", "search", "add_resource", "health"]) {
-    assert.ok(longDesc.includes(tool), `longDescription should mention real tool "${tool}"`);
+    assert.ok(!interfaceText.includes(legacy), `plugin interface must not reference legacy tool name "${legacy}"`);
   }
 });
 
@@ -155,7 +157,10 @@ test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {
   execFileSync("node", ["--check", join(pluginDir, "servers", "mcp-proxy.mjs")], { stdio: "pipe" });
 });
 
-test("plugin.json keeps the canonical tool list available for reference", () => {
-  // Sanity: the documented tool set is the one we assert against above.
-  assert.equal(REAL_MCP_TOOLS.length, 10);
+test("canonical MCP tool list matches server registrations", () => {
+  const source = readFileSync(mcpEndpointPath, "utf-8");
+  const registered = [
+    ...source.matchAll(/@mcp\.tool\((?:name="([a-z_]+)")?\)\s*\nasync def ([a-z_]+)\(/g),
+  ].map((match) => match[1] || match[2]);
+  assert.deepEqual(registered, REAL_MCP_TOOLS);
 });

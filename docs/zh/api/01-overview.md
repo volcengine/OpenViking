@@ -106,6 +106,31 @@ Go SDK 发送的身份请求头与 Python HTTP client 一致：
 
 Go SDK 不支持 Python embedded 模式，也不保留旧 `agent_id` 兼容路径。更多示例见 [`sdk/go/README_CN.md`](../../../sdk/go/README_CN.md)。
 
+#### JavaScript/TypeScript SDK 客户端
+
+JavaScript/TypeScript SDK 是面向 Node.js 18+ 和现代浏览器的 HTTP-only 客户端，
+同时发布 ESM、CommonJS 和 TypeScript 类型声明。
+
+```bash
+npm install @openviking/sdk
+```
+
+```ts
+import { OpenVikingClient } from "@openviking/sdk";
+
+const client = new OpenVikingClient({
+  baseUrl: "http://localhost:1933",
+  apiKey: "your-key",
+});
+
+const results = await client.search("部署文档", {
+  targetUri: "viking://resources",
+});
+```
+
+它与 Python、Go HTTP Client 使用相同的身份请求头和响应信封。更多示例见
+[`sdk/typescript/README_CN.md`](../../../sdk/typescript/README_CN.md)。
+
 未显式传入 `url` 时，HTTP 客户端会自动从 `ovcli.conf` 读取连接信息。`ovcli.conf` 是 HTTP 客户端和 CLI 共享的配置文件，默认路径 `~/.openviking/ovcli.conf`，也可通过环境变量指定：
 
 ```bash

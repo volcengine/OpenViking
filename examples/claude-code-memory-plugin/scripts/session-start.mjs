@@ -35,6 +35,7 @@ import {
 import { replayPending } from "./lib/pending-queue.mjs";
 import { buildProfileBlock, estimateTokens } from "./lib/profile-inject.mjs";
 import { writeJsonState } from "./lib/state.mjs";
+import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -105,7 +106,8 @@ async function main() {
   const source = input.source || "startup";
   const sessionId = input.session_id;
   const cwd = input.cwd;
-  log("start", { source, sessionId });
+  const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
+  log("start", { source, sessionId, peerSource: effectivePeer.source });
 
   if (isBypassed(cfg, { sessionId, cwd })) {
     log("skip", { reason: "bypass_session_pattern" });
@@ -145,7 +147,7 @@ async function main() {
   let profile = null;
   if (!cfg.noAutoInject) {
     try {
-      profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, cfg.peerId);
+      profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, effectivePeer.peerId);
     } catch (err) {
       logError("profile_inject", err);
     }

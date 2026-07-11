@@ -3679,35 +3679,6 @@ benchmark = [
     { name = "tiktoken" },
 ]
 bot = [
-    { name = "beautifulsoup4" },
-    { name = "croniter" },
-    { name = "ddgs" },
-    { name = "gradio" },
-    { name = "html2text" },
-    { name = "httpx", extra = ["socks"] },
-    { name = "mcp" },
-    { name = "msgpack" },
-    { name = "prompt-toolkit" },
-    { name = "py-machineid" },
-    { name = "pydantic-settings" },
-    { name = "pygments" },
-    { name = "python-engineio" },
-    { name = "python-socketio" },
-    { name = "python-socks", extra = ["asyncio"] },
-    { name = "readability-lxml" },
-    { name = "rich" },
-    { name = "socksio" },
-    { name = "tavily-python" },
-    { name = "websocket-client" },
-    { name = "websockets" },
-]
-bot-dingtalk = [
-    { name = "dingtalk-stream" },
-]
-bot-feishu = [
-    { name = "lark-oapi" },
-]
-bot-full = [
     { name = "agent-sandbox" },
     { name = "beautifulsoup4" },
     { name = "croniter" },
@@ -3740,29 +3711,6 @@ bot-full = [
     { name = "tavily-python" },
     { name = "websocket-client" },
     { name = "websockets" },
-]
-bot-fuse = [
-    { name = "fusepy" },
-]
-bot-langfuse = [
-    { name = "langfuse" },
-]
-bot-opencode = [
-    { name = "opencode-ai" },
-]
-bot-qq = [
-    { name = "qq-botpy" },
-]
-bot-sandbox = [
-    { name = "agent-sandbox" },
-    { name = "opensandbox" },
-    { name = "opensandbox-server" },
-]
-bot-slack = [
-    { name = "slack-sdk" },
-]
-bot-telegram = [
-    { name = "python-telegram-bot", extra = ["socks"] },
 ]
 build = [
     { name = "build" },
@@ -3835,7 +3783,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-sandbox", marker = "extra == 'bot-sandbox'", specifier = ">=0.0.23" },
+    { name = "agent-sandbox", marker = "extra == 'bot'", specifier = ">=0.0.23" },
     { name = "anyio", marker = "extra == 'gemini-async'", specifier = ">=4.0.0" },
     { name = "apscheduler", specifier = ">=3.11.0" },
     { name = "argon2-cffi", specifier = ">=23.0.0" },
@@ -3852,11 +3800,11 @@ requires-dist = [
     { name = "ddgs", marker = "extra == 'bot'", specifier = ">=9.0.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "diff-match-patch", marker = "extra == 'test'", specifier = ">=20200713" },
-    { name = "dingtalk-stream", marker = "extra == 'bot-dingtalk'", specifier = ">=0.4.0" },
+    { name = "dingtalk-stream", marker = "extra == 'bot'", specifier = ">=0.4.0" },
     { name = "ebooklib", specifier = ">=0.18.0" },
     { name = "fastapi", specifier = ">=0.128.0" },
     { name = "feedparser", specifier = ">=6.0.0" },
-    { name = "fusepy", marker = "extra == 'bot-fuse'", specifier = ">=3.0.1" },
+    { name = "fusepy", marker = "extra == 'bot'", specifier = ">=3.0.1" },
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.0.0" },
     { name = "google-genai", marker = "extra == 'gemini-async'", specifier = ">=1.0.0" },
     { name = "gradio", marker = "extra == 'bot'", specifier = ">=6.6.0" },
@@ -3872,11 +3820,11 @@ requires-dist = [
     { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-core", marker = "extra == 'langgraph'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-openai", marker = "extra == 'benchmark'", specifier = ">=1.0.0" },
-    { name = "langfuse", marker = "extra == 'bot-langfuse'", specifier = ">=3.0.0" },
+    { name = "langfuse", marker = "extra == 'bot'", specifier = ">=3.0.0" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.0.0,<2.0.0" },
     { name = "lark-oapi", specifier = ">=1.5.3" },
-    { name = "lark-oapi", marker = "extra == 'bot-feishu'", specifier = ">=1.0.0" },
-    { name = "litellm", specifier = ">=1.83.7,<1.89.3" },
+    { name = "lark-oapi", marker = "extra == 'bot'", specifier = ">=1.0.0" },
+    { name = "litellm", specifier = ">=1.83.7,<1.90.3" },
     { name = "llama-cpp-python", marker = "extra == 'local-embed'", specifier = ">=0.3.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "mcp", specifier = ">=1.27.0" },
@@ -3886,16 +3834,15 @@ requires-dist = [
     { name = "myst-parser", marker = "extra == 'doc'", specifier = ">=2.0.0" },
     { name = "olefile", specifier = ">=0.47" },
     { name = "openai", specifier = ">=1.0.0" },
-    { name = "opencode-ai", marker = "extra == 'bot-opencode'", specifier = ">=0.1.0a0" },
+    { name = "opencode-ai", marker = "extra == 'bot'", specifier = ">=0.1.0a0" },
     { name = "openpyxl", specifier = ">=3.0.0" },
-    { name = "opensandbox", marker = "extra == 'bot-sandbox'", specifier = ">=0.1.0" },
-    { name = "opensandbox-server", marker = "extra == 'bot-sandbox'", specifier = ">=0.1.0" },
+    { name = "opensandbox", marker = "extra == 'bot'", specifier = ">=0.1.0" },
+    { name = "opensandbox-server", marker = "extra == 'bot'", specifier = ">=0.1.0" },
     { name = "opentelemetry-api", specifier = ">=1.14" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.14" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.14" },
     { name = "opentelemetry-instrumentation-asyncio", specifier = ">=0.61b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.14" },
-    { name = "openviking", extras = ["bot", "bot-dingtalk", "bot-feishu", "bot-fuse", "bot-langfuse", "bot-opencode", "bot-qq", "bot-sandbox", "bot-slack", "bot-telegram"], marker = "extra == 'bot-full'" },
     { name = "openviking-sdk", specifier = ">=0.1.1" },
     { name = "pandas", marker = "extra == 'benchmark'", specifier = ">=2.0.0" },
     { name = "pandas", marker = "extra == 'eval'", specifier = ">=2.0.0" },
@@ -3921,9 +3868,9 @@ requires-dist = [
     { name = "python-pptx", specifier = ">=1.0.0" },
     { name = "python-socketio", marker = "extra == 'bot'", specifier = ">=5.16.2" },
     { name = "python-socks", extras = ["asyncio"], marker = "extra == 'bot'", specifier = ">=2.4.0" },
-    { name = "python-telegram-bot", extras = ["socks"], marker = "extra == 'bot-telegram'", specifier = ">=21.0" },
+    { name = "python-telegram-bot", extras = ["socks"], marker = "extra == 'bot'", specifier = ">=21.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "qq-botpy", marker = "extra == 'bot-qq'", specifier = ">=1.0.0" },
+    { name = "qq-botpy", marker = "extra == 'bot'", specifier = ">=1.0.0" },
     { name = "ragas", marker = "extra == 'eval'", specifier = ">=0.1.0" },
     { name = "ragas", marker = "extra == 'test'", specifier = ">=0.1.0" },
     { name = "readability-lxml", marker = "extra == 'bot'", specifier = ">=0.8.0" },
@@ -3934,7 +3881,7 @@ requires-dist = [
     { name = "setuptools", marker = "extra == 'build'", specifier = ">=61.0" },
     { name = "setuptools-scm", marker = "extra == 'build'", specifier = ">=8.0" },
     { name = "setuptools-scm", marker = "extra == 'dev'", specifier = ">=10.0.0" },
-    { name = "slack-sdk", marker = "extra == 'bot-slack'", specifier = ">=3.26.0" },
+    { name = "slack-sdk", marker = "extra == 'bot'", specifier = ">=3.26.0" },
     { name = "socksio", marker = "extra == 'bot'", specifier = ">=1.0.0" },
     { name = "sphinx", marker = "extra == 'doc'", specifier = ">=7.0.0" },
     { name = "sphinx-rtd-theme", marker = "extra == 'doc'", specifier = ">=1.3.0" },
@@ -3965,7 +3912,7 @@ requires-dist = [
     { name = "xlrd", specifier = ">=2.0.1" },
     { name = "xxhash", specifier = ">=3.0.0" },
 ]
-provides-extras = ["test", "opengauss", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "bot-langfuse", "bot-telegram", "bot-feishu", "bot-dingtalk", "bot-slack", "bot-qq", "bot-sandbox", "bot-fuse", "bot-opencode", "bot-full", "benchmark", "langchain", "langgraph", "local-embed"]
+provides-extras = ["test", "opengauss", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "benchmark", "langchain", "langgraph", "local-embed"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]

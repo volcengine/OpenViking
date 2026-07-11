@@ -146,8 +146,10 @@ async def health_check(request: Request):
     try:
         async with _create_bot_proxy_client() as client:
             # Forward to Vikingbot OpenAPIChannel health endpoint
+            headers = {"X-Gateway-Token": BOT_API_KEY} if BOT_API_KEY else None
             response = await client.get(
                 f"{bot_url}/bot/v1/health",
+                headers=headers,
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -246,7 +248,7 @@ async def feedback(
 
             response = await client.post(
                 f"{bot_url}/bot/v1/feedback",
-                json=body,
+                json=_attach_openviking_connection(body, request, _ctx),
                 headers=headers,
                 timeout=30.0,
             )

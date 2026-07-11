@@ -28,8 +28,7 @@ use super::store::{
     ApiKeyRole, ConfigDraft, ConfigEntry, ConfigKind, ConfigStore, IdentityField,
     OPENVIKING_SERVICE_URL, build_config, custom_allows_empty_api_key, normalize_custom_url,
     validate_candidate_config, validate_candidate_config_with_role, validate_config,
-    validate_config_name, validate_identity_value, validation_error_copy,
-    validation_error_copy_zh,
+    validate_config_name, validate_identity_value, validation_error_copy, validation_error_copy_zh,
 };
 
 const OPENVIKING_SERVICE_API_KEY_URL: &str =
@@ -925,8 +924,9 @@ async fn status_box_runtime(active: Option<&Config>) -> StatusBoxRuntime {
         config.actor_peer_id.clone(),
         STATUS_BOX_PROBE_TIMEOUT_SECS,
         config.profile,
-        config.extra_headers.clone(),
-    );
+        config.effective_extra_headers(),
+    )
+    .with_gateway_token(config.effective_gateway_token());
 
     match client.get::<Value>("/api/v1/system/status", &[]).await {
         Ok(status) => {
@@ -4604,8 +4604,9 @@ fn root_admin_client(config: &Config, root_api_key: &str) -> BaseClient {
         None,
         config.timeout.clamp(1.0, 60.0),
         config.profile,
-        config.extra_headers.clone(),
+        config.effective_extra_headers(),
     )
+    .with_gateway_token(config.effective_gateway_token())
 }
 
 async fn list_root_accounts(client: &BaseClient) -> Result<Vec<RootAccountSummary>> {

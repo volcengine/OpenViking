@@ -189,6 +189,7 @@ type ReindexOptions struct {
 // FindOptions controls Find.
 type FindOptions struct {
 	TargetURI      any
+	Image          string
 	Limit          int
 	NodeLimit      *int
 	ScoreThreshold *float64
@@ -204,6 +205,7 @@ type FindOptions struct {
 // SearchOptions controls Search.
 type SearchOptions struct {
 	TargetURI      any
+	Image          string
 	SessionID      string
 	Limit          int
 	NodeLimit      *int

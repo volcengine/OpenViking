@@ -253,7 +253,7 @@ class BaseClient(ABC):
     @abstractmethod
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -261,6 +261,7 @@ class BaseClient(ABC):
         context_type: Optional[SearchContextTypeInput] = None,
         tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search without session context."""
         ...
@@ -268,7 +269,7 @@ class BaseClient(ABC):
     @abstractmethod
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -277,6 +278,7 @@ class BaseClient(ABC):
         context_type: Optional[SearchContextTypeInput] = None,
         tags: Optional[List[str]] = None,
         telemetry: TelemetryRequest = False,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         ...
