@@ -130,13 +130,29 @@ class BatchTrainEvalConfig:
         self.train_index = _normalize_index_filter(self.train_index, label="train_index")
         self.eval_index = _normalize_index_filter(self.eval_index, label="eval_index")
         if self.eval_split is not None:
-            normalized_eval_split = str(self.eval_split).strip().lower()
+            normalized_eval_split = str(self.eval_split).strip().lower().replace("-", "_")
             if normalized_eval_split in {"", "none"}:
                 self.eval_split = None
-            elif normalized_eval_split not in {"train", "test"}:
-                raise ValueError("eval_split must be train, test, or none")
+            elif normalized_eval_split in {
+                "dev",
+                "valid_seen",
+                "validation_seen",
+                "eval_in_distribution",
+                "eval_indistribution",
+            }:
+                self.eval_split = "dev"
+            elif normalized_eval_split in {
+                "test",
+                "valid_unseen",
+                "validation_unseen",
+                "eval_out_of_distribution",
+                "eval_outofdistribution",
+            }:
+                self.eval_split = "test"
+            elif normalized_eval_split == "train":
+                self.eval_split = "train"
             else:
-                self.eval_split = normalized_eval_split
+                raise ValueError("eval_split must be train, dev, test, or none")
         if self.trials <= 0:
             raise ValueError("trials must be > 0")
         if self.train_trials <= 0:

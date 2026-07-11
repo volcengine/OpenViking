@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+import httpx
+
 from openviking.session.train.components.progress import run_with_progress
 from openviking.session.train.context import PipelineContext
 from openviking.session.train.domain import (
@@ -45,6 +47,7 @@ class SessionCommitPolicyTrainer:
     show_progress: bool = False
     progress_label: str = "session-commit"
     event_recorder: Any | None = None
+    create_session_retry_sleep: Any = asyncio.sleep
 
     def __post_init__(self) -> None:
         if not self.run_id:
@@ -135,7 +138,7 @@ class SessionCommitPolicyTrainer:
                 + [_evaluation_message_to_request(rollout)]
             )
             stage = "create_session"
-            await self.client.create_session(
+            await self._create_session_with_retry(
                 session_id=session_id,
                 memory_policy=_training_commit_memory_policy(),
             )
@@ -202,9 +205,10 @@ class SessionCommitPolicyTrainer:
                 "error": task_error,
             }
         except Exception as exc:
+            error_summary = _exception_summary(exc)
             print(
                 f"[session_commit] failed stage={stage} session_id={session_id} "
-                f"task_id=<none> trace_id=<none> error={exc}",
+                f"task_id=<none> trace_id=<none> error={error_summary}",
                 flush=True,
             )
             await self._record_event(
@@ -220,7 +224,7 @@ class SessionCommitPolicyTrainer:
                 telemetry_id=None,
                 task_status="failed",
                 score=_rollout_score(rollout),
-                error=str(exc),
+                error=error_summary,
             )
             return {
                 "index": index,
@@ -232,8 +236,38 @@ class SessionCommitPolicyTrainer:
                 "telemetry_id": None,
                 "task_status": "failed",
                 "score": _rollout_score(rollout),
-                "error": str(exc),
+                "error": error_summary,
             }
+
+    async def _create_session_with_retry(
+        self,
+        *,
+        session_id: str,
+        memory_policy: dict[str, Any],
+    ) -> None:
+        """Create a commit session, retrying transient create failures indefinitely."""
+
+        delay = 0.5
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                await self.client.create_session(
+                    session_id=session_id,
+                    memory_policy=memory_policy,
+                )
+                return
+            except Exception as exc:
+                if not _is_retryable_create_session_error(exc):
+                    raise
+                error_summary = _exception_summary(exc)
+                print(
+                    f"[session_commit] retrying stage=create_session session_id={session_id} "
+                    f"attempt={attempt} delay={delay:g}s error={error_summary}",
+                    flush=True,
+                )
+                await self.create_session_retry_sleep(delay)
+                delay = min(delay * 2, 2.0)
 
     async def _record_event(
         self,
@@ -381,6 +415,20 @@ def _task_error(task: dict[str, Any] | None) -> str | None:
     if task.get("status") == "timeout":
         return str(task.get("error") or "task timeout")
     return None
+
+
+def _is_retryable_create_session_error(exc: Exception) -> bool:
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError, TimeoutError)):
+        return True
+    return not str(exc).strip()
+
+
+def _exception_summary(exc: BaseException) -> str:
+    message = str(exc).strip()
+    detail = repr(exc)
+    if message and message != detail:
+        return f"{type(exc).__name__}: {message} ({detail})"
+    return f"{type(exc).__name__}: {detail}"
 
 
 def _commit_trace_id(commit_result: dict[str, Any]) -> str | None:

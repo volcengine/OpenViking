@@ -317,16 +317,24 @@ def test_eval_split_normalization_and_validation():
         benchmark_service_url="http://127.0.0.1:1944",
     )
 
+    dev_config = BatchTrainEvalConfig(
+        dataset="alfworld",
+        domain="all",
+        eval_split="valid_seen",
+        benchmark_service_url="http://127.0.0.1:1955",
+    )
+
     assert train_config.eval_split == "train"
+    assert dev_config.eval_split == "dev"
     assert none_config.eval_split is None
 
     import pytest
 
-    with pytest.raises(ValueError, match="eval_split must be train, test, or none"):
+    with pytest.raises(ValueError, match="eval_split must be train, dev, test, or none"):
         BatchTrainEvalConfig(
             dataset="tau2",
             domain="airline",
-            eval_split="dev",
+            eval_split="invalid",
             benchmark_service_url="http://127.0.0.1:1944",
         )
 

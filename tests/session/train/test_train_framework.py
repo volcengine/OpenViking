@@ -1415,6 +1415,79 @@ async def test_session_commit_policy_trainer_streams_commit_trace_events(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_session_commit_policy_trainer_retries_transient_create_session():
+    import httpx
+
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    original_create_session = client.create_session
+    transient_errors = [
+        TimeoutError(),
+        RuntimeError(""),
+        httpx.ReadError("temporary read failure"),
+        httpx.PoolTimeout("temporary pool timeout"),
+    ]
+    sleep_delays = []
+
+    async def fake_sleep(delay):
+        sleep_delays.append(delay)
+
+    async def flaky_create_session(*, session_id, memory_policy=None):
+        if transient_errors:
+            raise transient_errors.pop(0)
+        await original_create_session(session_id=session_id, memory_policy=memory_policy)
+
+    client.create_session = flaky_create_session
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+        create_session_retry_sleep=fake_sleep,
+    )
+
+    await trainer._create_session_with_retry(
+        session_id="retry-session",
+        memory_policy={"memory_types": ["experiences"]},
+    )
+
+    assert sleep_delays == [0.5, 1.0, 2.0, 2.0]
+    assert len(client.created_sessions) == 1
+    assert client.created_sessions[0] == ("retry-session", {"memory_types": ["experiences"]})
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_does_not_retry_nontransient_create_session():
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    sleep_delays = []
+
+    async def fake_sleep(delay):
+        sleep_delays.append(delay)
+
+    async def failing_create_session(*, session_id, memory_policy=None):
+        raise RuntimeError("bad request")
+
+    client.create_session = failing_create_session
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+        create_session_retry_sleep=fake_sleep,
+    )
+
+    with pytest.raises(RuntimeError, match="bad request"):
+        await trainer._create_session_with_retry(
+            session_id="nonretry-session",
+            memory_policy={"memory_types": ["experiences"]},
+        )
+
+    assert sleep_delays == []
+    assert client.created_sessions == []
+
+
+@pytest.mark.asyncio
 async def test_jsonl_pipeline_event_hook_omits_full_commit_results(tmp_path):
     from openviking.session.train import JsonlEventRecorder, JsonlPipelineEventHook
 

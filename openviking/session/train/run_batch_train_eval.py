@@ -135,9 +135,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--eval-split",
-        choices=("train", "test", "none"),
         default="test",
-        help="Split used for baseline, per-epoch, and final eval (default: test; none disables eval).",
+        help=(
+            "Split used for baseline, per-epoch, and final eval "
+            "(default: test; dev maps to in-distribution/valid_seen when supported; "
+            "none disables eval)."
+        ),
     )
     parser.add_argument(
         "--eval-each-epoch",
