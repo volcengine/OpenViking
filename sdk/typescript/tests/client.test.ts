@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -294,6 +294,7 @@ describe("OpenVikingClient", () => {
   it("streams OVPack exports to a normalized local file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-pack-"));
     try {
+      await writeFile(join(directory, "docs.ovpack"), "old-backup");
       const fetcher = vi
         .fn<typeof fetch>()
         .mockResolvedValue(new Response(new Uint8Array([1, 2, 3])));
@@ -311,6 +312,7 @@ describe("OpenVikingClient", () => {
 
       expect(output).toBe(join(directory, "docs.ovpack"));
       expect(await readFile(output)).toEqual(Buffer.from([1, 2, 3]));
+      expect(await readdir(directory)).toEqual(["docs.ovpack"]);
       const [url, init] = fetcher.mock.calls[0]!;
       expect(new URL(String(url)).searchParams.get("profile")).toBe("1");
       expect(JSON.parse(String(init?.body))).toEqual({
@@ -321,6 +323,53 @@ describe("OpenVikingClient", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it.each([true, false])(
+    "preserves the final OVPack when a download stream fails",
+    async (existingOutput) => {
+      const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-pack-"));
+      const output = join(directory, "backup.ovpack");
+      if (existingOutput) await writeFile(output, "known-good-backup");
+      let pulls = 0;
+      try {
+        const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+          new Response(
+            new ReadableStream({
+              pull(controller) {
+                if (pulls++ === 0)
+                  controller.enqueue(new TextEncoder().encode("partial"));
+                else controller.error(new Error("connection reset"));
+              },
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/octet-stream" },
+            },
+          ),
+        );
+        const client = new OpenVikingClient({
+          baseUrl: "https://example.com",
+          fetch: fetcher,
+        });
+
+        await expect(client.backupOVPack(output)).rejects.toMatchObject({
+          code: "UNAVAILABLE",
+        });
+
+        if (existingOutput)
+          expect(await readFile(output, "utf8")).toBe("known-good-backup");
+        else
+          await expect(readFile(output)).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        expect(await readdir(directory)).toEqual(
+          existingOutput ? ["backup.ovpack"] : [],
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("maps structured OVPack download failures", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(

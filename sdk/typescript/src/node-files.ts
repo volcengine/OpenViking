@@ -130,13 +130,24 @@ export async function writeResponseToFile(
     throw new OpenVikingError("Download response did not include a body", {
       code: "INTERNAL",
     });
-  const fs = await nodeFs();
-  const file = await fs.open(output, "w");
+  const [fs, paths] = await Promise.all([nodeFs(), nodePath()]);
+  const temporaryDirectory = await fs.mkdtemp(
+    paths.join(paths.dirname(output), `.${paths.basename(output)}-`),
+  );
+  const temporaryPath = paths.join(temporaryDirectory, "download");
+  let file: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
+    file = await fs.open(temporaryPath, "wx");
     for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>)
-      await file.write(chunk);
-  } finally {
+      await file.writeFile(chunk);
     await file.close();
+    file = undefined;
+    await fs.rename(temporaryPath, output);
+    return output;
+  } finally {
+    await file?.close().catch(() => undefined);
+    await fs
+      .rm(temporaryDirectory, { recursive: true, force: true })
+      .catch(() => undefined);
   }
-  return output;
 }
