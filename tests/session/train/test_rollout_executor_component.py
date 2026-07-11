@@ -564,6 +564,48 @@ async def test_tau2_search_experience_summary_only_exposes_case_name_and_experie
     assert "input_summary" not in summary
 
 
+def test_tau2_search_experience_response_hides_internal_search_metadata():
+    import json
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import _format_search_experience_response
+
+    payload = json.loads(
+        _format_search_experience_response(
+            query="cancel flight reservations",
+            candidates=[
+                {
+                    "rank": 1,
+                    "case_name": "case_1",
+                    "experiences": [
+                        {
+                            "uri": "viking://user/u/memories/experiences/keep_scope.md",
+                            "situation": "- Applies when: scope matters",
+                        }
+                    ],
+                }
+            ],
+        )
+    )
+
+    assert payload == {
+        "query": "cancel flight reservations",
+        "candidates": [
+            {
+                "rank": 1,
+                "case_name": "case_1",
+                "experiences": [
+                    {
+                        "uri": "viking://user/u/memories/experiences/keep_scope.md",
+                        "situation": "- Applies when: scope matters",
+                    }
+                ],
+            }
+        ],
+    }
+    assert "target_uri" not in payload
+    assert "count" not in payload
+
+
 def test_tau2_rollout_backend_factory_defaults_to_native():
     from benchmark.tau2.train.rollout_executor import (
         NativeTau2RolloutExecutor,
@@ -771,10 +813,15 @@ async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_pa
     assert "search_experience" in content
     assert "read_experience" in content
     assert "Situation snippets" in content or "`situation` as a filter only" in content
-    assert "you MUST call `read_experience`" in content
-    assert "current or later task boundary" in content
+    assert "Read by default" in content
+    assert "call `read_experience` unless" in content
+    assert "later boundary in the same task" in content
+    assert "Re-search on new subtasks" in content
     assert "case_name" in content
     assert "case URI" not in content
+    assert "RETURN_COMPLETED" not in content
+    assert "RETURN_BLOCKED" not in content
+    assert "RETURN_NOT_APPLICABLE" not in content
     assert fake_sandbox.writes
     assert fake_sandbox.writes[0][0] == "skills/experience_loader/SKILL.md"
     assert context_builder.latest_experience_loader_skill_content == content

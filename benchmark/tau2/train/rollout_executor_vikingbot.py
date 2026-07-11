@@ -267,16 +267,7 @@ def _make_search_experience_tool():
                     await _experience_search_summary(client, item, rank)
                     for rank, item in enumerate(memories, start=1)
                 ]
-                return json.dumps(
-                    {
-                        "query": query,
-                        "target_uri": target_uri,
-                        "count": len(candidates),
-                        "candidates": candidates,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
+                return _format_search_experience_response(query=query, candidates=candidates)
             except Exception as exc:
                 logger.warning("search_experience failed: %s", exc)
                 return f"Error searching experience candidates: {exc}"
@@ -285,6 +276,24 @@ def _make_search_experience_tool():
                     await client.close()
 
     return SearchExperienceTool()
+
+
+def _format_search_experience_response(*, query: str, candidates: list[dict[str, Any]]) -> str:
+    """Render search_experience output for the agent.
+
+    Keep only task-facing information. Internal search roots and duplicate counts are omitted
+    because they can make the agent reason about storage plumbing instead of candidate
+    applicability.
+    """
+
+    return json.dumps(
+        {
+            "query": query,
+            "candidates": candidates,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 def _make_read_experience_tool():
