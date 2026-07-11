@@ -28,7 +28,9 @@ jobs:
       - name: Validate package
         run: |
           npm run typecheck
+          npm run format:check
           npm run build
+          npm run test:browser
           npm test
           npm pack --dry-run
       - name: Validate release tag

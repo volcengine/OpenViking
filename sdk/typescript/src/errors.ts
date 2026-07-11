@@ -6,7 +6,15 @@ export class OpenVikingError extends Error {
   readonly details: JsonObject;
   readonly statusCode: number | undefined;
 
-  constructor(message: string, options: { code?: string; details?: JsonObject; statusCode?: number; cause?: unknown } = {}) {
+  constructor(
+    message: string,
+    options: {
+      code?: string;
+      details?: JsonObject;
+      statusCode?: number;
+      cause?: unknown;
+    } = {},
+  ) {
     super(message, { cause: options.cause });
     this.name = "OpenVikingError";
     this.code = options.code ?? "UNKNOWN";
@@ -16,5 +24,9 @@ export class OpenVikingError extends Error {
 }
 
 /** Test whether an unknown value is an OpenViking error with an optional code. */
-export const isOpenVikingError = (error: unknown, code?: string): error is OpenVikingError =>
-  error instanceof OpenVikingError && (code === undefined || error.code === code);
+export const isOpenVikingError = (
+  error: unknown,
+  code?: string,
+): error is OpenVikingError =>
+  error instanceof OpenVikingError &&
+  (code === undefined || error.code === code);

@@ -12,6 +12,8 @@ import { OpenVikingClient } from "@openviking/sdk";
 const client = new OpenVikingClient({
   baseUrl: "http://127.0.0.1:1933",
   apiKey: "your-key",
+  // 可选：部分部署会要求指定上传模式。
+  uploadMode: "proxy",
 });
 
 const results = await client.search("部署文档", {

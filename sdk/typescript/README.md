@@ -12,6 +12,8 @@ import { OpenVikingClient } from "@openviking/sdk";
 const client = new OpenVikingClient({
   baseUrl: "http://127.0.0.1:1933",
   apiKey: "your-key",
+  // Optional: keep this aligned with deployments that require an upload mode.
+  uploadMode: "proxy",
 });
 
 const results = await client.search("deployment guide", {
