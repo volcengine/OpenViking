@@ -124,6 +124,13 @@ fields:
         - db_check: <passed|failed|unknown>
         - action_checks: <passed|failed|unknown>
         - communicate_checks: <passed|failed|unknown>
+      - Communication/Value Diagnosis:
+        - Required value role: <semantic role of the required answer/list/count/summary/value, or none>
+        - Expected source scope: <object set/value scope implied by the user's request at request time, or none>
+        - Observed communicated value role: <semantic role and scope of what was actually communicated, or none>
+        - Difference type: <omitted|calculation_error|scope_substitution|wrong_source_field|none|unknown>
+        - Substituted scope: <post-action/current/narrower/broader scope used instead, or none>
+        - Later write effect: <how later modifications/cancellations/upgrades changed a current-state value, or none>
       - First Wrong Tool Call:
         - Step: <raw step id, final_response, expected_missing_tool, or none>
         - Tool: <one raw tool name, communicate_with_user, or none>
@@ -171,8 +178,10 @@ fields:
       ## Runtime Experience Content
       When `Selected candidate: C1` and the recommended operation is create/update/validate,
       `Runtime experience content` must be a directly injectable production reminder, not an
-      explanation or case audit. It should tell the future agent what mistaken decision to avoid
-      and what runtime check/rule would make the next similar session succeed. Use this shape:
+      explanation, case audit, or validation report. It should tell the future agent what mistaken
+      decision to avoid and what runtime check/rule would make the next similar session succeed.
+      Prefer the concise production style of a direct reminder: reusable situation, numbered
+      rules, and the target wrong behavior to avoid. Use this shape:
 
       # <experience_name>
 
@@ -211,6 +220,22 @@ fields:
         set, Candidate C1 should say to communicate both scopes with explicit labels rather than
         choosing only the narrower scope. Keep this domain-agnostic; do not mention dataset names,
         fixed IDs, exact amounts, or task-specific values in the reusable lesson.
+      - If the expected answer/list/count/summary/value differs from a similar value the agent
+        communicated, do not call it a simple omission until you diagnose the difference as
+        `scope_substitution`, `calculation_error`, `wrong_source_field`, or true `omitted`.
+        A later-write/current-state aggregate replacing an earlier request-time aggregate is
+        `scope_substitution`.
+      - Do not exclude records from a request-time information/aggregate/list/summary/value
+        solely because they are later modified, canceled, upgraded, consumed, split, or otherwise
+        changed. Exclude them only when the user's own wording explicitly excludes that semantic
+        role from the earlier information request.
+      - If the agent chose a post-action/current/remaining subset but the user had earlier asked
+        for an original/source aggregate, Candidate C1 must preserve the original request-time
+        scope and, when both interpretations are plausible, instruct the future agent to state
+        both labeled scopes. In that case `Ambiguous alternate scopes` must not be `none`.
+      - For object/action scope failures, distinguish read/discovery scope from mutation/write
+        scope. Retrieved extra objects may be used for verification or communication, but they
+        do not become write targets unless the user independently requested them.
       - Preserve correct near-miss behavior. If the same tool had both correct and wrong calls,
         Candidate C1 must name the discriminator that makes the wrong call different.
 
@@ -229,6 +254,10 @@ fields:
         `Derivation`, and `Later write effect`. The freeze point must be when the user asked
         for the aggregate/list/summary, not after later writes. If multiple runtime scopes are
         plausible, fill `Ambiguous alternate scopes` with explicit labels for each scope.
+      - If `Communication/Value Diagnosis.Difference type` is `scope_substitution`, Candidate C1
+        must name the substituted scope and the preserved request-time scope. Do not write
+        `Scope ambiguity: none` or `Ambiguous alternate scopes: none` when trajectory evidence
+        shows both an original/request-time scope and a later post-action/current scope.
       - `Runtime Facts` may contain `db_check`, `action_checks`, and `communicate_checks` for OV
         parsing. Do not put those control-plane terms inside Candidate C1, `Repair principle`, or
         `Runtime experience content`.

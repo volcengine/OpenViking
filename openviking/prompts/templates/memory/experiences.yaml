@@ -34,7 +34,8 @@ fields:
 
       ## Situation
       - Applies when: <runtime-visible task/user/tool-result situation where this lesson matters>
-      - Does not apply when: <closest nearby but non-applicable situation>
+      - Does not apply when: <closest nearby but non-applicable task pattern; do not use
+        temporal stage wording such as before final_response or while still reading/writing>
       - Source binding: <which user request scope, confirmed object, retrieved record/set,
         source field, policy gate, calculation, or candidate message content supplies the rule>
       - Scope ambiguity: <if an information/list/aggregate request could mean both the
@@ -66,6 +67,9 @@ fields:
         If `Counterfactual Ideal Experience` contains candidates, use only Selected candidate=C1;
         create no experience for Selected candidate=none unless the trajectory independently
         shows a reusable preventable failure.
+      - If C1 includes a concise production `Runtime experience content`, preserve its operative
+        situation, numbered rules, and target wrong behavior, but convert them into this
+        skill-loader 4-section format.
       - For non-success trajectories, legacy `Action: skip`, `Recommended operation: skip`,
         `Existing target experience: none`, or `Trigger boundary: none` are advisory only; they
         must not suppress a reusable new experience.
@@ -90,8 +94,22 @@ fields:
       - If the user's wording is ambiguous between the original requested set and a post-action
         remaining/current-state set, the experience should instruct the future agent to include
         both scopes with explicit labels, not only the narrower post-action scope.
+      - Do not exclude records from a request-time information/aggregate/list/summary/value
+        merely because they are later modified, canceled, upgraded, consumed, split, or otherwise
+        changed. Exclude them only when the user's own wording explicitly excluded that semantic
+        role from the earlier information request.
+      - If later writes affect records that could belong to a requested information/list/aggregate
+        value, `Scope ambiguity` must name both the original request-time scope and the
+        post-action/current remaining scope; do not write none/无.
       - State when the scope is frozen, the semantic roles included/excluded, the source fields
         used for derivation, and whether later writes change the previously requested scope.
+      - `Does not apply when` must describe a task-pattern mismatch, not the current temporal
+        stage. Do not write conditions such as "still reading", "before final response", "before
+        writes complete", or "not yet at the final_response"; the skill loader may read the
+        experience at task start even when the reminder applies at a later boundary.
+      - If a loaded existing experience encodes the misleading rule that later-modified/canceled/
+        upgraded records should be removed from an earlier requested aggregate, update that
+        experience instead of creating a competing memory.
       - Do not encode dataset-specific values, IDs, amounts, or domain names in the reusable rule;
         express the lesson as source-scope binding, freeze point, included/excluded object roles,
         and later-write effect.

@@ -66,6 +66,8 @@ def test_agent_experience_instruction_preserves_coupled_scope_repairs():
     assert "agent-proposed broader plan" in instruction
     assert "State the behavior delta" in instruction
     assert "Do not output `trigger_code`" in instruction
+    assert "later modified, canceled, upgraded" in instruction
+    assert "`Does not apply when` must describe a task-pattern mismatch" in instruction
     assert "## Situation" in instruction
 
 

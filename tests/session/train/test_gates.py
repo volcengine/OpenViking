@@ -206,6 +206,8 @@ def test_default_policy_gate_runner_uses_deterministic_experience_gates_only():
     assert "eligible for experience learning by default" in contract
     assert "Recommended operation=skip" in contract
     assert "Existing target experience=none only means" in contract
+    assert "not a temporal" in contract
+    assert "request-time scope" in contract
     assert "Action is create/update" not in contract
     assert "Candidate-shape trigger" not in contract
     assert "Update safety" not in contract
@@ -285,6 +287,43 @@ async def test_skill_readability_gate_requires_situation_source_binding():
     assert decision.action == "reject"
     assert decision.gate_name == "experience_skill_readability"
     assert decision.evidence["has_source_binding"] is False
+
+
+@pytest.mark.asyncio
+async def test_skill_readability_gate_rejects_temporal_does_not_apply():
+    item = _plan_item()
+    item.after_content = (
+        "## Situation\n"
+        "- Applies when: a requested total may be communicated after later writes.\n"
+        "- Does not apply when: still reading records before final_response.\n"
+        "- Source binding: user request scope and retrieved records.\n\n"
+        "## Reminder\n"
+        "- Preserve the request-time total.\n\n"
+        "## Procedure\n"
+        "- Before replying: compare request-time and current scopes.\n\n"
+        "## Anti-pattern\n"
+        "- Do not answer only the current remaining total.\n"
+    )
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=_trajectory_with_repair_signal(
+            action="create",
+            first_wrong_tool="communicate_with_user",
+            trigger_boundary="communicate_with_user",
+        ),
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceSkillReadabilityGate().evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert "before_final_response" in decision.evidence["temporal_non_applicability"]
+    assert "still_reading_or_writing" in decision.evidence["temporal_non_applicability"]
 
 
 @pytest.mark.asyncio
@@ -584,6 +623,8 @@ async def test_experience_root_cause_prevention_gate_allows_preventive_experienc
     assert "preventable wrong decision" in prompt
     assert "coupled causal chain" in prompt
     assert "agent-proposed expansion" in prompt
+    assert "later modified, canceled, upgraded" in prompt
+    assert "temporal non-applicability" in prompt
 
 
 @pytest.mark.asyncio

@@ -261,6 +261,13 @@ Your experience output will be rejected unless every experience satisfies these 
 - `## Situation` must state applicability, non-applicability, and the runtime
   source binding that lets a future agent decide whether to read/apply the
   experience without executing trigger_code.
+- `Does not apply when` must describe a task-pattern mismatch, not a temporal
+  stage such as "still reading/writing", "before final_response", or "before
+  writes complete"; the skill loader may read the experience before the later
+  boundary where it becomes actionable.
+- For information/aggregate/list/summary/value requests affected by later
+  writes, the experience must preserve the original request-time scope and
+  label any post-action/current remaining scope separately.
 
 If you cannot satisfy this contract, output no experience changes."""
 
@@ -437,7 +444,13 @@ class ExperienceSkillReadabilityGate:
         has_source_binding = any(term in situation_lower for term in source_binding_terms)
         applicability_terms = ("applies when", "does not apply", "适用", "不适用")
         has_applicability = any(term in situation_lower for term in applicability_terms)
-        if not missing and has_source_binding and has_applicability:
+        temporal_non_applicability = _temporal_non_applicability_terms(situation)
+        if (
+            not missing
+            and has_source_binding
+            and has_applicability
+            and not temporal_non_applicability
+        ):
             return None
         return GateDecision(
             gate_name=self.name,
@@ -448,6 +461,7 @@ class ExperienceSkillReadabilityGate:
                 "missing_sections": missing,
                 "has_source_binding": has_source_binding,
                 "has_applicability": has_applicability,
+                "temporal_non_applicability": temporal_non_applicability,
                 "situation_preview": _preview_text(situation, limit=500),
             },
             retriable=True,
@@ -455,7 +469,9 @@ class ExperienceSkillReadabilityGate:
                 "Rewrite the experience in exactly these sections: `## Situation`, "
                 "`## Reminder`, `## Procedure`, `## Anti-pattern`. In `## Situation`, "
                 "state applies-when, does-not-apply-when, and the runtime source binding "
-                "used to decide applicability. Do not add trigger_code."
+                "used to decide applicability. `Does not apply when` must be a task-pattern "
+                "mismatch, not a temporal stage such as still reading/writing or before "
+                "final_response. Do not add trigger_code."
             ),
         )
 
@@ -597,6 +613,7 @@ class ExperienceRootCausePreventionGate:
                 "by the source trajectory, trigger before the first preventable wrong decision, "
                 "state the narrow runtime rule that replaces the mistaken decision rule, preserve "
                 "any coupled communication/action-scope distinction needed to prevent recurrence, "
+                "avoid temporal `Does not apply when` clauses that block skill loading, "
                 "and explain what future behavior changes so the next similar session succeeds "
                 "without blocking nearby correct behavior."
             ),
@@ -942,13 +959,23 @@ Pass only when all are true:
    request. Later writes may be described as a separate post-action/current
    scope, but they do not silently replace the original requested scope. If both
    scopes are plausible from runtime wording, the experience labels both.
+8. The experience does not exclude request-time records merely because they were
+   later modified, canceled, upgraded, consumed, split, or otherwise changed,
+   unless the user's own words explicitly excluded that semantic role from the
+   earlier information request.
+9. `Does not apply when` names a real task-pattern mismatch, not a temporal
+   loader stage such as still reading/writing, before final_response, or before
+   writes complete. Temporal wording would make the future agent skip reading an
+   experience that must be available from task start.
 
 Fail when the proposed experience only summarizes the task, fires too late,
 uses unsupported or hidden facts, overfits case literals, misses the root
 decision rule, splits a coupled causal chain, treats agent-proposed expansion as
 user-initiated scope, lets a later-write/current-state scope overwrite an
-earlier information request scope, lacks a concrete future behavior change, or
-would likely harm correct behavior.
+earlier information request scope, silently drops later-modified records from an
+earlier request-time aggregate, uses temporal non-applicability to avoid skill
+loading, lacks a concrete future behavior change, or would likely harm correct
+behavior.
 
 Return JSON only:
 {{
@@ -964,7 +991,8 @@ If failing, set "pass": false, choose root_cause_quality from:
 surface_level, unsupported, not_preventive, too_late_boundary,
 wrong_scope, split_causal_chain, agent_initiated_scope_expansion,
 missing_source_binding, missing_behavior_change, not_injectable,
-over_broad, later_write_scope_substitution, unsafe, unclear.
+over_broad, later_write_scope_substitution, implicit_later_write_exclusion,
+temporal_non_applicability, unsafe, unclear.
 Set repair_prompt to one concise instruction for rewriting or removing this
 specific experience. Do not ask for any output schema.
 
@@ -1055,6 +1083,39 @@ _RUNTIME_CONTROL_PLANE_TERM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = 
 def _runtime_control_plane_terms(text: str) -> list[str]:
     value = str(text or "")
     return [term for term, pattern in _RUNTIME_CONTROL_PLANE_TERM_PATTERNS if pattern.search(value)]
+
+
+_TEMPORAL_NON_APPLICABILITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (term, re.compile(pattern, re.IGNORECASE))
+    for term, pattern in (
+        ("before_final_response", r"\b(before|until|not yet|prior to).{0,40}final[_ -]?response\b"),
+        (
+            "before_final_answer",
+            r"\b(before|until|not yet|prior to).{0,40}final (answer|message|reply)\b",
+        ),
+        (
+            "before_writes_complete",
+            r"\b(before|until|not yet|prior to).{0,40}(writes?|mutations?|actions?).{0,30}(complete|done|finish)",
+        ),
+        (
+            "still_reading_or_writing",
+            r"\bstill (reading|retrieving|writing|executing|processing)\b",
+        ),
+        ("read_write_stage", r"\b(read|write|mutation|action)[-/ ]?stage\b"),
+        ("not_final_response", r"\bnot (yet )?(at )?(the )?final[_ -]?response\b"),
+        ("chinese_before_final_response", r"(最终回复前|最终回答前|还没到最终回复|尚未最终回复)"),
+        ("chinese_still_reading_or_writing", r"(仍在|还在|正在).{0,8}(读取|查询|写入|执行|处理)"),
+        (
+            "chinese_before_write_complete",
+            r"(写操作|修改|取消|更新).{0,12}(完成前|尚未完成|还没完成)",
+        ),
+    )
+)
+
+
+def _temporal_non_applicability_terms(text: str) -> list[str]:
+    value = str(text or "")
+    return [term for term, pattern in _TEMPORAL_NON_APPLICABILITY_PATTERNS if pattern.search(value)]
 
 
 def _effective_action(action: GateAction, mode: GateMode) -> GateAction:
