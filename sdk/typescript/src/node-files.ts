@@ -1,6 +1,27 @@
 import { zipSync } from "fflate";
 import { OpenVikingError } from "./errors.js";
 
+const NODE_FS_SPECIFIER = "node:fs/promises";
+const NODE_PATH_SPECIFIER = "node:path";
+const IMAGE_REFERENCE_PREFIXES = [
+  "data:image/",
+  "http://",
+  "https://",
+  "viking://",
+] as const;
+
+const nodeFs = () => import(NODE_FS_SPECIFIER);
+const nodePath = () => import(NODE_PATH_SPECIFIER);
+
+const statOrUndefined = async (path: string) => {
+  try {
+    return await (await nodeFs()).stat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+};
+
 const bytesToDataURI = (bytes: Uint8Array, mimeType: string): string => {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -10,10 +31,16 @@ const bytesToDataURI = (bytes: Uint8Array, mimeType: string): string => {
 const imageMimeType = (path: string): string => {
   const extension = path.toLowerCase().match(/\.[^.\\/]+$/)?.[0];
   const mimeTypes: Record<string, string> = {
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
     ".gif": "image/gif",
+    ".ico": "image/x-icon",
     ".jpeg": "image/jpeg",
     ".jpg": "image/jpeg",
     ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
     ".webp": "image/webp",
   };
   return (extension && mimeTypes[extension]) || "image/png";
@@ -23,44 +50,37 @@ const imageMimeType = (path: string): string => {
 export async function nodeImagePathToDataURI(
   path: string,
 ): Promise<string | undefined> {
-  const fsSpecifier = "node:fs/promises";
-  const fs = await import(fsSpecifier);
-  try {
-    const stat = await fs.stat(path);
-    if (!stat.isFile()) return undefined;
-    return bytesToDataURI(await fs.readFile(path), imageMimeType(path));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
+  if (IMAGE_REFERENCE_PREFIXES.some((prefix) => path.startsWith(prefix)))
+    return undefined;
+  const stat = await statOrUndefined(path);
+  if (!stat?.isFile()) return undefined;
+  return bytesToDataURI(
+    await (await nodeFs()).readFile(path),
+    imageMimeType(path),
+  );
 }
 
 /** Read a Node.js file or zip a directory for temporary upload. */
 export async function nodePathToBlob(
   path: string,
-  allowDirectory = true,
+  options: { allowDirectory?: boolean } = {},
 ): Promise<{ blob: Blob; filename: string; sourceName?: string } | undefined> {
   // Keep built-in specifiers dynamic so bundled ESM and CommonJS outputs share
   // this implementation without eager filesystem initialization.
-  const fsSpecifier = "node:fs/promises";
-  const pathSpecifier = "node:path";
-  const fs = await import(fsSpecifier);
-  const nodePath = await import(pathSpecifier);
-  let stat;
-  try {
-    stat = await fs.stat(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
+  const [fs, paths, stat] = await Promise.all([
+    nodeFs(),
+    nodePath(),
+    statOrUndefined(path),
+  ]);
+  if (!stat) return undefined;
   if (stat.isFile())
     return {
       blob: new Blob([await fs.readFile(path)]),
-      filename: nodePath.basename(path),
-      sourceName: nodePath.basename(path),
+      filename: paths.basename(path),
+      sourceName: paths.basename(path),
     };
   if (!stat.isDirectory()) return undefined;
-  if (!allowDirectory)
+  if (options.allowDirectory === false)
     throw new TypeError(
       `OpenViking: ${path} is a directory, expected an OVPack file`,
     );
@@ -68,7 +88,7 @@ export async function nodePathToBlob(
   const walk = async (directory: string, prefix = ""): Promise<void> => {
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) continue;
-      const fullPath = nodePath.join(directory, entry.name);
+      const fullPath = paths.join(directory, entry.name);
       const archivePath = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) await walk(fullPath, archivePath);
       else if (entry.isFile()) files[archivePath] = await fs.readFile(fullPath);
@@ -77,8 +97,8 @@ export async function nodePathToBlob(
   await walk(path);
   return {
     blob: new Blob([zipSync(files)]),
-    filename: `${nodePath.basename(path)}.zip`,
-    sourceName: nodePath.basename(path),
+    filename: `${paths.basename(path)}.zip`,
+    sourceName: paths.basename(path),
   };
 }
 
@@ -88,23 +108,16 @@ export async function packOutputPath(
   uri: string | undefined,
   fallback: string,
 ): Promise<string> {
-  const fsSpecifier = "node:fs/promises";
-  const pathSpecifier = "node:path";
-  const fs = await import(fsSpecifier);
-  const nodePath = await import(pathSpecifier);
+  const [fs, paths] = await Promise.all([nodeFs(), nodePath()]);
   let output = to || ".";
-  try {
-    if ((await fs.stat(output)).isDirectory()) {
-      const name = uri
-        ? nodePath.basename(uri.trim().replace(/\/+$/, "")) || fallback
-        : fallback;
-      output = nodePath.join(output, `${name}.ovpack`);
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  if ((await statOrUndefined(output))?.isDirectory()) {
+    const name = uri
+      ? paths.basename(uri.trim().replace(/\/+$/, "")) || fallback
+      : fallback;
+    output = paths.join(output, `${name}.ovpack`);
   }
   if (!output.endsWith(".ovpack")) output += ".ovpack";
-  await fs.mkdir(nodePath.dirname(output), { recursive: true });
+  await fs.mkdir(paths.dirname(output), { recursive: true });
   return output;
 }
 
@@ -117,8 +130,7 @@ export async function writeResponseToFile(
     throw new OpenVikingError("Download response did not include a body", {
       code: "INTERNAL",
     });
-  const fsSpecifier = "node:fs/promises";
-  const fs = await import(fsSpecifier);
+  const fs = await nodeFs();
   const file = await fs.open(output, "w");
   try {
     for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>)

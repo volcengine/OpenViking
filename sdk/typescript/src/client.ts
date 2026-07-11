@@ -692,7 +692,7 @@ export class OpenVikingClient {
     parent: string,
     options: ImportPackOptions = {},
   ): Promise<string> {
-    const local = await nodePathToBlob(source, false);
+    const local = await nodePathToBlob(source, { allowDirectory: false });
     if (!local)
       throw new TypeError(
         "OpenViking: importOVPack requires an existing Node.js local file",
@@ -716,7 +716,7 @@ export class OpenVikingClient {
     source: string,
     options: ImportPackOptions = {},
   ): Promise<string> {
-    const local = await nodePathToBlob(source, false);
+    const local = await nodePathToBlob(source, { allowDirectory: false });
     if (!local)
       throw new TypeError(
         "OpenViking: restoreOVPack requires an existing Node.js local file",

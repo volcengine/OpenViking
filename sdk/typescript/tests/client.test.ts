@@ -119,6 +119,47 @@ describe("OpenVikingClient", () => {
     }
   });
 
+  it("uses the MIME type for a local BMP image", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-image-"));
+    const path = join(directory, "photo.bmp");
+    await writeFile(path, new Uint8Array([66, 77]));
+    try {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+
+      await client.find("", { image: path });
+
+      const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+      expect(body.image_url).toBe("data:image/bmp;base64,Qk0=");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    `data:image/png;base64,${"A".repeat(8192)}`,
+    "http://example.com/photo.png",
+    "https://example.com/photo.png",
+    "viking://resources/photo.png",
+  ])(
+    "passes image references through without filesystem access",
+    async (image) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+
+      await client.search("", { image });
+
+      const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+      expect(body.image_url).toBe(image);
+    },
+  );
+
   it("normalizes empty parts consistently in batch messages", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
     const client = new OpenVikingClient({
