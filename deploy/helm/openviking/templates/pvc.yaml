@@ -5,6 +5,10 @@ metadata:
   name: {{ include "openviking.fullname" . }}-data
   labels:
     {{- include "openviking.labels" . | nindent 4 }}
+  annotations:
+    # Keep the PVC when the release is uninstalled so data survives accidental
+    # removals. Delete the PVC manually to reclaim the storage.
+    helm.sh/resource-policy: keep
 spec:
   accessModes:
     - {{ .Values.persistence.accessMode }}

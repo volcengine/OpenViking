@@ -1,16 +1,38 @@
 # Default values for openviking.
 
+# Single-replica by default. Multi-instance requires remote backends (S3 +
+# VikingDB) and specific ov.conf settings — see README "Multi-Instance
+# Deployment" before changing this.
 replicaCount: 1
+
+# Deployment update strategy. Defaults to Recreate (safe for single-replica).
+# For multi-instance, RollingUpdate avoids downtime during upgrades.
+# strategy:
+#   type: RollingUpdate
+#   rollingUpdate:
+#     maxUnavailable: 0
+#     maxSurge: 1
+
+# HorizontalPodAutoscaler (requires multi-instance setup).
+# WARNING: enabling this without config.storage.skip_process_lock=true will
+# cause helm to fail — see README "Multi-Instance Deployment".
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
 
 image:
   repository: ghcr.io/volcengine/openviking
-  # Use Always for the default moving tag. Pin a version and set IfNotPresent if
-  # you want Kubernetes to reuse cached immutable images.
-  pullPolicy: Always
-  # Image tag to deploy. Defaults to the latest released OpenViking image.
-  # Set to "main" for the newest image from the main branch, a version such as
-  # "v0.3.17" for a pinned release, or "" to use latest.
-  tag: latest
+  # IfNotPresent reuses cached images for immutable (version-pinned) tags,
+  # which is the default since tag:"" resolves to a pinned appVersion.
+  # Switch to Always if you use moving tags like "latest" or "main".
+  pullPolicy: IfNotPresent
+  # Image tag. Empty (the default) resolves to Chart.appVersion (the release
+  # this chart was tested with). Set to "latest" or "main" for moving tags, or
+  # a specific version like "v0.4.9" to pin.
+  tag: ""
 
 imagePullSecrets: []
 nameOverride: ""
@@ -19,6 +41,8 @@ fullnameOverride: ""
 serviceAccount:
   # Specifies whether a service account should be created.
   create: false
+  # Automatically mount a ServiceAccount's API credentials.
+  automount: true
   # Annotations to add to the service account.
   annotations: {}
   # The name of the service account to use.
@@ -38,6 +62,14 @@ securityContext: {}
 service:
   type: ClusterIP
   port: 1933
+  annotations: {}
+  # Set when type is LoadBalancer (some cloud providers ignore this field).
+  loadBalancerIP: ""
+  # Local preserves client source IP and avoids a second hop for
+  # LoadBalancer/NodePort; use Cluster for the old behavior.
+  externalTrafficPolicy: ""
+  # Restrict LB source ranges (CIDR list). Only used when type is LoadBalancer.
+  loadBalancerSourceRanges: []
 
 ingress:
   enabled: false
@@ -105,6 +137,23 @@ config:
     root_api_key: null
     cors_origins:
       - "*"
+    # Observability via OpenTelemetry. Disabled by default — enable the
+    # exporters you need and point them at your OTel Collector.
+    # The Prometheus /metrics endpoint is always served regardless of this
+    # setting (use monitoring.serviceMonitor to scrape it).
+    observability:
+      metrics:
+        enabled: false
+        exporters:
+          otel:
+            enabled: false
+            endpoint: "otel-collector.monitoring.svc.cluster.local:4317"
+      traces:
+        enabled: false
+        endpoint: "otel-collector.monitoring.svc.cluster.local:4317"
+      logs:
+        enabled: false
+        endpoint: "otel-collector.monitoring.svc.cluster.local:4317"
   embedding:
     dense:
       api_base: "https://ark.cn-beijing.volces.com/api/v3"
@@ -155,3 +204,46 @@ readinessProbe:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Prometheus ServiceMonitor for the /metrics endpoint.
+# Requires the prometheus-operator CRD. The labels below are merged onto the
+# ServiceMonitor so the operator picks it up — typically you set the release
+# label that matches your Prometheus install, e.g. { release: prometheus }.
+monitoring:
+  serviceMonitor:
+    enabled: false
+    labels: {}
+    # path: /metrics
+    # interval: 30s
+    # scrapeTimeout: 10s
+    # relabelings:
+    #   - sourceLabels: [__address__]
+    #     targetLabel: cluster
+    #     replacement: my-cluster
+    # metricRelabelings:
+    #   - action: drop
+    #     sourceLabels: [__name__]
+    #     regex: 'openviking_encryption_.*'
+
+# NetworkPolicy restricting ingress to the pod.
+# Disabled by default. When enabled with no ingress rules, allows traffic on
+# the http port from any source. Tighten by setting custom ingress rules with
+# namespaceSelector / podSelector for your environment.
+networkPolicy:
+  enabled: false
+  # ingress:
+  #   - from:
+  #       - namespaceSelector:
+  #           matchLabels:
+  #             name: monitoring
+  #     ports:
+  #       - port: http
+  #         protocol: TCP
+
+# PodDisruptionBudget for voluntary evictions (node drains).
+# Only meaningful for multi-instance deployments. For single-replica, a PDB is
+# either a no-op (maxUnavailable: 1) or blocks all drains (minAvailable: 1).
+podDisruptionBudget:
+  enabled: false
+  # maxUnavailable: 1
+  # minAvailable: 1

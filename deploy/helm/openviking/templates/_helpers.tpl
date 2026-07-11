@@ -64,16 +64,31 @@ Create the name of the service account to use.
 {{- end }}
 
 {{/*
+Resolve the effective image tag.
+Priority: explicit image.tag > Chart.appVersion > "latest".
+An empty tag (the default) resolves to Chart.appVersion so the chart deploys
+the release it was tested with, rather than a mutable "latest".
+*/}}
+{{- define "openviking.imageTag" -}}
+{{- $tag := .Values.image.tag | toString -}}
+{{- if $tag -}}
+{{- $tag -}}
+{{- else -}}
+{{- default "latest" .Chart.AppVersion -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Return the deployed app version label.
+Uses the resolved tag (same logic as the image).
 */}}
 {{- define "openviking.appVersion" -}}
-{{- default "latest" .Values.image.tag -}}
+{{- include "openviking.imageTag" . -}}
 {{- end }}
 
 {{/*
 Return the image name including tag.
 */}}
 {{- define "openviking.image" -}}
-{{- $tag := default "latest" .Values.image.tag -}}
-{{- printf "%s:%s" .Values.image.repository $tag -}}
+{{- printf "%s:%s" .Values.image.repository (include "openviking.imageTag" .) -}}
 {{- end }}

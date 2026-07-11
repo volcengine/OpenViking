@@ -28,14 +28,13 @@ IMPORTANT: Make sure to configure your embedding and VLM API keys in values.yaml
 or via extraEnv before using OpenViking. The server will not function correctly
 without valid model provider credentials.
 
-{{- if not .Values.config.server.root_api_key }}
+To use the in-pod `ov` CLI, create a CLI config interactively (this writes
+ovcli.conf into the persistent volume, so it survives restarts):
 
-WARNING: config.server.root_api_key is not set. When the server binds to 0.0.0.0
-(the default), a root_api_key is REQUIRED for security. The server will refuse to
-start without it.
+  CLI_POD=$(kubectl get pods -n {{ .Release.Namespace }} -l "app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath='{.items[0].metadata.name}')
+  kubectl exec -it -n {{ .Release.Namespace }} "$CLI_POD" -- ov config
 
-Set it via:
+Replace `<chart>` with your chart path when running helm commands, e.g.:
 
-  helm upgrade {{ .Release.Name }} <chart> --set config.server.root_api_key="YOUR_SECRET_KEY"
+  helm upgrade {{ .Release.Name }} ./deploy/helm/openviking -f my-values.yaml
 
-{{- end }}

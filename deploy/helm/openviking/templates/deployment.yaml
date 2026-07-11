@@ -1,5 +1,22 @@
-{{- if gt (int .Values.replicaCount) 1 }}
-{{- fail "replicaCount must be 1. OpenViking uses RocksDB which does not support concurrent access from multiple pods sharing the same PVC." }}
+{{- $multiReplica := or (gt (int .Values.replicaCount) 1) .Values.autoscaling.enabled }}
+{{- if $multiReplica }}
+{{- if not .Values.config.storage.skip_process_lock }}
+{{- fail "replicaCount > 1 (or autoscaling.enabled) requires config.storage.skip_process_lock=true. See README 'Multi-Instance Deployment'." }}
+{{- end }}
+{{- /* Data must be shared across pods: either remote backends OR a shared (RWX) volume. */ -}}
+{{- $agfsBackend := default "local" .Values.config.storage.agfs.backend }}
+{{- $vdbBackend := default "local" .Values.config.storage.vectordb.backend }}
+{{- $localBackends := list "local" "cuvs" "memory" }}
+{{- $hasLocalBackend := or (has $agfsBackend $localBackends) (has $vdbBackend $localBackends) }}
+{{- $accessMode := default "ReadWriteOnce" .Values.persistence.accessMode }}
+{{- $sharedVolume := eq $accessMode "ReadWriteMany" }}
+{{- if and $hasLocalBackend (not $sharedVolume) }}
+{{- fail (printf "Multi-instance with local backends (agfs=%q, vectordb=%q) requires a shared volume — set persistence.accessMode to ReadWriteMany (NFS/CephFS/etc.), or switch to remote backends (agfs.backend=\"s3\", vectordb.backend=\"volcengine\"/\"qdrant\"/\"http\"/etc.). With ReadWriteOnce each pod gets its own data and silently diverges. See README 'Multi-Instance Deployment'." $agfsBackend $vdbBackend) }}
+{{- end }}
+{{- end }}
+{{- $loopback := list "127.0.0.1" "localhost" "::1" -}}
+{{- if and (not (has .Values.config.server.host $loopback)) (not .Values.config.server.root_api_key) }}
+{{- fail (printf "config.server.root_api_key is required when config.server.host is %q (non-loopback). The server refuses to start without it. Set it to a literal or a ${VAR} placeholder (resolved at runtime from env/Secret), or bind to loopback (127.0.0.1) to run without one." .Values.config.server.host) }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -8,12 +25,18 @@ metadata:
   labels:
     {{- include "openviking.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "openviking.selectorLabels" . | nindent 6 }}
   strategy:
+    {{- if .Values.strategy }}
+    {{- toYaml .Values.strategy | nindent 4 }}
+    {{- else }}
     type: Recreate
+    {{- end }}
   template:
     metadata:
       annotations:
@@ -31,7 +54,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.serviceAccount.create }}
+      {{- if or .Values.serviceAccount.create .Values.serviceAccount.name }}
       serviceAccountName: {{ include "openviking.serviceAccountName" . }}
       {{- end }}
       {{- with .Values.podSecurityContext }}

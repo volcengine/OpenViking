@@ -19,18 +19,25 @@ helm install openviking ./deploy/helm/openviking \
   --set-string config.vlm.api_key="YOUR_VOLCENGINE_API_KEY"
 ```
 
-The chart deploys `ghcr.io/volcengine/openviking:latest` by default. To choose
-a different image tag:
+> **`root_api_key` is required by default.** When `config.server.host` is
+> `0.0.0.0` (the default), the server refuses to start without a root API key.
+> The chart now fails fast at `helm install/upgrade` time if it is missing,
+> rather than leaving you to discover a `CrashLoopBackOff`. See
+> [Using Secrets for API Keys](#using-secrets-for-api-keys) for the production
+> pattern, or set `config.server.host: "127.0.0.1"` to run without one.`
+
+The chart deploys `ghcr.io/volcengine/openviking:{appVersion}` by default (the
+release this chart was tested with). To choose a different image tag:
 
 ```bash
 # newest image from the main branch
 helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=main
 
-# pinned release image
-helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=v0.3.17
+# explicit latest (mutable, use Always pullPolicy)
+helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=latest
 
-# use the default latest image
-helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=
+# pinned release image
+helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=v0.4.9
 ```
 
 ### Install with Custom Values
@@ -140,10 +147,12 @@ Secrets.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `replicaCount` | Number of replicas | `1` |
+| `replicaCount` | Number of replicas (1 by default; see Multi-Instance Deployment) | `1` |
+| `strategy` | Deployment update strategy (defaults to `Recreate`) | unset |
+| `autoscaling.enabled` | Create a HorizontalPodAutoscaler (requires multi-instance setup) | `false` |
 | `image.repository` | Container image repository | `ghcr.io/volcengine/openviking` |
-| `image.tag` | Container image tag (`latest`, `main`, pinned release, or empty for `latest`) | `latest` |
-| `image.pullPolicy` | Image pull policy | `Always` |
+| `image.tag` | Container image tag (empty resolves to `appVersion`) | `""` |
+| `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `service.type` | Kubernetes service type | `ClusterIP` |
 | `service.port` | Service port | `1933` |
 | `persistence.enabled` | Enable persistent storage | `true` |
@@ -157,9 +166,82 @@ Secrets.
 | `resources.requests.cpu` | CPU request | `500m` |
 | `resources.requests.memory` | Memory request | `1Gi` |
 | `ingress.enabled` | Enable ingress | `false` |
-| `config.server.root_api_key` | API key required when server binds to 0.0.0.0 | `""` |
+| `config.server.root_api_key` | API key required when server binds to 0.0.0.0; **fail-fast if missing** | `null` |
 | `config` | Full ov.conf configuration object | See `values.yaml` |
+| `config.server.observability` | OpenTelemetry exporters (metrics/traces/logs); disabled by default | See `values.yaml` |
+| `serviceAccount.create` | Create a dedicated ServiceAccount for the pod | `false` |
+| `serviceAccount.name` | Name of the ServiceAccount to use (generated when `create: true` and unset) | `""` |
 | `extraEnv` | Additional environment variables | `[]` |
+| `monitoring.serviceMonitor.enabled` | Create a Prometheus ServiceMonitor for the `/metrics` endpoint | `false` |
+| `monitoring.serviceMonitor.labels` | Extra labels for ServiceMonitor (set the Prometheus release label here) | `{}` |
+| `monitoring.serviceMonitor.relabelings` | Target relabeling rules | `[]` |
+| `monitoring.serviceMonitor.metricRelabelings` | Metric-level relabeling rules | `[]` |
+| `podDisruptionBudget.enabled` | Create a PodDisruptionBudget (multi-instance only) | `false` |
+| `networkPolicy.enabled` | Create a NetworkPolicy restricting ingress | `false` |
+| `networkPolicy.ingress` | Custom ingress rules (default allows http from any source) | unset |
+
+## Observability
+
+OpenViking exposes a Prometheus `/metrics` endpoint (enabled by default in the
+app) and supports OpenTelemetry exporters for metrics, traces, and logs.
+
+### Prometheus (ServiceMonitor)
+
+If you run the Prometheus operator, enable the ServiceMonitor and set the label
+that matches your Prometheus release:
+
+```yaml
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: prometheus  # match your Prometheus Helm release
+```
+
+### OpenTelemetry
+
+OTel exporters are disabled by default in `values.yaml` under
+`config.server.observability`. Enable the signal(s) you need and point them at
+your OTel Collector:
+
+```yaml
+config:
+  server:
+    observability:
+      metrics:
+        enabled: true
+        exporters:
+          otel:
+            enabled: true
+            endpoint: "otel-collector.monitoring.svc.cluster.local:4317"
+      traces:
+        enabled: true
+        endpoint: "otel-collector.monitoring.svc.cluster.local:4317"
+      logs:
+        enabled: true
+        endpoint: "otel-collector.monitoring.svc.cluster.local:4317"
+```
+
+### ServiceMonitor relabeling
+
+The ServiceMonitor supports `relabelings` (target relabeling) and
+`metricRelabelings` (metric-level filtering) for advanced Prometheus setups:
+
+```yaml
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: prometheus
+    relabelings:
+      - sourceLabels: [__address__]
+        targetLabel: cluster
+        replacement: my-cluster
+    metricRelabelings:
+      - action: drop
+        sourceLabels: [__name__]
+        regex: 'openviking_encryption_.*'
+```
 
 ## Upgrading
 
@@ -167,8 +249,95 @@ Secrets.
 helm upgrade openviking ./deploy/helm/openviking -f my-values.yaml
 ```
 
-The deployment uses a `Recreate` strategy to avoid data corruption from
-multiple pods accessing the same RocksDB volume simultaneously.
+The default strategy is `Recreate` (the pod is terminated and recreated on each
+upgrade). This is the safe choice for single-replica with the local backend.
+For multi-instance deployments, set `strategy.type: RollingUpdate` to avoid
+downtime during upgrades.
+
+## Multi-Instance Deployment
+
+By default the chart runs a single replica with local backends. OpenViking
+supports multi-instance when pods share the same data — either via **remote
+backends** or a **shared filesystem**. See the
+[official deployment guide](https://docs.openviking.ai/zh/guides/03-deployment#多实例部署注意事项)
+for the full reference.
+
+### Option A: Remote backends (recommended for cloud)
+
+AGFS and VectorDB both use cloud services, so all pods access the same data
+regardless of PVC:
+
+```yaml
+config:
+  storage:
+    vectordb:
+      backend: "volcengine"   # or "qdrant", "http", etc.
+    agfs:
+      backend: "s3"
+```
+
+> **Both backends must be remote.** Setting only `agfs.backend: "s3"` while
+> leaving `vectordb.backend: "local"` causes each pod's vector index (RocksDB)
+> to live on its own PVC — indexes silently diverge.
+
+### Option B: Shared filesystem (NFS / CephFS / RWX PVC)
+
+Keep `local` backends but mount a shared `ReadWriteMany` volume so all pods
+read/write the same workspace:
+
+```yaml
+persistence:
+  accessMode: ReadWriteMany
+  storageClass: "nfs-client"   # your RWX storage class
+```
+
+### Required ov.conf settings (both options)
+
+```yaml
+config:
+  server:
+    temp_upload:
+      default_mode: "shared"
+    observability:
+      usage_audit:
+        sqlite_path: "/var/lib/openviking-local/usage_audit.sqlite3"
+  storage:
+    skip_process_lock: true            # REQUIRED — skip .openviking.pid
+    agfs:
+      queuefs:
+        db_path: "/var/lib/openviking-local/queue.db"  # per-pod SQLite
+```
+
+### Chart guards
+
+The chart fails fast if multi-instance is requested without the prerequisites:
+
+1. **`skip_process_lock=true`** is required (the `.openviking.pid` process lock
+   prevents concurrent access by design).
+2. **Shared data** is required — either remote backends for BOTH agfs and
+   vectordb, OR `persistence.accessMode: ReadWriteMany` for a shared volume.
+   With local backends on a `ReadWriteOnce` PVC, each pod gets divergent data.
+
+### Enabling HPA and PDB
+
+Once the prerequisites are met:
+
+```yaml
+replicaCount: 1
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+```
 
 ## Uninstalling
 
@@ -176,8 +345,9 @@ multiple pods accessing the same RocksDB volume simultaneously.
 helm uninstall openviking
 ```
 
-Note: The PersistentVolumeClaim is not deleted automatically. To remove stored
-data:
+The PersistentVolumeClaim is annotated with `helm.sh/resource-policy: keep`, so
+it survives `helm uninstall` and protects your data from accidental removal. To
+reclaim the storage after uninstalling:
 
 ```bash
 kubectl delete pvc openviking-data
