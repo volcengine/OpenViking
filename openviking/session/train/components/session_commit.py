@@ -260,12 +260,6 @@ class SessionCommitPolicyTrainer:
             except Exception as exc:
                 if not _is_retryable_create_session_error(exc):
                     raise
-                error_summary = _exception_summary(exc)
-                print(
-                    f"[session_commit] retrying stage=create_session session_id={session_id} "
-                    f"attempt={attempt} delay={delay:g}s error={error_summary}",
-                    flush=True,
-                )
                 await self.create_session_retry_sleep(delay)
                 delay = min(delay * 2, 2.0)
 
