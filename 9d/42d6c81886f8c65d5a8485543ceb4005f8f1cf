@@ -1,0 +1,23 @@
+openviking/storage/observers/retrieval_observer.py
+  s_6fe15e66a05bf5::t_490e4576953a5b 24,26-28,90-97,99,103,106,110
+tests/unit/retrieve/test_retrieval_stats.py
+  s_6fe15e66a05bf5::t_e71dd175c29b3a 148-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9d42d6c81886f8c65d5a8485543ceb4005f8f1cf",
+  "prompts": {},
+  "sessions": {
+    "s_6fe15e66a05bf5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4aa1-02af-7ff2-8876-044dd610c7a1",
+        "model": "unknown"
+      },
+      "human_author": "huangruiteng <huangruiteng@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
