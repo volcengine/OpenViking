@@ -22,6 +22,7 @@ class SandboxManager:
         self.workspace = sandbox_parent_path
         self.source_workspace = source_workspace_path
         self._sandboxes: dict[str, SandboxBackend] = {}
+        self._creation_lock = asyncio.Lock()
         backend_cls = get_backend(config.sandbox.backend)
         if not backend_cls:
             raise UnsupportedBackendError(f"Unknown sandbox backend: {config.backend}")
@@ -33,9 +34,11 @@ class SandboxManager:
     async def _get_or_create_sandbox(self, session_key: SessionKey) -> SandboxBackend:
         """Get or create session-specific sandbox."""
         workspace_id = self.to_workspace_id(session_key)
-        if workspace_id not in self._sandboxes:
-            sandbox = await self._create_sandbox(workspace_id)
-            self._sandboxes[workspace_id] = sandbox
+        if workspace_id in self._sandboxes:
+            return self._sandboxes[workspace_id]
+        async with self._creation_lock:
+            if workspace_id not in self._sandboxes:  # re-check inside lock
+                self._sandboxes[workspace_id] = await self._create_sandbox(workspace_id)
         return self._sandboxes[workspace_id]
 
     async def _create_sandbox(self, workspace_id: str) -> SandboxBackend:
