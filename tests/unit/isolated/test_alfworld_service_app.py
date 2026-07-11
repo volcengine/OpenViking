@@ -70,6 +70,9 @@ def test_alfworld_service_wires_generic_dataset_service(monkeypatch):
         {"task_indices": [1], "case_count": 4},
     )
     executor = app["make_rollout_executor"]({"max_iterations": 7, "show_progress": True})
+    direct_executor = app["make_rollout_executor"](
+        {"rollout_backend": "direct", "max_iterations": 9}
+    )
     vikingbot_executor = app["make_rollout_executor"](
         {"rollout_backend": "vikingbot", "loader_mode": "skill", "max_iterations": 9}
     )
@@ -79,6 +82,8 @@ def test_alfworld_service_wires_generic_dataset_service(monkeypatch):
     assert loader.case_count == 4
     assert executor.max_steps == 7
     assert executor.show_progress is True
+    assert executor.loader_mode == "skill"
+    assert direct_executor.max_steps == 9
     assert vikingbot_executor.max_steps == 9
     assert vikingbot_executor.loader_mode == "skill"
 

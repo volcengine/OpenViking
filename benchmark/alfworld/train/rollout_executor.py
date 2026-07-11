@@ -34,7 +34,7 @@ _ALFWORLD_ENV_LOCK = threading.RLock()
 
 AlfworldRolloutBackend = Literal["direct", "vikingbot"]
 AlfworldExperienceLoaderMode = Literal["skill", "constraint", "direct_experience"]
-DEFAULT_ALFWORLD_ROLLOUT_BACKEND: AlfworldRolloutBackend = "direct"
+DEFAULT_ALFWORLD_ROLLOUT_BACKEND: AlfworldRolloutBackend = "vikingbot"
 DEFAULT_ALFWORLD_EXPERIENCE_LOADER_MODE: AlfworldExperienceLoaderMode = "skill"
 
 

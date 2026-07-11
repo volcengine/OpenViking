@@ -29,9 +29,12 @@ logger = get_logger(__name__)
 
 
 EXPERIENCE_MEMORY_TYPE = "experiences"
+TRAJECTORY_MEMORY_TYPE = "trajectories"
 SEARCH_TOP_K = 5
 SOURCE_TRAJ_TOP_K = 3  # only attach source_trajectories for the top-3 candidates
 MAX_SOURCE_TRAJS = 3  # max trajectories to load per experience
+COMPARISON_TRAJ_TOP_K = 6  # peer trajectories to compare before experience writing
+MAX_COMPARISON_TRAJ_CHARS = 6000
 
 
 def _is_directory_not_found_error(exc: Exception) -> bool:
@@ -55,6 +58,7 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         self.trajectory_summary = trajectory_summary
         self.trajectory_uri = trajectory_uri
         self.prefetched_uris: List[str] = []
+        self.prefetched_comparison_trajectories: List[Dict[str, Any]] = []
 
     def instruction(self) -> str:
         from openviking.session.train.gates import default_experience_gate_contract
@@ -64,9 +68,10 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
 
 You are given:
 - A new trajectory to learn from
+- Optional `comparison_trajectory` records from the same/similar task pattern, which may include both successes and failures
 - Up to {SEARCH_TOP_K} relevant existing experiences, sometimes with their source trajectories for grounding
 
-Source trajectories are evidence only. Do NOT copy or modify trajectory text in the output.
+Source and comparison trajectories are evidence only. Do NOT copy or modify trajectory text in the output.
 
 ## What to output
 
@@ -92,8 +97,9 @@ The system handles create vs update automatically:
 - The failure is successful, case-specific, unsupported, random, already solved by available tool facts, or not preventable by a runtime reminder → output no changes.
 - If the failure came from agent-initiated scope expansion, do not treat the user's later yes/confirmation to the agent's over-broad proposal as a clean user-initiated request. Preserve the original user-requested write/action scope unless the user independently requested a new object/action in their own words.
 - If tool/action/DB checks passed but required user-visible communication failed, create/update a communication-boundary experience. Generalize the omitted literal into its semantic role: total cost, identifier, policy explanation, next step, etc.
-- Treat trajectory memories as factual evidence, not authoritative conclusions. Use their `Timeline`, `Outcome Checks`, `Observed Problem`, `Value/Scope Trace`, `Source Field Trace`, `Diagnostic Hints`, and `Raw Evidence` to infer the reusable repair.
-- Do not copy `Diagnostic Hints` directly into an experience. Re-check the original runtime evidence, injected experience effects, existing experiences, and this gate contract before writing an injectable reminder.
+- Treat trajectory memories as factual evidence, not authoritative conclusions. Use their `Timeline`, `Outcome Checks`, `Observed Problem`, `Value/Scope Trace/Evidence`, `Source Field Trace/Evidence`, and `Raw Evidence` to infer the reusable repair.
+- When both successful and non-successful trajectories are available for the same or similar task pattern, compare them before writing an experience: identify which user-visible value, included/excluded record set, source field, label, confirmation, or write argument appears in successful traces and is missing/different in failures.
+- Do not copy trajectory wording directly into an experience. Re-check the original runtime evidence, injected experience effects, existing experiences, and this gate contract before writing an injectable reminder.
 - A failed or partial trajectory does not require an experience update. Create/update only when the evidence supports a narrow runtime reminder that would likely prevent or recover from the first materially outcome-changing mistake.
 
 ## Writing rules
@@ -135,8 +141,14 @@ All memory content must be written in {output_language}.
         return []
 
     def _render_experience_dir(self, ctx: RequestContext) -> str:
+        return self._render_memory_dir(EXPERIENCE_MEMORY_TYPE, ctx)
+
+    def _render_trajectory_dir(self, ctx: RequestContext) -> str:
+        return self._render_memory_dir(TRAJECTORY_MEMORY_TYPE, ctx)
+
+    def _render_memory_dir(self, memory_type: str, ctx: RequestContext) -> str:
         registry = self._get_registry()
-        schema = registry.get(EXPERIENCE_MEMORY_TYPE)
+        schema = registry.get(memory_type)
         if schema is None or not schema.directory:
             return ""
 
@@ -149,6 +161,46 @@ All memory content must be written in {output_language}.
             schema.directory,
             {"user_space": user_space},
         )
+
+
+    async def _search_comparison_trajectories(
+        self,
+        *,
+        trajectory_dir: str,
+        viking_fs: VikingFS,
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        if not trajectory_dir or not viking_fs:
+            return []
+        candidate_uris = await self.search_files(
+            query=self.trajectory_summary[:500] or "trajectory",
+            search_uris=[trajectory_dir],
+            limit=COMPARISON_TRAJ_TOP_K + 2,
+        )
+        results: List[Dict[str, Any]] = []
+        seen = {self.trajectory_uri}
+        for uri in candidate_uris:
+            if not uri or uri in seen:
+                continue
+            seen.add(uri)
+            try:
+                raw = await viking_fs.read_file(uri, ctx=ctx) or ""
+                mf = MemoryFileUtils.read(raw, uri=uri)
+            except Exception as e:
+                tracer.error(f"Failed to read comparison trajectory {uri}: {e}")
+                continue
+            if mf.memory_type and mf.memory_type != TRAJECTORY_MEMORY_TYPE:
+                continue
+            content = str(mf.content or "")
+            if len(content) > MAX_COMPARISON_TRAJ_CHARS:
+                content = content[: MAX_COMPARISON_TRAJ_CHARS - 20].rstrip() + "\n...<truncated>"
+            result = mf.to_metadata()
+            result["content"] = content
+            result["uri"] = uri
+            results.append(result)
+            if len(results) >= COMPARISON_TRAJ_TOP_K:
+                break
+        return results
 
     async def _load_source_trajectories(
         self,
@@ -209,6 +261,7 @@ All memory content must be written in {output_language}.
         viking_fs = self._viking_fs
 
         experience_dir = self._render_experience_dir(ctx)
+        trajectory_dir = self._render_trajectory_dir(ctx)
 
         candidate_uris: List[str] = []
         if experience_dir and viking_fs:
@@ -260,6 +313,26 @@ All memory content must be written in {output_language}.
         )
         call_id_seq = 0
 
+        comparison_trajectories = await self._search_comparison_trajectories(
+            trajectory_dir=trajectory_dir,
+            viking_fs=viking_fs,
+            ctx=ctx,
+        )
+        self.prefetched_comparison_trajectories = list(comparison_trajectories)
+        for comparison_idx, comparison_result in enumerate(comparison_trajectories):
+            comparison_uri = comparison_result["uri"]
+            add_tool_call_pair_to_messages(
+                messages=prefetch_messages,
+                call_id=f"comparison-{comparison_idx}",
+                tool_name="read",
+                params={"uri": comparison_uri},
+                result=self._build_context_result(
+                    uri=comparison_uri,
+                    context_role="comparison_trajectory",
+                    result=comparison_result,
+                ),
+            )
+
         for idx, exp_uri in enumerate(candidate_uris):
             result = await self.read_file(exp_uri)
             if result is None:
@@ -307,8 +380,9 @@ All memory content must be written in {output_language}.
                 "role": "user",
                 "content": "\n".join(
                     [
-                        "You have already read the conversation, one `new_trajectory`, candidate experience memories, and optional `candidate_source_trajectory` references.",
+                        "You have already read the conversation, one `new_trajectory`, optional `comparison_trajectory` records, candidate experience memories, and optional `candidate_source_trajectory` references.",
                         "Treat `new_trajectory` as the new execution to incorporate.",
+                        "Treat `comparison_trajectory` as factual peer evidence for comparing success and failure paths; do not modify it directly.",
                         "Treat `candidate_experience` as existing memories you may update, replace, or skip.",
                         "Treat `candidate_source_trajectory` as reference-only context for understanding a candidate experience; do not modify it directly.",
                         "Based on the above, decide whether to **Update**, **Replace**, **Create**, or **Skip** a failure-repair experience. Output JSON only.",

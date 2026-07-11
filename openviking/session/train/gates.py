@@ -580,6 +580,7 @@ class ExperienceRootCausePreventionGate:
     name: str = "experience_root_cause_prevention"
     vlm: Any = None
     max_trajectory_chars: int = 8000
+    max_comparison_chars: int = 8000
     max_policy_chars: int = 5000
 
     def applies_to(self, target: GateTarget) -> bool:
@@ -596,6 +597,7 @@ class ExperienceRootCausePreventionGate:
         prompt = _experience_root_cause_prevention_prompt(
             target,
             max_trajectory_chars=self.max_trajectory_chars,
+            max_comparison_chars=self.max_comparison_chars,
             max_policy_chars=self.max_policy_chars,
         )
         try:
@@ -960,6 +962,7 @@ def _experience_root_cause_prevention_prompt(
     target: GateTarget,
     *,
     max_trajectory_chars: int,
+    max_comparison_chars: int,
     max_policy_chars: int,
 ) -> str:
     trajectory = target.trajectory
@@ -970,6 +973,10 @@ def _experience_root_cause_prevention_prompt(
     trajectory_content = _preview_text(
         trajectory.content if trajectory is not None else "",
         limit=max_trajectory_chars,
+    )
+    comparison_content = _comparison_trajectory_context(
+        trajectory,
+        max_chars=max_comparison_chars,
     )
     trajectory_uri = trajectory.uri if trajectory is not None else ""
     trajectory_outcome = trajectory.outcome if trajectory is not None else ""
@@ -987,8 +994,9 @@ preventable wrong decision, would it change the future agent's behavior enough
 for the next similar session to succeed, without breaking nearby correct cases?
 
 Pass only when all are true:
-1. The source trajectory supports the causal failure: first preventable wrong
-   decision, mistaken runtime rule, visible runtime/source evidence, and success link.
+1. The source trajectory plus any comparison trajectories support the causal
+   failure: first preventable wrong decision, mistaken runtime rule, visible
+   runtime/source evidence, and success/failure contrast.
 2. The experience is directly preventive: it changes a future tool call, missing
    tool call, confirmation, calculation, policy branch, write, communication, or
    final answer before or at the failing boundary.
@@ -1027,8 +1035,9 @@ Pass only when all are true:
    experience that must be available from task start.
 
 Fail when the proposed experience only summarizes the task, fires too late,
-uses unsupported or hidden facts, overfits case literals, misses the root
-decision rule, splits a coupled causal chain, treats agent-proposed expansion as
+uses unsupported or hidden facts not present in the source/comparison
+trajectories, overfits case literals, misses the root decision rule, splits a
+coupled causal chain, treats agent-proposed expansion as
 user-initiated scope, lets a later-write/current-state scope overwrite an
 earlier information request scope, silently drops later-modified records from an
 earlier request-time aggregate, uses temporal non-applicability to avoid skill
@@ -1061,6 +1070,9 @@ outcome: {trajectory_outcome}
 
 {trajectory_content}
 
+## Comparison trajectories
+{comparison_content or "(none)"}
+
 ## Evaluation summary
 {evaluation_summary}
 
@@ -1072,6 +1084,37 @@ target: {target.target_name}
 
 {after}
 """
+
+
+def _comparison_trajectory_context(
+    trajectory: Trajectory | None,
+    *,
+    max_chars: int,
+) -> str:
+    if trajectory is None:
+        return ""
+    metadata = dict(getattr(trajectory, "metadata", {}) or {})
+    items = metadata.get("comparison_trajectories")
+    if not isinstance(items, list) or not items:
+        return ""
+    chunks: list[str] = []
+    remaining = max(0, max_chars)
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        uri = str(item.get("uri") or "")
+        outcome = str(item.get("outcome") or "")
+        content = str(item.get("content") or "")
+        header = f"### comparison_{index}\nuri: {uri}\noutcome: {outcome}\n"
+        if remaining <= len(header):
+            break
+        body = _preview_text(content, limit=remaining - len(header))
+        chunk = header + body
+        chunks.append(chunk)
+        remaining -= len(chunk) + 2
+        if remaining <= 0:
+            break
+    return "\n\n".join(chunks)
 
 
 def _evaluation_summary(analysis: RolloutAnalysis | None) -> str:

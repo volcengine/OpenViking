@@ -85,6 +85,8 @@ fields:
       - No `Recommended operation`, `New experience action`, `Selected candidate`, or C1/C2/C3.
       - No instructions that should be injected into a future agent.
       - No broad advice such as "check all requirements" or "include all information".
+      - No `Diagnostic Hints` section.
+      - No `Ambiguous references` field or verdict such as `Ambiguous references: none`.
 
       ## What to preserve
       Preserve concrete runtime evidence, especially:
@@ -92,7 +94,7 @@ fields:
       - retrieved records, candidate objects, policy facts, source fields, and calculations;
       - read/discovery scope versus mutation/write scope;
       - communication obligations and final user-visible content;
-      - expected versus observed object/value/scope/source-field differences;
+      - observed object/value/scope/source-field differences;
       - correct actions/messages that should be preserved;
       - uncertainty and competing interpretations.
 
@@ -126,24 +128,23 @@ fields:
         - First observed divergence: <earliest observable boundary where behavior diverged, or none/unknown>
         - Candidate bad behavior: <tool/action/message/calculation shape that appears risky, or none>
         - What was missing/wrong: <runtime fact, object binding, value, policy gate, confirmation, or communication that differed, or none>
-      - Value/Scope Trace:
+      - Value/Scope Evidence:
         - Requested value/list/summary role: <semantic role, or none>
-        - Request-time scope: <object set/value scope implied when user asked, or none/unknown>
-        - Agent-used scope: <scope actually used in tool/message/calculation, or none/unknown>
-        - Post-action/current scope: <scope after later writes if different/relevant, or none/unknown>
-        - Explicit exclusions from user wording: <semantic roles explicitly excluded by user's own words, or none>
-        - Ambiguous references: <relative terms such as other/remaining/those/其他/剩余 and plausible scopes, or none>
-      - Source Field Trace:
-        - Expected source fields: <runtime fields/tool text that appear relevant to the required value, or none/unknown>
+        - Request boundary/timing: <when the user asked relative to reads/writes/communications, or unknown>
+        - Request wording with relative terms: <short exact wording containing other/remaining/those/其他/剩余, or none>
+        - Relative words observed: <raw relative words observed, or none>
+        - Visible records before later writes: <records/roles visible at that boundary, with evidence, or unknown>
+        - Records later written/changed: <records/roles later modified/canceled/upgraded/consumed, or none>
+        - Records in agent calculation/answer: <records/roles actually included or omitted in the user-visible answer, or unknown>
+        - Records after later writes: <post-action/current remaining records/roles if visible, or unknown>
+        - Explicit exclusions by exact user wording: <quote exact exclusion words from user, or none; do not infer from relative words alone>
+      - Source Field Evidence:
+        - User-requested value source wording: <exact source/value wording from user, or none>
+        - Outcome-mentioned missing/present value: <value/semantic fact the runtime outcome says was missing or present, or none/unknown>
         - Agent-used source fields: <runtime fields or derivation actually used, or none/unknown>
         - Canonical value fields observed: <explicit total/paid/charged/order/payment amount fields if present, or none/unknown>
         - Line-item derivation observed: <line-item formula if used or available, or none/unknown>
-        - Difference type: <omitted|calculation_error|scope_substitution|wrong_source_field|none|unknown>
-      - Diagnostic Hints:
-        - Possible causes: <bounded hypotheses supported by observed evidence; write none if insufficient>
-        - Evidence for: <facts supporting those hypotheses, or none>
-        - Evidence against / uncertainty: <facts that make the diagnosis uncertain or ambiguous, or none>
-        - Near-miss risk: <nearby correct behavior that a future experience must avoid harming, or none>
+        - Observed difference: <omitted value, different included records, different source field, calculation mismatch, none, or unknown>
       - Raw Evidence:
         - User/request snippets: <short relevant snippets or none>
         - Tool/result snippets: <short relevant snippets, field names, IDs/values only as evidence, or none>
@@ -158,13 +159,17 @@ fields:
         only under `Raw Evidence` when they are needed to audit the trace.
       - Distinguish information/read scope from mutation/write scope. Extra records read for
         discovery or communication do not become write targets unless user wording confirms that.
-      - For value/aggregate/list/summary requests, record request-time scope, agent-used scope,
-        post-action/current scope, explicit exclusions, and ambiguous references separately.
+      - For value/aggregate/list/summary requests, record the exact request wording, relative
+        words observed, visible records before writes, records later changed, records included in
+        the answer, records after writes, and explicit exclusion quotes separately. Do not decide
+        whether a relative word is truly ambiguous or not; preserve evidence for downstream
+        comparison.
       - For monetary/value answers, record both canonical fields and line-item derivations if
         visible. Do not decide here which one should be the final reusable rule unless the runtime
         evidence directly shows the agent used a different source than the requested value.
-      - If the run succeeded, record the successful path and why it appears safe; do not produce a
-        success-path SOP or an injectable reminder.
+      - If the run succeeded, record the successful path facts that distinguish it from failures
+        (especially included records, communicated values, labels, and source fields); do not
+        produce a success-path SOP or an injectable reminder.
       - If an injected experience was misleading, record how it influenced observed behavior; do
         not rewrite the experience here.
 

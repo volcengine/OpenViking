@@ -42,6 +42,10 @@ def test_trajectory_validation_rejects_experience_generation_sections():
         "- Experience Repair Signal:\n"
         "  - Recommended operation: create\n"
         "  - Selected candidate: C1\n"
+        "- Value/Scope Trace:\n"
+        "  - Ambiguous references: none\n"
+        "- Diagnostic Hints:\n"
+        "  - Possible causes: guessed rule\n"
     )
 
     issues = _trajectory_content_validation_issues("bad_trace", content)
@@ -50,6 +54,8 @@ def test_trajectory_validation_rejects_experience_generation_sections():
     assert issues[0].reason == "trajectory contains experience-generation sections"
     assert "Counterfactual Ideal Experience" in issues[0].details
     assert "Experience Repair Signal" in issues[0].details
+    assert "Ambiguous references" in issues[0].details
+    assert "Diagnostic Hints" in issues[0].details
 
 
 class FakeVikingFS:

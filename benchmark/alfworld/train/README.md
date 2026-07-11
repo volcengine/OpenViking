@@ -15,11 +15,11 @@ bash benchmark/alfworld/train/run_service.sh --host 127.0.0.1 --port 1954
 
 Rollout backends:
 
-- `direct` (default): service calls the configured VLM directly with
-  observation/admissible-command prompts.
-- `vikingbot`: ALFWorld is exposed to VikingBot as tools (`alfworld_step`,
+- `vikingbot` (default): ALFWorld is exposed to VikingBot as tools (`alfworld_step`,
   `done`) and can use the Tau2-style `experience_loader` skill with
   `search_experience` / `read_experience`.
+- `direct`: service calls the configured VLM directly with
+  observation/admissible-command prompts.
 
 Example VikingBot backend:
 
@@ -47,10 +47,9 @@ bash benchmark/alfworld/train/restart_alfworld_train_eval.sh \
   --max-iterations 50
 ```
 
-To run the one-click flow with the VikingBot backend:
+To run the one-click flow with the default VikingBot backend:
 
 ```bash
-ALFWORLD_ROLLOUT_BACKEND=vikingbot \
 ALFWORLD_EXPERIENCE_LOADER_MODE=skill \
 bash benchmark/alfworld/train/restart_alfworld_train_eval.sh \
   --epochs 1 \

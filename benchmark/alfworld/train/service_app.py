@@ -169,7 +169,7 @@ def parse_args() -> argparse.Namespace:
         "--rollout-backend",
         choices=["direct", "vikingbot"],
         default=os.getenv("ALFWORLD_ROLLOUT_BACKEND", DEFAULT_ALFWORLD_ROLLOUT_BACKEND),
-        help="Rollout implementation backend (default: direct).",
+        help=f"Rollout implementation backend (default: {DEFAULT_ALFWORLD_ROLLOUT_BACKEND}).",
     )
     parser.add_argument(
         "--loader-mode",

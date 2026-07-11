@@ -63,11 +63,15 @@ fields:
       - Focus on the first materially outcome-changing mistake and the minimal prevention or
         recovery action at that boundary.
       - Treat trajectory memories as factual evidence, not authoritative conclusions.
-        Prefer their `Timeline`, `Outcome Checks`, `Observed Problem`, `Value/Scope Trace`,
-        `Source Field Trace`, `Diagnostic Hints`, and `Raw Evidence` when inferring a repair.
-      - Do not copy `Diagnostic Hints` directly into an experience. Re-check the original runtime
-        evidence, injected experience effects, existing experiences, and these rules before
-        writing an injectable reminder.
+        Prefer their `Timeline`, `Outcome Checks`, `Observed Problem`, `Value/Scope Trace/Evidence`,
+        `Source Field Trace/Evidence`, and `Raw Evidence` when inferring a repair.
+      - When both successful and non-successful trajectories are available for the same or
+        similar task pattern, compare them before writing an experience: find which
+        user-visible value, included/excluded record set, source field, label, confirmation,
+        or write argument appears in successful traces and is missing/different in failures.
+      - Do not copy any trajectory wording directly into an experience. Re-check the original
+        runtime evidence, injected experience effects, existing experiences, and these rules
+        before writing an injectable reminder.
       - For non-success trajectories, create or update an experience only when the evidence
         supports a narrow runtime reminder that would likely prevent or recover from the first
         materially outcome-changing mistake.

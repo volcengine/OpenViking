@@ -202,6 +202,21 @@ class ExperienceGradientEstimator:
             max_post_validation_retries=_EXPERIENCE_POST_VALIDATION_MAX_RETRIES,
         )
         operations, _ = await orchestrator.run()
+        comparison_trajectories = list(
+            getattr(provider, "prefetched_comparison_trajectories", []) or []
+        )
+        if comparison_trajectories:
+            trajectory.metadata["comparison_trajectory_uris"] = [
+                str(item.get("uri") or "") for item in comparison_trajectories if item.get("uri")
+            ]
+            trajectory.metadata["comparison_trajectories"] = [
+                {
+                    "uri": str(item.get("uri") or ""),
+                    "outcome": str(item.get("outcome") or ""),
+                    "content": str(item.get("content") or ""),
+                }
+                for item in comparison_trajectories
+            ]
         return operations
 
 

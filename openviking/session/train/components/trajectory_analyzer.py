@@ -413,6 +413,8 @@ def _trajectory_content_validation_issues(
         ("Counterfactual Ideal Experience", r"(?mi)^\s*-?\s*Counterfactual Ideal Experience\s*:"),
         ("Runtime experience content", r"(?mi)^\s*-?\s*Runtime experience content\s*:"),
         ("Experience Repair Signal", r"(?mi)^\s*-?\s*Experience Repair Signal\s*:"),
+        ("Diagnostic Hints", r"(?mi)^\s*-?\s*Diagnostic Hints\s*:"),
+        ("Ambiguous references", r"(?mi)^\s*-\s*Ambiguous references\s*:"),
         ("Recommended operation", r"(?mi)^\s*-\s*Recommended operation\s*:"),
         ("Selected candidate", r"(?mi)^\s*-\s*Selected candidate\s*:"),
         ("Candidate Cx", r"(?mi)^\s*-\s*Candidate\s+C\d+\s*:"),
@@ -444,9 +446,9 @@ def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationI
             *detail_lines,
             "",
             "Required repair:",
-            "- Do not output Counterfactual Ideal Experience, Runtime experience content, Experience Repair Signal, Recommended operation, Selected candidate, or C1/C2/C3 sections.",
-            "- Record observed execution facts only: timeline, outcome checks, correct work to preserve, observed problem, value/scope trace, source-field trace, diagnostic hints, raw evidence, and uncertainty.",
-            "- Diagnostic Hints must be hypotheses supported by evidence, not final injectable reminders or experience operations.",
+            "- Do not output Counterfactual Ideal Experience, Runtime experience content, Experience Repair Signal, Diagnostic Hints, Recommended operation, Selected candidate, or C1/C2/C3 sections.",
+            "- Do not output an Ambiguous references field or a verdict such as 'Ambiguous references: none'. Record request wording with relative terms, relative words observed, visible records before writes, records later changed, records included in the answer, records after writes, exact explicit-exclusion quotes, raw evidence, and uncertainty instead.",
+            "- Record observed execution facts only: timeline, outcome checks, correct work to preserve, observed problem, value/scope evidence, source-field evidence, raw evidence, and uncertainty.",
             "Output ONLY the complete JSON object as an instance of OUTPUT_SCHEMA; "
             "do not output the OUTPUT_SCHEMA definition itself.",
         ]
