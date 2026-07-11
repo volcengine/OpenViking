@@ -315,6 +315,36 @@ async def test_vectorize_image_file_enqueues_summary_and_image(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_vectorize_svg_file_uses_summary_and_indexes_markup(monkeypatch):
+    queue = DummyQueue()
+    svg_content = '<svg xmlns="http://www.w3.org/2000/svg"><text>queue flow</text></svg>'
+    fs = DummyFS(svg_content)
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/diagram.svg",
+        summary_dict={"name": "diagram.svg", "summary": "queue processing diagram"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    msg = queue.items[0]
+    assert msg.message == "queue processing diagram"
+    assert msg.context_data["content"] == svg_content
+    assert fs.read_file_calls == 1
+    assert fs.read_file_bytes_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_vectorize_image_file_falls_back_to_summary_when_image_unreadable(monkeypatch):
     class UnreadableImageFS(DummyFS):
         async def read_file_bytes(self, _path, ctx=None):
