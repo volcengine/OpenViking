@@ -112,8 +112,8 @@ See [`sdk/go/README.md`](../../../sdk/go/README.md) for package-level examples.
 
 #### JavaScript/TypeScript SDK Client
 
-The JavaScript/TypeScript SDK is an HTTP-only client for Node.js 18+ and modern
-browsers. It ships ESM, CommonJS and TypeScript declarations.
+The JavaScript/TypeScript SDK is an HTTP-only client for Node.js 18+. It ships
+ESM, CommonJS and TypeScript declarations.
 
 ```bash
 npm install @openviking/sdk

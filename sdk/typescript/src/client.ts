@@ -1,5 +1,5 @@
 import { OpenVikingError } from "./errors.js";
-import { zipSync } from "fflate/browser";
+import { zipSync } from "fflate";
 import type {
   AddResourceOptions,
   ClientConfig,
@@ -27,27 +27,48 @@ const compact = (value: JsonObject): JsonObject =>
     ),
   );
 const pathPart = (value: string): string => encodeURIComponent(value);
-const isBlobLike = (value: unknown): value is Blob => {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<Blob>;
-  return (
-    typeof candidate.arrayBuffer === "function" &&
-    typeof candidate.type === "string" &&
-    typeof candidate.size === "number"
-  );
+const bytesToDataURI = (bytes: Uint8Array, mimeType: string): string => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `data:${mimeType};base64,${btoa(binary)}`;
 };
-const blobFilename = (value: Blob, fallback: string): string => {
-  const name = (value as Blob & { name?: unknown }).name;
-  return typeof name === "string" && name ? name : fallback;
+
+const imageMimeType = (path: string): string => {
+  const extension = path.toLowerCase().match(/\.[^.\\/]+$/)?.[0];
+  const mimeTypes: Record<string, string> = {
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+  };
+  return (extension && mimeTypes[extension]) || "image/png";
 };
+
+async function nodeImagePathToDataURI(
+  path: string,
+): Promise<string | undefined> {
+  if (typeof process === "undefined" || !process.versions?.node)
+    return undefined;
+  const fsSpecifier = "node:fs/promises";
+  const fs = await import(fsSpecifier);
+  try {
+    const stat = await fs.stat(path);
+    if (!stat.isFile()) return undefined;
+    return bytesToDataURI(await fs.readFile(path), imageMimeType(path));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
 
 async function nodePathToBlob(
   path: string,
 ): Promise<{ blob: Blob; filename: string; sourceName?: string } | undefined> {
   if (typeof process === "undefined" || !process.versions?.node)
     return undefined;
-  // Keep Node built-ins as runtime-only imports so browser bundlers do not
-  // attempt to resolve them while building the browser branch.
+  // Keep built-in specifiers dynamic so the bundled ESM and CommonJS outputs
+  // can share this implementation without eager filesystem initialization.
   const fsSpecifier = "node:fs/promises";
   const pathSpecifier = "node:path";
   const fs = await import(fsSpecifier);
@@ -139,7 +160,7 @@ export class OpenVikingClient {
     }
     if (this.profile) url.searchParams.set("profile", "1");
     const headers = new Headers(this.headers);
-    let body: BodyInit | undefined;
+    let body: string | FormData | undefined;
     if (options.form) body = options.form;
     else if (options.body !== undefined) {
       headers.set("Content-Type", "application/json");
@@ -269,9 +290,9 @@ export class OpenVikingClient {
     }
   }
 
-  /** Add a remote URL, browser Blob/File, or Node.js local file/directory as a resource. */
+  /** Add a remote URL or Node.js local file/directory as a resource. */
   async addResource(
-    source: string | Blob,
+    source: string,
     options: AddResourceOptions = {},
   ): Promise<JsonObject> {
     if (options.to && options.parent)
@@ -296,24 +317,17 @@ export class OpenVikingClient {
           : undefined,
       telemetry: options.telemetry,
     });
-    const local =
-      typeof source === "string" ? await nodePathToBlob(source) : undefined;
+    const local = await nodePathToBlob(source);
     if (local) {
       body.temp_file_id = await this.upload(local.blob, local.filename);
       body.source_name = local.sourceName;
-    } else if (typeof source === "string") body.path = source;
-    else if (isBlobLike(source)) {
-      body.temp_file_id = await this.upload(
-        source,
-        blobFilename(source, "resource"),
-      );
-    }
+    } else body.path = source;
     return this.request("POST", "/api/v1/resources", { body });
   }
 
-  /** Install a skill from inline data, a Blob/File, or an existing Node.js path. */
+  /** Install a skill from inline data or an existing Node.js path. */
   async addSkill(
-    source: unknown | Blob,
+    source: unknown,
     options: WaitOptions & { targetUri?: string } = {},
   ): Promise<JsonObject> {
     const body: JsonObject = compact({
@@ -326,12 +340,7 @@ export class OpenVikingClient {
       typeof source === "string" ? await nodePathToBlob(source) : undefined;
     if (local)
       body.temp_file_id = await this.upload(local.blob, local.filename);
-    else if (isBlobLike(source)) {
-      body.temp_file_id = await this.upload(
-        source,
-        blobFilename(source, "skill"),
-      );
-    } else body.data = source;
+    else body.data = source;
     return this.request("POST", "/api/v1/skills", { body });
   }
   /** List installed skills. */
@@ -402,7 +411,7 @@ export class OpenVikingClient {
   /** Replace an installed skill. */
   async updateSkill(
     name: string,
-    source: unknown | Blob,
+    source: unknown,
     options: WaitOptions & {
       sourceMetadata?: JsonObject;
       targetUri?: string;
@@ -419,12 +428,7 @@ export class OpenVikingClient {
       typeof source === "string" ? await nodePathToBlob(source) : undefined;
     if (local)
       body.temp_file_id = await this.upload(local.blob, local.filename);
-    else if (isBlobLike(source)) {
-      body.temp_file_id = await this.upload(
-        source,
-        blobFilename(source, "skill"),
-      );
-    } else body.data = source;
+    else body.data = source;
     return this.request("PUT", `/api/v1/skills/${pathPart(name)}`, { body });
   }
   /** Delete an installed skill. */
@@ -515,13 +519,9 @@ export class OpenVikingClient {
     query: string,
     options: SearchOptions,
   ): Promise<FindResult> {
-    let imageUrl =
-      typeof options.image === "string" ? options.image : undefined;
-    if (isBlobLike(options.image)) {
-      const bytes = new Uint8Array(await options.image.arrayBuffer());
-      let binary = "";
-      for (const byte of bytes) binary += String.fromCharCode(byte);
-      imageUrl = `data:${options.image.type || "application/octet-stream"};base64,${btoa(binary)}`;
+    let imageUrl: string | undefined;
+    if (typeof options.image === "string") {
+      imageUrl = (await nodeImagePathToDataURI(options.image)) ?? options.image;
     }
     return this.request("POST", `/api/v1/search/${kind}`, {
       body: compact({
@@ -786,15 +786,21 @@ export class OpenVikingClient {
       `/api/v1/sessions/${pathPart(sessionId)}/messages/batch`,
       {
         body: compact({
-          messages: messages.map((m) =>
-            compact({
-              role: m.role,
-              content: m.content,
-              parts: m.parts,
-              created_at: m.createdAt,
-              peer_id: m.peerId,
-            }),
-          ),
+          messages: messages.map((message) => {
+            if (message.content === undefined && !message.parts?.length) {
+              throw new TypeError(
+                "OpenViking: each message requires content or parts",
+              );
+            }
+            const parts = message.parts?.length ? message.parts : undefined;
+            return compact({
+              role: message.role,
+              content: parts ? undefined : message.content,
+              parts,
+              created_at: message.createdAt,
+              peer_id: message.peerId,
+            });
+          }),
           telemetry,
         }),
       },
@@ -825,18 +831,16 @@ export class OpenVikingClient {
       include_vectors: includeVectors,
     });
   }
-  /** Import an OVPack blob or Node.js local file under a parent URI. */
+  /** Import a local OVPack file under a parent URI. */
   async importOVPack(
-    source: string | Blob,
+    source: string,
     parent: string,
     options: ImportPackOptions = {},
   ): Promise<string> {
-    const local =
-      typeof source === "string" ? await nodePathToBlob(source) : undefined;
-    const blob = local?.blob ?? (isBlobLike(source) ? source : undefined);
-    if (!blob)
+    const local = await nodePathToBlob(source);
+    if (!local)
       throw new TypeError(
-        "OpenViking: importOVPack requires a Blob or an existing Node.js local file",
+        "OpenViking: importOVPack requires an existing Node.js local file",
       );
     const result = await this.request<{ uri: string }>(
       "POST",
@@ -844,10 +848,7 @@ export class OpenVikingClient {
       {
         body: compact({
           parent: normalizeURI(parent),
-          temp_file_id: await this.upload(
-            blob,
-            local?.filename ?? "import.ovpack",
-          ),
+          temp_file_id: await this.upload(local.blob, local.filename),
           on_conflict: options.onConflict,
           vector_mode: options.vectorMode,
         }),
@@ -855,27 +856,22 @@ export class OpenVikingClient {
     );
     return result.uri;
   }
-  /** Restore an OVPack backup blob or Node.js local file. */
+  /** Restore a local OVPack backup file. */
   async restoreOVPack(
-    source: string | Blob,
+    source: string,
     options: ImportPackOptions = {},
   ): Promise<string> {
-    const local =
-      typeof source === "string" ? await nodePathToBlob(source) : undefined;
-    const blob = local?.blob ?? (isBlobLike(source) ? source : undefined);
-    if (!blob)
+    const local = await nodePathToBlob(source);
+    if (!local)
       throw new TypeError(
-        "OpenViking: restoreOVPack requires a Blob or an existing Node.js local file",
+        "OpenViking: restoreOVPack requires an existing Node.js local file",
       );
     const result = await this.request<{ uri: string }>(
       "POST",
       "/api/v1/pack/restore",
       {
         body: compact({
-          temp_file_id: await this.upload(
-            blob,
-            local?.filename ?? "restore.ovpack",
-          ),
+          temp_file_id: await this.upload(local.blob, local.filename),
           on_conflict: options.onConflict,
           vector_mode: options.vectorMode,
         }),

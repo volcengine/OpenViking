@@ -83,45 +83,43 @@ describe("OpenVikingClient", () => {
     );
   });
 
-  it("uploads blobs through the shared resource upload endpoint", async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(ok({ temp_file_id: "temp-1" }))
-      .mockResolvedValueOnce(ok({ task_id: "task-1" }));
-    const client = new OpenVikingClient({
-      baseUrl: "https://example.com",
-      fetch: fetcher,
-    });
-    await client.addResource(new Blob(["hello"], { type: "text/plain" }));
-    expect(String(fetcher.mock.calls[0]![0])).toBe(
-      "https://example.com/api/v1/resources/temp_upload",
-    );
-    expect(fetcher.mock.calls[0]![1]?.body).toBeInstanceOf(FormData);
-    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({
-      temp_file_id: "temp-1",
-    });
+  it("converts an existing Node.js image path to a data URI", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-image-"));
+    const path = join(directory, "photo.png");
+    await writeFile(path, new Uint8Array([137, 80, 78, 71]));
+    try {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+
+      await client.find("", { image: path });
+
+      const body = JSON.parse(String(fetcher.mock.calls[0]![1]?.body));
+      expect(body.image_url).toBe("data:image/png;base64,iVBORw==");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
-  it("preserves browser file names and sends the configured upload mode", async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(ok({ temp_file_id: "temp-file" }))
-      .mockResolvedValueOnce(ok({ task_id: "task-file" }));
+  it("normalizes empty parts consistently in batch messages", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
     const client = new OpenVikingClient({
       baseUrl: "https://example.com",
       fetch: fetcher,
-      uploadMode: "proxy",
     });
-    const file = new Blob(["# guide"], { type: "text/markdown" }) as Blob & {
-      name: string;
-    };
-    Object.defineProperty(file, "name", { value: "guide.md" });
 
-    await client.addResource(file);
+    await client.batchAddMessages("session", [
+      { role: "user", content: "hello", parts: [] },
+    ]);
 
-    const form = fetcher.mock.calls[0]![1]?.body as FormData;
-    expect((form.get("file") as File).name).toBe("guide.md");
-    expect(form.get("upload_mode")).toBe("proxy");
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      messages: [{ role: "user", content: "hello" }],
+    });
+    expect(() =>
+      client.batchAddMessages("session", [{ role: "user", parts: [] }]),
+    ).toThrow("each message requires content or parts");
   });
 
   it("maps typed watch options to the server contract", async () => {
@@ -188,16 +186,23 @@ describe("OpenVikingClient", () => {
   });
 
   it("maps non-JSON upload failures to OpenVikingError", async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(new Response("gateway failure", { status: 502 }));
-    const client = new OpenVikingClient({
-      baseUrl: "https://example.com",
-      fetch: fetcher,
-    });
-    await expect(client.addResource(new Blob(["hello"]))).rejects.toMatchObject(
-      { statusCode: 502 },
-    );
+    const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-error-"));
+    const path = join(directory, "resource.md");
+    await writeFile(path, "hello");
+    try {
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response("gateway failure", { status: 502 }));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+      await expect(client.addResource(path)).rejects.toMatchObject({
+        statusCode: 502,
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("uploads an existing Node.js local file instead of sending its path to the server", async () => {
@@ -212,8 +217,15 @@ describe("OpenVikingClient", () => {
       const client = new OpenVikingClient({
         baseUrl: "https://example.com",
         fetch: fetcher,
+        uploadMode: "shared",
       });
       await client.addResource(path);
+      expect(String(fetcher.mock.calls[0]![0])).toBe(
+        "https://example.com/api/v1/resources/temp_upload",
+      );
+      const form = fetcher.mock.calls[0]![1]?.body as FormData;
+      expect((form.get("file") as File).name).toBe("resource.md");
+      expect(form.get("upload_mode")).toBe("shared");
       expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject(
         { temp_file_id: "temp-local", source_name: "resource.md" },
       );

@@ -2,6 +2,11 @@
 export type JsonObject = Record<string, unknown>;
 /** One target URI or multiple target scopes. */
 export type TargetURI = string | string[];
+/** Header values accepted without requiring the DOM-only `HeadersInit` alias. */
+export type ClientHeaders =
+  Headers | Record<string, string> | [string, string][];
+/** Temporary upload storage mode supported by the OpenViking server. */
+export type UploadMode = "local" | "shared";
 
 /** Connection, identity and transport configuration. */
 export interface ClientConfig {
@@ -11,14 +16,14 @@ export interface ClientConfig {
   user?: string;
   actorPeerId?: string;
   timeout?: number;
-  headers?: HeadersInit;
+  headers?: ClientHeaders;
   fetch?: typeof globalThis.fetch;
   profile?: boolean;
-  uploadMode?: string;
+  uploadMode?: UploadMode;
 }
 
-/** A browser file/blob, a Node.js local path, a remote URL, or inline skill data. */
-export type UploadSource = string | Blob;
+/** A Node.js local path or remote URL accepted by resource APIs. */
+export type UploadSource = string;
 
 /** Options shared by OVPack import and restore operations. */
 export interface ImportPackOptions {
@@ -54,7 +59,7 @@ export interface AddResourceOptions extends WaitOptions {
 /** Semantic retrieval options. */
 export interface SearchOptions {
   targetUri?: TargetURI;
-  image?: string | Blob;
+  image?: string;
   sessionId?: string;
   limit?: number;
   nodeLimit?: number;
@@ -119,7 +124,7 @@ export interface GetSkillOptions {
   includeFiles?: boolean;
   includeSource?: boolean;
   level?: number;
-  targetUri?: TargetURI;
+  targetUri?: string;
 }
 /** Fields that can be changed on a watch task. */
 export interface UpdateWatchOptions {

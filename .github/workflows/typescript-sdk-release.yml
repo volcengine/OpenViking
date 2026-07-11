@@ -30,7 +30,7 @@ jobs:
           npm run typecheck
           npm run format:check
           npm run build
-          npm run test:browser
+          npm run test:node-types
           npm test
           npm pack --dry-run
       - name: Validate release tag
