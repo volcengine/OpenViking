@@ -27,6 +27,36 @@ GateStage = Literal["post_gradient", "post_plan"]
 GateMode = Literal["enforce", "warn", "shadow"]
 GateAction = Literal["allow", "warn", "reject"]
 
+_GATE_NONE_VALUES = {"", "none", "n/a", "na", "null", "无", "无。", "没有"}
+_GATE_AGGREGATE_TERMS_RE = re.compile(
+    r"\b(total|cost|count|list|summary|aggregate|balance|sum|subtotal|grand total|paid|refund)\b"
+    r"|总(?:费用|价|额|计|数)|合计|汇总|列表|数量|退款|余额|已付",
+    re.IGNORECASE,
+)
+_GATE_RELATIVE_SCOPE_RE = re.compile(
+    r"\b(?:other|remaining|those|the\s+rest|rest\s+of|leftover)\b|其他|剩余|其余|剩下",
+    re.IGNORECASE,
+)
+_GATE_WRITE_SCOPE_RE = re.compile(
+    r"\b(?:cancel|cancell|upgrade|modify|change|update|write|book|reschedule)\b"
+    r"|取消|升级|修改|变更|更改|写入|预订|改签",
+    re.IGNORECASE,
+)
+_GATE_LINE_ITEM_MONEY_SOURCE_RE = re.compile(
+    r"\b(?:line[- ]?item|itemized|reconstruct|derive|flight\s+price|fare)\b"
+    r"|price.{0,40}(?:passenger|count|quantity)"
+    r"|(?:passenger|count|quantity).{0,40}price"
+    r"|航班价格|价格.{0,12}乘客|乘客.{0,12}价格|明细.{0,12}(?:求和|相加)",
+    re.IGNORECASE,
+)
+_GATE_CANONICAL_MONEY_SOURCE_RE = re.compile(
+    r"\b(?:canonical|explicit)\b.{0,30}\b(?:total|paid|charged|payment|order|amount)\b"
+    r"|\b(?:payment[-_ ]?history|total[_ ]?amount|paid[_ ]?amount|charged[_ ]?amount|order[_ ]?amount)\b"
+    r"|(?:付款|支付|实付|已付|收取|订单|账单).{0,12}(?:金额|总额|费用)"
+    r"|(?:金额|总额|费用).{0,12}(?:付款|支付|实付|已付|收取|订单|账单)",
+    re.IGNORECASE,
+)
+
 
 @dataclass(slots=True)
 class GateDecision:
@@ -450,11 +480,15 @@ class ExperienceSkillReadabilityGate:
         applicability_terms = ("applies when", "does not apply", "适用", "不适用")
         has_applicability = any(term in situation_lower for term in applicability_terms)
         temporal_non_applicability = _temporal_non_applicability_terms(situation)
+        relative_scope_ambiguity = _experience_relative_write_scope_ambiguity_issue(content)
+        line_item_money_source = _experience_line_item_money_source_issue(content)
         if (
             not missing
             and has_source_binding
             and has_applicability
             and not temporal_non_applicability
+            and not relative_scope_ambiguity
+            and not line_item_money_source
         ):
             return None
         return GateDecision(
@@ -467,6 +501,8 @@ class ExperienceSkillReadabilityGate:
                 "has_source_binding": has_source_binding,
                 "has_applicability": has_applicability,
                 "temporal_non_applicability": temporal_non_applicability,
+                "relative_scope_ambiguity": relative_scope_ambiguity,
+                "line_item_money_source": line_item_money_source,
                 "situation_preview": _preview_text(situation, limit=500),
             },
             retriable=True,
@@ -476,7 +512,13 @@ class ExperienceSkillReadabilityGate:
                 "state applies-when, does-not-apply-when, and the runtime source binding "
                 "used to decide applicability. `Does not apply when` must be a task-pattern "
                 "mismatch, not a temporal stage such as still reading/writing or before "
-                "final_response. Put the complete four-section Markdown body in the "
+                "final_response. If relative wording such as other/remaining/其他/剩余 appears "
+                "while writes such as cancel/upgrade/modify are also discussed, `Scope ambiguity` "
+                "must label both the request-time scope and the post-action/current remaining "
+                "scope instead of none. For monetary totals/paid/refund/balance values, bind "
+                "the source to explicit canonical total/paid/charged/order/payment amount "
+                "fields when present, and use reconstructed line-item sums only as fallback "
+                "or cross-check. Put the complete four-section Markdown body in the "
                 "`constraint` field (or `content` if that is the only available field); do not "
                 "return a production `# name` / `## 规则` block. Do not add trigger_code."
             ),
@@ -1509,6 +1551,28 @@ def _markdown_section(content: str, heading: str) -> str:
     pattern = re.compile(rf"(?ims)^##\s+{re.escape(heading)}\s*\n(?P<body>.*?)(?=^##\s+|\Z)")
     match = pattern.search(content or "")
     return match.group("body").strip() if match else ""
+
+
+def _experience_relative_write_scope_ambiguity_issue(content: str) -> bool:
+    text = str(content or "")
+    if not (
+        _GATE_AGGREGATE_TERMS_RE.search(text)
+        and _GATE_RELATIVE_SCOPE_RE.search(text)
+        and _GATE_WRITE_SCOPE_RE.search(text)
+    ):
+        return False
+    situation = _markdown_section(text, "Situation")
+    scope_ambiguity = _field_from_section(situation, "Scope ambiguity").strip().lower()
+    return scope_ambiguity in _GATE_NONE_VALUES
+
+
+def _experience_line_item_money_source_issue(content: str) -> bool:
+    text = str(content or "")
+    if not _GATE_AGGREGATE_TERMS_RE.search(text):
+        return False
+    if not _GATE_LINE_ITEM_MONEY_SOURCE_RE.search(text):
+        return False
+    return not bool(_GATE_CANONICAL_MONEY_SOURCE_RE.search(text))
 
 
 def _field_from_section(section: str, field_name: str) -> str:

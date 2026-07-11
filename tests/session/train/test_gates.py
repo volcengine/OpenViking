@@ -328,6 +328,84 @@ async def test_skill_readability_gate_rejects_temporal_does_not_apply():
 
 
 @pytest.mark.asyncio
+async def test_skill_readability_gate_rejects_relative_write_scope_none():
+    item = _plan_item()
+    item.after_content = (
+        "## Situation\n"
+        "- Applies when: user asks for other upcoming items and their total while also "
+        "requesting cancel or upgrade writes.\n"
+        "- Does not apply when: the user explicitly says excluding a named object.\n"
+        "- Source binding: user request scope, retrieved record set, and later write scope.\n"
+        "- Scope ambiguity: 无\n\n"
+        "## Reminder\n"
+        "- Preserve the request-time aggregate and label any post-action remaining aggregate.\n\n"
+        "## Procedure\n"
+        "- Before replying: compare request-time and post-action scopes.\n\n"
+        "## Anti-pattern\n"
+        "- Do not answer only the remaining subset.\n"
+        "- Preserve the requested writes.\n"
+    )
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=_trajectory_with_repair_signal(
+            action="create",
+            first_wrong_tool="communicate_with_user",
+            trigger_boundary="communicate_with_user",
+        ),
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceSkillReadabilityGate().evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert decision.evidence["relative_scope_ambiguity"] is True
+
+
+@pytest.mark.asyncio
+async def test_skill_readability_gate_rejects_line_item_money_without_canonical_source():
+    item = _plan_item()
+    item.after_content = (
+        "## Situation\n"
+        "- Applies when: user asks for a total cost.\n"
+        "- Does not apply when: user asks for a non-monetary count.\n"
+        "- Source binding: retrieved records, source field, and calculation.\n"
+        "- Scope ambiguity: none\n\n"
+        "## Reminder\n"
+        "- Calculate the total cost from source-bound facts.\n\n"
+        "## Procedure\n"
+        "- Before replying: compute each record as flight price × passenger count, then sum.\n"
+        "- If any record is missing: read it.\n\n"
+        "## Anti-pattern\n"
+        "- Do not omit part of the total.\n"
+        "- Preserve unrelated actions.\n"
+    )
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=_trajectory_with_repair_signal(
+            action="create",
+            first_wrong_tool="communicate_with_user",
+            trigger_boundary="communicate_with_user",
+        ),
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceSkillReadabilityGate().evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert decision.evidence["line_item_money_source"] is True
+
+
+@pytest.mark.asyncio
 async def test_causal_signal_gate_rejects_structured_selected_none():
     trajectory = Trajectory(
         name="missing_total",

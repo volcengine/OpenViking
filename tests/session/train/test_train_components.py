@@ -22,11 +22,34 @@ from openviking.session.train import (
     PatchSemanticGradient,
     PolicyUpdatePlan,
 )
+from openviking.session.train.components.trajectory_analyzer import (
+    _trajectory_content_validation_issues,
+)
 from openviking.session.train.gates import ExperienceSkillReadabilityGate, GateRunner
 
 DEFAULT_TRIGGER_CODE = (
     'def should_trigger(ctx):\n    return ctx.get("candidate_tool") == "test_tool"\n'
 )
+
+
+def test_trajectory_validation_rejects_experience_generation_sections():
+    content = (
+        "# bad_trace\n"
+        "- Outcome: partial\n"
+        "- Counterfactual Ideal Experience:\n"
+        "  - Candidate C1:\n"
+        "    - Runtime experience content: do something\n"
+        "- Experience Repair Signal:\n"
+        "  - Recommended operation: create\n"
+        "  - Selected candidate: C1\n"
+    )
+
+    issues = _trajectory_content_validation_issues("bad_trace", content)
+
+    assert issues
+    assert issues[0].reason == "trajectory contains experience-generation sections"
+    assert "Counterfactual Ideal Experience" in issues[0].details
+    assert "Experience Repair Signal" in issues[0].details
 
 
 class FakeVikingFS:

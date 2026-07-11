@@ -1,14 +1,12 @@
 memory_type: trajectories
 description: |
-  Extract a compact SkillOpt-style trajectory analysis whose primary purpose is to propose
-  the minimum reusable runtime experience that would make the next similar session succeed.
+  Extract a compact factual execution record from an agent trajectory.
 
-  This is not a verbose audit log. Treat each candidate as a counterfactual prevention
-  hypothesis: if injected before the first preventable wrong decision, it should change the
-  agent's behavior enough to avoid the failure while preserving correct behavior. Prefer one
-  causal lesson that is source-bound, runtime-actionable, generalizable, and safe to inject.
-  Do not hardcode case literals, do not duplicate existing coverage, and output no candidate
-  when no bounded runtime patch would prevent recurrence.
+  A trajectory memory is evidence for later experience extraction, not an experience and not
+  a final root-cause judgment. Preserve what happened, what was requested, what was read,
+  what was written/communicated, what succeeded, what failed, and which runtime facts are
+  uncertain. Do not propose injectable reminders, do not write production experience content,
+  and do not recommend create/update/delete operations for experiences.
 
 embedding_template: |-
   {{ trajectory_name }}
@@ -25,11 +23,10 @@ fields:
   - name: trajectory_name
     type: string
     description: |
-      Name the reusable lesson or audited boundary directly.
+      Name the observed boundary or failure/success pattern, not the final lesson.
       Must be written in {{ language }}.
       {% if language == 'en' %}Use lowercase snake_case, max 6 words.{% else %}Use a concise noun phrase, max 18 characters.{% endif %}
-      Prefer the experience-worthy boundary over the broad task name.
-      Good: "named_scope_no_substitution", "aggregate_scope_freeze", "cancel_once_then_book", "点名范围不替代".
+      Good: "aggregate_scope_observed", "wrong_value_source", "confirmation_scope_trace", "总费用范围记录".
     merge_op: immutable
 
   - name: outcome
@@ -48,16 +45,16 @@ fields:
     description: |
       Positive semantic retrieval text for embedding, not display.
       Format exactly:
-      "Stage: <opening|after_read|before_confirmation|before_write|after_write|final_response|terminal_handoff>; Boundary: <runtime condition>; Capability: <operation/check/communication>; Target: <semantic object role>; Outcome: <success|failure|partial|unfinished|unknown>."
+      "Stage: <opening|after_read|before_confirmation|before_write|after_write|final_response|terminal_handoff>; Boundary: <observed runtime boundary>; Capability: <read|write|policy|calculation|communication|handoff>; Target: <semantic object/value role>; Outcome: <success|failure|partial|unfinished|unknown>."
 
       Generalize identifiers, names, exact amounts, dates, task numbers, and raw payload values.
-      Anchor on the condition where the future reminder should trigger.
+      Anchor on the observed boundary where later experience extraction should inspect evidence.
     merge_op: immutable
 
   - name: experience_effects
     type: string
     description: |
-      Machine-readable JSON object about injected experience reminders.
+      Machine-readable JSON object about injected experience reminders observed in this run.
       Output ONLY a valid compact JSON object, not markdown and not a code block.
 
       Required shape:
@@ -66,10 +63,10 @@ fields:
       If no experience reminder was injected, output exactly:
       {"positive_ids":[],"negative_ids":[],"weak_ids":[]}
 
-      positive_ids: injected experiences that were necessary/helpful.
-      negative_ids: injected experiences that were misleading or over-broad.
-      weak_ids: injected experiences that were relevant but insufficient.
-      Use only IDs from the injected list. Do not invent IDs.
+      positive_ids: injected experiences that appeared necessary/helpful in the observed run.
+      negative_ids: injected experiences that appeared misleading or over-broad in the observed run.
+      weak_ids: injected experiences that were relevant but insufficient in the observed run.
+      Use only IDs from the injected list. Do not invent IDs. If unsure, leave the arrays empty.
     merge_op: immutable
 
   - name: content
@@ -77,34 +74,27 @@ fields:
     description: |
       Write in {{ language }}. Keep raw tool names, schema keys, and quoted runtime values unchanged.
 
-      You are an expert SkillOpt-style failure-analysis agent for AI agent tasks.
+      You are producing a compact factual trace for downstream experience extraction. Your job is
+      to preserve enough runtime evidence for a later extractor to compare multiple trajectories
+      and decide the true reusable experience. Do not decide the final experience here.
 
-      You will be given ONE agent trajectory, the task outcome, and any injected experience
-      reminders. Your job is to identify the minimum reusable experience that would make the
-      next similar session succeed if it were injected before the first preventable wrong
-      decision.
+      ## Do NOT output
+      - No `Counterfactual Ideal Experience` section.
+      - No `Runtime experience content`.
+      - No `Experience Repair Signal`.
+      - No `Recommended operation`, `New experience action`, `Selected candidate`, or C1/C2/C3.
+      - No instructions that should be injected into a future agent.
+      - No broad advice such as "check all requirements" or "include all information".
 
-      ## Analysis Process
-      1. Read the whole trajectory before writing.
-      2. Decide whether the trajectory is a failure, partial failure, unfinished run, success, or
-         unknown.
-      3. For failures, locate the first preventable wrong decision: the earliest boundary where
-         a reminder could have changed a tool call, missing tool call, confirmation, calculation,
-         policy branch, write action, communication, final response, or handoff.
-      4. Diagnose the mistaken runtime rule the agent used at that boundary: wrong scope,
-         object binding, policy branch, calculation, confirmation assumption, ordering, or
-         communication obligation. Do not stop at the symptom.
-      5. Propose at most ONE candidate repair: `Candidate C1`.
-      6. Candidate C1 must be a counterfactual prevention experience: it must trigger from
-         visible runtime facts before the wrong decision, replace the mistaken rule, state what
-         future behavior changes, and explain why the next similar session would succeed.
-      7. Do not learn a full workflow. Patch only the missing rule/check/communication that would
-         change the first preventable wrong decision.
-      8. Do not duplicate existing experience reminders. If an injected reminder was helpful,
-         weak, or misleading, reflect that in the `experience_effects` field and choose
-         validate/update/none accordingly.
-      9. If no bounded reusable candidate would actually prevent recurrence, set
-         `Selected candidate: none` and `Recommended operation: skip`.
+      ## What to preserve
+      Preserve concrete runtime evidence, especially:
+      - user request and confirmations that created obligations;
+      - retrieved records, candidate objects, policy facts, source fields, and calculations;
+      - read/discovery scope versus mutation/write scope;
+      - communication obligations and final user-visible content;
+      - expected versus observed object/value/scope/source-field differences;
+      - correct actions/messages that should be preserved;
+      - uncertainty and competing interpretations.
 
       ## Output Format
       Output exactly ONE markdown record with the labels below. Do not add extra top-level sections.
@@ -113,175 +103,69 @@ fields:
       - Outcome: <success|failure|partial|unfinished|unknown>
       - Domain: <task/tool domain>
       - User Goal: <generalized user goal, no task id>
-      - Failure Summary:
-        - Failure type: <wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|premature_write|extra_write|premature_done|tool_error|success_pattern|none>
-        - Count: 1
-        - Description: <one-line reusable pattern, not case-specific>
-      - Runtime Facts:
-        - User obligation: <request/confirmation that creates the obligation, or none>
-        - Tool/policy facts: <visible runtime facts needed for the rule, or none>
-        - Correct work to preserve: <correct actions/reads/messages this lesson must not block, or none>
-        - db_check: <passed|failed|unknown>
-        - action_checks: <passed|failed|unknown>
-        - communicate_checks: <passed|failed|unknown>
-      - Communication/Value Diagnosis:
-        - Required value role: <semantic role of the required answer/list/count/summary/value, or none>
-        - Expected source scope: <object set/value scope implied by the user's request at request time, or none>
-        - Expected source field: <canonical runtime field/tool text that should supply the value, or none>
-        - Observed communicated value role: <semantic role and scope of what was actually communicated, or none>
-        - Observed source field: <runtime field or derivation the agent actually used, or none>
+      - Injected Experiences:
+        - Loaded: <semantic names or none>
+        - Helpful: <which loaded reminders appeared helpful, or none>
+        - Misleading: <which loaded reminders appeared misleading/over-broad, or none>
+        - Insufficient: <which loaded reminders were relevant but incomplete, or none>
+      - Timeline:
+        - User request: <relevant user wording and obligations, generalized>
+        - Reads: <important read tools and semantic records/fields retrieved>
+        - Decisions: <important branch/calculation/scope/object decisions the agent made>
+        - Writes: <write tools called, target object roles, whether observed correct/incorrect/unknown>
+        - Communication: <user-visible answer/summary/value/list given or omitted>
+        - Termination: <done/handoff/unfinished and any side effects>
+      - Outcome Checks:
+        - Required state/actions: <passed|failed|partial|unknown; evidence in runtime terms>
+        - Required communication: <passed|failed|partial|unknown; evidence in runtime terms>
+        - Other required effects: <passed|failed|partial|unknown|none>
+      - Correct Work To Preserve:
+        - <correct reads/actions/messages/policy branches that later experience extraction should not block, or none>
+      - Observed Problem:
+        - Failure type: <wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|premature_write|extra_write|premature_done|tool_error|calculation_error|scope_substitution|wrong_source_field|none|unknown>
+        - First observed divergence: <earliest observable boundary where behavior diverged, or none/unknown>
+        - Candidate bad behavior: <tool/action/message/calculation shape that appears risky, or none>
+        - What was missing/wrong: <runtime fact, object binding, value, policy gate, confirmation, or communication that differed, or none>
+      - Value/Scope Trace:
+        - Requested value/list/summary role: <semantic role, or none>
+        - Request-time scope: <object set/value scope implied when user asked, or none/unknown>
+        - Agent-used scope: <scope actually used in tool/message/calculation, or none/unknown>
+        - Post-action/current scope: <scope after later writes if different/relevant, or none/unknown>
+        - Explicit exclusions from user wording: <semantic roles explicitly excluded by user's own words, or none>
+        - Ambiguous references: <relative terms such as other/remaining/those/其他/剩余 and plausible scopes, or none>
+      - Source Field Trace:
+        - Expected source fields: <runtime fields/tool text that appear relevant to the required value, or none/unknown>
+        - Agent-used source fields: <runtime fields or derivation actually used, or none/unknown>
+        - Canonical value fields observed: <explicit total/paid/charged/order/payment amount fields if present, or none/unknown>
+        - Line-item derivation observed: <line-item formula if used or available, or none/unknown>
         - Difference type: <omitted|calculation_error|scope_substitution|wrong_source_field|none|unknown>
-        - Substituted scope: <post-action/current/narrower/broader scope used instead, or none>
-        - Later write effect: <how later modifications/cancellations/upgrades changed a current-state value, or none>
-      - First Wrong Tool Call:
-        - Step: <raw step id, final_response, expected_missing_tool, or none>
-        - Tool: <one raw tool name, communicate_with_user, or none>
-        - Error type: <missing_expected_tool|missing_communication|wrong_arguments|wrong_object|wrong_policy_branch|premature_write|extra_write|premature_done|tool_error|none>
-        - Candidate shape: <generalized risky candidate_tool_args/content shape, or none>
-        - Missing check: <mistaken runtime rule or single missing runtime fact/policy gate/object binding/calculation/confirmation/communication, or none>
-        - Expected behavior: <what should have changed at that boundary so the session would succeed>
-      - Counterfactual Ideal Experience:
-        - Candidate C1:
-          - Situation: <visible runtime condition where the reminder should fire, or none>
-          - Repair rule: <minimal source-bound rule that replaces the mistaken runtime rule, or none>
-          - Experience name: <lower_snake_case or concise name, or none>
-          - Injection boundary: <opening|after_read|before_confirmation|before_write|after_write|final_response|none>
-          - Runtime experience content:
-            <complete production-style experience block, or none>
-          - Source binding:
-            - Scope freeze point: <when object set/value/decision becomes fixed, or none>
-            - Included records: <semantic roles included, or none>
-            - Excluded records: <semantic roles excluded, or none>
-            - Source field: <runtime fields/text/tool outputs to read, or none>
-            - Derivation: <how to compute/select/verify using visible facts, or none>
-            - Later write effect: <whether later writes change a previously requested value/scope, or none>
-            - Ambiguous alternate scopes: <if wording could mean original requested scope and
-              post-action/current remaining scope, name both labels; otherwise none>
-            - Confirmation binding: <which user confirmation authorizes which write objects, or none>
-          - Applicability: <exact runtime shape where C1 applies>
-          - Anti-pattern: <tempting broad or wrong-scope lesson not to learn>
-          - Preserve: <specific correct behavior this experience must preserve>
-          - Why this would help: <trigger -> changed future behavior -> why the next similar session succeeds>
-        - Selected candidate: <C1|none>
-      - Experience Repair Signal:
-        - Recommended operation: <create|update|validate|skip>
-        - Existing target experience: <name or none>
-        - New experience action: <create|none>
-        - Trigger boundary: <same tool/boundary as First Wrong Tool Call.Tool, final_response, or none>
-        - Repair principle: <C1 repair in one sentence, or none>
-        - Reject over-broad lesson: <tempting broad rule that should not be learned>
-        - Reject wrong-scope lesson: <nearby non-causal or wrong-scope rule that should not be learned>
-      - Case Evidence:
-        - Diagnostic literals: <ids/values/tool args only as evidence, or none>
-        - Observed wrong behavior: <what happened, or none>
-        - Observed correct behavior: <what worked, or none>
-      - Result: <final outcome and side effects>
+      - Diagnostic Hints:
+        - Possible causes: <bounded hypotheses supported by observed evidence; write none if insufficient>
+        - Evidence for: <facts supporting those hypotheses, or none>
+        - Evidence against / uncertainty: <facts that make the diagnosis uncertain or ambiguous, or none>
+        - Near-miss risk: <nearby correct behavior that a future experience must avoid harming, or none>
+      - Raw Evidence:
+        - User/request snippets: <short relevant snippets or none>
+        - Tool/result snippets: <short relevant snippets, field names, IDs/values only as evidence, or none>
+        - Final message snippets: <short relevant snippets or none>
+      - Result: <concise final outcome and side effects>
 
-      ## Runtime Experience Content
-      When `Selected candidate: C1` and the recommended operation is create/update/validate,
-      `Runtime experience content` must be a directly injectable production reminder, not an
-      explanation, case audit, or validation report. It should tell the future agent what mistaken
-      decision to avoid and what runtime check/rule would make the next similar session succeed.
-      Prefer the concise production style of a direct reminder: reusable situation, numbered
-      rules, and the target wrong behavior to avoid. Use this shape:
-
-      # <experience_name>
-
-      当 <reusable runtime situation> 时，必须 <core strategy>。
-
-      ## 规则
-      1. <actionable rule bound to visible runtime facts>
-      2. <actionable rule bound to visible runtime facts>
-      ...
-
-      目标是避免 <closest tempting wrong behavior>，从而在相似场景中完成用户目标。
-
-      If {{ language }} is English, write the same structure in English. If no candidate is
-      selected, write `Runtime experience content: none`.
-
-      ## Selection Rules
-      - Failure-driven candidates take priority. For failure/partial/unfinished trajectories,
-        choose create or update only when a narrow runtime reminder would likely have prevented
-        the first preventable wrong decision and made the next similar session succeed.
-      - Success-driven candidates are conservative. For success trajectories, choose validate only
-        when the trajectory demonstrates a reusable strategy not already covered; otherwise skip.
-      - Candidate C1 must not include task IDs, exact dates, exact amounts, raw entity names, hidden
-        answers, dataset names, evaluator terms, or diagnostic-only literals.
-      - Put exact identifiers, amounts, dates, and raw payload snippets only under `Case Evidence`.
-      - Avoid vague lessons such as "check all requirements" or "include all required information".
-        Bind each rule to user wording, confirmation, object membership, selected tool output,
-        source field, calculation, policy gate, payment/source field, or communication obligation.
-      - For scope, aggregate, list, summary, or value failures, diagnose the implicit scope/value
-        decision the agent made, what runtime evidence did or did not justify it, and what earlier
-        reminder would change that decision. Do not force a preferred scope shape; extract the
-        causal rule that would prevent the observed failure.
-      - For information/aggregate/list/summary/value requests, preserve the source scope created
-        at the moment the user made the request. Later writes may create a second post-action or
-        current-state scope, but they must not silently replace the original requested scope.
-      - If wording is ambiguous between the original requested set and a post-action remaining
-        set, Candidate C1 should say to communicate both scopes with explicit labels rather than
-        choosing only the narrower scope. Keep this domain-agnostic; do not mention dataset names,
-        fixed IDs, exact amounts, or task-specific values in the reusable lesson.
-      - Words such as "other", "remaining", "those", "the rest", "其他", "剩余", or similar
-        relative references are not explicit exclusions by themselves when the user is also
-        discussing writes. Treat them as ambiguous unless the user independently says in their own
-        words to exclude a named object/semantic role, such as "except/excluding X". Do not write
-        `Scope ambiguity: none` for that situation.
-      - If the expected answer/list/count/summary/value differs from a similar value the agent
-        communicated, do not call it a simple omission until you diagnose the difference as
-        `scope_substitution`, `calculation_error`, `wrong_source_field`, or true `omitted`.
-        A later-write/current-state aggregate replacing an earlier request-time aggregate is
-        `scope_substitution`.
-      - For money, total cost, paid amount, balance, refund, or other aggregate value requests,
-        identify the canonical source field before deriving from line items. If retrieved records
-        include explicit total/paid/charged/payment/order amount fields, prefer those fields for
-        user-visible "total cost" answers and use line-item sums only as a fallback or cross-check.
-        If the agent used line-item derivation while a canonical total/payment field was available
-        and the values differ, diagnose `wrong_source_field`, not just `calculation_error`.
-      - Do not exclude records from a request-time information/aggregate/list/summary/value
-        solely because they are later modified, canceled, upgraded, consumed, split, or otherwise
-        changed. Exclude them only when the user's own wording explicitly excludes that semantic
-        role from the earlier information request.
-      - If the agent chose a post-action/current/remaining subset but the user had earlier asked
-        for an original/source aggregate, Candidate C1 must preserve the original request-time
-        scope and, when both interpretations are plausible, instruct the future agent to state
-        both labeled scopes. In that case `Ambiguous alternate scopes` must not be `none`.
-      - For object/action scope failures, distinguish read/discovery scope from mutation/write
-        scope. Retrieved extra objects may be used for verification or communication, but they
-        do not become write targets unless the user independently requested them.
-      - Preserve correct near-miss behavior. If the same tool had both correct and wrong calls,
-        Candidate C1 must name the discriminator that makes the wrong call different.
-
-      ## OV Gate Compatibility
-      These labels are required by downstream OV parsers and gates; keep them exact:
-      `Runtime Facts`, `First Wrong Tool Call`, `Counterfactual Ideal Experience`,
-      `Candidate C1`, `Selected candidate`, and `Experience Repair Signal`.
-
-      - Use exactly `Selected candidate: C1` or `Selected candidate: none`.
-      - Do not output Candidate C2 or Candidate C3.
-      - If `Selected candidate: C1`, fill `First Wrong Tool Call.Tool`,
-        `First Wrong Tool Call.Error type`, `Experience Repair Signal.Recommended operation`,
-        `Experience Repair Signal.Trigger boundary`, and all C1 `Source binding` fields.
-      - For totals/counts/lists/summaries, Candidate C1 must fill non-empty
-        `Scope freeze point`, `Included records`, `Excluded records`, `Source field`,
-        `Derivation`, and `Later write effect`. The freeze point must be when the user asked
-        for the aggregate/list/summary, not after later writes. If multiple runtime scopes are
-        plausible, fill `Ambiguous alternate scopes` with explicit labels for each scope.
-      - For total-cost/paid-amount style values, `Source field` must say whether the value comes
-        from canonical total/paid/charged/payment fields or from a line-item derivation. When both
-        exist, Candidate C1 should instruct the future agent to prefer the canonical total field
-        and cross-check any derivation.
-      - If `Communication/Value Diagnosis.Difference type` is `scope_substitution`, Candidate C1
-        must name the substituted scope and the preserved request-time scope. Do not write
-        `Scope ambiguity: none` or `Ambiguous alternate scopes: none` when trajectory evidence
-        shows both an original/request-time scope and a later post-action/current scope.
-      - If `Communication/Value Diagnosis.Difference type` is `wrong_source_field`, Candidate C1
-        must name the expected canonical source field, the incorrect field/derivation used, and
-        the future source-selection rule that would prevent recurrence.
-      - `Runtime Facts` may contain `db_check`, `action_checks`, and `communicate_checks` for OV
-        parsing. Do not put those control-plane terms inside Candidate C1, `Repair principle`, or
-        `Runtime experience content`.
-      - If a source-bound C1 cannot be written, choose `Selected candidate: none`,
-        `Recommended operation: skip`, and `Runtime experience content: none`.
+      ## Rules
+      - Be factual and compact. Prefer evidence over interpretation.
+      - Do not hide uncertainty. If the trace does not prove the expected scope/source field,
+        write unknown/uncertain instead of inventing a root cause.
+      - Do not generalize IDs, dates, names, or exact amounts into rules. Exact literals may appear
+        only under `Raw Evidence` when they are needed to audit the trace.
+      - Distinguish information/read scope from mutation/write scope. Extra records read for
+        discovery or communication do not become write targets unless user wording confirms that.
+      - For value/aggregate/list/summary requests, record request-time scope, agent-used scope,
+        post-action/current scope, explicit exclusions, and ambiguous references separately.
+      - For monetary/value answers, record both canonical fields and line-item derivations if
+        visible. Do not decide here which one should be the final reusable rule unless the runtime
+        evidence directly shows the agent used a different source than the requested value.
+      - If the run succeeded, record the successful path and why it appears safe; do not produce a
+        success-path SOP or an injectable reminder.
+      - If an injected experience was misleading, record how it influenced observed behavior; do
+        not rewrite the experience here.
 
     merge_op: patch

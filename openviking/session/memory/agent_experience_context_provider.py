@@ -92,9 +92,9 @@ The system handles create vs update automatically:
 - The failure is successful, case-specific, unsupported, random, already solved by available tool facts, or not preventable by a runtime reminder → output no changes.
 - If the failure came from agent-initiated scope expansion, do not treat the user's later yes/confirmation to the agent's over-broad proposal as a clean user-initiated request. Preserve the original user-requested write/action scope unless the user independently requested a new object/action in their own words.
 - If tool/action/DB checks passed but required user-visible communication failed, create/update a communication-boundary experience. Generalize the omitted literal into its semantic role: total cost, identifier, policy explanation, next step, etc.
-- If the trajectory has `Counterfactual Ideal Experience` and selected C1 says an ideal experience would fix the rollout, use C1 as the repair target. Preserve its situation, repair rule, source binding, applicability, and anti-pattern in generalized runtime language.
-- If C1 includes concise production `Runtime experience content`, preserve its operative situation, numbered rules, and target wrong behavior, but convert them into the skill-loader `## Situation`/`## Reminder`/`## Procedure`/`## Anti-pattern` format.
-- Treat legacy `Experience Repair Signal.Action=skip`, `Recommended operation=skip`, `Existing target experience=none`, or `Trigger boundary=none` as advisory only for failed/partial trajectories; they must not suppress a reusable new experience.
+- Treat trajectory memories as factual evidence, not authoritative conclusions. Use their `Timeline`, `Outcome Checks`, `Observed Problem`, `Value/Scope Trace`, `Source Field Trace`, `Diagnostic Hints`, and `Raw Evidence` to infer the reusable repair.
+- Do not copy `Diagnostic Hints` directly into an experience. Re-check the original runtime evidence, injected experience effects, existing experiences, and this gate contract before writing an injectable reminder.
+- A failed or partial trajectory does not require an experience update. Create/update only when the evidence supports a narrow runtime reminder that would likely prevent or recover from the first materially outcome-changing mistake.
 
 ## Writing rules
 

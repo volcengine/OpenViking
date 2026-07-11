@@ -49,42 +49,6 @@ logger = get_logger(__name__)
 
 _TRAJECTORY_MEMORY_TYPE = "trajectories"
 
-_CONTROL_PLANE_TERMS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
-    (term, re.compile(pattern, re.IGNORECASE))
-    for term, pattern in (
-        ("evaluation", r"\bevaluation\b"),
-        ("evaluator", r"\bevaluator\b"),
-        ("communicate_checks", r"\bcommunicate_checks?\b"),
-        ("action_checks", r"\baction_checks?\b"),
-        ("db_check", r"\bdb_checks?\b"),
-        ("reward", r"\breward\b"),
-        ("rubric", r"\brubric\b"),
-        ("评估", r"评估"),
-        ("奖励", r"奖励"),
-    )
-)
-_VAGUE_COMPLETENESS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in (
-        r"\b(?:include|check|verify|ensure)\s+(?:all\s+)?required\s+(?:info|information)\b",
-        r"\ball\s+required\s+(?:info|information|items)\b",
-        r"所有(?:必要|所需|要求的)信息",
-    )
-)
-_AGGREGATE_TERMS_RE = re.compile(
-    r"\b(total|count|list|summary|aggregate|balance|sum|subtotal|grand total)\b"
-    r"|总(?:费用|价|额|计|数)|合计|汇总|列表|数量",
-    re.IGNORECASE,
-)
-_INVALID_AGGREGATE_FREEZE_RE = re.compile(
-    r"\bafter\s+(?:all\s+)?(?:db|database|tool|write)\s+(?:actions?|operations?|calls?)"
-    r"|final\s+response|prepar(?:e|ing)\s+(?:the\s+)?final"
-    r"|完成所有(?:数据库|工具|写入).{0,8}(?:后|之后)"
-    r"|(?:最终|最后)(?:回复|沟通|通信).{0,8}(?:前|时|阶段)",
-    re.IGNORECASE,
-)
-_NONE_VALUES = {"", "none", "n/a", "na", "null", "无", "无。", "没有"}
-
 
 @dataclass(slots=True)
 class _TrajectoryValidationIssue:
@@ -271,6 +235,7 @@ class TrajectoryRolloutAnalyzer:
             return PostValidationRetryDecision(
                 retry=True,
                 instruction=_trajectory_validation_retry_instruction(issues),
+                include_latest_draft=True,
             )
 
         orchestrator = ExtractLoop(
@@ -443,61 +408,24 @@ def _trajectory_content_validation_issues(
     target_name: str,
     content: str,
 ) -> list[_TrajectoryValidationIssue]:
-    selected = _selected_candidate(content)
-    if not selected or selected == "none":
-        return []
-    if selected != "c1":
-        return [
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="selected candidate must be C1 or none",
-                details=f"selected={selected}",
-            )
-        ]
-
-    c1 = _candidate_section(content, "C1")
-    repair_principle = _field_from_section(
-        _section(content, "Experience Repair Signal"), "Repair principle"
-    )
-    reusable_text = "\n".join([c1, f"Repair principle: {repair_principle}"])
     issues: list[_TrajectoryValidationIssue] = []
-
-    terms = _control_plane_terms(reusable_text)
-    if terms:
+    forbidden_patterns = (
+        ("Counterfactual Ideal Experience", r"(?mi)^\s*-?\s*Counterfactual Ideal Experience\s*:"),
+        ("Runtime experience content", r"(?mi)^\s*-?\s*Runtime experience content\s*:"),
+        ("Experience Repair Signal", r"(?mi)^\s*-?\s*Experience Repair Signal\s*:"),
+        ("Recommended operation", r"(?mi)^\s*-\s*Recommended operation\s*:"),
+        ("Selected candidate", r"(?mi)^\s*-\s*Selected candidate\s*:"),
+        ("Candidate Cx", r"(?mi)^\s*-\s*Candidate\s+C\d+\s*:"),
+    )
+    found = [name for name, pattern in forbidden_patterns if re.search(pattern, content or "")]
+    if found:
         issues.append(
             _TrajectoryValidationIssue(
                 target_name=target_name,
-                reason="C1 reusable fields contain evaluator/control-plane wording",
-                details=", ".join(terms),
+                reason="trajectory contains experience-generation sections",
+                details=", ".join(found),
             )
         )
-    if _has_vague_completeness_phrase(reusable_text):
-        issues.append(
-            _TrajectoryValidationIssue(
-                target_name=target_name,
-                reason="C1 uses vague completeness wording instead of source-bound runtime facts",
-            )
-        )
-
-    if _looks_like_aggregate_or_list_repair(content, c1):
-        missing_fields = _missing_aggregate_source_binding_fields(c1)
-        if missing_fields:
-            issues.append(
-                _TrajectoryValidationIssue(
-                    target_name=target_name,
-                    reason="C1 aggregate/list source binding is incomplete",
-                    details=", ".join(missing_fields),
-                )
-            )
-        freeze_point = _field_from_section(c1, "Scope freeze point")
-        if _aggregate_freeze_point_is_invalid(freeze_point):
-            issues.append(
-                _TrajectoryValidationIssue(
-                    target_name=target_name,
-                    reason="C1 aggregate/list scope freeze point is too late",
-                    details=freeze_point,
-                )
-            )
     return issues
 
 
@@ -510,18 +438,15 @@ def _trajectory_validation_retry_instruction(issues: list[_TrajectoryValidationI
     return "\n".join(
         [
             "Your previous trajectory extraction was rejected by training validation.",
-            "Retry once. Regenerate the complete trajectory memory operations; do not add unrelated memories.",
+            "Retry once. Regenerate the complete trajectory memory operations as factual execution records only; do not add unrelated memories.",
             "",
-            "Invalid trajectory C1 repairs:",
+            "Invalid trajectory content:",
             *detail_lines,
             "",
             "Required repair:",
-            "- If `Selected candidate=C1`, C1 reusable fields must use only runtime facts: user request, confirmed target, retrieved record/set membership, source field, calculation/derivation, policy gate, or user-visible communication obligation.",
-            "- Do not use evaluator/control-plane terms outside Case evidence: evaluation, evaluator, communicate_checks, action_checks, db_check, reward, rubric, 评估, 奖励.",
-            "- Do not use vague completeness rules such as include/check/verify all required information.",
-            "- For totals/counts/lists/summaries, bind C1 to the object set at the time the user asked for that aggregate/list/summary. Later cancellations/updates/writes must explicitly say whether they change that already-requested scope.",
-            "- For totals/counts/lists/summaries, fill non-empty Source binding fields: Scope freeze point, Included records, Excluded records, Source field, Derivation, and Later write effect.",
-            "- If a valid source-bound C1 cannot be written, set `Selected candidate: none` and `Recommended operation: skip`.",
+            "- Do not output Counterfactual Ideal Experience, Runtime experience content, Experience Repair Signal, Recommended operation, Selected candidate, or C1/C2/C3 sections.",
+            "- Record observed execution facts only: timeline, outcome checks, correct work to preserve, observed problem, value/scope trace, source-field trace, diagnostic hints, raw evidence, and uncertainty.",
+            "- Diagnostic Hints must be hypotheses supported by evidence, not final injectable reminders or experience operations.",
             "Output ONLY the complete JSON object as an instance of OUTPUT_SCHEMA; "
             "do not output the OUTPUT_SCHEMA definition itself.",
         ]
@@ -552,78 +477,6 @@ def _filter_invalid_trajectory_operations(operations: ResolvedOperations) -> Res
 def _fallback_trajectory_name(op: Any) -> str:
     uri = (getattr(op, "uris", None) or [""])[0]
     return str(uri).rstrip("/").split("/")[-1].removesuffix(".md") or "unknown_trajectory"
-
-
-def _selected_candidate(content: str) -> str:
-    return _norm_candidate(_first_match(content, r"(?mi)^\s*-\s*Selected candidate:\s*(.+)$"))
-
-
-def _norm_candidate(value: str) -> str:
-    text = str(value or "").strip().strip("` ").lower()
-    match = re.match(r"^(c[123]|none)\b", text)
-    return match.group(1) if match else text
-
-
-def _candidate_section(content: str, candidate: str) -> str:
-    match = re.search(
-        rf"(?ims)^\s*-\s*Candidate\s+{re.escape(candidate)}:\s*\n"
-        rf"(?P<body>.*?)(?=^\s*-\s*Candidate\s+[A-Z0-9]+:|^\s*-\s*Selected candidate:|\Z)",
-        content or "",
-    )
-    return match.group("body") if match else ""
-
-
-def _control_plane_terms(text: str) -> list[str]:
-    return [term for term, pattern in _CONTROL_PLANE_TERMS if pattern.search(text or "")]
-
-
-def _has_vague_completeness_phrase(text: str) -> bool:
-    return any(pattern.search(text or "") for pattern in _VAGUE_COMPLETENESS_PATTERNS)
-
-
-def _looks_like_aggregate_or_list_repair(content: str, c1: str) -> bool:
-    return bool(_AGGREGATE_TERMS_RE.search("\n".join([content or "", c1 or ""])))
-
-
-def _missing_aggregate_source_binding_fields(c1: str) -> list[str]:
-    missing: list[str] = []
-    for field in (
-        "Scope freeze point",
-        "Included records",
-        "Excluded records",
-        "Source field",
-        "Derivation",
-        "Later write effect",
-    ):
-        value = _field_from_section(c1, field).strip().lower()
-        if value in _NONE_VALUES:
-            missing.append(field)
-    return missing
-
-
-def _aggregate_freeze_point_is_invalid(value: str) -> bool:
-    text = str(value or "").strip()
-    if text.lower() in _NONE_VALUES:
-        return True
-    return bool(_INVALID_AGGREGATE_FREEZE_RE.search(text))
-
-
-def _section(content: str, title: str) -> str:
-    pattern = re.compile(
-        rf"(?mi)^-\s*{re.escape(title)}:\s*$\n(?P<body>.*?)(?=^-[^\n]*:\s*(?:$|.)|\Z)",
-        re.DOTALL | re.MULTILINE,
-    )
-    match = pattern.search(content or "")
-    return match.group("body") if match else ""
-
-
-def _field_from_section(section: str, field_name: str) -> str:
-    return _first_match(section, rf"(?mi)^\s*-\s*{re.escape(field_name)}:\s*(.+)$")
-
-
-def _first_match(text: str, pattern: str) -> str:
-    match = re.search(pattern, text or "")
-    return match.group(1).strip() if match else ""
 
 
 def _log_operations(operations: ResolvedOperations) -> None:
