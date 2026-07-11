@@ -58,12 +58,12 @@ curl http://localhost:1933/api/v1/observer/system \
     "is_healthy": true,
     "errors": [],
     "components": {
-      "queue": {"name": "queue", "is_healthy": true, "has_errors": false, "status": {}},
-      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false, "status": {}},
-      "models": {"name": "models", "is_healthy": true, "has_errors": false, "status": {}},
-      "lock": {"name": "lock", "is_healthy": true, "has_errors": false, "status": {}},
-      "retrieval": {"name": "retrieval", "is_healthy": true, "has_errors": false, "status": {}},
-      "filesystem": {"name": "filesystem", "is_healthy": true, "has_errors": false, "status": {}}
+      "queue": {"name": "queue", "is_healthy": true, "has_errors": false, "status": "..."},
+      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false, "status": "..."},
+      "models": {"name": "models", "is_healthy": true, "has_errors": false, "status": "..."},
+      "lock": {"name": "lock", "is_healthy": true, "has_errors": false, "status": "..."},
+      "retrieval": {"name": "retrieval", "is_healthy": true, "has_errors": false, "status": "..."},
+      "filesystem": {"name": "filesystem", "is_healthy": true, "has_errors": false, "status": "..."}
     }
   }
 }
