@@ -41,13 +41,19 @@ def _transform_gitignore_line(line: str, base_rel: str) -> str:
         return raw
 
     scoped = pattern
-    if scoped.startswith("/"):
-        scoped = scoped.lstrip("/")
-        scoped = f"{base_rel}/{scoped}" if scoped else base_rel
-    elif "/" in scoped:
-        scoped = f"{base_rel}/{scoped}"
+    is_dir_only = scoped.endswith("/")
+    body = scoped.rstrip("/") if is_dir_only else scoped
+
+    if body.startswith("/"):
+        body = body.lstrip("/")
+        scoped = f"{base_rel}/{body}" if body else base_rel
+    elif "/" in body:
+        scoped = f"{base_rel}/{body}"
     else:
-        scoped = f"{base_rel}/**/{scoped}" if scoped else base_rel
+        scoped = f"{base_rel}/**/{body}" if body else base_rel
+
+    if is_dir_only and scoped:
+        scoped = f"{scoped}/"
 
     return f"!{scoped}" if negated else scoped
 
