@@ -45,7 +45,7 @@ class ToolContext:
 
     session_key: SessionKey = None
     sandbox_manager: SandboxManager | None = None
-    workspace_id: str = sandbox_manager.to_workspace_id(session_key) if sandbox_manager else None
+    workspace_id: str | None = None
     sender_id: str | None = None
     actor_peer_id: str | None = None
     memory_peer_ids: list[str] | None = None
@@ -55,6 +55,8 @@ class ToolContext:
     channel_metadata: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.workspace_id is None and self.sandbox_manager is not None and self.session_key is not None:
+            self.workspace_id = self.sandbox_manager.to_workspace_id(self.session_key)
         if self.memory_owner_user_ids is None and self.memory_user_ids is not None:
             self.memory_owner_user_ids = self.memory_user_ids
         elif self.memory_user_ids is None and self.memory_owner_user_ids is not None:
