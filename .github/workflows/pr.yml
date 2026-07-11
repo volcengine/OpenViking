@@ -21,7 +21,7 @@ jobs:
   plugin-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
@@ -68,7 +68,7 @@ jobs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
       cuvs_changed: ${{ steps.check.outputs.cuvs_changed }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
