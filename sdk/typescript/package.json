@@ -22,7 +22,7 @@
     "format": "prettier --write src tests",
     "format:check": "prettier --check src tests",
     "test": "vitest run",
-    "test:browser": "esbuild dist/index.js --bundle --platform=browser --format=esm --outfile=/tmp/openviking-sdk-browser.js",
+    "test:node-types": "tsc --project tests/node-consumer/tsconfig.json",
     "typecheck": "tsc --noEmit"
   },
   "engines": { "node": ">=18" },

@@ -78,6 +78,25 @@ def _image_to_data_uri(data: bytes | bytearray | memoryview, file_name: str = ""
     return f"data:{_image_mime_type(file_name)};base64,{encoded}"
 
 
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    temporary = tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=path.parent,
+        prefix=f".{path.name}-",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary_path = Path(temporary.name)
+    try:
+        with temporary:
+            temporary.write(data)
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary.close()
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def _normalize_image_input(image: Any) -> Optional[str]:
     if image is None:
         return None
@@ -1273,8 +1292,7 @@ class AsyncHTTPClient:
         )
         if not response.is_success:
             self._handle_response(response)
-        with open(to_path, "wb") as f:
-            f.write(response.content)
+        _atomic_write_bytes(to_path, response.content)
         return str(to_path)
 
     async def backup_ovpack(self, to: str, include_vectors: bool = False) -> str:
@@ -1289,8 +1307,7 @@ class AsyncHTTPClient:
         )
         if not response.is_success:
             self._handle_response(response)
-        with open(to_path, "wb") as f:
-            f.write(response.content)
+        _atomic_write_bytes(to_path, response.content)
         return str(to_path)
 
     async def import_ovpack(

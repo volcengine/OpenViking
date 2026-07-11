@@ -84,13 +84,29 @@ func (c *Client) downloadPack(ctx context.Context, path string, payload map[stri
 		}
 		return &Error{Code: "UNKNOWN", Message: envelopeDetail(env, resp.StatusCode, data), StatusCode: resp.StatusCode}
 	}
-	file, err := os.Create(outPath)
+	file, err := os.CreateTemp(filepath.Dir(outPath), "."+filepath.Base(outPath)+"-*.tmp")
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	_, err = io.Copy(file, resp.Body)
-	return err
+	tempPath := file.Name()
+	keepTemp := true
+	defer func() {
+		if keepTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if _, err := io.Copy(file, resp.Body); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, outPath); err != nil {
+		return err
+	}
+	keepTemp = false
+	return nil
 }
 
 // ImportOVPack imports a local .ovpack under parent.

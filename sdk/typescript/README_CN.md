@@ -1,6 +1,6 @@
 # @openviking/sdk
 
-OpenViking 的轻量级 JavaScript/TypeScript HTTP SDK，面向现代浏览器和 Node.js 18+，没有运行时依赖。
+OpenViking 的轻量级 JavaScript/TypeScript HTTP SDK，面向 Node.js 18+，没有运行时依赖。
 
 ```bash
 npm install @openviking/sdk
@@ -12,8 +12,6 @@ import { OpenVikingClient } from "@openviking/sdk";
 const client = new OpenVikingClient({
   baseUrl: "http://127.0.0.1:1933",
   apiKey: "your-key",
-  // 可选：部分部署会要求指定上传模式。
-  uploadMode: "proxy",
 });
 
 const results = await client.search("部署文档", {
@@ -22,9 +20,24 @@ const results = await client.search("部署文档", {
 });
 ```
 
-SDK 与 Python `openviking-sdk`、Go SDK 使用相同的 HTTP API、身份请求头、响应信封和错误码，覆盖资源与技能、文件系统与内容、检索、会话、任务、Watch、Observer 状态和租户管理接口。
+SDK 与 Python `openviking-sdk`、Go SDK 使用相同的 HTTP API、身份请求头、响应信封和错误码，覆盖资源与技能、文件系统与内容、资源关系、检索、会话、OVPack、快照、任务、Watch、Observer 状态和租户管理接口。
 
-浏览器本地文件可直接传入 `Blob` 或 `File`。Node.js 中存在的字符串路径会自动上传（目录会先压缩）；其他字符串会作为 URL 或服务端路径发送。浏览器无法读取任意本地路径，因此浏览器场景应传 URL 或文件对象。
+Node.js 中存在的本地文件路径会自动上传，目录会先压缩后上传；其他字符串会作为 URL 或服务端路径发送。
+
+使用共享临时存储的部署可设置 `uploadMode: "shared"`；服务端也接受 `"local"`（默认值）。
+
+OVPack 导出和备份与 Python、Go SDK 契约一致：内容会流式写入 Node.js 本地文件，并返回最终文件路径。
+
+```ts
+const packPath = await client.exportOVPack(
+  "viking://resources/docs",
+  "./backups",
+);
+await client.importOVPack(packPath, "viking://resources", {
+  onConflict: "overwrite",
+  vectorMode: "auto",
+});
+```
 
 ## 发布
 

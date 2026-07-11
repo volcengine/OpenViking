@@ -707,6 +707,9 @@ async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
     backup_response = SimpleNamespace(is_success=True, content=b"backup")
     fake_http = SimpleNamespace(post=AsyncMock(side_effect=[export_response, backup_response]))
     client._http = fake_http
+    existing_export = tmp_path / "exports" / "demo.ovpack"
+    existing_export.parent.mkdir()
+    existing_export.write_bytes(b"old-backup")
 
     export_path = await client.export_ovpack("/resources/demo/", str(tmp_path / "exports" / "demo"))
     backup_path = await client.backup_ovpack(str(tmp_path / "backup-dir"))
@@ -715,6 +718,27 @@ async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
     assert Path(export_path).read_bytes() == b"exported"
     assert backup_path.endswith("backup-dir.ovpack")
     assert Path(backup_path).read_bytes() == b"backup"
+
+
+@pytest.mark.asyncio
+async def test_backup_ovpack_preserves_existing_file_when_replace_fails(tmp_path):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._http = SimpleNamespace(
+        post=AsyncMock(
+            return_value=SimpleNamespace(is_success=True, content=b"new-backup")
+        )
+    )
+    output = tmp_path / "backup.ovpack"
+    output.write_bytes(b"known-good-backup")
+
+    with patch(
+        "openviking_sdk.client.os.replace", side_effect=OSError("replace failed")
+    ):
+        with pytest.raises(OSError, match="replace failed"):
+            await client.backup_ovpack(str(output))
+
+    assert output.read_bytes() == b"known-good-backup"
+    assert list(tmp_path.iterdir()) == [output]
 
 
 @pytest.mark.asyncio
