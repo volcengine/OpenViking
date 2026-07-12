@@ -405,11 +405,17 @@ class LocalIndex(IIndex):
         if self.dense_search:
             with self._dense_search_lock.write():
                 if self.engine_proxy:
-                    self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
+                    self.engine_proxy.delete_data(
+                        self._convert_delta_list_for_index(
+                            delta_list, tolerate_invalid_old_fields=True
+                        )
+                    )
                 self.dense_search.delete(delta_list)
                 self._schedule_dense_rebuild()
         elif self.engine_proxy:
-            self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
+            self.engine_proxy.delete_data(
+                self._convert_delta_list_for_index(delta_list, tolerate_invalid_old_fields=True)
+            )
 
     def _schedule_dense_rebuild(self) -> None:
         if not self._auto_background_rebuild or self.dense_search is None:
@@ -921,7 +927,12 @@ class LocalIndex(IIndex):
             return self.engine_proxy.get_data_count()
         return 0
 
-    def _convert_delta_list_for_index(self, delta_list: List[DeltaRecord]) -> List[DeltaRecord]:
+    def _convert_delta_list_for_index(
+        self,
+        delta_list: List[DeltaRecord],
+        *,
+        tolerate_invalid_old_fields: bool = False,
+    ) -> List[DeltaRecord]:
         if not self.field_type_converter:
             return delta_list
         converted: List[DeltaRecord] = []
@@ -936,11 +947,22 @@ class LocalIndex(IIndex):
                 if data.fields
                 else data.fields
             )
-            item.old_fields = (
-                self.field_type_converter.convert_fields_for_index(data.old_fields)
-                if data.old_fields
-                else data.old_fields
-            )
+            if data.old_fields:
+                try:
+                    item.old_fields = self.field_type_converter.convert_fields_for_index(
+                        data.old_fields
+                    )
+                except json.JSONDecodeError:
+                    if not tolerate_invalid_old_fields:
+                        raise
+                    logger.warning(
+                        "Ignoring unparseable old_fields while deleting legacy record "
+                        "label=%s; scalar-index cleanup will be best-effort",
+                        data.label,
+                    )
+                    item.old_fields = ""
+            else:
+                item.old_fields = data.old_fields
             converted.append(item)
         return converted
 
