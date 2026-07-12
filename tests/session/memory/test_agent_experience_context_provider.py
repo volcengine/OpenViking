@@ -270,7 +270,7 @@ async def test_agent_experience_comparison_prefers_case_linked_success_trajector
         ctx=ctx,
     )
 
-    assert [item["uri"] for item in results] == [success_uri, failure_uri, semantic_uri]
+    assert [item["uri"] for item in results] == [success_uri]
     assert results[0]["outcome"] == "success"
 
 
@@ -345,3 +345,64 @@ async def test_agent_experience_comparison_resolves_case_from_trajectory_backlin
     )
 
     assert [item["uri"] for item in results] == [success_uri]
+
+
+@pytest.mark.asyncio
+async def test_agent_experience_comparison_does_not_semantic_fallback_without_case_success():
+    case_uri = "viking://user/user_1/memories/cases/tau2_airline_train_5.md"
+    current_uri = "viking://user/user_1/memories/trajectories/current_failure.md"
+    failure_uri = "viking://user/user_1/memories/trajectories/same_case_failure.md"
+
+    def raw(memory_file: MemoryFile) -> str:
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+        return MemoryFileUtils.write(memory_file)
+
+    files = {
+        case_uri: raw(
+            MemoryFile(
+                uri=case_uri,
+                content="# tau2_airline_train_5",
+                memory_type="cases",
+                extra_fields={"case_name": "tau2_airline_train_5"},
+                links=[
+                    {
+                        "from_uri": case_uri,
+                        "to_uri": failure_uri,
+                        "link_type": "related_to",
+                        "weight": 1.0,
+                    }
+                ],
+            )
+        ),
+        failure_uri: raw(
+            MemoryFile(
+                uri=failure_uri,
+                content="# failure\n- Outcome: partial",
+                memory_type="trajectories",
+                extra_fields={"trajectory_name": "failure", "outcome": "partial"},
+            )
+        ),
+    }
+
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="other upcoming total cost failure",
+        trajectory_uri=current_uri,
+        case_uri=case_uri,
+    )
+    provider.search_files = AsyncMock(
+        return_value=["viking://user/user_1/memories/trajectories/semantic_success.md"]
+    )
+    viking_fs = AsyncMock()
+    viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
+    ctx = RequestContext(user=UserIdentifier(account_id="acc", user_id="user_1"), role=Role.USER)
+
+    results = await provider._search_comparison_trajectories(
+        trajectory_dir="viking://user/user_1/memories/trajectories",
+        viking_fs=viking_fs,
+        ctx=ctx,
+    )
+
+    assert results == []
+    provider.search_files.assert_not_awaited()

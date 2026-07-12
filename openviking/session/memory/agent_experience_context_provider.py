@@ -37,6 +37,10 @@ COMPARISON_TRAJ_TOP_K = 6  # peer trajectories to compare before experience writ
 MAX_COMPARISON_TRAJ_CHARS = 6000
 
 
+def _is_success_trajectory(item: Dict[str, Any]) -> bool:
+    return str(item.get("outcome") or "").strip().lower() == "success"
+
+
 def _comparison_trajectory_sort_key(item: Dict[str, Any]) -> tuple[int, str]:
     outcome = str(item.get("outcome") or "").strip().lower()
     outcome_rank = {"success": 0, "partial": 1, "failure": 2, "unfinished": 3}.get(
@@ -192,29 +196,35 @@ All memory content must be written in {output_language}.
         seen = {self.trajectory_uri}
 
         linked_uris = await self._case_linked_trajectory_uris(viking_fs=viking_fs, ctx=ctx)
-        linked_results = await self._load_comparison_trajectory_results(
-            linked_uris,
-            viking_fs=viking_fs,
-            ctx=ctx,
-            seen=seen,
-        )
-        linked_results.sort(key=_comparison_trajectory_sort_key)
-        for result in linked_results:
-            results.append(result)
-            if len(results) >= COMPARISON_TRAJ_TOP_K:
-                return results
+        if linked_uris is not None:
+            linked_results = [
+                result
+                for result in await self._load_comparison_trajectory_results(
+                    linked_uris,
+                    viking_fs=viking_fs,
+                    ctx=ctx,
+                    seen=seen,
+                )
+                if _is_success_trajectory(result)
+            ]
+            linked_results.sort(key=_comparison_trajectory_sort_key)
+            return linked_results[:COMPARISON_TRAJ_TOP_K]
 
         candidate_uris = await self.search_files(
             query=self.trajectory_summary[:500] or "trajectory",
             search_uris=[trajectory_dir],
             limit=COMPARISON_TRAJ_TOP_K + 2,
         )
-        semantic_results = await self._load_comparison_trajectory_results(
-            candidate_uris,
-            viking_fs=viking_fs,
-            ctx=ctx,
-            seen=seen,
-        )
+        semantic_results = [
+            result
+            for result in await self._load_comparison_trajectory_results(
+                candidate_uris,
+                viking_fs=viking_fs,
+                ctx=ctx,
+                seen=seen,
+            )
+            if _is_success_trajectory(result)
+        ]
         for result in semantic_results:
             results.append(result)
             if len(results) >= COMPARISON_TRAJ_TOP_K:
@@ -226,10 +236,10 @@ All memory content must be written in {output_language}.
         *,
         viking_fs: VikingFS,
         ctx: RequestContext,
-    ) -> List[str]:
+    ) -> Optional[List[str]]:
         case_uri = await self._resolve_case_uri(viking_fs=viking_fs, ctx=ctx)
         if not case_uri:
-            return []
+            return None
         try:
             raw = await viking_fs.read_file(case_uri, ctx=ctx) or ""
             case_file = MemoryFileUtils.read(raw, uri=case_uri)
