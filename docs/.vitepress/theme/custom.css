@@ -29,6 +29,12 @@
   }
 }
 
+@media (min-width: 1600px) {
+  :root {
+    --vp-layout-max-width: calc(100vw - 176px);
+  }
+}
+
 .dark {
   --vp-c-brand-1: #5eead4;
   --vp-c-brand-2: #2dd4bf;
