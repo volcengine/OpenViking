@@ -1777,6 +1777,21 @@ class Session:
         context = await self._collect_session_context_components()
         merged_messages = context["messages"]
 
+        # Fallback: if merged_messages is empty but there are completed archives,
+        # read messages from all completed archives (handles the case where
+        # messages.jsonl was cleared after archiving but get_session_context
+        # should still return the full history)
+        if not merged_messages and context["total_archives"] > 0:
+            completed = await self._get_completed_archive_refs()
+            for archive in reversed(completed):
+                try:
+                    msgs = await self._read_archive_messages(archive["archive_uri"])
+                    if msgs:
+                        merged_messages = msgs
+                        break
+                except Exception:
+                    continue
+
         message_tokens = sum(m.estimated_tokens for m in merged_messages)
 
         # 精简日志：只打印关键信息
