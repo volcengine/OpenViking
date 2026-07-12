@@ -405,7 +405,6 @@ async def search_type_quota_recall(
             can_try_full = memory_type in budgets
             if memory_type == "preferences":
                 can_try_full = preference_full_count < PREFERENCE_FULL_LIMIT
-                preference_full_count += 1
             if (
                 can_try_full
                 and used_by_type.get(memory_type, 0) + full_chars
@@ -417,6 +416,8 @@ async def search_type_quota_recall(
                 fragment = full
                 used_by_type[memory_type] = used_by_type.get(memory_type, 0) + full_chars
                 total_chars += full_chars
+                if memory_type == "preferences":
+                    preference_full_count += 1
             elif memory_type == "events":
                 summary = _extract_event_summary(content, fallback=abstract)
                 if summary:
