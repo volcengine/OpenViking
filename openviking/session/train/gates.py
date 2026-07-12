@@ -584,8 +584,6 @@ class ExperienceRootCausePreventionGate:
     mode: GateMode = "enforce"
     name: str = "experience_root_cause_prevention"
     vlm: Any = None
-    max_trajectory_chars: int = 0
-    max_comparison_chars: int = 0
     max_policy_chars: int = 5000
 
     def applies_to(self, target: GateTarget) -> bool:
@@ -601,8 +599,6 @@ class ExperienceRootCausePreventionGate:
     async def evaluate(self, target: GateTarget) -> GateDecision | None:
         prompt = _experience_root_cause_prevention_prompt(
             target,
-            max_trajectory_chars=self.max_trajectory_chars,
-            max_comparison_chars=self.max_comparison_chars,
             max_policy_chars=self.max_policy_chars,
         )
         try:
@@ -966,8 +962,6 @@ class _TriggerProfileVisitor(ast.NodeVisitor):
 def _experience_root_cause_prevention_prompt(
     target: GateTarget,
     *,
-    max_trajectory_chars: int,
-    max_comparison_chars: int,
     max_policy_chars: int,
 ) -> str:
     trajectory = target.trajectory
@@ -975,14 +969,8 @@ def _experience_root_cause_prevention_prompt(
     evaluation_summary = _evaluation_summary(analysis) if analysis is not None else ""
     before = _preview_text(target.before_content or "", limit=max_policy_chars)
     after = _preview_text(target.after_content or "", limit=max_policy_chars)
-    trajectory_content = _preview_text(
-        trajectory.content if trajectory is not None else "",
-        limit=max_trajectory_chars,
-    )
-    comparison_content = _comparison_trajectory_context(
-        trajectory,
-        max_chars=max_comparison_chars,
-    )
+    trajectory_content = trajectory.content if trajectory is not None else ""
+    comparison_content = _comparison_trajectory_context(trajectory)
     trajectory_uri = trajectory.uri if trajectory is not None else ""
     trajectory_outcome = trajectory.outcome if trajectory is not None else ""
 
@@ -1095,8 +1083,6 @@ target: {target.target_name}
 
 def _comparison_trajectory_context(
     trajectory: Trajectory | None,
-    *,
-    max_chars: int,
 ) -> str:
     if trajectory is None:
         return ""
@@ -1105,7 +1091,6 @@ def _comparison_trajectory_context(
     if not isinstance(items, list) or not items:
         return ""
     chunks: list[str] = []
-    remaining = max(0, max_chars)
     for index, item in enumerate(items, start=1):
         if not isinstance(item, dict):
             continue
@@ -1113,14 +1098,8 @@ def _comparison_trajectory_context(
         outcome = str(item.get("outcome") or "")
         content = str(item.get("content") or "")
         header = f"### comparison_{index}\nuri: {uri}\noutcome: {outcome}\n"
-        if remaining <= len(header):
-            break
-        body = _preview_text(content, limit=remaining - len(header))
-        chunk = header + body
+        chunk = header + content
         chunks.append(chunk)
-        remaining -= len(chunk) + 2
-        if remaining <= 0:
-            break
     return "\n\n".join(chunks)
 
 
@@ -1168,8 +1147,6 @@ def _normalize_experience_prevention_result(parsed: dict[str, Any]) -> dict[str,
 
 def _preview_text(text: str, *, limit: int) -> str:
     value = str(text or "")
-    if limit <= 0:
-        return value
     if len(value) <= limit:
         return value
     return value[: max(0, limit - 3)] + "..."

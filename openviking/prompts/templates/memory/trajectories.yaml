@@ -127,7 +127,7 @@ fields:
         - Failure type: <wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|premature_write|extra_write|premature_done|tool_error|calculation_error|scope_substitution|wrong_source_field|none|unknown>
         - First observed divergence: <earliest observable boundary where behavior diverged, or none/unknown>
         - Candidate bad behavior: <tool/action/message/calculation shape that appears risky, or none>
-        - What was missing/wrong: <runtime fact, object binding, value, policy gate, confirmation, or communication that differed, or none>
+        - What was missing/wrong: <runtime fact, object binding, value, policy gate, confirmation, or communication that differed, or none. If the failure involves a policy or eligibility judgment, include the specific runtime field values and policy conditions from the conversation that determined the expected vs. actual outcome, not just that an action was missing>
       - Value/Scope Evidence:
         - Requested value/list/summary role: <semantic role, or none>
         - Request boundary/timing: <when the user asked relative to reads/writes/communications, or unknown>
