@@ -1142,7 +1142,11 @@ class QdrantCollection(ICollection):
             json_body={
                 "ids": [_to_qdrant_point_id(pk) for pk in primary_keys],
                 "with_payload": True,
-                "with_vector": False,
+                # Return vectors so that callers performing a full-record
+                # upsert (e.g. update_search_tags -> get -> upsert) have the
+                # vector available. Without this, _make_point raises
+                # "Qdrant point requires at least one dense or sparse vector".
+                "with_vector": True,
             },
         )
         points = _extract_points(response)
@@ -1152,6 +1156,13 @@ class QdrantCollection(ICollection):
             if not isinstance(point, dict):
                 continue
             original_id, payload = self._point_payload_for_read(point)
+            # Preserve vectors in the returned fields so subsequent full
+            # upserts (which require vectors) can reuse them.
+            dense_vector, sparse_vector = self._extract_named_vectors(point)
+            if dense_vector is not None:
+                payload[self._dense_vector_name] = dense_vector
+            if sparse_vector is not None:
+                payload[self._sparse_vector_name] = sparse_vector
             found_ids.add(str(original_id))
             items.append(DataItem(id=original_id, fields=payload))
         return FetchDataInCollectionResult(
