@@ -180,6 +180,12 @@ result = client.admin_create_account(
 )
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminCreateAccount("account-id", "admin-user-id"));
+```
+
 **Go SDK**
 
 ```go
@@ -274,6 +280,12 @@ for account in accounts:
     print(f"Account: {account['account_id']}, created: {account['created_at']}, users: {account['user_count']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminListAccounts());
+```
+
 **Go SDK**
 
 ```go
@@ -358,6 +370,12 @@ client.initialize()
 
 result = client.admin_delete_account("acme")
 print(f"Account deleted: {result['deleted']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.adminDeleteAccount("account-id");
 ```
 
 **Go SDK**
@@ -466,6 +484,12 @@ result = client.admin_register_user(
     role="user",
     user_config={"add_targets": {"resource_uri": "viking://user/resources/project-a"}},
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminRegisterUser("account-id", "user-id", "user"));
 ```
 
 **Go SDK**
@@ -579,6 +603,12 @@ for user in users:
     print(f"User: {user['user_id']}, role: {user['role']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminListUsers("account-id"));
+```
+
 **Go SDK**
 
 ```go
@@ -666,6 +696,12 @@ client.initialize()
 
 result = client.admin_remove_user("acme", "bob")
 print(f"User deleted: {result['deleted']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.adminRemoveUser("account-id", "user-id");
 ```
 
 **Go SDK**
@@ -757,6 +793,12 @@ client.initialize()
 
 result = client.admin_set_role("acme", "bob", "admin")
 print(f"User: {result['user_id']}, new role: {result['role']}")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.adminSetRole("account-id", "user-id", "admin");
 ```
 
 **Go SDK**
@@ -851,6 +893,12 @@ result = client.admin_regenerate_key("acme", "bob", seed="bob-new-seed")
 print(f"New user key: {result['user_key']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminRegenerateKey("account-id", "user-id"));
+```
+
 **Go SDK**
 
 ```go
@@ -910,6 +958,12 @@ ov --sudo admin regenerate-key acme bob
 - `openviking/service/legacy_migration.py:LegacyDataMigration` - 迁移实现
 
 #### 2. 接口和参数说明
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminMigrate(false));
+```
 
 **HTTP API**
 

@@ -200,6 +200,12 @@ for ctx in results.resources:
     print("---")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.find("authentication", { targetUri: "viking://resources/docs/" }));
+```
+
 **使用 Target URI 限定搜索范围**
 
 ```python
@@ -458,6 +464,12 @@ for ctx in results.resources:
     print(f"Abstract: {ctx.abstract[:200]}...")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.search("authentication", { targetUri: "viking://resources/docs/" }));
+```
+
 **不使用会话的搜索**
 
 ```python
@@ -633,6 +645,12 @@ for match in results['matches']:
     print(f"    {match['content']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.grep("authentication", { uri: "viking://resources/docs/" }));
+```
+
 **Go SDK**
 
 ```go
@@ -745,6 +763,12 @@ for uri in results['matches']:
 # 查找所有 Python 文件，并显式放宽返回上限
 results = client.glob("**/*.py", "viking://resources", node_limit=1024)
 print(f"Found {results['count']} Python files")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.glob("**/*.md", "viking://resources/docs/"));
 ```
 
 **Go SDK**

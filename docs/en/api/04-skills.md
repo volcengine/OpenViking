@@ -321,6 +321,12 @@ result = client.add_skill("./skills/my-skill/", wait=True)
 client.wait_processed()
 ```
 
+**TypeScript SDK**
+
+```typescript
+await client.addSkill("./my-skill", { wait: true });
+```
+
 **Go SDK**
 
 ```go
@@ -442,6 +448,12 @@ for skill in skills["skills"]:
     print(skill["name"])
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.listSkills());
+```
+
 **Go SDK**
 
 ```go
@@ -464,6 +476,12 @@ curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
 skill = client.get_skill("search-web", include_content=True, include_files=True)
 print(skill["name"])
 print(skill.get("content"))
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getSkill("my-skill"));
 ```
 
 **Go SDK**
@@ -492,6 +510,12 @@ results = client.find_skills("search the internet", limit=5)
 
 for skill in results["skills"]:
     print(skill["name"], skill["score"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.findSkills("database migration"));
 ```
 
 **Go SDK**
@@ -524,6 +548,12 @@ validated = client.validate_skill({"name": "search-web", "description": "..."})
 updated = client.update_skill("search-web", "./skills/search-web", wait=True)
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.validateSkill("./my-skill"));
+```
+
 **Go SDK**
 
 ```go
@@ -552,6 +582,12 @@ curl -X POST http://localhost:1933/api/v1/skills/validate \
 
 ```python
 client.delete_skill("old-skill")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.deleteSkill("my-skill");
 ```
 
 **Go SDK**

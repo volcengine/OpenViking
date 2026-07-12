@@ -55,6 +55,12 @@ result = client.snapshot.commit(
 print(result["commit_oid"])
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitCommit({ message: "Update docs", paths: ["resources/docs"] }));
+```
+
 **HTTP API**
 
 ```
@@ -125,6 +131,12 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 history = client.snapshot.log(limit=10)
 for commit in history:
     print(commit["oid"], commit["message"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitLog("main", 20));
 ```
 
 **HTTP API**
@@ -198,6 +210,12 @@ print(meta["message"], meta["parents"])
 
 # 读取该提交中某个文件的内容
 blob = client.snapshot.show("3f2a1b9c", path="viking://resources/my_project/guide.md")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitShow("HEAD", "docs/api.md"));
 ```
 
 > 注意：带 `path` 读取文件内容时，**Embedded（本地）客户端**直接返回原始 `bytes`；**HTTP 客户端**返回 `{"oid": str, "size": int, "bytes": bytes}` 字典。
@@ -296,6 +314,12 @@ plan = client.snapshot.restore(
     dry_run=True,
 )
 print(plan["diff"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitRestore({ projectDir: "resources/docs", sourceCommit: "HEAD~1" }));
 ```
 
 **HTTP API**
@@ -404,6 +428,12 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project --dry-run -o json
 content = client.snapshot.get_gitignore()
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitGetIgnore());
+```
+
 **HTTP API**
 
 ```
@@ -448,6 +478,12 @@ ov snapshot ignore-get -o json
 client.snapshot.set_gitignore(content="*.log\n")
 ```
 
+**TypeScript SDK**
+
+```typescript
+await client.gitSetIgnore("*.tmp\n.cache/\n");
+```
+
 **HTTP API**
 
 ```
@@ -486,6 +522,12 @@ ov snapshot ignore-set --file ./my-rules -o json
 
 ```python
 client.snapshot.delete_gitignore()
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.gitDeleteIgnore();
 ```
 
 **HTTP API**

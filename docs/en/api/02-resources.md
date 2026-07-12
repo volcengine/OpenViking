@@ -368,6 +368,16 @@ client.add_resource(
 )
 ```
 
+**TypeScript SDK**
+
+```typescript
+const task = await client.addResource("https://example.com/docs", {
+  to: "viking://resources/docs/",
+  wait: true,
+});
+console.log(task);
+```
+
 **Go SDK**
 
 ```go
@@ -740,6 +750,13 @@ result = client.add_skill("./skills/my-skill.json")
 
 # Wait for processing to complete
 client.wait_processed()
+```
+
+**TypeScript SDK**
+
+```typescript
+const task = await client.addSkill("./my-skill", { wait: true });
+console.log(task);
 ```
 
 **Go SDK**
