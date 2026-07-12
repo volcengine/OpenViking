@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VLM base interface and abstract classes"""
 
+import asyncio
 import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from weakref import WeakKeyDictionary
 
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
@@ -68,6 +71,7 @@ class VLMBase(ABC):
         self.temperature = config.get("temperature", 0.0)
         self.max_retries = config.get("max_retries", 3)
         self.timeout = config.get("timeout", 600.0)
+        self.max_concurrent = max(1, int(config.get("max_concurrent", 64)))
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
         self.extra_request_body = dict(config.get("extra_request_body") or {})
@@ -76,6 +80,19 @@ class VLMBase(ABC):
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
+        self._async_concurrency_semaphores: WeakKeyDictionary[
+            asyncio.AbstractEventLoop, asyncio.Semaphore
+        ] = WeakKeyDictionary()
+
+    def _get_async_concurrency_semaphore(self) -> asyncio.Semaphore:
+        """Return this provider's semaphore for the current event loop."""
+
+        loop = asyncio.get_running_loop()
+        semaphore = self._async_concurrency_semaphores.get(loop)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(self.max_concurrent)
+            self._async_concurrency_semaphores[loop] = semaphore
+        return semaphore
 
     @abstractmethod
     def get_completion(
@@ -280,6 +297,19 @@ class VLMBase(ABC):
         if isinstance(response, str):
             return response
         return response.choices[0].message.content or ""
+
+
+def limit_async_vlm_concurrency(
+    method: Callable[..., Awaitable[Any]],
+) -> Callable[..., Awaitable[Any]]:
+    """Apply the configured provider-wide concurrency budget to an async call."""
+
+    @wraps(method)
+    async def wrapper(self: VLMBase, *args: Any, **kwargs: Any) -> Any:
+        async with self._get_async_concurrency_semaphore():
+            return await method(self, *args, **kwargs)
+
+    return wrapper
 
 
 class VLMFactory:

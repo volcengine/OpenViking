@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
-from ..base import ToolCall, VLMResponse
+from ..base import ToolCall, VLMResponse, limit_async_vlm_concurrency
 from .openai_vlm import OpenAIVLM
 
 logger = get_logger(__name__)
@@ -147,6 +147,7 @@ class VolcEngineVLM(OpenAIVLM):
         return self._clean_response(str(result))
 
     @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=False)
+    @limit_async_vlm_concurrency
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -362,6 +363,7 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
+    @limit_async_vlm_concurrency
     async def get_vision_completion_async(
         self,
         prompt: str = "",

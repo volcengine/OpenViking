@@ -20,7 +20,7 @@ except ImportError:
 
 from openviking.utils.model_retry import retry_async, retry_sync
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, VLMBase, VLMResponse, limit_async_vlm_concurrency
 from ..registry import DEFAULT_AZURE_API_VERSION
 
 logger = get_logger(__name__)
@@ -318,6 +318,7 @@ class OpenAIVLM(VLMBase):
         )
 
     @tracer("openai.vlm.call", ignore_result=True, ignore_args=["messages"])
+    @limit_async_vlm_concurrency
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -433,6 +434,7 @@ class OpenAIVLM(VLMBase):
             operation_name="OpenAI VLM vision completion",
         )
 
+    @limit_async_vlm_concurrency
     async def get_vision_completion_async(
         self,
         prompt: str = "",

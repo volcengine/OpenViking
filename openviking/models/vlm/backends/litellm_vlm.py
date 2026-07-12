@@ -19,7 +19,7 @@ from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async, retry_sync
 from openviking_cli.utils import get_logger
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, VLMBase, VLMResponse, limit_async_vlm_concurrency
 
 logger = get_logger(__name__)
 
@@ -434,6 +434,7 @@ class LiteLLMVLMProvider(VLMBase):
         )
 
     @tracer("litellm.vlm.call", ignore_result=True, ignore_args=["messages"])
+    @limit_async_vlm_concurrency
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -492,6 +493,7 @@ class LiteLLMVLMProvider(VLMBase):
             operation_name="LiteLLM VLM vision completion",
         )
 
+    @limit_async_vlm_concurrency
     async def get_vision_completion_async(
         self,
         prompt: str = "",
