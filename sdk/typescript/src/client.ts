@@ -15,13 +15,17 @@ import type {
   GitCommitOptions,
   GitRestoreOptions,
   JsonObject,
+  ListToolResultsOptions,
   ListOptions,
   GetSkillOptions,
   GrepOptions,
   ImportPackOptions,
   Message,
   RequestOptions,
+  ReadToolResultOptions,
+  RecallOptions,
   SearchOptions,
+  SearchToolResultOptions,
   TaskListOptions,
   TreeOptions,
   UpdateWatchOptions,
@@ -352,6 +356,21 @@ export class OpenVikingClient {
       }),
     });
   }
+  /** Recall memories using per-type quotas and bounded rendering. */
+  recall(query: string, options: RecallOptions = {}): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/search/recall", {
+      body: compact({
+        query,
+        quotas: options.quotas,
+        max_chars: options.maxChars ?? 6_500,
+        min_score: options.minScore ?? 0.1,
+        peer_scope: options.peerScope ?? "all",
+        other_peer_penalty: options.otherPeerPenalty,
+        render: options.render ?? true,
+        telemetry: options.telemetry,
+      }),
+    });
+  }
   /** Search file contents by pattern. */
   grep(
     uri: string,
@@ -596,6 +615,54 @@ export class OpenVikingClient {
       `/api/v1/sessions/${pathPart(sessionId)}/archives/${pathPart(archiveId)}`,
     );
   }
+  /** List externalized tool results for a session. */
+  listToolResults(
+    sessionId: string,
+    options: ListToolResultsOptions = {},
+  ): Promise<JsonObject> {
+    return this.request(
+      "GET",
+      `/api/v1/sessions/${pathPart(sessionId)}/tool-results`,
+      { query: { tool_name: options.toolName, limit: options.limit ?? 50 } },
+    );
+  }
+  /** Read a character range from an externalized tool result. */
+  readToolResult(
+    sessionId: string,
+    toolResultId: string,
+    options: ReadToolResultOptions = {},
+  ): Promise<JsonObject> {
+    return this.request(
+      "GET",
+      `/api/v1/sessions/${pathPart(sessionId)}/tool-results/${pathPart(toolResultId)}`,
+      {
+        query: {
+          offset: options.offset ?? 0,
+          limit: options.limit ?? 20_000,
+          include_metadata: options.includeMetadata ?? true,
+        },
+      },
+    );
+  }
+  /** Search text within an externalized tool result. */
+  searchToolResult(
+    sessionId: string,
+    toolResultId: string,
+    query: string,
+    options: SearchToolResultOptions = {},
+  ): Promise<JsonObject> {
+    return this.request(
+      "GET",
+      `/api/v1/sessions/${pathPart(sessionId)}/tool-results/${pathPart(toolResultId)}/search`,
+      {
+        query: {
+          q: query,
+          limit: options.limit ?? 20,
+          context_chars: options.contextChars ?? 300,
+        },
+      },
+    );
+  }
   /** Append one message to a session. */
   addMessage(sessionId: string, message: Message): Promise<JsonObject> {
     if (message.content === undefined && !message.parts?.length) {
@@ -658,6 +725,25 @@ export class OpenVikingClient {
       "POST",
       `/api/v1/sessions/${pathPart(sessionId)}/commit`,
       { body: compact({ keep_recent_count: keepRecentCount, telemetry }) },
+    );
+  }
+  /** Extract memories immediately from an existing session. */
+  extractSession(sessionId: string): Promise<unknown> {
+    return this.request(
+      "POST",
+      `/api/v1/sessions/${pathPart(sessionId)}/extract`,
+    );
+  }
+  /** Record contexts and a skill actually used by a session. */
+  recordUsed(
+    sessionId: string,
+    contexts?: string[],
+    skill?: JsonObject,
+  ): Promise<JsonObject> {
+    return this.request(
+      "POST",
+      `/api/v1/sessions/${pathPart(sessionId)}/used`,
+      { body: compact({ contexts, skill }) },
     );
   }
   /** Export a resource subtree to a local OVPack file. */

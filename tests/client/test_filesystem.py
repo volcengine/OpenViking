@@ -163,6 +163,7 @@ async def test_async_openviking_ls_and_tree_forward_documented_options():
     client._client = SimpleNamespace(
         ls=AsyncMock(return_value=[]),
         tree=AsyncMock(return_value={}),
+        close=AsyncMock(),
     )
 
     await AsyncOpenViking.ls(client, "viking://resources")
@@ -184,6 +185,10 @@ async def test_async_openviking_ls_and_tree_forward_documented_options():
         node_limit=1000,
         level_limit=2,
     )
+
+    client._client.tree.reset_mock()
+    await AsyncOpenViking.tree(client, "viking://resources")
+    assert client._client.tree.await_args.kwargs["level_limit"] == 3
 
 
 async def test_local_client_mkdir_forwards_description():

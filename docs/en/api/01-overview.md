@@ -471,6 +471,9 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | GET | `/api/v1/snapshot/log` | Walk commit history newest-first |
 | GET | `/api/v1/snapshot/show` | View commit metadata, or read a file from a commit |
 | POST | `/api/v1/snapshot/restore` | Restore a directory or the whole account tree to a past snapshot (forward commit) |
+| GET | `/api/v1/snapshot/ignore` | Read `.ovgitignore` rules |
+| PUT | `/api/v1/snapshot/ignore` | Replace `.ovgitignore` rules |
+| DELETE | `/api/v1/snapshot/ignore` | Delete `.ovgitignore` rules |
 
 ### Content
 
@@ -489,6 +492,7 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 |--------|------|-------------|
 | POST | `/api/v1/search/find` | Semantic search (no session context) |
 | POST | `/api/v1/search/search` | Context-aware search (supports sessions) |
+| POST | `/api/v1/search/recall` | Type-quota memory recall |
 | POST | `/api/v1/search/grep` | Content pattern search |
 | POST | `/api/v1/search/glob` | File pattern matching |
 
@@ -507,12 +511,16 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | POST | `/api/v1/sessions` | Create session |
 | GET | `/api/v1/sessions` | List sessions |
 | GET | `/api/v1/sessions/{session_id}` | Get session |
+| GET | `/api/v1/sessions/{session_id}/tool-results` | List externalized tool results |
+| GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}` | Read an externalized tool result |
+| GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search` | Search an externalized tool result |
 | GET | `/api/v1/sessions/{session_id}/context` | Get assembled session context |
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | Get a specific session archive |
 | DELETE | `/api/v1/sessions/{session_id}` | Delete session |
 | POST | `/api/v1/sessions/{session_id}/commit` | Commit session (archive and extract memories) |
 | POST | `/api/v1/sessions/{session_id}/extract` | Extract memories from a session |
 | POST | `/api/v1/sessions/{session_id}/messages` | Add message |
+| POST | `/api/v1/sessions/{session_id}/messages/batch` | Add multiple messages |
 | POST | `/api/v1/sessions/{session_id}/used` | Record contexts / skills actually used |
 
 ### Privacy Configs
@@ -594,6 +602,30 @@ VikingBot API requires the server to be started with the `--with-bot` option:
 | DELETE | `/webdav/resources/{path}` | Delete file/directory |
 | MKCOL | `/webdav/resources/{path}` | Create directory |
 | MOVE | `/webdav/resources/{path}` | Move/rename resource |
+
+### Additional Public Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/admin/migrate` | Start legacy-data migration or cleanup |
+| POST | `/feedback` | Submit retrieval feedback |
+| POST | `/api/v1/code/outline` | Generate a code outline |
+| POST | `/api/v1/code/search` | Search code symbols |
+| POST | `/api/v1/code/expand` | Expand code context |
+| GET | `/api/v1/console/dashboard/summary` | Console dashboard summary |
+| GET | `/api/v1/console/tokens` | Console token usage |
+| GET | `/api/v1/console/context-commits` | Console context commits |
+| GET | `/api/v1/console/audit` | Console audit events |
+| POST | `/api/v1/content/set_tags` | Legacy content tag update |
+| GET | `/api/v1/observer/filesystem` | Filesystem observer status |
+| POST | `/api/v1/relations/build_graph` | Build the relation graph |
+| POST | `/api/v1/system/backend/sync-status` | Query backend synchronization status |
+| POST | `/api/v1/system/backend/sync-retry` | Retry backend synchronization |
+| GET | `/api/v1/system/sync/{backend_name}` | Query one backend synchronization status |
+| POST | `/api/v1/system/sync/{backend_name}/retry` | Retry one backend synchronization |
+| GET | `/api/v1/user-settings/add-locations` | List resource add locations |
+| PATCH | `/api/v1/user-settings/add-locations` | Update a resource add location |
+| DELETE | `/api/v1/user-settings/add-locations` | Delete a resource add location |
 
 ---
 

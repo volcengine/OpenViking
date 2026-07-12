@@ -347,6 +347,36 @@ ov session get a1b2c3d4
 
 ---
 
+### Tool results
+
+List, read, or search tool output that was externalized from a session.
+
+```python
+items = client.list_tool_results("session-id", tool_name="shell", limit=20)
+content = client.read_tool_result("session-id", "result-id", offset=0, limit=2000)
+matches = client.search_tool_result("session-id", "result-id", "error")
+```
+
+```typescript
+const items = await client.listToolResults("session-id", { toolName: "shell" });
+const content = await client.readToolResult("session-id", "result-id", { limit: 2000 });
+const matches = await client.searchToolResult("session-id", "result-id", "error");
+```
+
+```go
+items, err := client.ListToolResults(ctx, "session-id", &openviking.ListToolResultsOptions{ToolName: "shell"})
+content, err := client.ReadToolResult(ctx, "session-id", "result-id", nil)
+matches, err := client.SearchToolResult(ctx, "session-id", "result-id", "error", nil)
+```
+
+HTTP endpoints:
+
+- `GET /api/v1/sessions/{session_id}/tool-results`
+- `GET /api/v1/sessions/{session_id}/tool-results/{tool_result_id}`
+- `GET /api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search?q={query}`
+
+---
+
 ### get_session_context()
 
 #### 1. API Implementation Introduction
@@ -1008,6 +1038,18 @@ Record actually used contexts and skills in the session. When `commit()` is call
 
 #### 3. Usage Examples
 
+```python
+result = client.record_used("a1b2c3d4", contexts=["viking://resources/docs/auth/"])
+```
+
+```typescript
+const result = await client.recordUsed("a1b2c3d4", ["viking://resources/docs/auth/"]);
+```
+
+```go
+result, err := client.RecordUsed(ctx, "a1b2c3d4", []string{"viking://resources/docs/auth/"}, nil)
+```
+
 **HTTP API**
 
 ```http
@@ -1197,6 +1239,18 @@ Trigger memory extraction immediately for an existing session without creating a
 | session_id | str | Yes | - | Session ID to extract memories from |
 
 #### 3. Usage Examples
+
+```python
+result = client.extract_session("a1b2c3d4")
+```
+
+```typescript
+const result = await client.extractSession("a1b2c3d4");
+```
+
+```go
+result, err := client.ExtractSession(ctx, "a1b2c3d4")
+```
 
 **HTTP API**
 

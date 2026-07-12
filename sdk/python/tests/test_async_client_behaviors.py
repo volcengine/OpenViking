@@ -336,6 +336,33 @@ async def test_async_http_client_forwards_cross_sdk_contract_fields():
     assert client._request.await_args_list[4].args == ("GET", "/api/v1/system/status")
 
 
+@pytest.mark.asyncio
+async def test_async_http_client_forwards_recall_and_session_extension_contracts():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.recall("preferences", quotas={"preferences": 2})
+    await client.grep("viking://resources", "TODO", level_limit=4)
+    await client.list_tool_results("session", tool_name="shell")
+    await client.read_tool_result("session", "result", limit=100)
+    await client.search_tool_result("session", "result", "error")
+    await client.extract_session("session")
+    await client.record_used(
+        "session", contexts=["viking://resources/docs"], skill={"uri": "viking://user/skills/demo"}
+    )
+
+    calls = client._request.await_args_list
+    assert calls[0].args == ("POST", "/api/v1/search/recall")
+    assert calls[0].kwargs["json"]["quotas"] == {"preferences": 2}
+    assert calls[1].kwargs["json"]["level_limit"] == 4
+    assert calls[2].args == ("GET", "/api/v1/sessions/session/tool-results")
+    assert calls[3].kwargs["params"]["limit"] == 100
+    assert calls[4].kwargs["params"]["q"] == "error"
+    assert calls[5].args == ("POST", "/api/v1/sessions/session/extract")
+    assert calls[6].kwargs["json"]["skill"]["uri"] == "viking://user/skills/demo"
+
+
 def test_sync_http_client_health_wraps_async_coroutine():
     client = SyncHTTPClient(url="http://localhost:1933")
     client._async_client.health = AsyncMock(return_value=True)
@@ -570,6 +597,7 @@ async def test_grep_normalizes_uri_and_exclude_uri():
             "pattern": "Sample",
             "case_insensitive": True,
             "node_limit": 12,
+            "level_limit": 10,
             "exclude_uri": "viking://resources/demo/tmp",
         },
     )

@@ -225,6 +225,17 @@ type SearchOptions struct {
 	IncludeProvenance bool
 }
 
+// RecallOptions controls type-quota memory recall.
+type RecallOptions struct {
+	Quotas           map[string]int
+	MaxChars         int
+	MinScore         *float64
+	PeerScope        string
+	OtherPeerPenalty any
+	Render           *bool
+	Telemetry        any
+}
+
 // GrepOptions controls Grep.
 type GrepOptions struct {
 	CaseInsensitive bool
@@ -271,6 +282,25 @@ type Message struct {
 // BatchAddMessagesOptions controls BatchAddMessages.
 type BatchAddMessagesOptions struct {
 	Telemetry any
+}
+
+// ListToolResultsOptions controls ListToolResults.
+type ListToolResultsOptions struct {
+	ToolName string
+	Limit    int
+}
+
+// ReadToolResultOptions controls ReadToolResult.
+type ReadToolResultOptions struct {
+	Offset          int
+	Limit           int
+	IncludeMetadata *bool
+}
+
+// SearchToolResultOptions controls SearchToolResult.
+type SearchToolResultOptions struct {
+	Limit        int
+	ContextChars *int
 }
 
 // CommitSessionOptions controls CommitSession.

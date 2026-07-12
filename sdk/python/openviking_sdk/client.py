@@ -559,6 +559,7 @@ class AsyncHTTPClient:
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
+        """Add a resource and optionally create its parent directory."""
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
@@ -609,6 +610,7 @@ class AsyncHTTPClient:
         messages: list[dict],
         telemetry: Any = False,
     ) -> Dict[str, Any]:
+        """Append multiple messages to a session in one request."""
         session_path = self._path_segment(session_id)
         payload: Dict[str, Any] = {"messages": messages}
         if telemetry is not False:
@@ -617,6 +619,77 @@ class AsyncHTTPClient:
             "POST",
             f"/api/v1/sessions/{session_path}/messages/batch",
             json=payload,
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def list_tool_results(
+        self, session_id: str, tool_name: Optional[str] = None, limit: int = 50
+    ) -> Dict[str, Any]:
+        """List externalized tool results for a session."""
+        params = {"tool_name": tool_name, "limit": limit}
+        response = await self._request(
+            "GET",
+            f"/api/v1/sessions/{self._path_segment(session_id)}/tool-results",
+            params=self._compact_request_body(params),
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def read_tool_result(
+        self,
+        session_id: str,
+        tool_result_id: str,
+        offset: int = 0,
+        limit: int = 20_000,
+        include_metadata: bool = True,
+    ) -> Dict[str, Any]:
+        """Read a character range from an externalized tool result."""
+        response = await self._request(
+            "GET",
+            f"/api/v1/sessions/{self._path_segment(session_id)}/tool-results/"
+            f"{self._path_segment(tool_result_id)}",
+            params={
+                "offset": offset,
+                "limit": limit,
+                "include_metadata": include_metadata,
+            },
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def search_tool_result(
+        self,
+        session_id: str,
+        tool_result_id: str,
+        query: str,
+        limit: int = 20,
+        context_chars: int = 300,
+    ) -> Dict[str, Any]:
+        """Search text within an externalized tool result."""
+        response = await self._request(
+            "GET",
+            f"/api/v1/sessions/{self._path_segment(session_id)}/tool-results/"
+            f"{self._path_segment(tool_result_id)}/search",
+            params={"q": query, "limit": limit, "context_chars": context_chars},
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def extract_session(self, session_id: str) -> Any:
+        """Extract memories immediately from an existing session."""
+        response = await self._request(
+            "POST", f"/api/v1/sessions/{self._path_segment(session_id)}/extract"
+        )
+        return self._handle_response_data(response).get("result")
+
+    async def record_used(
+        self,
+        session_id: str,
+        contexts: Optional[List[str]] = None,
+        skill: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Record contexts and skills actually used by a session."""
+        response = await self._request(
+            "POST",
+            f"/api/v1/sessions/{self._path_segment(session_id)}/used",
+            json={"contexts": contexts, "skill": skill},
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -909,6 +982,7 @@ class AsyncHTTPClient:
         node_limit: int = 1000,
         level_limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        """Return a directory tree with optional depth limiting."""
         params = {
             "uri": VikingURI.normalize(uri),
             "output": output,
@@ -1047,6 +1121,7 @@ class AsyncHTTPClient:
         include_provenance: bool = False,
         image: Any = None,
     ) -> Dict[str, Any]:
+        """Find semantically similar contexts without session history."""
         actual_limit = node_limit if node_limit is not None else limit
         payload = {
             "query": query,
@@ -1088,6 +1163,7 @@ class AsyncHTTPClient:
         include_provenance: bool = False,
         image: Any = None,
     ) -> Dict[str, Any]:
+        """Search semantically with optional session context."""
         actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
         payload = {
@@ -1118,17 +1194,47 @@ class AsyncHTTPClient:
         case_insensitive: bool = False,
         node_limit: int = 256,
         exclude_uri: Optional[str] = None,
+        level_limit: int = 10,
     ) -> Dict[str, Any]:
+        """Search file content with a pattern and traversal limits."""
         request_json = {
             "uri": VikingURI.normalize(uri),
             "pattern": pattern,
             "case_insensitive": case_insensitive,
             "node_limit": node_limit,
+            "level_limit": level_limit,
         }
         if exclude_uri is not None:
             request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
         response = await self._request("POST", "/api/v1/search/grep", json=request_json)
         return self._handle_response(response)
+
+    async def recall(
+        self,
+        query: str,
+        quotas: Optional[Dict[str, int]] = None,
+        max_chars: int = 6_500,
+        min_score: float = 0.1,
+        peer_scope: str = "all",
+        other_peer_penalty: Any = None,
+        render: bool = True,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        """Recall memories using per-type quotas and bounded rendering."""
+        payload = self._compact_request_body(
+            {
+                "query": query,
+                "quotas": quotas,
+                "max_chars": max_chars,
+                "min_score": min_score,
+                "peer_scope": peer_scope,
+                "other_peer_penalty": other_peer_penalty,
+                "render": render,
+                "telemetry": telemetry,
+            }
+        )
+        response = await self._request("POST", "/api/v1/search/recall", json=payload)
+        return self._handle_response_data(response).get("result", {})
 
     async def glob(
         self,
@@ -1508,6 +1614,7 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def get_system_status(self) -> Dict[str, Any]:
+        """Return initialization state and the authenticated user."""
         response = await self._request("GET", "/api/v1/system/status")
         return self._handle_response(response)
 
@@ -1683,6 +1790,7 @@ class SyncHTTPClient:
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
     ) -> Dict[str, Any]:
+        """Add a resource and optionally create its parent directory."""
         return run_async(
             self._async_client.add_resource(
                 path=path,
@@ -1711,9 +1819,59 @@ class SyncHTTPClient:
         messages: list[dict],
         telemetry: Any = False,
     ) -> Dict[str, Any]:
+        """Append multiple messages to a session in one request."""
         if telemetry is False:
             return run_async(self._async_client.batch_add_messages(session_id, messages))
         return run_async(self._async_client.batch_add_messages(session_id, messages, telemetry))
+
+    def list_tool_results(
+        self, session_id: str, tool_name: Optional[str] = None, limit: int = 50
+    ) -> Dict[str, Any]:
+        """List externalized tool results for a session."""
+        return run_async(self._async_client.list_tool_results(session_id, tool_name, limit))
+
+    def read_tool_result(
+        self,
+        session_id: str,
+        tool_result_id: str,
+        offset: int = 0,
+        limit: int = 20_000,
+        include_metadata: bool = True,
+    ) -> Dict[str, Any]:
+        """Read a character range from an externalized tool result."""
+        return run_async(
+            self._async_client.read_tool_result(
+                session_id, tool_result_id, offset, limit, include_metadata
+            )
+        )
+
+    def search_tool_result(
+        self,
+        session_id: str,
+        tool_result_id: str,
+        query: str,
+        limit: int = 20,
+        context_chars: int = 300,
+    ) -> Dict[str, Any]:
+        """Search text within an externalized tool result."""
+        return run_async(
+            self._async_client.search_tool_result(
+                session_id, tool_result_id, query, limit, context_chars
+            )
+        )
+
+    def extract_session(self, session_id: str) -> Any:
+        """Extract memories immediately from an existing session."""
+        return run_async(self._async_client.extract_session(session_id))
+
+    def record_used(
+        self,
+        session_id: str,
+        contexts: Optional[List[str]] = None,
+        skill: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Record contexts and a skill actually used by a session."""
+        return run_async(self._async_client.record_used(session_id, contexts, skill))
 
     def add_skill(
         self,
@@ -1914,6 +2072,7 @@ class SyncHTTPClient:
         node_limit: int = 1000,
         level_limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        """Return a directory tree with optional depth limiting."""
         return run_async(
             self._async_client.tree(
                 uri,
@@ -2011,6 +2170,7 @@ class SyncHTTPClient:
         include_provenance: bool = False,
         image: Any = None,
     ) -> Dict[str, Any]:
+        """Find semantically similar contexts without session history."""
         return run_async(
             self._async_client.find(
                 query=query,
@@ -2051,6 +2211,7 @@ class SyncHTTPClient:
         include_provenance: bool = False,
         image: Any = None,
     ) -> Dict[str, Any]:
+        """Search semantically with optional session context."""
         actual_session_id = session_id
         if actual_session_id is None and session is not None:
             actual_session_id = getattr(session, "session_id", None)
@@ -2082,7 +2243,9 @@ class SyncHTTPClient:
         case_insensitive: bool = False,
         node_limit: int = 256,
         exclude_uri: Optional[str] = None,
+        level_limit: int = 10,
     ) -> Dict[str, Any]:
+        """Search file content with a pattern and traversal limits."""
         return run_async(
             self._async_client.grep(
                 uri=uri,
@@ -2090,6 +2253,32 @@ class SyncHTTPClient:
                 case_insensitive=case_insensitive,
                 node_limit=node_limit,
                 exclude_uri=exclude_uri,
+                level_limit=level_limit,
+            )
+        )
+
+    def recall(
+        self,
+        query: str,
+        quotas: Optional[Dict[str, int]] = None,
+        max_chars: int = 6_500,
+        min_score: float = 0.1,
+        peer_scope: str = "all",
+        other_peer_penalty: Any = None,
+        render: bool = True,
+        telemetry: Any = False,
+    ) -> Dict[str, Any]:
+        """Recall memories using per-type quotas and bounded rendering."""
+        return run_async(
+            self._async_client.recall(
+                query,
+                quotas,
+                max_chars,
+                min_score,
+                peer_scope,
+                other_peer_penalty,
+                render,
+                telemetry,
             )
         )
 
@@ -2322,6 +2511,7 @@ class SyncHTTPClient:
         return self._async_client.get_status()
 
     def get_system_status(self) -> Dict[str, Any]:
+        """Return initialization state and the authenticated user."""
         return run_async(self._async_client.get_system_status())
 
     def is_healthy(self) -> bool:

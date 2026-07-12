@@ -733,7 +733,7 @@ class AsyncOpenViking:
         abs_limit = kwargs.get("abs_limit", 128)
         show_all_hidden = kwargs.get("show_all_hidden", False)
         node_limit = kwargs.get("node_limit", 1000)
-        level_limit = kwargs.get("level_limit")
+        level_limit = kwargs.get("level_limit", 3)
         return await self._client.tree(
             uri,
             output=output,

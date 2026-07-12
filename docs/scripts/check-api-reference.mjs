@@ -5,9 +5,13 @@ import { fileURLToPath } from 'node:url'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const routerDir = path.join(repoRoot, 'openviking/server/routers')
 const apiDocs = ['zh', 'en'].flatMap((locale) =>
-  fs.readdirSync(path.join(repoRoot, 'docs', locale, 'api'))
+  fs
+    .readdirSync(path.join(repoRoot, 'docs', locale, 'api'))
     .filter((file) => file.endsWith('.md') && !file.startsWith('01-') && !file.startsWith('99-'))
     .map((file) => path.join(repoRoot, 'docs', locale, 'api', file))
+)
+const overviewDocs = ['zh', 'en'].map((locale) =>
+  path.join(repoRoot, 'docs', locale, 'api', '01-overview.md')
 )
 
 function normalizePath(value) {
@@ -85,12 +89,14 @@ for (const file of fs.readdirSync(routerDir).filter((name) => name.endsWith('.py
 
       const defaultMatch = parameter.match(/^([A-Za-z_]\w*)\s*:[\s\S]*?=\s*([\s\S]+)$/)
       if (!defaultMatch || pathParameters.has(defaultMatch[1])) continue
-      if (
-        /^(?:Path|Depends|Body|Header|Cookie|File|Form|Security)\s*\(/.test(defaultMatch[2])
-      ) continue
+      if (/^(?:Path|Depends|Body|Header|Cookie|File|Form|Security)\s*\(/.test(defaultMatch[2]))
+        continue
       query.set(defaultMatch[1], false)
     }
-    routes.set(`${match[1].toUpperCase()} ${normalizePath(routePath)}`, { query, pathParameters })
+    routes.set(`${match[1].toUpperCase()} ${normalizePath(routePath)}`, {
+      query,
+      pathParameters
+    })
   }
 }
 
@@ -163,10 +169,7 @@ function methodSource(name) {
 const sdkContractFixtures = [
   {
     method: 'addResource',
-    required: [
-      'this.request("POST", "/api/v1/resources"',
-      'create_parent: options.createParent'
-    ]
+    required: ['this.request("POST", "/api/v1/resources"', 'create_parent: options.createParent']
   },
   {
     method: 'searchRequest',
@@ -177,25 +180,44 @@ const sdkContractFixtures = [
   },
   {
     method: 'tree',
-    required: [
-      'this.request("GET", "/api/v1/fs/tree"',
-      'level_limit: options.levelLimit'
-    ]
+    required: ['this.request("GET", "/api/v1/fs/tree"', 'level_limit: options.levelLimit']
   },
   {
     method: 'getSystemStatus',
     required: ['this.request("GET", "/api/v1/system/status"']
+  },
+  {
+    method: 'recall',
+    required: ['this.request("POST", "/api/v1/search/recall"', 'max_chars: options.maxChars']
+  },
+  {
+    method: 'listToolResults',
+    required: ['/tool-results`', 'tool_name: options.toolName']
+  },
+  {
+    method: 'readToolResult',
+    required: ['/tool-results/${pathPart(toolResultId)}`', 'include_metadata:']
+  },
+  {
+    method: 'searchToolResult',
+    required: ['/tool-results/${pathPart(toolResultId)}/search`', 'context_chars:']
+  },
+  {
+    method: 'extractSession',
+    required: ['/extract`']
+  },
+  {
+    method: 'recordUsed',
+    required: ['/used`', 'compact({ contexts, skill })']
   }
 ]
 
 const crossSdkSources = {
-  python: fs.readFileSync(
-    path.join(repoRoot, 'sdk/python/openviking_sdk/client.py'),
-    'utf8'
-  ),
+  python: fs.readFileSync(path.join(repoRoot, 'sdk/python/openviking_sdk/client.py'), 'utf8'),
   goResources: fs.readFileSync(path.join(repoRoot, 'sdk/go/resources.go'), 'utf8'),
   goRetrieval: fs.readFileSync(path.join(repoRoot, 'sdk/go/retrieval.go'), 'utf8'),
   goFilesystem: fs.readFileSync(path.join(repoRoot, 'sdk/go/filesystem.go'), 'utf8'),
+  goSessions: fs.readFileSync(path.join(repoRoot, 'sdk/go/sessions.go'), 'utf8'),
   goSystem: fs.readFileSync(path.join(repoRoot, 'sdk/go/system.go'), 'utf8')
 }
 
@@ -208,7 +230,12 @@ const crossSdkContractFixtures = [
       '"include_provenance": True if include_provenance else None',
       'params["level_limit"] = level_limit',
       'json={"action": action}',
-      'self._request("GET", "/api/v1/system/status")'
+      'self._request("GET", "/api/v1/system/status")',
+      '"/api/v1/search/recall"',
+      '"level_limit": level_limit',
+      '/tool-results',
+      '/extract',
+      '/used'
     ]
   },
   {
@@ -230,10 +257,29 @@ const crossSdkContractFixtures = [
     label: 'Go system SDK',
     source: crossSdkSources.goSystem,
     required: ['c.doJSON(ctx, http.MethodGet, "/api/v1/system/status"']
+  },
+  {
+    label: 'Go session SDK',
+    source: crossSdkSources.goSessions,
+    required: ['/tool-results', '/extract', '/used']
   }
 ]
 
 const errors = []
+for (const overview of overviewDocs) {
+  const source = fs.readFileSync(overview, 'utf8')
+  const declared = new Set(
+    Array.from(
+      source.matchAll(/^\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|\s*`([^`]+)`/gm),
+      (match) => `${match[1]} ${normalizePath(match[2])}`
+    )
+  )
+  for (const route of routes.keys()) {
+    if (!declared.has(route)) {
+      errors.push(`${path.relative(repoRoot, overview)}: endpoint overview is missing ${route}`)
+    }
+  }
+}
 for (const fixture of sdkContractFixtures) {
   const source = methodSource(fixture.method)
   if (!source) {
@@ -259,8 +305,7 @@ let httpExamples = 0
 let typescriptCalls = 0
 const curlUrlPattern = String.raw`["']?https?:\/\/[^/\s"']+(\/[A-Za-z0-9_{}<>?=&./:-]+)`
 const explicitCurlPattern = new RegExp(
-  String.raw`\bcurl\b[^\n]*?(?:-X|--request)\s+(GET|POST|PUT|PATCH|DELETE)\s+` +
-    curlUrlPattern,
+  String.raw`\bcurl\b[^\n]*?(?:-X|--request)\s+(GET|POST|PUT|PATCH|DELETE)\s+` + curlUrlPattern,
   'g'
 )
 const implicitGetCurlPattern = new RegExp(
@@ -275,14 +320,8 @@ for (const file of apiDocs) {
       source.matchAll(/^\s*(GET|POST|PUT|PATCH|DELETE)\s+(\/[A-Za-z0-9_{}?=&./:-]+)/gm),
       (match) => [match[1], match[2]]
     ),
-    ...Array.from(
-      source.matchAll(explicitCurlPattern),
-      (match) => [match[1], match[2]]
-    ),
-    ...Array.from(
-      source.matchAll(implicitGetCurlPattern),
-      (match) => ['GET', match[1]]
-    )
+    ...Array.from(source.matchAll(explicitCurlPattern), (match) => [match[1], match[2]]),
+    ...Array.from(source.matchAll(implicitGetCurlPattern), (match) => ['GET', match[1]])
   ]
   for (const [method, documentedPath] of httpReferences) {
     const normalizedPath = normalizePath(documentedPath)
@@ -355,9 +394,10 @@ for (const file of apiDocs) {
       const args = splitTopLevel(block[1].slice(opening + 1, closing))
       const argumentCount = args.length
       if (argumentCount < contract.required || argumentCount > contract.maximum) {
-        const expected = contract.required === contract.maximum
-          ? String(contract.required)
-          : `${contract.required}-${contract.maximum}`
+        const expected =
+          contract.required === contract.maximum
+            ? String(contract.required)
+            : `${contract.required}-${contract.maximum}`
         errors.push(
           `${relative}: client.${call[1]}() has ${argumentCount} arguments; expected ${expected}`
         )
@@ -381,7 +421,7 @@ for (const file of apiDocs) {
           if (propertyName && !allowedProperties.has(propertyName)) {
             errors.push(
               `${relative}: client.${call[1]}() argument ${index + 1} ` +
-              `has unknown option ${propertyName}`
+                `has unknown option ${propertyName}`
             )
           }
         }
@@ -396,8 +436,8 @@ if (errors.length) {
 } else {
   console.log(
     `API reference check passed: ${httpExamples} HTTP examples with query contracts, ` +
-    `${typescriptCalls} TypeScript SDK calls with signature/option contracts, ` +
-    `${sdkContractFixtures.length} TypeScript and ` +
-    `${crossSdkContractFixtures.length} cross-SDK request fixtures`
+      `${typescriptCalls} TypeScript SDK calls with signature/option contracts, ` +
+      `${sdkContractFixtures.length} TypeScript and ` +
+      `${crossSdkContractFixtures.length} cross-SDK request fixtures`
   )
 }

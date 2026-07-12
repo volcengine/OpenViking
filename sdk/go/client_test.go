@@ -1233,3 +1233,56 @@ func TestCrossSDKContractFields(t *testing.T) {
 		t.Fatalf("status = %#v", status)
 	}
 }
+
+func TestRecallAndSessionExtensionContracts(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/search/recall":
+			body := readJSONBody(t, r)
+			if body["query"] != "preferences" {
+				t.Fatalf("query = %#v", body["query"])
+			}
+		case strings.HasSuffix(r.URL.Path, "/tool-results"):
+			if r.URL.Query().Get("tool_name") != "shell" {
+				t.Fatalf("tool_name = %q", r.URL.Query().Get("tool_name"))
+			}
+		case strings.HasSuffix(r.URL.Path, "/tool-results/result"):
+			if r.URL.Query().Get("limit") != "100" {
+				t.Fatalf("limit = %q", r.URL.Query().Get("limit"))
+			}
+		case strings.HasSuffix(r.URL.Path, "/tool-results/result/search"):
+			if r.URL.Query().Get("q") != "error" {
+				t.Fatalf("q = %q", r.URL.Query().Get("q"))
+			}
+		case strings.HasSuffix(r.URL.Path, "/extract"):
+		case strings.HasSuffix(r.URL.Path, "/used"):
+			body := readJSONBody(t, r)
+			if body["skill"].(map[string]any)["uri"] != "viking://user/skills/demo" {
+				t.Fatalf("skill = %#v", body["skill"])
+			}
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{})
+	}))
+	defer closeServer()
+
+	if _, err := client.Recall(context.Background(), "preferences", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListToolResults(context.Background(), "session", &ListToolResultsOptions{ToolName: "shell"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ReadToolResult(context.Background(), "session", "result", &ReadToolResultOptions{Limit: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SearchToolResult(context.Background(), "session", "result", "error", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ExtractSession(context.Background(), "session"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.RecordUsed(context.Background(), "session", nil, map[string]any{"uri": "viking://user/skills/demo"}); err != nil {
+		t.Fatal(err)
+	}
+}

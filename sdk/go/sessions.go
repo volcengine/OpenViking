@@ -71,6 +71,63 @@ func (c *Client) GetSessionArchive(ctx context.Context, sessionID, archiveID str
 	return result, err
 }
 
+// ListToolResults lists externalized tool results for a session.
+func (c *Client) ListToolResults(ctx context.Context, sessionID string, opts *ListToolResultsOptions) (map[string]any, error) {
+	query := url.Values{}
+	limit := 50
+	if opts != nil {
+		setQueryString(query, "tool_name", opts.ToolName)
+		if opts.Limit > 0 {
+			limit = opts.Limit
+		}
+	}
+	queryInt(query, "limit", limit)
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/tool-results", query, nil, &result)
+	return result, err
+}
+
+// ReadToolResult reads a character range from an externalized tool result.
+func (c *Client) ReadToolResult(ctx context.Context, sessionID, toolResultID string, opts *ReadToolResultOptions) (map[string]any, error) {
+	query := url.Values{}
+	limit := 20000
+	includeMetadata := true
+	if opts != nil {
+		queryInt(query, "offset", opts.Offset)
+		if opts.Limit != 0 {
+			limit = opts.Limit
+		}
+		if opts.IncludeMetadata != nil {
+			includeMetadata = *opts.IncludeMetadata
+		}
+	}
+	queryInt(query, "limit", limit)
+	queryBool(query, "include_metadata", includeMetadata)
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/tool-results/"+url.PathEscape(toolResultID), query, nil, &result)
+	return result, err
+}
+
+// SearchToolResult searches text within an externalized tool result.
+func (c *Client) SearchToolResult(ctx context.Context, sessionID, toolResultID, searchQuery string, opts *SearchToolResultOptions) (map[string]any, error) {
+	query := url.Values{"q": []string{searchQuery}}
+	limit := 20
+	contextChars := 300
+	if opts != nil {
+		if opts.Limit > 0 {
+			limit = opts.Limit
+		}
+		if opts.ContextChars != nil {
+			contextChars = *opts.ContextChars
+		}
+	}
+	queryInt(query, "limit", limit)
+	queryInt(query, "context_chars", contextChars)
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/tool-results/"+url.PathEscape(toolResultID)+"/search", query, nil, &result)
+	return result, err
+}
+
 // DeleteSession deletes a session.
 func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/api/v1/sessions/"+url.PathEscape(sessionID), nil, nil, nil)
@@ -116,6 +173,23 @@ func (c *Client) CommitSession(ctx context.Context, sessionID string, opts *Comm
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/commit", nil, payload, &result)
+	return result, err
+}
+
+// ExtractSession extracts memories immediately from an existing session.
+func (c *Client) ExtractSession(ctx context.Context, sessionID string) (any, error) {
+	var result any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/extract", nil, nil, &result)
+	return result, err
+}
+
+// RecordUsed records contexts and a skill actually used by a session.
+func (c *Client) RecordUsed(ctx context.Context, sessionID string, contexts []string, skill map[string]any) (map[string]any, error) {
+	payload := map[string]any{}
+	setAny(payload, "contexts", contexts)
+	setAny(payload, "skill", skill)
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(sessionID)+"/used", nil, payload, &result)
 	return result, err
 }
 

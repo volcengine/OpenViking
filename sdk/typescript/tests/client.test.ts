@@ -147,6 +147,44 @@ describe("OpenVikingClient", () => {
     ).toBe("5");
   });
 
+  it("maps recall and session extension contracts", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.recall("preferences", { quotas: { preferences: 2 } });
+    await client.listToolResults("session", { toolName: "shell" });
+    await client.readToolResult("session", "result", { limit: 100 });
+    await client.searchToolResult("session", "result", "error");
+    await client.extractSession("session");
+    await client.recordUsed("session", ["viking://resources/docs"], {
+      uri: "viking://user/skills/demo",
+    });
+
+    expect(String(fetcher.mock.calls[0]![0])).toContain(
+      "/api/v1/search/recall",
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
+      quotas: { preferences: 2 },
+      max_chars: 6500,
+    });
+    expect(String(fetcher.mock.calls[1]![0])).toContain("tool-results");
+    expect(
+      new URL(String(fetcher.mock.calls[2]![0])).searchParams.get("limit"),
+    ).toBe("100");
+    expect(
+      new URL(String(fetcher.mock.calls[3]![0])).searchParams.get("q"),
+    ).toBe("error");
+    expect(String(fetcher.mock.calls[4]![0])).toContain("/extract");
+    expect(JSON.parse(String(fetcher.mock.calls[5]![1]?.body))).toMatchObject({
+      skill: { uri: "viking://user/skills/demo" },
+    });
+  });
+
   it("converts an existing Node.js image path to a data URI", async () => {
     const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-image-"));
     const path = join(directory, "photo.png");

@@ -466,6 +466,9 @@ JSON 输出 - 错误：
 | GET | `/api/v1/snapshot/log` | 从最新提交开始回溯历史 |
 | GET | `/api/v1/snapshot/show` | 查看提交元数据，或读取提交中某个文件 |
 | POST | `/api/v1/snapshot/restore` | 恢复目录或整棵账号树到某个历史快照（正向提交） |
+| GET | `/api/v1/snapshot/ignore` | 读取 `.ovgitignore` 规则 |
+| PUT | `/api/v1/snapshot/ignore` | 替换 `.ovgitignore` 规则 |
+| DELETE | `/api/v1/snapshot/ignore` | 删除 `.ovgitignore` 规则 |
 
 ### 内容端点
 
@@ -484,6 +487,7 @@ JSON 输出 - 错误：
 |------|------|------|
 | POST | `/api/v1/search/find` | 语义搜索（无会话上下文） |
 | POST | `/api/v1/search/search` | 上下文感知搜索（支持会话） |
+| POST | `/api/v1/search/recall` | 按记忆类型配额召回 |
 | POST | `/api/v1/search/grep` | 内容模式搜索 |
 | POST | `/api/v1/search/glob` | 文件模式匹配 |
 
@@ -502,12 +506,16 @@ JSON 输出 - 错误：
 | POST | `/api/v1/sessions` | 创建会话 |
 | GET | `/api/v1/sessions` | 列出会话 |
 | GET | `/api/v1/sessions/{session_id}` | 获取会话 |
+| GET | `/api/v1/sessions/{session_id}/tool-results` | 列出外置工具结果 |
+| GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}` | 读取外置工具结果 |
+| GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search` | 搜索外置工具结果 |
 | GET | `/api/v1/sessions/{session_id}/context` | 获取组装后的会话上下文 |
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | 获取特定会话归档 |
 | DELETE | `/api/v1/sessions/{session_id}` | 删除会话 |
 | POST | `/api/v1/sessions/{session_id}/commit` | 提交会话（归档并提取记忆） |
 | POST | `/api/v1/sessions/{session_id}/extract` | 从会话提取记忆 |
 | POST | `/api/v1/sessions/{session_id}/messages` | 添加消息 |
+| POST | `/api/v1/sessions/{session_id}/messages/batch` | 批量添加消息 |
 | POST | `/api/v1/sessions/{session_id}/used` | 记录实际使用的上下文 / 技能 |
 
 ### 隐私配置
@@ -589,6 +597,30 @@ VikingBot API 需要服务器启动时指定 `--with-bot` 选项：
 | DELETE | `/webdav/resources/{path}` | 删除文件/目录 |
 | MKCOL | `/webdav/resources/{path}` | 创建目录 |
 | MOVE | `/webdav/resources/{path}` | 移动/重命名资源 |
+
+### 其他公开端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/admin/migrate` | 启动旧数据迁移或清理 |
+| POST | `/feedback` | 提交检索反馈 |
+| POST | `/api/v1/code/outline` | 生成代码大纲 |
+| POST | `/api/v1/code/search` | 搜索代码符号 |
+| POST | `/api/v1/code/expand` | 扩展代码上下文 |
+| GET | `/api/v1/console/dashboard/summary` | Console 仪表盘摘要 |
+| GET | `/api/v1/console/tokens` | Console Token 用量 |
+| GET | `/api/v1/console/context-commits` | Console 上下文提交记录 |
+| GET | `/api/v1/console/audit` | Console 审计事件 |
+| POST | `/api/v1/content/set_tags` | 旧版内容标签更新 |
+| GET | `/api/v1/observer/filesystem` | 文件系统观测状态 |
+| POST | `/api/v1/relations/build_graph` | 构建关系图 |
+| POST | `/api/v1/system/backend/sync-status` | 查询后端同步状态 |
+| POST | `/api/v1/system/backend/sync-retry` | 重试后端同步 |
+| GET | `/api/v1/system/sync/{backend_name}` | 查询指定后端同步状态 |
+| POST | `/api/v1/system/sync/{backend_name}/retry` | 重试指定后端同步 |
+| GET | `/api/v1/user-settings/add-locations` | 列出资源添加位置 |
+| PATCH | `/api/v1/user-settings/add-locations` | 更新资源添加位置 |
+| DELETE | `/api/v1/user-settings/add-locations` | 删除资源添加位置 |
 
 ---
 

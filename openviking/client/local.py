@@ -559,7 +559,7 @@ class LocalClient(BaseClient):
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
-        level_limit: Optional[int] = None,
+        level_limit: Optional[int] = 3,
     ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         return await self._service.fs.tree(

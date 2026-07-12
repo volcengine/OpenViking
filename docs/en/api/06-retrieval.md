@@ -43,7 +43,8 @@ The `find()` method performs pure vector similarity search for simple query scen
 5. Return matched context list
 
 **Code Entry Points**:
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.find()` - Python SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.find()` - canonical Python SDK entry
+- `openviking_cli/client/sync_http.py:SyncHTTPClient` - legacy compatibility import
 - `openviking/retrieve/hierarchical_retriever.py:HierarchicalRetriever.retrieve()` - Core retrieval implementation
 - `openviking/server/routers/search.py:find()` - HTTP router
 - `crates/ov_cli/src/commands/search.rs:find()` - Rust CLI command
@@ -58,13 +59,15 @@ The `find()` method performs pure vector similarity search for simple query scen
 | image_url | str | No | None | Image query as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
-| node_limit | int | No | None | Maximum number of results |
+| limit | int | No | 10 | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
+| tags | List[str] | No | None | Match retrieval tags in `k=v` form |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
-| level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
+| level | HTTP: int \| str \| List[int]; TypeScript/Go: List[int] | No | None | Limit results to specific levels. TypeScript/Go use a one-element array for a single level; CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
@@ -355,7 +358,8 @@ The `search()` method adds session context understanding and intent analysis cap
 5. Return search results with query plan
 
 **Code Entry Points**:
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.search()` - Python SDK entry (HTTP)
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.search()` - canonical Python SDK entry
+- `openviking_cli/client/sync_http.py:SyncHTTPClient` - legacy compatibility import
 - `openviking/retrieve/hierarchical_retriever.py:HierarchicalRetriever.retrieve()` - Core retrieval implementation
 - `openviking/server/routers/search.py:search()` - HTTP router
 - `crates/ov_cli/src/commands/search.rs:search()` - Rust CLI command
@@ -375,10 +379,11 @@ The `search()` method adds session context understanding and intent analysis cap
 | node_limit | int | No | None | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
+| tags | List[str] | No | None | Match retrieval tags in `k=v` form |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--before` maps to this field |
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
-| level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
+| level | HTTP: int \| str \| List[int]; TypeScript/Go: List[int] | No | None | Limit results to specific levels. TypeScript/Go use a one-element array for a single level; CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
@@ -571,6 +576,40 @@ openviking search "similar poster" --image ./poster.png --uri "viking://resource
 
 ---
 
+### recall()
+
+Recall memories with independent quotas per memory type and a bounded rendered result.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| query | str | Yes | - | Recall query |
+| quotas | Dict[str, int] | No | events 10, entities 10, preferences 3, experiences 0 | Maximum hits per memory type |
+| max_chars | int | No | 6500 | Maximum rendered characters |
+| min_score | float | No | 0.1 | Minimum similarity score |
+| peer_scope | str | No | `all` | `actor` searches only the selected peer; `all` searches every visible peer |
+| other_peer_penalty | float \| Dict | No | Server defaults | Score penalty for other peers |
+| render | bool | No | True | Include bounded rendered text |
+
+```python
+result = client.recall("deployment preferences", quotas={"preferences": 5})
+```
+
+```typescript
+const result = await client.recall("deployment preferences", {
+  quotas: { preferences: 5 },
+});
+```
+
+```go
+result, err := client.Recall(ctx, "deployment preferences", &openviking.RecallOptions{
+    Quotas: map[string]int{"preferences": 5},
+})
+```
+
+```http
+POST /api/v1/search/recall
+```
+
 ### grep()
 
 Search content by pattern (regex).
@@ -601,7 +640,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
-| level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
+| level_limit | int | No | Embedded Python: 5; HTTP API / HTTP SDKs / CLI: 10 | Maximum directory depth to traverse |
 
 #### 3. Usage Examples
 

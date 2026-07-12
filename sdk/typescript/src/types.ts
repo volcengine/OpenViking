@@ -104,6 +104,16 @@ export interface SearchOptions {
   level?: number[];
   tags?: string[];
 }
+/** Type-quota memory recall options. */
+export interface RecallOptions {
+  quotas?: Record<string, number>;
+  maxChars?: number;
+  minScore?: number;
+  peerScope?: "actor" | "all";
+  otherPeerPenalty?: number | Record<string, number>;
+  render?: boolean;
+  telemetry?: unknown;
+}
 /** Content grep options. */
 export interface GrepOptions {
   caseInsensitive?: boolean;
@@ -142,6 +152,22 @@ export interface CreateSessionOptions {
   sessionId?: string;
   memoryPolicy?: JsonObject;
   telemetry?: unknown;
+}
+/** Query options for listing externalized tool results. */
+export interface ListToolResultsOptions {
+  toolName?: string;
+  limit?: number;
+}
+/** Query options for reading an externalized tool result. */
+export interface ReadToolResultOptions {
+  offset?: number;
+  limit?: number;
+  includeMetadata?: boolean;
+}
+/** Query options for searching an externalized tool result. */
+export interface SearchToolResultOptions {
+  limit?: number;
+  contextChars?: number;
 }
 /** Background task filters. */
 export interface TaskListOptions {

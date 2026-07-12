@@ -43,7 +43,8 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 5. 返回匹配的上下文列表
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.find()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.find()` - Python SDK 规范实现入口
+- `openviking_cli/client/sync_http.py:SyncHTTPClient` - 旧版兼容导入入口
 - `openviking/retrieve/hierarchical_retriever.py:HierarchicalRetriever.retrieve()` - 核心检索实现
 - `openviking/server/routers/search.py:find()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:find()` - Rust CLI 命令
@@ -62,10 +63,11 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
+| tags | List[str] | 否 | None | 匹配 `k=v` 格式的检索标签 |
 | since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--after` 会映射到这个字段 |
 | until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--before` 会映射到这个字段 |
 | time_field | "updated_at" \| "created_at" | 否 | "updated_at" | since/until 使用的元数据时间字段 |
-| level | str | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
+| level | HTTP：int \| str \| List[int]；TypeScript/Go：List[int] | 否 | None | 限定结果层级。TypeScript/Go 的单层级使用单元素数组；CLI `--level`/`-L` 会映射到这个字段 |
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
@@ -356,7 +358,8 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
 5. 返回带查询计划的搜索结果
 
 **代码入口**：
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.search()` - Python SDK 入口（HTTP）
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.search()` - Python SDK 规范实现入口
+- `openviking_cli/client/sync_http.py:SyncHTTPClient` - 旧版兼容导入入口
 - `openviking/retrieve/hierarchical_retriever.py:HierarchicalRetriever.retrieve()` - 核心检索实现
 - `openviking/server/routers/search.py:search()` - HTTP 路由
 - `crates/ov_cli/src/commands/search.rs:search()` - Rust CLI 命令
@@ -377,10 +380,11 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
 | node_limit | int | 否 | None | 可选 HTTP 别名；如果提供，会覆盖 limit |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
+| tags | List[str] | 否 | None | 匹配 `k=v` 格式的检索标签 |
 | since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--after` 会映射到这个字段 |
 | until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`。不带时区的值按 UTC 解释。CLI `--before` 会映射到这个字段 |
 | time_field | "updated_at" \| "created_at" | 否 | "updated_at" | since/until 使用的元数据时间字段 |
-| level | str | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
+| level | HTTP：int \| str \| List[int]；TypeScript/Go：List[int] | 否 | None | 限定结果层级。TypeScript/Go 的单层级使用单元素数组；CLI `--level`/`-L` 会映射到这个字段 |
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
@@ -573,6 +577,40 @@ openviking search "similar poster" --image ./poster.png --uri "viking://resource
 
 ---
 
+### recall()
+
+按记忆类型独立配额召回，并限制渲染结果长度。
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| query | str | 是 | - | 召回查询 |
+| quotas | Dict[str, int] | 否 | events 10、entities 10、preferences 3、experiences 0 | 每种记忆类型的最大命中数 |
+| max_chars | int | 否 | 6500 | 最大渲染字符数 |
+| min_score | float | 否 | 0.1 | 最低相似度分数 |
+| peer_scope | str | 否 | `all` | `actor` 仅检索当前 peer，`all` 检索所有可见 peer |
+| other_peer_penalty | float \| Dict | 否 | 服务端默认值 | 其他 peer 的分数惩罚 |
+| render | bool | 否 | True | 是否返回限长后的渲染文本 |
+
+```python
+result = client.recall("部署偏好", quotas={"preferences": 5})
+```
+
+```typescript
+const result = await client.recall("部署偏好", {
+  quotas: { preferences: 5 },
+});
+```
+
+```go
+result, err := client.Recall(ctx, "部署偏好", &openviking.RecallOptions{
+    Quotas: map[string]int{"preferences": 5},
+})
+```
+
+```http
+POST /api/v1/search/recall
+```
+
 ### grep()
 
 通过模式（正则表达式）搜索内容。
@@ -603,7 +641,7 @@ openviking search "similar poster" --image ./poster.png --uri "viking://resource
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
-| level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
+| level_limit | int | 否 | Embedded Python：5；HTTP API / HTTP SDK / CLI：10 | 最大目录遍历深度 |
 
 #### 3. 使用示例
 
