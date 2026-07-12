@@ -1,0 +1,35 @@
+.github/workflows/_docs.yml
+  s_767d71cc4b524b::t_b281e32b2de74b 27-32
+docs/.vitepress/config.ts
+  s_767d71cc4b524b::t_085da28e1a5a82 57-59,65-66,103-115,118-119,138-140,147-149,375-379,395-399
+docs/.vitepress/theme/ApiExampleTabsEnhancer.vue
+  s_767d71cc4b524b::t_7459dd85e5b84b 2,17,19,21-27,31-32,36-38,45-48,52,60-88,131,137-138,142,144,148-150
+docs/.vitepress/theme/LlmsTxtLink.vue
+  s_767d71cc4b524b::t_200a488d1592af 66-76,83-93
+docs/.vitepress/theme/api-example-tabs.test.ts
+  s_767d71cc4b524b::t_75c1dc8aab8b93 5,11-15
+docs/.vitepress/theme/custom.css
+  s_767d71cc4b524b::t_e9718dc6178a87 2,17-37
+docs/en/api/03-filesystem.md
+  s_767d71cc4b524b::t_f7b65a77d97a7b 363,468-469,850,1108,1416,1448,1532,1557
+docs/zh/api/03-filesystem.md
+  s_767d71cc4b524b::t_54f3725333d290 363,469-470,851,1417,1449,1533,1558
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "599df5d1f673d756b3fe405805ade0f4133f01b8",
+  "prompts": {},
+  "sessions": {
+    "s_767d71cc4b524b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5589-563d-7fa2-8a6b-dbc852570879",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
