@@ -188,7 +188,7 @@ async def test_async_openviking_ls_and_tree_forward_documented_options():
 
     client._client.tree.reset_mock()
     await AsyncOpenViking.tree(client, "viking://resources")
-    assert client._client.tree.await_args.kwargs["level_limit"] is None
+    assert client._client.tree.await_args.kwargs["level_limit"] == 3
 
 
 async def test_local_client_mkdir_forwards_description():

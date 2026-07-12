@@ -340,6 +340,7 @@ type FindResult struct {
 	Skills       []MatchedContext `json:"skills,omitempty"`
 	QueryPlan    *QueryPlan       `json:"query_plan,omitempty"`
 	QueryResults []map[string]any `json:"query_results,omitempty"`
+	Provenance   []map[string]any `json:"provenance,omitempty"`
 	Total        int              `json:"total,omitempty"`
 }
 

@@ -16,19 +16,19 @@ let observer: MutationObserver | undefined
 let frame = 0
 let tabGroup = 0
 
-function strongOnlyChildLabel(element: Element) {
+function strongHeadingLabel(element: Element) {
   if (!element.matches('p')) return undefined
-  const strong = element.querySelector(':scope > strong:only-child')
-  return strong?.textContent?.trim()
+  const strong = element.querySelector(':scope > strong:first-child')
+  return strong ? element.textContent?.trim() : undefined
 }
 
 function headingLanguage(element: Element) {
-  const label = strongOnlyChildLabel(element)
+  const label = strongHeadingLabel(element)
   return label ? exampleLanguage(label) : undefined
 }
 
 function isSharedSection(element: Element) {
-  const label = strongOnlyChildLabel(element)
+  const label = strongHeadingLabel(element)
   return label ? isSharedSectionLabel(label) : false
 }
 

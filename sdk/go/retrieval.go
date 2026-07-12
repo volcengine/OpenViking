@@ -96,7 +96,9 @@ func (c *Client) Recall(ctx context.Context, queryText string, opts *RecallOptio
 		opts = &RecallOptions{}
 	}
 	payload := map[string]any{"query": queryText}
-	setAny(payload, "quotas", opts.Quotas)
+	if opts.Quotas != nil {
+		payload["quotas"] = opts.Quotas
+	}
 	if opts.MaxChars > 0 {
 		payload["max_chars"] = opts.MaxChars
 	}

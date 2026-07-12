@@ -136,6 +136,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 			"resources": []map[string]any{
 				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9},
 			},
+			"provenance": []map[string]any{{"uri": "viking://resources/docs/api.md"}},
 		})
 	}))
 	defer closeServer()
@@ -156,6 +157,22 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	}
 	if len(result.Resources) != 1 || result.Resources[0].URI != "viking://resources/docs/api.md" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	if len(result.Provenance) != 1 || result.Provenance[0]["uri"] != "viking://resources/docs/api.md" {
+		t.Fatalf("unexpected provenance: %#v", result.Provenance)
+	}
+}
+
+func TestRecallOmitsQuotasWhenOptionsAreNil(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		requireBodyKeysAbsent(t, body, "quotas")
+		writeOK(t, w, map[string]any{})
+	}))
+	defer closeServer()
+
+	if _, err := client.Recall(context.Background(), "preferences", nil); err != nil {
+		t.Fatal(err)
 	}
 }
 

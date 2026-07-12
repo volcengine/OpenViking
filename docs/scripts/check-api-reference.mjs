@@ -279,6 +279,13 @@ for (const overview of overviewDocs) {
       errors.push(`${path.relative(repoRoot, overview)}: endpoint overview is missing ${route}`)
     }
   }
+  for (const endpoint of declared) {
+    // WebDAV uses api_route with multi-method declarations and is validated by
+    // its dedicated tests rather than the standard FastAPI route extractor.
+    if (!endpoint.includes(' /webdav/') && !routes.has(endpoint)) {
+      errors.push(`${path.relative(repoRoot, overview)}: endpoint overview has unknown ${endpoint}`)
+    }
+  }
 }
 for (const fixture of sdkContractFixtures) {
   const source = methodSource(fixture.method)

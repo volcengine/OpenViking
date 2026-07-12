@@ -2,10 +2,16 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  exampleLanguage,
   isApiReferencePath,
   isSharedSectionLabel,
   preferredLanguage
 } from './api-example-tabs.ts'
+
+test('recognizes language headings with punctuation and qualifiers', () => {
+  assert.equal(exampleLanguage('HTTP API：')?.key, 'http')
+  assert.equal(exampleLanguage('CLI (subcommands of resources)')?.key, 'cli')
+})
 
 test('recognizes response and note variants as shared sections', () => {
   for (const label of [
