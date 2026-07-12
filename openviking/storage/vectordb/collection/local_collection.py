@@ -979,6 +979,7 @@ class PersistCollection(LocalCollection):
             # This ensures the index's base version starts at 0, allowing it to ingest
             # all data from the delta log (CandidateData) regardless of when that data was created.
             # If we used the default (current time), the index would ignore older data in the log.
+            # Keep the dense worker stopped until the native snapshot has replayed those deltas.
             index = PersistentIndex(
                 name=index_name,
                 path=self.index_dir,
@@ -986,6 +987,7 @@ class PersistCollection(LocalCollection):
                 cands_list=recovery_candidates,
                 initial_timestamp=0,
                 dense_search_config=self.dense_search_config,
+                defer_dense_rebuild_start=True,
             )
             newest_version = index.get_newest_version()
             if not self.store_mgr:
@@ -1045,6 +1047,7 @@ class PersistCollection(LocalCollection):
                     operation="delete",
                 )
             logger.info("Index '%s': replay complete (%d records)", index_name, _processed)
+            index._start_dense_rebuild_worker()
             self.indexes.set(index_name, index)
 
     def _replay_recovery_records(

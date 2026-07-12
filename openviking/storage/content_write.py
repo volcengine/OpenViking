@@ -16,6 +16,7 @@ from openviking.session.memory.utils.resource_refs import (
     RESOURCE_REF_SOURCE_CONTENT_WRITE,
     sync_memory_resource_refs,
 )
+from openviking.storage.errors import ResourceBusyError
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.transaction import get_lock_manager
@@ -249,7 +250,10 @@ class ContentWriteCoordinator:
         acquired = await lock_manager.acquire_exact_path(handle, lock_path)
         if not acquired:
             await lock_manager.release(handle)
-            raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
+            raise ResourceBusyError(
+                f"resource is busy and cannot be written now: {uri}",
+                uri=uri,
+            )
 
         previous_content: Optional[str] = None
         content_written = False
@@ -559,7 +563,10 @@ class ContentWriteCoordinator:
         acquired = await lock_manager.acquire_exact_path(handle, lock_path)
         if not acquired:
             await lock_manager.release(handle)
-            raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
+            raise ResourceBusyError(
+                f"resource is busy and cannot be written now: {uri}",
+                uri=uri,
+            )
 
         released = False
         request_registered = False

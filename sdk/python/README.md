@@ -182,6 +182,13 @@ result = client.find("hello", limit=5)
 print(result)
 ```
 
+Image search uses the same methods. Pass a local path, bytes, data URI, HTTP URL, or `viking://` URI with `image`. The server must use a multimodal embedding model.
+
+```python
+result = client.find(image="/path/to/photo.png", limit=5)
+result = client.search("similar poster", image="viking://resources/poster.png")
+```
+
 ## Admin Operations
 
 If you connect with a root key, the SDK also exposes admin APIs such as:

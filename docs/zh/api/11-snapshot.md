@@ -24,10 +24,10 @@ OpenViking 在 VikingFS 之上提供了一套基于 Git 的多版本管理能力
 
 ## API 实现介绍
 
-- HTTP 路由：[snapshot.py](file:///cloudide/workspace/OpenViking/openviking/server/routers/snapshot.py)，前缀 `/api/v1/snapshot`。
-- 命名空间（SDK）：[snapshot_namespace.py](file:///cloudide/workspace/OpenViking/openviking/snapshot_namespace.py)，暴露为 `client.snapshot.*`。
-- 底层语义实现：[viking_fs.py](file:///cloudide/workspace/OpenViking/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log`。
-- CLI 命令：[main.rs](file:///cloudide/workspace/OpenViking/crates/ov_cli/src/main.rs) 的 `SnapshotCmd`，子命令 [snapshot.rs](file:///cloudide/workspace/OpenViking/crates/ov_cli/src/commands/snapshot.rs)。
+- HTTP 路由：[snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py)，前缀 `/api/v1/snapshot`。
+- 命名空间（SDK）：[snapshot_namespace.py](https://github.com/volcengine/OpenViking/blob/main/openviking/snapshot_namespace.py)，暴露为 `client.snapshot.*`。
+- 底层语义实现：[viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log`。
+- CLI 命令：[main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs) 的 `SnapshotCmd`，子命令 [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs)。
 
 ## API 参考
 
@@ -544,7 +544,7 @@ client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], messag
 client.close()
 ```
 
-更多端到端示例参见仓库中的 [examples/snapshot/](file:///cloudide/workspace/OpenViking/examples/snapshot) 目录，涵盖 SDK、HTTP、CLI 三种调用方式。
+更多端到端示例参见仓库中的 [examples/snapshot/](https://github.com/volcengine/OpenViking/tree/main/examples/snapshot) 目录，涵盖 SDK、HTTP、CLI 三种调用方式。
 
 ## 错误处理
 

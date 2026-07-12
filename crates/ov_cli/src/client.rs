@@ -3,6 +3,8 @@ use serde_json::{Map, Value};
 use std::env;
 use std::path::Path;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+
 pub use crate::base_client::{BaseClient, FileUploader, TimeoutConfig};
 
 use crate::error::{Error, Result};
@@ -31,6 +33,32 @@ fn compact_request_body(body: &mut Value) {
         }
         true
     });
+}
+
+fn normalize_image_input(image: Option<String>) -> Result<Option<String>> {
+    let Some(value) = image else {
+        return Ok(None);
+    };
+    if value.starts_with("data:image/")
+        || value.starts_with("http://")
+        || value.starts_with("https://")
+        || value.starts_with("viking://")
+    {
+        return Ok(Some(value));
+    }
+
+    let path = Path::new(&value);
+    if path.is_file() {
+        let bytes = std::fs::read(path)?;
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        return Ok(Some(format!(
+            "data:{};base64,{}",
+            mime,
+            BASE64_STANDARD.encode(bytes)
+        )));
+    }
+
+    Ok(Some(value))
 }
 
 #[derive(serde::Serialize)]
@@ -62,7 +90,11 @@ pub struct SnapshotRestoreReq {
 
 pub enum SnapshotShowResult {
     Metadata(Value),
-    Blob { oid: String, size: u64, bytes: Vec<u8> },
+    Blob {
+        oid: String,
+        size: u64,
+        bytes: Vec<u8>,
+    },
 }
 
 // ============ HttpClient ============
@@ -96,6 +128,11 @@ impl HttpClient {
                 extra_headers,
             ),
         }
+    }
+
+    pub fn with_gateway_token(mut self, gateway_token: Option<String>) -> Self {
+        self.base = self.base.with_gateway_token(gateway_token);
+        self
     }
 
     pub fn user_id(&self) -> Option<&str> {
@@ -336,15 +373,16 @@ impl HttpClient {
             ("profile".to_string(), "0".to_string()),
         ];
 
-        let response = self
+        let request = self
             .base
             .http
             .get(&url)
             .headers(self.base.build_headers())
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&params);
+        let response = self
+            .base
+            .send_request(request, "HTTP request failed")
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -475,6 +513,7 @@ impl HttpClient {
         &self,
         query: String,
         uri: String,
+        image: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
         since: Option<String>,
@@ -484,8 +523,10 @@ impl HttpClient {
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
+        let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
             "query": query,
+            "image_url": image_url,
             "target_uri": uri,
             "limit": node_limit,
             "score_threshold": threshold,
@@ -504,6 +545,7 @@ impl HttpClient {
         &self,
         query: String,
         uri: String,
+        image: Option<String>,
         session_id: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
@@ -514,8 +556,10 @@ impl HttpClient {
         context_type: Option<Vec<String>>,
         tags: Option<Vec<String>>,
     ) -> Result<serde_json::Value> {
+        let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
             "query": query,
+            "image_url": image_url,
             "target_uri": uri,
             "session_id": session_id,
             "limit": node_limit,
@@ -1096,16 +1140,17 @@ impl HttpClient {
         default_name: &str,
     ) -> Result<String> {
         let url = format!("{}{}", self.base.base_url, endpoint);
-        let response = self
+        let request = self
             .base
             .http
             .post(&url)
             .headers(self.base.build_headers())
             .json(&body)
-            .query(&[("profile", "0")])
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&[("profile", "0")]);
+        let response = self
+            .base
+            .send_request(request, "HTTP request failed")
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -1571,8 +1616,11 @@ impl HttpClient {
     }
 
     pub async fn snapshot_ignore_set(&self, content: &str) -> Result<Value> {
-        self.put("/api/v1/snapshot/ignore", &serde_json::json!({ "content": content }))
-            .await
+        self.put(
+            "/api/v1/snapshot/ignore",
+            &serde_json::json!({ "content": content }),
+        )
+        .await
     }
 
     pub async fn snapshot_ignore_delete(&self) -> Result<Value> {
@@ -1583,21 +1631,24 @@ impl HttpClient {
         &self,
         target_ref: &str,
         path: Option<&str>,
-    ) -> Result<SnapshotShowResult> {        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
-        let mut query: Vec<(String, String)> = vec![("target_ref".to_string(), target_ref.to_string())];
+    ) -> Result<SnapshotShowResult> {
+        let url = format!("{}/api/v1/snapshot/show", self.base.base_url);
+        let mut query: Vec<(String, String)> =
+            vec![("target_ref".to_string(), target_ref.to_string())];
         if let Some(p) = path {
             query.push(("path".to_string(), p.to_string()));
         }
 
-        let response = self
+        let request = self
             .base
             .http
             .get(&url)
             .headers(self.base.build_headers())
-            .query(&query)
-            .send()
-            .await
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+            .query(&query);
+        let response = self
+            .base
+            .send_request(request, "HTTP request failed")
+            .await?;
 
         let status = response.status();
         let content_type = response
@@ -1607,7 +1658,10 @@ impl HttpClient {
             .unwrap_or("")
             .to_string();
 
-        if path.is_some() && status.is_success() && content_type.starts_with("application/octet-stream") {
+        if path.is_some()
+            && status.is_success()
+            && content_type.starts_with("application/octet-stream")
+        {
             let oid = response
                 .headers()
                 .get("x-snapshot-oid")
@@ -1812,6 +1866,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gateway_token_is_not_sent_without_a_gateway_challenge() {
+        let (base_url, request_rx) = spawn_request_capture_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        let _: serde_json::Value = client
+            .get("/health", &[])
+            .await
+            .expect("direct OpenViking request should succeed");
+
+        let request = request_rx.await.expect("request should be captured");
+        assert!(!request.to_ascii_lowercase().contains("x-gateway-token"));
+    }
+
+    #[tokio::test]
+    async fn gateway_token_is_retried_for_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        let _: serde_json::Value = client
+            .get("/health", &[])
+            .await
+            .expect("gateway retry should succeed");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn file_download_retries_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        client
+            .get_bytes("viking://resources/file.bin")
+            .await
+            .expect("file download should retry through gateway");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn pack_download_retries_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+        let output = tempfile::tempdir().expect("tempdir should be created");
+
+        client
+            .export_ovpack(
+                "viking://resources",
+                output
+                    .path()
+                    .to_str()
+                    .expect("tempdir path should be valid"),
+                false,
+            )
+            .await
+            .expect("pack export should retry through gateway");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    #[tokio::test]
+    async fn snapshot_show_retries_marked_gateway_challenge() {
+        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
+        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
+            .with_gateway_token(Some("gateway-secret".to_string()));
+
+        client
+            .snapshot_show("HEAD", None)
+            .await
+            .expect("snapshot show should retry through gateway");
+
+        let requests = requests_rx.await.expect("requests should be captured");
+        assert_gateway_token_retry(&requests);
+    }
+
+    fn assert_gateway_token_retry(requests: &[String]) {
+        assert_eq!(requests.len(), 2);
+        assert!(!requests[0].to_ascii_lowercase().contains("x-gateway-token"));
+        assert!(
+            requests[1]
+                .to_ascii_lowercase()
+                .contains("x-gateway-token: gateway-secret")
+        );
+    }
+
+    #[tokio::test]
     async fn tree_does_not_send_display_time_query() {
         let (base_url, request_rx) = spawn_request_capture_server().await;
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
@@ -1945,6 +2092,46 @@ mod tests {
                 body
             );
             let _ = stream.write_all(response.as_bytes()).await;
+        });
+
+        (format!("http://{addr}"), request_rx)
+    }
+
+    async fn spawn_gateway_challenge_server() -> (String, oneshot::Receiver<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().expect("test server should have addr");
+        let (request_tx, request_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for attempt in 0..2 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 4096];
+                let Ok(read) = stream.read(&mut buffer).await else {
+                    return;
+                };
+                requests.push(String::from_utf8_lossy(&buffer[..read]).to_string());
+
+                let (status, marker, body) = if attempt == 0 {
+                    (
+                        "401 Unauthorized",
+                        "X-VikingBot-Gateway: true\r\n",
+                        r#"{"detail":"X-Gateway-Token header required"}"#,
+                    )
+                } else {
+                    ("200 OK", "", r#"{"status":"ok","result":{"ok":true}}"#)
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n{marker}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+            let _ = request_tx.send(requests);
         });
 
         (format!("http://{addr}"), request_rx)

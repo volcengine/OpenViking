@@ -246,12 +246,29 @@ def test_engine_loader_wraps_abi3_backend_with_python_api(monkeypatch):
                 "extra_json": '{"ok":true}',
             }
         ),
+        _index_engine_search_with_filter_token=lambda handle, req, token: (
+            calls.append(("search_with_filter_token", handle, req, token))
+            or {
+                "result_num": 1,
+                "labels": [101],
+                "scores": [0.9],
+                "extra_json": "",
+            }
+        ),
         _index_engine_set_filter_layout=lambda handle, labels: (
             calls.append(("set_filter_layout", handle, labels)) or 0
         ),
         _index_engine_evaluate_filter=lambda handle, dsl: (
             calls.append(("evaluate_filter", handle, dsl))
             or {"eligible_count": 1, "bitset_words": [4]}
+        ),
+        _index_engine_evaluate_filter_cached=lambda handle, dsl, max_candidates: (
+            calls.append(("evaluate_filter_cached", handle, dsl, max_candidates))
+            or {
+                "eligible_count": 1,
+                "bitset_words": [4],
+                "native_filter_token": 17,
+            }
         ),
         _index_engine_dump=lambda handle, path: calls.append(("dump", handle, path)) or 11,
         _index_engine_get_state=lambda handle: (
@@ -322,6 +339,21 @@ def test_engine_loader_wraps_abi3_backend_with_python_api(monkeypatch):
     filter_result = index.evaluate_filter('{"op":"must"}')
     assert filter_result.eligible_count == 1
     assert filter_result.bitset_words == [4]
+    assert filter_result.native_filter_token == 0
+
+    cached_filter_result = index.evaluate_filter('{"op":"must"}', max_cached_candidates=10)
+    assert cached_filter_result.native_filter_token == 17
+    token_search_result = index.search_with_filter_token(search_req, 17)
+    assert token_search_result is not None
+    assert token_search_result.labels == [101]
+
+    # A source checkout paired with an older native module keeps the original
+    # evaluate + search path instead of failing during a rolling upgrade.
+    del backend._index_engine_evaluate_filter_cached
+    del backend._index_engine_search_with_filter_token
+    fallback_filter_result = index.evaluate_filter('{"op":"must"}', max_cached_candidates=10)
+    assert fallback_filter_result.native_filter_token == 0
+    assert index.search_with_filter_token(search_req, 17) is None
 
     state = index.get_state()
     assert state.update_timestamp == 123

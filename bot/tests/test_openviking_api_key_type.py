@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from vikingbot.agent import memory as memory_module
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import _is_tool_result_success
 from vikingbot.agent.memory import MemoryStore
@@ -153,6 +154,21 @@ def test_viking_client_init_root_mode_sets_account_and_user(monkeypatch):
     assert "agent_id" not in first.kwargs
 
 
+def test_viking_client_uses_injected_config_without_reloading(monkeypatch):
+    config = _make_config("root")
+
+    def _unexpected_load():
+        raise AssertionError("VikingClient must not reload Bot config")
+
+    monkeypatch.setattr(ov_server_module, "load_config", _unexpected_load)
+
+    client = VikingClient(config=config)
+
+    assert client.config is config
+    assert client.openviking_config is config.ov_server
+    assert _DummyHTTPClient.instances[0].kwargs["api_key"] == "root-key"
+
+
 def test_tool_result_success_only_treats_standard_error_prefix_as_failure():
     assert _is_tool_result_success("errorCode = 0") is True
     assert _is_tool_result_success("Error budget: 5%") is True
@@ -261,37 +277,30 @@ async def test_viking_client_search_preserves_serialized_group_results(monkeypat
     assert [item["uri"] for item in result["resources"]] == [
         "viking://resources/解释信-杜涛/解释信-杜涛.md"
     ]
-    assert [item["uri"] for item in result["skills"]] == [
-        "viking://user/default/skills/planner.md"
-    ]
+    assert [item["uri"] for item in result["skills"]] == ["viking://user/default/skills/planner.md"]
 
 
-def test_ov_server_api_key_mode_ignores_bot_root_key_and_uses_ovcli_user_key(monkeypatch):
+def test_ov_server_api_key_mode_does_not_read_ovcli_user_key():
     bot_data = {"root_api_key": "bot-root-key"}
     ov_data = {"root_api_key": "server-root-key"}
-    monkeypatch.setattr(
-        config_loader_module,
-        "load_ovcli_config",
-        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
+
+    auth_mode, source, api_key_source = config_loader_module._merge_ov_server_config(
+        bot_data, ov_data, server_section_present=True
     )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
-
+    assert auth_mode == "api_key"
+    assert source == "inherited"
+    assert api_key_source == "none"
     assert bot_data["mode"] == "remote"
-    assert bot_data["api_key"] == "stale-ovcli-key"
+    assert "api_key" not in bot_data
     assert bot_data["api_key_type"] == "user"
 
 
-def test_ov_server_trusted_mode_fills_api_key_from_top_level_root_key(monkeypatch):
+def test_ov_server_trusted_mode_fills_api_key_from_top_level_root_key():
     bot_data = {}
     ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
-    monkeypatch.setattr(
-        config_loader_module,
-        "load_ovcli_config",
-        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
-    )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(bot_data, ov_data, server_section_present=True)
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "server-root-key"
@@ -299,52 +308,37 @@ def test_ov_server_trusted_mode_fills_api_key_from_top_level_root_key(monkeypatc
     assert bot_data["api_key_type"] == "root"
 
 
-def test_ov_server_current_trusted_prefers_top_level_root_key(monkeypatch):
+def test_ov_server_current_trusted_prefers_top_level_root_key():
     bot_data = {"api_key": "stale-bot-key"}
     ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
-    monkeypatch.setattr(
-        config_loader_module,
-        "load_ovcli_config",
-        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
-    )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(bot_data, ov_data, server_section_present=True)
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "server-root-key"
     assert bot_data["api_key_type"] == "root"
 
 
-def test_ov_server_external_url_does_not_inherit_trusted_root_key(monkeypatch):
+def test_ov_server_external_url_does_not_inherit_trusted_root_key():
     bot_data = {"server_url": "https://external.example"}
     ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
-    monkeypatch.setattr(
-        config_loader_module,
-        "load_ovcli_config",
-        lambda: SimpleNamespace(api_key="external-user-key"),
-    )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(bot_data, ov_data, server_section_present=True)
 
     assert bot_data["mode"] == "remote"
-    assert bot_data["api_key"] == "external-user-key"
+    assert "api_key" not in bot_data
     assert bot_data["api_key_type"] == "user"
     assert "root_api_key" not in bot_data
 
 
-def test_ov_server_explicit_url_is_external_even_if_it_matches_local_url(monkeypatch):
+def test_ov_server_explicit_url_is_external_even_if_it_matches_local_url():
     bot_data = {"server_url": "http://localhost:1933"}
     ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
-    monkeypatch.setattr(
-        config_loader_module,
-        "load_ovcli_config",
-        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
-    )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(bot_data, ov_data, server_section_present=True)
 
     assert bot_data["mode"] == "remote"
-    assert bot_data["api_key"] == "stale-ovcli-key"
+    assert "api_key" not in bot_data
     assert bot_data["api_key_type"] == "user"
     assert "root_api_key" not in bot_data
 
@@ -357,7 +351,7 @@ def test_ov_server_external_url_forces_remote_mode():
     }
     ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(bot_data, ov_data, server_section_present=True)
 
     assert bot_data["mode"] == "remote"
     assert bot_data["api_key"] == "external-user-key"
@@ -365,54 +359,176 @@ def test_ov_server_external_url_forces_remote_mode():
     assert "root_api_key" not in bot_data
 
 
-def test_ov_server_external_url_root_key_does_not_imply_root_mode(monkeypatch):
+def test_ov_server_external_url_root_key_does_not_imply_root_mode():
     bot_data = {
         "server_url": "https://external.example",
         "root_api_key": "bot-root-key",
     }
     ov_data = {"auth_mode": "trusted", "root_api_key": "server-root-key"}
-    monkeypatch.setattr(
-        config_loader_module,
-        "load_ovcli_config",
-        lambda: SimpleNamespace(api_key="external-user-key"),
-    )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(bot_data, ov_data, server_section_present=True)
 
     assert bot_data["mode"] == "remote"
-    assert bot_data["api_key"] == "external-user-key"
+    assert "api_key" not in bot_data
     assert bot_data["api_key_type"] == "user"
     assert bot_data["root_api_key"] == "bot-root-key"
 
 
-def test_ov_server_legacy_mode_is_ignored_for_current_api_key_server(monkeypatch):
+def test_ov_server_legacy_mode_is_ignored_for_current_api_key_server():
     bot_data = {"mode": "local"}
     ov_data = {"root_api_key": "server-root-key"}
-    monkeypatch.setattr(
-        config_loader_module,
-        "load_ovcli_config",
-        lambda: SimpleNamespace(api_key="ovcli-user-key"),
-    )
 
-    config_loader_module._merge_ov_server_config(bot_data, ov_data)
+    config_loader_module._merge_ov_server_config(bot_data, ov_data, server_section_present=True)
 
     assert bot_data["mode"] == "remote"
-    assert bot_data["api_key"] == "ovcli-user-key"
+    assert "api_key" not in bot_data
     assert bot_data["api_key_type"] == "user"
 
 
-def test_ov_server_current_dev_mode_ignores_legacy_api_key_for_mode(monkeypatch):
+def test_ov_server_current_dev_mode_ignores_legacy_api_key_for_mode():
     bot_data = {"api_key": "bot-user-key"}
-    monkeypatch.setattr(
-        config_loader_module,
-        "load_ovcli_config",
-        lambda: SimpleNamespace(api_key="stale-ovcli-key"),
-    )
 
-    config_loader_module._merge_ov_server_config(bot_data, {})
+    config_loader_module._merge_ov_server_config(bot_data, {}, server_section_present=True)
 
     assert bot_data["mode"] == "local"
     assert bot_data["api_key"] == "bot-user-key"
+
+
+def test_ov_server_without_root_server_section_stays_standalone():
+    bot_data = {}
+
+    auth_mode, source, api_key_source = config_loader_module._merge_ov_server_config(
+        bot_data,
+        {},
+        server_section_present=False,
+    )
+
+    assert auth_mode == ""
+    assert source == "none"
+    assert api_key_source == "none"
+    assert "source" not in bot_data
+    assert bot_data["server_url"] == ""
+    assert bot_data["mode"] == "local"
+    assert bot_data["api_key_type"] == "user"
+
+
+def test_server_managed_load_config_ignores_bot_ov_server(monkeypatch, tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "host": "127.0.0.1",
+                    "port": 1935,
+                    "auth_mode": "api_key",
+                    "root_api_key": "root-key",
+                },
+                "bot": {
+                    "ov_server": {
+                        "server_url": "https://remote.example",
+                        "api_key": "bot-key",
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(config_loader_module, "CONFIG_PATH", config_path)
+    monkeypatch.setenv(config_loader_module.VIKINGBOT_WITH_OPENVIKING_SERVER_ENV, "1")
+    config = config_loader_module.load_config()
+
+    assert config.ov_server.server_url == "http://127.0.0.1:1935"
+    assert config.ov_server.api_key == ""
+    assert config.ov_server.get_config_source() == "inherited"
+    assert config.ov_server.get_api_key_source() == "none"
+    assert config.ov_server.is_server_managed() is True
+
+
+def test_server_managed_load_config_uses_runtime_server_url(monkeypatch, tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "host": "127.0.0.1",
+                    "port": 1935,
+                    "auth_mode": "api_key",
+                    "root_api_key": "root-key",
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(config_loader_module, "CONFIG_PATH", config_path)
+    monkeypatch.setenv(config_loader_module.VIKINGBOT_WITH_OPENVIKING_SERVER_ENV, "1")
+    monkeypatch.setenv(
+        config_loader_module.VIKINGBOT_MANAGED_OV_SERVER_URL_ENV,
+        "http://127.0.0.1:1940",
+    )
+
+    config = config_loader_module.load_config()
+
+    assert config.ov_server.server_url == "http://127.0.0.1:1940"
+    assert config.ov_server.is_server_managed() is True
+
+
+def test_vikingbot_load_config_does_not_read_ovcli_conf(monkeypatch, tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "host": "127.0.0.1",
+                    "port": 1935,
+                    "auth_mode": "api_key",
+                    "root_api_key": "root-key",
+                },
+                "bot": {"ov_server": {"api_key": "bot-user-key"}},
+            }
+        )
+    )
+    invalid_cli_path = tmp_path / "ovcli.conf"
+    invalid_cli_path.write_text(json.dumps({"account_id": "legacy-account"}))
+    monkeypatch.setattr(config_loader_module, "CONFIG_PATH", config_path)
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(invalid_cli_path))
+
+    config = config_loader_module.load_config()
+
+    assert not hasattr(config_loader_module, "load_ovcli_config")
+    assert config.ov_server.api_key == "bot-user-key"
+    assert config.ov_server.get_api_key_source() == "bot.ov_server.api_key"
+
+
+@pytest.mark.asyncio
+async def test_memory_store_passes_injected_config_to_request_client(monkeypatch, tmp_path):
+    config = _make_config("root")
+    captured = {}
+
+    def _unexpected_load():
+        raise AssertionError("MemoryStore must not reload Bot config")
+
+    class _FakeClient:
+        async def read_peer_profile(self, peer_id):
+            return f"profile:{peer_id}"
+
+        async def close(self):
+            return None
+
+    async def _create(**kwargs):
+        captured.update(kwargs)
+        return _FakeClient()
+
+    monkeypatch.setattr(memory_module, "load_config", _unexpected_load)
+    monkeypatch.setattr(memory_module, "VikingClient", SimpleNamespace(create=_create))
+
+    store = MemoryStore(tmp_path, config=config)
+    result = await store.get_viking_peer_profile(
+        workspace_id="workspace",
+        peer_id="peer-a",
+        openviking_connection={"api_key": "request-key"},
+    )
+
+    assert result == "profile:peer-a"
+    assert captured["config"] is config
+    assert captured["connection"] == {"api_key": "request-key"}
 
 
 def _auth_probe(*, ok=True, status_code=200, data=None, error=""):
@@ -427,6 +543,7 @@ def _auth_probe(*, ok=True, status_code=200, data=None, error=""):
 def test_validate_openviking_auth_warns_when_server_unavailable(monkeypatch, capsys):
     config = SimpleNamespace(
         ov_server=SimpleNamespace(
+            _source="inherited",
             mode="remote",
             api_key_type="user",
             api_key="user-key",
@@ -444,13 +561,89 @@ def test_validate_openviking_auth_warns_when_server_unavailable(monkeypatch, cap
 
     captured = capsys.readouterr()
     assert "OpenViking server at http://ov.local is unavailable" in captured.err
-    assert "Only basic VikingBot features are available" in captured.err
+    assert "standalone mode" in captured.err
     assert "user-key" not in captured.err
+    assert config.ov_server.server_url == ""
+    assert config.ov_server.mode == "local"
+
+
+def test_validate_openviking_auth_exits_when_explicit_server_unavailable(monkeypatch, capsys):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            _source="explicit",
+            mode="remote",
+            api_key_type="user",
+            api_key="user-key",
+            root_api_key="",
+            server_url="http://ov.remote",
+        )
+    )
+    monkeypatch.setattr(
+        config_loader_module,
+        "_request_openviking_json",
+        lambda *_args, **_kwargs: _auth_probe(ok=False, error="ConnectError"),
+    )
+
+    with pytest.raises(SystemExit):
+        config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert "configured bot.ov_server.server_url is unavailable" in captured.err
+    assert "OpenViking server URL: http://ov.remote" in captured.err
+    assert "user-key" not in captured.err
+
+
+def test_validate_openviking_auth_keeps_managed_upstream_while_server_starts(monkeypatch, capsys):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            _source="inherited",
+            _server_managed=True,
+            mode="remote",
+            api_key_type="user",
+            api_key="",
+            root_api_key="",
+            server_url="http://127.0.0.1:1935",
+        )
+    )
+    monkeypatch.setattr(
+        config_loader_module,
+        "_request_openviking_json",
+        lambda *_args, **_kwargs: _auth_probe(ok=False, status_code=None, error="ConnectError"),
+    )
+
+    config_loader_module.validate_openviking_auth(config)
+
+    assert config.ov_server.server_url == "http://127.0.0.1:1935"
+    assert "keep the inherited upstream" in capsys.readouterr().err
+
+
+def test_validate_openviking_auth_does_not_downgrade_inherited_auth_failure(monkeypatch):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            _source="inherited",
+            mode="remote",
+            api_key_type="user",
+            api_key="bad-user-key",
+            root_api_key="",
+            server_url="http://ov.local",
+        )
+    )
+    monkeypatch.setattr(
+        config_loader_module,
+        "_request_openviking_json",
+        lambda *_args, **_kwargs: _auth_probe(ok=False, status_code=401),
+    )
+
+    with pytest.raises(SystemExit):
+        config_loader_module.validate_openviking_auth(config)
+
+    assert config.ov_server.server_url == "http://ov.local"
 
 
 def test_validate_openviking_auth_exits_for_auth_mode_mismatch(monkeypatch, capsys):
     config = SimpleNamespace(
         ov_server=SimpleNamespace(
+            _source="inherited",
             mode="remote",
             api_key_type="user",
             api_key="user-key",
@@ -468,15 +661,47 @@ def test_validate_openviking_auth_exits_for_auth_mode_mismatch(monkeypatch, caps
         config_loader_module.validate_openviking_auth(config)
 
     captured = capsys.readouterr()
-    assert "auth mode mismatch" in captured.err
+    assert "does not match the current ov.conf" in captured.err
     assert "OpenViking server URL: http://ov.local" in captured.err
-    assert "Actual server auth_mode: trusted" in captured.err
-    assert "VikingBot current auth_mode: api_key" in captured.err
-    assert "bot.ov_server.api_key_type to 'root'" in captured.err
+    assert "Running server auth_mode: trusted" in captured.err
+    assert "Current ov.conf server auth_mode: api_key" in captured.err
+    assert "restart OpenViking server with the current ov.conf" in captured.err
+    assert "server.auth_mode='trusted'" in captured.err
+    assert "bot.ov_server.api_key_type" not in captured.err
     assert "user-key" not in captured.err
 
 
-def test_validate_openviking_auth_warns_for_api_key_mode_without_user_key(monkeypatch, capsys):
+def test_inherited_dev_config_mismatch_explains_stale_api_key_server(monkeypatch, capsys):
+    config = SimpleNamespace(
+        ov_server=SimpleNamespace(
+            _source="inherited",
+            effective_auth_mode="dev",
+            mode="local",
+            api_key_type="user",
+            api_key="",
+            root_api_key="",
+            server_url="http://127.0.0.1:1935",
+        )
+    )
+    monkeypatch.setattr(
+        config_loader_module,
+        "_request_openviking_json",
+        lambda *_args, **_kwargs: _auth_probe(data={"auth_mode": "api_key"}),
+    )
+
+    with pytest.raises(SystemExit):
+        config_loader_module.validate_openviking_auth(config)
+
+    captured = capsys.readouterr()
+    assert "Running server auth_mode: api_key" in captured.err
+    assert "Current ov.conf server auth_mode: dev" in captured.err
+    assert "started with different authentication settings" in captured.err
+    assert "configure bot.ov_server.api_key with an OpenViking User/Admin API key" in captured.err
+    assert "dev-mode VikingBot gateway must listen on localhost" in captured.err
+    assert "bot.ov_server.api_key_type" not in captured.err
+
+
+def test_validate_openviking_auth_exits_for_api_key_mode_without_user_key(monkeypatch, capsys):
     config = SimpleNamespace(
         ov_server=SimpleNamespace(
             mode="remote",
@@ -492,16 +717,17 @@ def test_validate_openviking_auth_warns_for_api_key_mode_without_user_key(monkey
         lambda *_args, **_kwargs: _auth_probe(data={"auth_mode": "api_key"}),
     )
 
-    config_loader_module.validate_openviking_auth(config)
+    with pytest.raises(SystemExit):
+        config_loader_module.validate_openviking_auth(config)
 
     captured = capsys.readouterr()
-    assert "Warning:" in captured.err
-    assert "OpenViking User API key" in captured.err
+    assert "Error:" in captured.err
+    assert "OpenViking User/Admin API key" in captured.err
     assert "bot.ov_server.api_key" in captured.err
     assert "Root API keys cannot access" in captured.err
 
 
-def test_validate_openviking_auth_warns_when_user_key_is_root(monkeypatch, capsys):
+def test_validate_openviking_auth_exits_when_user_key_is_root(monkeypatch, capsys):
     config = SimpleNamespace(
         ov_server=SimpleNamespace(
             mode="remote",
@@ -528,7 +754,8 @@ def test_validate_openviking_auth_warns_when_user_key_is_root(monkeypatch, capsy
 
     monkeypatch.setattr(config_loader_module, "_request_openviking_json", _fake_probe)
 
-    config_loader_module.validate_openviking_auth(config)
+    with pytest.raises(SystemExit):
+        config_loader_module.validate_openviking_auth(config)
 
     captured = capsys.readouterr()
     assert "resolves to a ROOT API key" in captured.err
@@ -575,7 +802,7 @@ def test_validate_openviking_auth_uses_effective_auth_mode_not_legacy_mode(monke
             api_key_type="user",
             api_key="configured-key",
             root_api_key="",
-            server_url="http://ov.local",
+            server_url="http://127.0.0.1:1935",
         )
     )
     monkeypatch.setattr(
@@ -590,7 +817,7 @@ def test_validate_openviking_auth_uses_effective_auth_mode_not_legacy_mode(monke
     assert captured.err == ""
 
 
-def test_validate_openviking_auth_warns_for_trusted_bad_root_key(monkeypatch, capsys):
+def test_validate_openviking_auth_exits_for_trusted_bad_root_key(monkeypatch, capsys):
     config = SimpleNamespace(
         ov_server=SimpleNamespace(
             mode="remote",
@@ -615,10 +842,11 @@ def test_validate_openviking_auth_warns_for_trusted_bad_root_key(monkeypatch, ca
 
     monkeypatch.setattr(config_loader_module, "_request_openviking_json", _fake_probe)
 
-    config_loader_module.validate_openviking_auth(config)
+    with pytest.raises(SystemExit):
+        config_loader_module.validate_openviking_auth(config)
 
     captured = capsys.readouterr()
-    assert "configured root API key was rejected" in captured.err
+    assert "no valid root API key is available" in captured.err
     assert "configured-root" not in captured.err
 
 
@@ -724,9 +952,11 @@ def test_viking_client_request_connection_uses_active_identity(monkeypatch):
     assert client.should_sender_fanout() is False
     assert client._memory_target_uri(None) == "viking://user/memories/"
     assert first.kwargs == {
-        "url": "http://studio.local",
+        "url": "http://ov.local",
         "api_key": "anonymous-key",
         "profile_enabled": False,
+        "account": "acct",
+        "user": "anonymous",
     }
 
 
@@ -748,7 +978,7 @@ def test_viking_client_request_connection_preserves_trusted_scope(monkeypatch):
 
     first = _DummyHTTPClient.instances[0]
     assert first.kwargs == {
-        "url": "http://studio.local",
+        "url": "http://ov.local",
         "api_key": "admin-key",
         "profile_enabled": False,
         "account": "acct",
@@ -773,10 +1003,31 @@ def test_viking_client_request_connection_allows_trusted_no_key(monkeypatch):
 
     first = _DummyHTTPClient.instances[0]
     assert first.kwargs == {
-        "url": "http://studio.local",
+        "url": "http://ov.local",
         "profile_enabled": False,
         "account": "acct",
         "user": "alice",
+    }
+
+
+def test_viking_client_request_connection_does_not_fill_identity_from_bot_config(monkeypatch):
+    monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
+
+    client = VikingClient(
+        connection={
+            "server_url": "http://untrusted.local",
+            "api_key": "request-key",
+            "api_key_type": "user",
+        },
+    )
+
+    first = _DummyHTTPClient.instances[0]
+    assert client.account_id is None
+    assert client.admin_user_id is None
+    assert first.kwargs == {
+        "url": "http://ov.local",
+        "api_key": "request-key",
+        "profile_enabled": False,
     }
 
 
@@ -2381,17 +2632,21 @@ async def test_openviking_search_actor_client_expands_current_peer_scope(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_openviking_tool_sender_uses_actor_scoped_one_shot_client(monkeypatch):
+async def test_openviking_tool_uses_authenticated_actor_instead_of_display_sender(monkeypatch):
     monkeypatch.setattr(ov_server_module, "load_config", lambda: _make_config("user"))
     tool = VikingSearchTool()
 
     result = await tool.execute(
-        SimpleNamespace(workspace_id="workspace", sender_id="sender-1"),
+        SimpleNamespace(
+            workspace_id="workspace",
+            sender_id="display-user",
+            actor_peer_id="peer-a",
+        ),
         query="hello",
     )
 
     first = _DummyHTTPClient.instances[0]
-    assert first.kwargs["actor_peer_id"] == "sender-1"
+    assert first.kwargs["actor_peer_id"] == "peer-a"
     assert first.closed is True
     assert "No results found" in result
 
@@ -2812,7 +3067,7 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
     case_uri = "viking://user/admin/memories/cases/case1.md"
     exp_uri = "viking://user/admin/memories/experiences/exp1.md"
     direct_exp_uri = "viking://user/admin/memories/experiences/direct.md"
-    case_content = MemoryFileUtils.write(
+    MemoryFileUtils.write(
         MemoryFile(
             uri=case_uri,
             content="# case1\n\n## Linked Experiences\n- exp1",

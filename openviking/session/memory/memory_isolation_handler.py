@@ -71,22 +71,15 @@ class MemoryIsolationHandler:
     def _message_target_id(self, msg: Any) -> Optional[str]:
         raw_peer_id = getattr(msg, "peer_id", None)
         peer_id = safe_peer_id(raw_peer_id)
-        if peer_id and self._can_write_peer(peer_id):
+        if peer_id and self._is_peer_owner_message(msg) and self._can_write_peer(peer_id):
             return peer_id
         if raw_peer_id in (None, "") and self.allow_self:
             return _SELF_PEER_ID
         return None
 
-    def _first_target_id_in_messages(self) -> Optional[str]:
-        targets = [
-            target_id
-            for msg in self._messages()
-            if (target_id := self._message_target_id(msg))
-        ]
-        for target_id in targets:
-            if target_id != _SELF_PEER_ID:
-                return target_id
-        return targets[0] if targets else None
+    @staticmethod
+    def _is_peer_owner_message(msg: Any) -> bool:
+        return getattr(msg, "role", None) == "user"
 
     def get_read_scope(self) -> RoleScope:
         user_ids = set()
@@ -132,10 +125,23 @@ class MemoryIsolationHandler:
             return True
         if self.allowed_memory_types is not None and memory_type not in self.allowed_memory_types:
             return False
+        if not self.allow_self and not getattr(memory_type_schema, "peer_enabled", True):
+            return False
         return True
 
     def _can_write_peer(self, peer_id: str) -> bool:
         return self.allow_peer and peer_id in self.allowed_peer_ids
+
+    def _unique_peer_target_id_in_messages(self) -> Optional[str]:
+        targets = [
+            peer_id
+            for msg in self._messages()
+            if (peer_id := safe_peer_id(getattr(msg, "peer_id", None)))
+            and self._is_peer_owner_message(msg)
+            and self._can_write_peer(peer_id)
+        ]
+        peer_ids = list(dict.fromkeys(targets))
+        return peer_ids[0] if len(peer_ids) == 1 else None
 
     def render_schema_directories(self, memory_type_schema: MemoryTypeSchema) -> List[str]:
         user_id = self.ctx.user.user_id if self.ctx and self.ctx.user else "default"
@@ -181,12 +187,11 @@ class MemoryIsolationHandler:
             return _SELF_PEER_ID
         if peer_id and self._can_write_peer(peer_id):
             return peer_id
-        fallback_target_id = self._first_target_id_in_messages()
-        if fallback_target_id:
-            return fallback_target_id
+        if raw_peer_id not in (None, ""):
+            return None
         if self.allow_self:
             return _SELF_PEER_ID
-        return None
+        return self._unique_peer_target_id_in_messages()
 
     def calculate_memory_uris(
         self,
@@ -207,7 +212,7 @@ class MemoryIsolationHandler:
         has_ranges = operation.memory_fields.get("ranges") is not None
         if not getattr(memory_type_schema, "peer_enabled", True):
             operation.memory_fields.pop("peer_id", None)
-            target_ids = [_SELF_PEER_ID]
+            target_ids = [_SELF_PEER_ID] if self.allow_self else []
         elif operation.memory_fields.get("ranges") is not None:
             target_ids = self._range_targets(
                 operation.memory_fields.get("ranges"),

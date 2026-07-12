@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
 from typing import Any, Dict
 
 import httpx
@@ -56,6 +59,23 @@ ERROR_CODE_TO_EXCEPTION = {
 }
 
 
+def _timeout_configured_outside_call() -> bool:
+    if os.getenv("OPENVIKING_TIMEOUT"):
+        return True
+    config_path = os.getenv("OPENVIKING_CLI_CONFIG_FILE")
+    if config_path:
+        path = Path(config_path).expanduser()
+    else:
+        path = Path.home() / ".openviking" / "ovcli.conf"
+    if not path.exists():
+        return False
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(raw, dict) and "timeout" in raw
+
+
 def _raise_legacy_exception(error: Dict[str, Any]) -> None:
     code = error.get("code", "UNKNOWN")
     message = error.get("message", "Unknown error")
@@ -91,8 +111,8 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
     def __init__(self, *args, **kwargs):
         # Heavy local benchmark runs can keep OpenViking search requests queued
         # behind embedding/vector work. Use a larger default read timeout than
-        # the upstream SDK's 60s while still respecting explicit caller values,
-        # including the SDK default when callers pass no timeout argument.
+        # the upstream SDK's 60s while still respecting explicit caller values
+        # and timeouts configured via environment or ovcli.conf.
         if "timeout" not in kwargs:
             try:
                 import inspect
@@ -108,7 +128,7 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
                 timeout_index = params.index("timeout")
             except Exception:
                 timeout_index = 7
-            if len(args) <= timeout_index:
+            if len(args) <= timeout_index and not _timeout_configured_outside_call():
                 kwargs["timeout"] = 180.0
         super().__init__(*args, **kwargs)
 

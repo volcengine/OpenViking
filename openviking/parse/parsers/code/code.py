@@ -467,7 +467,7 @@ class CodeRepositoryParser(BaseParser):
             "clone",
             "--depth",
             "1",
-            "--recursive",
+            "--no-recurse-submodules",
         ]
         if branch and not commit:
             clone_args.extend(["--branch", branch])

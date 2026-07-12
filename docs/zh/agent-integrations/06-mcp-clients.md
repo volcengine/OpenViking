@@ -37,9 +37,13 @@ claude mcp add --transport http openviking \
 
 > 如果你需要免工具调用的自动召回与自动捕获，请使用 [Claude Code 记忆插件](./02-claude-code.md)。
 
-### Trae / Cursor / ChatGPT / Codex
+### Trae / Cursor / ChatGPT
 
 使用上面的标准 `mcpServers` 配置即可——均已通过 API Key 鉴权验证。
+
+### Codex
+
+Codex 请使用 [Codex 记忆插件](./04-codex.md)。插件通过 manifest 提供 stdio MCP 代理，并让 MCP 与生命周期 hooks 共用同一套凭据配置。
 
 ### OpenCode
 
@@ -71,26 +75,7 @@ HTTPS 配置、部署模板和完整授权流程详见 [OAuth 2.1 指南](../gui
 
 ## 可用工具
 
-连接后 OpenViking 暴露 14 个工具：
-
-| 工具 | 说明 |
-|------|------|
-| `search` | 跨记忆、资源、技能的语义搜索 |
-| `read` | 读取一个或多个 `viking://` URI |
-| `list` | 列出 `viking://` 目录下的条目 |
-| `store` | 存储消息到长期记忆 |
-| `add_resource` | 添加本地文件或 URL 作为资源 |
-| `grep` | 正则内容搜索 |
-| `glob` | 按 glob 模式查找文件 |
-| `forget` | 删除 `viking://` URI |
-| `code_outline` | 展示文件的符号结构 |
-| `code_search` | 跨目录搜索符号名 |
-| `code_expand` | 返回单个符号的完整源码 |
-| `health` | 检查 OpenViking 服务状态 |
-| `list_watches` | 列出自动刷新订阅 |
-| `cancel_watch` | 取消 watch 任务 |
-
-工具参数、渐进式文件上传和高级配置见 [MCP 集成指南](../guides/06-mcp-integration.md)。
+连接后，OpenViking 会提供检索、记忆、资源、watch、文件系统和代码导航工具。完整工具清单、参数、渐进式文件上传和高级配置见 [MCP 集成指南](../guides/06-mcp-integration.md#可用-mcp-工具)。
 
 ## 故障排查
 

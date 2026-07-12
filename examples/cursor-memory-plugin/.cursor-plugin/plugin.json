@@ -1,0 +1,20 @@
+{
+  "name": "openviking-memory",
+  "displayName": "OpenViking Memory",
+  "version": "0.1.0",
+  "description": "Automatic long-term memory recall and conversation capture for Cursor",
+  "author": {
+    "name": "OpenViking"
+  },
+  "publisher": "OpenViking",
+  "homepage": "https://openviking.ai",
+  "repository": "https://github.com/volcengine/OpenViking",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "context", "mcp", "hooks", "openviking"],
+  "category": "developer-tools",
+  "tags": ["memory", "productivity", "context"],
+  "rules": "./rules/",
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

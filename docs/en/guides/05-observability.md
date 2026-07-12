@@ -58,9 +58,12 @@ curl http://localhost:1933/api/v1/observer/system \
     "is_healthy": true,
     "errors": [],
     "components": {
-      "queue": {"name": "queue", "is_healthy": true, "has_errors": false},
-      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false},
-      "vlm": {"name": "vlm", "is_healthy": true, "has_errors": false}
+      "queue": {"name": "queue", "is_healthy": true, "has_errors": false, "status": "..."},
+      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false, "status": "..."},
+      "models": {"name": "models", "is_healthy": true, "has_errors": false, "status": "..."},
+      "lock": {"name": "lock", "is_healthy": true, "has_errors": false, "status": "..."},
+      "retrieval": {"name": "retrieval", "is_healthy": true, "has_errors": false, "status": "..."},
+      "filesystem": {"name": "filesystem", "is_healthy": true, "has_errors": false, "status": "..."}
     }
   }
 }
@@ -72,7 +75,10 @@ curl http://localhost:1933/api/v1/observer/system \
 | --- | --- | --- |
 | `GET /api/v1/observer/queue` | Queue | Processing queue status |
 | `GET /api/v1/observer/vikingdb` | VikingDB | Vector database status |
-| `GET /api/v1/observer/vlm` | VLM | Vision Language Model status |
+| `GET /api/v1/observer/models` | Models | VLM, embedding, and rerank model status |
+| `GET /api/v1/observer/lock` | Lock | Lock and transaction status |
+| `GET /api/v1/observer/retrieval` | Retrieval | Retrieval quality metrics |
+| `GET /api/v1/observer/filesystem` | Filesystem | Filesystem operation metrics |
 
 For example:
 

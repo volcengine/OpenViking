@@ -79,6 +79,13 @@ class QdrantConfig(BaseModel):
 class CuVSConfig(BaseModel):
     """Configuration for GPU dense-vector search through NVIDIA cuVS."""
 
+    dtype: Literal["float32", "float16"] = Field(
+        default="float32",
+        description=(
+            "GPU dataset and query dtype. float16 is an opt-in direct cast and "
+            "must be benchmarked for recall; it does not change native CPU quantization."
+        ),
+    )
     algorithm: Literal["brute_force", "cagra"] = Field(
         default="brute_force",
         description=(
@@ -147,6 +154,29 @@ class CuVSConfig(BaseModel):
             "Set to zero to disable caching."
         ),
     )
+    max_concurrent_gpu_searches: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Maximum in-flight cuVS GPU search calls per index. Host-side filter and "
+            "snapshot work remains concurrent; increase only after hardware-specific tuning."
+        ),
+    )
+    auto_background_rebuild: bool = Field(
+        default=False,
+        description=(
+            "Build dirty auto-cuVS snapshots in a coalescing background worker. "
+            "Queries use the native index until the new GPU snapshot is committed."
+        ),
+    )
+    auto_rebuild_debounce_ms: int = Field(
+        default=500,
+        ge=0,
+        description=(
+            "Quiet period used to coalesce consecutive mutations before an auto-cuVS "
+            "background rebuild."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -203,6 +233,7 @@ class MilvusConfig(BaseModel):
         if self.timeout_seconds <= 0:
             raise ValueError("Milvus timeout_seconds must be positive")
         return self
+
 
 _OPENGAUSS_MODES = {"standalone", "distributed"}
 

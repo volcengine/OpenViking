@@ -33,6 +33,7 @@
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
+ *   OPENVIKING_WORKSPACE_PEER, OPENVIKING_RECALL_PEER_SCOPE
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
  */
 
@@ -88,6 +89,12 @@ export function loadConfig() {
   const debug = envBool("OPENVIKING_DEBUG") ?? (cx.debug === true);
   const defaultLogPath = join(homedir(), ".openviking", "logs", "codex-hooks.log");
   const debugLogPath = str(process.env.OPENVIKING_DEBUG_LOG, defaultLogPath);
+  const workspacePeer = envBool("OPENVIKING_WORKSPACE_PEER") ?? (cx.workspacePeer !== false);
+  const recallPeerScopeRaw = str(
+    process.env.OPENVIKING_RECALL_PEER_SCOPE,
+    str(cx.recallPeerScope, "all"),
+  );
+  const recallPeerScope = recallPeerScopeRaw === "actor" ? "actor" : "all";
 
   const timeoutMs = Math.max(1000, Math.floor(num(
     process.env.OPENVIKING_TIMEOUT_MS,
@@ -133,6 +140,7 @@ export function loadConfig() {
     account: creds.account,
     user: creds.user,
     peerId: creds.peerId,
+    workspacePeer,
     timeoutMs,
     recallTimeoutMs,
 
@@ -150,6 +158,7 @@ export function loadConfig() {
       num(cx.minQueryLength, 3),
     ))),
     logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cx.logRankingDetails === true),
+    recallPeerScope,
     recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? (cx.recallCompress !== false),
     recallCompressModel,
     recallCompressThinking,

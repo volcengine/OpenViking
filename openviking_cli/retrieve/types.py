@@ -251,6 +251,8 @@ class TypedQuery:
     intent: str
     priority: int = 3
     target_directories: List[str] = field(default_factory=list)
+    embedding_input: Optional[Any] = None
+    image_query: bool = False
 
 
 @dataclass

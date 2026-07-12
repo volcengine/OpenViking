@@ -121,19 +121,21 @@ claude mcp add --transport http openviking \
 
 ## 可用的 MCP 工具
 
-连接后，OpenViking MCP 端点暴露 14 个工具：
+连接后，OpenViking MCP 端点暴露 16 个工具：
 
 | 工具 | 说明 | 主要参数 |
 |------|------|----------|
-| `search` | 语义搜索记忆、资源和技能 | `query`, `target_uri`(可选), `limit`, `min_score` |
+| `find` | 无 session 上下文的快速语义检索 | `query`, `target_uri`(可选), `limit`, `min_score`, `level`(可选) |
+| `search` | 支持可选 session 上下文和意图分析的深度语义检索 | `query`, `target_uri`(可选), `session_id`(可选), `limit`, `min_score`, `level`(可选) |
+| `recall` | 按记忆类别配额召回 | `query`, `quotas`(可选), `max_chars`, `min_score`, `peer_scope`, `other_peer_penalty`(可选) |
 | `read` | 读取一个或多个 `viking://` URI 的内容 | `uris`（单个字符串或数组） |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
-| `store` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
+| `remember` | 存储消息到长期记忆（触发记忆提取） | `messages`（`{role, content}` 列表） |
 | `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `args`(可选,特定 parser 参数，例如飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，飞书用户 token watch 使用 `{"feishu_access_token":"u-...","feishu_refresh_token":"r-..."}`) |
 | `list_watches` | 列出当前 Agent 可见的 watch 任务（自动刷新订阅），每行显示目标 URI、刷新间隔（分钟）、active/paused 状态以及下一次调度时间 | 无 |
 | `cancel_watch` | 按目标 URI 取消（删除）watch 任务。若需调整刷新周期或临时暂停，请取消后使用新的 `watch_interval` 重新添加 | `to_uri`（必须匹配 watch 任务的 `to` 值，例如 `viking://resources/...`） |
-| `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串）, `case_insensitive` |
-| `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围) |
+| `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串或数组）, `case_insensitive`, `node_limit` |
+| `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围), `node_limit` |
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`） | `uri`, `recursive`(可选) |
 | `code_outline` | 显示文件的符号结构（类、函数、方法及其行号范围），不读取实现体。在决定 `read` 之前用于快速浏览文件。 | `uri`（必须是 `viking://` **文件** URI） |
 | `code_search` | 在 `viking://` 目录下按子串搜索符号名（类 / 函数 / 方法），返回符号类型、所属类、文件 URI、行号范围。最多扫描 200 个源文件。 | `query`, `uri`（必须是 `viking://` 目录；缩小到子目录可获得更深覆盖） |

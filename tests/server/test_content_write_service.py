@@ -9,6 +9,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.storage.content_write import ContentWriteCoordinator
+from openviking.storage.errors import ResourceBusyError
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     DeadlineExceededError,
@@ -293,8 +294,15 @@ class _FakeHandle:
 
 
 class _FakeLockManager:
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        acquire_exact_path_result: bool = True,
+        acquire_tree_result: bool = True,
+    ):
         self.handle = _FakeHandle("lock-1")
+        self.acquire_exact_path_result = acquire_exact_path_result
+        self.acquire_tree_result = acquire_tree_result
         self.release_calls = []
 
     def create_handle(self):
@@ -302,11 +310,11 @@ class _FakeLockManager:
 
     async def acquire_tree(self, handle, path):
         del handle, path
-        return True
+        return self.acquire_tree_result
 
     async def acquire_exact_path(self, handle, path):
         del handle, path
-        return True
+        return self.acquire_exact_path_result
 
     async def release(self, handle):
         self.release_calls.append(handle.id)
@@ -460,6 +468,58 @@ async def test_write_timeout_after_enqueue_releases_resource_lock(monkeypatch):
     assert lock_manager.release_calls == ["lock-1"]
     assert viking_fs.delete_temp_calls == []
     assert viking_fs.content[file_uri] == "updated"
+
+
+@pytest.mark.asyncio
+async def test_resource_write_lock_conflict_raises_resource_busy(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager(acquire_exact_path_result=False)
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager",
+        lambda: lock_manager,
+    )
+
+    with pytest.raises(ResourceBusyError) as exc_info:
+        await coordinator.write(
+            uri=file_uri,
+            content="updated",
+            ctx=ctx,
+        )
+
+    assert exc_info.value.uri == file_uri
+    assert lock_manager.release_calls == ["lock-1"]
+    assert viking_fs.content[file_uri] == "original"
+
+
+@pytest.mark.asyncio
+async def test_memory_write_lock_conflict_raises_resource_busy(monkeypatch):
+    file_uri = "viking://user/default/memories/preferences/theme.md"
+    root_uri = "viking://user/default/memories/preferences"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager(acquire_exact_path_result=False)
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager",
+        lambda: lock_manager,
+    )
+
+    with pytest.raises(ResourceBusyError) as exc_info:
+        await coordinator.write(
+            uri=file_uri,
+            content="updated",
+            ctx=ctx,
+        )
+
+    assert exc_info.value.uri == file_uri
+    assert lock_manager.release_calls == ["lock-1"]
+    assert viking_fs.content[file_uri] == "original"
 
 
 @pytest.mark.asyncio

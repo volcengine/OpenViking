@@ -1,7 +1,9 @@
 import {
   extractPartsFromPayload,
   extractTextFromPayload,
+  sanitizeCapturedText,
   shouldCaptureText,
+  truncateCaptureText,
 } from "../shared/capture-utils.mjs";
 
 function normalizeRole(role) {
@@ -22,6 +24,20 @@ function entryPayload(entry) {
   return entry;
 }
 
+function faithfulDecision(rawText, cfg) {
+  const sanitized = sanitizeCapturedText(rawText);
+  if (!sanitized) return { shouldCapture: false, reason: "empty", text: "" };
+  const capped = truncateCaptureText(sanitized, cfg.captureMaxLength || 24000);
+  const compact = String(capped || "").replace(/\s+/g, " ").trim();
+  if (/^\[openviking-memory\]/i.test(compact)) {
+    return { shouldCapture: false, reason: "plugin_status", text: "" };
+  }
+  if (/^\/[a-z0-9_-]{1,64}\b/i.test(compact)) {
+    return { shouldCapture: false, reason: "slash_command", text: "" };
+  }
+  return { shouldCapture: true, reason: "faithful", text: capped };
+}
+
 export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg = {}) {
   const entries = Array.isArray(branch) ? branch : [];
   const previousCount = Math.max(0, Number(syncedEntryCount) || 0);
@@ -39,11 +55,18 @@ export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg =
 
     const rawText = extractTextFromPayload(payload, { toolMaxChars: cfg.captureToolMaxChars });
     const parts = extractPartsFromPayload(payload, { toolMaxChars: cfg.captureToolMaxChars });
-    const decision = shouldCaptureText(rawText, role, cfg);
-    if (!decision.shouldCapture && parts.length === 0) continue;
+    const decision = cfg.faithfulCapture || cfg.takeoverEnabled
+      ? faithfulDecision(rawText, cfg)
+      : shouldCaptureText(rawText, role, cfg);
+    const structuredParts = parts.filter((part) => part?.type !== "text");
+    if (!decision.shouldCapture && structuredParts.length === 0) continue;
 
-    const body = parts.length > 0
-      ? { role, parts }
+    const bodyParts = [
+      ...(decision.shouldCapture && decision.text ? [{ type: "text", text: decision.text }] : []),
+      ...structuredParts,
+    ];
+    const body = bodyParts.length > 0
+      ? { role, parts: bodyParts }
       : { role, content: decision.text };
     if (cfg.peerId) body.peer_id = cfg.peerId;
     payloads.push(body);
