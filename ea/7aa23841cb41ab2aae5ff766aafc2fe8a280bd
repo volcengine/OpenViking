@@ -1,0 +1,21 @@
+docs/.vitepress/theme/custom.css
+  s_4a1d89659be257::t_32da0e677adf5c 2,17-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ea7aa23841cb41ab2aae5ff766aafc2fe8a280bd",
+  "prompts": {},
+  "sessions": {
+    "s_4a1d89659be257": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5412-3eb1-7b70-995e-0d6e1b6b2b1d",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

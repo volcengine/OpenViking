@@ -1,0 +1,63 @@
+docs/en/api/01-overview.md
+  s_b3ef78c60c0a9e::t_53ff9ed4f230fb 474-476,495,514-516,523,606-629
+docs/en/api/05-sessions.md
+  s_b3ef78c60c0a9e::t_cb472d84fe1c4f 350-379,1041-1052,1243-1254
+docs/en/api/06-retrieval.md
+  s_b3ef78c60c0a9e::t_64106332960a84 46-47,62-63,66,70,361-362,382,386,579-612,643
+docs/scripts/check-api-reference.mjs
+  s_b3ef78c60c0a9e::t_b5e2f7deb571f9 8-9,13-15,92-93,96-99,172,183,188-211,216,220,233-238,260-264,269-282,308,323-324,397-400,424,439-441
+docs/zh/api/01-overview.md
+  s_b3ef78c60c0a9e::t_e1205cca894f48 469-471,490,509-511,518,601-624
+docs/zh/api/05-sessions.md
+  s_b3ef78c60c0a9e::t_608cafd5708a27 350-379,1015-1026,1217-1228
+docs/zh/api/06-retrieval.md
+  s_b3ef78c60c0a9e::t_f1b9a6166e3fec 46-47,66,70,361-362,383,387,580-613,644
+openviking/async_client.py
+  s_b3ef78c60c0a9e::t_780f4d75276975 736
+openviking/client/local.py
+  s_b3ef78c60c0a9e::t_84bfc09d6e83a2 562
+sdk/go/README.md
+  s_b3ef78c60c0a9e::t_f3cccad346cbfc 128-129
+sdk/go/README_CN.md
+  s_b3ef78c60c0a9e::t_4a24e742112863 72-73
+sdk/go/client_test.go
+  s_b3ef78c60c0a9e::t_be0420275e8459 1236-1288
+sdk/go/retrieval.go
+  s_b3ef78c60c0a9e::t_c7f4f0940f62bc 93-116
+sdk/go/sessions.go
+  s_b3ef78c60c0a9e::t_9ef811c6210a9f 74-130,179-195
+sdk/go/types.go
+  s_b3ef78c60c0a9e::t_19af4d2035e5b5 228-238,287-305
+sdk/python/openviking_sdk/client.py
+  s_b3ef78c60c0a9e::t_0c873c458eb3ae 562,613,625-695,985,1124,1166,1197,1199,1205,1212-1238,1617,1793,1822,1827-1875,2075,2173,2214,2246,2248,2256-2281,2514
+sdk/python/tests/test_async_client_behaviors.py
+  s_b3ef78c60c0a9e::t_c640e431b138de 339-365,600
+sdk/typescript/src/client.ts
+  s_b3ef78c60c0a9e::t_b5b502a5190246 18,25-26,28,359-373,618-665,730-748
+sdk/typescript/src/types.ts
+  s_b3ef78c60c0a9e::t_5ddf363779121f 107-116,156-171
+sdk/typescript/tests/client.test.ts
+  s_b3ef78c60c0a9e::t_637b51b87afa75 150-187
+tests/client/test_filesystem.py
+  s_b3ef78c60c0a9e::t_b2ae462941a4f7 166,189-192
+tests/server/test_peer_id_compat.py
+  s_b3ef78c60c0a9e::t_6911f71de93186 15-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "abdfb73fd37b3da7b561e9b96baa6a5a3f22d7f4",
+  "prompts": {},
+  "sessions": {
+    "s_b3ef78c60c0a9e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5534-f976-7163-90ce-c25160be25ce",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

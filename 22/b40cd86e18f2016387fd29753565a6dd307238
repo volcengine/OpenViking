@@ -1,0 +1,43 @@
+.github/workflows/release-tos.yml
+  s_5e17b6c73ed8ec::t_0d3cc1b6eac46c 94-97,103-105,240
+examples/cursor-memory-plugin/.cursor-plugin/plugin.json
+  s_5e17b6c73ed8ec::t_42932d1992938f 1-20
+examples/cursor-memory-plugin/.mcp.json
+  s_5e17b6c73ed8ec::t_2e53fba221ad3c 1-8
+examples/cursor-memory-plugin/hooks/hooks.json
+  s_5e17b6c73ed8ec::t_754e500148756d 1-35
+examples/cursor-memory-plugin/openviking.integration.json
+  s_5e17b6c73ed8ec::t_50a4bbbeddc31c 1-7
+examples/cursor-memory-plugin/scripts/cursor-plugin.test.mjs
+  s_5e17b6c73ed8ec::t_54f142e0da4c1e 2,35-38,47-52
+examples/memory-plugin-shared/install-agent-hooks.test.mjs
+  s_5e17b6c73ed8ec::t_7739e55bd02701 70-73,80-81,89,94-95,101-112,131,134
+examples/memory-plugin-shared/install.sh
+  s_5e17b6c73ed8ec::t_2a43b61acd49c2 1700-1703,1737,1740,1773,1779-1807,1810-1822,1828-1835,1845-1849,1857,1860,1864-1884,2529,2532-2533,2554,2556-2557,2574,2576-2577
+examples/trae-memory-hooks/.mcp.json
+  s_5e17b6c73ed8ec::t_a9d20f163adb07 1-8
+examples/trae-memory-hooks/hooks/hooks.json
+  s_5e17b6c73ed8ec::t_b916142e86d0c6 1-39
+examples/trae-memory-hooks/openviking.integration.json
+  s_5e17b6c73ed8ec::t_f5a760017afc8c 1-7
+examples/trae-memory-hooks/scripts/trae-hooks.test.mjs
+  s_5e17b6c73ed8ec::t_967610f5954683 4,14-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "22b40cd86e18f2016387fd29753565a6dd307238",
+  "prompts": {},
+  "sessions": {
+    "s_5e17b6c73ed8ec": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f49b4-d234-7ae0-a95d-b3a3014392cd",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

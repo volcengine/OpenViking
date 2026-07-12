@@ -1,0 +1,45 @@
+.github/workflows/typescript-sdk-release.yml
+  s_e183408b893d84::t_bf6deea6413506 1-57
+docs/en/api/01-overview.md
+  s_e183408b893d84::t_8f077e01fd4186 113-138
+docs/zh/api/01-overview.md
+  s_e183408b893d84::t_68bd58acc194b4 109-133
+sdk/typescript/README.md
+  s_e183408b893d84::t_376fe563dea95f 1-29
+sdk/typescript/README_CN.md
+  s_e183408b893d84::t_58f1e6d8ba817f 1-29
+sdk/typescript/package-lock.json
+  s_e183408b893d84::t_ae3a92971306cd 1-2052
+sdk/typescript/package.json
+  s_e183408b893d84::t_b9aa1de8422b3c 1-35
+sdk/typescript/src/client.ts
+  s_e183408b893d84::t_e570dffea84024 1-344
+sdk/typescript/src/errors.ts
+  s_e183408b893d84::t_79f9845250c16a 1-20
+sdk/typescript/src/index.ts
+  s_e183408b893d84::t_e40ee35e06b198 1-3
+sdk/typescript/src/types.ts
+  s_e183408b893d84::t_d1b36ae3900941 1-58
+sdk/typescript/tests/client.test.ts
+  s_e183408b893d84::t_da34541e181438 1-77
+sdk/typescript/tsconfig.json
+  s_e183408b893d84::t_65b496606ae2ce 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "59fb9eb2d217584e2da3b9bcb26bea54ba70e074",
+  "prompts": {},
+  "sessions": {
+    "s_e183408b893d84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4f2d-c961-7e63-82bc-e3db763a0474",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

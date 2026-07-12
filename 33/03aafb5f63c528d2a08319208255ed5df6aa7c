@@ -1,0 +1,43 @@
+docs/en/about/02-changelog.md
+  s_fc57356f120c42::t_0bab3d18906b14 6-54
+docs/en/agent-integrations/06-mcp-clients.md
+  s_fc57356f120c42::t_8367c9e8048cb1 40,44-47,78,82,84,87
+docs/en/guides/06-mcp-integration.md
+  s_fc57356f120c42::t_d1220abe8bab0c 132,136-138,141,145-146
+docs/images/agents/en/codex.md
+  s_fc57356f120c42::t_da4dd054d35e33 1
+docs/images/agents/zh/codex.md
+  s_fc57356f120c42::t_9eb978c0477da5 1
+docs/zh/about/02-changelog.md
+  s_fc57356f120c42::t_99c28c217828f9 6-54
+docs/zh/agent-integrations/04-codex.md
+  s_fc57356f120c42::t_096213b7a55748 3
+docs/zh/agent-integrations/06-mcp-clients.md
+  s_fc57356f120c42::t_7a3f08dad4cdda 40,44-47,78,82,84,87
+docs/zh/guides/06-mcp-integration.md
+  s_fc57356f120c42::t_f2a5394b1d01a4 124,128-130,133,137-138
+examples/codex-memory-plugin/.codex-plugin/plugin.json
+  s_fc57356f120c42::t_fa31aae7a5df32 24,33
+examples/codex-memory-plugin/README.md
+  s_fc57356f120c42::t_3993833bdeafc7 12
+openviking/server/mcp_endpoint.py
+  s_fc57356f120c42::t_a1e971cbfd0449 960-962
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3303aafb5f63c528d2a08319208255ed5df6aa7c",
+  "prompts": {},
+  "sessions": {
+    "s_fc57356f120c42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4f34-5c5b-7133-8a69-0411a64c2b5b",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

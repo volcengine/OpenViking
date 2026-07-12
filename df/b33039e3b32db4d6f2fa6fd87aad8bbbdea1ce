@@ -1,0 +1,21 @@
+sdk/typescript/tests/node-consumer/tsconfig.json
+  s_e183408b893d84::t_f4e752e2a6e62c 1-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "dfb33039e3b32db4d6f2fa6fd87aad8bbbdea1ce",
+  "prompts": {},
+  "sessions": {
+    "s_e183408b893d84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4f2d-c961-7e63-82bc-e3db763a0474",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

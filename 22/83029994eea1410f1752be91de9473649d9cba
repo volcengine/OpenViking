@@ -1,0 +1,63 @@
+openviking/async_client.py
+  s_767d71cc4b524b::t_4e0d340e7f7842 355,736,743
+openviking/client/local.py
+  s_767d71cc4b524b::t_5b383c5180a6d2 318-322,562,572
+openviking_cli/_sdk_import.py
+  s_767d71cc4b524b::t_0d84746a73168e 11-15,19-23
+openviking_cli/client/base.py
+  s_767d71cc4b524b::t_ae49f2519528d7 173
+sdk/go/README.md
+  s_767d71cc4b524b::t_bde9b61fc40760 128-129,131
+sdk/go/README_CN.md
+  s_767d71cc4b524b::t_0ce0f9b017a6d8 72-73,75
+sdk/go/client_test.go
+  s_767d71cc4b524b::t_2cf8b789df84a2 127-133,139,145-153,161-176,1207-1305
+sdk/go/filesystem.go
+  s_767d71cc4b524b::t_127dfd2279e0d0 62-64
+sdk/go/resources.go
+  s_767d71cc4b524b::t_052340fb52a1ec 24
+sdk/go/retrieval.go
+  s_767d71cc4b524b::t_ae4822bf585b14 40-43,83-86,93-118
+sdk/go/sessions.go
+  s_767d71cc4b524b::t_ec12036591fb9b 74-130,179-195
+sdk/go/system.go
+  s_767d71cc4b524b::t_f704afc87efbd5 70-76
+sdk/go/types.go
+  s_767d71cc4b524b::t_a4fb9d35834049 27,160,193-206,211-236,287-305,343
+sdk/python/openviking_sdk/client.py
+  s_767d71cc4b524b::t_201251ab1d9cfc 560,562,569,613,625-695,983,985-994,998,1118-1122,1124,1136-1140,1160-1164,1166,1180-1184,1197,1199,1205,1212-1238,1612-1618,1791,1793,1799,1822,1827-1875,2073,2075,2083,2167-2171,2173,2185-2189,2208-2212,2214,2230-2234,2246,2248,2256-2281,2513-2516
+sdk/python/tests/test_async_client_behaviors.py
+  s_767d71cc4b524b::t_2c1c79a4cf0fc1 1,12-23,249,302-378,613,633,819,824
+sdk/typescript/src/client.ts
+  s_767d71cc4b524b::t_2a12c389b2a2dd 18,25-26,28,115,348,359-373,458,618-665,730-748,878-881
+sdk/typescript/src/types.ts
+  s_767d71cc4b524b::t_b47d407cba9277 77,98,107-116,139,156-171
+sdk/typescript/tests/client.test.ts
+  s_767d71cc4b524b::t_1def52999a26dd 102-187
+tests/client/test_filesystem.py
+  s_767d71cc4b524b::t_019e26fa6581d4 160-193
+tests/server/conftest.py
+  s_767d71cc4b524b::t_8160dc818d25ad 26,38-39,219,254,256,268-285
+tests/server/test_peer_id_compat.py
+  s_767d71cc4b524b::t_81d8896ee8ad10 15,26-38
+tests/server/test_sdk_time_filters.py
+  s_767d71cc4b524b::t_09b61e11c5b939 9,19-22,39,109,131-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2283029994eea1410f1752be91de9473649d9cba",
+  "prompts": {},
+  "sessions": {
+    "s_767d71cc4b524b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5589-563d-7fa2-8a6b-dbc852570879",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

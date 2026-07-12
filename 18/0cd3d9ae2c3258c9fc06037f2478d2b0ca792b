@@ -1,0 +1,23 @@
+examples/memory-plugin-shared/install-agent-hooks.test.mjs
+  s_5e17b6c73ed8ec::t_38d172da0e420e 57-63,103-106,115
+examples/memory-plugin-shared/install.sh
+  s_5e17b6c73ed8ec::t_33b2c0da7a0d75 1795-1797
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "180cd3d9ae2c3258c9fc06037f2478d2b0ca792b",
+  "prompts": {},
+  "sessions": {
+    "s_5e17b6c73ed8ec": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f49b4-d234-7ae0-a95d-b3a3014392cd",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

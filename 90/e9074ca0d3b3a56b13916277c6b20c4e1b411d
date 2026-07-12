@@ -1,0 +1,145 @@
+.cursor-plugin/marketplace.json
+  s_5e17b6c73ed8ec::t_54e97b38465077 1-16
+.github/workflows/pr.yml
+  s_5e17b6c73ed8ec::t_331a91285a1a6f 44-46
+.github/workflows/release-tos.yml
+  s_5e17b6c73ed8ec::t_1f45e798c8603b 86,88,91-101,226-231
+docs/en/agent-integrations/01-overview.md
+  s_5e17b6c73ed8ec::t_61b883d886afec 12-13,18,21,23,25-27
+docs/en/agent-integrations/12-cursor.md
+  s_5e17b6c73ed8ec::t_40e3596117cdfd 1-91
+docs/en/agent-integrations/13-trae.md
+  s_5e17b6c73ed8ec::t_367137443baafa 1-73
+docs/images/agents/en/cursor.md
+  s_5e17b6c73ed8ec::t_21407330aee7c2 1,3,5,7-8,11,14,17,19,21-23,25,27-29,31,33,37-39
+docs/images/agents/en/index.json
+  s_5e17b6c73ed8ec::t_9ac5b5715a1f61 78,80,86,88
+docs/images/agents/en/trae.md
+  s_5e17b6c73ed8ec::t_42411a3c21a437 1,3,6-7,9-10,12-13,16,18-21,23,25,29-31
+docs/images/agents/zh/cursor.md
+  s_5e17b6c73ed8ec::t_c958084fb3f2c4 1,3,5,7-8,11,14,17,19,21-23,25,27-29,31,33,35,37-39
+docs/images/agents/zh/index.json
+  s_5e17b6c73ed8ec::t_9771077ba2f4b3 78,80,86,88
+docs/images/agents/zh/trae.md
+  s_5e17b6c73ed8ec::t_24e0f15d440444 1,3,6-7,9-10,12-13,16,18-21,23,25,27,29-31
+docs/zh/agent-integrations/01-overview.md
+  s_5e17b6c73ed8ec::t_c367e8194f84e6 12-13,18,21,23,25-27
+docs/zh/agent-integrations/12-cursor.md
+  s_5e17b6c73ed8ec::t_143745edc06100 1-91
+docs/zh/agent-integrations/13-trae.md
+  s_5e17b6c73ed8ec::t_5ee3c2bced40a5 1-73
+examples/.cursor-plugin/marketplace.json
+  s_5e17b6c73ed8ec::t_3ca8d32c309c2c 1-16
+examples/claude-code-memory-plugin/scripts/shared/agent-hook-runtime.mjs
+  s_5e17b6c73ed8ec::t_089dab290c47b6 1-222
+examples/codex-memory-plugin/scripts/shared/agent-hook-runtime.mjs
+  s_5e17b6c73ed8ec::t_b05a08154622a7 1-222
+examples/cursor-memory-plugin/.cursor-plugin/plugin.json
+  s_5e17b6c73ed8ec::t_0146b208c5d99e 1-20
+examples/cursor-memory-plugin/.mcp.json
+  s_5e17b6c73ed8ec::t_ece140d34d443d 1-8
+examples/cursor-memory-plugin/README.md
+  s_5e17b6c73ed8ec::t_463e66398af2bd 1-5
+examples/cursor-memory-plugin/hooks/hooks.json
+  s_5e17b6c73ed8ec::t_5580515497778e 1-41
+examples/cursor-memory-plugin/rules/openviking-memory.mdc
+  s_5e17b6c73ed8ec::t_1d5aca5d4b2093 1-6
+examples/cursor-memory-plugin/scripts/cursor-hook.mjs
+  s_5e17b6c73ed8ec::t_119090e8f945d5 1-148
+examples/cursor-memory-plugin/scripts/cursor-plugin.test.mjs
+  s_5e17b6c73ed8ec::t_fc5de5bfa917f5 1-166
+examples/cursor-memory-plugin/scripts/shared/agent-hook-runtime.mjs
+  s_5e17b6c73ed8ec::t_5f8b4920224bc7 1-222
+examples/cursor-memory-plugin/scripts/shared/capture-utils.mjs
+  s_5e17b6c73ed8ec::t_ec94c72c352bec 1-500
+examples/cursor-memory-plugin/scripts/shared/credentials.mjs
+  s_5e17b6c73ed8ec::t_987d9b87deb706 1-207
+examples/cursor-memory-plugin/scripts/shared/debug-log.mjs
+  s_5e17b6c73ed8ec::t_8e6fcb396d14de 1-58
+examples/cursor-memory-plugin/scripts/shared/mcp-proxy-core.mjs
+  s_5e17b6c73ed8ec::t_26f6843b7061de 1-451
+examples/cursor-memory-plugin/scripts/shared/pending-queue.mjs
+  s_5e17b6c73ed8ec::t_27da5c82e53030 1-439
+examples/cursor-memory-plugin/scripts/shared/profile-inject.mjs
+  s_5e17b6c73ed8ec::t_c9bb1ed1c734c3 1-294
+examples/cursor-memory-plugin/scripts/shared/recall-core.mjs
+  s_5e17b6c73ed8ec::t_1596f2cff01afb 1-302
+examples/cursor-memory-plugin/scripts/shared/session-model.mjs
+  s_5e17b6c73ed8ec::t_fe9c12d3c0f512 1-57
+examples/cursor-memory-plugin/scripts/shared/setup-wizard.mjs
+  s_5e17b6c73ed8ec::t_42a6552e6867af 1-111
+examples/cursor-memory-plugin/scripts/shared/uri-guard.mjs
+  s_5e17b6c73ed8ec::t_f997e17fae0faa 1-56
+examples/cursor-memory-plugin/scripts/shared/workspace-peer.mjs
+  s_5e17b6c73ed8ec::t_9abb1fe759efb2 1-16
+examples/cursor-memory-plugin/servers/mcp-proxy.mjs
+  s_5e17b6c73ed8ec::t_99fdf251419404 1-29
+examples/cursor-memory-plugin/skills/openviking-memory/SKILL.md
+  s_5e17b6c73ed8ec::t_e6e042a2124c14 1-15
+examples/memory-plugin-shared/install-agent-hooks.test.mjs
+  s_5e17b6c73ed8ec::t_8518d91d66f3e8 1-90
+examples/memory-plugin-shared/install.sh
+  s_5e17b6c73ed8ec::t_5171deeb378b5c 3-4,11,93,126,138,157,352,355-357,426,435-437,451,477-482,509-511,525,527-532,536-542,550-552,564,567-572,598,638-640,661-663,749-751,762-764,829-831,879,916-918,1680-1886,2382-2418,2502-2505,2529-2531,2544-2546
+examples/memory-plugin-shared/lib/agent-hook-runtime.mjs
+  s_5e17b6c73ed8ec::t_51433133ca41c0 1-221
+examples/memory-plugin-shared/sync.mjs
+  s_5e17b6c73ed8ec::t_04e17a357f22db 10,26-27
+examples/opencode-plugin/lib/shared/agent-hook-runtime.mjs
+  s_5e17b6c73ed8ec::t_cbc97a581abbce 1-222
+examples/pi-coding-agent-extension/shared/agent-hook-runtime.mjs
+  s_5e17b6c73ed8ec::t_861f81475002ac 1-222
+examples/trae-memory-hooks/.mcp.json
+  s_5e17b6c73ed8ec::t_1be7fcf067ebc0 1-8
+examples/trae-memory-hooks/README.md
+  s_5e17b6c73ed8ec::t_9b84d918de8fc3 1-11
+examples/trae-memory-hooks/hooks/hooks.template.json
+  s_5e17b6c73ed8ec::t_32db62a502661c 1-39
+examples/trae-memory-hooks/scripts/shared/agent-hook-runtime.mjs
+  s_5e17b6c73ed8ec::t_82cde3b7fa45df 1-222
+examples/trae-memory-hooks/scripts/shared/capture-utils.mjs
+  s_5e17b6c73ed8ec::t_2182167a60065d 1-500
+examples/trae-memory-hooks/scripts/shared/credentials.mjs
+  s_5e17b6c73ed8ec::t_30f73a623f554d 1-207
+examples/trae-memory-hooks/scripts/shared/debug-log.mjs
+  s_5e17b6c73ed8ec::t_01722efa4c6ed2 1-58
+examples/trae-memory-hooks/scripts/shared/mcp-proxy-core.mjs
+  s_5e17b6c73ed8ec::t_998f28ec9c0421 1-451
+examples/trae-memory-hooks/scripts/shared/pending-queue.mjs
+  s_5e17b6c73ed8ec::t_7728a4be626bdd 1-439
+examples/trae-memory-hooks/scripts/shared/profile-inject.mjs
+  s_5e17b6c73ed8ec::t_5781c60e5990dc 1-294
+examples/trae-memory-hooks/scripts/shared/recall-core.mjs
+  s_5e17b6c73ed8ec::t_fa5cc15da7692a 1-302
+examples/trae-memory-hooks/scripts/shared/session-model.mjs
+  s_5e17b6c73ed8ec::t_d0555cc6d3f608 1-57
+examples/trae-memory-hooks/scripts/shared/setup-wizard.mjs
+  s_5e17b6c73ed8ec::t_96e7c6df30a055 1-111
+examples/trae-memory-hooks/scripts/shared/uri-guard.mjs
+  s_5e17b6c73ed8ec::t_e56b808bce5bd9 1-56
+examples/trae-memory-hooks/scripts/shared/workspace-peer.mjs
+  s_5e17b6c73ed8ec::t_9538d96e839bc0 1-16
+examples/trae-memory-hooks/scripts/trae-hook.mjs
+  s_5e17b6c73ed8ec::t_3400e9de8f22cb 1-143
+examples/trae-memory-hooks/scripts/trae-hooks.test.mjs
+  s_5e17b6c73ed8ec::t_784bfd0537a508 1-91
+examples/trae-memory-hooks/servers/mcp-proxy.mjs
+  s_5e17b6c73ed8ec::t_c144e79f3f4344 1-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "90e9074ca0d3b3a56b13916277c6b20c4e1b411d",
+  "prompts": {},
+  "sessions": {
+    "s_5e17b6c73ed8ec": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f49b4-d234-7ae0-a95d-b3a3014392cd",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

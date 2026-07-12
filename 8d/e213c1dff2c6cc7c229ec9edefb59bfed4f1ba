@@ -1,0 +1,31 @@
+sdk/go/client_test.go
+  s_e183408b893d84::t_d58fcef6a8b8f5 8,946-951,962-1004
+sdk/go/pack.go
+  s_e183408b893d84::t_a9e22a05c5ec21 87,91-109
+sdk/python/openviking_sdk/client.py
+  s_e183408b893d84::t_1bcffc32604228 81-99,1295,1310
+sdk/python/tests/test_async_client_behaviors.py
+  s_e183408b893d84::t_ab995e58d3b2a7 710-712,723-743
+sdk/typescript/src/node-files.ts
+  s_e183408b893d84::t_a12be98ac8b0a9 133-138,140,142,144-151
+sdk/typescript/tests/client.test.ts
+  s_e183408b893d84::t_0c059e65c89248 2,297,315,327-373
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8de213c1dff2c6cc7c229ec9edefb59bfed4f1ba",
+  "prompts": {},
+  "sessions": {
+    "s_e183408b893d84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4f2d-c961-7e63-82bc-e3db763a0474",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
