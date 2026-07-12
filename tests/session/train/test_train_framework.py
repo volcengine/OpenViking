@@ -2080,6 +2080,51 @@ async def test_session_commit_policy_trainer_can_still_use_explicit_timeout():
     assert commit_result["error"] == "commit task timeout"
 
 
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_retries_transient_task_poll_errors():
+    import httpx
+
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    original_get_task = client.get_task
+    transient_errors = [
+        httpx.ReadError("temporary read failure"),
+        httpx.ConnectError("temporary connect failure"),
+        httpx.TimeoutException("temporary timeout"),
+        httpx.RemoteProtocolError("temporary protocol error"),
+    ]
+    attempts = []
+
+    async def flaky_get_task(task_id):
+        attempts.append(task_id)
+        if transient_errors:
+            raise transient_errors.pop(0)
+        return await original_get_task(task_id)
+
+    client.get_task = flaky_get_task
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+        metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    assert commit_result["task_status"] == "completed"
+    assert commit_result["error"] is None
+    assert len(attempts) == 5
+    assert client.task_poll_counts[commit_result["task_id"]] == 1
+
+
 def test_tau2_case_loader_selects_exact_task_indices(tmp_path: Path, monkeypatch):
     from benchmark.tau2.train import case_loader as tau2_case_loader
 

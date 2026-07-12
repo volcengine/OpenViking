@@ -305,8 +305,28 @@ class SessionCommitPolicyTrainer:
             if self.timeout_seconds is not None
             else None
         )
+        transient_errors = 0
         while True:
-            task = await self.client.get_task(task_id)
+            try:
+                task = await self.client.get_task(task_id)
+                transient_errors = 0
+            except (
+                httpx.ReadError,
+                httpx.ConnectError,
+                httpx.TimeoutException,
+                httpx.RemoteProtocolError,
+            ) as exc:
+                transient_errors += 1
+                if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+                    return {
+                        "task_id": task_id,
+                        "status": "timeout",
+                        "error": (
+                            f"commit task timeout; last polling error: {type(exc).__name__}: {exc}"
+                        ),
+                    }
+                await asyncio.sleep(min(self.poll_interval_seconds * transient_errors, 10.0))
+                continue
             if task and task.get("status") in {"completed", "failed"}:
                 return task
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:
