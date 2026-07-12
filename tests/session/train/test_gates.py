@@ -406,6 +406,81 @@ async def test_skill_readability_gate_rejects_line_item_money_without_canonical_
 
 
 @pytest.mark.asyncio
+async def test_skill_readability_gate_rejects_price_field_money_source_without_canonical():
+    item = _plan_item()
+    item.after_content = (
+        "## Situation\n"
+        "- Applies when: 用户询问记录集合的总费用。\n"
+        "- Does not apply when: 用户没有询问金额汇总。\n"
+        "- Source binding: 请求范围内的记录和价格字段。\n"
+        "- Scope ambiguity: 无\n\n"
+        "## Reminder\n"
+        "- 回答总费用时必须绑定来源字段。\n\n"
+        "## Procedure\n"
+        "- 对每条记录使用每个子项目的 price 字段相加计算总费用。\n"
+        "- 在最终回复中说明这个总费用。\n\n"
+        "## Anti-pattern\n"
+        "- 不要遗漏任何记录。\n"
+    )
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=_trajectory_with_repair_signal(
+            action="create",
+            first_wrong_tool="communicate_with_user",
+            trigger_boundary="communicate_with_user",
+        ),
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceSkillReadabilityGate().evaluate(target)
+
+    assert decision is not None
+    assert decision.action == "reject"
+    assert decision.evidence["line_item_money_source"] is True
+
+
+@pytest.mark.asyncio
+async def test_skill_readability_gate_allows_line_item_cross_check_with_canonical_source():
+    item = _plan_item()
+    item.after_content = (
+        "## Situation\n"
+        "- Applies when: user asks for a total cost from retrieved records.\n"
+        "- Does not apply when: user asks for a non-monetary count.\n"
+        "- Source binding: canonical payment_history.amount or explicit paid amount field; "
+        "line-item prices are only a fallback/cross-check when no canonical amount exists.\n"
+        "- Scope ambiguity: none\n\n"
+        "## Reminder\n"
+        "- Prefer the record-level paid amount over reconstructed item prices.\n\n"
+        "## Procedure\n"
+        "- Read the record-level payment amount first.\n"
+        "- Use lower-level price fields only as a fallback or cross-check.\n\n"
+        "## Anti-pattern\n"
+        "- Do not make lower-level item prices the primary total source when a paid amount exists.\n"
+    )
+    target = GateTarget(
+        stage="post_plan",
+        memory_type="experiences",
+        target_kind="plan_item",
+        plan_item=item,
+        analysis=None,
+        trajectory=_trajectory_with_repair_signal(
+            action="create",
+            first_wrong_tool="communicate_with_user",
+            trigger_boundary="communicate_with_user",
+        ),
+        policy_set=ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[]),
+    )
+
+    decision = await ExperienceSkillReadabilityGate().evaluate(target)
+
+    assert decision is None
+
+
+@pytest.mark.asyncio
 async def test_causal_signal_gate_rejects_structured_selected_none():
     trajectory = Trajectory(
         name="missing_total",

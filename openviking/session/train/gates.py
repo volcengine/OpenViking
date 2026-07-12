@@ -44,9 +44,12 @@ _GATE_WRITE_SCOPE_RE = re.compile(
 )
 _GATE_LINE_ITEM_MONEY_SOURCE_RE = re.compile(
     r"\b(?:line[- ]?item|itemized|reconstruct|derive|flight\s+price|fare)\b"
+    r"|\b(?:unit|segment|leg|component|per[- ]?item|per[- ]?unit)\b.{0,40}\b(?:price|cost|fare|amount)\b"
+    r"|\b(?:price|cost|fare)\s*(?:field|attribute|column)\b"
     r"|price.{0,40}(?:passenger|count|quantity)"
     r"|(?:passenger|count|quantity).{0,40}price"
-    r"|航班价格|价格.{0,12}乘客|乘客.{0,12}价格|明细.{0,12}(?:求和|相加)",
+    r"|航班价格|单价|分段价格|明细价格|价格字段|price\s*字段|price.{0,8}字段|字段.{0,8}price"
+    r"|价格.{0,12}乘客|乘客.{0,12}价格|明细.{0,12}(?:求和|相加)",
     re.IGNORECASE,
 )
 _GATE_CANONICAL_MONEY_SOURCE_RE = re.compile(
@@ -302,7 +305,9 @@ Your experience output will be rejected unless every experience satisfies these 
   not an explicit exclusion by itself when writes are also being discussed.
 - Monetary/value aggregates must bind to the canonical runtime value field when
   available: total/paid/charged/order/payment-history amount fields take
-  precedence over reconstructed line-item sums.
+  precedence over reconstructed lower-level unit/segment/item price sums. Do
+  not name lower-level price fields as the primary source when a record-level
+  total/paid/charged amount is available in runtime evidence.
 
 If you cannot satisfy this contract, output no experience changes."""
 
@@ -1028,7 +1033,9 @@ Pass only when all are true:
    obligations, the experience identifies the canonical source field when one
    exists. Explicit total/paid/charged/order/payment amount fields take
    precedence over reconstructed line-item sums; line items are a fallback or
-   cross-check.
+   cross-check. Do not name lower-level unit/segment/item price fields as the
+   primary source when a record-level total/paid/charged amount is available in
+   source or comparison evidence.
 11. `Does not apply when` names a real task-pattern mismatch, not a temporal
    loader stage such as still reading/writing, before final_response, or before
    writes complete. Temporal wording would make the future agent skip reading an
