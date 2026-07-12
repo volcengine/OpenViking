@@ -837,8 +837,6 @@ class SemanticDagExecutor:
             except Exception as e:
                 logger.error(f"Failed to schedule vectorization for {dir_uri}: {e}", exc_info=True)
 
-        except Exception as e:
-            logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
