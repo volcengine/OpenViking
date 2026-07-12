@@ -1,4 +1,5 @@
 :root {
+  --vp-layout-max-width: 100vw;
   --vp-c-brand-1: #0f766e;
   --vp-c-brand-2: #115e59;
   --vp-c-brand-3: #14b8a6;
@@ -11,6 +12,21 @@
   --vp-c-text-2: #47534f;
   --vp-font-family-base: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
   --vp-font-family-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+@media (min-width: 1280px) {
+  .VPContent .VPDoc.has-aside > .container > .content {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-right: 16px;
+    padding-left: 16px;
+    width: auto;
+  }
+
+  .VPContent .VPDoc.has-aside > .container > .content > .content-container {
+    width: 100%;
+    max-width: 1200px;
+  }
 }
 
 .dark {
