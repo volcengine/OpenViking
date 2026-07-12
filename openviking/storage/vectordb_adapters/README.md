@@ -202,6 +202,7 @@ from typing import Any, Dict
 
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
 
+
 class ThirdPartyCollectionAdapter(CollectionAdapter):
     def __init__(self, *, endpoint: str, token: str, collection_name: str):
         super().__init__(collection_name=collection_name)
