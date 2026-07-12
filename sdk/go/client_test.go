@@ -124,29 +124,55 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 1 || tags[0] != "team=docs" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if got := body["include_provenance"]; got != true {
+			t.Fatalf("include_provenance = %#v", got)
+		}
 		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{
 			"resources": []map[string]any{
 				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9},
 			},
+			"provenance": []map[string]any{{"uri": "viking://resources/docs/api.md"}},
 		})
 	}))
 	defer closeServer()
 
 	result, err := client.Find(context.Background(), "auth", &FindOptions{
-		TargetURI:   "resources/docs",
-		Limit:       5,
-		ContextType: []string{"resource"},
-		Since:       "2026-06-01",
-		Until:       "2026-06-18",
-		TimeField:   "created_at",
-		Level:       []int{0, 2},
+		TargetURI:         "resources/docs",
+		Limit:             5,
+		ContextType:       []string{"resource"},
+		Since:             "2026-06-01",
+		Until:             "2026-06-18",
+		TimeField:         "created_at",
+		Level:             []int{0, 2},
+		Tags:              []string{"team=docs"},
+		IncludeProvenance: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Resources) != 1 || result.Resources[0].URI != "viking://resources/docs/api.md" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	if len(result.Provenance) != 1 || result.Provenance[0]["uri"] != "viking://resources/docs/api.md" {
+		t.Fatalf("unexpected provenance: %#v", result.Provenance)
+	}
+}
+
+func TestRecallOmitsQuotasWhenOptionsAreNil(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		requireBodyKeysAbsent(t, body, "quotas")
+		writeOK(t, w, map[string]any{})
+	}))
+	defer closeServer()
+
+	if _, err := client.Recall(context.Background(), "preferences", nil); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1175,6 +1201,105 @@ func TestGrepOmitsLevelLimitWhenUnset(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Grep(context.Background(), "viking://user", "pat", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCrossSDKContractFields(t *testing.T) {
+	levelLimit := 4
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/resources":
+			body := readJSONBody(t, r)
+			if got := body["create_parent"]; got != true {
+				t.Fatalf("create_parent = %#v", got)
+			}
+			writeOK(t, w, map[string]any{"root_uri": "viking://resources/docs"})
+		case "/api/v1/fs/tree":
+			if got := r.URL.Query().Get("level_limit"); got != "4" {
+				t.Fatalf("level_limit = %q", got)
+			}
+			writeOK(t, w, []any{})
+		case "/api/v1/system/status":
+			writeOK(t, w, map[string]any{"initialized": true, "user": "alice"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(
+		context.Background(),
+		"https://example.com/docs",
+		&AddResourceOptions{Parent: "viking://resources", CreateParent: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Tree(
+		context.Background(),
+		"viking://resources",
+		&TreeOptions{LevelLimit: &levelLimit},
+	); err != nil {
+		t.Fatal(err)
+	}
+	status, err := client.GetSystemStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status["user"] != "alice" {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestRecallAndSessionExtensionContracts(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/search/recall":
+			body := readJSONBody(t, r)
+			if body["query"] != "preferences" {
+				t.Fatalf("query = %#v", body["query"])
+			}
+		case strings.HasSuffix(r.URL.Path, "/tool-results"):
+			if r.URL.Query().Get("tool_name") != "shell" {
+				t.Fatalf("tool_name = %q", r.URL.Query().Get("tool_name"))
+			}
+		case strings.HasSuffix(r.URL.Path, "/tool-results/result"):
+			if r.URL.Query().Get("limit") != "100" {
+				t.Fatalf("limit = %q", r.URL.Query().Get("limit"))
+			}
+		case strings.HasSuffix(r.URL.Path, "/tool-results/result/search"):
+			if r.URL.Query().Get("q") != "error" {
+				t.Fatalf("q = %q", r.URL.Query().Get("q"))
+			}
+		case strings.HasSuffix(r.URL.Path, "/extract"):
+		case strings.HasSuffix(r.URL.Path, "/used"):
+			body := readJSONBody(t, r)
+			if body["skill"].(map[string]any)["uri"] != "viking://user/skills/demo" {
+				t.Fatalf("skill = %#v", body["skill"])
+			}
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		writeOK(t, w, map[string]any{})
+	}))
+	defer closeServer()
+
+	if _, err := client.Recall(context.Background(), "preferences", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListToolResults(context.Background(), "session", &ListToolResultsOptions{ToolName: "shell"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ReadToolResult(context.Background(), "session", "result", &ReadToolResultOptions{Limit: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SearchToolResult(context.Background(), "session", "result", "error", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ExtractSession(context.Background(), "session"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.RecordUsed(context.Background(), "session", nil, map[string]any{"uri": "viking://user/skills/demo"}); err != nil {
 		t.Fatal(err)
 	}
 }

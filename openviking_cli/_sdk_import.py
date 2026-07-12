@@ -8,17 +8,16 @@ from pathlib import Path
 
 
 def import_openviking_sdk():
+    sdk_root = Path(__file__).resolve().parents[1] / "sdk" / "python"
+    if sdk_root.is_dir() and str(sdk_root) not in sys.path:
+        # A source checkout must exercise the SDK code from the same revision,
+        # not an older openviking-sdk installed in the active environment.
+        sys.path.insert(0, str(sdk_root))
     try:
         return import_module("openviking_sdk")
     except ImportError as exc:
-        sdk_root = Path(__file__).resolve().parents[1] / "sdk" / "python"
-        if str(sdk_root) not in sys.path:
-            sys.path.insert(0, str(sdk_root))
-        try:
-            return import_module("openviking_sdk")
-        except ImportError:
-            raise ImportError(
-                "openviking-sdk is required for HTTP client usage. "
-                "Install it with the main package or run 'pip install -e sdk/python' "
-                "when developing from the repository."
-            ) from exc
+        raise ImportError(
+            "openviking-sdk is required for HTTP client usage. "
+            "Install it with the main package or run 'pip install -e sdk/python' "
+            "when developing from the repository."
+        ) from exc

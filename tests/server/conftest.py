@@ -23,6 +23,7 @@ from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.storage.transaction import reset_lock_manager
+from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
@@ -34,6 +35,8 @@ from openviking_cli.utils.config.vlm_config import VLMConfig
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp_server"
 SDK_ROOT_API_KEY = "test-root-api-key"
+SDK_ACCOUNT_ID = "sdk_test_account"
+SDK_USER_ID = "sdk_test_user"
 
 # ---------------------------------------------------------------------------
 # Sample data
@@ -213,7 +216,7 @@ async def running_server(temp_dir: Path, monkeypatch):
     monkeypatch.setattr("openviking.server.mcp_endpoint.mcp_lifespan", _noop_mcp_lifespan)
 
     svc = OpenVikingService(
-        path=str(temp_dir / "sdk_data"), user=UserIdentifier.the_default_user("sdk_test_user")
+        path=str(temp_dir / "sdk_data"), user=UserIdentifier.the_default_user(SDK_USER_ID)
     )
     await svc.initialize()
     svc.viking_fs.query_embedder = fake_embedder_cls()
@@ -248,10 +251,9 @@ async def running_server(temp_dir: Path, monkeypatch):
         raise RuntimeError("APIKeyManager did not initialize for SDK server test")
 
     manager = fastapi_app.state.api_key_manager
-    sdk_account_id = "sdk_test_account"
-    sdk_user_key = await manager.create_account(sdk_account_id, "sdk_test_user")
+    sdk_user_key = await manager.create_account(SDK_ACCOUNT_ID, SDK_USER_ID)
     sdk_ctx = RequestContext(
-        user=UserIdentifier(sdk_account_id, "sdk_test_user"),
+        user=UserIdentifier(SDK_ACCOUNT_ID, SDK_USER_ID),
         role=Role.ADMIN,
     )
     await svc.initialize_account_directories(sdk_ctx)
@@ -263,3 +265,21 @@ async def running_server(temp_dir: Path, monkeypatch):
     thread.join(timeout=5)
     await svc.close()
     await AsyncOpenViking.reset()
+
+
+@pytest_asyncio.fixture()
+async def http_client(running_server):
+    """Create an AsyncHTTPClient connected to the real test server."""
+    port, svc, sdk_user_key = running_server
+    client = AsyncHTTPClient(
+        url=f"http://127.0.0.1:{port}",
+        api_key=sdk_user_key,
+        account="",
+        user="",
+        timeout=33.0,
+        extra_headers={},
+        profile_enabled=False,
+    )
+    await client.initialize()
+    yield client, svc
+    await client.close()

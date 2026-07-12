@@ -37,6 +37,10 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	if len(opts.Level) > 0 {
 		payload["level"] = opts.Level
 	}
+	if len(opts.Tags) > 0 {
+		payload["tags"] = opts.Tags
+	}
+	payload["include_provenance"] = opts.IncludeProvenance
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
 	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/find", nil, payload, &result)
@@ -76,10 +80,40 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	if len(opts.Level) > 0 {
 		payload["level"] = opts.Level
 	}
+	if len(opts.Tags) > 0 {
+		payload["tags"] = opts.Tags
+	}
+	payload["include_provenance"] = opts.IncludeProvenance
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
 	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)
 	return &result, err
+}
+
+// Recall performs type-quota memory recall with bounded rendering.
+func (c *Client) Recall(ctx context.Context, queryText string, opts *RecallOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &RecallOptions{}
+	}
+	payload := map[string]any{"query": queryText}
+	if opts.Quotas != nil {
+		payload["quotas"] = opts.Quotas
+	}
+	if opts.MaxChars > 0 {
+		payload["max_chars"] = opts.MaxChars
+	}
+	if opts.MinScore != nil {
+		payload["min_score"] = *opts.MinScore
+	}
+	setString(payload, "peer_scope", opts.PeerScope)
+	setAny(payload, "other_peer_penalty", opts.OtherPeerPenalty)
+	if opts.Render != nil {
+		payload["render"] = *opts.Render
+	}
+	setAny(payload, "telemetry", opts.Telemetry)
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/search/recall", nil, payload, &result)
+	return result, err
 }
 
 // Grep searches file content by pattern.

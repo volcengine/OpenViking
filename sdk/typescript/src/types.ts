@@ -74,6 +74,7 @@ export interface WaitOptions {
 export interface AddResourceOptions extends WaitOptions {
   to?: string;
   parent?: string;
+  createParent?: boolean;
   reason?: string;
   instruction?: string;
   strict?: boolean;
@@ -94,6 +95,7 @@ export interface SearchOptions {
   nodeLimit?: number;
   scoreThreshold?: number;
   filter?: JsonObject;
+  includeProvenance?: boolean;
   contextType?: unknown;
   telemetry?: unknown;
   since?: string;
@@ -101,6 +103,16 @@ export interface SearchOptions {
   timeField?: string;
   level?: number[];
   tags?: string[];
+}
+/** Type-quota memory recall options. */
+export interface RecallOptions {
+  quotas?: Record<string, number>;
+  maxChars?: number;
+  minScore?: number;
+  peerScope?: "actor" | "all";
+  otherPeerPenalty?: number | Record<string, number>;
+  render?: boolean;
+  telemetry?: unknown;
 }
 /** Content grep options. */
 export interface GrepOptions {
@@ -124,6 +136,7 @@ export interface TreeOptions {
   absLimit?: number;
   showAllHidden?: boolean;
   nodeLimit?: number;
+  levelLimit?: number;
 }
 /** Session message payload. */
 export interface Message {
@@ -139,6 +152,22 @@ export interface CreateSessionOptions {
   sessionId?: string;
   memoryPolicy?: JsonObject;
   telemetry?: unknown;
+}
+/** Query options for listing externalized tool results. */
+export interface ListToolResultsOptions {
+  toolName?: string;
+  limit?: number;
+}
+/** Query options for reading an externalized tool result. */
+export interface ReadToolResultOptions {
+  offset?: number;
+  limit?: number;
+  includeMetadata?: boolean;
+}
+/** Query options for searching an externalized tool result. */
+export interface SearchToolResultOptions {
+  limit?: number;
+  contextChars?: number;
 }
 /** Background task filters. */
 export interface TaskListOptions {

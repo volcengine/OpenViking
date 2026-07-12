@@ -315,7 +315,11 @@ class LocalClient(BaseClient):
             result["abstract"] = abstract
         if level is None or level == 1:
             result["overview"] = await service.fs.overview(root_uri, ctx=ctx)
-        if level == 2 or include_content is True or (level is None and include_content is not False):
+        if (
+            level == 2
+            or include_content is True
+            or (level is None and include_content is not False)
+        ):
             from openviking.server.routers.skills import _skill_md_uri
 
             result["content"] = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
@@ -555,6 +559,7 @@ class LocalClient(BaseClient):
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: Optional[int] = 3,
     ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         return await self._service.fs.tree(
@@ -564,6 +569,7 @@ class LocalClient(BaseClient):
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
             node_limit=node_limit,
+            level_limit=level_limit,
         )
 
     async def stat(self, uri: str) -> Dict[str, Any]:

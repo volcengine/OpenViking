@@ -24,6 +24,7 @@ type Config struct {
 type AddResourceOptions struct {
 	To                  string
 	Parent              string
+	CreateParent        bool
 	Reason              string
 	Instruction         string
 	Wait                bool
@@ -156,6 +157,7 @@ type TreeOptions struct {
 	AbsLimit      int
 	ShowAllHidden bool
 	NodeLimit     int
+	LevelLimit    *int
 }
 
 // RemoveOptions controls Remove.
@@ -188,35 +190,50 @@ type ReindexOptions struct {
 
 // FindOptions controls Find.
 type FindOptions struct {
-	TargetURI      any
-	Image          string
-	Limit          int
-	NodeLimit      *int
-	ScoreThreshold *float64
-	Filter         map[string]any
-	ContextType    any
-	Telemetry      any
-	Since          string
-	Until          string
-	TimeField      string
-	Level          []int
+	TargetURI         any
+	Image             string
+	Limit             int
+	NodeLimit         *int
+	ScoreThreshold    *float64
+	Filter            map[string]any
+	ContextType       any
+	Telemetry         any
+	Since             string
+	Until             string
+	TimeField         string
+	Level             []int
+	Tags              []string
+	IncludeProvenance bool
 }
 
 // SearchOptions controls Search.
 type SearchOptions struct {
-	TargetURI      any
-	Image          string
-	SessionID      string
-	Limit          int
-	NodeLimit      *int
-	ScoreThreshold *float64
-	Filter         map[string]any
-	ContextType    any
-	Telemetry      any
-	Since          string
-	Until          string
-	TimeField      string
-	Level          []int
+	TargetURI         any
+	Image             string
+	SessionID         string
+	Limit             int
+	NodeLimit         *int
+	ScoreThreshold    *float64
+	Filter            map[string]any
+	ContextType       any
+	Telemetry         any
+	Since             string
+	Until             string
+	TimeField         string
+	Level             []int
+	Tags              []string
+	IncludeProvenance bool
+}
+
+// RecallOptions controls type-quota memory recall.
+type RecallOptions struct {
+	Quotas           map[string]int
+	MaxChars         int
+	MinScore         *float64
+	PeerScope        string
+	OtherPeerPenalty any
+	Render           *bool
+	Telemetry        any
 }
 
 // GrepOptions controls Grep.
@@ -267,6 +284,25 @@ type BatchAddMessagesOptions struct {
 	Telemetry any
 }
 
+// ListToolResultsOptions controls ListToolResults.
+type ListToolResultsOptions struct {
+	ToolName string
+	Limit    int
+}
+
+// ReadToolResultOptions controls ReadToolResult.
+type ReadToolResultOptions struct {
+	Offset          int
+	Limit           int
+	IncludeMetadata *bool
+}
+
+// SearchToolResultOptions controls SearchToolResult.
+type SearchToolResultOptions struct {
+	Limit        int
+	ContextChars *int
+}
+
 // CommitSessionOptions controls CommitSession.
 type CommitSessionOptions struct {
 	KeepRecentCount int
@@ -304,6 +340,7 @@ type FindResult struct {
 	Skills       []MatchedContext `json:"skills,omitempty"`
 	QueryPlan    *QueryPlan       `json:"query_plan,omitempty"`
 	QueryResults []map[string]any `json:"query_results,omitempty"`
+	Provenance   []map[string]any `json:"provenance,omitempty"`
 	Total        int              `json:"total,omitempty"`
 }
 

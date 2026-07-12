@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -6,6 +7,18 @@ import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
+
+
+def test_new_options_preserve_existing_positional_parameter_order():
+    async_add_resource = list(inspect.signature(AsyncHTTPClient.add_resource).parameters)
+    sync_add_resource = list(inspect.signature(SyncHTTPClient.add_resource).parameters)
+    assert async_add_resource.index("create_parent") > async_add_resource.index("telemetry")
+    assert sync_add_resource.index("create_parent") > sync_add_resource.index("telemetry")
+
+    for client_type in (AsyncHTTPClient, SyncHTTPClient):
+        for method_name in ("find", "search"):
+            parameters = list(inspect.signature(getattr(client_type, method_name)).parameters)
+            assert parameters.index("image") < parameters.index("since")
 
 
 @pytest.mark.asyncio
@@ -233,6 +246,7 @@ def test_sync_http_client_declares_common_sync_methods_explicitly():
         "get_task",
         "list_tasks",
         "admin_list_accounts",
+        "get_system_status",
     ]:
         assert method_name in explicit_methods, method_name
 
@@ -283,6 +297,83 @@ def test_sync_http_client_get_status_does_not_require_run_async():
     status = client.get_status()
 
     assert status == {"is_healthy": True}
+
+
+def test_sync_http_client_get_system_status_uses_authenticated_endpoint():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client.get_system_status = AsyncMock(
+        return_value={"initialized": True, "user": "alice"}
+    )
+
+    assert client.get_system_status() == {"initialized": True, "user": "alice"}
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_forwards_cross_sdk_contract_fields():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+    client._handle_response = lambda _response: {}
+
+    await client.add_resource(
+        "https://example.com/docs",
+        parent="viking://user/resources/docs",
+        create_parent=True,
+    )
+    await client.find(
+        "invoice",
+        since="7d",
+        until="2026-07-12",
+        time_field="created_at",
+        level=[0, 1],
+        include_provenance=True,
+    )
+    await client.tree("viking://resources", level_limit=4)
+    await client.admin_migrate(cleanup=True)
+    await client.get_system_status()
+
+    assert client._request.await_args_list[0].kwargs["json"]["create_parent"] is True
+    assert client._request.await_args_list[1].kwargs["json"] == {
+        "query": "invoice",
+        "target_uri": "",
+        "limit": 10,
+        "since": "7d",
+        "until": "2026-07-12",
+        "time_field": "created_at",
+        "level": [0, 1],
+        "include_provenance": True,
+        "telemetry": False,
+    }
+    assert client._request.await_args_list[2].kwargs["params"]["level_limit"] == 4
+    assert client._request.await_args_list[3].kwargs["json"] == {"action": "cleanup"}
+    assert client._request.await_args_list[4].args == ("GET", "/api/v1/system/status")
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_forwards_recall_and_session_extension_contracts():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.recall("preferences", quotas={"preferences": 2})
+    await client.grep("viking://resources", "TODO", level_limit=4)
+    await client.list_tool_results("session", tool_name="shell")
+    await client.read_tool_result("session", "result", limit=100)
+    await client.search_tool_result("session", "result", "error")
+    await client.extract_session("session")
+    await client.record_used(
+        "session", contexts=["viking://resources/docs"], skill={"uri": "viking://user/skills/demo"}
+    )
+
+    calls = client._request.await_args_list
+    assert calls[0].args == ("POST", "/api/v1/search/recall")
+    assert calls[0].kwargs["json"]["quotas"] == {"preferences": 2}
+    assert calls[1].kwargs["json"]["level_limit"] == 4
+    assert calls[2].args == ("GET", "/api/v1/sessions/session/tool-results")
+    assert calls[3].kwargs["params"]["limit"] == 100
+    assert calls[4].kwargs["params"]["q"] == "error"
+    assert calls[5].args == ("POST", "/api/v1/sessions/session/extract")
+    assert calls[6].kwargs["json"]["skill"]["uri"] == "viking://user/skills/demo"
 
 
 def test_sync_http_client_health_wraps_async_coroutine():
@@ -519,6 +610,7 @@ async def test_grep_normalizes_uri_and_exclude_uri():
             "pattern": "Sample",
             "case_insensitive": True,
             "node_limit": 12,
+            "level_limit": 10,
             "exclude_uri": "viking://resources/demo/tmp",
         },
     )
@@ -538,7 +630,7 @@ async def test_glob_normalizes_scope_uri():
 
     fake_http.post.assert_awaited_once_with(
         "/api/v1/search/glob",
-        json={"pattern": "**/*.md", "uri": "viking://resources/"},
+        json={"pattern": "**/*.md", "uri": "viking://resources/", "node_limit": 256},
     )
 
 
@@ -724,16 +816,12 @@ async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
 async def test_backup_ovpack_preserves_existing_file_when_replace_fails(tmp_path):
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._http = SimpleNamespace(
-        post=AsyncMock(
-            return_value=SimpleNamespace(is_success=True, content=b"new-backup")
-        )
+        post=AsyncMock(return_value=SimpleNamespace(is_success=True, content=b"new-backup"))
     )
     output = tmp_path / "backup.ovpack"
     output.write_bytes(b"known-good-backup")
 
-    with patch(
-        "openviking_sdk.client.os.replace", side_effect=OSError("replace failed")
-    ):
+    with patch("openviking_sdk.client.os.replace", side_effect=OSError("replace failed")):
         with pytest.raises(OSError, match="replace failed"):
             await client.backup_ovpack(str(output))
 

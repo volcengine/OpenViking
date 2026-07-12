@@ -7,31 +7,11 @@ import asyncio
 
 import httpx
 import pytest
-import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import ConflictError, ProcessingError
 from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
 from tests.server.ovpack_test_helpers import build_ovpack_bytes
-
-
-@pytest_asyncio.fixture()
-async def http_client(running_server):
-    """Create an AsyncHTTPClient connected to the running server."""
-    port, svc, sdk_user_key = running_server
-    client = AsyncHTTPClient(
-        url=f"http://127.0.0.1:{port}",
-        api_key=sdk_user_key,
-        account="",
-        user="",
-        timeout=33.0,
-        extra_headers={},
-        profile_enabled=False,
-    )
-    await client.initialize()
-    yield client, svc
-    await client.close()
-
 
 # ===================================================================
 # Lifecycle

@@ -69,10 +69,10 @@ _, _, _ = imageResults, storedImageResults, similarPosters
 | 技能管理 | `ListSkills`, `FindSkills`, `ValidateSkill`, `GetSkill`, `UpdateSkill`, `DeleteSkill` |
 | Watch 管理 | `ListWatches`, `GetWatch`, `UpdateWatch`, `DeleteWatch`, `TriggerWatch` |
 | 文件系统和内容 | `List`, `Tree`, `Stat`, `Attrs`, `Mkdir`, `Remove`, `Move`, `Read`, `Abstract`, `Overview`, `Write`, `SetTags`, `Reindex` |
-| 检索 | `Find`, `Search`, `Grep`, `Glob` |
-| 会话和任务 | `CreateSession`, `ListSessions`, `GetSession`, `SessionExists`, `GetSessionContext`, `GetSessionArchive`, `DeleteSession`, `AddMessage`, `BatchAddMessages`, `CommitSession`, `GetTask`, `ListTasks` |
+| 检索 | `Find`, `Search`, `Recall`, `Grep`, `Glob` |
+| 会话和任务 | `CreateSession`, `ListSessions`, `GetSession`, `SessionExists`, `GetSessionContext`, `GetSessionArchive`, `ListToolResults`, `ReadToolResult`, `SearchToolResult`, `DeleteSession`, `AddMessage`, `BatchAddMessages`, `CommitSession`, `ExtractSession`, `RecordUsed`, `GetTask`, `ListTasks` |
 | OVPack | `ExportOVPack`, `BackupOVPack`, `ImportOVPack`, `RestoreOVPack` |
-| 系统和 observer | `Health`, `CheckConsistency`, `GetStatus`, `IsHealthy`, `QueueStatus`, `VikingDBStatus`, `ModelsStatus` |
+| 系统和 observer | `Health`, `CheckConsistency`, `GetSystemStatus`, `GetStatus`, `IsHealthy`, `QueueStatus`, `VikingDBStatus`, `ModelsStatus` |
 | 管理接口 | `AdminCreateAccount`, `AdminCreateAccountWithOptions`, `AdminListAccounts`, `AdminDeleteAccount`, `AdminRegisterUser`, `AdminRegisterUserWithOptions`, `AdminListUsers`, `AdminRemoveUser`, `AdminSetRole`, `AdminRegenerateKey`, `AdminRegenerateKeyWithOptions`, `AdminMigrate` |
 
 ## 暂未实现接口
