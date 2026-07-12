@@ -648,7 +648,7 @@ for match in results['matches']:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.grep("authentication", { uri: "viking://resources/docs/" }));
+console.log(await client.grep("viking://resources/docs/", "authentication"));
 ```
 
 **Go SDK**
