@@ -10,8 +10,10 @@ import {
   parseOVSearchCommandArgs,
   tokenizeCommandArgs,
 } from "../../plugin/openviking-command-args.js";
+import { registerOpenVikingMemoryTools } from "../../plugin/openviking-memory-tools.js";
 import type { FindResultItem } from "../../client.js";
 import { openClawSessionToOvStorageId } from "../../routing/identity-routing.js";
+import { toRoleId } from "../../services/context-message-adapter.js";
 
 type ToolDef = {
   name: string;
@@ -444,6 +446,56 @@ describe("Tool: memory_recall (registration)", () => {
 });
 
 describe("Tool: memory_store (behavioral)", () => {
+  async function executeDirectMemoryStore(peerRole: unknown = "__omit__") {
+    let factory: ((ctx: Record<string, unknown>) => ToolDef) | undefined;
+    const addSessionMessage = vi.fn().mockResolvedValue(undefined);
+    const commitSession = vi.fn().mockResolvedValue({
+      status: "completed",
+      archived: false,
+      memories_extracted: { core: 1 },
+    });
+    const deps: any = {
+      registerTool: vi.fn((toolFactory: unknown, opts?: { name: string }) => {
+        if (opts?.name === "memory_store") {
+          factory = toolFactory as (ctx: Record<string, unknown>) => ToolDef;
+        }
+      }),
+      getClient: vi.fn().mockResolvedValue({
+        addSessionMessage,
+        commitSession,
+        deleteUri: vi.fn().mockResolvedValue(undefined),
+        find: vi.fn().mockResolvedValue({ memories: [] }),
+      }),
+      normalizeSessionId: (sessionId: string) => sessionId,
+      createTempSessionId: () => "memory-store-temp",
+      extractSenderId: (ctx?: Record<string, unknown>) =>
+        typeof ctx?.requesterSenderId === "string" ? ctx.requesterSenderId : undefined,
+      toRoleId,
+      resolvePluginSessionRouting: () => ({
+        sessionId: "runtime-session",
+        agentId: "agent:main",
+      }),
+      isBypassedSession: () => false,
+      makeBypassedToolResult: () => ({ content: [] }),
+      defaultTargetUri: "viking://user/default",
+      defaultRecallScoreThreshold: 0.15,
+      logFindRequests: false,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    };
+    if (peerRole !== "__omit__") {
+      deps.peerRole = peerRole;
+    }
+
+    registerOpenVikingMemoryTools(deps);
+    expect(factory).toBeDefined();
+    const tool = factory!({ requesterSenderId: "wx/user-01@abc" });
+    await tool.execute("tc-memory-store", { text: "hello from tool" });
+    return addSessionMessage.mock.calls[0][5];
+  }
+
   it("registers with correct name and description", () => {
     const { tools, api } = setupPlugin();
     contextEnginePlugin.register(api as any);
@@ -455,7 +507,15 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(store!.description).toContain("threshold/commit dependent");
   });
 
-  it("uses requesterSenderId to populate peer_id for user writes", async () => {
+  it("preserves sender peer_id routing when memory tool peerRole is missing", async () => {
+    await expect(executeDirectMemoryStore()).resolves.toBe("wx_user-01_abc");
+  });
+
+  it("preserves sender peer_id routing when memory tool peerRole is invalid", async () => {
+    await expect(executeDirectMemoryStore("invalid")).resolves.toBe("wx_user-01_abc");
+  });
+
+  it("uses session agentId to populate peer_id when peer_role defaults to assistant", async () => {
     const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "default" });
@@ -494,7 +554,122 @@ describe("Tool: memory_store (behavioral)", () => {
     const [, init] = messageCall as [string, RequestInit];
     const body = JSON.parse(String(init.body));
     expect(body.role).toBe("user");
+    expect(body.peer_id).toBe("main");
+    expect(body).not.toHaveProperty("role_id");
+  });
+
+  it("uses requesterSenderId to populate peer_id when peer_role is person", async () => {
+    const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: false,
+          memories_extracted: { core: 1 },
+        });
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "person" });
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const factory = factoryTools.get("memory_store");
+    expect(factory).toBeDefined();
+
+    const tool = factory!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+      requesterSenderId: "wx/user-01@abc",
+    });
+
+    await tool.execute("tc-memory-store", { text: "hello from tool" });
+
+    const messageCall = openVikingTransport.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    );
+    expect(messageCall).toBeDefined();
+    const [, init] = messageCall as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.role).toBe("user");
     expect(body.peer_id).toBe("wx_user-01_abc");
+    expect(body).not.toHaveProperty("role_id");
+  });
+
+  it("skips memory_store when peer_role is person and sender identity is unavailable", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({ status: "completed", archived: false, memories_extracted: {} });
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "person" });
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store", { text: "hello from tool" }) as ToolResult;
+
+    expect(openVikingTransport).not.toHaveBeenCalled();
+    expect(result.details.action).toBe("skipped");
+    expect(result.details.reason).toBe("missing_person_peer_id");
+  });
+
+  it("omits peer_id for user writes when peer_role is none", async () => {
+    const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: false,
+          memories_extracted: { core: 1 },
+        });
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "none" });
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const factory = factoryTools.get("memory_store");
+    expect(factory).toBeDefined();
+
+    const tool = factory!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+      requesterSenderId: "wx/user-01@abc",
+    });
+
+    await tool.execute("tc-memory-store", { text: "hello from tool" });
+
+    const messageCall = openVikingTransport.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    );
+    expect(messageCall).toBeDefined();
+    const [, init] = messageCall as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.role).toBe("user");
+    expect(body).not.toHaveProperty("peer_id");
     expect(body).not.toHaveProperty("role_id");
   });
 

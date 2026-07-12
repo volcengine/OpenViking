@@ -4,6 +4,8 @@ import type { CommitSessionResult, FindResultItem } from "../client.js";
 import { clampScore, postProcessMemories } from "../memory-ranking.js";
 import { isMemoryUri } from "../routing/memory-uri.js";
 
+type OpenVikingPeerRole = "none" | "assistant" | "person";
+
 export type OpenVikingMemoryToolContext = {
   sessionKey?: string;
   sessionId?: string;
@@ -26,7 +28,7 @@ export type OpenVikingMemoryClient = {
     parts: Array<{ type: "text"; text: string }>,
     agentId?: string,
     createdAt?: string,
-    roleId?: string,
+    peerId?: string,
   ) => Promise<void>;
   commitSession: (
     sessionId: string,
@@ -47,6 +49,7 @@ export type OpenVikingMemoryToolsDeps = {
   createTempSessionId: () => string;
   extractSenderId: (ctx?: OpenVikingMemoryToolContext) => string | undefined;
   toRoleId: (senderId?: string) => string | undefined;
+  peerRole?: OpenVikingPeerRole;
   resolvePluginSessionRouting: (ctx?: OpenVikingMemoryToolContext) => OpenVikingMemorySession;
   isBypassedSession: (ctx?: OpenVikingMemoryToolContext) => boolean;
   makeBypassedToolResult: (toolName: string) => unknown;
@@ -63,6 +66,25 @@ function totalCommitMemories(r: CommitSessionResult): number {
   const m = r.memories_extracted;
   if (!m || typeof m !== "object") return 0;
   return Object.values(m).reduce((sum, n) => sum + (n ?? 0), 0);
+}
+
+function normalizeSessionWritePeerRole(peerRole: unknown): OpenVikingPeerRole {
+  return peerRole === "none" || peerRole === "assistant" ? peerRole : "person";
+}
+
+function sessionWritePeerId(
+  peerRole: OpenVikingPeerRole,
+  agentId: string,
+  senderId: string | undefined,
+  toRoleId: (senderId?: string) => string | undefined,
+): string | undefined {
+  if (peerRole === "none") {
+    return undefined;
+  }
+  if (peerRole === "assistant") {
+    return toRoleId(agentId);
+  }
+  return toRoleId(senderId);
 }
 
 export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): void {
@@ -102,19 +124,45 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
         let sessionId = explicitSessionId;
         let usedTempSession = false;
         try {
+          const peerRole = normalizeSessionWritePeerRole(deps.peerRole);
+          const peerId = role === "user"
+            ? sessionWritePeerId(
+                peerRole,
+                session.agentId,
+                deps.extractSenderId(ctx),
+                deps.toRoleId,
+              )
+            : undefined;
+          if (role === "user" && peerRole === "person" && !peerId) {
+            deps.logger.warn(
+              "openviking: memory_store skipped because peer_role=person but senderId was unavailable",
+            );
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Memory was not stored because peer_role=person requires sender identity.",
+                },
+              ],
+              details: {
+                action: "skipped",
+                reason: "missing_person_peer_id",
+              },
+            };
+          }
+
           const client = await deps.getClient();
           if (!sessionId) {
             sessionId = deps.createTempSessionId();
             usedTempSession = true;
           }
-          const roleId = role === "user" ? deps.toRoleId(deps.extractSenderId(ctx)) : undefined;
           await client.addSessionMessage(
             sessionId,
             role,
             [{ type: "text", text }],
             session.agentId,
             undefined,
-            roleId,
+            peerId,
           );
           const commitResult = await client.commitSession(sessionId, {
             wait: true,

@@ -15,6 +15,7 @@ import {
 } from "./context-message-adapter.js";
 
 type ExtractedTurnMessage = ReturnType<typeof extractNewTurnMessages>["messages"][number];
+type OpenVikingPeerRole = "none" | "assistant" | "person";
 
 export type ContextEngineLifecycleLogger = {
   info: (msg: string) => void;
@@ -131,6 +132,7 @@ export type AfterTurnOpenVikingSessionParams = {
     commitTokenThresholdRatio: number;
     commitKeepRecentCount: number;
     logFindRequests: boolean;
+    peer_role: OpenVikingPeerRole;
   };
   getClient: () => Promise<AfterTurnClient>;
   logger: ContextEngineLifecycleLogger;
@@ -168,6 +170,20 @@ const PHASE2_POLL_MAX_MS = DEFAULT_PHASE2_POLL_TIMEOUT_MS;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sessionWritePeerId(
+  peerRole: OpenVikingPeerRole,
+  agentId: string,
+  senderId?: string,
+): string | undefined {
+  if (peerRole === "none") {
+    return undefined;
+  }
+  if (peerRole === "assistant") {
+    return toRoleId(agentId);
+  }
+  return toRoleId(senderId);
 }
 
 /**
@@ -874,7 +890,20 @@ export async function afterTurnOpenVikingSession({
 
     const client = await getClient();
     const createdAt = pickLatestCreatedAt(turnMessages);
-    const senderRoleId = toRoleId(sender.senderId);
+    const userPeerId = sessionWritePeerId(cfg.peer_role, agentId, sender.senderId);
+    const missingPersonPeerId = cfg.peer_role === "person" && !userPeerId;
+    if (missingPersonPeerId) {
+      logger.warn?.(
+        "openviking: afterTurn skipped session writes because peer_role=person but senderId was unavailable",
+      );
+      diag("afterTurn_skip", ovSessionId, {
+        reason: "missing_person_peer_id",
+        senderIdFound: sender.found,
+        senderId: sender.senderId ?? null,
+      });
+      return;
+    }
+    let storedMessageCount = 0;
     for (const msg of extractedMessages) {
       const ovParts = msg.parts.map((part) => {
         if (part.type === "text") {
@@ -901,9 +930,19 @@ export async function afterTurnOpenVikingSession({
           ovParts,
           agentId,
           createdAt,
-          msg.role === "user" ? senderRoleId : undefined,
+          msg.role === "user" ? userPeerId : undefined,
         );
+        storedMessageCount += 1;
       }
+    }
+
+    if (storedMessageCount === 0) {
+      diag("afterTurn_skip", ovSessionId, {
+        reason: "no_session_messages_written",
+        senderIdFound: sender.found,
+        senderId: sender.senderId ?? null,
+      });
+      return;
     }
 
     const session = await client.getSession(ovSessionId, agentId);
