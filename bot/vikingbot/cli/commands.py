@@ -7,6 +7,7 @@ import select
 import socket
 import sys
 import time
+import uuid
 import warnings
 from pathlib import Path
 from typing import Any, Optional
@@ -129,7 +130,8 @@ def _redirect_openviking_logs_to_stderr() -> None:
 def get_or_create_machine_id() -> str:
     """Get a unique machine ID using py-machineid.
 
-    Uses the system's machine ID, falls back to "default" if unavailable.
+    Uses the system's machine ID, falls back to a unique synthetic identifier
+    if the system machine ID cannot be retrieved.
     """
     try:
         from machineid import machine_id
@@ -138,11 +140,12 @@ def get_or_create_machine_id() -> str:
     except ImportError:
         # Fallback if py-machineid is not installed
         pass
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to read system machine id (%s); using fallback", exc)
 
-    # Default fallback
-    return "default"
+    # Unique fallback ID so concurrent installs on the same host do not
+    # collide on the literal string "default".
+    return f"default-{uuid.uuid4().hex[:8]}"
 
 
 def _init_bot_data(config):

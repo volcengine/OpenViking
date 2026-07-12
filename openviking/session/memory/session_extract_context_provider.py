@@ -389,7 +389,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
         return self._truncate_prefetch_query_text(query, _PREFETCH_SEARCH_QUERY_MAX_CHARS)
 
-    def create_tool_context(self, default_search_uris=[]):
+    def create_tool_context(self, default_search_uris=None):
+        if default_search_uris is None:
+            default_search_uris = []
         extract_context = self.get_extract_context()
         tool_ctx = ToolContext(
             viking_fs=self._viking_fs,

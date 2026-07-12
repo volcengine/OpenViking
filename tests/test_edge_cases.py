@@ -504,8 +504,14 @@ class TestBoundaryConditions:
         # Should handle circular links without infinite recursion
         try:
             result = await upload_directory(tmp_path, "viking://test/", MockFS())
-            # Should complete without hanging
-            assert result is None or result is not None
+            # Should complete without hanging and report uploaded files.
+            # With os.walk's default followlinks=False, the symlink loop is
+            # never followed, so only test.txt (in dir_a) gets uploaded.
+            assert isinstance(result, tuple)
+            assert len(result) == 2
+            uploaded_count, warnings = result
+            assert uploaded_count == 1, f"expected 1 file uploaded, got {uploaded_count}"
+            assert isinstance(warnings, list)
         except Exception as e:
             # Acceptable to raise exception for circular links
             assert "recursion" in str(e).lower() or "circular" in str(e).lower()

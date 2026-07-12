@@ -37,7 +37,7 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
-from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -2053,7 +2053,7 @@ class Session:
                 await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
                 latest_completed_index = max(latest_completed_index, archive["index"])
                 continue
-            except Exception:
+            except (FileNotFoundError, NotFoundError):
                 pass
 
             try:
@@ -2062,7 +2062,7 @@ class Session:
                     ctx=self.ctx,
                 )
                 continue
-            except Exception:
+            except (FileNotFoundError, NotFoundError):
                 pass
 
             pending_archives.append(archive)

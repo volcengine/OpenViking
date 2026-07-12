@@ -829,7 +829,7 @@ class MultiSearchReplaceDiffStrategy:
                 if line.startswith(":start_line:"):
                     try:
                         start_line = int(line.split(":")[1].strip())
-                    except:
+                    except (ValueError, IndexError):
                         pass
 
             matches.append(

@@ -66,7 +66,7 @@ def pretty_print_messages(messages: List[Dict[str, Any]]) -> None:
                     try:
                         args_json = json.loads(args_str)
                         output.append(json.dumps(args_json, indent=2, ensure_ascii=False))
-                    except:
+                    except (json.JSONDecodeError, TypeError):
                         output.append(args_str)
                 else:
                     output.append(f"\n[{role} tool_calls]")

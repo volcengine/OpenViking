@@ -4,6 +4,7 @@
 
 import asyncio
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -34,8 +35,14 @@ class DocumentConverter:
 
     async def _convert_with_libreoffice(self, file_path: Path) -> Optional[Path]:
         """Convert using LibreOffice (soffice)."""
-        output_dir = self.temp_dir or Path(tempfile.gettempdir())
-        output_path = output_dir / f"{file_path.stem}.pdf"
+        # Use a per-call isolated temp dir + uuid-suffixed output name to avoid
+        # collisions when two requests convert files sharing the same stem.
+        if self.temp_dir is not None:
+            output_dir = self.temp_dir
+        else:
+            output_dir = Path(tempfile.mkdtemp(prefix="ov-conv-"))
+        unique_suffix = uuid.uuid4().hex[:8]
+        output_path = output_dir / f"{file_path.stem}-{unique_suffix}.pdf"
 
         try:
             cmd = [

@@ -2913,7 +2913,8 @@ class VikingFS:
                             await _collect(full_path)
                     else:
                         uris.append(self._path_to_uri(full_path, ctx=ctx))
-            except Exception:
+            except (FileNotFoundError, NotFoundError):
+                # Path may have been removed concurrently; treat as empty.
                 pass
 
         await _collect(path)
