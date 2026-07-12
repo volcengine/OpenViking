@@ -2,7 +2,7 @@
 import { nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vitepress'
 import {
-  exampleLanguage,
+  exampleHeading,
   isApiReferencePath,
   isSharedSectionLabel,
   preferredLanguage,
@@ -24,7 +24,7 @@ function strongHeadingLabel(element: Element) {
 
 function headingLanguage(element: Element) {
   const label = strongHeadingLabel(element)
-  return label ? exampleLanguage(label) : undefined
+  return label ? exampleHeading(label) : undefined
 }
 
 function isSharedSection(element: Element) {
@@ -51,7 +51,7 @@ function activate(container: HTMLElement, key: string, broadcast = true) {
     button.setAttribute('aria-selected', String(active))
     button.tabIndex = active ? 0 : -1
   }
-  if (broadcast) {
+  if (broadcast && container.dataset.apiExampleKind === 'language') {
     localStorage.setItem(STORAGE_KEY, selected)
     window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: selected }))
   }
@@ -109,6 +109,7 @@ function enhanceDocument() {
       if (groups.length && isSharedSection(node)) break
       const currentLanguage = headingLanguage(node)
       if (currentLanguage) {
+        if (groups.length && groups[0].language.kind !== currentLanguage.kind) break
         if (groups.some((group) => group.language.key === currentLanguage.key)) break
         groups.push({ language: currentLanguage, nodes: [node] })
       }
@@ -122,6 +123,7 @@ function enhanceDocument() {
     if (groups.length < 2) continue
     const container = document.createElement('div')
     container.className = 'api-example-tabs'
+    container.dataset.apiExampleKind = groups[0].language.kind
     const tablist = document.createElement('div')
     tablist.className = 'api-example-tabs__tablist'
     tablist.setAttribute('role', 'tablist')
@@ -153,12 +155,11 @@ function enhanceDocument() {
       for (const child of group.nodes) panel.append(child)
       container.append(panel)
     }
-    initialLanguage = preferredLanguage(
-      storedLanguage,
-      initialLanguage,
-      groups[0].language.key
-    )
-    activate(container, initialLanguage, false)
+    if (groups[0].language.kind === 'language') {
+      initialLanguage = preferredLanguage(storedLanguage, initialLanguage, groups[0].language.key)
+      activate(container, initialLanguage, false)
+    }
+    else activate(container, groups[0].language.key, false)
   }
 }
 

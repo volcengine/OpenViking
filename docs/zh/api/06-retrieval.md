@@ -200,12 +200,6 @@ for ctx in results.resources:
     print("---")
 ```
 
-**TypeScript SDK**
-
-```typescript
-console.log(await client.find("authentication", { targetUri: "viking://resources/docs/" }));
-```
-
 **使用 Target URI 限定搜索范围**
 
 ```python
@@ -246,6 +240,12 @@ results = client.find(
     "API endpoints",
     target_uri="viking://resources/my-project"
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.find("authentication", { targetUri: "viking://resources/docs/" }));
 ```
 
 **Go SDK**
@@ -464,12 +464,6 @@ for ctx in results.resources:
     print(f"Abstract: {ctx.abstract[:200]}...")
 ```
 
-**TypeScript SDK**
-
-```typescript
-console.log(await client.search("authentication", { targetUri: "viking://resources/docs/" }));
-```
-
 **不使用会话的搜索**
 
 ```python
@@ -487,6 +481,12 @@ for ctx in results.resources:
 
 ```python
 results = client.search("similar poster", image="/path/to/poster.png")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.search("authentication", { targetUri: "viking://resources/docs/" }));
 ```
 
 **Go SDK**

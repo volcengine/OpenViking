@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   exampleLanguage,
+  responseExample,
   isApiReferencePath,
   isSharedSectionLabel,
   preferredLanguage
@@ -21,18 +22,25 @@ test('recognizes language headings with punctuation and qualifiers', () => {
   assert.equal(exampleLanguage('CLI (subcommands of resources)')?.key, 'cli')
 })
 
+test('recognizes transport and result response variants', () => {
+  assert.deepEqual(responseExample('HTTP API 响应 (JSON, `wait=true`)'), {
+    key: 'response-http', label: 'HTTP (wait=true)', kind: 'response'
+  })
+  assert.equal(responseExample('CLI 响应 (JSON 格式，使用 -o json)')?.label, 'CLI JSON')
+  assert.equal(responseExample('Response (Directory)')?.label, 'Directory')
+  assert.equal(responseExample('响应（Memory）')?.label, 'Memory')
+  assert.equal(responseExample('异步响应（`wait=false`）')?.key, 'response-async')
+})
+
 test('recognizes response and note variants as shared sections', () => {
   for (const label of [
     'Response',
     'Response Examples',
-    'Response (File)',
     'Result fields',
-    'HTTP API Response (JSON)',
     'Error Response',
     'CLI override flags',
+    'MCP (agent control plane)',
     'Notes:',
-    '响应（applied）',
-    '响应示例（完成）',
     '返回字段说明',
     '说明：'
   ]) {
@@ -43,7 +51,21 @@ test('recognizes response and note variants as shared sections', () => {
     'TypeScript SDK',
     'Go SDK',
     'HTTP API',
-    'CLI (via ovcli.conf)'
+    'CLI (via ovcli.conf)',
+    'Response (File)',
+    'HTTP API Response (JSON)',
+    '响应（applied）',
+    '响应示例（完成）'
+  ]) {
+    assert.equal(isSharedSectionLabel(label), false, label)
+  }
+  for (const label of [
+    'Basic Search',
+    'Image Search',
+    'Search with Target URI Limitation',
+    '基础搜索',
+    '图片搜索',
+    '使用 Target URI 限定搜索范围'
   ]) {
     assert.equal(isSharedSectionLabel(label), false, label)
   }

@@ -477,12 +477,6 @@ result = client.reindex(
 print(result)
 ```
 
-**TypeScript SDK**
-
-```typescript
-console.log(await client.reindex("viking://resources/docs/"));
-```
-
 ```python
 result = client.reindex(
     uri="viking://user/default/skills",
@@ -490,6 +484,12 @@ result = client.reindex(
     wait=False,
 )
 print(result["status"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.reindex("viking://resources/docs/"));
 ```
 
 **Go SDK**
