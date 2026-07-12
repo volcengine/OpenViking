@@ -329,3 +329,40 @@
     grid-template-columns: 1fr;
   }
 }
+.api-example-tabs {
+  margin: 20px 0 28px;
+}
+
+.api-example-tabs__tablist {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  margin-bottom: 12px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.api-example-tabs__tablist button {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--vp-c-text-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.api-example-tabs__tablist button:hover { color: var(--vp-c-text-1); }
+.api-example-tabs__tablist button.is-active {
+  border-bottom-color: var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+}
+
+.api-example-tabs > p:has(> strong:first-child) { margin-top: 0; }
+.api-example-tabs > div[class*='language-'] { margin: 0; }
+.api-example-tabs__panel > p:first-child { margin-top: 0; }
+.api-example-tabs__panel > div[class*='language-'] { margin: 0; }
+.api-example-tabs-enhancer { display: none; }

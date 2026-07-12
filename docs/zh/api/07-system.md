@@ -66,6 +66,12 @@ healthy = client.health()
 print(f"Healthy: {healthy}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.health());
+```
+
 **Go SDK**
 
 ```go
@@ -202,6 +208,12 @@ status = client.get_status()
 print(status)
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getStatus());
+```
+
 **CLI**
 
 ```bash
@@ -264,6 +276,12 @@ curl -X POST http://localhost:1933/api/v1/system/consistency \
 report = client.check_consistency("viking://resources/my-project")
 print(report["ok"])
 print(report["missing_records"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.checkConsistency("viking://resources/"));
 ```
 
 **Go SDK**
@@ -351,6 +369,12 @@ client.add_resource("./docs/")
 # 等待所有处理完成
 status = client.wait_processed(timeout=60.0)
 print(f"Processing complete: {status}")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.waitProcessed(60));
 ```
 
 **Go SDK**
@@ -451,6 +475,12 @@ result = client.reindex(
     wait=True,
 )
 print(result)
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.reindex("viking://resources/docs/"));
 ```
 
 ```python
@@ -635,6 +665,12 @@ print(client.observer.queue)
 # TOTAL                 0        0            20         0       20
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.queueStatus());
+```
+
 **Go SDK**
 
 ```go
@@ -712,6 +748,12 @@ print(client.observer.vikingdb().is_healthy)  # True
 print(client.observer.vikingdb().status)      # 状态表字符串
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.vikingDBStatus());
+```
+
 **Go SDK**
 
 ```go
@@ -784,6 +826,12 @@ print(client.observer.models)
 # dense_embedding        yes      ...
 # rerank                 yes      ...
 # vlm                    yes      ...
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.modelsStatus());
 ```
 
 **Go SDK**

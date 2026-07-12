@@ -55,6 +55,12 @@ result = client.snapshot.commit(
 print(result["commit_oid"])
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitCommit({ message: "Update docs", paths: ["resources/docs"] }));
+```
+
 **HTTP API**
 
 ```
@@ -125,6 +131,12 @@ Starting from a branch's HEAD, walk history along the first parent (`parents[0]`
 history = client.snapshot.log(limit=10)
 for commit in history:
     print(commit["oid"], commit["message"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitLog("main", 20));
 ```
 
 **HTTP API**
@@ -198,6 +210,12 @@ print(meta["message"], meta["parents"])
 
 # Read a file's content from the commit
 blob = client.snapshot.show("3f2a1b9c", path="viking://resources/my_project/guide.md")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitShow("HEAD", "docs/api.md"));
 ```
 
 > Note: when reading a file (`path` given), the **Embedded (local) client** returns raw `bytes`, while the **HTTP client** returns a `{"oid": str, "size": int, "bytes": bytes}` dict.
@@ -296,6 +314,12 @@ plan = client.snapshot.restore(
     dry_run=True,
 )
 print(plan["diff"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitRestore({ projectDir: "resources/docs", sourceCommit: "HEAD~1" }));
 ```
 
 **HTTP API**
@@ -404,6 +428,12 @@ Reads the account `.ovgitignore` content; returns an empty string when the file 
 content = client.snapshot.get_gitignore()
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitGetIgnore());
+```
+
 **HTTP API**
 
 ```
@@ -448,6 +478,12 @@ Writes the account `.ovgitignore` content (overwrites). The size limit (64 KiB) 
 client.snapshot.set_gitignore(content="*.log\n")
 ```
 
+**TypeScript SDK**
+
+```typescript
+await client.gitSetIgnore("*.tmp\n.cache/\n");
+```
+
 **HTTP API**
 
 ```
@@ -486,6 +522,12 @@ Deletes the account `.ovgitignore`. Missing is success (idempotent).
 
 ```python
 client.snapshot.delete_gitignore()
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.gitDeleteIgnore();
 ```
 
 **HTTP API**

@@ -199,6 +199,12 @@ for ctx in results.resources:
     print("---")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.find("authentication", { targetUri: "viking://resources/docs/" }));
+```
+
 **Search with Target URI Limitation**
 
 ```python
@@ -456,6 +462,12 @@ for ctx in results.resources:
     print(f"Abstract: {ctx.abstract[:200]}...")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.search("authentication", { targetUri: "viking://resources/docs/" }));
+```
+
 **Search without Session**
 
 ```python
@@ -631,6 +643,12 @@ for match in results['matches']:
     print(f"    {match['content']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.grep("authentication", { uri: "viking://resources/docs/" }));
+```
+
 **Go SDK**
 
 ```go
@@ -743,6 +761,12 @@ for uri in results['matches']:
 # Find all Python files with a higher explicit cap
 results = client.glob("**/*.py", "viking://resources", node_limit=1024)
 print(f"Found {results['count']} Python files")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.glob("**/*.md", "viking://resources/docs/"));
 ```
 
 **Go SDK**

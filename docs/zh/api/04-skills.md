@@ -199,6 +199,12 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 
 #### 3. 使用示例
 
+**TypeScript SDK**
+
+```typescript
+await client.addSkill("./my-skill", { wait: true });
+```
+
 **HTTP API**：
 
 ```
@@ -441,6 +447,13 @@ for skill in skills["skills"]:
     print(skill["name"])
 ```
 
+**TypeScript SDK**
+
+```typescript
+const skills = await client.listSkills();
+console.log(skills);
+```
+
 **Go SDK**：
 
 ```go
@@ -463,6 +476,13 @@ curl -X GET "http://localhost:1933/api/v1/skills?node_limit=1000" \
 skill = client.get_skill("search-web", include_content=True, include_files=True)
 print(skill["name"])
 print(skill.get("content"))
+```
+
+**TypeScript SDK**
+
+```typescript
+const skill = await client.getSkill("my-skill");
+console.log(skill);
 ```
 
 **Go SDK**：
@@ -491,6 +511,13 @@ results = client.find_skills("search the internet", limit=5)
 
 for skill in results["skills"]:
     print(skill["name"], skill["score"])
+```
+
+**TypeScript SDK**
+
+```typescript
+const skills = await client.findSkills("database migration");
+console.log(skills);
 ```
 
 **Go SDK**：
@@ -523,6 +550,13 @@ validated = client.validate_skill({"name": "search-web", "description": "..."})
 updated = client.update_skill("search-web", "./skills/search-web", wait=True)
 ```
 
+**TypeScript SDK**
+
+```typescript
+const result = await client.validateSkill("./my-skill");
+console.log(result);
+```
+
 **Go SDK**：
 
 ```go
@@ -551,6 +585,12 @@ curl -X POST http://localhost:1933/api/v1/skills/validate \
 
 ```python
 client.delete_skill("old-skill")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.deleteSkill("my-skill");
 ```
 
 **Go SDK**：

@@ -349,6 +349,9 @@ export default defineConfig({
       link: '/en/',
       themeConfig: {
         nav: enNav,
+        outline: {
+          level: [2, 3]
+        },
         sidebar: {
           '/en/getting-started/': localizedGuideSidebarItems('en'),
           '/en/concepts/': localizedGuideSidebarItems('en'),
@@ -379,7 +382,8 @@ export default defineConfig({
           '/zh/about/': localizedAboutSidebarItems('zh')
         },
         outline: {
-          label: '页面导航'
+          label: '页面导航',
+          level: [2, 3]
         },
         docFooter: {
           prev: '上一页',
