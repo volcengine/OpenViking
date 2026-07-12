@@ -368,6 +368,9 @@ class SemanticProcessor(DequeueHandlerBase):
                     semantic_lock = await SemanticLockScope.resolve(
                         msg.lock_handoff,
                         caller_lock=lock,
+                        fallback_path_factory=lambda: get_viking_fs()._uri_to_path(
+                            msg.uri, ctx=current_ctx
+                        ),
                     )
                     lock_transferred = False
                     try:
