@@ -1,19 +1,35 @@
 .github/workflows/_docs.yml
   s_767d71cc4b524b::t_b281e32b2de74b 27-32
+  s_dd0b1bee01126c::t_475f443da0d072 27-32
 docs/.vitepress/config.ts
   s_767d71cc4b524b::t_085da28e1a5a82 57-59,65-66,103-115,118-119,138-140,147-149,375-379,395-399
+  s_7bcf1fea0f6a0c::t_861f5bad45952e 57-59,65-66,103-115,118-119,138-140,147-149,375-379,395-399
 docs/.vitepress/theme/ApiExampleTabsEnhancer.vue
   s_767d71cc4b524b::t_7459dd85e5b84b 2,17,19,21-27,31-32,36-38,45-48,52,60-88,131,137-138,142,144,148-150
+  s_81a365c147ae59::t_87be2ef7d989a9 60-68,86,142
+  s_c13ca0bc5585a4::t_8d57d9fc10a815 19,21-22,26,31
 docs/.vitepress/theme/LlmsTxtLink.vue
   s_767d71cc4b524b::t_200a488d1592af 66-76,83-93
 docs/.vitepress/theme/api-example-tabs.test.ts
   s_767d71cc4b524b::t_75c1dc8aab8b93 5,11-15
+  s_c13ca0bc5585a4::t_4ee813b974c235 5,11-15
 docs/.vitepress/theme/custom.css
   s_767d71cc4b524b::t_e9718dc6178a87 2,17-37
+  s_7bcf1fea0f6a0c::t_4a1ea975f19004 2,17-37
 docs/en/api/03-filesystem.md
   s_767d71cc4b524b::t_f7b65a77d97a7b 363,468-469,850,1108,1416,1448,1532,1557
 docs/zh/api/03-filesystem.md
   s_767d71cc4b524b::t_54f3725333d290 363,469-470,851,1417,1449,1533,1558
+sdk/go/types.go
+  s_b3ef78c60c0a9e::t_19af4d2035e5b5 220-221
+openviking/async_client.py
+  s_81a365c147ae59::t_4e006241eca73a 677,733
+openviking/server/routers/search.py
+  s_81a365c147ae59::t_c219b2116dfbf5 104-105,128-129
+sdk/python/openviking_sdk/client.py
+  s_81a365c147ae59::t_9b56de42b284db 1037,1068,1972,2002
+tests/server/test_peer_id_compat.py
+  s_81a365c147ae59::t_2274e883be745a 16-25
 ---
 {
   "schema_version": "authorship/3.0.0",
@@ -25,6 +41,46 @@ docs/zh/api/03-filesystem.md
       "agent_id": {
         "tool": "codex",
         "id": "019f5589-563d-7fa2-8a6b-dbc852570879",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    },
+    "s_7bcf1fea0f6a0c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f555f-71e9-7342-9b43-175c57289f29",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    },
+    "s_81a365c147ae59": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f555c-8677-7553-a1e7-47bf4defbfd0",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    },
+    "s_b3ef78c60c0a9e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5534-f976-7163-90ce-c25160be25ce",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    },
+    "s_c13ca0bc5585a4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5570-6b47-74d1-8c28-82094000626f",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    },
+    "s_dd0b1bee01126c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f54ae-c30c-75d2-a802-bc808acec085",
         "model": "unknown"
       },
       "human_author": "yufeng <ahwulv@gmail.com>"
