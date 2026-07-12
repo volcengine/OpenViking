@@ -584,8 +584,8 @@ class ExperienceRootCausePreventionGate:
     mode: GateMode = "enforce"
     name: str = "experience_root_cause_prevention"
     vlm: Any = None
-    max_trajectory_chars: int = 8000
-    max_comparison_chars: int = 8000
+    max_trajectory_chars: int = 0
+    max_comparison_chars: int = 0
     max_policy_chars: int = 5000
 
     def applies_to(self, target: GateTarget) -> bool:
@@ -1168,6 +1168,8 @@ def _normalize_experience_prevention_result(parsed: dict[str, Any]) -> dict[str,
 
 def _preview_text(text: str, *, limit: int) -> str:
     value = str(text or "")
+    if limit <= 0:
+        return value
     if len(value) <= limit:
         return value
     return value[: max(0, limit - 3)] + "..."
