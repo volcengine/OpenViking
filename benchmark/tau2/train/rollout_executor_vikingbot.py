@@ -245,14 +245,14 @@ def _make_search_experience_tool():
                     "limit": {
                         "type": "integer",
                         "description": "Maximum candidate cases to inspect and return.",
-                        "default": 1,
+                        "default": 2,
                     },
                 },
                 "required": ["query"],
             }
 
         async def execute(
-            self, tool_context: Any, query: str, limit: int = 1, **kwargs: Any
+            self, tool_context: Any, query: str, limit: int = 2, **kwargs: Any
         ) -> str:
             del kwargs
             client = None

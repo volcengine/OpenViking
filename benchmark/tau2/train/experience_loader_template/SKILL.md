@@ -25,5 +25,5 @@ filters by the short `situation` snippet, then loads the full applicable experie
 
 ## Tools
 
-- `search_experience(query, limit=1)`: searches OpenViking `memories/cases` under the current user, reads each matched case's `## Linked Experiences` section, and returns JSON candidates with `case_name` and linked experience entries. Each experience entry contains only `uri` and a `situation` snippet from that experience's `## Situation` section.
+- `search_experience(query, limit=2)`: searches OpenViking `memories/cases` under the current user, reads each matched case's `## Linked Experiences` section, and returns JSON candidates with `case_name` and linked experience entries. Each experience entry contains only `uri` and a `situation` snippet from that experience's `## Situation` section.
 - `read_experience(experience_uri)`: reads one OpenViking experience memory by full URI and returns Markdown.
