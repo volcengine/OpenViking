@@ -470,8 +470,19 @@ class HierarchicalRetriever:
 
                 query_scores = [self._finite_score(r.get("_score", 0.0)) for r in results]
                 if self._rerank_client and mode == RetrieverMode.THINKING:
-                    documents = [str(r.get("abstract", "")) for r in results]
-                    query_scores = await self._rerank_scores(query, documents, query_scores)
+                    rerank_indices = [
+                        index for index, result in enumerate(results) if result.get("level", 2) != 2
+                    ]
+                    if rerank_indices:
+                        documents = [
+                            str(results[index].get("abstract", "")) for index in rerank_indices
+                        ]
+                        fallback_scores = [query_scores[index] for index in rerank_indices]
+                        reranked_scores = await self._rerank_scores(
+                            query, documents, fallback_scores
+                        )
+                        for index, score in zip(rerank_indices, reranked_scores, strict=True):
+                            query_scores[index] = score
 
                 for r, score in zip(results, query_scores, strict=True):
                     uri = r.get("uri", "")

@@ -194,6 +194,35 @@ class DirectChildProxy:
         ]
 
 
+class MixedLevelChildProxy:
+    async def search_children_in_tenant(
+        self,
+        parent_uri: str,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        if parent_uri != "viking://resources":
+            return []
+        return [
+            _result(
+                "viking://resources/directory",
+                0.2,
+                level=1,
+                abstract="directory overview",
+            ),
+            _result(
+                "viking://resources/large-file",
+                0.8,
+                level=2,
+                abstract="large file abstract",
+            ),
+        ]
+
+
 class FakeRerankClient:
     def __init__(self, scores):
         self.scores = list(scores)
@@ -240,7 +269,7 @@ def test_retriever_initializes_rerank_client(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
-    fake_client = FakeRerankClient([0.95, 0.05, 0.11, 0.95])
+    fake_client = FakeRerankClient([0.95, 0.05])
     monkeypatch.setattr(
         "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
         lambda config: fake_client,
@@ -260,7 +289,7 @@ async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
         "viking://resources/file-a",
     ]
     assert fake_client.calls[0] == ("hello", ["root A", "root B"])
-    assert fake_client.calls[1] == ("hello", ["child A", "child B"])
+    assert len(fake_client.calls) == 1
     assert storage.search_calls[0]["level"] == [0, 1]
 
 
@@ -494,6 +523,36 @@ async def test_score_propagation_alpha_uses_configured_weight():
 
     assert candidates[0]["uri"] == "viking://resources/file-b"
     assert candidates[0]["_final_score"] == pytest.approx(0.8)
+
+
+@pytest.mark.asyncio
+async def test_recursive_search_reranks_only_directory_levels():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+        retrieval_config=RetrievalConfig(score_propagation_alpha=1.0),
+    )
+    fake_client = FakeRerankClient([0.95, 0.05])
+    retriever._rerank_client = fake_client
+
+    candidates = await retriever._recursive_search(
+        vector_proxy=MixedLevelChildProxy(),
+        query="hello",
+        query_vector=None,
+        sparse_query_vector=None,
+        starting_points=[("viking://resources", 0.0)],
+        limit=2,
+        mode=RetrieverMode.THINKING,
+    )
+
+    assert fake_client.calls == [("hello", ["directory overview"])]
+    assert [candidate["uri"] for candidate in candidates] == [
+        "viking://resources/directory",
+        "viking://resources/large-file",
+    ]
+    assert candidates[0]["_final_score"] == pytest.approx(0.95)
+    assert candidates[1]["_final_score"] == pytest.approx(0.8)
 
 
 @pytest.mark.asyncio
