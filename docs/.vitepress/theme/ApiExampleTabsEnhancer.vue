@@ -45,8 +45,10 @@ function activate(container: HTMLElement, key: string, broadcast = true) {
     button.classList.toggle('is-active', active)
     button.setAttribute('aria-selected', String(active))
   }
-  localStorage.setItem(STORAGE_KEY, selected)
-  if (broadcast) window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: selected }))
+  if (broadcast) {
+    localStorage.setItem(STORAGE_KEY, selected)
+    window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: selected }))
+  }
 }
 
 function enhanceDocument() {

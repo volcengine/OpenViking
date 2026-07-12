@@ -74,13 +74,25 @@ for (const file of fs.readdirSync(routerDir).filter((name) => name.endsWith('.py
     const opening = source.indexOf('(', definition)
     const closing = closingDelimiter(source, opening)
     const signature = closing < 0 ? '' : source.slice(opening + 1, closing)
+    const routePath = prefix + match[2]
+    const pathParameters = new Set(
+      Array.from(routePath.matchAll(/\{([^}]+)\}/g), (item) => item[1])
+    )
     const query = new Map()
     for (const parameter of splitTopLevel(signature)) {
       const queryMatch = parameter.match(/^([A-Za-z_]\w*)\s*:[\s\S]*?=\s*Query\(([\s\S]*)\)$/)
-      if (queryMatch) query.set(queryMatch[1], /^\s*\.\.\.(?:\s*,|\s*$)/.test(queryMatch[2]))
+      if (queryMatch) {
+        query.set(queryMatch[1], /^\s*\.\.\.(?:\s*,|\s*$)/.test(queryMatch[2]))
+        continue
+      }
+
+      const defaultMatch = parameter.match(/^([A-Za-z_]\w*)\s*:[\s\S]*?=\s*([\s\S]+)$/)
+      if (!defaultMatch || pathParameters.has(defaultMatch[1])) continue
+      if (
+        /^(?:Path|Depends|Body|Header|Cookie|File|Form|Security)\s*\(/.test(defaultMatch[2])
+      ) continue
+      query.set(defaultMatch[1], false)
     }
-    const routePath = prefix + match[2]
-    const pathParameters = new Set(Array.from(routePath.matchAll(/\{([^}]+)\}/g), (item) => item[1]))
     routes.set(`${match[1].toUpperCase()} ${normalizePath(routePath)}`, { query, pathParameters })
   }
 }
@@ -98,41 +110,95 @@ for (const match of clientSource.matchAll(/^  (?:async )?([A-Za-z][A-Za-z0-9]*)\
   }).length
   clientMethods.set(match[1], {
     required,
-    maximum: parameters.some((parameter) => parameter.startsWith('...')) ? Infinity : parameters.length
+    maximum: parameters.some((parameter) => parameter.startsWith('...'))
+      ? Infinity
+      : parameters.length,
+    parameters
   })
 }
 
 const errors = []
 let httpExamples = 0
 let typescriptCalls = 0
+const curlUrlPattern = String.raw`["']?https?:\/\/[^/\s"']+(\/[A-Za-z0-9_{}<>?=&./:-]+)`
+const explicitCurlPattern = new RegExp(
+  String.raw`\bcurl\b[^\n]*?(?:-X|--request)\s+(GET|POST|PUT|PATCH|DELETE)\s+` +
+    curlUrlPattern,
+  'g'
+)
+const implicitGetCurlPattern = new RegExp(
+  String.raw`\bcurl\b(?![^\n]*(?:-X|--request))[^\n]*?` + curlUrlPattern,
+  'g'
+)
 for (const file of apiDocs) {
   const source = fs.readFileSync(file, 'utf8')
   const relative = path.relative(repoRoot, file)
-  for (const match of source.matchAll(/^\s*(GET|POST|PUT|PATCH|DELETE)\s+(\/[A-Za-z0-9_{}?=&./:-]+)/gm)) {
-    const route = `${match[1]} ${normalizePath(match[2])}`
+  const httpReferences = [
+    ...Array.from(
+      source.matchAll(/^\s*(GET|POST|PUT|PATCH|DELETE)\s+(\/[A-Za-z0-9_{}?=&./:-]+)/gm),
+      (match) => [match[1], match[2]]
+    ),
+    ...Array.from(
+      source.matchAll(explicitCurlPattern),
+      (match) => [match[1], match[2]]
+    ),
+    ...Array.from(
+      source.matchAll(implicitGetCurlPattern),
+      (match) => ['GET', match[1]]
+    )
+  ]
+  for (const [method, documentedPath] of httpReferences) {
+    const normalizedPath = normalizePath(documentedPath)
+    const route = `${method} ${normalizedPath}`
     httpExamples++
-    const contract = routes.get(route)
+    let contract = routes.get(route)
+    if (!contract) {
+      for (const [candidate, candidateContract] of routes) {
+        const [candidateMethod, candidatePath] = candidate.split(' ', 2)
+        if (candidateMethod !== method) continue
+        const pattern = candidatePath
+          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          .replace(/\\\{\\\}/g, '[^/]+')
+        if (new RegExp(`^${pattern}$`).test(normalizedPath)) {
+          contract = candidateContract
+          break
+        }
+      }
+    }
     if (!contract) {
       errors.push(`${relative}: unknown HTTP route ${route}`)
       continue
     }
     const documentedPathParameters = new Set(
-      Array.from(match[2].split('?')[0].matchAll(/\{([^}]+)\}/g), (item) => item[1])
+      Array.from(documentedPath.split('?')[0].matchAll(/\{([^}]+)\}/g), (item) => item[1])
     )
-    for (const name of documentedPathParameters) {
-      if (!contract.pathParameters.has(name)) errors.push(`${relative}: ${route} has unknown path parameter ${name}`)
-    }
-    for (const name of contract.pathParameters) {
-      if (!documentedPathParameters.has(name)) errors.push(`${relative}: ${route} is missing path parameter ${name}`)
+    if (documentedPathParameters.size) {
+      for (const name of documentedPathParameters) {
+        if (!contract.pathParameters.has(name)) {
+          errors.push(`${relative}: ${route} has unknown path parameter ${name}`)
+        }
+      }
+      for (const name of contract.pathParameters) {
+        if (!documentedPathParameters.has(name)) {
+          errors.push(`${relative}: ${route} is missing path parameter ${name}`)
+        }
+      }
     }
     const queryNames = new Set(
-      (match[2].split('?')[1] ?? '').split('&').filter(Boolean).map((item) => item.split('=')[0])
+      (documentedPath.split('?')[1] ?? '')
+        .split('&')
+        .filter(Boolean)
+        .map((item) => item.split('=')[0])
     )
     for (const name of queryNames) {
-      if (!contract.query.has(name)) errors.push(`${relative}: ${route} has unknown query parameter ${name}`)
+      if (!contract.query.has(name)) {
+        errors.push(`${relative}: ${route} has unknown query parameter ${name}`)
+      }
     }
     for (const [name, required] of contract.query) {
-      if (required && !queryNames.has(name)) errors.push(`${relative}: ${route} is missing required query parameter ${name}`)
+      if (required && !queryNames.has(name)) {
+        errors.push(`${relative}: ${route} is missing required query parameter ${name}`)
+      }
     }
   }
   for (const block of source.matchAll(/```(?:typescript|ts)\n([\s\S]*?)\n```/g)) {
@@ -149,12 +215,21 @@ for (const file of apiDocs) {
         errors.push(`${relative}: could not parse TypeScript SDK call client.${call[1]}()`)
         continue
       }
-      const argumentCount = splitTopLevel(block[1].slice(opening + 1, closing)).length
+      const args = splitTopLevel(block[1].slice(opening + 1, closing))
+      const argumentCount = args.length
       if (argumentCount < contract.required || argumentCount > contract.maximum) {
         const expected = contract.required === contract.maximum
           ? String(contract.required)
           : `${contract.required}-${contract.maximum}`
-        errors.push(`${relative}: client.${call[1]}() has ${argumentCount} arguments; expected ${expected}`)
+        errors.push(
+          `${relative}: client.${call[1]}() has ${argumentCount} arguments; expected ${expected}`
+        )
+      }
+      for (let index = 0; index < Math.min(args.length, contract.parameters.length); index++) {
+        const type = contract.parameters[index].match(/:\s*([^=]+?)(?:\s*=|$)/)?.[1]?.trim()
+        if (type === 'string' && /^[{[]/.test(args[index])) {
+          errors.push(`${relative}: client.${call[1]}() argument ${index + 1} must be a string`)
+        }
       }
     }
   }
@@ -164,5 +239,8 @@ if (errors.length) {
   console.error(errors.join('\n'))
   process.exitCode = 1
 } else {
-  console.log(`API reference check passed: ${httpExamples} HTTP examples with query contracts, ${typescriptCalls} TypeScript SDK calls with arity contracts`)
+  console.log(
+    `API reference check passed: ${httpExamples} HTTP examples with query contracts, ` +
+    `${typescriptCalls} TypeScript SDK calls with signature contracts`
+  )
 }

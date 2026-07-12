@@ -1035,9 +1035,7 @@ for match in results['matches']:
 **TypeScript SDK**
 
 ```typescript
-const matches = await client.grep("authentication", {
-  uri: "viking://resources/docs/",
-});
+const matches = await client.grep("viking://resources/docs/", "authentication");
 console.log(matches);
 ```
 
