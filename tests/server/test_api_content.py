@@ -174,6 +174,53 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
     assert seen["ctx"] == ctx
 
 
+@pytest.mark.asyncio
+async def test_reindex_user_private_scope(monkeypatch):
+    """Users should be able to reindex their own private scope."""
+    seen = {}
+
+    class FakeService:
+        async def reindex(self, *, uri, mode, wait, ctx):
+            seen["uri"] = uri
+            seen["ctx"] = ctx
+            return {"status": "completed"}
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.USER,
+    )
+    request = ReindexRequest(
+        uri="viking://user/alice/resources/",
+        mode="vectors_only",
+        wait=True,
+    )
+
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
+
+    response = await reindex(body=request, ctx=ctx)
+    assert response.status == "ok"
+    assert seen["uri"] == "viking://user/alice/resources/"
+
+
+@pytest.mark.asyncio
+async def test_reindex_user_private_scope_denied(monkeypatch):
+    """Users should NOT be able to reindex another user's private scope."""
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.USER,
+    )
+    request = ReindexRequest(
+        uri="viking://user/bob/resources/",
+        mode="vectors_only",
+        wait=True,
+    )
+
+    from openviking_cli.exceptions import PermissionDeniedError
+    with pytest.raises(PermissionDeniedError):
+        await reindex(body=request, ctx=ctx)
+
+
 async def test_content_rebuild_endpoint_removed(client):
     response = await client.post(
         "/api/v1/content/rebuild",

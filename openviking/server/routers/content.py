@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict
 
+from openviking.core.namespace import is_accessible
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
@@ -21,7 +22,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -239,11 +240,19 @@ async def set_tags(
 @router.post("/reindex")
 async def reindex(
     body: ReindexRequest = Body(...),
-    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
     uri = resolve_path_variables(body.uri)
     uri = _validate_reindex_uri(uri)
+
+    # Require ROOT/ADMIN for non-user scopes, but allow users to reindex their own private scopes.
+    if ctx.role not in (Role.ROOT, Role.ADMIN):
+        if not is_accessible(uri, ctx):
+            raise PermissionDeniedError(
+                "Access denied for this URI, or you lack root/admin privileges."
+            )
+
     service = get_service()
     result = await service.reindex(
         uri=uri,
