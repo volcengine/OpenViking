@@ -553,7 +553,11 @@ updated = client.update_skill("search-web", "./skills/search-web", wait=True)
 **TypeScript SDK**
 
 ```typescript
-const result = await client.validateSkill("./my-skill");
+const result = await client.validateSkill({
+  name: "search-web",
+  description: "Search the web for current information",
+  content: "# search-web\n\nSearch the web for current information.",
+});
 console.log(result);
 ```
 

@@ -8,6 +8,7 @@
     "docs:build": "vitepress build .",
     "docs:preview": "vitepress preview . --host 0.0.0.0",
     "check:api": "node scripts/check-api-reference.mjs",
+    "test:theme": "node --experimental-strip-types --test .vitepress/theme/*.test.ts",
     "test:search": "node --experimental-strip-types --test .vitepress/theme/openviking-search-*.test.ts"
   },
   "devDependencies": {
