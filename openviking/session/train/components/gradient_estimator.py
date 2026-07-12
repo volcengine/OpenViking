@@ -155,6 +155,7 @@ class ExperienceGradientEstimator:
             messages: list[dict[str, Any]] | None = None,
             latest_draft: Any = None,
         ):
+            _sync_prefetched_comparison_trajectories(provider, trajectory)
             analysis_obj = _analysis_from_context_metadata(context)
             experience_set = _experience_set_from_context_metadata(context)
             gradients = _operations_to_gradients(
@@ -208,22 +209,32 @@ class ExperienceGradientEstimator:
             max_post_validation_retries=_EXPERIENCE_POST_VALIDATION_MAX_RETRIES,
         )
         operations, _ = await orchestrator.run()
-        comparison_trajectories = list(
-            getattr(provider, "prefetched_comparison_trajectories", []) or []
-        )
-        if comparison_trajectories:
-            trajectory.metadata["comparison_trajectory_uris"] = [
-                str(item.get("uri") or "") for item in comparison_trajectories if item.get("uri")
-            ]
-            trajectory.metadata["comparison_trajectories"] = [
-                {
-                    "uri": str(item.get("uri") or ""),
-                    "outcome": str(item.get("outcome") or ""),
-                    "content": str(item.get("content") or ""),
-                }
-                for item in comparison_trajectories
-            ]
+        _sync_prefetched_comparison_trajectories(provider, trajectory)
         return operations
+
+
+def _sync_prefetched_comparison_trajectories(
+    provider: Any,
+    trajectory: Trajectory,
+) -> list[dict[str, str]]:
+    comparison_trajectories = list(
+        getattr(provider, "prefetched_comparison_trajectories", []) or []
+    )
+    if not comparison_trajectories:
+        return []
+    compact = [
+        {
+            "uri": str(item.get("uri") or ""),
+            "outcome": str(item.get("outcome") or ""),
+            "content": str(item.get("content") or ""),
+        }
+        for item in comparison_trajectories
+    ]
+    trajectory.metadata["comparison_trajectory_uris"] = [
+        item["uri"] for item in compact if item["uri"]
+    ]
+    trajectory.metadata["comparison_trajectories"] = compact
+    return compact
 
 
 async def _evaluate_experience_gradients(

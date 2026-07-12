@@ -20,6 +20,7 @@ from openviking.session.train import (
     Trajectory,
 )
 from openviking.session.train.components import gradient_estimator as gradient_estimator_module
+from openviking.session.train.gates import GateReport
 
 
 class FakeExperienceGradientEstimator(ExperienceGradientEstimator):
@@ -289,3 +290,104 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
     assert captured["allowed_memory_types"] == {"experiences"}
     assert captured["prepare_messages_called"] is True
     assert captured["extract_loop_kwargs"]["context_provider"]._isolation_handler is not None
+
+
+@pytest.mark.asyncio
+async def test_post_validation_gate_sees_prefetched_comparison_trajectories(monkeypatch):
+    analysis = _analysis(passed=False, outcome="failure")
+    comparison = [
+        {
+            "uri": "viking://user/u/memories/trajectories/same_case_success.md",
+            "outcome": "success",
+            "content": "# same case success\n- Outcome: success\n- Communication: included total.",
+        }
+    ]
+    captured = {"metadata_seen": []}
+
+    class FakeProvider:
+        def __init__(self, **kwargs):
+            captured["provider_kwargs"] = kwargs
+            self.prefetched_comparison_trajectories = list(comparison)
+
+    class FakeIsolationHandler:
+        def __init__(self, request_context, extract_context, allowed_memory_types):
+            self.request_context = request_context
+            self.extract_context = extract_context
+            self.allowed_memory_types = allowed_memory_types
+
+        def prepare_messages(self):
+            captured["prepare_messages_called"] = True
+
+    class FakeExtractLoop:
+        def __init__(self, **kwargs):
+            captured["extract_loop_kwargs"] = kwargs
+
+        async def run(self):
+            operations = SimpleNamespace(
+                upsert_operations=[
+                    SimpleNamespace(
+                        memory_type="experiences",
+                        memory_fields={
+                            "experience_name": "scope_total",
+                            "constraint": (
+                                "## Situation\n"
+                                "- Applies when: a scoped total is requested.\n"
+                                "- Does not apply when: no scoped total is requested.\n"
+                                "- Source binding: request records.\n\n"
+                                "## Reminder\n- Preserve the requested total scope.\n\n"
+                                "## Procedure\n- Calculate and communicate the requested total.\n\n"
+                                "## Anti-pattern\n- Do not omit the requested total."
+                            ),
+                        },
+                        uris=["viking://user/u/memories/experiences/scope_total.md"],
+                        old_memory_file_content=None,
+                    )
+                ],
+                delete_file_contents=[],
+                errors=[],
+            )
+            decision = await captured["extract_loop_kwargs"]["post_validation_hook"](
+                operations,
+                0,
+                messages=[{"role": "user", "content": "draft"}],
+                latest_draft=operations,
+            )
+            captured["post_validation_decision"] = decision
+            return operations, {"summary": "ok"}
+
+    async def fake_evaluate_experience_gradients(
+        *,
+        gradients,
+        analysis,
+        experience_set,
+        semantic_vlm=None,
+    ):
+        captured["metadata_seen"].append(
+            list(analysis.trajectories[0].metadata.get("comparison_trajectories") or [])
+        )
+        return gradients, GateReport(
+            stage="post_gradient",
+            evaluated_count=len(gradients),
+            allowed_count=len(gradients),
+        )
+
+    monkeypatch.setattr(gradient_estimator_module, "AgentExperienceContextProvider", FakeProvider)
+    monkeypatch.setattr(gradient_estimator_module, "MemoryIsolationHandler", FakeIsolationHandler)
+    monkeypatch.setattr(gradient_estimator_module, "ExtractLoop", FakeExtractLoop)
+    monkeypatch.setattr(
+        gradient_estimator_module,
+        "_evaluate_experience_gradients",
+        fake_evaluate_experience_gradients,
+    )
+
+    estimator = ExperienceGradientEstimator(viking_fs=SimpleNamespace(), vlm=SimpleNamespace())
+
+    gradients = await estimator.estimate(analysis, _experience_set(), _context())
+
+    assert len(gradients) == 1
+    assert captured["post_validation_decision"] is None
+    assert captured["metadata_seen"]
+    assert all(item == comparison for item in captured["metadata_seen"])
+    assert analysis.trajectories[0].metadata["comparison_trajectory_uris"] == [
+        comparison[0]["uri"]
+    ]
