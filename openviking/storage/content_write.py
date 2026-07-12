@@ -321,13 +321,16 @@ class ContentWriteCoordinator:
                 )
             except BaseException:
                 if not semantic_enqueued and content_written:
-                    await self._rollback_direct_write(
-                        uri=uri,
-                        previous_content=previous_content,
-                        mode=mode,
-                        ctx=ctx,
-                        lock_handle=handle,
-                    )
+                    try:
+                        await self._rollback_direct_write(
+                            uri=uri,
+                            previous_content=previous_content,
+                            mode=mode,
+                            ctx=ctx,
+                            lock_handle=handle,
+                        )
+                    except BaseException:
+                        logger.error("Failed to rollback direct content write", exc_info=True)
                 if acquired and not lock_released:
                     try:
                         await release_lock(lock_manager, handle)

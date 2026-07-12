@@ -261,3 +261,72 @@ async def test_direct_write_cancellation_during_release_finishes_release(monkeyp
 
     assert lock_manager.release_count == 1
     assert telemetry_id not in tracker._states
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("primary_error", "rollback_error"),
+    [
+        (RuntimeError("enqueue failed"), RuntimeError("rollback failed")),
+        (asyncio.CancelledError(), asyncio.CancelledError()),
+    ],
+)
+async def test_direct_write_rollback_failure_preserves_primary_and_releases_lock(
+    monkeypatch, primary_error, rollback_error
+):
+    telemetry_id = "telemetry-rollback-cleanup-failure"
+
+    class _LockManager:
+        def __init__(self):
+            self.release_count = 0
+
+        def create_handle(self):
+            return _FakeHandle()
+
+        async def acquire_exact_path(self, handle, lock_path):
+            del handle, lock_path
+            return True
+
+        async def release(self, handle):
+            del handle
+            self.release_count += 1
+
+    lock_manager = _LockManager()
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager", lambda: lock_manager
+    )
+    coordinator = ContentWriteCoordinator(_FakeVikingFS())
+
+    async def no_op(*args, **kwargs):
+        del args, kwargs
+
+    async def fail_enqueue(*args, **kwargs):
+        del args, kwargs
+        raise primary_error
+
+    async def fail_rollback(*args, **kwargs):
+        del args, kwargs
+        raise rollback_error
+
+    monkeypatch.setattr(coordinator, "_write_in_place", no_op)
+    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", fail_enqueue)
+    monkeypatch.setattr(coordinator, "_rollback_direct_write", fail_rollback)
+    ctx = RequestContext(user=UserIdentifier("acc", "alice"), role=Role.USER)
+    tracker = get_request_wait_tracker()
+    tracker.cleanup(telemetry_id)
+
+    with pytest.raises(type(primary_error), match=str(primary_error) or None):
+        await coordinator._write_direct_with_refresh(
+            uri="viking://resources/doc.md",
+            root_uri="viking://resources/doc.md",
+            content="updated",
+            mode="create",
+            context_type="resource",
+            wait=True,
+            timeout=0.1,
+            ctx=ctx,
+            written_bytes=7,
+            telemetry_id=telemetry_id,
+        )
+
+    assert lock_manager.release_count == 1
+    assert telemetry_id not in tracker._states
