@@ -157,6 +157,35 @@ class TestTree:
         assert isinstance(tree, (list, dict))
 
 
+async def test_async_openviking_ls_and_tree_forward_documented_options():
+    client = AsyncOpenViking.__new__(AsyncOpenViking)
+    client._ensure_initialized = AsyncMock()
+    client._client = SimpleNamespace(
+        ls=AsyncMock(return_value=[]),
+        tree=AsyncMock(return_value={}),
+    )
+
+    await AsyncOpenViking.ls(client, "viking://resources")
+    await AsyncOpenViking.tree(client, "viking://resources", level_limit=2)
+
+    client._client.ls.assert_awaited_once_with(
+        "viking://resources",
+        recursive=False,
+        simple=False,
+        output="original",
+        abs_limit=256,
+        show_all_hidden=False,
+    )
+    client._client.tree.assert_awaited_once_with(
+        "viking://resources",
+        output="original",
+        abs_limit=128,
+        show_all_hidden=False,
+        node_limit=1000,
+        level_limit=2,
+    )
+
+
 async def test_local_client_mkdir_forwards_description():
     client = LocalClient.__new__(LocalClient)
     client._ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)

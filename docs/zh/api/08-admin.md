@@ -1012,6 +1012,7 @@ curl -X POST http://localhost:1933/api/v1/admin/migrate \
 
 ```python
 print(client.admin_migrate(cleanup=False))
+print(client.admin_migrate(cleanup=True))
 ```
 
 **TypeScript SDK**

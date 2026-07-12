@@ -21,6 +21,7 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 		"strict":                opts.Strict,
 		"directly_upload_media": boolValue(opts.DirectlyUploadMedia, true),
 		"watch_interval":        opts.WatchInterval,
+		"create_parent":         opts.CreateParent,
 	}
 	setString(payload, "to", opts.To)
 	setString(payload, "parent", opts.Parent)

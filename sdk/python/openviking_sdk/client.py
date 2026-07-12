@@ -544,6 +544,7 @@ class AsyncHTTPClient:
         path: str,
         to: Optional[str] = None,
         parent: Optional[str] = None,
+        create_parent: bool = False,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
@@ -564,6 +565,7 @@ class AsyncHTTPClient:
         request_data = {
             "to": to,
             "parent": parent,
+            "create_parent": create_parent,
             "reason": reason,
             "instruction": instruction,
             "wait": wait,
@@ -905,17 +907,21 @@ class AsyncHTTPClient:
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
+        params = {
+            "uri": VikingURI.normalize(uri),
+            "output": output,
+            "abs_limit": abs_limit,
+            "show_all_hidden": show_all_hidden,
+            "node_limit": node_limit,
+        }
+        if level_limit is not None:
+            params["level_limit"] = level_limit
         response = await self._request(
             "GET",
             "/api/v1/fs/tree",
-            params={
-                "uri": VikingURI.normalize(uri),
-                "output": output,
-                "abs_limit": abs_limit,
-                "show_all_hidden": show_all_hidden,
-                "node_limit": node_limit,
-            },
+            params=params,
         )
         return self._handle_response(response)
 
@@ -1034,6 +1040,11 @@ class AsyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
+        level: Optional[Any] = None,
+        include_provenance: bool = False,
         image: Any = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
@@ -1047,6 +1058,11 @@ class AsyncHTTPClient:
             "context_type": self._normalize_context_type(context_type),
             "tags": tags,
             "telemetry": telemetry,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
+            "level": level,
+            "include_provenance": True if include_provenance else None,
         }
         payload = self._compact_request_body(payload)
         response = await self._request("POST", "/api/v1/search/find", json=payload)
@@ -1065,6 +1081,11 @@ class AsyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
+        level: Optional[Any] = None,
+        include_provenance: bool = False,
         image: Any = None,
     ) -> Dict[str, Any]:
         actual_limit = node_limit if node_limit is not None else limit
@@ -1080,6 +1101,11 @@ class AsyncHTTPClient:
             "context_type": self._normalize_context_type(context_type),
             "tags": tags,
             "telemetry": telemetry,
+            "since": since,
+            "until": until,
+            "time_field": time_field,
+            "level": level,
+            "include_provenance": True if include_provenance else None,
         }
         payload = self._compact_request_body(payload)
         response = await self._request("POST", "/api/v1/search/search", json=payload)
@@ -1477,7 +1503,12 @@ class AsyncHTTPClient:
         return self._handle_response(response)
 
     async def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
-        response = await self._request("POST", "/api/v1/admin/migrate", json={"cleanup": cleanup})
+        action = "cleanup" if cleanup else "migrate"
+        response = await self._request("POST", "/api/v1/admin/migrate", json={"action": action})
+        return self._handle_response(response)
+
+    async def get_system_status(self) -> Dict[str, Any]:
+        response = await self._request("GET", "/api/v1/system/status")
         return self._handle_response(response)
 
     def get_status(self) -> Dict[str, Any]:
@@ -1637,6 +1668,7 @@ class SyncHTTPClient:
         path: str,
         to: Optional[str] = None,
         parent: Optional[str] = None,
+        create_parent: bool = False,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
@@ -1656,6 +1688,7 @@ class SyncHTTPClient:
                 path=path,
                 to=to,
                 parent=parent,
+                create_parent=create_parent,
                 reason=reason,
                 instruction=instruction,
                 wait=wait,
@@ -1879,6 +1912,7 @@ class SyncHTTPClient:
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         return run_async(
             self._async_client.tree(
@@ -1887,6 +1921,7 @@ class SyncHTTPClient:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                level_limit=level_limit,
             )
         )
 
@@ -1969,6 +2004,11 @@ class SyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
+        level: Optional[Any] = None,
+        include_provenance: bool = False,
         image: Any = None,
     ) -> Dict[str, Any]:
         return run_async(
@@ -1982,6 +2022,11 @@ class SyncHTTPClient:
                 context_type=context_type,
                 tags=tags,
                 telemetry=telemetry,
+                since=since,
+                until=until,
+                time_field=time_field,
+                level=level,
+                include_provenance=include_provenance,
                 image=image,
             )
         )
@@ -1999,6 +2044,11 @@ class SyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
+        level: Optional[Any] = None,
+        include_provenance: bool = False,
         image: Any = None,
     ) -> Dict[str, Any]:
         actual_session_id = session_id
@@ -2016,6 +2066,11 @@ class SyncHTTPClient:
                 context_type=context_type,
                 tags=tags,
                 telemetry=telemetry,
+                since=since,
+                until=until,
+                time_field=time_field,
+                level=level,
+                include_provenance=include_provenance,
                 image=image,
             )
         )
@@ -2265,6 +2320,9 @@ class SyncHTTPClient:
 
     def get_status(self) -> Dict[str, Any]:
         return self._async_client.get_status()
+
+    def get_system_status(self) -> Dict[str, Any]:
+        return run_async(self._async_client.get_system_status())
 
     def is_healthy(self) -> bool:
         return self._async_client.is_healthy()

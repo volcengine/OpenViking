@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.time_utils import format_iso8601
 from openviking_cli.session.user_id import UserIdentifier
+from tests.server.conftest import SDK_ACCOUNT_ID, SDK_USER_ID
 
 
 async def _seed_time_filter_records(
@@ -15,7 +16,10 @@ async def _seed_time_filter_records(
 ) -> dict[str, str]:
     embedder = svc.vikingdb_manager.get_embedder()
     vector = embedder.embed(query).dense_vector
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(
+        user=UserIdentifier(SDK_ACCOUNT_ID, SDK_USER_ID),
+        role=Role.ADMIN,
+    )
 
     for record in records.values():
         await svc.vikingdb_manager.upsert(
@@ -32,7 +36,7 @@ async def _seed_time_filter_records(
                 "vector": vector,
                 "meta": {},
                 "related_uri": [],
-                "account_id": "default",
+                "account_id": SDK_ACCOUNT_ID,
                 "owner_space": "",
                 "level": 2,
             },
@@ -102,7 +106,7 @@ async def test_sdk_find_respects_since_and_time_field(http_client):
         limit=10,
     )
 
-    found_uris = {item.uri for item in result.resources}
+    found_uris = {item["uri"] for item in result["resources"]}
     assert uris["recent_email"] in found_uris
     assert uris["old_email"] not in found_uris
 
@@ -124,8 +128,8 @@ async def test_sdk_search_respects_since_default_updated_at(http_client):
         limit=10,
     )
 
-    recent_uris = {item.uri for item in recent_result.resources}
-    old_uris = {item.uri for item in old_result.resources}
+    recent_uris = {item["uri"] for item in recent_result["resources"]}
+    old_uris = {item["uri"] for item in old_result["resources"]}
 
     assert uris["recent_note"] in recent_uris
     assert uris["old_note"] not in recent_uris

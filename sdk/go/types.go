@@ -24,6 +24,7 @@ type Config struct {
 type AddResourceOptions struct {
 	To                  string
 	Parent              string
+	CreateParent        bool
 	Reason              string
 	Instruction         string
 	Wait                bool
@@ -156,6 +157,7 @@ type TreeOptions struct {
 	AbsLimit      int
 	ShowAllHidden bool
 	NodeLimit     int
+	LevelLimit    *int
 }
 
 // RemoveOptions controls Remove.
@@ -188,35 +190,39 @@ type ReindexOptions struct {
 
 // FindOptions controls Find.
 type FindOptions struct {
-	TargetURI      any
-	Image          string
-	Limit          int
-	NodeLimit      *int
-	ScoreThreshold *float64
-	Filter         map[string]any
-	ContextType    any
-	Telemetry      any
-	Since          string
-	Until          string
-	TimeField      string
-	Level          []int
+	TargetURI         any
+	Image             string
+	Limit             int
+	NodeLimit         *int
+	ScoreThreshold    *float64
+	Filter            map[string]any
+	ContextType       any
+	Telemetry         any
+	Since             string
+	Until             string
+	TimeField         string
+	Level             []int
+	Tags              []string
+	IncludeProvenance bool
 }
 
 // SearchOptions controls Search.
 type SearchOptions struct {
-	TargetURI      any
-	Image          string
-	SessionID      string
-	Limit          int
-	NodeLimit      *int
-	ScoreThreshold *float64
-	Filter         map[string]any
-	ContextType    any
-	Telemetry      any
-	Since          string
-	Until          string
-	TimeField      string
-	Level          []int
+	TargetURI         any
+	Image             string
+	SessionID         string
+	Limit             int
+	NodeLimit         *int
+	ScoreThreshold    *float64
+	Filter            map[string]any
+	ContextType       any
+	Telemetry         any
+	Since             string
+	Until             string
+	TimeField         string
+	Level             []int
+	Tags              []string
+	IncludeProvenance bool
 }
 
 // GrepOptions controls Grep.

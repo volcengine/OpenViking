@@ -192,11 +192,11 @@ typed_results = client.find(
 image_results = client.find(image="/path/to/photo.png")
 
 # 遍历结果
-for ctx in results.resources:
-    print(f"URI: {ctx.uri}")
-    print(f"Score: {ctx.score:.3f}")
-    print(f"Type: {ctx.context_type}")
-    print(f"Abstract: {ctx.abstract[:100]}...")
+for ctx in results["resources"]:
+    print(f"URI: {ctx['uri']}")
+    print(f"Score: {ctx['score']:.3f}")
+    print(f"Type: {ctx['context_type']}")
+    print(f"Abstract: {ctx['abstract'][:100]}...")
     print("---")
 ```
 
@@ -459,9 +459,9 @@ results = client.search(
     since="2h"
 )
 
-for ctx in results.resources:
-    print(f"Found: {ctx.uri}")
-    print(f"Abstract: {ctx.abstract[:200]}...")
+for ctx in results["resources"]:
+    print(f"Found: {ctx['uri']}")
+    print(f"Abstract: {ctx['abstract'][:200]}...")
 ```
 
 **TypeScript SDK**

@@ -352,6 +352,7 @@ class AsyncOpenViking:
         """
         if getattr(self, "_snapshot", None) is None:
             from openviking.snapshot_namespace import AsyncSnapshotNamespace
+
             self._snapshot = AsyncSnapshotNamespace(self)
         return self._snapshot
 
@@ -674,7 +675,7 @@ class AsyncOpenViking:
         simple = kwargs.get("simple", False)
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 256)
-        show_all_hidden = kwargs.get("show_all_hidden", True)
+        show_all_hidden = kwargs.get("show_all_hidden", False)
         return await self._client.ls(
             uri,
             recursive=recursive,
@@ -730,14 +731,16 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 128)
-        show_all_hidden = kwargs.get("show_all_hidden", True)
+        show_all_hidden = kwargs.get("show_all_hidden", False)
         node_limit = kwargs.get("node_limit", 1000)
+        level_limit = kwargs.get("level_limit")
         return await self._client.tree(
             uri,
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
             node_limit=node_limit,
+            level_limit=level_limit,
         )
 
     async def mkdir(self, uri: str, description: Optional[str] = None) -> None:

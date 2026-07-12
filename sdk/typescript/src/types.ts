@@ -74,6 +74,7 @@ export interface WaitOptions {
 export interface AddResourceOptions extends WaitOptions {
   to?: string;
   parent?: string;
+  createParent?: boolean;
   reason?: string;
   instruction?: string;
   strict?: boolean;
@@ -94,6 +95,7 @@ export interface SearchOptions {
   nodeLimit?: number;
   scoreThreshold?: number;
   filter?: JsonObject;
+  includeProvenance?: boolean;
   contextType?: unknown;
   telemetry?: unknown;
   since?: string;
@@ -124,6 +126,7 @@ export interface TreeOptions {
   absLimit?: number;
   showAllHidden?: boolean;
   nodeLimit?: number;
+  levelLimit?: number;
 }
 /** Session message payload. */
 export interface Message {

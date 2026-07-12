@@ -67,6 +67,13 @@ func (c *Client) GetStatus(ctx context.Context) (map[string]any, error) {
 	return c.observerStatus(ctx, "/api/v1/observer/system")
 }
 
+// GetSystemStatus returns initialization state and the authenticated user.
+func (c *Client) GetSystemStatus(ctx context.Context) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/system/status", nil, nil, &result)
+	return result, err
+}
+
 func (c *Client) observerStatus(ctx context.Context, path string) (map[string]any, error) {
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &result)

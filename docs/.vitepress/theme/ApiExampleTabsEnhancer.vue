@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted } from 'vue'
+import { nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vitepress'
-import { watch } from 'vue'
 import {
   exampleLanguage,
   isApiReferencePath,
@@ -15,36 +14,67 @@ const STORAGE_KEY = 'openviking-api-example-language'
 const CHANGE_EVENT = 'openviking-api-example-language-change'
 let observer: MutationObserver | undefined
 let frame = 0
+let tabGroup = 0
 
-function headingLanguage(element: Element) {
+function strongOnlyChildLabel(element: Element) {
   if (!element.matches('p')) return undefined
   const strong = element.querySelector(':scope > strong:only-child')
-  return strong ? exampleLanguage(strong.textContent?.trim() ?? '') : undefined
+  return strong?.textContent?.trim()
+}
+
+function headingLanguage(element: Element) {
+  const label = strongOnlyChildLabel(element)
+  return label ? exampleLanguage(label) : undefined
 }
 
 function isSharedSection(element: Element) {
-  if (!element.matches('p')) return false
-  const strong = element.querySelector(':scope > strong:only-child')
-  return strong ? isSharedSectionLabel(strong.textContent?.trim() ?? '') : false
+  const label = strongOnlyChildLabel(element)
+  return label ? isSharedSectionLabel(label) : false
 }
 
 function activate(container: HTMLElement, key: string, broadcast = true) {
-  const available = Array.from(container.querySelectorAll<HTMLElement>(':scope > [data-api-example]'))
+  const available = Array.from(
+    container.querySelectorAll<HTMLElement>(':scope > [data-api-example]')
+  )
   const selected = available.some((panel) => panel.dataset.apiExample === key)
     ? key
     : available[0]?.dataset.apiExample
   if (!selected) return
 
   for (const panel of available) panel.hidden = panel.dataset.apiExample !== selected
-  for (const button of container.querySelectorAll<HTMLButtonElement>(':scope > [role="tablist"] button')) {
+  const buttons = container.querySelectorAll<HTMLButtonElement>(
+    ':scope > [role="tablist"] button'
+  )
+  for (const button of buttons) {
     const active = button.dataset.language === selected
     button.classList.toggle('is-active', active)
     button.setAttribute('aria-selected', String(active))
+    button.tabIndex = active ? 0 : -1
   }
   if (broadcast) {
     localStorage.setItem(STORAGE_KEY, selected)
     window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: selected }))
   }
+}
+
+function handleTabKeydown(event: KeyboardEvent, container: HTMLElement) {
+  const buttons = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(':scope > [role="tablist"] button')
+  )
+  const currentIndex = buttons.indexOf(event.currentTarget as HTMLButtonElement)
+  if (currentIndex < 0) return
+
+  let nextIndex: number | undefined
+  if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + buttons.length) % buttons.length
+  else if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % buttons.length
+  else if (event.key === 'Home') nextIndex = 0
+  else if (event.key === 'End') nextIndex = buttons.length - 1
+  if (nextIndex === undefined) return
+
+  event.preventDefault()
+  const nextButton = buttons[nextIndex]
+  nextButton.focus()
+  activate(container, nextButton.dataset.language ?? '')
 }
 
 function enhanceDocument() {
@@ -89,11 +119,14 @@ function enhanceDocument() {
     tablist.setAttribute('aria-label', 'API examples')
     container.append(tablist)
     parent.insertBefore(container, firstHeading)
+    const groupId = `api-example-tabs-${tabGroup++}`
 
     for (const group of groups) {
       const button = document.createElement('button')
       button.type = 'button'
       button.setAttribute('role', 'tab')
+      button.id = `${groupId}-tab-${group.language.key}`
+      button.setAttribute('aria-controls', `${groupId}-panel-${group.language.key}`)
       button.dataset.language = group.language.key
       button.textContent = group.language.label
       button.addEventListener('click', () => {
@@ -102,9 +135,13 @@ function enhanceDocument() {
         const offset = tablist.getBoundingClientRect().top - anchorTop
         if (offset) window.scrollBy({ top: offset, behavior: 'instant' })
       })
+      button.addEventListener('keydown', (event) => handleTabKeydown(event, container))
       tablist.append(button)
 
       const panel = document.createElement('div')
+      panel.id = `${groupId}-panel-${group.language.key}`
+      panel.setAttribute('role', 'tabpanel')
+      panel.setAttribute('aria-labelledby', button.id)
       panel.dataset.apiExample = group.language.key
       panel.className = 'api-example-tabs__panel'
       for (const child of group.nodes) panel.append(child)

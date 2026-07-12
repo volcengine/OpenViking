@@ -360,7 +360,7 @@ List directory contents.
 | uri | str | Yes | - | Viking URI |
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
-| output | str | No | `agent` | Output format: `agent` or `original` |
+| output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
 | abs_limit | int | No | 256 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
@@ -465,8 +465,8 @@ Get directory tree structure.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
-| output | str | No | `agent` | Output format: `agent` or `original` |
-| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
+| abs_limit | int | No | HTTP: 256; SDKs: 128 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
 | node_limit | int | No | 1000 | Maximum number of results |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
@@ -847,9 +847,7 @@ Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_
 client.rm("viking://resources/docs/old.md")
 
 # Remove directory recursively
-result = client.rm("viking://resources/old-project/", recursive=True)
-if 'estimated_deleted_count' in result:
-    print(f"Deleted {result['estimated_deleted_count']} items")
+client.rm("viking://resources/old-project/", recursive=True)
 ```
 
 **TypeScript SDK**
@@ -1107,7 +1105,7 @@ Match files by pattern.
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | 256 | Maximum number of results |
 
 
 **Python SDK (Embedded / HTTP)**
@@ -1415,7 +1413,7 @@ Export a resource tree as a `.ovpack` file.
 
 #### 1. API Implementation Overview
 
-Packages all resources under the specified URI into a `.ovpack` file for backup or migration. Requires ROOT or ADMIN permissions.
+Packages all resources under the specified URI into a `.ovpack` file for backup or migration. Available to ROOT, ADMIN, and USER roles; normal URI access controls still apply.
 
 **Processing Flow**:
 1. Verify user permissions
@@ -1447,7 +1445,7 @@ Packages all resources under the specified URI into a `.ovpack` file for backup 
 | uri | string | Yes | - | Viking URI to export |
 | include_vectors | boolean | No | false | Include a pure-dense vector snapshot; hybrid index types are rejected |
 
-**Permission Requirements**: ROOT or ADMIN
+**Permission Requirements**: ROOT, ADMIN, or USER
 
 #### 3. Usage Examples
 
@@ -1531,7 +1529,7 @@ Import a `.ovpack` file.
 
 #### 1. API Implementation Overview
 
-Imports a `.ovpack` file to a specified location for restoring or migrating data. Requires ROOT or ADMIN permissions.
+Imports a `.ovpack` file to a specified location for restoring or migrating data. Available to ROOT, ADMIN, and USER roles; normal URI access controls still apply.
 
 **Processing Flow**:
 1. Verify user permissions
@@ -1556,7 +1554,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 | on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
 | vector_mode | string | No | auto | Vector handling: `auto`, `recompute`, or `require` |
 
-**Permission Requirements**: ROOT or ADMIN
+**Permission Requirements**: ROOT, ADMIN, or USER
 
 **Behavior Notes**:
 - The API no longer accepts `vectorize` or `force`.

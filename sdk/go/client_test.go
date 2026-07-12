@@ -124,6 +124,13 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
 		}
+		tags, ok := body["tags"].([]any)
+		if !ok || len(tags) != 1 || tags[0] != "team=docs" {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if got := body["include_provenance"]; got != true {
+			t.Fatalf("include_provenance = %#v", got)
+		}
 		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{
 			"resources": []map[string]any{
@@ -134,13 +141,15 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	defer closeServer()
 
 	result, err := client.Find(context.Background(), "auth", &FindOptions{
-		TargetURI:   "resources/docs",
-		Limit:       5,
-		ContextType: []string{"resource"},
-		Since:       "2026-06-01",
-		Until:       "2026-06-18",
-		TimeField:   "created_at",
-		Level:       []int{0, 2},
+		TargetURI:         "resources/docs",
+		Limit:             5,
+		ContextType:       []string{"resource"},
+		Since:             "2026-06-01",
+		Until:             "2026-06-18",
+		TimeField:         "created_at",
+		Level:             []int{0, 2},
+		Tags:              []string{"team=docs"},
+		IncludeProvenance: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1176,5 +1185,51 @@ func TestGrepOmitsLevelLimitWhenUnset(t *testing.T) {
 
 	if _, err := client.Grep(context.Background(), "viking://user", "pat", nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCrossSDKContractFields(t *testing.T) {
+	levelLimit := 4
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/resources":
+			body := readJSONBody(t, r)
+			if got := body["create_parent"]; got != true {
+				t.Fatalf("create_parent = %#v", got)
+			}
+			writeOK(t, w, map[string]any{"root_uri": "viking://resources/docs"})
+		case "/api/v1/fs/tree":
+			if got := r.URL.Query().Get("level_limit"); got != "4" {
+				t.Fatalf("level_limit = %q", got)
+			}
+			writeOK(t, w, []any{})
+		case "/api/v1/system/status":
+			writeOK(t, w, map[string]any{"initialized": true, "user": "alice"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(
+		context.Background(),
+		"https://example.com/docs",
+		&AddResourceOptions{Parent: "viking://resources", CreateParent: true},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Tree(
+		context.Background(),
+		"viking://resources",
+		&TreeOptions{LevelLimit: &levelLimit},
+	); err != nil {
+		t.Fatal(err)
+	}
+	status, err := client.GetSystemStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status["user"] != "alice" {
+		t.Fatalf("status = %#v", status)
 	}
 }

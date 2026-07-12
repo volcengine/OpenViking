@@ -15,22 +15,26 @@ function normalizePath(value) {
   return pathname.replace(/\{[^}]+\}/g, '{}')
 }
 
+function consumeQuotedCharacter(character, state) {
+  if (state.quote) {
+    if (state.escaped) state.escaped = false
+    else if (character === '\\') state.escaped = true
+    else if (character === state.quote) state.quote = ''
+    return true
+  }
+  if (character === '"' || character === "'" || character === '`') {
+    state.quote = character
+    return true
+  }
+  return false
+}
+
 function closingDelimiter(source, openingIndex, opening = '(', closing = ')') {
   let depth = 0
-  let quote = ''
-  let escaped = false
+  const quoteState = { quote: '', escaped: false }
   for (let index = openingIndex; index < source.length; index++) {
     const character = source[index]
-    if (quote) {
-      if (escaped) escaped = false
-      else if (character === '\\') escaped = true
-      else if (character === quote) quote = ''
-      continue
-    }
-    if (character === '"' || character === "'" || character === '`') {
-      quote = character
-      continue
-    }
+    if (consumeQuotedCharacter(character, quoteState)) continue
     if (character === opening) depth++
     else if (character === closing && --depth === 0) return index
   }
@@ -41,19 +45,12 @@ function splitTopLevel(source) {
   const parts = []
   let start = 0
   const stack = []
-  let quote = ''
-  let escaped = false
+  const quoteState = { quote: '', escaped: false }
   const pairs = { '(': ')', '[': ']', '{': '}' }
   for (let index = 0; index < source.length; index++) {
     const character = source[index]
-    if (quote) {
-      if (escaped) escaped = false
-      else if (character === '\\') escaped = true
-      else if (character === quote) quote = ''
-      continue
-    }
-    if (character === '"' || character === "'" || character === '`') quote = character
-    else if (pairs[character]) stack.push(pairs[character])
+    if (consumeQuotedCharacter(character, quoteState)) continue
+    if (pairs[character]) stack.push(pairs[character])
     else if (character === stack.at(-1)) stack.pop()
     else if (character === ',' && stack.length === 0) {
       parts.push(source.slice(start, index).trim())
@@ -98,6 +95,7 @@ for (const file of fs.readdirSync(routerDir).filter((name) => name.endsWith('.py
 }
 
 const clientSource = fs.readFileSync(path.join(repoRoot, 'sdk/typescript/src/client.ts'), 'utf8')
+const typeSource = fs.readFileSync(path.join(repoRoot, 'sdk/typescript/src/types.ts'), 'utf8')
 const clientMethods = new Map()
 for (const match of clientSource.matchAll(/^  (?:async )?([A-Za-z][A-Za-z0-9]*)\s*\(/gm)) {
   const opening = clientSource.indexOf('(', match.index)
@@ -117,7 +115,146 @@ for (const match of clientSource.matchAll(/^  (?:async )?([A-Za-z][A-Za-z0-9]*)\
   })
 }
 
+const interfaceDefinitions = new Map()
+const interfacePattern = /export interface\s+([A-Za-z]\w*)(?:\s+extends\s+([^\{]+))?\s*\{/g
+for (const match of typeSource.matchAll(interfacePattern)) {
+  const opening = typeSource.indexOf('{', match.index)
+  const closing = closingDelimiter(typeSource, opening, '{', '}')
+  if (closing < 0) continue
+  const properties = new Set(
+    Array.from(
+      typeSource.slice(opening + 1, closing).matchAll(/^\s*([A-Za-z]\w*)\??\s*:/gm),
+      (property) => property[1]
+    )
+  )
+  const parents = (match[2] ?? '')
+    .split(',')
+    .map((parent) => parent.trim())
+    .filter(Boolean)
+  interfaceDefinitions.set(match[1], { parents, properties })
+}
+
+function interfaceProperties(name, seen = new Set()) {
+  if (seen.has(name)) return new Set()
+  seen.add(name)
+  const definition = interfaceDefinitions.get(name)
+  if (!definition) return new Set()
+  const properties = new Set(definition.properties)
+  for (const parent of definition.parents) {
+    for (const property of interfaceProperties(parent, seen)) properties.add(property)
+  }
+  return properties
+}
+
+function methodSource(name) {
+  const declaration = new RegExp(
+    `^  (?:(?:private|public|protected)\\s+)?(?:async\\s+)?${name}\\s*\\(`,
+    'm'
+  ).exec(clientSource)
+  if (!declaration) return ''
+  const signatureOpening = clientSource.indexOf('(', declaration.index)
+  const signatureClosing = closingDelimiter(clientSource, signatureOpening)
+  if (signatureClosing < 0) return ''
+  const bodyOpening = clientSource.indexOf('{', signatureClosing)
+  const bodyClosing = closingDelimiter(clientSource, bodyOpening, '{', '}')
+  return bodyClosing < 0 ? '' : clientSource.slice(declaration.index, bodyClosing + 1)
+}
+
+const sdkContractFixtures = [
+  {
+    method: 'addResource',
+    required: [
+      'this.request("POST", "/api/v1/resources"',
+      'create_parent: options.createParent'
+    ]
+  },
+  {
+    method: 'searchRequest',
+    required: [
+      'this.request("POST", `/api/v1/search/${kind}`',
+      'include_provenance: options.includeProvenance'
+    ]
+  },
+  {
+    method: 'tree',
+    required: [
+      'this.request("GET", "/api/v1/fs/tree"',
+      'level_limit: options.levelLimit'
+    ]
+  },
+  {
+    method: 'getSystemStatus',
+    required: ['this.request("GET", "/api/v1/system/status"']
+  }
+]
+
+const crossSdkSources = {
+  python: fs.readFileSync(
+    path.join(repoRoot, 'sdk/python/openviking_sdk/client.py'),
+    'utf8'
+  ),
+  goResources: fs.readFileSync(path.join(repoRoot, 'sdk/go/resources.go'), 'utf8'),
+  goRetrieval: fs.readFileSync(path.join(repoRoot, 'sdk/go/retrieval.go'), 'utf8'),
+  goFilesystem: fs.readFileSync(path.join(repoRoot, 'sdk/go/filesystem.go'), 'utf8'),
+  goSystem: fs.readFileSync(path.join(repoRoot, 'sdk/go/system.go'), 'utf8')
+}
+
+const crossSdkContractFixtures = [
+  {
+    label: 'Python SDK',
+    source: crossSdkSources.python,
+    required: [
+      '"create_parent": create_parent',
+      '"include_provenance": True if include_provenance else None',
+      'params["level_limit"] = level_limit',
+      'json={"action": action}',
+      'self._request("GET", "/api/v1/system/status")'
+    ]
+  },
+  {
+    label: 'Go resource SDK',
+    source: crossSdkSources.goResources,
+    required: ['"create_parent":         opts.CreateParent']
+  },
+  {
+    label: 'Go retrieval SDK',
+    source: crossSdkSources.goRetrieval,
+    required: ['payload["tags"] = opts.Tags', 'payload["include_provenance"]']
+  },
+  {
+    label: 'Go filesystem SDK',
+    source: crossSdkSources.goFilesystem,
+    required: ['queryInt(query, "level_limit", *opts.LevelLimit)']
+  },
+  {
+    label: 'Go system SDK',
+    source: crossSdkSources.goSystem,
+    required: ['c.doJSON(ctx, http.MethodGet, "/api/v1/system/status"']
+  }
+]
+
 const errors = []
+for (const fixture of sdkContractFixtures) {
+  const source = methodSource(fixture.method)
+  if (!source) {
+    errors.push(`sdk/typescript/src/client.ts: missing contract method ${fixture.method}()`)
+    continue
+  }
+  for (const required of fixture.required) {
+    if (!source.includes(required)) {
+      errors.push(
+        `sdk/typescript/src/client.ts: ${fixture.method}() is missing contract mapping ${required}`
+      )
+    }
+  }
+}
+for (const fixture of crossSdkContractFixtures) {
+  for (const required of fixture.required) {
+    if (!fixture.source.includes(required)) {
+      errors.push(`${fixture.label}: missing contract mapping ${required}`)
+    }
+  }
+}
 let httpExamples = 0
 let typescriptCalls = 0
 const curlUrlPattern = String.raw`["']?https?:\/\/[^/\s"']+(\/[A-Za-z0-9_{}<>?=&./:-]+)`
@@ -230,6 +367,24 @@ for (const file of apiDocs) {
         if (type === 'string' && /^[{[]/.test(args[index])) {
           errors.push(`${relative}: client.${call[1]}() argument ${index + 1} must be a string`)
         }
+        if (!args[index].startsWith('{') || !args[index].endsWith('}')) continue
+        const typeMatches = type?.matchAll(/\b([A-Z][A-Za-z0-9]*)\b/g) ?? []
+        const typeNames = Array.from(typeMatches, (item) => item[1])
+        const allowedProperties = new Set()
+        for (const typeName of typeNames) {
+          for (const property of interfaceProperties(typeName)) allowedProperties.add(property)
+        }
+        if (!allowedProperties.size) continue
+        for (const property of splitTopLevel(args[index].slice(1, -1))) {
+          if (property.startsWith('...')) continue
+          const propertyName = property.match(/^([A-Za-z_$][A-Za-z0-9_$]*)\s*(?::|$)/)?.[1]
+          if (propertyName && !allowedProperties.has(propertyName)) {
+            errors.push(
+              `${relative}: client.${call[1]}() argument ${index + 1} ` +
+              `has unknown option ${propertyName}`
+            )
+          }
+        }
       }
     }
   }
@@ -241,6 +396,8 @@ if (errors.length) {
 } else {
   console.log(
     `API reference check passed: ${httpExamples} HTTP examples with query contracts, ` +
-    `${typescriptCalls} TypeScript SDK calls with signature contracts`
+    `${typescriptCalls} TypeScript SDK calls with signature/option contracts, ` +
+    `${sdkContractFixtures.length} TypeScript and ` +
+    `${crossSdkContractFixtures.length} cross-SDK request fixtures`
   )
 }

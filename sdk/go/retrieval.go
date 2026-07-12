@@ -37,6 +37,10 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	if len(opts.Level) > 0 {
 		payload["level"] = opts.Level
 	}
+	if len(opts.Tags) > 0 {
+		payload["tags"] = opts.Tags
+	}
+	payload["include_provenance"] = opts.IncludeProvenance
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
 	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/find", nil, payload, &result)
@@ -76,6 +80,10 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	if len(opts.Level) > 0 {
 		payload["level"] = opts.Level
 	}
+	if len(opts.Tags) > 0 {
+		payload["tags"] = opts.Tags
+	}
+	payload["include_provenance"] = opts.IncludeProvenance
 	setAny(payload, "telemetry", opts.Telemetry)
 	var result FindResult
 	err = c.doJSON(ctx, http.MethodPost, "/api/v1/search/search", nil, payload, &result)

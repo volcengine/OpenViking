@@ -59,6 +59,9 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 	queryInt(query, "abs_limit", absLimit)
 	queryBool(query, "show_all_hidden", opts.ShowAllHidden)
 	queryInt(query, "node_limit", nodeLimit)
+	if opts.LevelLimit != nil {
+		queryInt(query, "level_limit", *opts.LevelLimit)
+	}
 	var result []map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/tree", query, nil, &result)
 	return result, err

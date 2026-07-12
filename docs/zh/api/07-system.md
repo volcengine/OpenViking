@@ -181,7 +181,8 @@ curl -X GET http://localhost:1933/ready
 
 **代码入口**:
 - `openviking/server/routers/system.py:system_status` - HTTP 路由
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.get_status` - SDK 入口
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.get_system_status` - Python SDK 入口
+- `sdk/go/system.go:Client.GetSystemStatus` - Go SDK 入口
 - `crates/ov_cli/src/commands/system.rs` - CLI 命令
 
 #### 2. 接口和参数说明
@@ -204,14 +205,24 @@ curl -X GET http://localhost:1933/api/v1/system/status \
 **Python SDK**
 
 ```python
-status = client.get_status()
+status = client.get_system_status()
 print(status)
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.getStatus());
+console.log(await client.getSystemStatus());
+```
+
+**Go SDK**
+
+```go
+status, err := client.GetSystemStatus(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(status["user"])
 ```
 
 **CLI**

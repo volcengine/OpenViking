@@ -108,6 +108,7 @@ export class OpenVikingClient {
     const body: JsonObject = compact({
       to: options.to,
       parent: options.parent,
+      create_parent: options.createParent ?? false,
       reason: options.reason,
       instruction: options.instruction,
       wait: options.wait ?? false,
@@ -340,6 +341,7 @@ export class OpenVikingClient {
         limit: options.nodeLimit ?? options.limit ?? 10,
         score_threshold: options.scoreThreshold,
         filter: options.filter,
+        include_provenance: options.includeProvenance ?? false,
         context_type: options.contextType,
         telemetry: options.telemetry,
         since: options.since,
@@ -434,6 +436,7 @@ export class OpenVikingClient {
         abs_limit: options.absLimit ?? 128,
         show_all_hidden: options.showAllHidden ?? false,
         node_limit: options.nodeLimit ?? 1000,
+        level_limit: options.levelLimit,
       },
     });
   }
@@ -785,6 +788,10 @@ export class OpenVikingClient {
   /** Return aggregate observer status. */
   getStatus(): Promise<JsonObject> {
     return this.request("GET", "/api/v1/observer/system");
+  }
+  /** Return initialization state and the authenticated user. */
+  getSystemStatus(): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/system/status");
   }
   /** Return queue observer status. */
   queueStatus(): Promise<JsonObject> {
