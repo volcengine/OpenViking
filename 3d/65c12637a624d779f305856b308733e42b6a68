@@ -1,0 +1,33 @@
+docs/.vitepress/config.ts
+  s_683c6c0c357b01::t_f6c9572ca2614f 57,99,101,103-104,123,130,356-360,376-380
+docs/.vitepress/theme/ApiExampleTabsEnhancer.vue
+  s_683c6c0c357b01::t_f0ad71f7c99914 48-51
+docs/en/api/03-filesystem.md
+  s_683c6c0c357b01::t_ee547a30f1aafe 1037
+docs/en/api/06-retrieval.md
+  s_683c6c0c357b01::t_88ef67abc6e813 649
+docs/scripts/check-api-reference.mjs
+  s_683c6c0c357b01::t_4e1b589aab990a 77-80,84-94,113-116,123-132,136-152,154-167,173,175-185,188-191,194-196,199-201,218-219,224-232,242-245
+docs/zh/api/03-filesystem.md
+  s_683c6c0c357b01::t_0804dda00739bd 1038
+docs/zh/api/06-retrieval.md
+  s_683c6c0c357b01::t_7d1b21ae6951a7 651
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3d65c12637a624d779f305856b308733e42b6a68",
+  "prompts": {},
+  "sessions": {
+    "s_683c6c0c357b01": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5456-50c2-76f0-a906-0f69b4233291",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
