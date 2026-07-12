@@ -20,7 +20,16 @@ export function exampleLanguage(label: string): ExampleLanguage | undefined {
 }
 
 function responseKey(value: string): string {
-  return `response-${value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
+  const normalized = value
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-|-$/g, '')
+  return `response-${normalized}`
+}
+
+export function shouldSynchronizeExampleTabs(kind: string | undefined): boolean {
+  return kind === 'language'
 }
 
 export function responseExample(label: string): ExampleLanguage | undefined {

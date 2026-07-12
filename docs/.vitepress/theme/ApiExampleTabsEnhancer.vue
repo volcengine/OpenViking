@@ -6,6 +6,7 @@ import {
   isApiReferencePath,
   isSharedSectionLabel,
   preferredLanguage,
+  shouldSynchronizeExampleTabs,
   type ExampleLanguage
 } from './api-example-tabs'
 
@@ -171,6 +172,7 @@ function scheduleEnhancement() {
 function sync(event: Event) {
   const key = (event as CustomEvent<string>).detail
   for (const container of document.querySelectorAll<HTMLElement>('.api-example-tabs')) {
+    if (!shouldSynchronizeExampleTabs(container.dataset.apiExampleKind)) continue
     activate(container, key, false)
   }
 }

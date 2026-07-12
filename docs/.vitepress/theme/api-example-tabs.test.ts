@@ -6,7 +6,8 @@ import {
   responseExample,
   isApiReferencePath,
   isSharedSectionLabel,
-  preferredLanguage
+  preferredLanguage,
+  shouldSynchronizeExampleTabs
 } from './api-example-tabs.ts'
 import { hasPageLlmsTxt } from './llms-txt.ts'
 
@@ -30,6 +31,24 @@ test('recognizes transport and result response variants', () => {
   assert.equal(responseExample('Response (Directory)')?.label, 'Directory')
   assert.equal(responseExample('响应（Memory）')?.label, 'Memory')
   assert.equal(responseExample('异步响应（`wait=false`）')?.key, 'response-async')
+})
+
+test('keeps localized response variant keys distinct', () => {
+  const file = responseExample('响应（文件）')
+  const directory = responseExample('响应（目录）')
+  const importing = responseExample('响应示例（资源导入进行中）')
+  const completed = responseExample('响应示例（完成）')
+
+  assert.equal(file?.key, 'response-文件')
+  assert.equal(directory?.key, 'response-目录')
+  assert.notEqual(file?.key, directory?.key)
+  assert.notEqual(importing?.key, completed?.key)
+})
+
+test('synchronizes language tabs without resetting response tabs', () => {
+  assert.equal(shouldSynchronizeExampleTabs('language'), true)
+  assert.equal(shouldSynchronizeExampleTabs('response'), false)
+  assert.equal(shouldSynchronizeExampleTabs(undefined), false)
 })
 
 test('recognizes response and note variants as shared sections', () => {
