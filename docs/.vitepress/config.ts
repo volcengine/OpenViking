@@ -102,19 +102,18 @@ function sidebarSection(dir: string, title: string, collapsed = true): DefaultTh
 
 function localizedSectionSidebarItems(
   locale: 'en' | 'zh',
-  section: 'getting-started' | 'concepts'
+  section: 'getting-started' | 'concepts' | 'guides' | 'agent-integrations' | 'migration'
 ): DefaultTheme.SidebarItem[] {
   const labels = locale === 'zh' ? zhSectionNames : sectionNames
   return [sidebarSection(`${locale}/${section}`, labels[section], false)]
 }
 
-function localizedGuideSidebarItems(
+function localizedGroupedSidebarItems(
   locale: 'en' | 'zh',
-  activeSection: 'guides' | 'agent-integrations' | 'migration' = 'guides'
+  sections: ReadonlyArray<'getting-started' | 'guides' | 'agent-integrations' | 'migration'>,
+  activeSection: 'getting-started' | 'guides' | 'agent-integrations' | 'migration'
 ): DefaultTheme.SidebarItem[] {
   const labels = locale === 'zh' ? zhSectionNames : sectionNames
-  const sections = ['guides', 'agent-integrations', 'migration'] as const
-
   return sections.map((section) =>
     sidebarSection(`${locale}/${section}`, labels[section], section !== activeSection)
   )
@@ -135,18 +134,18 @@ const designSidebar: DefaultTheme.SidebarItem[] = [
 ]
 
 const enNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.en.start, link: '/en/getting-started/01-introduction', activeMatch: '/en/getting-started/' },
+  { text: navLabels.en.start, link: '/en/getting-started/01-introduction', activeMatch: '/en/(getting-started|agent-integrations)/' },
   { text: navLabels.en.concepts, link: '/en/concepts/01-architecture', activeMatch: '/en/concepts/' },
-  { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|agent-integrations|migration)/' },
+  { text: navLabels.en.guide, link: '/en/guides/01-configuration', activeMatch: '/en/(guides|migration)/' },
   { text: navLabels.en.api, link: '/en/api/01-overview', activeMatch: '/en/api/' },
   { text: navLabels.en.faq, link: '/en/faq/faq', activeMatch: '/en/faq/' },
   { text: navLabels.en.about, link: '/en/about/01-about-us', activeMatch: '/en/about/' }
 ]
 
 const zhNav: DefaultTheme.NavItem[] = [
-  { text: navLabels.zh.start, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/getting-started/' },
+  { text: navLabels.zh.start, link: '/zh/getting-started/01-introduction', activeMatch: '/zh/(getting-started|agent-integrations)/' },
   { text: navLabels.zh.concepts, link: '/zh/concepts/01-architecture', activeMatch: '/zh/concepts/' },
-  { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|agent-integrations|migration)/' },
+  { text: navLabels.zh.guide, link: '/zh/guides/01-configuration', activeMatch: '/zh/(guides|migration)/' },
   { text: navLabels.zh.api, link: '/zh/api/01-overview', activeMatch: '/zh/api/' },
   { text: navLabels.zh.faq, link: '/zh/faq/faq', activeMatch: '/zh/faq/' },
   { text: navLabels.zh.about, link: '/zh/about/01-about-us', activeMatch: '/zh/about/' }
@@ -372,11 +371,11 @@ export default defineConfig({
           level: [2, 3]
         },
         sidebar: {
-          '/en/getting-started/': localizedSectionSidebarItems('en', 'getting-started'),
+          '/en/getting-started/': localizedGroupedSidebarItems('en', ['getting-started', 'agent-integrations'], 'getting-started'),
           '/en/concepts/': localizedSectionSidebarItems('en', 'concepts'),
-          '/en/guides/': localizedGuideSidebarItems('en'),
-          '/en/agent-integrations/': localizedGuideSidebarItems('en', 'agent-integrations'),
-          '/en/migration/': localizedGuideSidebarItems('en', 'migration'),
+          '/en/guides/': localizedGroupedSidebarItems('en', ['guides', 'migration'], 'guides'),
+          '/en/agent-integrations/': localizedGroupedSidebarItems('en', ['getting-started', 'agent-integrations'], 'agent-integrations'),
+          '/en/migration/': localizedGroupedSidebarItems('en', ['guides', 'migration'], 'migration'),
           '/en/api/': localizedReferenceSidebarItems('en'),
           '/en/about/': localizedAboutSidebarItems('en'),
           '/design/': designSidebar
@@ -392,11 +391,11 @@ export default defineConfig({
       themeConfig: {
         nav: zhNav,
         sidebar: {
-          '/zh/getting-started/': localizedSectionSidebarItems('zh', 'getting-started'),
+          '/zh/getting-started/': localizedGroupedSidebarItems('zh', ['getting-started', 'agent-integrations'], 'getting-started'),
           '/zh/concepts/': localizedSectionSidebarItems('zh', 'concepts'),
-          '/zh/guides/': localizedGuideSidebarItems('zh'),
-          '/zh/agent-integrations/': localizedGuideSidebarItems('zh', 'agent-integrations'),
-          '/zh/migration/': localizedGuideSidebarItems('zh', 'migration'),
+          '/zh/guides/': localizedGroupedSidebarItems('zh', ['guides', 'migration'], 'guides'),
+          '/zh/agent-integrations/': localizedGroupedSidebarItems('zh', ['getting-started', 'agent-integrations'], 'agent-integrations'),
+          '/zh/migration/': localizedGroupedSidebarItems('zh', ['guides', 'migration'], 'migration'),
           '/zh/api/': localizedReferenceSidebarItems('zh'),
           '/zh/about/': localizedAboutSidebarItems('zh')
         },
