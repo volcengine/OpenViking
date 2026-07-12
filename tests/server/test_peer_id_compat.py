@@ -12,15 +12,30 @@ from openviking.server.routers.search import (
 from openviking.server.routers.sessions import AddMessageRequest
 
 
-def test_search_request_rejects_ignored_legacy_agent_fields():
-    with pytest.raises(ValueError):
-        SearchRequest.model_validate(
-            {
-                "query": "invoice",
-                "agent_id": "code-agent",
-                "agent_uri": "viking://agent/code-agent/skills",
-            }
-        )
+def test_search_request_preserves_ignored_legacy_agent_fields():
+    request = SearchRequest.model_validate(
+        {
+            "query": "invoice",
+            "agent_id": "code-agent",
+            "agent_uri": "viking://agent/code-agent/skills",
+        }
+    )
+
+    assert request.agent_id == "code-agent"
+    assert request.agent_uri == "viking://agent/code-agent/skills"
+
+
+def test_find_request_preserves_ignored_legacy_agent_fields():
+    request = FindRequest.model_validate(
+        {
+            "query": "invoice",
+            "agent_id": "code-agent",
+            "agent_uri": "viking://agent/code-agent/skills",
+        }
+    )
+
+    assert request.agent_id == "code-agent"
+    assert request.agent_uri == "viking://agent/code-agent/skills"
 
 
 def test_find_request_rejects_unpublished_peer_id_body_field():

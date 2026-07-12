@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -6,6 +7,18 @@ import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
+
+
+def test_new_options_preserve_existing_positional_parameter_order():
+    async_add_resource = list(inspect.signature(AsyncHTTPClient.add_resource).parameters)
+    sync_add_resource = list(inspect.signature(SyncHTTPClient.add_resource).parameters)
+    assert async_add_resource.index("create_parent") > async_add_resource.index("telemetry")
+    assert sync_add_resource.index("create_parent") > sync_add_resource.index("telemetry")
+
+    for client_type in (AsyncHTTPClient, SyncHTTPClient):
+        for method_name in ("find", "search"):
+            parameters = list(inspect.signature(getattr(client_type, method_name)).parameters)
+            assert parameters.index("image") < parameters.index("since")
 
 
 @pytest.mark.asyncio

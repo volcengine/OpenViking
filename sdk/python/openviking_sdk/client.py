@@ -544,7 +544,6 @@ class AsyncHTTPClient:
         path: str,
         to: Optional[str] = None,
         parent: Optional[str] = None,
-        create_parent: bool = False,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
@@ -558,6 +557,7 @@ class AsyncHTTPClient:
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
+        create_parent: bool = False,
     ) -> Dict[str, Any]:
         """Add a resource and optionally create its parent directory."""
         if to and parent:
@@ -1114,12 +1114,12 @@ class AsyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[Any] = None,
         include_provenance: bool = False,
-        image: Any = None,
     ) -> Dict[str, Any]:
         """Find semantically similar contexts without session history."""
         actual_limit = node_limit if node_limit is not None else limit
@@ -1156,12 +1156,12 @@ class AsyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[Any] = None,
         include_provenance: bool = False,
-        image: Any = None,
     ) -> Dict[str, Any]:
         """Search semantically with optional session context."""
         actual_limit = node_limit if node_limit is not None else limit
@@ -1775,7 +1775,6 @@ class SyncHTTPClient:
         path: str,
         to: Optional[str] = None,
         parent: Optional[str] = None,
-        create_parent: bool = False,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
@@ -1789,6 +1788,7 @@ class SyncHTTPClient:
         watch_interval: float = 0,
         args: Optional[Dict[str, Any]] = None,
         telemetry: Any = False,
+        create_parent: bool = False,
     ) -> Dict[str, Any]:
         """Add a resource and optionally create its parent directory."""
         return run_async(
@@ -2163,12 +2163,12 @@ class SyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[Any] = None,
         include_provenance: bool = False,
-        image: Any = None,
     ) -> Dict[str, Any]:
         """Find semantically similar contexts without session history."""
         return run_async(
@@ -2204,12 +2204,12 @@ class SyncHTTPClient:
         context_type: Optional[Any] = None,
         tags: Optional[List[str]] = None,
         telemetry: Any = False,
+        image: Any = None,
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[Any] = None,
         include_provenance: bool = False,
-        image: Any = None,
     ) -> Dict[str, Any]:
         """Search semantically with optional session context."""
         actual_session_id = session_id

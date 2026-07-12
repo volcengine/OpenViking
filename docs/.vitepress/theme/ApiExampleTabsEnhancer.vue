@@ -57,6 +57,15 @@ function activate(container: HTMLElement, key: string, broadcast = true) {
   }
 }
 
+function activatePreservingViewport(container: HTMLElement, key: string) {
+  const tablist = container.querySelector<HTMLElement>(':scope > [role="tablist"]')
+  const anchorTop = tablist?.getBoundingClientRect().top
+  activate(container, key)
+  if (anchorTop === undefined || !tablist) return
+  const offset = tablist.getBoundingClientRect().top - anchorTop
+  if (offset) window.scrollBy({ top: offset, behavior: 'instant' })
+}
+
 function handleTabKeydown(event: KeyboardEvent, container: HTMLElement) {
   const buttons = Array.from(
     container.querySelectorAll<HTMLButtonElement>(':scope > [role="tablist"] button')
@@ -74,7 +83,7 @@ function handleTabKeydown(event: KeyboardEvent, container: HTMLElement) {
   event.preventDefault()
   const nextButton = buttons[nextIndex]
   nextButton.focus()
-  activate(container, nextButton.dataset.language ?? '')
+  activatePreservingViewport(container, nextButton.dataset.language ?? '')
 }
 
 function enhanceDocument() {
@@ -130,10 +139,7 @@ function enhanceDocument() {
       button.dataset.language = group.language.key
       button.textContent = group.language.label
       button.addEventListener('click', () => {
-        const anchorTop = tablist.getBoundingClientRect().top
-        activate(container, group.language.key)
-        const offset = tablist.getBoundingClientRect().top - anchorTop
-        if (offset) window.scrollBy({ top: offset, behavior: 'instant' })
+        activatePreservingViewport(container, group.language.key)
       })
       button.addEventListener('keydown', (event) => handleTabKeydown(event, container))
       tablist.append(button)

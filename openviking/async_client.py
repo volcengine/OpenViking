@@ -675,7 +675,7 @@ class AsyncOpenViking:
         simple = kwargs.get("simple", False)
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 256)
-        show_all_hidden = kwargs.get("show_all_hidden", False)
+        show_all_hidden = kwargs.get("show_all_hidden", True)
         return await self._client.ls(
             uri,
             recursive=recursive,
@@ -731,9 +731,9 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 128)
-        show_all_hidden = kwargs.get("show_all_hidden", False)
+        show_all_hidden = kwargs.get("show_all_hidden", True)
         node_limit = kwargs.get("node_limit", 1000)
-        level_limit = kwargs.get("level_limit", 3)
+        level_limit = kwargs.get("level_limit")
         return await self._client.tree(
             uri,
             output=output,
