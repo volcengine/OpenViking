@@ -7,6 +7,14 @@ import {
   isSharedSectionLabel,
   preferredLanguage
 } from './api-example-tabs.ts'
+import { hasPageLlmsTxt } from './llms-txt.ts'
+
+test('hides llms.txt actions on index pages without generated artifacts', () => {
+  assert.equal(hasPageLlmsTxt('index.md'), false)
+  assert.equal(hasPageLlmsTxt('en/index.md'), false)
+  assert.equal(hasPageLlmsTxt('zh/index.md'), false)
+  assert.equal(hasPageLlmsTxt('en/api/01-overview.md'), true)
+})
 
 test('recognizes language headings with punctuation and qualifiers', () => {
   assert.equal(exampleLanguage('HTTP API：')?.key, 'http')

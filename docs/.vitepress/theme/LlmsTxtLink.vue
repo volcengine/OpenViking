@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useData, withBase } from 'vitepress'
 import { computed, ref } from 'vue'
+import { hasPageLlmsTxt } from './llms-txt'
 
 const { page } = useData()
 
@@ -9,7 +10,7 @@ const llmsUrl = computed(() => {
   return withBase(`/${pagePath}/llms.txt`)
 })
 
-const isDoc = computed(() => page.value.relativePath !== 'index.md')
+const isDoc = computed(() => hasPageLlmsTxt(page.value.relativePath))
 const copied = ref(false)
 const copyFailed = ref(false)
 let resetTimer: ReturnType<typeof window.setTimeout> | undefined
