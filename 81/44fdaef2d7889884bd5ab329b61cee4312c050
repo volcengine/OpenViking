@@ -1,0 +1,35 @@
+docs/.vitepress/theme/ApiExampleTabsEnhancer.vue
+  s_c13ca0bc5585a4::t_8d57d9fc10a815 19,21-22,26,31
+docs/.vitepress/theme/api-example-tabs.test.ts
+  s_c13ca0bc5585a4::t_4ee813b974c235 5,11-15
+docs/scripts/check-api-reference.mjs
+  s_c13ca0bc5585a4::t_5e71c7834dbfa2 282-288
+openviking/async_client.py
+  s_c13ca0bc5585a4::t_c87f6245ec70d9 736
+sdk/go/client_test.go
+  s_c13ca0bc5585a4::t_ebe91180449658 139,161-176
+sdk/go/retrieval.go
+  s_c13ca0bc5585a4::t_6eef1772843916 99-101
+sdk/go/types.go
+  s_c13ca0bc5585a4::t_a190363b25074e 343
+tests/client/test_filesystem.py
+  s_c13ca0bc5585a4::t_7418b8bc48d2f0 191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8144fdaef2d7889884bd5ab329b61cee4312c050",
+  "prompts": {},
+  "sessions": {
+    "s_c13ca0bc5585a4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5570-6b47-74d1-8c28-82094000626f",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
