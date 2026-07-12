@@ -959,12 +959,6 @@ ov --sudo admin regenerate-key acme bob
 
 #### 2. 接口和参数说明
 
-**TypeScript SDK**
-
-```typescript
-console.log(await client.adminMigrate(false));
-```
-
 **HTTP API**
 
 ```
@@ -998,22 +992,32 @@ POST /api/v1/admin/migrate
 
 #### 3. 使用示例
 
-**执行迁移**
+**HTTP API**
 
 ```bash
+# 执行迁移
 curl -X POST http://localhost:1933/api/v1/admin/migrate \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-key>" \
   -d '{"action": "migrate"}'
-```
 
-**清理旧 namespace**
-
-```bash
+# 清理旧 namespace
 curl -X POST http://localhost:1933/api/v1/admin/migrate \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-key>" \
   -d '{"action": "cleanup"}'
+```
+
+**Python SDK**
+
+```python
+print(client.admin_migrate(cleanup=False))
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminMigrate(false));
 ```
 
 **Go SDK**

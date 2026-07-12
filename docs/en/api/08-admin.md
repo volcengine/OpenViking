@@ -962,12 +962,6 @@ Migration does not automatically call `reindex`. If retrieval after migration is
 
 #### 2. Interface and Parameters
 
-**TypeScript SDK**
-
-```typescript
-console.log(await client.adminMigrate(false));
-```
-
 **HTTP API**
 
 ```
@@ -1001,22 +995,32 @@ POST /api/v1/admin/migrate
 
 #### 3. Usage Examples
 
-**Run migration**
+**HTTP API**
 
 ```bash
+# Run migration
 curl -X POST http://localhost:1933/api/v1/admin/migrate \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-key>" \
   -d '{"action": "migrate"}'
-```
 
-**Clean old namespaces**
-
-```bash
+# Clean old namespaces
 curl -X POST http://localhost:1933/api/v1/admin/migrate \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <root-key>" \
   -d '{"action": "cleanup"}'
+```
+
+**Python SDK**
+
+```python
+print(client.admin_migrate(cleanup=False))
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.adminMigrate(false));
 ```
 
 **Go SDK**

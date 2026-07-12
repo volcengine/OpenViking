@@ -24,6 +24,14 @@ function headingLanguage(element: Element) {
   return strong ? language(strong.textContent?.trim() ?? '') : undefined
 }
 
+function isSharedSection(element: Element) {
+  if (!element.matches('p')) return false
+  const strong = element.querySelector(':scope > strong:only-child')
+  if (!strong) return false
+  return /^(response|response example|result|result example|notes?|响应|响应示例|返回|返回示例|结果|结果示例|说明)[：:]?$/i
+    .test(strong.textContent?.trim() ?? '')
+}
+
 function activate(container: HTMLElement, key: string, broadcast = true) {
   const available = Array.from(container.querySelectorAll<HTMLElement>(':scope > [data-api-example]'))
   const selected = available.some((panel) => panel.dataset.apiExample === key)
@@ -58,6 +66,7 @@ function enhanceDocument() {
     let node: Element | null = firstHeading
     while (node) {
       if (node.matches('h2, h3, h4, hr')) break
+      if (groups.length && isSharedSection(node)) break
       const currentLanguage = headingLanguage(node)
       if (currentLanguage) {
         if (groups.some((group) => group.language.key === currentLanguage.key)) break
