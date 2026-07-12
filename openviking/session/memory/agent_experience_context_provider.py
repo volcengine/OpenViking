@@ -37,6 +37,16 @@ COMPARISON_TRAJ_TOP_K = 6  # peer trajectories to compare before experience writ
 MAX_COMPARISON_TRAJ_CHARS = 6000
 
 
+def _comparison_trajectory_sort_key(item: Dict[str, Any]) -> tuple[int, str]:
+    outcome = str(item.get("outcome") or "").strip().lower()
+    outcome_rank = {"success": 0, "partial": 1, "failure": 2, "unfinished": 3}.get(
+        outcome,
+        4,
+    )
+    uri = str(item.get("uri") or "")
+    return outcome_rank, uri
+
+
 def _is_directory_not_found_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return "directory not found" in message or "not_found" in message
@@ -53,10 +63,16 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         trajectory_summary: str,
         trajectory_uri: str,
         latest_archive_overview: str = "",
+        case_uri: str = "",
+        case_name: str = "",
+        task_signature: str = "",
     ):
         super().__init__(messages=messages, latest_archive_overview=latest_archive_overview)
         self.trajectory_summary = trajectory_summary
         self.trajectory_uri = trajectory_uri
+        self.case_uri = str(case_uri or "")
+        self.case_name = str(case_name or "")
+        self.task_signature = str(task_signature or "")
         self.prefetched_uris: List[str] = []
         self.prefetched_comparison_trajectories: List[Dict[str, Any]] = []
 
@@ -162,7 +178,6 @@ All memory content must be written in {output_language}.
             {"user_space": user_space},
         )
 
-
     async def _search_comparison_trajectories(
         self,
         *,
@@ -172,13 +187,99 @@ All memory content must be written in {output_language}.
     ) -> List[Dict[str, Any]]:
         if not trajectory_dir or not viking_fs:
             return []
+
+        results: List[Dict[str, Any]] = []
+        seen = {self.trajectory_uri}
+
+        linked_uris = await self._case_linked_trajectory_uris(viking_fs=viking_fs, ctx=ctx)
+        linked_results = await self._load_comparison_trajectory_results(
+            linked_uris,
+            viking_fs=viking_fs,
+            ctx=ctx,
+            seen=seen,
+        )
+        linked_results.sort(key=_comparison_trajectory_sort_key)
+        for result in linked_results:
+            results.append(result)
+            if len(results) >= COMPARISON_TRAJ_TOP_K:
+                return results
+
         candidate_uris = await self.search_files(
             query=self.trajectory_summary[:500] or "trajectory",
             search_uris=[trajectory_dir],
             limit=COMPARISON_TRAJ_TOP_K + 2,
         )
+        semantic_results = await self._load_comparison_trajectory_results(
+            candidate_uris,
+            viking_fs=viking_fs,
+            ctx=ctx,
+            seen=seen,
+        )
+        for result in semantic_results:
+            results.append(result)
+            if len(results) >= COMPARISON_TRAJ_TOP_K:
+                break
+        return results
+
+    async def _case_linked_trajectory_uris(
+        self,
+        *,
+        viking_fs: VikingFS,
+        ctx: RequestContext,
+    ) -> List[str]:
+        case_uri = await self._resolve_case_uri(viking_fs=viking_fs, ctx=ctx)
+        if not case_uri:
+            return []
+        try:
+            raw = await viking_fs.read_file(case_uri, ctx=ctx) or ""
+            case_file = MemoryFileUtils.read(raw, uri=case_uri)
+        except Exception as e:
+            tracer.error(f"Failed to read case memory for trajectory comparison {case_uri}: {e}")
+            return []
+
+        uris: List[str] = []
+        for link in list(case_file.links or []) + list(case_file.backlinks or []):
+            from_uri = str(link.get("from_uri") if isinstance(link, dict) else link.from_uri)
+            to_uri = str(link.get("to_uri") if isinstance(link, dict) else link.to_uri)
+            for uri in (to_uri, from_uri):
+                if "/memories/trajectories/" in uri and uri not in uris:
+                    uris.append(uri)
+        return uris
+
+    async def _resolve_case_uri(
+        self,
+        *,
+        viking_fs: VikingFS,
+        ctx: RequestContext,
+    ) -> str:
+        if self.case_uri:
+            return self.case_uri
+        try:
+            raw = await viking_fs.read_file(self.trajectory_uri, ctx=ctx) or ""
+            trajectory_file = MemoryFileUtils.read(raw, uri=self.trajectory_uri)
+        except Exception:
+            return ""
+        fields = dict(trajectory_file.extra_fields or {})
+        uri = str(fields.get("case_uri") or "")
+        if uri:
+            return uri
+        for link in list(trajectory_file.backlinks or []) + list(trajectory_file.links or []):
+            from_uri = str(link.get("from_uri") if isinstance(link, dict) else link.from_uri)
+            to_uri = str(link.get("to_uri") if isinstance(link, dict) else link.to_uri)
+            for candidate in (from_uri, to_uri):
+                if "/memories/cases/" in candidate:
+                    return candidate
+        return ""
+
+    async def _load_comparison_trajectory_results(
+        self,
+        candidate_uris: List[str],
+        *,
+        viking_fs: VikingFS,
+        ctx: RequestContext,
+        seen: set[str],
+    ) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
-        seen = {self.trajectory_uri}
         for uri in candidate_uris:
             if not uri or uri in seen:
                 continue
@@ -198,8 +299,6 @@ All memory content must be written in {output_language}.
             result["content"] = content
             result["uri"] = uri
             results.append(result)
-            if len(results) >= COMPARISON_TRAJ_TOP_K:
-                break
         return results
 
     async def _load_source_trajectories(

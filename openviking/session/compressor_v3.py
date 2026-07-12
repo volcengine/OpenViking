@@ -661,6 +661,10 @@ class SessionCompressorV3:
                 )
                 # Analyze once — trajectories + skill patches co-extracted
                 analysis = await self.rollout_analyzer.analyze(rollout, analysis_context)
+                if case_uri:
+                    analysis.metadata.setdefault("case_uri", case_uri)
+                    for trajectory in analysis.trajectories:
+                        trajectory.metadata.setdefault("case_uri", case_uri)
 
                 # Experience path: estimate gradients, then submit to exp trainer
                 exp_gradients = await ExperienceGradientEstimator(

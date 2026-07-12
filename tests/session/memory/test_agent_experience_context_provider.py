@@ -189,3 +189,159 @@ async def test_agent_experience_prefetch_missing_experience_dir_returns_empty_ca
     assert messages[-1]["role"] == "user"
     assert add_tool_call_pair.call_count == 1
     tracer_error.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_agent_experience_comparison_prefers_case_linked_success_trajectories():
+    case_uri = "viking://user/user_1/memories/cases/tau2_airline_train_5.md"
+    current_uri = "viking://user/user_1/memories/trajectories/current_failure.md"
+    success_uri = "viking://user/user_1/memories/trajectories/same_case_success.md"
+    failure_uri = "viking://user/user_1/memories/trajectories/same_case_failure.md"
+    semantic_uri = "viking://user/user_1/memories/trajectories/semantic_only.md"
+
+    def raw(memory_file: MemoryFile) -> str:
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+        return MemoryFileUtils.write(memory_file)
+
+    files = {
+        case_uri: raw(
+            MemoryFile(
+                uri=case_uri,
+                content="# tau2_airline_train_5",
+                memory_type="cases",
+                extra_fields={"case_name": "tau2_airline_train_5"},
+                links=[
+                    {
+                        "from_uri": case_uri,
+                        "to_uri": failure_uri,
+                        "link_type": "related_to",
+                        "weight": 1.0,
+                    },
+                    {
+                        "from_uri": case_uri,
+                        "to_uri": success_uri,
+                        "link_type": "related_to",
+                        "weight": 1.0,
+                    },
+                ],
+            )
+        ),
+        success_uri: raw(
+            MemoryFile(
+                uri=success_uri,
+                content="# success\n- Outcome: success\n- Communication: total 1628",
+                memory_type="trajectories",
+                extra_fields={"trajectory_name": "success", "outcome": "success"},
+            )
+        ),
+        failure_uri: raw(
+            MemoryFile(
+                uri=failure_uri,
+                content="# failure\n- Outcome: partial\n- Communication: total 708",
+                memory_type="trajectories",
+                extra_fields={"trajectory_name": "failure", "outcome": "partial"},
+            )
+        ),
+        semantic_uri: raw(
+            MemoryFile(
+                uri=semantic_uri,
+                content="# semantic\n- Outcome: partial",
+                memory_type="trajectories",
+                extra_fields={"trajectory_name": "semantic", "outcome": "partial"},
+            )
+        ),
+    }
+
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="other upcoming total cost failure",
+        trajectory_uri=current_uri,
+        case_uri=case_uri,
+    )
+    provider.search_files = AsyncMock(return_value=[semantic_uri])
+    viking_fs = AsyncMock()
+    viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
+    ctx = RequestContext(user=UserIdentifier(account_id="acc", user_id="user_1"), role=Role.USER)
+
+    results = await provider._search_comparison_trajectories(
+        trajectory_dir="viking://user/user_1/memories/trajectories",
+        viking_fs=viking_fs,
+        ctx=ctx,
+    )
+
+    assert [item["uri"] for item in results] == [success_uri, failure_uri, semantic_uri]
+    assert results[0]["outcome"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_agent_experience_comparison_resolves_case_from_trajectory_backlink():
+    case_uri = "viking://user/user_1/memories/cases/tau2_airline_train_5.md"
+    current_uri = "viking://user/user_1/memories/trajectories/current_failure.md"
+    success_uri = "viking://user/user_1/memories/trajectories/same_case_success.md"
+
+    def raw(memory_file: MemoryFile) -> str:
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+        return MemoryFileUtils.write(memory_file)
+
+    files = {
+        current_uri: raw(
+            MemoryFile(
+                uri=current_uri,
+                content="# current",
+                memory_type="trajectories",
+                extra_fields={"trajectory_name": "current", "outcome": "partial"},
+                backlinks=[
+                    {
+                        "from_uri": case_uri,
+                        "to_uri": current_uri,
+                        "link_type": "related_to",
+                        "weight": 1.0,
+                    }
+                ],
+            )
+        ),
+        case_uri: raw(
+            MemoryFile(
+                uri=case_uri,
+                content="# tau2_airline_train_5",
+                memory_type="cases",
+                extra_fields={"case_name": "tau2_airline_train_5"},
+                links=[
+                    {
+                        "from_uri": case_uri,
+                        "to_uri": success_uri,
+                        "link_type": "related_to",
+                        "weight": 1.0,
+                    }
+                ],
+            )
+        ),
+        success_uri: raw(
+            MemoryFile(
+                uri=success_uri,
+                content="# success\n- Outcome: success",
+                memory_type="trajectories",
+                extra_fields={"trajectory_name": "success", "outcome": "success"},
+            )
+        ),
+    }
+
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="other upcoming total cost failure",
+        trajectory_uri=current_uri,
+    )
+    provider.search_files = AsyncMock(return_value=[])
+    viking_fs = AsyncMock()
+    viking_fs.read_file = AsyncMock(side_effect=lambda uri, ctx=None: files[uri])
+    ctx = RequestContext(user=UserIdentifier(account_id="acc", user_id="user_1"), role=Role.USER)
+
+    results = await provider._search_comparison_trajectories(
+        trajectory_dir="viking://user/user_1/memories/trajectories",
+        viking_fs=viking_fs,
+        ctx=ctx,
+    )
+
+    assert [item["uri"] for item in results] == [success_uri]

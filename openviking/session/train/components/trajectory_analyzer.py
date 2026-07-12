@@ -132,7 +132,10 @@ class TrajectoryRolloutAnalyzer:
             metadata={
                 "context_count": len(contexts),
                 "policy_snapshot_id": rollout.policy_snapshot_id,
+                "rollout": rollout,
                 "rollout_messages": rollout.messages,
+                "case_name": getattr(rollout.case, "name", ""),
+                "task_signature": getattr(rollout.case, "task_signature", ""),
                 "extraction_message_count": len(extraction_messages),
                 "experience_feedback_stats": experience_feedback_stats,
             },

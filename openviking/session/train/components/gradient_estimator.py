@@ -122,11 +122,17 @@ class ExperienceGradientEstimator:
         if viking_fs is None:
             raise RuntimeError("VikingFS is required for experience gradient estimation")
 
-        provider = AgentExperienceContextProvider(
-            messages=context.messages,
-            trajectory_summary=trajectory.content,
-            trajectory_uri=trajectory.uri,
-        )
+        analysis_obj = _analysis_from_context_metadata_optional(context)
+        provider_kwargs = {
+            "messages": context.messages,
+            "trajectory_summary": trajectory.content,
+            "trajectory_uri": trajectory.uri,
+        }
+        for key in ("case_uri", "case_name", "task_signature"):
+            value = _trajectory_or_analysis_metadata(trajectory, analysis_obj, key)
+            if value:
+                provider_kwargs[key] = value
+        provider = AgentExperienceContextProvider(**provider_kwargs)
         if hasattr(provider, "get_extract_context"):
             extract_context = provider.get_extract_context()
         else:
@@ -240,6 +246,38 @@ async def _evaluate_experience_gradients(
         analyses=[analysis],
         policy_set=experience_set,
     )
+
+
+def _analysis_from_context_metadata_optional(
+    context: ExperienceGradientContext,
+) -> RolloutAnalysis | None:
+    value = dict(context.metadata or {}).get("current_analysis")
+    return value if isinstance(value, RolloutAnalysis) else None
+
+
+def _trajectory_or_analysis_metadata(
+    trajectory: Trajectory,
+    analysis: RolloutAnalysis | None,
+    key: str,
+) -> str:
+    trajectory_metadata = dict(getattr(trajectory, "metadata", {}) or {})
+    value = trajectory_metadata.get(key)
+    if value:
+        return str(value)
+    analysis_metadata = (
+        dict(getattr(analysis, "metadata", {}) or {}) if analysis is not None else {}
+    )
+    value = analysis_metadata.get(key)
+    if value:
+        return str(value)
+    rollout = analysis_metadata.get("rollout")
+    case = getattr(rollout, "case", None)
+    if case is not None:
+        if key == "case_name":
+            return str(getattr(case, "name", "") or "")
+        if key == "task_signature":
+            return str(getattr(case, "task_signature", "") or "")
+    return ""
 
 
 def _experience_extract_gate_runner(vlm: Any) -> GateRunner:
@@ -397,7 +435,9 @@ def _trajectory_training_category(
         if value:
             return str(value)
 
-    analysis_metadata = dict(getattr(analysis, "metadata", {}) or {})
+    analysis_metadata = (
+        dict(getattr(analysis, "metadata", {}) or {}) if analysis is not None else {}
+    )
     for key in ("training_category", "category", "case_task_signature", "task_signature"):
         value = analysis_metadata.get(key)
         if value:
