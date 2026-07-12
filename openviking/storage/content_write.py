@@ -45,6 +45,9 @@ _CREATE_ALLOWED_EXTENSIONS = frozenset(
 )
 
 
+_REQUEST_WAIT_DEFAULT_TIMEOUT_SECONDS = 300.0
+
+
 class ContentWriteCoordinator:
     """Write a file (create or modify) and trigger downstream maintenance."""
 
@@ -244,12 +247,19 @@ class ContentWriteCoordinator:
         written_bytes: int,
         telemetry_id: str,
     ) -> Dict[str, Any]:
+        request_registered = False
+        if wait and telemetry_id:
+            get_request_wait_tracker().register_request(telemetry_id)
+            request_registered = True
+
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         acquired = await lock_manager.acquire_exact_path(handle, lock_path)
         if not acquired:
             await lock_manager.release(handle)
+            if request_registered:
+                get_request_wait_tracker().cleanup(telemetry_id)
             raise ResourceBusyError(
                 f"resource is busy and cannot be written now: {uri}",
                 uri=uri,
@@ -262,8 +272,6 @@ class ContentWriteCoordinator:
         try:
             if mode != "create":
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
-            if wait and telemetry_id:
-                get_request_wait_tracker().register_request(telemetry_id)
             await self._write_in_place(
                 uri,
                 content,
@@ -309,7 +317,7 @@ class ContentWriteCoordinator:
                 await lock_manager.release(handle)
             raise
         finally:
-            if wait and telemetry_id:
+            if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
     async def _rollback_direct_write(
@@ -538,10 +546,18 @@ class ContentWriteCoordinator:
         if not telemetry_id:
             return await self._wait_for_queues(timeout=timeout)
         tracker = get_request_wait_tracker()
+        wait_timeout = timeout
+        if wait_timeout is None:
+            wait_timeout = _REQUEST_WAIT_DEFAULT_TIMEOUT_SECONDS
+            logger.warning(
+                "No request wait timeout provided for telemetry_id=%s; using %.1fs max wait",
+                telemetry_id,
+                wait_timeout,
+            )
         try:
-            await tracker.wait_for_request(telemetry_id, timeout=timeout)
+            await tracker.wait_for_request(telemetry_id, timeout=wait_timeout)
         except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", timeout) from exc
+            raise DeadlineExceededError("queue processing", wait_timeout) from exc
         return tracker.build_queue_status(telemetry_id)
 
     async def _write_memory_with_refresh(
