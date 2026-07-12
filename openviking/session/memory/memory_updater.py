@@ -1266,9 +1266,31 @@ class MemoryUpdater:
                 mf = MemoryFileUtils.read(content, uri=uri)
                 from openviking.session.memory.utils.link_renderer import LinkRenderer
 
-                # Prefer VLM-generated summary from extra_fields (e.g. events type);
-                # fall back to full content for types without summary field.
-                abstract = mf.extra_fields.get("summary", "") or LinkRenderer.strip_all_links(mf.content or "")
+                # Prefer VLM-generated summary from extra_fields (e.g. events type).
+                # If missing and this type has a summary field in its schema, regenerate
+                # via VLM so stale summaries don't linger after content edits.
+                abstract = mf.extra_fields.get("summary", "")
+                if not abstract and memory_type and self._registry:
+                    schema = self._registry.get(memory_type)
+                    if schema and any(f.name == "summary" for f in schema.fields):
+                        try:
+                            generated = await self._regenerate_summary(
+                                memory_type, mf.plain_content() or ""
+                            )
+                            if generated:
+                                abstract = generated
+                                # Persist to file so it's cached for future vectorization runs
+                                mf.extra_fields["summary"] = abstract
+                                serialized = MemoryFileUtils.write(mf)
+                                await viking_fs.write_file(uri, serialized, ctx=ctx)
+                                logger.info(
+                                    "Regenerated summary for %s (%d chars)",
+                                    uri, len(abstract),
+                                )
+                        except Exception as e:
+                            logger.warning("Failed to regenerate summary for %s: %s", uri, e)
+                if not abstract:
+                    abstract = LinkRenderer.strip_all_links(mf.content or "")
                 abstract = self._truncate_memory_abstract(abstract)
                 embedding_text = abstract
 
@@ -1348,6 +1370,66 @@ class MemoryUpdater:
             except Exception as e:
                 tracer.error(f"Failed to vectorize memory {uri}: {e}")
         return attempted_count
+
+    @staticmethod
+    async def _regenerate_summary(
+        memory_type: str,
+        content: str,
+    ) -> str:
+        """Call MiniMax M3 to regenerate summary, async-safe via thread pool."""
+        import asyncio, json, urllib.request
+        from openviking_cli.utils.config import get_openviking_config
+
+        config = get_openviking_config()
+        vlm_cfg = config.vlm
+
+        prompts = {
+            "experiences": "Summarize this experience: the situation, approach, and key lesson. Write in Chinese if the content is Chinese, English otherwise. Max 1000 chars.",
+            "cases": "Summarize this training case: the task, actions taken, and outcome. Max 1000 chars.",
+            "entities": "Describe this entity: who/what, key attributes, and context. Max 800 chars.",
+            "identity": "Describe this identity: name, role, key traits. Max 600 chars.",
+            "preferences": "Describe this user preference: what is preferred, when, and any constraints. Max 800 chars.",
+            "profile": "Describe this profile: key characteristics and context. Max 600 chars.",
+            "skills": "Describe this skill: what it does, when to use it, and key capabilities. Max 1000 chars.",
+            "soul": "Describe this behavioral directive: the rule, its purpose, and when it applies. Max 600 chars.",
+            "tools": "Describe this tool: what it does, key features, and usage notes. Max 1000 chars.",
+            "trajectories": "Summarize this agent trajectory: the task, key actions taken, and the outcome. Max 1000 chars.",
+        }
+
+        system_prompt = prompts.get(memory_type, prompts["experiences"])
+        user_text = content[:8000]
+
+        def _call() -> str:
+            body = json.dumps({
+                "model": vlm_cfg.model if hasattr(vlm_cfg, "model") else "MiniMax-M3",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text},
+                ],
+                "max_tokens": 1500,
+                "temperature": 0.3,
+            }).encode()
+
+            api_base = vlm_cfg.api_base if hasattr(vlm_cfg, "api_base") else "https://api.minimaxi.com/v1"
+            api_key = vlm_cfg.api_key if hasattr(vlm_cfg, "api_key") else ""
+
+            req = urllib.request.Request(
+                f"{api_base}/chat/completions",
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp = json.loads(urllib.request.urlopen(req, timeout=90).read())
+            raw = resp["choices"][0]["message"]["content"].strip()
+            return raw
+
+        raw = await asyncio.to_thread(_call)
+        # Strip <think> tags from MiniMax M3 reasoning output
+        import re
+        cleaned = re.sub(r"<think>.*?</think>\s*", "", raw, flags=re.DOTALL).strip()
+        return cleaned[:1000] if len(cleaned) > 1000 else cleaned
 
     @staticmethod
     def _truncate_memory_abstract(abstract: str) -> str:

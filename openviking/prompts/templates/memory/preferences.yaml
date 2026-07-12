@@ -1,48 +1,73 @@
 memory_type: preferences
-description: |
-  User preference memory - captures "what the user likes/dislikes or is accustomed to".
+description: 'User preference memory - captures "what the user likes/dislikes or is
+  accustomed to".
+
   Extract specific preferences the user has expressed across conversations.
+
   Each preference should be about a specific topic (not generic).
-  Topics can be: code style, communication style, tools, workflow, food, commute, etc.
+
+  Topics can be: code style, communication style, tools, workflow, food, commute,
+  etc.
+
   Store different topics as separate memory files, do NOT mix unrelated preferences.
-directory: "viking://user/{{ user_space }}/memories/preferences"
-filename_template: "{{ user }}/{{ topic }}.md"
+
+  '
+directory: viking://user/{{ user_space }}/memories/preferences
+filename_template: '{{ user }}/{{ topic }}.md'
 enabled: true
-embedding_template: |-
-  {{ user }}
+embedding_template: '{{ summary }}'
+overview_template: '# Preferences Overview
 
-  {{ topic }}
+  {% if items %}**User:** {{ items[0].file_content.user|default(directory_name, true)
+  }}
 
-  {{ content }}
+  **Topic:** {{ items[0].file_content.topic|default(items[0].file_name, true) }}{%
+  endif %}
 
-overview_template: |-
-  # Preferences Overview
-  {% if items %}**User:** {{ items[0].file_content.user|default(directory_name, true) }}
-  **Topic:** {{ items[0].file_content.topic|default(items[0].file_name, true) }}{% endif %}
   {% for item in items %}
-  - [{{ item.file_content.topic|default(item.file_name, true) }}](./{{ item.file_name }})
-  {% endfor %}
 
+  - [{{ item.file_content.topic|default(item.file_name, true) }}](./{{ item.file_name
+  }})
+
+  {% endfor %}'
 fields:
-  - name: user
-    type: string
-    description: |
-      Username for the preference owner
-    merge_op: immutable
+- name: user
+  type: string
+  description: 'Username for the preference owner
 
-  - name: topic
-    type: string
-    description: |
-      Preference topic written in {{ language }}.
-      {% if language == 'en' %}Use lowercase with underscores, max 3 words.{% else %}Keep the topic concise and natural in {{ language }}.{% endif %}
-      Preference topic used to uniquely identify this preference memory.
-      Should be a semantic topic description such as "Python code style", "Communication style", "Food preference", "Commute preference", etc.
-      Different preference topics should be stored as separate memories, do not mix unrelated preferences.
-    merge_op: immutable
+    '
+  merge_op: immutable
+- name: topic
+  type: string
+  description: 'Preference topic written in {{ language }}.
 
-  - name: content
-    type: string
-    description: |
-      Preference content in Markdown format describing "what the user prefers/is accustomed to".
-      Example: "User has shown clear preferences for Python code style in multiple conversations: dislikes using type hints, considers them redundant; requires concise function comments, limited to 1-2 lines; prefers direct implementation, avoids excessive fallbacks and over-engineering."
-    merge_op: patch
+    {% if language == ''en'' %}Use lowercase with underscores, max 3 words.{% else
+    %}Keep the topic concise and natural in {{ language }}.{% endif %}
+
+    Preference topic used to uniquely identify this preference memory.
+
+    Should be a semantic topic description such as "Python code style", "Communication
+    style", "Food preference", "Commute preference", etc.
+
+    Different preference topics should be stored as separate memories, do not mix
+    unrelated preferences.
+
+    '
+  merge_op: immutable
+- name: content
+  type: string
+  description: 'Preference content in Markdown format describing "what the user prefers/is
+    accustomed to".
+
+    Example: "User has shown clear preferences for Python code style in multiple conversations:
+    dislikes using type hints, considers them redundant; requires concise function
+    comments, limited to 1-2 lines; prefers direct implementation, avoids excessive
+    fallbacks and over-engineering."
+
+    '
+  merge_op: patch
+- name: summary
+  type: string
+  description: 'A concise summary of this preference: what the user likes/dislikes
+    or is accustomed to. Keep within 500 characters. Focus on actionable guidance
+    for future interactions.'
