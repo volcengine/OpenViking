@@ -329,6 +329,26 @@
     grid-template-columns: 1fr;
   }
 }
+.doc-page-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.doc-page-actions > .llms-link-wrap,
+.doc-page-actions > .copy-md-wrap {
+  margin-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .doc-page-actions {
+    align-items: center;
+    flex-wrap: wrap;
+  }
+}
+
 .api-example-tabs {
   margin: 20px 0 28px;
 }

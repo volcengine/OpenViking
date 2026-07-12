@@ -303,9 +303,11 @@ export default {
   extends: DefaultTheme,
   Layout() {
     return h(DefaultTheme.Layout, null, {
-      'doc-before': () => h(CopyMarkdownButton),
+      'doc-before': () => h('div', { class: 'doc-page-actions' }, [
+        h(LlmsTxtLink),
+        h(CopyMarkdownButton)
+      ]),
       'doc-after': () => h(ApiExampleTabsEnhancer),
-      'doc-footer-before': () => h(LlmsTxtLink),
       'nav-bar-content-before': () => h(OpenVikingSearch)
     })
   },
