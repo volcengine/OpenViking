@@ -360,7 +360,7 @@ openviking write viking://resources/docs/api.md \
 | uri | str | 是 | - | Viking URI |
 | simple | bool | 否 | False | 仅返回相对路径 |
 | recursive | bool | 否 | False | 递归列出所有子目录 |
-| output | str | 否 | `agent` | 输出格式：`agent` 或 `original` |
+| output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
 | abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
@@ -466,8 +466,8 @@ openviking ls viking://resources/ [--simple] [--recursive]
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
-| output | str | 否 | `agent` | 输出格式：`agent` 或 `original` |
-| abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
+| output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
+| abs_limit | int | 否 | HTTP：256；SDK：128 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
@@ -848,9 +848,7 @@ URI 格式非法、scheme 不支持或使用非公开作用域时返回 `INVALID
 client.rm("viking://resources/docs/old.md")
 
 # 递归删除目录
-result = client.rm("viking://resources/old-project/", recursive=True)
-if 'estimated_deleted_count' in result:
-    print(f"Deleted {result['estimated_deleted_count']} items")
+client.rm("viking://resources/old-project/", recursive=True)
 ```
 
 **TypeScript SDK**
@@ -1416,7 +1414,7 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 
 #### 1. API 实现介绍
 
-将指定 URI 下的所有资源打包成 `.ovpack` 格式文件，用于备份或迁移。需要 ROOT 或 ADMIN 权限。
+将指定 URI 下的所有资源打包成 `.ovpack` 格式文件，用于备份或迁移。ROOT、ADMIN 和 USER 角色均可使用，仍受常规 URI 访问控制约束。
 
 **处理流程**：
 1. 验证用户权限
@@ -1448,7 +1446,7 @@ openviking unlink viking://resources/docs/auth/ viking://resources/docs/security
 | uri | string | 是 | - | 要导出的 Viking URI |
 | include_vectors | boolean | 否 | false | 导出纯 dense 向量快照；底层 index type 为 hybrid 时会拒绝 |
 
-**权限要求**：ROOT 或 ADMIN
+**权限要求**：ROOT、ADMIN 或 USER
 
 #### 3. 使用示例
 
@@ -1532,7 +1530,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 
 #### 1. API 实现介绍
 
-将 `.ovpack` 文件导入到指定位置，用于恢复或迁移数据。需要 ROOT 或 ADMIN 权限。
+将 `.ovpack` 文件导入到指定位置，用于恢复或迁移数据。ROOT、ADMIN 和 USER 角色均可使用，仍受常规 URI 访问控制约束。
 
 **处理流程**：
 1. 验证用户权限
@@ -1557,7 +1555,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 | on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
 | vector_mode | string | 否 | auto | 向量处理方式：`auto`、`recompute` 或 `require` |
 
-**权限要求**：ROOT 或 ADMIN
+**权限要求**：ROOT、ADMIN 或 USER
 
 **行为说明**：
 - API 已不再接受 `vectorize` 或 `force`。
