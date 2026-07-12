@@ -2,6 +2,13 @@
 import { nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vitepress'
 import { watch } from 'vue'
+import {
+  exampleLanguage,
+  isApiReferencePath,
+  isSharedSectionLabel,
+  preferredLanguage,
+  type ExampleLanguage
+} from './api-example-tabs'
 
 const route = useRoute()
 const STORAGE_KEY = 'openviking-api-example-language'
@@ -9,27 +16,16 @@ const CHANGE_EVENT = 'openviking-api-example-language-change'
 let observer: MutationObserver | undefined
 let frame = 0
 
-function language(label: string) {
-  if (/python/i.test(label)) return { key: 'python', label: 'Python' }
-  if (/typescript|javascript/i.test(label)) return { key: 'typescript', label: 'TypeScript' }
-  if (/go sdk/i.test(label)) return { key: 'go', label: 'Go' }
-  if (/http api/i.test(label)) return { key: 'http', label: 'HTTP' }
-  if (/^cli/i.test(label)) return { key: 'cli', label: 'CLI' }
-  return undefined
-}
-
 function headingLanguage(element: Element) {
   if (!element.matches('p')) return undefined
   const strong = element.querySelector(':scope > strong:only-child')
-  return strong ? language(strong.textContent?.trim() ?? '') : undefined
+  return strong ? exampleLanguage(strong.textContent?.trim() ?? '') : undefined
 }
 
 function isSharedSection(element: Element) {
   if (!element.matches('p')) return false
   const strong = element.querySelector(':scope > strong:only-child')
-  if (!strong) return false
-  return /^(response|response example|result|result example|notes?|响应|响应示例|返回|返回示例|结果|结果示例|说明)[：:]?$/i
-    .test(strong.textContent?.trim() ?? '')
+  return strong ? isSharedSectionLabel(strong.textContent?.trim() ?? '') : false
 }
 
 function activate(container: HTMLElement, key: string, broadcast = true) {
@@ -52,8 +48,11 @@ function activate(container: HTMLElement, key: string, broadcast = true) {
 }
 
 function enhanceDocument() {
+  if (!isApiReferencePath(route.path)) return
   const doc = document.querySelector('.vp-doc')
   if (!doc) return
+  const storedLanguage = localStorage.getItem(STORAGE_KEY)
+  let initialLanguage: string | undefined
 
   const headings = Array.from(doc.querySelectorAll('p')).filter(
     (element) => headingLanguage(element) && !element.closest('.api-example-tabs')
@@ -64,7 +63,7 @@ function enhanceDocument() {
     const parent = firstHeading.parentElement
     if (!parent) continue
 
-    const groups: { language: { key: string; label: string }; nodes: Element[] }[] = []
+    const groups: { language: ExampleLanguage; nodes: Element[] }[] = []
     let node: Element | null = firstHeading
     while (node) {
       if (node.matches('h2, h3, h4, hr')) break
@@ -111,7 +110,12 @@ function enhanceDocument() {
       for (const child of group.nodes) panel.append(child)
       container.append(panel)
     }
-    activate(container, localStorage.getItem(STORAGE_KEY) ?? groups[0].language.key, false)
+    initialLanguage = preferredLanguage(
+      storedLanguage,
+      initialLanguage,
+      groups[0].language.key
+    )
+    activate(container, initialLanguage, false)
   }
 }
 

@@ -215,7 +215,7 @@ blob = client.snapshot.show("3f2a1b9c", path="viking://resources/my_project/guid
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.gitShow("HEAD", "docs/api.md"));
+console.log(await client.gitShow("main", "viking://resources/docs/api.md"));
 ```
 
 > 注意：带 `path` 读取文件内容时，**Embedded（本地）客户端**直接返回原始 `bytes`；**HTTP 客户端**返回 `{"oid": str, "size": int, "bytes": bytes}` 字典。
@@ -319,7 +319,10 @@ print(plan["diff"])
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.gitRestore({ projectDir: "resources/docs", sourceCommit: "HEAD~1" }));
+console.log(await client.gitRestore({
+  projectDir: "viking://resources/docs",
+  sourceCommit: "3f2a1b9c",
+}));
 ```
 
 **HTTP API**

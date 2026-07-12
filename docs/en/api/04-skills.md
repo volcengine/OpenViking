@@ -551,7 +551,11 @@ updated = client.update_skill("search-web", "./skills/search-web", wait=True)
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.validateSkill("./my-skill"));
+console.log(await client.validateSkill({
+  name: "search-web",
+  description: "Search the web for current information",
+  content: "# search-web\n\nSearch the web for current information.",
+}));
 ```
 
 **Go SDK**

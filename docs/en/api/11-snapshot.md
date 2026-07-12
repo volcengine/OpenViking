@@ -215,7 +215,7 @@ blob = client.snapshot.show("3f2a1b9c", path="viking://resources/my_project/guid
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.gitShow("HEAD", "docs/api.md"));
+console.log(await client.gitShow("main", "viking://resources/docs/api.md"));
 ```
 
 > Note: when reading a file (`path` given), the **Embedded (local) client** returns raw `bytes`, while the **HTTP client** returns a `{"oid": str, "size": int, "bytes": bytes}` dict.
@@ -319,7 +319,10 @@ print(plan["diff"])
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.gitRestore({ projectDir: "resources/docs", sourceCommit: "HEAD~1" }));
+console.log(await client.gitRestore({
+  projectDir: "viking://resources/docs",
+  sourceCommit: "3f2a1b9c",
+}));
 ```
 
 **HTTP API**
