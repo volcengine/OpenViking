@@ -2964,14 +2964,16 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
 
         for uri in uris:
-            new_uri = new_base + uri[len(old_base) :]
-
-            if await vector_store.update_uri_mapping(
-                ctx=real_ctx,
-                uri=uri,
-                new_uri=new_uri,
-            ):
-                logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
+            try:
+                new_uri = new_base + uri[len(old_base) :]
+                if await vector_store.update_uri_mapping(
+                    ctx=real_ctx,
+                    uri=uri,
+                    new_uri=new_uri,
+                ):
+                    logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
+            except Exception as e:
+                logger.warning(f"[VikingFS] Failed to update {uri} in vector store: {e}")
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""

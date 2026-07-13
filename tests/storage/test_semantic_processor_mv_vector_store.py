@@ -37,3 +37,19 @@ async def test_mv_canonicalizes_user_shorthand_before_vector_update(monkeypatch)
         "viking://user/default/memories/profile.md",
         ctx=ctx,
     )
+
+
+@pytest.mark.asyncio
+async def test_update_vector_store_uris_swallows_update_failure():
+    ctx = RequestContext(user=UserIdentifier("acc", "default"), role=Role.ROOT)
+    fs = VikingFS.__new__(VikingFS)
+    fs.vector_store = AsyncMock()
+    fs.vector_store.update_uri_mapping.side_effect = RuntimeError("vector unavailable")
+
+    await fs._update_vector_store_uris(
+        ["viking://user/default/source.md"],
+        "viking://user/default/source.md",
+        "viking://user/default/target.md",
+        ctx=ctx,
+    )
+    fs.vector_store.update_uri_mapping.assert_awaited_once()
