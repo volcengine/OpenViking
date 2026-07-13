@@ -522,6 +522,21 @@ Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILAR
 }
 ```
 
+Sparse output is a provider capability, not an endpoint inferred from
+`storage.vectordb.sparse_weight`. OpenViking currently implements `sparse` and
+`hybrid` embedding providers for `volcengine` and `vikingdb`. The
+OpenAI-compatible, Ollama, and built-in `local` providers are dense-only; a
+self-hosted `/v1/embeddings` endpoint is therefore not treated as a sparse
+endpoint, and OpenViking does not probe a separate
+`/v1/embeddings/sparse` route.
+
+There is no automatic BM25 or other sparse-vector fallback when the configured
+embedder returns only dense vectors. To use hybrid retrieval, configure a
+supported sparse/hybrid provider and set `storage.vectordb.sparse_weight > 0`.
+Model memory requirements are provider/model-specific and are not controlled by
+OpenViking; size self-hosted models against their provider documentation before
+enabling them in production.
+
 #### Hybrid Embedding
 
 Two approaches are supported:
@@ -1298,6 +1313,26 @@ OpenViking uses two config files:
 | `ovcli.conf` | HTTP client and CLI connection to remote server | `~/.openviking/ovcli.conf` |
 
 When config files are at the default path, OpenViking loads them automatically — no additional setup needed.
+
+> **Root-key two-file rule:** `server.root_api_key` in `ov.conf` is the
+> credential accepted by the server. `root_api_key` in `ovcli.conf` is the
+> client-side copy used by `ov --sudo`. If that CLI manages this server, keep
+> the two values identical and rotate both files together. The normal
+> tenant-scoped `api_key` remains a separate user/admin credential.
+
+### Reload boundary
+
+The server reads `ov.conf` during process startup and does not watch the file
+for changes. Editing `embedding`, `vlm`, `rerank`, `retrieval`, `storage`, or
+`server` settings requires restarting the OpenViking server. Queue work that is
+already running is not migrated to the new configuration, so use the normal
+service-manager restart procedure and verify with `openviking-server doctor`
+after the process comes back.
+
+`ovcli.conf` is client-side configuration. A new `ov` command or newly created
+HTTP client reads the current file; an already-running client or plugin may keep
+the values it loaded at construction time and should be restarted when its
+connection or credential settings change.
 
 If config files are at a different location, there are two ways to specify:
 
