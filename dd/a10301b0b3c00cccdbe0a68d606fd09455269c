@@ -1,0 +1,32 @@
+docs/en/api/12-acl.md
+  s_77d338fd50fb18::t_60a1389a17d61f 69-70,242-243,247-248
+docs/en/concepts/15-acl.md
+  s_77d338fd50fb18::t_c1be3d99d30949 75,83,87-88
+docs/zh/api/12-acl.md
+  s_77d338fd50fb18::t_8aed5683d1aefd 69-70,242-243,247-248
+docs/zh/concepts/15-acl.md
+  s_77d338fd50fb18::t_d56667fea60035 75,83,87-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "dda10301b0b3c00cccdbe0a68d606fd09455269c",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_77d338fd50fb18": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fca-8901-7a41-a062-eae93e1509a8",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
