@@ -43,7 +43,6 @@ const copy = computed(() => isZh.value ? {
   copied: '已复制',
   thinking: '正在查找答案…',
   close: '关闭 VikingBot',
-  hint: 'Enter 发送 · Shift + Enter 换行',
   empty: '请输入问题',
   tooLong: '问题不能超过 500 个字符',
   timeout: '请求超时，请稍后重试。',
@@ -61,7 +60,6 @@ const copy = computed(() => isZh.value ? {
   copied: 'Copied',
   thinking: 'Looking for an answer…',
   close: 'Close VikingBot',
-  hint: 'Enter to send · Shift + Enter for a new line',
   empty: 'Please enter a question',
   tooLong: 'Questions cannot exceed 500 characters',
   timeout: 'The request timed out. Please try again.',
@@ -352,7 +350,6 @@ onBeforeUnmount(() => {
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4.7 14-2.8-5.5L5 12Zm6.5 1.5 3-3" /></svg>
             </button>
           </div>
-          <small>{{ copy.hint }}</small>
         </form>
       </aside>
     </Transition>

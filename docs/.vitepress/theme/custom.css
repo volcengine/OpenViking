@@ -206,10 +206,11 @@ html.vikingbot-assistant-resizing * {
 
 .vikingbot-panel-header {
   display: flex;
-  min-height: 72px;
+  height: calc(var(--vp-nav-height) + 1px);
+  min-height: calc(var(--vp-nav-height) + 1px);
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 7px 16px;
   border-bottom: 1px solid var(--vp-c-divider);
 }
 
@@ -255,7 +256,6 @@ html.vikingbot-assistant-resizing * {
 .vikingbot-avatar {
   width: 36px;
   height: 36px;
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--vp-c-brand-1) 24%, transparent);
 }
 
 .vikingbot-close {
@@ -524,14 +524,6 @@ html.vikingbot-assistant-resizing * {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.8;
-}
-
-.vikingbot-composer > small {
-  display: block;
-  margin-top: 7px;
-  color: var(--vp-c-text-3);
-  font-size: 10px;
-  text-align: center;
 }
 
 .vikingbot-dots {
