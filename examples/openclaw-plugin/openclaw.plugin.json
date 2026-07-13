@@ -12,6 +12,7 @@
   },
   "contracts": {
     "tools": [
+      "add_resource",
       "add_skill",
       "ov_search",
       "ov_read",

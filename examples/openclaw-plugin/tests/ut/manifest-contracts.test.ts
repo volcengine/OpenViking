@@ -53,6 +53,7 @@ function collectRegisteredToolNames(): string[] {
       baseUrl: "http://127.0.0.1:1933",
       autoCapture: false,
       autoRecall: false,
+      enableAddResourceTool: true,
     },
     logger: {
       info: vi.fn(),
@@ -78,7 +79,7 @@ function collectRegisteredToolNames(): string[] {
 }
 
 describe("OpenClaw 5.2 manifest contracts", () => {
-  it("declares every runtime tool in contracts.tools", () => {
+  it("declares every registerable runtime tool in contracts.tools", () => {
     expect(manifest.contracts?.tools?.toSorted()).toEqual(collectRegisteredToolNames());
   });
 
