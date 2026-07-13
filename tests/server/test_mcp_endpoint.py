@@ -120,13 +120,13 @@ async def test_search_respects_min_score(service):
     assert isinstance(result, str)
 
 
-async def test_search_tools_expose_context_type_and_filter_parameters():
+async def test_search_tools_expose_only_context_type_parameter():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
     for tool_name in ("find", "search"):
         properties = tools[tool_name].inputSchema["properties"]
         assert "context_type" in properties
-        assert "filter" in properties
+        assert "filter" not in properties
 
 
 async def test_find_tool_calls_lightweight_find(service, monkeypatch):
@@ -144,7 +144,6 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
         limit=2,
         min_score=0.2,
         context_type=["memory", "resource"],
-        filter={"op": "must", "field": "category", "conds": ["docs"]},
     )
 
     assert result == "No matching context found."
@@ -154,15 +153,9 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
     assert captured["limit"] == 2
     assert captured["score_threshold"] == 0.2
     assert captured["filter"] == {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "category", "conds": ["docs"]},
-            {
-                "op": "must",
-                "field": "context_type",
-                "conds": ["memory", "resource"],
-            },
-        ],
+        "op": "must",
+        "field": "context_type",
+        "conds": ["memory", "resource"],
     }
 
 
@@ -198,7 +191,6 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
         limit=4,
         min_score=0.1,
         context_type="skill",
-        filter={"op": "must", "field": "category", "conds": ["tools"]},
     )
 
     assert result == "No matching context found."
@@ -212,11 +204,9 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["limit"] == 4
     assert captured["score_threshold"] == 0.1
     assert captured["filter"] == {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "category", "conds": ["tools"]},
-            {"op": "must", "field": "context_type", "conds": ["skill"]},
-        ],
+        "op": "must",
+        "field": "context_type",
+        "conds": ["skill"],
     }
 
 
