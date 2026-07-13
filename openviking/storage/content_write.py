@@ -849,7 +849,12 @@ class ContentWriteCoordinator:
                     raise InvalidArgumentError(
                         f"resource write target must be inside a resource directory: {uri}"
                     )
-                root_uri = VikingURI.build(*parts[: resources_idx + 2])
+                if anchor_to_parent:
+                    parent = parsed.parent
+                    if parent is not None:
+                        root_uri = parent.uri
+                else:
+                    root_uri = VikingURI.build(*parts[: resources_idx + 2])
             else:
                 try:
                     memories_idx = parts.index("memories")

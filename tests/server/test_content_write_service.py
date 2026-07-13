@@ -1062,17 +1062,33 @@ class _AnyDirVikingFS:
         return {"isDir": uri != self._file_uri}
 
 
+@pytest.mark.parametrize(
+    ("file_uri", "parent_uri", "project_root"),
+    [
+        (
+            "viking://resources/dir1/sub_dir/sub_dir_1/test.md",
+            "viking://resources/dir1/sub_dir/sub_dir_1",
+            "viking://resources/dir1",
+        ),
+        (
+            "viking://user/default/resources/dir1/sub_dir/sub_dir_1/test.md",
+            "viking://user/default/resources/dir1/sub_dir/sub_dir_1",
+            "viking://user/default/resources/dir1",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_resource_write_anchors_nested_file_to_direct_parent():
+async def test_resource_write_anchors_nested_file_to_direct_parent(
+    file_uri,
+    parent_uri,
+    project_root,
+):
     """A resource content write anchors the semantic refresh at the written file's
     direct parent directory (anchor_to_parent=True), so the changed file is a direct
     child of the DAG run root: its own L2 vector and the parent's L0/L1 are generated
     from a single-directory run instead of a recursive walk of the whole project subtree.
     set_tags keeps the project-root collapse (the default), which the derived
     ``.abstract.md`` sidecar mapping relies on."""
-    file_uri = "viking://resources/dir1/sub_dir/sub_dir_1/test.md"
-    parent_uri = "viking://resources/dir1/sub_dir/sub_dir_1"
-    project_root = "viking://resources/dir1"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     coordinator = ContentWriteCoordinator(viking_fs=_AnyDirVikingFS(file_uri))
 
