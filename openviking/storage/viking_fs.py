@@ -65,7 +65,7 @@ from openviking.storage.acl import (
     acl_ancestors,
     direct_to_entries,
     is_implicit_manager,
-    normalize_acl_user_id,
+    normalize_acl_principal,
 )
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import (
@@ -471,7 +471,7 @@ class VikingFS:
             if not acl.enabled:
                 result[original] = self._legacy_resource_access(normalized_uri, real_ctx)
             else:
-                result[original] = acl_allows(acl, real_ctx.user.user_id, action)
+                result[original] = acl_allows(acl, real_ctx, action)
         return result
 
     async def _ensure_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
@@ -546,7 +546,7 @@ class VikingFS:
         if is_implicit_manager(real_ctx, normalized_uri):
             return normalized_uri, real_ctx
         effective = await self.acl_manager.resolve(normalized_uri, real_ctx)
-        if effective.enabled and acl_allows(effective, real_ctx.user.user_id, "manage"):
+        if effective.enabled and acl_allows(effective, real_ctx, "manage"):
             return normalized_uri, real_ctx
         raise PermissionDeniedError(f"ACL management denied for {uri}", resource=normalized_uri)
 
@@ -590,7 +590,7 @@ class VikingFS:
     async def grant_acl(
         self,
         uri: str,
-        user_id: str,
+        principal: str,
         level: str,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
@@ -602,8 +602,8 @@ class VikingFS:
             await self._ensure_acl_manage(normalized_uri, real_ctx)
             await self._acl_target_stat(normalized_uri, real_ctx)
             direct = await self.acl_manager.get_direct(normalized_uri, real_ctx)
-            entries = {entry.user_id: entry.level for entry in direct_to_entries(direct)}
-            entries[user_id] = level
+            entries = {entry.principal: entry.level for entry in direct_to_entries(direct)}
+            entries[principal] = level
             await self.acl_manager.set_direct(
                 normalized_uri,
                 [AclEntry(principal, value) for principal, value in entries.items()],
@@ -614,10 +614,10 @@ class VikingFS:
     async def revoke_acl(
         self,
         uri: str,
-        user_id: str,
+        principal: str,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
-        user_id = normalize_acl_user_id(user_id)
+        principal = normalize_acl_principal(principal)
         normalized_uri, real_ctx = await self._ensure_acl_manage(uri, ctx)
         from openviking.storage.transaction import LockContext, get_lock_manager
 
@@ -626,7 +626,9 @@ class VikingFS:
             await self._ensure_acl_manage(normalized_uri, real_ctx)
             await self._acl_target_stat(normalized_uri, real_ctx)
             direct = await self.acl_manager.get_direct(normalized_uri, real_ctx)
-            entries = [entry for entry in direct_to_entries(direct) if entry.user_id != user_id]
+            entries = [
+                entry for entry in direct_to_entries(direct) if entry.principal != principal
+            ]
             await self.acl_manager.set_direct(normalized_uri, entries, real_ctx)
         return await self.acl_manager.report(normalized_uri, real_ctx)
 

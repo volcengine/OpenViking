@@ -1,6 +1,6 @@
 # Admin (Multi-tenant)
 
-The Admin API manages accounts and users in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, role changes, and API key regeneration.
+The Admin API manages accounts, users, and groups in a multi-tenant environment. It covers workspace (account) creation/deletion, user registration/removal, group membership, role changes, and API key regeneration.
 
 This API is available in both `api_key` and `trusted` deployments:
 - In `api_key` mode, the effective role is always derived from the presented API key.
@@ -21,6 +21,7 @@ For `/api/v1/admin/*`, `trusted` mode permits requests with no explicit identity
 | Create/delete workspace | Y | N | N |
 | List workspaces | Y | N | N |
 | Register/remove users | Y | Y (own account) | N |
+| Manage groups and membership | Y | Y (own account) | N |
 | List agents (deprecated, returns empty list) | Y | Y (own account) | N |
 | Regenerate user key | Y | Y (own account) | N |
 | Change user role | Y | N | N |
@@ -54,6 +55,32 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 - `--sudo` only works with the commands above - using it with regular data commands will error
 - Must have `root_api_key` configured to use `--sudo`
+
+## Groups
+
+A group belongs to one account and lets one ACL principal grant access to multiple users. The name is display-only. The server generates an immutable `group_id` and never reuses it after deletion. Only existing users from the same account can be members, and groups cannot be nested.
+
+The server adds memberships to `RequestContext.group_ids` for each request. Adding or removing a member takes effect on the next request without rewriting resource ACL or context records. Removing a user also removes all memberships. A group must be empty before deletion.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | Create an empty group with `{"name":"Engineering"}` |
+| GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete an empty group |
+| GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List members |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a member; repeated calls return `added=false` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a member; repeated calls return `removed=false` |
+
+```bash
+ov --sudo admin create-group acme Engineering
+ov --sudo admin add-group-member acme grp_0123 alice
+ov acl grant viking://resources/project-a \
+  --principal group:grp_0123 --level viewer
+ov --sudo admin remove-group-member acme grp_0123 alice
+ov --sudo admin delete-group acme grp_0123
+```
+
+The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 
 ## API Reference
 

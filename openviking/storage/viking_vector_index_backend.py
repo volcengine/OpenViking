@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_user_content_root, canonicalize_uri, visible_roots
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import ACL_CONTEXT_FIELDS
+from openviking.storage.acl import ACL_CONTEXT_FIELDS, acl_principals
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import UpdateResult
@@ -1471,10 +1471,11 @@ class VikingVectorIndexBackend:
                 Or([PathScope("uri", root, depth=-1) for root in visible_roots(ctx)]),
             ]
         )
+        principals = sorted(acl_principals(ctx))
         access_filters: List[FilterExpr] = [
             legacy_filter,
-            In("acl_direct_read_user_ids", [ctx.user.user_id, "*"]),
-            In("acl_inherited_read_user_ids", [ctx.user.user_id, "*"]),
+            In("acl_direct_read_principal_ids", principals),
+            In("acl_inherited_read_principal_ids", principals),
             PathScope("uri", canonical_user_content_root(ctx, "resource"), depth=-1),
         ]
         if ctx.role == Role.ADMIN:

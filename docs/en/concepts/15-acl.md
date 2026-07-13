@@ -1,6 +1,6 @@
 # Resource Access Control (ACL)
 
-OpenViking ACL shares resource directories or files with selected users inside one account. ACL never changes the account boundary: every grant is limited to the current account.
+OpenViking ACL shares resource directories or files with users or groups inside one account. ACL never changes the account boundary: every grant is limited to the current account.
 
 ACL uses a collaborative-document inheritance model. A directory grant continuously applies to its descendants, while child directories and files can add direct grants. A child ACL does not replace grants inherited from ancestors.
 
@@ -20,7 +20,13 @@ Implicit management is not stored as an ACL entry and cannot be removed by ACL c
 
 ## Principals and Levels
 
-An ACL principal is a raw `user_id` in the current account. The reserved value `*` means any user in the current account.
+ACL entries use typed principals:
+
+- `user:{user_id}`: a user in the current account.
+- `group:{group_id}`: a server-generated group ID in the current account.
+- `user:*`: any user in the current account.
+
+`group:*` is not supported. Groups are flat. Membership changes do not rewrite resource ACL or context records; they take effect when the next request builds `RequestContext.group_ids`.
 
 | Level | Allowed operations |
 |-------|--------------------|
@@ -41,18 +47,18 @@ effective(node) = UNION(direct_acl(each ancestor), direct_acl(node))
 For example:
 
 ```text
-viewer bob   on viking://resources/A
-editor alice on viking://resources/A/B
-viewer carol on viking://resources/A/B/C/report.md
+viewer user:bob   on viking://resources/A
+editor group:grp_engineering on viking://resources/A/B
+viewer user:carol on viking://resources/A/B/C/report.md
 ```
 
 The effective permissions on `report.md` are:
 
 - Bob: `viewer`
-- Alice: `editor`
+- Members of `grp_engineering`: `editor`
 - Carol: `viewer`
 
-Removing Alice's direct ACL from `A/B` does not remove entries from `A` or `report.md`. Descendants only lose the permissions contributed by that entry.
+Removing the group's direct ACL from `A/B` does not remove entries from `A` or `report.md`. Descendants only lose the permissions contributed by that entry.
 
 ## Default Behavior and `acl_enabled`
 
@@ -92,17 +98,17 @@ ACL data exists only in the context collection. Each context record stores direc
 
 ```text
 acl_enabled
-acl_direct_read_user_ids
-acl_direct_write_user_ids
-acl_direct_manage_user_ids
-acl_inherited_read_user_ids
-acl_inherited_write_user_ids
-acl_inherited_manage_user_ids
+acl_direct_read_principal_ids
+acl_direct_write_principal_ids
+acl_direct_manage_principal_ids
+acl_inherited_read_principal_ids
+acl_inherited_write_principal_ids
+acl_inherited_manage_principal_ids
 ```
 
 `acl_direct_*` is the ACL assigned to the current node. `acl_inherited_*` is the union of all ancestor direct ACLs. Effective permission is their union; there is no separate ACL collection.
 
-`find/search` filters directly in the vector database by `account_id`, URI scope, `acl_direct_read_user_ids`, and `acl_inherited_read_user_ids`. Legacy records without ACL fields are treated as `acl_enabled=false`, so they do not require a full data backfill.
+The request principals are `user:{ctx.user_id}`, `user:*`, and every `group:{ctx.group_ids}`. `find/search` uses native `list<string>` filters directly in the vector database over `account_id`, URI scope, `acl_direct_read_principal_ids`, and `acl_inherited_read_principal_ids`. Legacy records without ACL fields are treated as `acl_enabled=false`, so they do not require a full data backfill.
 
 A retrieval target URI is only a search scope; the caller does not need to read the target node itself. A user can discover a deeply shared file even when intermediate directories are not readable.
 
@@ -113,19 +119,19 @@ Every context write preserves an existing direct ACL for the same URI and derive
 Grant Bob read-only access to a directory:
 
 ```bash
-ov acl grant viking://resources/project-a --user-id bob --level viewer
+ov acl grant viking://resources/project-a --principal user:bob --level viewer
 ```
 
 Bob can read and retrieve descendants, but cannot write or delete them. Upgrade the grant to editor:
 
 ```bash
-ov acl grant viking://resources/project-a --user-id bob --level editor
+ov acl grant viking://resources/project-a --principal user:bob --level editor
 ```
 
 Remove Bob's direct grant from this node:
 
 ```bash
-ov acl revoke viking://resources/project-a --user-id bob
+ov acl revoke viking://resources/project-a --principal user:bob
 ```
 
 If an ancestor still grants Bob access, that inherited permission remains effective.

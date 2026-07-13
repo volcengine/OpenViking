@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, Sequence
 
-from openviking.core.identifiers import validate_user_id
+from openviking.core.identifiers import validate_identifier_part, validate_user_id
 from openviking.core.namespace import canonicalize_uri, uri_parts
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import Or, PathScope
@@ -22,7 +22,7 @@ _ACL_PREFIXES = ("acl_direct", "acl_inherited")
 ACL_CONTEXT_FIELDS = frozenset(
     {"acl_enabled"}
     | {
-        f"{prefix}_{action}_user_ids"
+        f"{prefix}_{action}_principal_ids"
         for prefix in _ACL_PREFIXES
         for action in ("read", "write", "manage")
     }
@@ -32,11 +32,11 @@ _ACL_OUTPUT_FIELDS = ["id", "uri", *sorted(ACL_CONTEXT_FIELDS)]
 
 @dataclass(frozen=True)
 class AclEntry:
-    user_id: str
+    principal: str
     level: AclLevel
 
     def to_dict(self) -> dict[str, str]:
-        return {"user_id": self.user_id, "level": self.level}
+        return {"principal": self.principal, "level": self.level}
 
 
 @dataclass(frozen=True)
@@ -58,16 +58,16 @@ class DirectAcl:
 
     def context_fields(self, prefix: str) -> dict[str, Any]:
         return {
-            f"{prefix}_read_user_ids": sorted(self.read),
-            f"{prefix}_write_user_ids": sorted(self.write),
-            f"{prefix}_manage_user_ids": sorted(self.manage),
+            f"{prefix}_read_principal_ids": sorted(self.read),
+            f"{prefix}_write_principal_ids": sorted(self.write),
+            f"{prefix}_manage_principal_ids": sorted(self.manage),
         }
 
     @classmethod
     def from_context_fields(cls, record: Mapping[str, Any], prefix: str) -> "DirectAcl":
-        manage = frozenset(record.get(f"{prefix}_manage_user_ids") or [])
-        write = frozenset(record.get(f"{prefix}_write_user_ids") or []) | manage
-        read = frozenset(record.get(f"{prefix}_read_user_ids") or []) | write
+        manage = frozenset(record.get(f"{prefix}_manage_principal_ids") or [])
+        write = frozenset(record.get(f"{prefix}_write_principal_ids") or []) | manage
+        read = frozenset(record.get(f"{prefix}_read_principal_ids") or []) | write
         return cls(read=read, write=write, manage=manage)
 
 
@@ -89,32 +89,52 @@ class EffectiveAcl:
         }
 
 
-def normalize_acl_user_id(user_id: Any) -> str:
-    if not isinstance(user_id, str):
-        raise InvalidArgumentError("user_id must be a string")
-    normalized = user_id.strip()
-    if normalized != "*":
-        error = validate_user_id(normalized)
+def normalize_acl_principal(principal: Any) -> str:
+    if not isinstance(principal, str):
+        raise InvalidArgumentError("principal must be a string")
+    normalized = principal.strip()
+    kind, separator, identifier = normalized.partition(":")
+    if not separator or kind not in {"user", "group"}:
+        raise InvalidArgumentError("principal must use user:<id> or group:<id>")
+    if kind == "user":
+        if identifier != "*":
+            error = validate_user_id(identifier)
+            if error:
+                raise InvalidArgumentError(error)
+    else:
+        if identifier == "*":
+            raise InvalidArgumentError("group:* is not supported")
+        error = validate_identifier_part(identifier, "group_id")
         if error:
             raise InvalidArgumentError(error)
     return normalized
+
+
+def acl_principals(ctx: RequestContext) -> frozenset[str]:
+    return frozenset(
+        [
+            f"user:{ctx.user.user_id}",
+            "user:*",
+            *(f"group:{value}" for value in ctx.group_ids),
+        ]
+    )
 
 
 def _normalize_entries(entries: Iterable[AclEntry | Mapping[str, Any]]) -> list[AclEntry]:
     highest: dict[str, str] = {}
     for raw in entries:
         if isinstance(raw, AclEntry):
-            user_id, level = raw.user_id, raw.level
+            principal, level = raw.principal, raw.level
         else:
-            user_id = raw.get("user_id")
+            principal = raw.get("principal")
             level = str(raw.get("level", "")).strip()
-        user_id = normalize_acl_user_id(user_id)
+        principal = normalize_acl_principal(principal)
         if level not in _LEVEL_RANK:
             raise InvalidArgumentError("ACL level must be viewer, editor, or manager")
-        current = highest.get(user_id)
+        current = highest.get(principal)
         if current is None or _LEVEL_RANK[level] > _LEVEL_RANK[current]:
-            highest[user_id] = level
-    return [AclEntry(user_id, highest[user_id]) for user_id in sorted(highest)]
+            highest[principal] = level
+    return [AclEntry(principal, highest[principal]) for principal in sorted(highest)]
 
 
 def entries_to_direct(entries: Iterable[AclEntry | Mapping[str, Any]]) -> DirectAcl:
@@ -122,24 +142,24 @@ def entries_to_direct(entries: Iterable[AclEntry | Mapping[str, Any]]) -> Direct
     write: set[str] = set()
     manage: set[str] = set()
     for entry in _normalize_entries(entries):
-        read.add(entry.user_id)
+        read.add(entry.principal)
         if entry.level in {"editor", "manager"}:
-            write.add(entry.user_id)
+            write.add(entry.principal)
         if entry.level == "manager":
-            manage.add(entry.user_id)
+            manage.add(entry.principal)
     return DirectAcl(frozenset(read), frozenset(write), frozenset(manage))
 
 
 def direct_to_entries(acl: DirectAcl) -> list[AclEntry]:
     entries: list[AclEntry] = []
-    for user_id in sorted(acl.read | acl.write | acl.manage):
-        if user_id in acl.manage:
+    for principal in sorted(acl.read | acl.write | acl.manage):
+        if principal in acl.manage:
             level: AclLevel = "manager"
-        elif user_id in acl.write:
+        elif principal in acl.write:
             level = "editor"
         else:
             level = "viewer"
-        entries.append(AclEntry(user_id, level))
+        entries.append(AclEntry(principal, level))
     return entries
 
 
@@ -169,9 +189,9 @@ def is_implicit_manager(ctx: RequestContext, uri: str) -> bool:
     )
 
 
-def acl_allows(acl: EffectiveAcl, user_id: str, action: AclAction) -> bool:
+def acl_allows(acl: EffectiveAcl, ctx: RequestContext, action: AclAction) -> bool:
     principals = getattr(acl.permissions, action)
-    return user_id in principals or "*" in principals
+    return not principals.isdisjoint(acl_principals(ctx))
 
 
 class AclManager:

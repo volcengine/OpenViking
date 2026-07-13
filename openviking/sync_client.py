@@ -499,11 +499,11 @@ class SyncOpenViking:
     def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
         return run_async(self._async_client.acl_set(uri, entries))
 
-    def acl_grant(self, uri: str, user_id: str, level: str) -> Dict[str, Any]:
-        return run_async(self._async_client.acl_grant(uri, user_id, level))
+    def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_grant(uri, principal, level))
 
-    def acl_revoke(self, uri: str, user_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.acl_revoke(uri, user_id))
+    def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_revoke(uri, principal))
 
     def acl_delete(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.acl_delete(uri))

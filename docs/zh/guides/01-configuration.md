@@ -1231,9 +1231,9 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 ACL 只维护在 context collection。除 `acl_enabled: bool` 外，需要以下 `list<string>` 标量索引字段：
 
 ```text
-acl_direct_read_user_ids       acl_inherited_read_user_ids
-acl_direct_write_user_ids      acl_inherited_write_user_ids
-acl_direct_manage_user_ids     acl_inherited_manage_user_ids
+acl_direct_read_principal_ids       acl_inherited_read_principal_ids
+acl_direct_write_principal_ids      acl_inherited_write_principal_ids
+acl_direct_manage_principal_ids     acl_inherited_manage_principal_ids
 ```
 
 本地 backend 会在启动时为存量 collection 增加字段并重建标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_enabled=false` 和空列表读取。

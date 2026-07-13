@@ -106,6 +106,48 @@ func (c *Client) AdminRegenerateKeyWithOptions(ctx context.Context, accountID, u
 	return result, err
 }
 
+// AdminCreateGroup creates an empty account-scoped group.
+func (c *Client) AdminCreateGroup(ctx context.Context, accountID, name string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups", nil, map[string]any{"name": name}, &result)
+	return result, err
+}
+
+// AdminListGroups lists account-scoped groups.
+func (c *Client) AdminListGroups(ctx context.Context, accountID string) ([]any, error) {
+	var result []any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups", nil, nil, &result)
+	return result, err
+}
+
+// AdminDeleteGroup deletes an empty group.
+func (c *Client) AdminDeleteGroup(ctx context.Context, accountID, groupID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID), nil, nil, &result)
+	return result, err
+}
+
+// AdminListGroupMembers lists a group's user IDs.
+func (c *Client) AdminListGroupMembers(ctx context.Context, accountID, groupID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodGet, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members", nil, nil, &result)
+	return result, err
+}
+
+// AdminAddGroupMember adds an existing account user to a group.
+func (c *Client) AdminAddGroupMember(ctx context.Context, accountID, groupID, userID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPut, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members/"+url.PathEscape(userID), nil, nil, &result)
+	return result, err
+}
+
+// AdminRemoveGroupMember removes a user from a group.
+func (c *Client) AdminRemoveGroupMember(ctx context.Context, accountID, groupID, userID string) (map[string]any, error) {
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodDelete, "/api/v1/admin/accounts/"+url.PathEscape(accountID)+"/groups/"+url.PathEscape(groupID)+"/members/"+url.PathEscape(userID), nil, nil, &result)
+	return result, err
+}
+
 // AdminMigrate starts legacy data migration or cleanup.
 func (c *Client) AdminMigrate(ctx context.Context, opts *AdminMigrateOptions) (map[string]any, error) {
 	action := "migrate"

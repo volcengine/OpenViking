@@ -26,12 +26,12 @@ pub async fn set(
 ) -> Result<()> {
     let mut entries = Vec::new();
     for raw in raw_entries {
-        let Some((user_id, level)) = raw.split_once('=') else {
+        let Some((principal, level)) = raw.split_once('=') else {
             return Err(Error::Client(format!(
-                "Invalid ACL entry '{raw}'. Expected user=viewer|editor|manager."
+                "Invalid ACL entry '{raw}'. Expected principal=viewer|editor|manager."
             )));
         };
-        entries.push(json!({"user_id": user_id, "level": level}));
+        entries.push(json!({"principal": principal, "level": level}));
     }
     show(client.acl_set(uri, entries).await?, output_format, compact)
 }
@@ -39,13 +39,13 @@ pub async fn set(
 pub async fn grant(
     client: &HttpClient,
     uri: &str,
-    user_id: &str,
+    principal: &str,
     level: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     show(
-        client.acl_grant(uri, user_id, level).await?,
+        client.acl_grant(uri, principal, level).await?,
         output_format,
         compact,
     )
@@ -54,12 +54,12 @@ pub async fn grant(
 pub async fn revoke(
     client: &HttpClient,
     uri: &str,
-    user_id: &str,
+    principal: &str,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
     show(
-        client.acl_revoke(uri, user_id).await?,
+        client.acl_revoke(uri, principal).await?,
         output_format,
         compact,
     )

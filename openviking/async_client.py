@@ -660,13 +660,13 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.acl_set(uri, entries)
 
-    async def acl_grant(self, uri: str, user_id: str, level: str) -> Dict[str, Any]:
+    async def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
         await self._ensure_initialized()
-        return await self._client.acl_grant(uri, user_id, level)
+        return await self._client.acl_grant(uri, principal, level)
 
-    async def acl_revoke(self, uri: str, user_id: str) -> Dict[str, Any]:
+    async def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
         await self._ensure_initialized()
-        return await self._client.acl_revoke(uri, user_id)
+        return await self._client.acl_revoke(uri, principal)
 
     async def acl_delete(self, uri: str) -> Dict[str, Any]:
         await self._ensure_initialized()

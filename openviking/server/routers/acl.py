@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/v1/acl", tags=["acl"])
 class AclEntryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    user_id: str
+    principal: str
     level: Literal["viewer", "editor", "manager"]
 
 
@@ -32,7 +32,7 @@ class GrantAclRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     uri: str
-    user_id: str
+    principal: str
     level: Literal["viewer", "editor", "manager"]
 
 
@@ -40,7 +40,7 @@ class RevokeAclRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     uri: str
-    user_id: str
+    principal: str
 
 
 @router.get("")
@@ -81,7 +81,7 @@ async def grant_acl(
 ):
     result = await get_service().fs.grant_acl(
         resolve_path_variables(request.uri),
-        request.user_id,
+        request.principal,
         request.level,
         ctx=_ctx,
     )
@@ -94,6 +94,6 @@ async def revoke_acl(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     result = await get_service().fs.revoke_acl(
-        resolve_path_variables(request.uri), request.user_id, ctx=_ctx
+        resolve_path_variables(request.uri), request.principal, ctx=_ctx
     )
     return Response(status="ok", result=result)

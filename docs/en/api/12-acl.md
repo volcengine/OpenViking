@@ -11,8 +11,8 @@ Read [Resource Access Control (ACL)](../concepts/15-acl.md) for the permission a
 | GET | `/api/v1/acl?uri={uri}` | Get direct, inherited, and effective ACLs |
 | PUT | `/api/v1/acl` | Replace the node's direct ACL |
 | DELETE | `/api/v1/acl?uri={uri}` | Clear the node's direct ACL |
-| POST | `/api/v1/acl/grant` | Set one user's direct level |
-| POST | `/api/v1/acl/revoke` | Remove one user's direct grant |
+| POST | `/api/v1/acl/grant` | Set one principal's direct level |
+| POST | `/api/v1/acl/revoke` | Remove one principal's direct grant |
 
 Every endpoint requires `manage` on the target node. Account `ADMIN`s implicitly manage public resources, and the user named in a user-resource URI implicitly manages that resource tree.
 
@@ -22,15 +22,17 @@ Every endpoint requires `manage` on the target node. Account `ADMIN`s implicitly
 
 ```json
 {
-  "user_id": "bob",
+  "principal": "user:bob",
   "level": "viewer"
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `user_id` | string | A user ID in the current account; `*` means any account user |
+| `principal` | string | `user:{user_id}`, `group:{group_id}`, or `user:*` |
 | `level` | string | `viewer`, `editor`, or `manager` |
+
+The [Admin API](./08-admin.md#groups) generates immutable, non-reusable group IDs. After a group is deleted, an old group principal left in an ACL no longer matches any request.
 
 ### ACL report
 
@@ -39,14 +41,14 @@ Every endpoint requires `manage` on the target node. Account `ADMIN`s implicitly
   "uri": "viking://resources/project-a",
   "acl_enabled": true,
   "direct_entries": [
-    {"user_id": "bob", "level": "viewer"}
+    {"principal": "user:bob", "level": "viewer"}
   ],
   "inherited_entries": [
-    {"user_id": "alice", "level": "editor"}
+    {"principal": "group:grp_engineering", "level": "editor"}
   ],
   "effective_entries": [
-    {"user_id": "alice", "level": "editor"},
-    {"user_id": "bob", "level": "viewer"}
+    {"principal": "group:grp_engineering", "level": "editor"},
+    {"principal": "user:bob", "level": "viewer"}
   ]
 }
 ```
@@ -97,8 +99,8 @@ Request body:
 {
   "uri": "viking://resources/project-a",
   "entries": [
-    {"user_id": "bob", "level": "viewer"},
-    {"user_id": "ci-bot", "level": "editor"}
+    {"principal": "user:bob", "level": "viewer"},
+    {"principal": "group:grp_engineering", "level": "editor"}
   ]
 }
 ```
@@ -112,8 +114,8 @@ curl -X PUT http://localhost:1933/api/v1/acl \
   -d '{
     "uri": "viking://resources/project-a",
     "entries": [
-      {"user_id": "bob", "level": "viewer"},
-      {"user_id": "ci-bot", "level": "editor"}
+      {"principal": "user:bob", "level": "viewer"},
+      {"principal": "group:grp_engineering", "level": "editor"}
     ]
   }'
 ```
@@ -124,8 +126,8 @@ curl -X PUT http://localhost:1933/api/v1/acl \
 report = client.acl_set(
     "viking://resources/project-a",
     [
-        {"user_id": "bob", "level": "viewer"},
-        {"user_id": "ci-bot", "level": "editor"},
+        {"principal": "user:bob", "level": "viewer"},
+        {"principal": "group:grp_engineering", "level": "editor"},
     ],
 )
 ```
@@ -140,8 +142,8 @@ report = await client.acl_set(uri, entries)
 
 ```go
 report, err := client.SetACL(ctx, "viking://resources/project-a", []openviking.ACLEntry{
-    {UserID: "bob", Level: "viewer"},
-    {UserID: "ci-bot", Level: "editor"},
+    {Principal: "user:bob", Level: "viewer"},
+    {Principal: "group:grp_engineering", Level: "editor"},
 })
 ```
 
@@ -149,11 +151,11 @@ report, err := client.SetACL(ctx, "viking://resources/project-a", []openviking.A
 
 ```bash
 ov acl set viking://resources/project-a \
-  --entry bob=viewer \
-  --entry ci-bot=editor
+  --entry user:bob=viewer \
+  --entry group:grp_engineering=editor
 ```
 
-## Set One User's Level
+## Set One Principal's Level
 
 ```
 POST /api/v1/acl/grant
@@ -162,7 +164,7 @@ POST /api/v1/acl/grant
 ```json
 {
   "uri": "viking://resources/project-a",
-  "user_id": "bob",
+  "principal": "user:bob",
   "level": "editor"
 }
 ```
@@ -175,7 +177,7 @@ curl -X POST http://localhost:1933/api/v1/acl/grant \
   -H "X-API-Key: your-key" \
   -d '{
     "uri": "viking://resources/project-a",
-    "user_id": "bob",
+    "principal": "user:bob",
     "level": "editor"
   }'
 ```
@@ -183,13 +185,13 @@ curl -X POST http://localhost:1933/api/v1/acl/grant \
 ```python
 report = client.acl_grant(
     "viking://resources/project-a",
-    user_id="bob",
+    principal="user:bob",
     level="editor",
 )
 ```
 
 ```bash
-ov acl grant viking://resources/project-a --user-id bob --level editor
+ov acl grant viking://resources/project-a --principal user:bob --level editor
 ```
 
 ## Remove One Direct Grant
@@ -201,18 +203,18 @@ POST /api/v1/acl/revoke
 ```json
 {
   "uri": "viking://resources/project-a",
-  "user_id": "bob"
+  "principal": "user:bob"
 }
 ```
 
 `revoke` removes only Bob's direct entry on the current node. Any permission inherited by Bob from an ancestor remains effective.
 
 ```python
-report = client.acl_revoke("viking://resources/project-a", user_id="bob")
+report = client.acl_revoke("viking://resources/project-a", principal="user:bob")
 ```
 
 ```bash
-ov acl revoke viking://resources/project-a --user-id bob
+ov acl revoke viking://resources/project-a --principal user:bob
 ```
 
 ## Clear the Node's Direct ACL
@@ -246,7 +248,7 @@ The API checks manage permission before confirming existence to an authorized ca
 | Caller lacks manage | `PERMISSION_DENIED` |
 | Authorized caller targets a URI that does not exist | `NOT_FOUND` |
 | ACL mutation targets a URI without a context record | `INVALID_ARGUMENT`; index it first |
-| Invalid `user_id` | `INVALID_ARGUMENT` |
+| Invalid `principal` syntax or `group:*` | `INVALID_ARGUMENT` |
 | Level is not `viewer/editor/manager` | `INVALID_ARGUMENT` |
 | Request includes unknown fields such as `acl_enabled` | `INVALID_ARGUMENT` |
 

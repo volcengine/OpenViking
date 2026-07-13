@@ -1,6 +1,6 @@
 # 资源访问控制（ACL）
 
-OpenViking ACL 用于在同一个 account 内，把资源目录或文件授权给指定用户。ACL 不改变 account 隔离：任何授权都只在当前 account 内生效。
+OpenViking ACL 用于在同一个 account 内，把资源目录或文件授权给用户或用户组。ACL 不改变 account 隔离：任何授权都只在当前 account 内生效。
 
 ACL 采用协作文档式的继承模型。目录授权持续作用于所有后代，子目录和文件可以继续增加直接授权；祖先授权不会被子节点覆盖。
 
@@ -20,7 +20,13 @@ viking://user/{user_id}/resources/...
 
 ## Principal 与权限级别
 
-ACL 条目直接使用当前 account 内的 `user_id`。保留值 `*` 表示当前 account 内任意用户。
+ACL 条目使用带类型的 principal：
+
+- `user:{user_id}`：当前 account 内的用户。
+- `group:{group_id}`：当前 account 内由服务端生成 ID 的用户组。
+- `user:*`：当前 account 内任意用户。
+
+不支持 `group:*`。用户组是平铺结构；修改成员关系不会重写资源 ACL 或 context 记录，而是在下一次请求构造 `RequestContext.group_ids` 时生效。
 
 | Level | 允许的操作 |
 |-------|------------|
@@ -41,18 +47,18 @@ effective(node) = UNION(direct_acl(each ancestor), direct_acl(node))
 例如：
 
 ```text
-viewer bob   on viking://resources/A
-editor alice on viking://resources/A/B
-viewer carol on viking://resources/A/B/C/report.md
+viewer user:bob   on viking://resources/A
+editor group:grp_engineering on viking://resources/A/B
+viewer user:carol on viking://resources/A/B/C/report.md
 ```
 
 `report.md` 的有效权限为：
 
 - Bob：`viewer`
-- Alice：`editor`
+- `grp_engineering` 的成员：`editor`
 - Carol：`viewer`
 
-删除 `A/B` 上 Alice 的直接 ACL 不会删除 `A` 或 `report.md` 上的条目。子节点只会失去由该条目提供的权限。
+删除 `A/B` 上用户组的直接 ACL 不会删除 `A` 或 `report.md` 上的条目。子节点只会失去由该条目提供的权限。
 
 ## 默认行为与 `acl_enabled`
 
@@ -92,17 +98,17 @@ ACL 只保存在 context collection。每条 context 记录维护当前节点和
 
 ```text
 acl_enabled
-acl_direct_read_user_ids
-acl_direct_write_user_ids
-acl_direct_manage_user_ids
-acl_inherited_read_user_ids
-acl_inherited_write_user_ids
-acl_inherited_manage_user_ids
+acl_direct_read_principal_ids
+acl_direct_write_principal_ids
+acl_direct_manage_principal_ids
+acl_inherited_read_principal_ids
+acl_inherited_write_principal_ids
+acl_inherited_manage_principal_ids
 ```
 
 `acl_direct_*` 是当前节点直接 ACL，`acl_inherited_*` 是所有祖先直接 ACL 的并集。有效权限是两组列表的并集，不维护独立 ACL collection。
 
-`find/search` 直接在向量库中按 `account_id`、URI scope、`acl_direct_read_user_ids` 和 `acl_inherited_read_user_ids` 过滤。旧记录缺少 ACL 字段时按 `acl_enabled=false` 处理，无需全量回填。
+请求的可用 principal 为 `user:{ctx.user_id}`、`user:*` 和所有 `group:{ctx.group_ids}`。`find/search` 直接在向量库中按 `account_id`、URI scope、`acl_direct_read_principal_ids` 和 `acl_inherited_read_principal_ids` 做原生 `list<string>` 过滤。旧记录缺少 ACL 字段时按 `acl_enabled=false` 处理，无需全量回填。
 
 检索 target URI 只是搜索范围，不要求调用者能够读取 target 节点本身。用户即使不能读取中间目录，也可以检索到深层单独授权给自己的文件。
 
@@ -113,19 +119,19 @@ acl_inherited_manage_user_ids
 将目录授权给 Bob 只读：
 
 ```bash
-ov acl grant viking://resources/project-a --user-id bob --level viewer
+ov acl grant viking://resources/project-a --principal user:bob --level viewer
 ```
 
 Bob 可以读取和检索该目录的后代，但不能写入或删除。升级为 editor：
 
 ```bash
-ov acl grant viking://resources/project-a --user-id bob --level editor
+ov acl grant viking://resources/project-a --principal user:bob --level editor
 ```
 
 删除 Bob 在当前节点上的直接授权：
 
 ```bash
-ov acl revoke viking://resources/project-a --user-id bob
+ov acl revoke viking://resources/project-a --principal user:bob
 ```
 
 如果 Bob 仍被祖先目录授权，该继承权限继续有效。

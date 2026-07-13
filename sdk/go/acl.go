@@ -6,10 +6,10 @@ import (
 	"net/url"
 )
 
-// ACLEntry grants one user a viewer, editor, or manager level.
+// ACLEntry grants one user or group a viewer, editor, or manager level.
 type ACLEntry struct {
-	UserID string `json:"user_id"`
-	Level  string `json:"level"`
+	Principal string `json:"principal"`
+	Level     string `json:"level"`
 }
 
 // ACL returns the direct, inherited, and effective ACL for a URI.
@@ -33,20 +33,20 @@ func (c *Client) SetACL(ctx context.Context, uri string, entries []ACLEntry) (ma
 	return result, err
 }
 
-// GrantACL sets one user's direct ACL level.
-func (c *Client) GrantACL(ctx context.Context, uri, userID, level string) (map[string]any, error) {
+// GrantACL sets one principal's direct ACL level.
+func (c *Client) GrantACL(ctx context.Context, uri, principal, level string) (map[string]any, error) {
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/acl/grant", nil, map[string]any{
-		"uri": NormalizeURI(uri), "user_id": userID, "level": level,
+		"uri": NormalizeURI(uri), "principal": principal, "level": level,
 	}, &result)
 	return result, err
 }
 
-// RevokeACL removes one user's direct ACL entry.
-func (c *Client) RevokeACL(ctx context.Context, uri, userID string) (map[string]any, error) {
+// RevokeACL removes one principal's direct ACL entry.
+func (c *Client) RevokeACL(ctx context.Context, uri, principal string) (map[string]any, error) {
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/acl/revoke", nil, map[string]any{
-		"uri": NormalizeURI(uri), "user_id": userID,
+		"uri": NormalizeURI(uri), "principal": principal,
 	}, &result)
 	return result, err
 }

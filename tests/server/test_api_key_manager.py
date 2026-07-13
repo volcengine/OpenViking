@@ -15,6 +15,7 @@ from openviking.server.identity import Role
 from openviking.service.core import OpenVikingService
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
@@ -265,6 +266,41 @@ async def test_get_users(manager: APIKeyManager):
     roles = {u["user_id"]: u["role"] for u in users}
     assert roles["alice"] == "admin"
     assert roles["bob"] == "user"
+
+
+async def test_group_lifecycle_persistence_and_user_cleanup(manager_service):
+    manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await manager.load()
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    await manager.register_user(acct, "bob")
+
+    group = await manager.create_group(acct, "Engineering")
+    group_id = group["group_id"]
+    assert group == {"group_id": group_id, "name": "Engineering", "member_count": 0}
+    with pytest.raises(AlreadyExistsError):
+        await manager.create_group(acct, "Engineering")
+
+    assert await manager.add_group_member(acct, group_id, "bob") is True
+    assert await manager.add_group_member(acct, group_id, "bob") is False
+    assert manager.get_user_group_ids(acct, "bob") == (group_id,)
+    assert manager.get_group_members(acct, group_id) == ["bob"]
+    with pytest.raises(FailedPreconditionError):
+        await manager.delete_group(acct, group_id)
+
+    reloaded = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await reloaded.load()
+    assert reloaded.get_user_group_ids(acct, "bob") == (group_id,)
+
+    await reloaded.remove_user(acct, "bob")
+    reloaded = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await reloaded.load()
+    assert reloaded.get_user_group_ids(acct, "bob") == ()
+    assert reloaded.get_group_members(acct, group_id) == []
+
+    await reloaded.delete_group(acct, group_id)
+    replacement = await reloaded.create_group(acct, "Engineering")
+    assert replacement["group_id"] != group_id
 
 
 # ---- Persistence tests ----

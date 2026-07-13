@@ -274,15 +274,15 @@ enum AclCommands {
     },
     Grant {
         uri: String,
-        #[arg(long = "user-id")]
-        user_id: String,
+        #[arg(long)]
+        principal: String,
         #[arg(long)]
         level: String,
     },
     Revoke {
         uri: String,
-        #[arg(long = "user-id")]
-        user_id: String,
+        #[arg(long)]
+        principal: String,
     },
     Rm {
         uri: String,
@@ -1632,6 +1632,50 @@ enum AdminCommands {
         #[arg(long, value_name = "role")]
         role: Option<String>,
     },
+    /// Create an empty account-scoped group
+    CreateGroup {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "name")]
+        name: String,
+    },
+    /// List groups in an account
+    ListGroups {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+    },
+    /// List the users in a group
+    ListGroupMembers {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+    },
+    /// Add an existing account user to a group
+    AddGroupMember {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+    },
+    /// Remove a user from a group
+    RemoveGroupMember {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+    },
+    /// Delete an empty group
+    DeleteGroup {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "group-id")]
+        group_id: String,
+    },
     /// Remove a user from an account
     RemoveUser {
         /// Account ID
@@ -2253,6 +2297,12 @@ fn is_admin_subcommand(token: &str) -> bool {
             | "migrate"
             | "register-user"
             | "list-users"
+            | "create-group"
+            | "list-groups"
+            | "list-group-members"
+            | "add-group-member"
+            | "remove-group-member"
+            | "delete-group"
             | "remove-user"
             | "set-role"
             | "regenerate-key"
@@ -3255,15 +3305,15 @@ mod tests {
     }
 
     #[test]
-    fn cli_acl_user_id_does_not_conflict_with_global_user() {
+    fn cli_acl_principal_parses() {
         Cli::command().debug_assert();
         let cli = Cli::try_parse_from([
             "ov",
             "acl",
             "grant",
             "viking://resources/project-a",
-            "--user-id",
-            "bob",
+            "--principal",
+            "user:bob",
             "--level",
             "viewer",
         ])
@@ -3275,12 +3325,12 @@ mod tests {
                 action:
                     AclCommands::Grant {
                         uri,
-                        user_id,
+                        principal,
                         level,
                     },
             } => {
                 assert_eq!(uri, "viking://resources/project-a");
-                assert_eq!(user_id, "bob");
+                assert_eq!(principal, "user:bob");
                 assert_eq!(level, "viewer");
             }
             _ => panic!("expected acl grant command"),
@@ -3612,6 +3662,12 @@ mod tests {
             &["ov", "admin", "migrate"],
             &["ov", "admin", "register-user"],
             &["ov", "admin", "list-users"],
+            &["ov", "admin", "create-group"],
+            &["ov", "admin", "list-groups"],
+            &["ov", "admin", "list-group-members"],
+            &["ov", "admin", "add-group-member"],
+            &["ov", "admin", "remove-group-member"],
+            &["ov", "admin", "delete-group"],
             &["ov", "admin", "remove-user"],
             &["ov", "admin", "set-role"],
             &["ov", "admin", "regenerate-key"],

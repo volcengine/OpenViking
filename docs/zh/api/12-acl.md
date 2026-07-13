@@ -11,8 +11,8 @@ ACL API 管理资源节点的直接授权，并返回节点继承后的有效权
 | GET | `/api/v1/acl?uri={uri}` | 获取直接、继承和有效 ACL |
 | PUT | `/api/v1/acl` | 替换当前节点的直接 ACL |
 | DELETE | `/api/v1/acl?uri={uri}` | 清空当前节点的直接 ACL |
-| POST | `/api/v1/acl/grant` | 设置一个用户的直接权限级别 |
-| POST | `/api/v1/acl/revoke` | 删除一个用户的直接授权 |
+| POST | `/api/v1/acl/grant` | 设置一个 principal 的直接权限级别 |
+| POST | `/api/v1/acl/revoke` | 删除一个 principal 的直接授权 |
 
 所有接口都要求调用者对目标节点拥有 `manage`。公共资源由 account `ADMIN` 隐式管理；用户资源由 URI 中的所属用户隐式管理。
 
@@ -22,15 +22,17 @@ ACL API 管理资源节点的直接授权，并返回节点继承后的有效权
 
 ```json
 {
-  "user_id": "bob",
+  "principal": "user:bob",
   "level": "viewer"
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `user_id` | string | 当前 account 内的用户 ID；`*` 表示任意用户 |
+| `principal` | string | `user:{user_id}`、`group:{group_id}` 或 `user:*` |
 | `level` | string | `viewer`、`editor` 或 `manager` |
+
+`group_id` 由 [Admin API](./08-admin.md#用户组) 生成且不可修改或复用。删除用户组后，ACL 中保留的旧 principal 不再匹配任何请求。
 
 ### ACL report
 
@@ -39,14 +41,14 @@ ACL API 管理资源节点的直接授权，并返回节点继承后的有效权
   "uri": "viking://resources/project-a",
   "acl_enabled": true,
   "direct_entries": [
-    {"user_id": "bob", "level": "viewer"}
+    {"principal": "user:bob", "level": "viewer"}
   ],
   "inherited_entries": [
-    {"user_id": "alice", "level": "editor"}
+    {"principal": "group:grp_engineering", "level": "editor"}
   ],
   "effective_entries": [
-    {"user_id": "alice", "level": "editor"},
-    {"user_id": "bob", "level": "viewer"}
+    {"principal": "group:grp_engineering", "level": "editor"},
+    {"principal": "user:bob", "level": "viewer"}
   ]
 }
 ```
@@ -97,8 +99,8 @@ PUT /api/v1/acl
 {
   "uri": "viking://resources/project-a",
   "entries": [
-    {"user_id": "bob", "level": "viewer"},
-    {"user_id": "ci-bot", "level": "editor"}
+    {"principal": "user:bob", "level": "viewer"},
+    {"principal": "group:grp_engineering", "level": "editor"}
   ]
 }
 ```
@@ -112,8 +114,8 @@ curl -X PUT http://localhost:1933/api/v1/acl \
   -d '{
     "uri": "viking://resources/project-a",
     "entries": [
-      {"user_id": "bob", "level": "viewer"},
-      {"user_id": "ci-bot", "level": "editor"}
+      {"principal": "user:bob", "level": "viewer"},
+      {"principal": "group:grp_engineering", "level": "editor"}
     ]
   }'
 ```
@@ -124,8 +126,8 @@ curl -X PUT http://localhost:1933/api/v1/acl \
 report = client.acl_set(
     "viking://resources/project-a",
     [
-        {"user_id": "bob", "level": "viewer"},
-        {"user_id": "ci-bot", "level": "editor"},
+        {"principal": "user:bob", "level": "viewer"},
+        {"principal": "group:grp_engineering", "level": "editor"},
     ],
 )
 ```
@@ -140,8 +142,8 @@ report = await client.acl_set(uri, entries)
 
 ```go
 report, err := client.SetACL(ctx, "viking://resources/project-a", []openviking.ACLEntry{
-    {UserID: "bob", Level: "viewer"},
-    {UserID: "ci-bot", Level: "editor"},
+    {Principal: "user:bob", Level: "viewer"},
+    {Principal: "group:grp_engineering", Level: "editor"},
 })
 ```
 
@@ -149,11 +151,11 @@ report, err := client.SetACL(ctx, "viking://resources/project-a", []openviking.A
 
 ```bash
 ov acl set viking://resources/project-a \
-  --entry bob=viewer \
-  --entry ci-bot=editor
+  --entry user:bob=viewer \
+  --entry group:grp_engineering=editor
 ```
 
-## 设置单个用户权限
+## 设置单个 principal 权限
 
 ```
 POST /api/v1/acl/grant
@@ -162,7 +164,7 @@ POST /api/v1/acl/grant
 ```json
 {
   "uri": "viking://resources/project-a",
-  "user_id": "bob",
+  "principal": "user:bob",
   "level": "editor"
 }
 ```
@@ -175,7 +177,7 @@ curl -X POST http://localhost:1933/api/v1/acl/grant \
   -H "X-API-Key: your-key" \
   -d '{
     "uri": "viking://resources/project-a",
-    "user_id": "bob",
+    "principal": "user:bob",
     "level": "editor"
   }'
 ```
@@ -183,16 +185,16 @@ curl -X POST http://localhost:1933/api/v1/acl/grant \
 ```python
 report = client.acl_grant(
     "viking://resources/project-a",
-    user_id="bob",
+    principal="user:bob",
     level="editor",
 )
 ```
 
 ```bash
-ov acl grant viking://resources/project-a --user-id bob --level editor
+ov acl grant viking://resources/project-a --principal user:bob --level editor
 ```
 
-## 删除单个用户的直接授权
+## 删除单个 principal 的直接授权
 
 ```
 POST /api/v1/acl/revoke
@@ -201,18 +203,18 @@ POST /api/v1/acl/revoke
 ```json
 {
   "uri": "viking://resources/project-a",
-  "user_id": "bob"
+  "principal": "user:bob"
 }
 ```
 
 `revoke` 只删除当前节点上 Bob 的直接条目。Bob 从祖先继承的权限仍然有效。
 
 ```python
-report = client.acl_revoke("viking://resources/project-a", user_id="bob")
+report = client.acl_revoke("viking://resources/project-a", principal="user:bob")
 ```
 
 ```bash
-ov acl revoke viking://resources/project-a --user-id bob
+ov acl revoke viking://resources/project-a --principal user:bob
 ```
 
 ## 清空当前节点的直接 ACL
@@ -246,7 +248,7 @@ ov acl rm viking://resources/project-a
 | 调用者没有 manage | `PERMISSION_DENIED` |
 | 已授权调用者访问不存在的 URI | `NOT_FOUND` |
 | 修改 ACL 时 URI 尚无 context 记录 | `INVALID_ARGUMENT`，需先完成索引 |
-| `user_id` 非法 | `INVALID_ARGUMENT` |
+| `principal` 格式非法，或使用 `group:*` | `INVALID_ARGUMENT` |
 | level 不是 `viewer/editor/manager` | `INVALID_ARGUMENT` |
 | 请求包含 `acl_enabled` 等未知字段 | `INVALID_ARGUMENT` |
 

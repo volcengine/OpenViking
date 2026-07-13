@@ -396,6 +396,51 @@ async def test_register_user(admin_client: httpx.AsyncClient):
     assert resp.status_code == 200
 
 
+async def test_group_admin_lifecycle(lightweight_admin_client: httpx.AsyncClient):
+    acct = _uid()
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "bob"},
+        headers=root_headers(),
+    )
+
+    response = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/groups",
+        json={"name": "Engineering"},
+        headers=root_headers(),
+    )
+    assert response.status_code == 200, response.text
+    group_id = response.json()["result"]["group_id"]
+
+    member_path = f"/api/v1/admin/accounts/{acct}/groups/{group_id}/members/bob"
+    response = await lightweight_admin_client.put(member_path, headers=root_headers())
+    assert response.json()["result"] == {"added": True}
+    response = await lightweight_admin_client.put(member_path, headers=root_headers())
+    assert response.json()["result"] == {"added": False}
+
+    response = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/groups/{group_id}/members",
+        headers=root_headers(),
+    )
+    assert response.json()["result"]["members"] == ["bob"]
+    response = await lightweight_admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}/groups/{group_id}", headers=root_headers()
+    )
+    assert response.status_code == 412
+
+    response = await lightweight_admin_client.delete(member_path, headers=root_headers())
+    assert response.json()["result"] == {"removed": True}
+    response = await lightweight_admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}/groups/{group_id}", headers=root_headers()
+    )
+    assert response.json()["result"] == {"deleted": True}
+
+
 async def test_root_can_register_admin_role_user(
     lightweight_admin_client: httpx.AsyncClient,
 ):

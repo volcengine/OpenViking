@@ -122,6 +122,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 # Returns: {"result": {"account_id": "acme", "user_id": "bob", "user_key": "..."}}
 ```
 
+ACL groups are the exception: groups and memberships are maintained through the [Admin API](../api/08-admin.md#groups), and members must be registered users in the current account. Clients cannot assert groups through headers or token claims. After authentication, the server resolves the group registry into `RequestContext.group_ids` for that request.
+
 Trusted deployments can also call Admin API through a trusted gateway. There are two supported patterns:
 
 - Present the trusted deployment's `root_api_key`. For `/api/v1/admin/*`, the server treats the request as ROOT after validating that key.
@@ -236,6 +238,8 @@ Tenant-scoped data APIs (for example `ls`, `find`, resources, and sessions)
 must use a key that is bound to an account/user in `api_key` mode. That can be
 a `USER` key or an `ADMIN` key; an `ADMIN` key accesses data as its own user and
 cannot switch identity with `X-OpenViking-Account` / `X-OpenViking-User`.
+
+ACL checks also use account groups resolved by the server. Membership changes take effect on the next request without issuing a new API key or modifying resource ACLs.
 
 A `ROOT` key is not bound to a tenant user, so it cannot access tenant-scoped
 data APIs in `api_key` mode. If a deployment needs an upstream gateway to assert

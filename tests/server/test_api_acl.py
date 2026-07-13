@@ -51,12 +51,12 @@ async def test_acl_http_crud_and_operation_levels(
             "/api/v1/acl",
             json={
                 "uri": directory,
-                "entries": [{"user_id": "bob", "level": "viewer"}],
+                "entries": [{"principal": "user:bob", "level": "viewer"}],
             },
         )
         assert response.status_code == 200, response.text
         assert response.json()["result"]["direct_entries"] == [
-            {"user_id": "bob", "level": "viewer"}
+            {"principal": "user:bob", "level": "viewer"}
         ]
 
         assert await service.viking_fs.read_file(file_uri, ctx=bob) == "initial"
@@ -71,7 +71,7 @@ async def test_acl_http_crud_and_operation_levels(
 
         response = await client.post(
             "/api/v1/acl/grant",
-            json={"uri": directory, "user_id": "bob", "level": "editor"},
+            json={"uri": directory, "principal": "user:bob", "level": "editor"},
         )
         assert response.status_code == 200
         await service.viking_fs.write_file(file_uri, "editor write", ctx=bob)
@@ -86,24 +86,26 @@ async def test_acl_http_crud_and_operation_levels(
 
         response = await client.post(
             "/api/v1/acl/grant",
-            json={"uri": directory, "user_id": "bob", "level": "manager"},
+            json={"uri": directory, "principal": "user:bob", "level": "manager"},
         )
         assert response.status_code == 200
         report = await service.viking_fs.get_acl(directory, ctx=bob)
-        assert report["direct_entries"] == [{"user_id": "bob", "level": "manager"}]
-        await service.viking_fs.grant_acl(directory, "carol", "viewer", ctx=bob)
-        await service.viking_fs.revoke_acl(directory, "carol", ctx=bob)
+        assert report["direct_entries"] == [
+            {"principal": "user:bob", "level": "manager"}
+        ]
+        await service.viking_fs.grant_acl(directory, "user:carol", "viewer", ctx=bob)
+        await service.viking_fs.revoke_acl(directory, "user:carol", ctx=bob)
         await service.viking_fs.rm(file_uri, ctx=bob)
 
         response = await client.get("/api/v1/acl", params={"uri": directory})
         assert response.status_code == 200
         assert response.json()["result"]["effective_entries"] == [
-            {"user_id": "bob", "level": "manager"}
+            {"principal": "user:bob", "level": "manager"}
         ]
 
         response = await client.post(
             "/api/v1/acl/revoke",
-            json={"uri": directory, "user_id": "bob"},
+            json={"uri": directory, "principal": "user:bob"},
         )
         assert response.status_code == 200
         assert response.json()["result"]["direct_entries"] == []
@@ -141,7 +143,9 @@ async def test_recursive_delete_cannot_bypass_child_acl(service):
             },
             ctx=admin,
         )
-    await service.viking_fs.set_acl(protected, [{"user_id": "bob", "level": "manager"}], ctx=admin)
+    await service.viking_fs.set_acl(
+        protected, [{"principal": "user:bob", "level": "manager"}], ctx=admin
+    )
 
     with pytest.raises(PermissionDeniedError):
         await service.viking_fs.rm(parent, recursive=True, ctx=alice)

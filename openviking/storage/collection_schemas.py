@@ -116,32 +116,32 @@ class CollectionSchemas:
                 {"FieldName": "owner_user_id", "FieldType": "string"},
                 {"FieldName": "acl_enabled", "FieldType": "bool", "DefaultValue": False},
                 {
-                    "FieldName": "acl_direct_read_user_ids",
+                    "FieldName": "acl_direct_read_principal_ids",
                     "FieldType": "list<string>",
                     "DefaultValue": [],
                 },
                 {
-                    "FieldName": "acl_direct_write_user_ids",
+                    "FieldName": "acl_direct_write_principal_ids",
                     "FieldType": "list<string>",
                     "DefaultValue": [],
                 },
                 {
-                    "FieldName": "acl_direct_manage_user_ids",
+                    "FieldName": "acl_direct_manage_principal_ids",
                     "FieldType": "list<string>",
                     "DefaultValue": [],
                 },
                 {
-                    "FieldName": "acl_inherited_read_user_ids",
+                    "FieldName": "acl_inherited_read_principal_ids",
                     "FieldType": "list<string>",
                     "DefaultValue": [],
                 },
                 {
-                    "FieldName": "acl_inherited_write_user_ids",
+                    "FieldName": "acl_inherited_write_principal_ids",
                     "FieldType": "list<string>",
                     "DefaultValue": [],
                 },
                 {
-                    "FieldName": "acl_inherited_manage_user_ids",
+                    "FieldName": "acl_inherited_manage_principal_ids",
                     "FieldType": "list<string>",
                     "DefaultValue": [],
                 },
@@ -164,12 +164,12 @@ class CollectionSchemas:
                 "account_id",
                 "owner_user_id",
                 "acl_enabled",
-                "acl_direct_read_user_ids",
-                "acl_direct_write_user_ids",
-                "acl_direct_manage_user_ids",
-                "acl_inherited_read_user_ids",
-                "acl_inherited_write_user_ids",
-                "acl_inherited_manage_user_ids",
+                "acl_direct_read_principal_ids",
+                "acl_direct_write_principal_ids",
+                "acl_direct_manage_principal_ids",
+                "acl_inherited_read_principal_ids",
+                "acl_inherited_write_principal_ids",
+                "acl_inherited_manage_principal_ids",
             ]
         )
         return {

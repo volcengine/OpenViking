@@ -44,7 +44,7 @@ from openviking.retrieve.type_quota_recall import (
     DEFAULT_QUOTAS,
     search_type_quota_recall,
 )
-from openviking.server.auth import resolve_actor_peer_headers, resolve_identity
+from openviking.server.auth import resolve_actor_peer_headers, resolve_group_ids, resolve_identity
 from openviking.server.dependencies import get_server_config, get_service
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
@@ -185,12 +185,12 @@ class _IdentityASGIMiddleware:
             )
             return await resp(scope, receive, send)
 
+        account_id = identity.account_id or "default"
+        user_id = identity.user_id or "default"
         ctx = RequestContext(
-            user=UserIdentifier(
-                identity.account_id or "default",
-                identity.user_id or "default",
-            ),
+            user=UserIdentifier(account_id, user_id),
             role=identity.role,
+            group_ids=resolve_group_ids(request, account_id, user_id),
             actor_peer_id=actor_peer_id,
             legacy_agent_id=legacy_agent_id,
             from_oauth=identity.from_oauth,

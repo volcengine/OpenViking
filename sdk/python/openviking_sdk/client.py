@@ -890,17 +890,21 @@ class AsyncHTTPClient:
         )
         return self._handle_response_data(response).get("result", {})
 
-    async def acl_grant(self, uri: str, user_id: str, level: str) -> Dict[str, Any]:
+    async def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
         response = await self._http.post(
             "/api/v1/acl/grant",
-            json={"uri": VikingURI.normalize(uri), "user_id": user_id, "level": level},
+            json={
+                "uri": VikingURI.normalize(uri),
+                "principal": principal,
+                "level": level,
+            },
         )
         return self._handle_response_data(response).get("result", {})
 
-    async def acl_revoke(self, uri: str, user_id: str) -> Dict[str, Any]:
+    async def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
         response = await self._http.post(
             "/api/v1/acl/revoke",
-            json={"uri": VikingURI.normalize(uri), "user_id": user_id},
+            json={"uri": VikingURI.normalize(uri), "principal": principal},
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -1341,6 +1345,47 @@ class AsyncHTTPClient:
         response = await self._http.post(
             f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
             json=payload,
+        )
+        return self._handle_response(response)
+
+    async def admin_create_group(self, account_id: str, name: str) -> Dict[str, Any]:
+        response = await self._http.post(
+            f"/api/v1/admin/accounts/{account_id}/groups",
+            json={"name": name},
+        )
+        return self._handle_response(response)
+
+    async def admin_list_groups(self, account_id: str) -> List[Any]:
+        response = await self._http.get(f"/api/v1/admin/accounts/{account_id}/groups")
+        return self._handle_response(response)
+
+    async def admin_delete_group(self, account_id: str, group_id: str) -> Dict[str, Any]:
+        response = await self._http.delete(
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}"
+        )
+        return self._handle_response(response)
+
+    async def admin_list_group_members(
+        self, account_id: str, group_id: str
+    ) -> Dict[str, Any]:
+        response = await self._http.get(
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members"
+        )
+        return self._handle_response(response)
+
+    async def admin_add_group_member(
+        self, account_id: str, group_id: str, user_id: str
+    ) -> Dict[str, Any]:
+        response = await self._http.put(
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
+        )
+        return self._handle_response(response)
+
+    async def admin_remove_group_member(
+        self, account_id: str, group_id: str, user_id: str
+    ) -> Dict[str, Any]:
+        response = await self._http.delete(
+            f"/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}"
         )
         return self._handle_response(response)
 
@@ -1830,11 +1875,11 @@ class SyncHTTPClient:
     def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
         return run_async(self._async_client.acl_set(uri, entries))
 
-    def acl_grant(self, uri: str, user_id: str, level: str) -> Dict[str, Any]:
-        return run_async(self._async_client.acl_grant(uri, user_id, level))
+    def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_grant(uri, principal, level))
 
-    def acl_revoke(self, uri: str, user_id: str) -> Dict[str, Any]:
-        return run_async(self._async_client.acl_revoke(uri, user_id))
+    def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_revoke(uri, principal))
 
     def acl_delete(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.acl_delete(uri))
@@ -2136,6 +2181,32 @@ class SyncHTTPClient:
         self, account_id: str, user_id: str, seed: Optional[str] = None
     ) -> Dict[str, Any]:
         return run_async(self._async_client.admin_regenerate_key(account_id, user_id, seed=seed))
+
+    def admin_create_group(self, account_id: str, name: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_create_group(account_id, name))
+
+    def admin_list_groups(self, account_id: str) -> List[Any]:
+        return run_async(self._async_client.admin_list_groups(account_id))
+
+    def admin_delete_group(self, account_id: str, group_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_delete_group(account_id, group_id))
+
+    def admin_list_group_members(self, account_id: str, group_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.admin_list_group_members(account_id, group_id))
+
+    def admin_add_group_member(
+        self, account_id: str, group_id: str, user_id: str
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.admin_add_group_member(account_id, group_id, user_id)
+        )
+
+    def admin_remove_group_member(
+        self, account_id: str, group_id: str, user_id: str
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.admin_remove_group_member(account_id, group_id, user_id)
+        )
 
     def admin_migrate(self, cleanup: bool = False) -> Dict[str, Any]:
         return run_async(self._async_client.admin_migrate(cleanup=cleanup))

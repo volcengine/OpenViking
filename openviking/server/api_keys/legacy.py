@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Legacy API Key management (original implementation)."""
 
+import asyncio
+import copy
 import fnmatch
 import hashlib
 import hmac
 import json
 import secrets
+import uuid
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
@@ -19,6 +22,7 @@ from openviking.server.identity import ResolvedIdentity, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     UnauthenticatedError,
@@ -30,6 +34,7 @@ logger = get_logger(__name__)
 
 ACCOUNTS_PATH = "/local/_system/accounts.json"
 USERS_PATH_TEMPLATE = "/local/{account_id}/_system/users.json"
+GROUPS_PATH_TEMPLATE = "/local/{account_id}/_system/groups.json"
 
 
 # Argon2id parameters - export with LEGACY_ prefix for reuse in new.py
@@ -75,10 +80,13 @@ class LegacyAPIKeyManager:
         self._accounts: Dict[str, AccountInfo] = {}
         # Prefix index: key_prefix -> list[UserKeyEntry]
         self._prefix_index: Dict[str, list[UserKeyEntry]] = {}
+        self._group_lock = asyncio.Lock()
+        self._user_group_ids: Dict[tuple[str, str], tuple[str, ...]] = {}
 
     def _discard_account_state(self, account_id: str) -> None:
         """Remove an account and its key index entries from in-memory state."""
         account = self._accounts.pop(account_id, None)
+        self._discard_account_group_index(account_id)
         if account is None:
             return
 
@@ -123,11 +131,16 @@ class LegacyAPIKeyManager:
             users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
             users_data = await self._read_json(users_path)
             users = users_data.get("users", {}) if users_data else {}
+            groups_path = GROUPS_PATH_TEMPLATE.format(account_id=account_id)
+            groups_data = await self._read_json(groups_path)
+            groups = groups_data.get("groups", {}) if groups_data else {}
 
             self._accounts[account_id] = AccountInfo(
                 created_at=info.get("created_at", ""),
                 users=users,
+                groups=groups,
             )
+            self._rebuild_account_group_index(account_id)
 
             for user_id, user_info in users.items():
                 key_or_hash = user_info.get("key", "")
@@ -258,6 +271,7 @@ class LegacyAPIKeyManager:
         self._accounts[account_id] = AccountInfo(
             created_at=now,
             users={admin_user_id: user_info},
+            groups={},
         )
 
         entry = UserKeyEntry(
@@ -277,6 +291,7 @@ class LegacyAPIKeyManager:
         try:
             await self._save_accounts_json()
             await self._save_users_json(account_id)
+            await self._save_groups_json(account_id)
         except Exception:
             await self._rollback_create_account(account_id)
             raise
@@ -353,33 +368,38 @@ class LegacyAPIKeyManager:
 
     async def remove_user(self, account_id: str, user_id: str) -> None:
         """Remove a user from an account."""
-        account = self._accounts.get(account_id)
-        if account is None:
-            raise NotFoundError(account_id, "account")
-        if user_id not in account.users:
-            raise NotFoundError(user_id, "user")
+        async with self._group_lock:
+            account = self._accounts.get(account_id)
+            if account is None:
+                raise NotFoundError(account_id, "account")
+            if user_id not in account.users:
+                raise NotFoundError(user_id, "user")
 
-        user_info = account.users.pop(user_id)
-        key_or_hash = user_info.get("key", "")
+            groups = copy.deepcopy(account.groups)
+            changed = False
+            for group in groups.values():
+                members = group.get("members", [])
+                if user_id in members:
+                    group["members"] = [member for member in members if member != user_id]
+                    changed = True
+            if changed:
+                await self._replace_groups(account_id, account, groups)
 
-        if key_or_hash:
-            # Get key_prefix - if not in user_info, compute from key
-            key_prefix = user_info.get("key_prefix", "")
-            if not key_prefix:
-                key_prefix = self._get_key_prefix(key_or_hash)
+            user_info = account.users.pop(user_id)
+            key_or_hash = user_info.get("key", "")
 
-            # Remove from prefix index
-            if key_prefix in self._prefix_index:
-                self._prefix_index[key_prefix] = [
-                    entry
-                    for entry in self._prefix_index[key_prefix]
-                    if not (entry.account_id == account_id and entry.user_id == user_id)
-                ]
-                # Remove prefix if index is empty
-                if not self._prefix_index[key_prefix]:
-                    del self._prefix_index[key_prefix]
+            if key_or_hash:
+                key_prefix = user_info.get("key_prefix", "") or self._get_key_prefix(key_or_hash)
+                if key_prefix in self._prefix_index:
+                    self._prefix_index[key_prefix] = [
+                        entry
+                        for entry in self._prefix_index[key_prefix]
+                        if not (entry.account_id == account_id and entry.user_id == user_id)
+                    ]
+                    if not self._prefix_index[key_prefix]:
+                        del self._prefix_index[key_prefix]
 
-        await self._save_users_json(account_id)
+            await self._save_users_json(account_id)
 
     async def regenerate_key(self, account_id: str, user_id: str, seed: Optional[str] = None) -> str:
         """Regenerate a user's API key. Old key is immediately invalidated."""
@@ -558,6 +578,72 @@ class LegacyAPIKeyManager:
             return Role.USER
         return Role(user.get("role", "user"))
 
+    def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]:
+        """Return the account-scoped groups currently containing the user."""
+        return self._user_group_ids.get((account_id, user_id), ())
+
+    async def create_group(self, account_id: str, name: str) -> dict:
+        name = self._normalize_group_name(name)
+        async with self._group_lock:
+            account = self._require_account(account_id)
+            if any(group.get("name") == name for group in account.groups.values()):
+                raise AlreadyExistsError(name, "group")
+            group_id = f"grp_{uuid.uuid4().hex}"
+            groups = copy.deepcopy(account.groups)
+            groups[group_id] = {"name": name, "members": []}
+            await self._replace_groups(account_id, account, groups)
+            return self._group_result(group_id, groups[group_id])
+
+    def get_groups(self, account_id: str) -> list[dict]:
+        account = self._require_account(account_id)
+        return [
+            self._group_result(group_id, group)
+            for group_id, group in sorted(
+                account.groups.items(), key=lambda item: (str(item[1].get("name", "")), item[0])
+            )
+        ]
+
+    def get_group_members(self, account_id: str, group_id: str) -> list[str]:
+        group = self._require_group(account_id, group_id)
+        return sorted(set(group.get("members", [])))
+
+    async def add_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:
+        async with self._group_lock:
+            account = self._require_account(account_id)
+            if user_id not in account.users:
+                raise NotFoundError(user_id, "user")
+            group = self._require_group(account_id, group_id)
+            if user_id in group.get("members", []):
+                return False
+            groups = copy.deepcopy(account.groups)
+            groups[group_id].setdefault("members", []).append(user_id)
+            groups[group_id]["members"].sort()
+            await self._replace_groups(account_id, account, groups)
+            return True
+
+    async def remove_group_member(self, account_id: str, group_id: str, user_id: str) -> bool:
+        async with self._group_lock:
+            account = self._require_account(account_id)
+            group = self._require_group(account_id, group_id)
+            if user_id not in group.get("members", []):
+                return False
+            groups = copy.deepcopy(account.groups)
+            groups[group_id]["members"] = [
+                member for member in groups[group_id].get("members", []) if member != user_id
+            ]
+            await self._replace_groups(account_id, account, groups)
+            return True
+
+    async def delete_group(self, account_id: str, group_id: str) -> None:
+        async with self._group_lock:
+            account = self._require_account(account_id)
+            group = self._require_group(account_id, group_id)
+            if group.get("members"):
+                raise FailedPreconditionError("Group must be empty before deletion")
+            groups = copy.deepcopy(account.groups)
+            del groups[group_id]
+            await self._replace_groups(account_id, account, groups)
+
     def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
         """Return SHA-256 hex digest of the user's stored API key value, or None.
 
@@ -588,6 +674,62 @@ class LegacyAPIKeyManager:
         return hashlib.sha256(stored.encode("utf-8")).hexdigest()
 
     # ---- internal helpers ----
+
+    def _require_account(self, account_id: str) -> AccountInfo:
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+        return account
+
+    def _require_group(self, account_id: str, group_id: str) -> dict:
+        account = self._require_account(account_id)
+        group = account.groups.get(group_id)
+        if group is None:
+            raise NotFoundError(group_id, "group")
+        return group
+
+    @staticmethod
+    def _normalize_group_name(name: str) -> str:
+        if not isinstance(name, str):
+            raise InvalidArgumentError("group name must be a string")
+        normalized = name.strip()
+        if not normalized:
+            raise InvalidArgumentError("group name must not be empty")
+        if len(normalized) > 100:
+            raise InvalidArgumentError("group name must not exceed 100 characters")
+        return normalized
+
+    @staticmethod
+    def _group_result(group_id: str, group: dict) -> dict:
+        return {
+            "group_id": group_id,
+            "name": group.get("name", ""),
+            "member_count": len(set(group.get("members", []))),
+        }
+
+    def _discard_account_group_index(self, account_id: str) -> None:
+        for key in [key for key in self._user_group_ids if key[0] == account_id]:
+            del self._user_group_ids[key]
+
+    def _rebuild_account_group_index(self, account_id: str) -> None:
+        self._discard_account_group_index(account_id)
+        account = self._accounts.get(account_id)
+        if account is None:
+            return
+        group_ids_by_user: Dict[str, list[str]] = {}
+        for group_id, group in account.groups.items():
+            for user_id in group.get("members", []):
+                if user_id in account.users:
+                    group_ids_by_user.setdefault(user_id, []).append(group_id)
+        for user_id, group_ids in group_ids_by_user.items():
+            self._user_group_ids[(account_id, user_id)] = tuple(sorted(set(group_ids)))
+
+    async def _replace_groups(
+        self, account_id: str, account: AccountInfo, groups: Dict[str, dict]
+    ) -> None:
+        await self._write_groups_json(account_id, groups)
+        account.groups = groups
+        self._rebuild_account_group_index(account_id)
 
     def _generate_api_key(self) -> str:
         """Generate new API Key (legacy format - hex)."""
@@ -666,3 +808,12 @@ class LegacyAPIKeyManager:
         data = {"users": account.users}
         path = USERS_PATH_TEMPLATE.format(account_id=account_id)
         await self._write_json(path, data)
+
+    async def _write_groups_json(self, account_id: str, groups: dict) -> None:
+        path = GROUPS_PATH_TEMPLATE.format(account_id=account_id)
+        await self._write_json(path, {"groups": groups})
+
+    async def _save_groups_json(self, account_id: str) -> None:
+        account = self._accounts.get(account_id)
+        if account is not None:
+            await self._write_groups_json(account_id, account.groups)

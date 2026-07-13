@@ -620,17 +620,17 @@ class FSService:
         )
 
     async def grant_acl(
-        self, uri: str, user_id: str, level: str, ctx: RequestContext
+        self, uri: str, principal: str, level: str, ctx: RequestContext
     ) -> Dict[str, Any]:
         return await self._ensure_initialized().grant_acl(
-            validate_viking_uri(uri), user_id, level, ctx=ctx
+            validate_viking_uri(uri), principal, level, ctx=ctx
         )
 
     async def revoke_acl(
-        self, uri: str, user_id: str, ctx: RequestContext
+        self, uri: str, principal: str, ctx: RequestContext
     ) -> Dict[str, Any]:
         return await self._ensure_initialized().revoke_acl(
-            validate_viking_uri(uri), user_id, ctx=ctx
+            validate_viking_uri(uri), principal, ctx=ctx
         )
 
     async def delete_acl(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:

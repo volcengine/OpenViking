@@ -254,10 +254,10 @@ class BaseClient(ABC):
     async def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
         raise NotImplementedError
 
-    async def acl_grant(self, uri: str, user_id: str, level: str) -> Dict[str, Any]:
+    async def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
         raise NotImplementedError
 
-    async def acl_revoke(self, uri: str, user_id: str) -> Dict[str, Any]:
+    async def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
         raise NotImplementedError
 
     async def acl_delete(self, uri: str) -> Dict[str, Any]:

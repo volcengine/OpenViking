@@ -121,6 +121,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 # 返回: {"result": {"account_id": "acme", "user_id": "bob", "user_key": "..."}}
 ```
 
+ACL 用户组是例外：组和成员通过 [Admin API](../api/08-admin.md#用户组) 维护，成员必须是当前 account 已注册的用户。客户端不能通过 header 或 token claim 声明组；服务端认证用户后查询组注册表，并把结果写入本次请求的 `RequestContext.group_ids`。
+
 受信部署也可以通过受信网关调用 Admin API，目前支持两种方式：
 
 - 携带受信部署自身的 `root_api_key`。对于 `/api/v1/admin/*`，服务端校验该 key 后会将请求视为 ROOT。
@@ -236,6 +238,8 @@ ov --sudo system status
 模式下必须使用绑定了 account/user 的 key。这个 key 可以是 `USER` key，也可以是
 `ADMIN` key；`ADMIN` key 会以它自己的 user 身份访问数据，不能通过
 `X-OpenViking-Account` / `X-OpenViking-User` 切换身份。
+
+ACL 检查还会使用服务端解析的 account 内用户组。成员变更从下一次请求生效，不需要签发新 API Key，也不会修改资源 ACL。
 
 `ROOT` key 没有绑定租户 user，因此在 `api_key` 模式下不能访问租户级数据 API。
 如果部署需要由上游网关断言 `account` / `user`，请使用 `trusted` 模式，而不是在

@@ -24,8 +24,12 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
-def _ctx(user_id: str, role: str = Role.USER) -> RequestContext:
-    return RequestContext(user=UserIdentifier("account-1", user_id), role=role)
+def _ctx(
+    user_id: str, role: str = Role.USER, group_ids: tuple[str, ...] = ()
+) -> RequestContext:
+    return RequestContext(
+        user=UserIdentifier("account-1", user_id), role=role, group_ids=group_ids
+    )
 
 
 async def _upsert_context(
@@ -52,29 +56,34 @@ async def _upsert_context(
 def test_acl_entries_expand_levels_and_keep_highest_duplicate():
     acl = entries_to_direct(
         [
-            AclEntry("bob", "viewer"),
-            AclEntry("alice", "editor"),
-            AclEntry("bob", "manager"),
-            AclEntry("*", "viewer"),
+            AclEntry("user:bob", "viewer"),
+            AclEntry("user:alice", "editor"),
+            AclEntry("user:bob", "manager"),
+            AclEntry("user:*", "viewer"),
+            AclEntry("group:grp_engineering", "viewer"),
         ]
     )
 
-    assert acl.read == frozenset({"*", "alice", "bob"})
-    assert acl.write == frozenset({"alice", "bob"})
-    assert acl.manage == frozenset({"bob"})
+    assert acl.read == frozenset(
+        {"user:*", "user:alice", "user:bob", "group:grp_engineering"}
+    )
+    assert acl.write == frozenset({"user:alice", "user:bob"})
+    assert acl.manage == frozenset({"user:bob"})
     assert [entry.to_dict() for entry in direct_to_entries(acl)] == [
-        {"user_id": "*", "level": "viewer"},
-        {"user_id": "alice", "level": "editor"},
-        {"user_id": "bob", "level": "manager"},
+        {"principal": "group:grp_engineering", "level": "viewer"},
+        {"principal": "user:*", "level": "viewer"},
+        {"principal": "user:alice", "level": "editor"},
+        {"principal": "user:bob", "level": "manager"},
     ]
 
 
 @pytest.mark.parametrize(
     "entry",
     [
-        {"user_id": "", "level": "viewer"},
-        {"user_id": "bad/user", "level": "viewer"},
-        {"user_id": "bob", "level": "owner"},
+        {"principal": "", "level": "viewer"},
+        {"principal": "user:bad/user", "level": "viewer"},
+        {"principal": "group:*", "level": "viewer"},
+        {"principal": "user:bob", "level": "owner"},
     ],
 )
 def test_acl_entries_reject_invalid_values(entry):
@@ -112,14 +121,18 @@ def test_implicit_managers_follow_resource_ownership():
 
 
 def test_effective_acl_adds_direct_and_inherited_permissions():
-    inherited = entries_to_direct([AclEntry("bob", "viewer"), AclEntry("alice", "editor")])
-    direct = entries_to_direct([AclEntry("carol", "manager")])
+    inherited = entries_to_direct(
+        [AclEntry("user:bob", "viewer"), AclEntry("user:alice", "editor")]
+    )
+    direct = entries_to_direct([AclEntry("group:grp_ops", "manager")])
     effective = EffectiveAcl(True, direct=direct, inherited=inherited)
 
-    assert effective.permissions.read == frozenset({"alice", "bob", "carol"})
-    assert acl_allows(effective, "alice", "write")
-    assert acl_allows(effective, "carol", "manage")
-    assert not acl_allows(effective, "bob", "write")
+    assert effective.permissions.read == frozenset(
+        {"user:alice", "user:bob", "group:grp_ops"}
+    )
+    assert acl_allows(effective, _ctx("alice"), "write")
+    assert acl_allows(effective, _ctx("carol", group_ids=("grp_ops",)), "manage")
+    assert not acl_allows(effective, _ctx("bob"), "write")
 
 
 @pytest.mark.asyncio
@@ -135,7 +148,7 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path):
     )
     context_store = VikingVectorIndexBackend(config)
     admin = _ctx("admin", Role.ADMIN)
-    bob = _ctx("bob")
+    bob = _ctx("bob", group_ids=("grp_readers",))
     carol = _ctx("carol")
     root = _ctx("root", Role.ROOT)
     old_root = "viking://resources/source"
@@ -155,9 +168,9 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path):
         await _upsert_context(context_store, admin, "doc-l2", old_file, 2)
         await _upsert_context(context_store, admin, "destination-l0", new_parent, 0)
 
-        await acl.set_direct("viking://resources", [AclEntry("alice", "viewer")], admin)
-        await acl.set_direct(old_root, [AclEntry("bob", "viewer")], admin)
-        await acl.set_direct(new_parent, [AclEntry("alice", "editor")], admin)
+        await acl.set_direct("viking://resources", [AclEntry("user:alice", "viewer")], admin)
+        await acl.set_direct(old_root, [AclEntry("group:grp_readers", "viewer")], admin)
+        await acl.set_direct(new_parent, [AclEntry("user:alice", "editor")], admin)
 
         await context_store.upsert(
             {
@@ -172,8 +185,11 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path):
             ctx=admin,
         )
         materialized = (await context_store.get_strict(["doc-l2"], ctx=admin))[0]
-        assert materialized["acl_direct_read_user_ids"] == []
-        assert materialized["acl_inherited_read_user_ids"] == ["alice", "bob"]
+        assert materialized["acl_direct_read_principal_ids"] == []
+        assert materialized["acl_inherited_read_principal_ids"] == [
+            "group:grp_readers",
+            "user:alice",
+        ]
 
         bob_results = await context_store.search_in_tenant(
             ctx=bob,
@@ -196,6 +212,16 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path):
         assert [record["uri"] for record in bob_results] == [old_file]
         assert carol_results == []
         assert root_results == []
+        revoked_results = await context_store.search_in_tenant(
+            ctx=_ctx("bob"),
+            query_vector=[1.0, 0.0, 0.0, 0.0],
+            target_directories=[old_root],
+            level=[2],
+        )
+        assert revoked_results == []
+        assert (await context_store.get_strict(["doc-l2"], ctx=admin))[0][
+            "acl_inherited_read_principal_ids"
+        ] == ["group:grp_readers", "user:alice"]
         assert await context_store.count_in_tenant(bob, PathScope("uri", old_root, depth=-1)) == 2
         assert await context_store.count_in_tenant(carol, PathScope("uri", old_root, depth=-1)) == 0
 
@@ -204,19 +230,26 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path):
         await acl.refresh_context_subtree(new_root, admin)
 
         effective = await acl.resolve(new_file, admin)
-        assert effective.permissions.read == frozenset({"alice", "bob"})
-        assert effective.permissions.write == frozenset({"alice"})
+        assert effective.permissions.read == frozenset(
+            {"group:grp_readers", "user:alice"}
+        )
+        assert effective.permissions.write == frozenset({"user:alice"})
         assert (await acl.get_direct(old_root, admin)).empty
-        assert (await acl.get_direct(new_root, admin)).read == frozenset({"bob"})
+        assert (await acl.get_direct(new_root, admin)).read == frozenset(
+            {"group:grp_readers"}
+        )
 
         new_context = await context_store.filter(
             filter=In("uri", [new_file]),
             limit=10,
             ctx=admin,
         )
-        assert new_context[0]["acl_direct_read_user_ids"] == []
-        assert new_context[0]["acl_inherited_read_user_ids"] == ["alice", "bob"]
-        assert new_context[0]["acl_inherited_write_user_ids"] == ["alice"]
+        assert new_context[0]["acl_direct_read_principal_ids"] == []
+        assert new_context[0]["acl_inherited_read_principal_ids"] == [
+            "group:grp_readers",
+            "user:alice",
+        ]
+        assert new_context[0]["acl_inherited_write_principal_ids"] == ["user:alice"]
     finally:
         await context_store.close()
 
@@ -256,8 +289,8 @@ async def test_local_acl_schema_migration_requires_no_record_backfill(tmp_path):
         )
         legacy = (await backend.get_strict(["legacy-1"], ctx=ctx))[0]
         assert legacy["acl_enabled"] is False
-        assert legacy["acl_direct_read_user_ids"] == []
-        assert legacy["acl_inherited_read_user_ids"] == []
+        assert legacy["acl_direct_read_principal_ids"] == []
+        assert legacy["acl_inherited_read_principal_ids"] == []
 
         visible = await backend.filter(
             filter=RawDSL({"op": "must_not", "field": "acl_enabled", "conds": [True]}),
@@ -267,12 +300,14 @@ async def test_local_acl_schema_migration_requires_no_record_backfill(tmp_path):
         assert [record["id"] for record in visible] == ["legacy-1"]
 
         acl = AclManager(backend)
-        await acl.set_direct("viking://resources/legacy.md", [AclEntry("bob", "viewer")], ctx)
+        await acl.set_direct(
+            "viking://resources/legacy.md", [AclEntry("user:bob", "viewer")], ctx
+        )
         stored = (await backend.get_strict(["legacy-1"], ctx=ctx))[0]
         assert stored["acl_enabled"] is True
-        assert stored["acl_direct_read_user_ids"] == ["bob"]
+        assert stored["acl_direct_read_principal_ids"] == ["user:bob"]
         filtered = await backend.filter(
-            filter=In("acl_direct_read_user_ids", ["bob"]),
+            filter=In("acl_direct_read_principal_ids", ["user:bob"]),
             limit=10,
             ctx=ctx,
         )
