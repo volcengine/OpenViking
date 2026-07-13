@@ -66,6 +66,8 @@ ACL API 管理资源节点的直接授权，并返回节点继承后的有效权
 GET /api/v1/acl?uri={uri}
 ```
 
+GET 可以在目标尚无 context 记录时返回结果：`direct_entries` 为空，继承权限从已有祖先 context 计算。修改 ACL 的接口要求目标已有 context 记录。
+
 ```bash
 curl "http://localhost:1933/api/v1/acl?uri=viking%3A%2F%2Fresources%2Fproject-a" \
   -H "X-API-Key: your-key"
@@ -237,11 +239,13 @@ ov acl rm viking://resources/project-a
 
 ## 错误处理
 
+接口先校验 manage，再向已授权调用者确认 URI 是否存在，避免通过错误类型探测资源。
+
 | 场景 | 错误 |
 |------|------|
-| URI 不存在 | `NOT_FOUND` |
-| URI 已存在但尚无 context 记录 | `INVALID_ARGUMENT`，需先完成索引 |
 | 调用者没有 manage | `PERMISSION_DENIED` |
+| 已授权调用者访问不存在的 URI | `NOT_FOUND` |
+| 修改 ACL 时 URI 尚无 context 记录 | `INVALID_ARGUMENT`，需先完成索引 |
 | `user_id` 非法 | `INVALID_ARGUMENT` |
 | level 不是 `viewer/editor/manager` | `INVALID_ARGUMENT` |
 | 请求包含 `acl_enabled` 等未知字段 | `INVALID_ARGUMENT` |

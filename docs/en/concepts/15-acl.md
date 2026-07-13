@@ -72,7 +72,7 @@ All filesystem APIs use the same permission mapping:
 
 | Operation | Required capability |
 |-----------|---------------------|
-| read, list, tree, find, search, grep, glob, relations | read |
+| read, stat, list, tree, find, search, grep, glob, relations | read |
 | write, create, mkdir, set tags | write |
 | delete, manage ACL | manage |
 | move source | manage |
@@ -80,9 +80,11 @@ All filesystem APIs use the same permission mapping:
 
 An ACL grant on a directory is inherited by every descendant. `list`, `tree`, and other batch results still check every returned node because an ACL-free directory may be visible under legacy URI rules while one of its descendants has entered the ACL-controlled domain through its own ACL.
 
-When a file or directory moves, its direct ACL moves with it. Permissions inherited from the old ancestors do not move, and ACLs on the new ancestors are recalculated into the effective permissions.
+When a file or directory moves, its direct ACL moves with it. Permissions inherited from the old ancestors do not move, and ACLs on the new ancestors are recalculated into the effective permissions. ACL-controlled resources can move only between supported resource scopes.
 
 Recursive tag updates, directory deletion, and directory moves validate the complete affected subtree first. The operation stops if any node lacks the required capability or the subtree cannot be scanned completely.
+
+For a directory, `stat.count` uses the same path and ACL scalar filter and reports the number of context records visible to the caller.
 
 ## Retrieval Filtering
 

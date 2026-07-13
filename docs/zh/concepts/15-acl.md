@@ -72,7 +72,7 @@ acl_enabled = true
 
 | 操作 | 所需能力 |
 |------|----------|
-| read、list、tree、find、search、grep、glob、relations | read |
+| read、stat、list、tree、find、search、grep、glob、relations | read |
 | write、create、mkdir、set tags | write |
 | delete、管理 ACL | manage |
 | move 源节点 | manage |
@@ -80,9 +80,11 @@ acl_enabled = true
 
 目录上的 ACL 授权会被所有后代继承。`list`、`tree` 和批量结果仍逐个检查有效 ACL，因为未设置 ACL 的目录可能按原有 URI 规则可见，而某个后代已经通过自己的 ACL 进入控制域。
 
-移动文件或目录时，节点自己的直接 ACL 随节点移动；旧祖先的继承权限不随对象移动，新祖先的 ACL 会重新参与计算。
+移动文件或目录时，节点自己的直接 ACL 随节点移动；旧祖先的继承权限不随对象移动，新祖先的 ACL 会重新参与计算。ACL 资源只能在受支持的资源范围之间移动。
 
 递归修改 tags、删除或移动目录会先校验完整目标子树。任一节点缺少所需能力，或子树扫描不完整，操作都会整体中止。
+
+目录 `stat` 的 `count` 使用相同的路径和 ACL 标量过滤，表示当前用户可见的 context 数量。
 
 ## 检索过滤
 

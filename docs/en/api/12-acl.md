@@ -66,6 +66,8 @@ Implicit managers are not included in these lists.
 GET /api/v1/acl?uri={uri}
 ```
 
+GET can report an existing target that has no context record: `direct_entries` is empty and inherited permissions are resolved from existing ancestor contexts. Mutating ACL endpoints require a context record for the target.
+
 ```bash
 curl "http://localhost:1933/api/v1/acl?uri=viking%3A%2F%2Fresources%2Fproject-a" \
   -H "X-API-Key: your-key"
@@ -237,11 +239,13 @@ ov acl rm viking://resources/project-a
 
 ## Errors
 
+The API checks manage permission before confirming existence to an authorized caller, preventing resource discovery through error types.
+
 | Scenario | Error |
 |----------|-------|
-| URI does not exist | `NOT_FOUND` |
-| URI exists but has no context record | `INVALID_ARGUMENT`; index it first |
 | Caller lacks manage | `PERMISSION_DENIED` |
+| Authorized caller targets a URI that does not exist | `NOT_FOUND` |
+| ACL mutation targets a URI without a context record | `INVALID_ARGUMENT`; index it first |
 | Invalid `user_id` | `INVALID_ARGUMENT` |
 | Level is not `viewer/editor/manager` | `INVALID_ARGUMENT` |
 | Request includes unknown fields such as `acl_enabled` | `INVALID_ARGUMENT` |
