@@ -9,7 +9,7 @@ Provides session management operations: session, sessions, add_message, commit, 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
-from openviking.server.config import ToolOutputExternalizationConfig
+from openviking.server.config import ToolOutputExternalizationConfig, UserConfig
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
@@ -43,6 +43,7 @@ class SessionService:
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
         self._tool_output_externalization_config = ToolOutputExternalizationConfig()
+        self._user_config_defaults = UserConfig()
 
     def set_dependencies(
         self,
@@ -60,6 +61,10 @@ class SessionService:
     ) -> None:
         """Set tool output externalization controls for newly created sessions."""
         self._tool_output_externalization_config = config.model_copy(deep=True)
+
+    def set_user_config_defaults(self, config: UserConfig) -> None:
+        """Set deployment defaults used by newly created session objects."""
+        self._user_config_defaults = config.model_copy(deep=True)
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -120,6 +125,7 @@ class SessionService:
             session_id=session_id,
             session_uri=session_uri,
             tool_output_externalization_config=self._tool_output_externalization_config,
+            user_config_defaults=self._user_config_defaults,
         )
 
     async def create(

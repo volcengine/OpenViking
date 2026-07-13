@@ -261,6 +261,7 @@ class SessionCompressorV3:
         latest_archive_overview: str = "",
         archive_uri: Optional[str] = None,
         allowed_memory_types: Optional[set[str]] = None,
+        agent_evolution_enabled: bool = True,
         allow_self_memory: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
     ):
@@ -274,6 +275,7 @@ class SessionCompressorV3:
                 session_id=session_id,
                 archive_uri=archive_uri or "",
                 strict_extract_errors=strict_extract_errors,
+                agent_evolution_enabled=agent_evolution_enabled,
             )
 
         result = await self._extract_user_memories(
@@ -288,16 +290,23 @@ class SessionCompressorV3:
             allow_self_memory=allow_self_memory,
             allowed_peer_ids=allowed_peer_ids,
         )
-        train_result = await self.train_from_extracted_cases(
-            cases=result.cases,
-            messages=message_list,
-            ctx=ctx,
-            case_uri_by_name=getattr(result, "case_uri_by_name", {}),
-            session_id=session_id,
-            archive_uri=archive_uri or "",
-            strict_extract_errors=strict_extract_errors,
-            collect_memory_diff=True,
-        )
+        if agent_evolution_enabled:
+            train_result = await self.train_from_extracted_cases(
+                cases=result.cases,
+                messages=message_list,
+                ctx=ctx,
+                case_uri_by_name=getattr(result, "case_uri_by_name", {}),
+                session_id=session_id,
+                archive_uri=archive_uri or "",
+                strict_extract_errors=strict_extract_errors,
+                collect_memory_diff=True,
+            )
+        else:
+            train_result = {
+                "case_count": len(result.cases),
+                "submitted": 0,
+                "reason": "agent_evolution_disabled",
+            }
         await self._write_final_memory_diff(
             archive_uri=archive_uri or "",
             ctx=ctx,
@@ -321,6 +330,7 @@ class SessionCompressorV3:
         session_id: Optional[str],
         archive_uri: str,
         strict_extract_errors: bool,
+        agent_evolution_enabled: bool,
     ) -> dict[str, Any]:
         if ctx is None:
             logger.warning("No RequestContext provided, skipping training case fast path")
@@ -332,16 +342,23 @@ class SessionCompressorV3:
         )
         case_result = _applied_memory_result(case_write)
         contexts = _contexts_from_update_result(case_result)
-        train_result = await self.train_from_extracted_cases(
-            cases=[case],
-            messages=_training_messages_after_case_spec(messages),
-            ctx=ctx,
-            case_uri_by_name={case.name: _first_context_uri(contexts)},
-            session_id=session_id,
-            archive_uri=archive_uri,
-            strict_extract_errors=strict_extract_errors,
-            collect_memory_diff=True,
-        )
+        if agent_evolution_enabled:
+            train_result = await self.train_from_extracted_cases(
+                cases=[case],
+                messages=_training_messages_after_case_spec(messages),
+                ctx=ctx,
+                case_uri_by_name={case.name: _first_context_uri(contexts)},
+                session_id=session_id,
+                archive_uri=archive_uri,
+                strict_extract_errors=strict_extract_errors,
+                collect_memory_diff=True,
+            )
+        else:
+            train_result = {
+                "case_count": 1,
+                "submitted": 0,
+                "reason": "agent_evolution_disabled",
+            }
         await self._write_final_memory_diff(
             archive_uri=archive_uri,
             ctx=ctx,

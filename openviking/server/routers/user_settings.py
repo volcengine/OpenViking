@@ -18,8 +18,12 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
     public_add_targets,
+    public_memory_settings,
     read_user_add_targets,
+    read_user_config,
+    resolve_memory_settings,
     write_user_add_targets,
+    write_user_memory_settings,
 )
 from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 
@@ -31,6 +35,13 @@ class PatchAddLocationsRequest(BaseModel):
 
     resource_uri: Optional[str] = None
     skill_uri: Optional[str] = None
+
+
+class PatchMemorySettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_types: Optional[list[str]] = None
+    agent_evolution_enabled: Optional[bool] = None
 
 
 def _viking_fs():
@@ -60,6 +71,24 @@ async def _response(request: Request, ctx: RequestContext) -> dict[str, Any]:
         "effective": {
             "resource_uri": effective.resource_uri,
             "skill_uri": effective.skill_uri,
+        },
+    }
+
+
+async def _memory_response(request: Request, ctx: RequestContext) -> dict[str, Any]:
+    viking_fs = _viking_fs()
+    override = await read_user_config(viking_fs, ctx)
+    effective = await resolve_memory_settings(
+        viking_fs=viking_fs,
+        ctx=ctx,
+        user_config_defaults=request.app.state.config.user_config_defaults,
+        user_config=override,
+    )
+    return {
+        "override": public_memory_settings(override),
+        "effective": {
+            "memory_types": list(effective.memory_types),
+            "agent_evolution_enabled": effective.agent_evolution_enabled,
         },
     }
 
@@ -113,5 +142,34 @@ async def delete_add_locations(
 ):
     await delete_user_add_targets(_viking_fs(), _ctx)
     return Response(status="ok", result=await _response(request, _ctx)).model_dump(
+        exclude_none=True
+    )
+
+
+@router.get("/memory")
+async def get_memory_settings(
+    request: Request,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    return Response(status="ok", result=await _memory_response(request, _ctx)).model_dump(
+        exclude_none=True
+    )
+
+
+@router.patch("/memory")
+async def patch_memory_settings(
+    request: Request,
+    body: PatchMemorySettingsRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    await write_user_memory_settings(
+        _viking_fs(),
+        _ctx,
+        memory_types=body.memory_types,
+        agent_evolution_enabled=body.agent_evolution_enabled,
+        memory_types_set="memory_types" in body.model_fields_set,
+        agent_evolution_enabled_set="agent_evolution_enabled" in body.model_fields_set,
+    )
+    return Response(status="ok", result=await _memory_response(request, _ctx)).model_dump(
         exclude_none=True
     )

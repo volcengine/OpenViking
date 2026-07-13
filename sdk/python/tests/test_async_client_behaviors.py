@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
@@ -724,16 +724,12 @@ async def test_export_and_backup_ovpack_append_default_suffixes(tmp_path):
 async def test_backup_ovpack_preserves_existing_file_when_replace_fails(tmp_path):
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._http = SimpleNamespace(
-        post=AsyncMock(
-            return_value=SimpleNamespace(is_success=True, content=b"new-backup")
-        )
+        post=AsyncMock(return_value=SimpleNamespace(is_success=True, content=b"new-backup"))
     )
     output = tmp_path / "backup.ovpack"
     output.write_bytes(b"known-good-backup")
 
-    with patch(
-        "openviking_sdk.client.os.replace", side_effect=OSError("replace failed")
-    ):
+    with patch("openviking_sdk.client.os.replace", side_effect=OSError("replace failed")):
         with pytest.raises(OSError, match="replace failed"):
             await client.backup_ovpack(str(output))
 
@@ -764,3 +760,40 @@ async def test_import_ovpack_fails_fast_when_path_is_directory(tmp_path):
 
     with pytest.raises(ValueError, match="is not a file"):
         await client.import_ovpack(str(pack_dir), parent="viking://resources/")
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_gets_and_partially_patches_memory_settings():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(
+        get=AsyncMock(return_value=object()),
+        patch=AsyncMock(return_value=object()),
+    )
+    client._http = fake_http
+    client._handle_response = lambda _response: {"effective": {}}
+
+    assert await client.get_memory_settings() == {"effective": {}}
+    await client.patch_memory_settings(agent_evolution_enabled=True)
+    await client.patch_memory_settings(memory_types=None)
+
+    fake_http.get.assert_awaited_once_with("/api/v1/user-settings/memory")
+    assert fake_http.patch.await_args_list[0].kwargs["json"] == {"agent_evolution_enabled": True}
+    assert fake_http.patch.await_args_list[1].kwargs["json"] == {"memory_types": None}
+
+
+def test_sync_http_client_forwards_memory_settings_calls():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    mock_patch = MagicMock(return_value=object())
+    with patch.object(
+        client._async_client,
+        "patch_memory_settings",
+        mock_patch,
+    ):
+        with patch(
+            "openviking_sdk.client.run_async",
+            return_value={"effective": {"agent_evolution_enabled": True}},
+        ):
+            result = client.patch_memory_settings(agent_evolution_enabled=True)
+
+    assert result == {"effective": {"agent_evolution_enabled": True}}
+    mock_patch.assert_called_once_with(agent_evolution_enabled=True)

@@ -5,17 +5,22 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional, TypeVar
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.uri_validation import validate_content_target_uri
 from openviking.server.config import AddTargetsConfig, UserConfig
+from openviking.session.memory.constants import EXECUTION_MEMORY_TYPES
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 if TYPE_CHECKING:
     from openviking.server.config import ServerConfig
     from openviking.server.identity import RequestContext
+    from openviking.storage.transaction import LockHandle
     from openviking.storage.viking_fs import VikingFS
 
 
@@ -25,8 +30,32 @@ class ResolvedAddTargets:
     skill_uri: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class ResolvedMemorySettings:
+    memory_types: tuple[str, ...]
+    agent_evolution_enabled: bool
+
+
+_UpdateResult = TypeVar("_UpdateResult")
+
+
 def user_config_uri(ctx: RequestContext) -> str:
     return f"{canonical_user_root(ctx)}/settings/user_config.json"
+
+
+@asynccontextmanager
+async def _user_config_lock(
+    viking_fs: VikingFS,
+    uri: str,
+    ctx: RequestContext,
+) -> AsyncIterator[Optional[LockHandle]]:
+    uri_to_path = getattr(viking_fs, "_uri_to_path", None)
+    if not callable(uri_to_path):
+        yield None
+        return
+    path = uri_to_path(uri, ctx=ctx)
+    async with LockContext(get_lock_manager(), [path], lock_mode="exact") as handle:
+        yield handle
 
 
 def _user_config_from_payload(payload: Any) -> UserConfig:
@@ -114,18 +143,68 @@ async def read_user_config(
     return _user_config_from_payload(payload)
 
 
+def _validate_memory_types(memory_types: Optional[list[str]]) -> None:
+    if memory_types is None:
+        return
+    known = set(MemoryTypeRegistry().list_names(include_disabled=False))
+    unknown = set(memory_types) - known
+    if unknown:
+        raise InvalidArgumentError(
+            "Unknown user memory types: " + ", ".join(sorted(unknown)),
+            details={"field": "memory_types", "unknown": sorted(unknown)},
+        )
+
+
+def validate_user_config(user_config: UserConfig) -> None:
+    _validate_memory_types(user_config.memory.memory_types)
+
+
+async def update_user_config(
+    viking_fs: VikingFS,
+    ctx: RequestContext,
+    updater: Callable[[UserConfig], _UpdateResult],
+) -> _UpdateResult:
+    """Apply a locked read-modify-write update to the current user's config."""
+    uri = user_config_uri(ctx)
+    async with _user_config_lock(viking_fs, uri, ctx) as handle:
+        current = await read_user_config(viking_fs, ctx)
+        before = current.model_dump()
+        result = updater(current)
+        validate_user_config(current)
+        validate_add_targets(current.add_targets, ctx=ctx, viking_fs=viking_fs)
+        if current.model_dump() != before:
+            await viking_fs.write_file(
+                uri,
+                json.dumps(
+                    current.model_dump(exclude_none=True),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                ctx=ctx,
+                lock_handle=handle,
+            )
+        return result
+
+
 async def write_user_config(
     viking_fs: VikingFS,
     ctx: RequestContext,
     user_config: UserConfig,
 ) -> ResolvedAddTargets:
+    validate_user_config(user_config)
     runtime = validate_add_targets(user_config.add_targets, ctx=ctx, viking_fs=viking_fs)
     uri = user_config_uri(ctx)
-    await viking_fs.write_file(
-        uri,
-        json.dumps(user_config.model_dump(exclude_none=True), ensure_ascii=False, sort_keys=True),
-        ctx=ctx,
-    )
+    async with _user_config_lock(viking_fs, uri, ctx) as handle:
+        await viking_fs.write_file(
+            uri,
+            json.dumps(
+                user_config.model_dump(exclude_none=True),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            ctx=ctx,
+            lock_handle=handle,
+        )
     return runtime
 
 
@@ -148,13 +227,92 @@ async def write_user_add_targets(
     ctx: RequestContext,
     settings: AddTargetsConfig,
 ) -> ResolvedAddTargets:
-    user_config = await read_user_config(viking_fs, ctx)
-    user_config.add_targets = settings
-    return await write_user_config(viking_fs, ctx, user_config)
+    runtime = validate_add_targets(settings, ctx=ctx, viking_fs=viking_fs)
+
+    def _set(user_config: UserConfig) -> None:
+        user_config.add_targets = settings
+
+    await update_user_config(viking_fs, ctx, _set)
+    return runtime
 
 
 async def delete_user_add_targets(viking_fs: VikingFS, ctx: RequestContext) -> None:
-    await delete_user_config(viking_fs, ctx)
+    def _clear(user_config: UserConfig) -> None:
+        user_config.add_targets = AddTargetsConfig()
+
+    await update_user_config(viking_fs, ctx, _clear)
+
+
+async def write_user_memory_settings(
+    viking_fs: VikingFS,
+    ctx: RequestContext,
+    *,
+    memory_types: Any,
+    agent_evolution_enabled: Any,
+    memory_types_set: bool,
+    agent_evolution_enabled_set: bool,
+) -> None:
+    def _set(user_config: UserConfig) -> None:
+        if memory_types_set:
+            user_config.memory.memory_types = memory_types
+        if agent_evolution_enabled_set:
+            user_config.agent_evolution.enabled = agent_evolution_enabled
+
+    await update_user_config(viking_fs, ctx, _set)
+
+
+async def initialize_agent_evolution_disabled(
+    viking_fs: VikingFS,
+    ctx: RequestContext,
+) -> bool:
+    """Persist the personal-edition default without overriding explicit state."""
+    changed = False
+
+    def _initialize(user_config: UserConfig) -> None:
+        nonlocal changed
+        if user_config.agent_evolution.enabled is None:
+            user_config.agent_evolution.enabled = False
+            changed = True
+
+    await update_user_config(viking_fs, ctx, _initialize)
+    return changed
+
+
+async def resolve_memory_settings(
+    *,
+    viking_fs: VikingFS,
+    ctx: RequestContext,
+    user_config_defaults: Optional[UserConfig] = None,
+    user_config: Optional[UserConfig] = None,
+) -> ResolvedMemorySettings:
+    current = user_config or await read_user_config(viking_fs, ctx)
+    defaults = user_config_defaults or UserConfig()
+    configured_types = current.memory.memory_types
+    if configured_types is None:
+        configured_types = defaults.memory.memory_types
+    _validate_memory_types(configured_types)
+
+    enabled_types = set(MemoryTypeRegistry().list_names(include_disabled=False))
+    effective_types = enabled_types if configured_types is None else set(configured_types)
+
+    enabled = current.agent_evolution.enabled
+    if enabled is None:
+        enabled = defaults.agent_evolution.enabled
+    effective_agent_evolution_enabled = bool(enabled) if enabled is not None else False
+    if not effective_agent_evolution_enabled:
+        effective_types -= EXECUTION_MEMORY_TYPES
+
+    return ResolvedMemorySettings(
+        memory_types=tuple(sorted(effective_types)),
+        agent_evolution_enabled=effective_agent_evolution_enabled,
+    )
+
+
+def public_memory_settings(user_config: UserConfig) -> dict[str, Any]:
+    return {
+        "memory_types": user_config.memory.memory_types,
+        "agent_evolution_enabled": user_config.agent_evolution.enabled,
+    }
 
 
 async def effective_resource_add_target(

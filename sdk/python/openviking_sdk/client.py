@@ -39,6 +39,8 @@ from .errors import (
     VLMFailedError,
 )
 
+_UNSET = object()
+
 ERROR_CODE_TO_EXCEPTION = {
     "INVALID_ARGUMENT": InvalidArgumentError,
     "INVALID_URI": InvalidURIError,
@@ -1582,6 +1584,33 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
+    async def get_memory_settings(self) -> Dict[str, Any]:
+        """Return current-user memory setting overrides and effective values."""
+        response = await self._http.get("/api/v1/user-settings/memory")
+        return self._handle_response(response)
+
+    async def patch_memory_settings(
+        self,
+        *,
+        memory_types: Any = _UNSET,
+        agent_evolution_enabled: Any = _UNSET,
+    ) -> Dict[str, Any]:
+        """Partially update current-user memory settings.
+
+        Passing ``None`` explicitly clears that user override. Omitted arguments
+        are not included in the PATCH body.
+        """
+        payload: Dict[str, Any] = {}
+        if memory_types is not _UNSET:
+            payload["memory_types"] = memory_types
+        if agent_evolution_enabled is not _UNSET:
+            payload["agent_evolution_enabled"] = agent_evolution_enabled
+        response = await self._http.patch(
+            "/api/v1/user-settings/memory",
+            json=payload,
+        )
+        return self._handle_response(response)
+
     async def git_get_ignore(self) -> str:
         """Return the account ``.ovgitignore`` content (empty string if absent)."""
         response = await self._request("GET", "/api/v1/snapshot/ignore")
@@ -1631,6 +1660,24 @@ class SyncHTTPClient:
 
     def session_exists(self, session_id: str) -> bool:
         return run_async(self._async_client.session_exists(session_id))
+
+    def get_memory_settings(self) -> Dict[str, Any]:
+        """Return current-user memory setting overrides and effective values."""
+        return run_async(self._async_client.get_memory_settings())
+
+    def patch_memory_settings(
+        self,
+        *,
+        memory_types: Any = _UNSET,
+        agent_evolution_enabled: Any = _UNSET,
+    ) -> Dict[str, Any]:
+        """Partially update current-user memory settings."""
+        kwargs: Dict[str, Any] = {}
+        if memory_types is not _UNSET:
+            kwargs["memory_types"] = memory_types
+        if agent_evolution_enabled is not _UNSET:
+            kwargs["agent_evolution_enabled"] = agent_evolution_enabled
+        return run_async(self._async_client.patch_memory_settings(**kwargs))
 
     def add_resource(
         self,

@@ -1,0 +1,153 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
+import httpx
+
+from openviking.server.config import UserConfig
+from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import read_user_config
+from openviking_cli.session.user_id import UserIdentifier
+
+
+def _ctx() -> RequestContext:
+    return RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+
+async def test_memory_settings_default_disables_agent_evolution(
+    client: httpx.AsyncClient,
+):
+    response = await client.get("/api/v1/user-settings/memory")
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["override"] == {
+        "memory_types": None,
+        "agent_evolution_enabled": None,
+    }
+    assert result["effective"]["agent_evolution_enabled"] is False
+    assert "profile" in result["effective"]["memory_types"]
+    assert "trajectories" not in result["effective"]["memory_types"]
+    assert "experiences" not in result["effective"]["memory_types"]
+
+
+async def test_memory_settings_patch_is_partial_and_preserves_add_targets(
+    service,
+    client: httpx.AsyncClient,
+):
+    response = await client.patch(
+        "/api/v1/user-settings/add-locations",
+        json={"skill_uri": "viking://user/skills"},
+    )
+    assert response.status_code == 200, response.text
+
+    response = await client.patch(
+        "/api/v1/user-settings/memory",
+        json={
+            "memory_types": ["profile", "trajectories", "experiences"],
+            "agent_evolution_enabled": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["effective"] == {
+        "memory_types": ["experiences", "profile", "trajectories"],
+        "agent_evolution_enabled": True,
+    }
+    stored = await read_user_config(service.viking_fs, _ctx())
+    assert stored.add_targets.skill_uri == "viking://user/skills"
+    assert stored.memory.memory_types == ["profile", "trajectories", "experiences"]
+    assert stored.agent_evolution.enabled is True
+
+
+async def test_memory_settings_rejects_unknown_memory_type(client: httpx.AsyncClient):
+    response = await client.patch(
+        "/api/v1/user-settings/memory",
+        json={"memory_types": ["profile", "not_registered"]},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+    assert "not_registered" in response.text
+
+
+async def test_memory_settings_null_clears_override_and_uses_server_default(
+    app,
+    client: httpx.AsyncClient,
+):
+    app.state.config.user_config_defaults = UserConfig.model_validate(
+        {
+            "memory": {"memory_types": ["profile", "experiences"]},
+            "agent_evolution": {"enabled": True},
+        }
+    )
+    response = await client.patch(
+        "/api/v1/user-settings/memory",
+        json={"memory_types": ["events"], "agent_evolution_enabled": False},
+    )
+    assert response.status_code == 200, response.text
+
+    response = await client.patch(
+        "/api/v1/user-settings/memory",
+        json={"memory_types": None, "agent_evolution_enabled": None},
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["override"] == {
+        "memory_types": None,
+        "agent_evolution_enabled": None,
+    }
+    assert result["effective"] == {
+        "memory_types": ["experiences", "profile"],
+        "agent_evolution_enabled": True,
+    }
+
+
+async def test_delete_add_locations_preserves_memory_settings(
+    service,
+    client: httpx.AsyncClient,
+):
+    assert (
+        await client.patch(
+            "/api/v1/user-settings/add-locations",
+            json={"skill_uri": "viking://user/skills"},
+        )
+    ).status_code == 200
+    assert (
+        await client.patch(
+            "/api/v1/user-settings/memory",
+            json={"memory_types": ["profile"], "agent_evolution_enabled": True},
+        )
+    ).status_code == 200
+
+    response = await client.delete("/api/v1/user-settings/add-locations")
+
+    assert response.status_code == 200, response.text
+    stored = await read_user_config(service.viking_fs, _ctx())
+    assert stored.add_targets.skill_uri is None
+    assert stored.memory.memory_types == ["profile"]
+    assert stored.agent_evolution.enabled is True
+
+
+async def test_initialize_missing_agent_evolution_switch_is_idempotent(
+    service,
+):
+    from openviking.server.user_config import initialize_agent_evolution_disabled
+
+    uri = "viking://user/default/settings/user_config.json"
+    await service.viking_fs.write_file(
+        uri,
+        '{"add_targets":{"skill_uri":"viking://user/skills"}}',
+        ctx=_ctx(),
+    )
+
+    first = await initialize_agent_evolution_disabled(service.viking_fs, _ctx())
+    second = await initialize_agent_evolution_disabled(service.viking_fs, _ctx())
+
+    assert first is True
+    assert second is False
+    stored = await read_user_config(service.viking_fs, _ctx())
+    assert stored.add_targets.skill_uri == "viking://user/skills"
+    assert stored.memory.memory_types is None
+    assert stored.agent_evolution.enabled is False

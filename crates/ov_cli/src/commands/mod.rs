@@ -15,4 +15,5 @@ pub mod skills;
 pub mod snapshot;
 pub mod system;
 pub mod task;
+pub mod user_settings;
 pub mod watch;

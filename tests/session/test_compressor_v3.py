@@ -88,6 +88,34 @@ def test_factory_ignores_deprecated_memory_version():
     )
 
 
+@pytest.mark.asyncio
+async def test_v3_skips_agent_training_when_agent_evolution_is_disabled(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.session.compressor_v3.get_viking_fs",
+        lambda: SimpleNamespace(),
+    )
+    compressor = SessionCompressorV3(vikingdb=None)
+    compressor._extract_user_memories = AsyncMock(
+        return_value=SimpleNamespace(
+            contexts=[],
+            cases=[_training_case()],
+            memory_diff={"operations": {}},
+            case_uri_by_name={},
+        )
+    )
+    compressor.train_from_extracted_cases = AsyncMock()
+    compressor._write_final_memory_diff = AsyncMock()
+
+    await compressor.extract_long_term_memories(
+        messages=_messages(),
+        ctx=_ctx(),
+        allowed_memory_types={"cases", "profile"},
+        agent_evolution_enabled=False,
+    )
+
+    compressor.train_from_extracted_cases.assert_not_awaited()
+
+
 def test_experience_root_uri_requires_request_user():
     with pytest.raises(ValueError, match="RequestContext.user.user_id is required"):
         _experience_root_uri(SimpleNamespace(user=None))
@@ -559,6 +587,7 @@ async def test_v3_training_case_spec_fast_path_skips_user_memory_extraction_and_
     compressor._extract_user_memories = fail_extract_user_memories
     compressor._write_training_case_memory = fake_write_training_case_memory
     compressor.train_from_extracted_cases = fake_train_from_extracted_cases
+    compressor._write_final_memory_diff = AsyncMock()
 
     contexts = await compressor.extract_long_term_memories(
         messages=[case_spec, *rollout_messages],
@@ -572,6 +601,37 @@ async def test_v3_training_case_spec_fast_path_skips_user_memory_extraction_and_
     assert [case.name for case in trained[0]["cases"]] == ["duplicate_booking"]
     assert trained[0]["messages"] == rollout_messages
     assert contexts[0].uri == "viking://user/u/memories/cases/duplicate_booking.md"
+
+
+@pytest.mark.asyncio
+async def test_v3_training_case_spec_fast_path_skips_agent_memory_when_evolution_disabled():
+    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=SimpleNamespace())
+    trained = []
+
+    async def fake_write_training_case_memory(**kwargs):
+        result = MemoryUpdateResult()
+        result.add_written("viking://user/u/memories/cases/duplicate_booking.md")
+        return result
+
+    async def fake_train_from_extracted_cases(**kwargs):
+        trained.append(kwargs)
+        return {"case_count": 1, "submitted": 1}
+
+    compressor._write_training_case_memory = fake_write_training_case_memory
+    compressor.train_from_extracted_cases = fake_train_from_extracted_cases
+    compressor._write_final_memory_diff = AsyncMock()
+
+    contexts = await compressor.extract_long_term_memories(
+        messages=[_case_spec_message(), *_messages()],
+        ctx=_ctx(),
+        session_id="s1",
+        archive_uri="viking://user/u/sessions/s1/history/archive_001",
+        allowed_memory_types={"cases", "trajectories", "experiences"},
+        agent_evolution_enabled=False,
+    )
+
+    assert contexts[0].uri == "viking://user/u/memories/cases/duplicate_booking.md"
+    assert trained == []
 
 
 @pytest.mark.asyncio
