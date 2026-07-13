@@ -122,6 +122,7 @@ class ReindexExecutor:
     ) -> dict[str, Any]:
         object_type = self._infer_target_type(uri)
         self._validate_mode(object_type, mode)
+        await get_viking_fs()._ensure_access(uri, ctx, "write")
 
         tracker = get_task_tracker()
         if wait:

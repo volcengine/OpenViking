@@ -185,7 +185,7 @@ class ContentWriteCoordinator:
 
     async def _ensure_mutable_target(self, uri: str, ctx: RequestContext) -> None:
         try:
-            await self._viking_fs._ensure_mutable_access(uri, ctx)
+            await self._viking_fs._ensure_access(uri, ctx, "write")
         except PermissionDeniedError as exc:
             if not await self._viking_fs._can_access(uri, ctx, "read"):
                 raise NotFoundError(uri, "file") from exc

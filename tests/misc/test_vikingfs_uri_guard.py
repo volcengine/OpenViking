@@ -168,6 +168,13 @@ class TestVikingFSURITraversalGuard:
         fs.agfs.rm.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_user_cannot_mutate_account_root(self) -> None:
+        fs = _make_viking_fs()
+
+        with pytest.raises(PermissionDeniedError, match="requires an administrator"):
+            await fs._ensure_access("viking://", _user_ctx(), "write")
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("old_uri", "new_uri"),
         [

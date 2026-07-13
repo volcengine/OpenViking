@@ -79,10 +79,14 @@ acl_enabled = true
 | 操作 | 所需能力 |
 |------|----------|
 | read、stat、list、tree、find、search、grep、glob、relations | read |
-| write、create、mkdir、set tags | write |
+| write、create、mkdir、set tags、reindex | write |
 | delete、管理 ACL | manage |
 | move 源节点 | manage |
 | move 目标父目录 | write |
+
+服务端会先 canonicalize URI，再在同一个鉴权入口中依次执行 account/owner/actor peer 等硬边界、有效 ACL 或 legacy fallback，以及写入和删除的 namespace 防护。普通写入、删除和 reindex 不维护各自的权限特判。
+
+首次为共享节点设置 ACL 是唯一的 bootstrap 规则：节点尚未进入 ACL 控制域时，只能由共享区隐式管理者设置；启用后，后续 ACL 修改要求有效 `manage` 能力。
 
 目录上的 ACL 授权会被所有后代继承。`list`、`tree` 和批量结果仍逐个检查有效 ACL，因为未设置 ACL 的目录可能按原有 URI 规则可见，而某个后代已经通过自己的 ACL 进入控制域。
 

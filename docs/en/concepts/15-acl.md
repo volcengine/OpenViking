@@ -79,10 +79,14 @@ All filesystem APIs use the same permission mapping:
 | Operation | Required capability |
 |-----------|---------------------|
 | read, stat, list, tree, find, search, grep, glob, relations | read |
-| write, create, mkdir, set tags | write |
+| write, create, mkdir, set tags, reindex | write |
 | delete, manage ACL | manage |
 | move source | manage |
 | move destination parent | write |
+
+The server canonicalizes the URI, then uses one authorization entry point for account/owner/actor-peer boundaries, the effective ACL or legacy fallback, and write/delete namespace guards. Ordinary writes, deletes, and reindexing do not maintain separate permission rules.
+
+Establishing the first ACL on a shared node is the only bootstrap rule: before the node enters the ACL-controlled domain, only the shared scope's implicit manager can set it. Later ACL changes require effective `manage` capability.
 
 An ACL grant on a directory is inherited by every descendant. `list`, `tree`, and other batch results still check every returned node because an ACL-free directory may be visible under legacy URI rules while one of its descendants has entered the ACL-controlled domain through its own ACL.
 

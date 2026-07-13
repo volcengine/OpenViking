@@ -468,11 +468,13 @@ class VikingFS:
                 result[original] = acl_allows(acl, real_ctx, action)
         return result
 
-    async def _ensure_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
-        real_ctx = self._ctx_or_default(ctx)
-        normalized_uri, _ = self._normalized_uri_parts(uri)
-        if not await self._can_access(normalized_uri, real_ctx, "read"):
-            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
+    async def _ensure_access(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext],
+        action: AclAction = "read",
+    ) -> None:
+        await self._ensure_access_many([uri], ctx, action)
 
     async def _ensure_access_many(
         self,
@@ -480,10 +482,33 @@ class VikingFS:
         ctx: Optional[RequestContext],
         action: AclAction,
     ) -> None:
-        access = await self._can_access_many(uris, ctx, action)
+        real_ctx = self._ctx_or_default(ctx)
+        access = await self._can_access_many(uris, real_ctx, action)
         denied = next((uri for uri in uris if not access.get(uri, False)), None)
         if denied is not None:
             raise PermissionDeniedError(f"Access denied for {denied}", resource=denied)
+
+        if action == "read":
+            return
+        for uri in uris:
+            normalized_uri = canonicalize_uri(self._normalized_uri_parts(uri)[0], real_ctx)
+            if normalized_uri == "viking://" and real_ctx.role == Role.USER:
+                raise PermissionDeniedError(
+                    "Writing the account root requires an administrator",
+                    resource=normalized_uri,
+                )
+            if is_hidden_by_actor_peer_view(
+                normalized_uri, real_ctx
+            ) or may_include_hidden_actor_peers(normalized_uri, real_ctx):
+                raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
+            if action == "manage":
+                self._ensure_supported_delete_namespace(normalized_uri)
+            self._ensure_supported_write_namespace(normalized_uri)
+            if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
+                raise PermissionDeniedError(
+                    "Temp root is read-only for non-root users",
+                    resource=normalized_uri,
+                )
 
     async def _ensure_retrieval_scope(self, uri: str, ctx: Optional[RequestContext]) -> None:
         real_ctx = self._ctx_or_default(ctx)
@@ -496,38 +521,6 @@ class VikingFS:
             except InvalidArgumentError:
                 pass
         await self._ensure_access(canonical_uri, real_ctx)
-
-    async def _ensure_mutable_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
-        real_ctx = self._ctx_or_default(ctx)
-        normalized_uri, _ = self._normalized_uri_parts(uri)
-        if not await self._can_access(normalized_uri, real_ctx, "write"):
-            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
-        if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
-            normalized_uri, real_ctx
-        ):
-            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
-        self._ensure_supported_write_namespace(normalized_uri)
-        if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
-            raise PermissionDeniedError(
-                "Temp root is read-only for non-root users",
-                resource=normalized_uri,
-            )
-
-    async def _ensure_delete_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
-        real_ctx = self._ctx_or_default(ctx)
-        normalized_uri, _ = self._normalized_uri_parts(uri)
-        if not await self._can_access(normalized_uri, real_ctx, "manage"):
-            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
-        if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
-            normalized_uri, real_ctx
-        ):
-            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
-        self._ensure_supported_delete_namespace(normalized_uri)
-        if real_ctx.role != Role.ROOT and normalized_uri.rstrip("/") == "viking://temp":
-            raise PermissionDeniedError(
-                "Temp root is read-only for non-root users",
-                resource=normalized_uri,
-            )
 
     async def _ensure_acl_manage(
         self, uri: str, ctx: Optional[RequestContext]
@@ -728,7 +721,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> str:
         """Write file"""
-        await self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, "write")
         path = self._uri_to_path(uri, ctx=ctx)
         if isinstance(data, str):
             data = data.encode("utf-8")
@@ -744,7 +737,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Create directory."""
-        await self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, "write")
         path = self._uri_to_path(uri, ctx=ctx)
         # Always ensure parent directories exist before creating this directory
         await self._ensure_parent_dirs(path, ctx=ctx)
@@ -779,7 +772,7 @@ class VikingFS:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        await self._ensure_delete_access(uri, ctx)
+        await self._ensure_access(uri, ctx, "manage")
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
@@ -884,14 +877,8 @@ class VikingFS:
         from openviking.storage.transaction import LockContext, get_lock_manager
 
         acl_manager = getattr(self, "acl_manager", None)
-        await self._ensure_mutable_access(old_uri, ctx)
-        # mv is implemented as copy + recursive rm of the source (see the
-        # ``rm(old_path, recursive=is_dir)`` below), so the source must also clear
-        # the delete guard. Without this, a protected account root such as
-        # ``viking://`` — which rm() rejects up front (#2873) — could still be
-        # destroyed via mv, since the write guard alone permits the bare root.
-        await self._ensure_delete_access(old_uri, ctx)
-        await self._ensure_mutable_access(new_uri, ctx)
+        await self._ensure_access(old_uri, ctx, "manage")
+        await self._ensure_access(new_uri, ctx, "write")
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
@@ -1037,7 +1024,7 @@ class VikingFS:
         self, uri: str, ctx: Optional[RequestContext] = None
     ) -> Dict[str, Any]:
         """Retry multi-write sync for one Viking URI subtree."""
-        await self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, "write")
         real_ctx = self._ctx_or_default(ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         return await self._async_agfs.system_sync_retry(
@@ -2481,7 +2468,7 @@ class VikingFS:
         """Create relation (maintained in .relations.json)."""
         if isinstance(uris, str):
             uris = [uris]
-        await self._ensure_mutable_access(from_uri, ctx)
+        await self._ensure_access(from_uri, ctx, "write")
         for uri in uris:
             await self._ensure_access(uri, ctx)
 
@@ -2504,7 +2491,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Delete relation."""
-        await self._ensure_mutable_access(from_uri, ctx)
+        await self._ensure_access(from_uri, ctx, "write")
         await self._ensure_access(uri, ctx)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
@@ -3280,6 +3267,7 @@ class VikingFS:
                     new_uri,
                     old_uri,
                 )
+
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""
         return self.vector_store
@@ -3388,7 +3376,7 @@ class VikingFS:
         lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Write file directly."""
-        await self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, "write")
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx)
 
@@ -3503,7 +3491,7 @@ class VikingFS:
         lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Write single binary file."""
-        await self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, "write")
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx)
 
@@ -3521,7 +3509,7 @@ class VikingFS:
         lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Append content to file."""
-        await self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, "write")
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
@@ -3755,8 +3743,8 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Move file."""
-        await self._ensure_mutable_access(from_uri, ctx)
-        await self._ensure_mutable_access(to_uri, ctx)
+        await self._ensure_access(from_uri, ctx, "manage")
+        await self._ensure_access(to_uri, ctx, "write")
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         await self._copy_file_through_vikingfs(from_uri, to_uri, ctx=ctx)
@@ -3783,7 +3771,7 @@ class VikingFS:
     ) -> None:
         """Persist an already-encrypted temp tree without rewriting file bytes."""
         await self._ensure_access(temp_uri, ctx)
-        await self._ensure_mutable_access(target_uri, ctx)
+        await self._ensure_access(target_uri, ctx, "write")
         src_path = self._uri_to_path(temp_uri, ctx=ctx)
         dst_path = self._uri_to_path(target_uri, ctx=ctx)
         await self._ensure_parent_dirs(dst_path, ctx=ctx)
@@ -3796,7 +3784,7 @@ class VikingFS:
 
     async def delete_temp(self, temp_uri: str, ctx: Optional[RequestContext] = None) -> None:
         """Delete temp directory and its contents."""
-        await self._ensure_mutable_access(temp_uri, ctx)
+        await self._ensure_access(temp_uri, ctx, "manage")
         path = self._uri_to_path(temp_uri, ctx=ctx)
         try:
             for entry in await self._ls_entries(path, ctx=ctx):
@@ -3861,7 +3849,7 @@ class VikingFS:
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
 
-        await self._ensure_mutable_access(uri, ctx)
+        await self._ensure_access(uri, ctx, "write")
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:

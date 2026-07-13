@@ -94,7 +94,7 @@ def _has_add_targets(user_config: UserConfig | None) -> bool:
     )
 
 
-def _validate_initial_user_config(
+async def _validate_initial_user_config(
     service,
     user_ctx: RequestContext,
     user_config: UserConfig | None,
@@ -103,7 +103,7 @@ def _validate_initial_user_config(
         return
     if service.viking_fs is None:
         raise FailedPreconditionError("OpenViking service is not initialized.")
-    validate_add_targets(
+    await validate_add_targets(
         user_config.add_targets,
         ctx=user_ctx,
         viking_fs=service.viking_fs,
@@ -175,7 +175,7 @@ async def create_account(
         user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
     )
-    _validate_initial_user_config(service, account_ctx, body.user_config)
+    await _validate_initial_user_config(service, account_ctx, body.user_config)
     manager = _get_api_key_manager(request)
     user_key = await manager.create_account(
         body.account_id,
@@ -317,7 +317,7 @@ async def register_user(
         user=UserIdentifier(account_id, body.user_id),
         role=resolved_role,
     )
-    _validate_initial_user_config(service, user_ctx, body.user_config)
+    await _validate_initial_user_config(service, user_ctx, body.user_config)
     manager = _get_api_key_manager(request)
     user_key = await manager.register_user(
         account_id,
