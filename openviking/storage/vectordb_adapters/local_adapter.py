@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
+from openviking_cli.utils.logger import default_logger as logger
 
 from .base import CollectionAdapter
 
@@ -81,6 +82,52 @@ class LocalCollectionAdapter(CollectionAdapter):
             path=collection_path,
             config=self._collection_config,
         )
+
+    def create_collection(
+        self,
+        name: str,
+        schema: Dict[str, Any],
+        *,
+        distance: str,
+        sparse_weight: float,
+        index_name: str,
+    ) -> bool:
+        """Create the collection or restore its configured index when it is missing."""
+        with self._load_lock:
+            if not self.collection_exists():
+                return super().create_collection(
+                    name,
+                    schema,
+                    distance=distance,
+                    sparse_weight=sparse_weight,
+                    index_name=index_name,
+                )
+
+            collection = self.get_collection()
+            if collection.has_index(index_name):
+                return False
+
+            collection_meta = collection.get_meta_data() or {}
+            scalar_index_fields = self._sanitize_scalar_index_fields(
+                scalar_index_fields=schema.get(
+                    "ScalarIndex", collection_meta.get("ScalarIndex", [])
+                ),
+                fields_meta=collection_meta.get("Fields", schema.get("Fields", [])),
+            )
+            index_meta = self._build_default_index_meta(
+                index_name=index_name,
+                distance=distance,
+                use_sparse=sparse_weight > 0.0,
+                sparse_weight=sparse_weight,
+                scalar_index_fields=scalar_index_fields,
+            )
+            logger.warning(
+                "Local collection %s has no configured index %s; rebuilding it",
+                self._collection_name,
+                index_name,
+            )
+            collection.create_index(index_name, index_meta)
+            return False
 
     def update_data(self, data_list: List[Dict[str, Any]]):
         collection = self.get_collection()
