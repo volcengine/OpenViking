@@ -579,6 +579,7 @@ class ReindexExecutor:
             recursive=True,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
+            group_ids=ctx.group_ids,
             peer_id=ctx.user.user_id,
             role=str(ctx.role),
             skip_vectorization=True,

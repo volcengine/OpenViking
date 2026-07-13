@@ -27,6 +27,7 @@ ACL entries use typed principals:
 - `user:*`: any user in the current account.
 
 `group:*` is not supported. Groups are flat. Membership changes do not rewrite resource ACL or context records; they take effect when the next request builds `RequestContext.group_ids`.
+Asynchronous parse and semantic tasks created by a request carry the same group identity, so one authorized operation uses consistent permissions across its foreground and background stages.
 
 | Level | Allowed operations |
 |-------|--------------------|

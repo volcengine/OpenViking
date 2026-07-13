@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import ACL_CONTEXT_FIELDS
+from openviking.storage.acl import ACL_CONTEXT_FIELDS, ACL_PRINCIPAL_FIELDS
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
@@ -115,36 +115,14 @@ class CollectionSchemas:
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
                 {"FieldName": "acl_enabled", "FieldType": "bool", "DefaultValue": False},
-                {
-                    "FieldName": "acl_direct_read_principal_ids",
-                    "FieldType": "list<string>",
-                    "DefaultValue": [],
-                },
-                {
-                    "FieldName": "acl_direct_write_principal_ids",
-                    "FieldType": "list<string>",
-                    "DefaultValue": [],
-                },
-                {
-                    "FieldName": "acl_direct_manage_principal_ids",
-                    "FieldType": "list<string>",
-                    "DefaultValue": [],
-                },
-                {
-                    "FieldName": "acl_inherited_read_principal_ids",
-                    "FieldType": "list<string>",
-                    "DefaultValue": [],
-                },
-                {
-                    "FieldName": "acl_inherited_write_principal_ids",
-                    "FieldType": "list<string>",
-                    "DefaultValue": [],
-                },
-                {
-                    "FieldName": "acl_inherited_manage_principal_ids",
-                    "FieldType": "list<string>",
-                    "DefaultValue": [],
-                },
+                *[
+                    {
+                        "FieldName": field,
+                        "FieldType": "list<string>",
+                        "DefaultValue": [],
+                    }
+                    for field in ACL_PRINCIPAL_FIELDS
+                ],
             ]
         )
         scalar_index = [
@@ -164,12 +142,7 @@ class CollectionSchemas:
                 "account_id",
                 "owner_user_id",
                 "acl_enabled",
-                "acl_direct_read_principal_ids",
-                "acl_direct_write_principal_ids",
-                "acl_direct_manage_principal_ids",
-                "acl_inherited_read_principal_ids",
-                "acl_inherited_write_principal_ids",
-                "acl_inherited_manage_principal_ids",
+                *ACL_PRINCIPAL_FIELDS,
             ]
         )
         return {

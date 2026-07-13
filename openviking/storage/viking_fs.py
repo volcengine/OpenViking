@@ -575,8 +575,8 @@ class VikingFS:
         async with LockContext(get_lock_manager(), [path], lock_mode="tree"):
             await self._ensure_acl_manage(uri, ctx)
             await self._acl_target_stat(uri, ctx)
-            await self.acl_manager.set_direct(uri, entries, ctx)
-        return await self.acl_manager.report(uri, ctx)
+            effective = await self.acl_manager.set_direct(uri, entries, ctx)
+            return self.acl_manager.to_report(uri, effective)
 
     async def set_acl(
         self,
@@ -594,28 +594,22 @@ class VikingFS:
         level: str,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
-        normalized_uri, real_ctx = await self._ensure_acl_manage(uri, ctx)
-        from openviking.storage.transaction import LockContext, get_lock_manager
-
-        path = self._uri_to_path(normalized_uri, ctx=real_ctx)
-        async with LockContext(get_lock_manager(), [path], lock_mode="tree"):
-            await self._ensure_acl_manage(normalized_uri, real_ctx)
-            await self._acl_target_stat(normalized_uri, real_ctx)
-            direct = await self.acl_manager.get_direct(normalized_uri, real_ctx)
-            entries = {entry.principal: entry.level for entry in direct_to_entries(direct)}
-            entries[principal] = level
-            await self.acl_manager.set_direct(
-                normalized_uri,
-                [AclEntry(principal, value) for principal, value in entries.items()],
-                real_ctx,
-            )
-        return await self.acl_manager.report(normalized_uri, real_ctx)
+        return await self._update_acl_entry(uri, principal, level, ctx)
 
     async def revoke_acl(
         self,
         uri: str,
         principal: str,
         ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        return await self._update_acl_entry(uri, principal, None, ctx)
+
+    async def _update_acl_entry(
+        self,
+        uri: str,
+        principal: str,
+        level: Optional[str],
+        ctx: Optional[RequestContext],
     ) -> Dict[str, Any]:
         principal = normalize_acl_principal(principal)
         normalized_uri, real_ctx = await self._ensure_acl_manage(uri, ctx)
@@ -626,11 +620,20 @@ class VikingFS:
             await self._ensure_acl_manage(normalized_uri, real_ctx)
             await self._acl_target_stat(normalized_uri, real_ctx)
             direct = await self.acl_manager.get_direct(normalized_uri, real_ctx)
-            entries = [
-                entry for entry in direct_to_entries(direct) if entry.principal != principal
-            ]
-            await self.acl_manager.set_direct(normalized_uri, entries, real_ctx)
-        return await self.acl_manager.report(normalized_uri, real_ctx)
+            entries = {entry.principal: entry.level for entry in direct_to_entries(direct)}
+            if level is None:
+                entries.pop(principal, None)
+            else:
+                entries[principal] = level
+            effective = await self.acl_manager.set_direct(
+                normalized_uri,
+                [
+                    {"principal": entry_principal, "level": entry_level}
+                    for entry_principal, entry_level in entries.items()
+                ],
+                real_ctx,
+            )
+            return self.acl_manager.to_report(normalized_uri, effective)
 
     async def delete_acl(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         return await self.set_acl(uri, [], ctx=ctx)
@@ -1004,24 +1007,19 @@ class VikingFS:
                     pass
 
             # Update VectorDB URIs (on failure, clean up the copy)
-            vector_moved = False
+            vector_mappings: List[tuple[str, str]] = []
             try:
-                await self._update_vector_store_uris(uris_to_move, old_uri, new_uri, ctx=ctx)
-                vector_moved = True
+                vector_mappings = await self._update_vector_store_uris(
+                    uris_to_move, old_uri, new_uri, ctx=ctx
+                )
                 if acl_manager and old_acl_scope:
                     await acl_manager.refresh_context_subtree(
                         canonicalize_uri(new_uri, self._ctx_or_default(ctx)),
                         self._ctx_or_default(ctx),
                     )
             except Exception:
-                if vector_moved:
-                    moved_uris = [
-                        new_uri.rstrip("/") + moved_uri[len(old_uri.rstrip("/")) :]
-                        for moved_uri in uris_to_move
-                        if moved_uri == old_uri.rstrip("/")
-                        or moved_uri.startswith(old_uri.rstrip("/") + "/")
-                    ]
-                    await self._update_vector_store_uris(moved_uris, new_uri, old_uri, ctx=ctx)
+                if vector_mappings:
+                    await self._restore_vector_store_uris(vector_mappings, ctx=ctx)
                 try:
                     if is_dir:
                         await self._async_agfs.rm(new_path, recursive=True)
@@ -3217,31 +3215,67 @@ class VikingFS:
         new_base: str,
         ctx: Optional[RequestContext] = None,
         levels: Optional[List[int]] = None,
-    ) -> None:
+    ) -> List[tuple[str, str]]:
         """Update URIs in vector store (when moving files).
 
         Preserves vector data and updates URI-derived identifiers without regenerating embeddings.
         """
         vector_store = self._get_vector_store()
         if not vector_store:
-            return
+            return []
 
         old_base_uri = self._path_to_uri(old_base, ctx=ctx)
         new_base_uri = self._path_to_uri(new_base, ctx=ctx)
+        real_ctx = self._ctx_or_default(ctx)
+        mappings: List[tuple[str, str]] = []
 
-        for uri in uris:
-            try:
+        try:
+            for uri in uris:
                 new_uri = uri.replace(old_base_uri, new_base_uri, 1)
-
-                await vector_store.update_uri_mapping(
-                    ctx=self._ctx_or_default(ctx),
+                updated = await vector_store.update_uri_mapping(
+                    ctx=real_ctx,
                     uri=uri,
                     new_uri=new_uri,
                     levels=levels,
                 )
-                logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
-            except Exception as e:
-                logger.warning(f"[VikingFS] Failed to update {uri} in vector store: {e}")
+                if updated:
+                    mappings.append((uri, new_uri))
+                    logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
+        except Exception:
+            await self._restore_vector_store_uris(mappings, ctx=real_ctx, levels=levels)
+            raise
+        return mappings
+
+    async def _restore_vector_store_uris(
+        self,
+        mappings: Sequence[tuple[str, str]],
+        ctx: Optional[RequestContext] = None,
+        levels: Optional[List[int]] = None,
+    ) -> None:
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return
+        real_ctx = self._ctx_or_default(ctx)
+        for old_uri, new_uri in sorted(mappings, key=lambda item: item[0].count("/")):
+            try:
+                restored = await vector_store.update_uri_mapping(
+                    ctx=real_ctx,
+                    uri=new_uri,
+                    new_uri=old_uri,
+                    levels=levels,
+                )
+                if not restored:
+                    logger.warning(
+                        "[VikingFS] Vector URI rollback found no records: %s -> %s",
+                        new_uri,
+                        old_uri,
+                    )
+            except Exception:
+                logger.exception(
+                    "[VikingFS] Failed to roll back vector URI: %s -> %s",
+                    new_uri,
+                    old_uri,
+                )
 
     async def _mv_vector_store_l0_l1(
         self,

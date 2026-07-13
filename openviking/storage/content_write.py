@@ -503,6 +503,7 @@ class ContentWriteCoordinator:
             recursive=recursive,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
+            group_ids=ctx.group_ids,
             role=str(ctx.role),
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,

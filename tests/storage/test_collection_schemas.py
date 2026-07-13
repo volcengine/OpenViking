@@ -904,12 +904,14 @@ async def test_init_context_collection_validates_api_key_data_plane_schema(
     monkeypatch,
 ):
     class _Storage:
+        meta = CollectionSchemas.context_collection("context", 2)
+
         async def create_collection(self, name, schema):  # pragma: no cover
             del name, schema
             raise AssertionError("create_collection should not be called for data-plane backend")
 
         async def get_collection_meta(self):
-            return CollectionSchemas.context_collection("context", 2)
+            return self.meta
 
         async def update_collection_description(self, description):  # pragma: no cover
             del description
@@ -927,28 +929,13 @@ async def test_init_context_collection_validates_api_key_data_plane_schema(
         ),
     )
 
-    created = await init_context_collection(_Storage())
+    storage = _Storage()
+    created = await init_context_collection(storage)
 
     assert created is False
-
-
-@pytest.mark.asyncio
-async def test_init_context_collection_does_not_migrate_remote_acl_schema(monkeypatch):
-    class _Storage:
-        async def create_collection(self, name, schema):
-            del name, schema
-            return False
-
-        async def get_collection_meta(self):
-            return {"Description": "Unified context collection", "Fields": []}
-
-    monkeypatch.setattr(
-        "openviking_cli.utils.config.get_openviking_config",
-        lambda: _DummyConfig(_DummyEmbedder(), backend="volcengine"),
-    )
-
-    with pytest.raises(EmbeddingConfigurationError, match="Add them to the remote collection"):
-        await init_context_collection(_Storage())
+    storage.meta = {"Description": "Unified context collection", "Fields": []}
+    with pytest.raises(EmbeddingConfigurationError, match="missing ACL fields"):
+        await init_context_collection(storage)
 
 
 def test_single_account_backend_filters_parent_uri_against_current_schema():

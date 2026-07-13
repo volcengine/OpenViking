@@ -4,8 +4,7 @@
 
 import asyncio
 import json
-
-from contextlib import suppress
+from contextlib import nullcontext
 from typing import Any, Dict, Optional
 
 from openviking.observability.context import (
@@ -38,8 +37,8 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
         reason: str,
         source_name: Optional[str],
     ) -> None:
-        from openviking.telemetry.resource_summary import unregister_wait_telemetry
         from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+        from openviking.telemetry.resource_summary import unregister_wait_telemetry
 
         task_tracker = get_task_tracker()
         request_wait_tracker = get_request_wait_tracker()
@@ -120,6 +119,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
+            group_ids=tuple(msg.group_ids),
             actor_peer_id=msg.actor_peer_id,
         )
 
@@ -160,6 +160,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                         root_uri=msg.root_uri,
                         account_id=msg.account_id,
                         user_id=msg.user_id,
+                        group_ids=msg.group_ids,
                         role=msg.role,
                         actor_peer_id=msg.actor_peer_id,
                         lock_handoff=msg.lock_handoff,
@@ -213,7 +214,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
             telemetry = OperationTelemetry(operation="noop", enabled=False)
             telemetry.telemetry_id = telemetry_id
 
-        with bind_execution_context(), (bind_telemetry(telemetry) if telemetry else suppress()):
+        with bind_execution_context(), bind_telemetry(telemetry) if telemetry else nullcontext():
             try:
                 await task_tracker.start(
                     msg.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id

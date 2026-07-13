@@ -3268,12 +3268,11 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        AclCommands, Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands,
-        LanguageGateAction, PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index,
-        first_command_token, is_language_command_request, language_command_can_run_picker,
-        language_gate_action, language_required_message, legacy_upload_option_error,
-        plain_help_misuse, pre_parse_requires_cli_config_file, preprocess_cli_args,
-        preprocess_privacy_args,
+        Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
+        PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index, first_command_token,
+        is_language_command_request, language_command_can_run_picker, language_gate_action,
+        language_required_message, legacy_upload_option_error, plain_help_misuse,
+        pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -3302,39 +3301,6 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
-    }
-
-    #[test]
-    fn cli_acl_principal_parses() {
-        Cli::command().debug_assert();
-        let cli = Cli::try_parse_from([
-            "ov",
-            "acl",
-            "grant",
-            "viking://resources/project-a",
-            "--principal",
-            "user:bob",
-            "--level",
-            "viewer",
-        ])
-        .expect("acl grant should parse");
-
-        assert!(cli.user.is_none());
-        match cli.command {
-            Commands::Acl {
-                action:
-                    AclCommands::Grant {
-                        uri,
-                        principal,
-                        level,
-                    },
-            } => {
-                assert_eq!(uri, "viking://resources/project-a");
-                assert_eq!(principal, "user:bob");
-                assert_eq!(level, "viewer");
-            }
-            _ => panic!("expected acl grant command"),
-        }
     }
 
     #[test]

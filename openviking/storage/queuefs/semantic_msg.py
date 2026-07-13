@@ -3,9 +3,9 @@
 """SemanticMsg: Semantic extraction queue message dataclass."""
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
 
 from openviking.storage.transaction import LockHandoffRef
@@ -46,6 +46,7 @@ class SemanticMsg:
     recursive: bool = True  # Whether to recursively process subdirectories
     account_id: str = "default"
     user_id: str = "default"
+    group_ids: List[str] = field(default_factory=list)
     peer_id: str = "default"
     role: str = "root"
     # Additional flags
@@ -68,6 +69,7 @@ class SemanticMsg:
         recursive: bool = True,
         account_id: str = "default",
         user_id: str = "default",
+        group_ids: Optional[Sequence[str]] = None,
         peer_id: str = "default",
         role: str = "root",
         skip_vectorization: bool = False,
@@ -86,6 +88,7 @@ class SemanticMsg:
         self.recursive = recursive
         self.account_id = account_id
         self.user_id = user_id
+        self.group_ids = list(group_ids or [])
         self.peer_id = peer_id
         self.role = role
         self.skip_vectorization = skip_vectorization
@@ -129,6 +132,7 @@ class SemanticMsg:
             recursive=data.get("recursive", True),
             account_id=data.get("account_id", "default"),
             user_id=data.get("user_id", "default"),
+            group_ids=data.get("group_ids") if isinstance(data.get("group_ids"), list) else None,
             peer_id=data.get("peer_id", "default"),
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),

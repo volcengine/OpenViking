@@ -176,7 +176,7 @@ async def test_mv_vector_store_moves_records(monkeypatch):
         async def stat(self, uri, ctx=None):
             return {"isDir": True}
 
-        def _ensure_access(self, uri, ctx):
+        async def _ensure_access(self, uri, ctx):
             return None
 
     monkeypatch.setattr(
@@ -194,6 +194,41 @@ async def test_mv_vector_store_moves_records(monkeypatch):
     assert {int(r["level"]) for r in store.records if r.get("uri") == new_uri} == {0, 1}
     assert all("parent_uri" not in r for r in store.records if r.get("uri") == new_uri)
     assert set(store.deleted_ids) == {"l0", "l1"}
+
+
+@pytest.mark.asyncio
+async def test_vector_uri_batch_rolls_back_completed_updates():
+    from openviking.storage.viking_fs import VikingFS
+
+    ctx = RequestContext(user=UserIdentifier("acc", "user"), role=Role.ROOT)
+    old_root = "viking://resources/old"
+    new_root = "viking://resources/new"
+    old_uris = [f"{old_root}/a.md", f"{old_root}/b.md"]
+
+    class _FailingVectorStore(_FakeVectorStore):
+        async def update_uri_mapping(self, *, ctx, uri, new_uri, levels=None):
+            if uri == old_uris[1] and new_uri == f"{new_root}/b.md":
+                raise RuntimeError("vector update failed")
+            return await super().update_uri_mapping(
+                ctx=ctx, uri=uri, new_uri=new_uri, levels=levels
+            )
+
+    class _FakeVikingFS(VikingFS):
+        def _path_to_uri(self, path, ctx=None):
+            return path
+
+    store = _FailingVectorStore(
+        [
+            {"id": str(index), "uri": uri, "level": 2, "account_id": ctx.account_id}
+            for index, uri in enumerate(old_uris)
+        ]
+    )
+    fs = _FakeVikingFS(agfs=object(), vector_store=store)
+
+    with pytest.raises(RuntimeError, match="vector update failed"):
+        await fs._update_vector_store_uris(old_uris, old_root, new_root, ctx=ctx)
+
+    assert sorted(record["uri"] for record in store.records) == old_uris
 
 
 @pytest.mark.asyncio
@@ -220,7 +255,7 @@ async def test_mv_vector_store_requires_directories(monkeypatch):
         async def stat(self, uri, ctx=None):
             return {"isDir": uri == old_uri}
 
-        def _ensure_access(self, uri, ctx):
+        async def _ensure_access(self, uri, ctx):
             return None
 
     monkeypatch.setattr(

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_user_content_root, canonicalize_uri, visible_roots
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import ACL_CONTEXT_FIELDS, acl_principals
+from openviking.storage.acl import ACL_CONTEXT_FIELDS, AclManager, acl_principals
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import UpdateResult
@@ -53,18 +53,6 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
     "abstract",
     "account_id",
     "owner_user_id",
-]
-
-URI_REWRITE_OUTPUT_FIELDS = [
-    "id",
-    "uri",
-    "level",
-    "name",
-    "description",
-    "tags",
-    "abstract",
-    "content",
-    "account_id",
 ]
 
 VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
@@ -187,6 +175,9 @@ class _SingleAccountBackend:
             result["content"] = content[:VIKINGDB_CONTENT_MAX_SIZE]
 
         return result
+
+    def _prepare_upsert_payloads(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [self._prepare_upsert_payload(item) for item in data]
 
     @staticmethod
     def _is_not_found_error(exc: Exception) -> bool:
@@ -335,9 +326,10 @@ class _SingleAccountBackend:
             context_type = payload.get("context_type")
             if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
                 raise ValueError(f"Invalid context_type: {context_type}")
-            payloads.append(await self._async_adapter.run(self._prepare_upsert_payload, payload))
+            payloads.append(payload)
         if not payloads:
             return []
+        payloads = await self._async_adapter.run(self._prepare_upsert_payloads, payloads)
         return await self._async_adapter.call("upsert", payloads)
 
     async def update(self, data: Dict[str, Any]) -> UpdateResult:
@@ -704,7 +696,7 @@ class VikingVectorIndexBackend:
         self.sparse_weight = config.sparse_weight
         self._collection_name = config.name or "context"
         self._index_name = config.index_name or DEFAULT_INDEX_NAME
-        self.acl_manager: Any = None
+        self.acl_manager: Optional[AclManager] = None
 
         self._account_backends: Dict[str, _SingleAccountBackend] = {}
         self._root_backend: Optional[_SingleAccountBackend] = None
@@ -1319,7 +1311,7 @@ class VikingVectorIndexBackend:
         records = await self.filter(
             filter=And(conds),
             limit=100,
-            output_fields=URI_REWRITE_OUTPUT_FIELDS,
+            output_fields=["id"],
             ctx=ctx,
         )
         if not records:
@@ -1351,7 +1343,7 @@ class VikingVectorIndexBackend:
                 return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
             return uri
 
-        success = False
+        updated_records: List[Dict[str, Any]] = []
         ids_to_delete: List[str] = []
         for record in full_records:
             if "id" not in record:
@@ -1386,17 +1378,27 @@ class VikingVectorIndexBackend:
                     record.get("id"),
                 )
                 continue
-            result = await self.upsert(updated, ctx=ctx, _acl_materialized=bool(self.acl_manager))
-            if result:
-                success = True
-                old_id = record.get("id")
-                if old_id and old_id != new_id:
-                    ids_to_delete.append(old_id)
+            updated_records.append(updated)
+            old_id = record.get("id")
+            if old_id and old_id != new_id:
+                ids_to_delete.append(old_id)
+
+        if not updated_records:
+            return False
+        new_ids = await self.upsert_many(
+            updated_records,
+            ctx=ctx,
+            _acl_materialized=bool(self.acl_manager),
+        )
+        if len(new_ids) != len(updated_records):
+            raise RuntimeError(
+                f"Failed to update {len(updated_records) - len(new_ids)} URI mapping record(s)"
+            )
 
         if ids_to_delete:
             await self.delete(list(set(ids_to_delete)), ctx=ctx)
 
-        return success
+        return True
 
     async def increment_active_count(self, ctx: RequestContext, uris: List[str]) -> int:
         updated = 0

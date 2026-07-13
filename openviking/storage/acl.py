@@ -19,15 +19,13 @@ AclAction = Literal["read", "write", "manage"]
 
 _LEVEL_RANK: dict[str, int] = {"viewer": 1, "editor": 2, "manager": 3}
 _ACL_PREFIXES = ("acl_direct", "acl_inherited")
-ACL_CONTEXT_FIELDS = frozenset(
-    {"acl_enabled"}
-    | {
-        f"{prefix}_{action}_principal_ids"
-        for prefix in _ACL_PREFIXES
-        for action in ("read", "write", "manage")
-    }
+ACL_PRINCIPAL_FIELDS = tuple(
+    f"{prefix}_{action}_principal_ids"
+    for prefix in _ACL_PREFIXES
+    for action in ("read", "write", "manage")
 )
-_ACL_OUTPUT_FIELDS = ["id", "uri", *sorted(ACL_CONTEXT_FIELDS)]
+ACL_CONTEXT_FIELDS = frozenset(("acl_enabled", *ACL_PRINCIPAL_FIELDS))
+_ACL_OUTPUT_FIELDS = ["uri", *sorted(ACL_CONTEXT_FIELDS)]
 
 
 @dataclass(frozen=True)
@@ -263,7 +261,7 @@ class AclManager:
                 filter=PathScope("uri", uri, depth=-1),
                 limit=500,
                 cursor=cursor,
-                output_fields=["id", "uri"],
+                output_fields=["id"],
                 ctx=ctx,
             )
             refs.extend(page)
@@ -386,7 +384,7 @@ class AclManager:
         ctx: RequestContext,
         *,
         root_direct: DirectAcl | None = None,
-    ) -> None:
+    ) -> EffectiveAcl:
         grouped = self._group_by_uri(records)
         if root_uri not in grouped:
             raise InvalidArgumentError("ACL target has no context record; index it first")
@@ -400,7 +398,7 @@ class AclManager:
         root_ancestors = acl_ancestors(root_uri)
         parent = root_ancestors[-2] if len(root_ancestors) > 1 else None
         base = (await self.resolve(parent, ctx)).permissions if parent else DirectAcl()
-        fields_by_uri: dict[str, dict[str, Any]] = {}
+        effective_by_uri: dict[str, EffectiveAcl] = {}
         for uri in grouped:
             ancestors = acl_ancestors(uri)
             try:
@@ -411,20 +409,21 @@ class AclManager:
             for ancestor in ancestors[root_index:-1]:
                 inherited = inherited.union(direct_map.get(ancestor, DirectAcl()))
             direct = direct_map.get(uri, DirectAcl())
-            fields_by_uri[uri] = EffectiveAcl(
+            effective_by_uri[uri] = EffectiveAcl(
                 enabled=not direct.empty or not inherited.empty,
                 direct=direct,
                 inherited=inherited,
-            ).context_fields()
+            )
 
         updated = [
-            {**record, **fields_by_uri[str(record["uri"])]}
+            {**record, **effective_by_uri[str(record["uri"])].context_fields()}
             for record in records
-            if str(record.get("uri") or "") in fields_by_uri
+            if str(record.get("uri") or "") in effective_by_uri
         ]
         ids = await self._context_store.upsert_many(updated, ctx=ctx, _acl_materialized=True)
         if len(ids) != len(updated):
             raise RuntimeError(f"Failed to update {len(updated) - len(ids)} context ACL record(s)")
+        return effective_by_uri[root_uri]
 
     async def refresh_context_subtree(self, uri: str, ctx: RequestContext) -> None:
         canonical_uri = canonicalize_uri(uri, ctx)
@@ -442,18 +441,19 @@ class AclManager:
         proposed = entries_to_direct(entries)
         old_records = await self._subtree_records(canonical_uri, ctx)
         try:
-            await self._apply_subtree(canonical_uri, old_records, ctx, root_direct=proposed)
+            effective = await self._apply_subtree(
+                canonical_uri, old_records, ctx, root_direct=proposed
+            )
         except Exception:
             if old_records:
                 await self._context_store.upsert_many(old_records, ctx=ctx, _acl_materialized=True)
             raise
-        return await self.resolve(canonical_uri, ctx)
+        return effective
 
-    async def report(self, uri: str, ctx: RequestContext) -> dict[str, Any]:
-        canonical_uri = canonicalize_uri(uri, ctx)
-        effective = await self.resolve(canonical_uri, ctx)
+    @staticmethod
+    def to_report(uri: str, effective: EffectiveAcl) -> dict[str, Any]:
         return {
-            "uri": canonical_uri,
+            "uri": uri,
             "acl_enabled": effective.enabled,
             "direct_entries": [entry.to_dict() for entry in direct_to_entries(effective.direct)],
             "inherited_entries": [
@@ -463,3 +463,7 @@ class AclManager:
                 entry.to_dict() for entry in direct_to_entries(effective.permissions)
             ],
         }
+
+    async def report(self, uri: str, ctx: RequestContext) -> dict[str, Any]:
+        canonical_uri = canonicalize_uri(uri, ctx)
+        return self.to_report(canonical_uri, await self.resolve(canonical_uri, ctx))

@@ -53,7 +53,7 @@ async def _upsert_context(
     )
 
 
-def test_acl_entries_expand_levels_and_keep_highest_duplicate():
+def test_acl_rule_model():
     acl = entries_to_direct(
         [
             AclEntry("user:bob", "viewer"),
@@ -76,22 +76,15 @@ def test_acl_entries_expand_levels_and_keep_highest_duplicate():
         {"principal": "user:bob", "level": "manager"},
     ]
 
-
-@pytest.mark.parametrize(
-    "entry",
-    [
+    for invalid_entry in (
         {"principal": "", "level": "viewer"},
         {"principal": "user:bad/user", "level": "viewer"},
         {"principal": "group:*", "level": "viewer"},
         {"principal": "user:bob", "level": "owner"},
-    ],
-)
-def test_acl_entries_reject_invalid_values(entry):
-    with pytest.raises(InvalidArgumentError):
-        entries_to_direct([entry])
+    ):
+        with pytest.raises(InvalidArgumentError):
+            entries_to_direct([invalid_entry])
 
-
-def test_acl_ancestors_cover_every_resource_level():
     assert acl_ancestors("viking://resources/a/b/c.md") == [
         "viking://resources",
         "viking://resources/a",
@@ -106,8 +99,6 @@ def test_acl_ancestors_cover_every_resource_level():
     with pytest.raises(InvalidArgumentError):
         acl_ancestors("viking://upload/private.md")
 
-
-def test_implicit_managers_follow_resource_ownership():
     assert is_implicit_manager(_ctx("admin", Role.ADMIN), "viking://resources/a")
     assert not is_implicit_manager(_ctx("root", Role.ROOT), "viking://resources/a")
     assert not is_implicit_manager(_ctx("alice"), "viking://resources/a")
@@ -119,8 +110,6 @@ def test_implicit_managers_follow_resource_ownership():
         _ctx("bob", Role.ADMIN), "viking://user/alice/resources/project/file.md"
     )
 
-
-def test_effective_acl_adds_direct_and_inherited_permissions():
     inherited = entries_to_direct(
         [AclEntry("user:bob", "viewer"), AclEntry("user:alice", "editor")]
     )
