@@ -5,7 +5,7 @@ import pytest
 
 from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.server.test_admin_api import ROOT_KEY
 from tests.server.test_admin_api import admin_app as _admin_app_fixture
@@ -34,6 +34,74 @@ async def test_reindex_requires_admin_role(admin_client: httpx.AsyncClient):
         json={"uri": "viking://resources/demo", "mode": "vectors_only"},
     )
     assert resp.status_code == 401
+
+
+async def test_reindex_user_can_only_target_own_user_scope(monkeypatch):
+    from inspect import signature
+
+    from openviking.server.routers.content import ReindexRequest, reindex
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="reindex_user_scope", user_id="bob"),
+        role=Role.USER,
+    )
+    role_dependency = signature(reindex).parameters["ctx"].default.dependency
+    assert await role_dependency(ctx=ctx) == ctx
+    seen = {}
+
+    class FakeService:
+        async def reindex(self, *, uri, mode, wait, ctx):
+            seen.update(uri=uri, mode=mode, wait=wait, ctx=ctx)
+            return {"status": "completed", "uri": uri, "mode": mode}
+
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
+
+    own_scope = await reindex(
+        body=ReindexRequest(uri="viking://user/resources", mode="vectors_only"),
+        ctx=ctx,
+    )
+    assert own_scope.status == "ok"
+    assert seen["uri"] == "viking://user/bob/resources"
+    assert seen["ctx"].role == Role.USER
+    assert seen["ctx"].account_id == "reindex_user_scope"
+
+    with pytest.raises(PermissionDeniedError):
+        await reindex(
+            body=ReindexRequest(uri="viking://resources/shared", mode="vectors_only"),
+            ctx=ctx,
+        )
+
+    with pytest.raises(PermissionDeniedError):
+        await reindex(
+            body=ReindexRequest(uri="viking://user/alice/resources", mode="vectors_only"),
+            ctx=ctx,
+        )
+
+    peer_ctx = RequestContext(
+        user=ctx.user,
+        role=Role.USER,
+        actor_peer_id="peer-a",
+    )
+    peer_scope = await reindex(
+        body=ReindexRequest(
+            uri="viking://user/bob/peers/peer-a/resources",
+            mode="vectors_only",
+        ),
+        ctx=peer_ctx,
+    )
+    assert peer_scope.status == "ok"
+    assert seen["uri"] == "viking://user/bob/peers/peer-a/resources"
+
+    for hidden_uri in (
+        "viking://user/bob",
+        "viking://user/bob/peers",
+        "viking://user/bob/peers/peer-b/resources",
+    ):
+        with pytest.raises(PermissionDeniedError):
+            await reindex(
+                body=ReindexRequest(uri=hidden_uri, mode="vectors_only"),
+                ctx=peer_ctx,
+            )
 
 
 async def test_reindex_rejects_unsupported_uri(admin_client: httpx.AsyncClient):
