@@ -448,6 +448,16 @@ class LockManager:
             logger.info(f"Recovering pending redo task: {task_id}")
             try:
                 info = await self._redo_log.read_async(task_id)
+                if info.get("fenced_operation_id"):
+                    # Alice fenced commits are recovered by the PostgreSQL
+                    # commit-work outbox, which also holds the authoritative
+                    # per-session advisory lock.  Generic archive replay here
+                    # could race that writer and duplicate model side effects.
+                    logger.info(
+                        "Leaving fenced redo task %s for durable commit worker",
+                        task_id,
+                    )
+                    continue
                 if info:
                     await self._redo_session_memory(info)
                 await self._redo_log.mark_done_async(task_id)

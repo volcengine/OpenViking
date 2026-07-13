@@ -25,6 +25,7 @@ def test_create_default_collector_manager_registers_expected_collectors_in_order
     names = [type(c).__name__ for c in manager._collectors]
     assert names == [
         "QueueCollector",
+        "FencedBacklogCollector",
         "TaskTrackerCollector",
         "ObserverHealthCollector",
         "ObserverStateCollector",
@@ -55,6 +56,7 @@ def test_create_default_collector_manager_registers_feedback_collector_when_bot_
     names = [type(c).__name__ for c in manager._collectors]
     assert names == [
         "QueueCollector",
+        "FencedBacklogCollector",
         "TaskTrackerCollector",
         "FeedbackCollector",
         "ObserverHealthCollector",

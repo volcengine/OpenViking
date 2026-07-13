@@ -490,3 +490,19 @@ class VikingDBManagerProxy:
 
     async def increment_active_count(self, uris: List[str]) -> int:
         return await self._manager.increment_active_count(self._ctx, uris)
+
+    async def plan_active_count_targets(
+        self,
+        ctx: RequestContext,
+        uris: List[str],
+    ) -> List[Dict[str, Any]]:
+        del ctx
+        return await self._manager.plan_active_count_targets(self._ctx, uris)
+
+    async def ensure_active_count_targets(
+        self,
+        ctx: RequestContext,
+        targets: List[Dict[str, Any]],
+    ) -> int:
+        del ctx
+        return await self._manager.ensure_active_count_targets(self._ctx, targets)

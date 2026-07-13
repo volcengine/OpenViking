@@ -33,6 +33,7 @@ from openviking.metrics.collectors import (
     CollectorManager,
     EncryptionProbeCollector,
     FeedbackCollector,
+    FencedBacklogCollector,
     LockCollector,
     ModelProviderProbeCollector,
     ModelUsageCollector,
@@ -60,6 +61,7 @@ from openviking.metrics.datasources.probes import (
     StorageProbeDataSource,
 )
 from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
+from openviking.metrics.datasources.session import FencedBacklogDataSource
 from openviking.metrics.datasources.task import TaskStateDataSource
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
@@ -82,6 +84,9 @@ def create_default_collector_manager(*, app=None, service=None, config=None) -> 
     """
     manager = CollectorManager()
     manager.register(QueueCollector(data_source=QueuePipelineStateDataSource()))
+    manager.register(
+        FencedBacklogCollector(data_source=FencedBacklogDataSource())
+    )
     manager.register(TaskTrackerCollector(data_source=TaskStateDataSource()))
     feedback_bot_data_path = _resolve_feedback_bot_data_path(config)
     if feedback_bot_data_path is not None:

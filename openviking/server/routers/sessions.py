@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
+import re
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
@@ -17,10 +18,20 @@ from openviking.server.models import ErrorInfo, Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.utils import get_logger
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = get_logger(__name__)
+_RESERVED_ALICE_SESSION_ID = re.compile(r"^alice_[0-9a-f]{48}$")
+
+
+def _reject_reserved_alice_session_write(session_id: Optional[str]) -> None:
+    if session_id and _RESERVED_ALICE_SESSION_ID.fullmatch(session_id):
+        raise FailedPreconditionError(
+            "Reserved Alice sessions require the fenced write API",
+            details={"reason": "alice_session_fencing_required"},
+        )
 
 
 class TextPartRequest(BaseModel):
@@ -197,6 +208,7 @@ async def create_session(
     If session_id is provided, creates a session with the given ID.
     If session_id is None, creates a new session with auto-generated ID.
     """
+    _reject_reserved_alice_session_write(request.session_id)
     service = get_service()
 
     async def _create() -> dict[str, Any]:
@@ -239,6 +251,8 @@ async def get_session(
     """Get session details."""
     from openviking_cli.exceptions import NotFoundError
 
+    if auto_create:
+        _reject_reserved_alice_session_write(session_id)
     service = get_service()
     try:
         session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
@@ -360,6 +374,7 @@ async def delete_session(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Delete a session."""
+    _reject_reserved_alice_session_write(session_id)
     service = get_service()
     await service.sessions.delete(session_id, _ctx)
     return Response(status="ok", result={"session_id": session_id})
@@ -399,6 +414,7 @@ async def commit_session(
     (Phase 2) runs in the background.  A ``task_id`` is returned for
     polling progress via ``GET /tasks/{task_id}``.
     """
+    _reject_reserved_alice_session_write(session_id)
     service = get_service()
     execution = await run_operation(
         operation="session.commit",
@@ -422,6 +438,7 @@ async def extract_session(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Extract memories from a session."""
+    _reject_reserved_alice_session_write(session_id)
     service = get_service()
     result = await service.sessions.extract(session_id, _ctx)
     return Response(status="ok", result=_to_jsonable(result))
@@ -448,6 +465,7 @@ async def add_message(
     If both `content` and `parts` are provided, `parts` takes precedence.
     Missing sessions are auto-created on first add.
     """
+    _reject_reserved_alice_session_write(session_id)
     service = get_service()
 
     async def _add() -> dict[str, Any]:
@@ -488,6 +506,7 @@ async def batch_add_messages(
     Accepts a list of messages, each following the same format as AddMessageRequest.
     Missing sessions are auto-created on first add.
     """
+    _reject_reserved_alice_session_write(session_id)
     service = get_service()
 
     async def _batch_add() -> dict[str, Any]:
@@ -525,6 +544,7 @@ async def record_used(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Record actually used contexts and skills in a session."""
+    _reject_reserved_alice_session_write(session_id)
     service = get_service()
     session = await service.sessions.get(session_id, _ctx, auto_create=False)
 

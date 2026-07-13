@@ -71,8 +71,35 @@ async def _embedding_probe(embedder) -> str:
 async def health_check(request: Request):
     """Health check endpoint (no authentication required)."""
     from openviking import __version__
+    from openviking.server.fenced_operation import (
+        ALICE_FENCING_PROTOCOL,
+        ALICE_FENCING_VERSION,
+        get_alice_fencing_mode,
+    )
+    from openviking.server.routers.fenced_sessions import (
+        fenced_writer_runtime_status,
+    )
 
-    result = {"status": "ok", "healthy": True, "version": __version__}
+    fenced_runtime = fenced_writer_runtime_status()
+
+    result = {
+        "status": "ok",
+        "healthy": True,
+        "version": __version__,
+        "capabilities": {
+            "alice_session_fencing": {
+                "protocol": ALICE_FENCING_PROTOCOL,
+                "version": ALICE_FENCING_VERSION,
+                "mode": get_alice_fencing_mode(),
+                "write_ack": "202_poll",
+                "configured": fenced_runtime["configured"],
+                "writer_healthy": fenced_runtime["healthy"],
+                "draining": fenced_runtime["draining"],
+                "effect_concurrency": fenced_runtime["effect_concurrency"],
+                "commit_concurrency": fenced_runtime["commit_concurrency"],
+            }
+        },
+    }
 
     # Try to get user identity
     try:
@@ -132,6 +159,39 @@ async def readiness_check(request: Request):
         )
 
     checks = {}
+
+    # The PostgreSQL authority and its supervised writers are a readiness
+    # dependency whenever operators supplied any fencing configuration.  In
+    # observe mode a wholly unconfigured deployment remains backwards
+    # compatible, but partial/invalid configuration fails closed.
+    from openviking.server.fenced_operation import get_alice_fencing_mode
+    from openviking.server.routers.fenced_sessions import (
+        fenced_writer_runtime_status,
+    )
+
+    fenced_runtime = fenced_writer_runtime_status()
+    if (
+        fenced_runtime["configured"]
+        and fenced_runtime["healthy"]
+        and not fenced_runtime["draining"]
+    ):
+        checks["alice_fenced_writer"] = {
+            "status": "ok",
+            "effect_concurrency": fenced_runtime["effect_concurrency"],
+            "commit_concurrency": fenced_runtime["commit_concurrency"],
+        }
+    elif (
+        get_alice_fencing_mode() == "observe"
+        and not fenced_runtime["requested"]
+    ):
+        checks["alice_fenced_writer"] = "not_configured"
+    else:
+        checks["alice_fenced_writer"] = {
+            "status": "error",
+            "configured": fenced_runtime["configured"],
+            "healthy": fenced_runtime["healthy"],
+            "draining": fenced_runtime["draining"],
+        }
 
     # 1. AGFS: probe filesystem access and multi-write sync health
     try:

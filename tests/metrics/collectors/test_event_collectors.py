@@ -72,6 +72,56 @@ def test_session_collector_records_lifecycle_and_contexts_and_archive(registry, 
     assert 'openviking_session_archive_total{account_id="__unknown__",status="ok"} 1' in text
 
 
+def test_session_collector_records_v2_fenced_effect(
+    monkeypatch, registry, render_prometheus
+):
+    monkeypatch.setattr(
+        "openviking.metrics.collectors.session.time.time", lambda: 1234.5
+    )
+    collector = SessionCollector()
+    collector.receive(
+        "session.fenced_effect",
+        {"operation": "message", "outcome": "completed"},
+        registry,
+    )
+
+    text = render_prometheus(registry)
+    assert (
+        'openviking_fenced_effects_total{operation="message",outcome="completed"} 1'
+        in text
+    )
+    assert (
+        "openviking_fenced_effect_last_event_timestamp_seconds"
+        '{operation="message",outcome="completed"} 1234.5'
+        in text
+    )
+
+
+def test_session_collector_records_fencing_last_event_timestamp(
+    monkeypatch, registry, render_prometheus
+):
+    monkeypatch.setattr(
+        "openviking.metrics.collectors.session.time.time", lambda: 2345.5
+    )
+    collector = SessionCollector()
+    collector.receive(
+        "session.fencing",
+        {
+            "operation": "message",
+            "outcome": "stale",
+            "latency_seconds": 0.01,
+        },
+        registry,
+    )
+
+    text = render_prometheus(registry)
+    assert (
+        "openviking_session_fencing_last_event_timestamp_seconds"
+        '{operation="message",outcome="stale"} 2345.5'
+        in text
+    )
+
+
 def test_session_collector_ignores_malformed_payloads_instead_of_raising(
     registry, render_prometheus
 ):

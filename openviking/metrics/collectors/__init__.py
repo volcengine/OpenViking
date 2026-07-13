@@ -28,6 +28,7 @@ from .rerank import RerankCollector
 from .retrieval import RetrievalCollector
 from .retrieval_backend_probe import RetrievalBackendProbeCollector
 from .service_probe import ServiceProbeCollector
+from .session import FencedBacklogCollector
 from .storage_probe import StorageProbeCollector
 from .task_tracker import TaskTrackerCollector
 from .vikingdb import VikingDBCollector
@@ -60,6 +61,7 @@ __all__ = [
     "ModelProviderProbeCollector",
     "AsyncSystemProbeCollector",
     "EncryptionProbeCollector",
+    "FencedBacklogCollector",
     "CollectorManager",
     "RefreshResult",
 ]

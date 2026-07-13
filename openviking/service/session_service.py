@@ -6,6 +6,7 @@ Session Service for OpenViking.
 Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
@@ -127,6 +128,8 @@ class SessionService:
         ctx: RequestContext,
         session_id: Optional[str] = None,
         memory_policy: Optional[Dict[str, Any]] = None,
+        *,
+        strict: bool = False,
     ) -> Session:
         """Create a session and persist its root path.
 
@@ -143,7 +146,7 @@ class SessionService:
         try:
             if session_id:
                 existing = self.session(ctx, session_id)
-                if await existing.exists():
+                if await existing.exists(strict=strict):
                     raise AlreadyExistsError(f"Session '{session_id}' already exists")
             session = self.session(ctx, session_id)
             if memory_policy is not None:
@@ -152,7 +155,7 @@ class SessionService:
                     set(MemoryTypeRegistry().list_names(include_disabled=False))
                 )
                 session.meta.memory_policy = policy.to_dict()
-            await session.ensure_exists()
+            await session.ensure_exists(strict=strict)
             self._record_lifecycle_metric("create", "ok")
             return session
         except Exception:
@@ -160,7 +163,12 @@ class SessionService:
             raise
 
     async def get(
-        self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        *,
+        auto_create: bool = False,
+        strict: bool = False,
     ) -> Session:
         """Get an existing session.
 
@@ -172,11 +180,11 @@ class SessionService:
         """
         try:
             session = self.session(ctx, session_id)
-            if not await session.exists():
+            if not await session.exists(strict=strict):
                 if not auto_create:
                     raise NotFoundError(session_id, "session")
-                await session.ensure_exists()
-            await session.load()
+                await session.ensure_exists(strict=strict)
+            await session.load(strict=strict)
             self._record_lifecycle_metric("get", "ok")
             return session
         except Exception:
@@ -249,6 +257,9 @@ class SessionService:
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
+        *,
+        operation_id: Optional[str] = None,
+        operation_sequence_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
@@ -265,6 +276,8 @@ class SessionService:
             session_id,
             ctx,
             keep_recent_count=keep_recent_count,
+            operation_id=operation_id,
+            operation_sequence_id=operation_sequence_id,
         )
 
     async def commit_async(
@@ -272,6 +285,9 @@ class SessionService:
         session_id: str,
         ctx: RequestContext,
         keep_recent_count: int = 0,
+        *,
+        operation_id: Optional[str] = None,
+        operation_sequence_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -288,11 +304,44 @@ class SessionService:
             archive_uri, archived
         """
         self._ensure_initialized()
-        session = await self.get(session_id, ctx)
-        result = await session.commit_async(keep_recent_count=keep_recent_count)
+        session = await self.get(
+            session_id,
+            ctx,
+            strict=operation_id is not None,
+        )
+        result = await session.commit_async(
+            keep_recent_count=keep_recent_count,
+            operation_id=operation_id,
+            operation_sequence_id=operation_sequence_id,
+        )
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")
         return result
+
+    async def run_fenced_commit_work(
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        *,
+        operation_id: str,
+        task_id: str,
+        archive_uri: str,
+    ) -> str:
+        """Resume one PostgreSQL-scheduled fenced commit Phase 2."""
+        self._ensure_initialized()
+        from openviking.session.session import fenced_phase2_timeout_seconds
+
+        # One wall-clock bound covers strict loading, every model/vector call,
+        # queue drain, and final receipts.  Writer shutdown is configured to
+        # exceed this bound so normal rolling deploys never force-cancel a
+        # non-idempotent started step.
+        async with asyncio.timeout(fenced_phase2_timeout_seconds()):
+            session = await self.get(session_id, ctx, strict=True)
+            return await session.run_fenced_commit_work(
+                operation_id=operation_id,
+                task_id=task_id,
+                archive_uri=archive_uri,
+            )
 
     async def get_commit_task(self, task_id: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
         """Query background commit task status by task_id for the calling owner."""

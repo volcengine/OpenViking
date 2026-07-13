@@ -34,6 +34,7 @@ from openviking.server.routers import (
     console_router,
     content_router,
     debug_router,
+    fenced_sessions_router,
     filesystem_router,
     metrics_router,
     observer_router,
@@ -216,6 +217,18 @@ def create_app(
 
     validate_server_config(config)
 
+    # Validate at startup.  Treating an operator typo as observe would silently
+    # re-enable unfenced Alice writes, so invalid values are fatal.
+    from openviking.server.fenced_operation import get_alice_fencing_mode
+
+    alice_fencing_mode = get_alice_fencing_mode()
+    if alice_fencing_mode == "required":
+        from openviking.server.fenced_postgres import (
+            validate_required_fencing_configuration,
+        )
+
+        validate_required_fencing_configuration()
+
     def _configure_session_tool_outputs(service_obj) -> None:  # noqa: ANN001
         sessions = getattr(service_obj, "sessions", None)
         setter = getattr(sessions, "set_tool_output_externalization_config", None)
@@ -287,38 +300,60 @@ def create_app(
         # Start MCP session manager (must be active before /mcp requests)
         from openviking.server.mcp_endpoint import mcp_lifespan
 
-        async with mcp_lifespan():
-            if service is not None:
-                await _initialize_runtime_state(app, service, config)
-            yield
+        try:
+            async with mcp_lifespan():
+                if service is not None:
+                    await _initialize_runtime_state(app, service, config)
+                from openviking.server.routers.fenced_sessions import (
+                    start_fenced_writer_runtime,
+                )
 
-        # Cleanup
-        from openviking.metrics.global_api import shutdown_metrics_async
-        from openviking.observability.usage_audit import shutdown_usage_audit
+                fencing_configured = await start_fenced_writer_runtime()
+                if alice_fencing_mode == "required" and not fencing_configured:
+                    raise RuntimeError(
+                        "required Alice fencing writer is not configured"
+                    )
+                yield
+        finally:
+            # Stop accepting/claiming durable work first and allow active Phase
+            # 2 effects to drain while service/storage dependencies still live.
+            from openviking.server.routers.fenced_sessions import (
+                stop_fenced_writer_runtime,
+            )
 
-        await shutdown_usage_audit(app=app)
-        await shutdown_metrics_async(app=app)
-        task_tracker.stop_cleanup_loop()
-        if oauth_gc_task is not None:
-            oauth_gc_task.cancel()
-            try:
-                await oauth_gc_task
-            except (asyncio.CancelledError, Exception):
-                pass
-        oauth_store_state = getattr(app.state, "oauth_store", None)
-        if oauth_store_state is not None:
-            try:
-                await oauth_store_state.close()
-            except Exception as e:  # noqa: BLE001
-                logger.warning("OAuth store close failed: %s", e)
-        if owns_service and service:
-            try:
-                await service.close()
-                logger.info("OpenVikingService closed")
-            except asyncio.CancelledError as e:
-                logger.warning(f"OpenVikingService close cancelled during shutdown: {e}")
-            except Exception as e:
-                logger.warning(f"OpenVikingService close failed during shutdown: {e}")
+            await stop_fenced_writer_runtime()
+
+            from openviking.metrics.global_api import shutdown_metrics_async
+            from openviking.observability.usage_audit import shutdown_usage_audit
+
+            await shutdown_usage_audit(app=app)
+            await shutdown_metrics_async(app=app)
+            task_tracker.stop_cleanup_loop()
+            if oauth_gc_task is not None:
+                oauth_gc_task.cancel()
+                try:
+                    await oauth_gc_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            oauth_store_state = getattr(app.state, "oauth_store", None)
+            if oauth_store_state is not None:
+                try:
+                    await oauth_store_state.close()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("OAuth store close failed: %s", e)
+            if owns_service and service:
+                try:
+                    await service.close()
+                    logger.info("OpenVikingService closed")
+                except asyncio.CancelledError as e:
+                    logger.warning(
+                        "OpenVikingService close cancelled during shutdown: %s",
+                        e,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "OpenVikingService close failed during shutdown: %s", e
+                    )
 
     app = FastAPI(
         title="OpenViking API",
@@ -396,6 +431,56 @@ def create_app(
             )
         response = await call_next(request)
         return response
+
+    @app.middleware("http")
+    async def require_fenced_alice_session_writes(request: Request, call_next: Callable):
+        """Fail closed on Alice's legacy writes after the required-mode cutover."""
+        from openviking.server.fenced_operation import get_alice_fencing_mode
+        from openviking.server.fenced_postgres import is_valid_alice_service_token
+
+        is_legacy_session_write = (
+            request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+            and (
+                request.url.path == "/api/v1/sessions"
+                or request.url.path.startswith("/api/v1/sessions/")
+            )
+        )
+        supplied_token = request.headers.get("X-OpenViking-Alice-Token")
+        authenticated_alice = is_valid_alice_service_token(supplied_token)
+        legacy_alice_marker = (
+            request.headers.get("X-OpenViking-Agent", "").strip().lower() == "alice"
+        )
+        if supplied_token is not None and not authenticated_alice:
+            return JSONResponse(
+                status_code=401,
+                content=Response(
+                    status="error",
+                    error=ErrorInfo(
+                        code="UNAUTHENTICATED",
+                        message="Invalid X-OpenViking-Alice-Token",
+                    ),
+                ).model_dump(exclude_none=True),
+            )
+        if (
+            get_alice_fencing_mode() == "required"
+            # The secret principal is the positive authentication boundary.
+            # The legacy marker is used only as a backwards-compatible deny so
+            # an already-running pre-token Alice process cannot bypass cutover.
+            and (authenticated_alice or legacy_alice_marker)
+            and is_legacy_session_write
+        ):
+            return JSONResponse(
+                status_code=412,
+                content=Response(
+                    status="error",
+                    error=ErrorInfo(
+                        code="FAILED_PRECONDITION",
+                        message="Alice must use the fenced session write API",
+                        details={"reason": "fencing_required"},
+                    ),
+                ).model_dump(exclude_none=True),
+            )
+        return await call_next(request)
 
     # Add request timing middleware
     @app.middleware("http")
@@ -531,6 +616,7 @@ def create_app(
     app.include_router(relations_router)
     app.include_router(privacy_configs_router)
     app.include_router(skills_router)
+    app.include_router(fenced_sessions_router)
     app.include_router(sessions_router)
     app.include_router(snapshot_router)
     app.include_router(stats_router)

@@ -3584,6 +3584,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+alice-fencing = [
+    { name = "psycopg2-binary" },
+]
 benchmark = [
     { name = "datasets" },
     { name = "langchain" },
@@ -3819,6 +3822,7 @@ requires-dist = [
     { name = "pdfplumber", specifier = ">=0.10.0" },
     { name = "prompt-toolkit", marker = "extra == 'bot'", specifier = ">=3.0.0" },
     { name = "protobuf", specifier = ">=6.33.5" },
+    { name = "psycopg2-binary", marker = "extra == 'alice-fencing'", specifier = ">=2.9" },
     { name = "psycopg2-binary", marker = "extra == 'opengauss'", specifier = ">=2.9" },
     { name = "py-machineid", marker = "extra == 'bot'", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -3877,7 +3881,7 @@ requires-dist = [
     { name = "xlrd", specifier = ">=2.0.1" },
     { name = "xxhash", specifier = ">=3.0.0" },
 ]
-provides-extras = ["test", "opengauss", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "bot-langfuse", "bot-telegram", "bot-feishu", "bot-dingtalk", "bot-slack", "bot-qq", "bot-sandbox", "bot-fuse", "bot-opencode", "bot-full", "benchmark", "langchain", "langgraph", "local-embed"]
+provides-extras = ["test", "opengauss", "alice-fencing", "dev", "doc", "eval", "gemini", "gemini-async", "ocr", "build", "bot", "bot-langfuse", "bot-telegram", "bot-feishu", "bot-dingtalk", "bot-slack", "bot-qq", "bot-sandbox", "bot-fuse", "bot-opencode", "bot-full", "benchmark", "langchain", "langgraph", "local-embed"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]
