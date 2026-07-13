@@ -641,6 +641,13 @@ html.vikingbot-assistant-resizing * {
   }
 }
 
+@media (min-width: 768px) and (max-width: 1599px) {
+  html.vikingbot-assistant-open .VPContent .VPDoc {
+    padding-right: 32px;
+    padding-left: 32px;
+  }
+}
+
 @media (min-width: 1280px) {
   html.vikingbot-assistant-open .VPSidebar {
     width: var(--vp-sidebar-width);
@@ -930,19 +937,24 @@ html.vikingbot-assistant-resizing * {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 16px;
 }
 
 .doc-page-actions > .llms-link-wrap,
 .doc-page-actions > .copy-md-wrap {
+  flex: 0 0 auto;
   margin-bottom: 0;
+}
+
+.doc-page-actions > .copy-md-wrap {
+  margin-left: auto;
 }
 
 @media (max-width: 640px) {
   .doc-page-actions {
     align-items: center;
-    flex-wrap: wrap;
   }
 }
 

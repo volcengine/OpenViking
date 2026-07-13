@@ -106,6 +106,7 @@ async function copyLlmsTxt() {
   align-items: center;
   gap: 12px;
   margin-bottom: 8px;
+  white-space: nowrap;
 }
 
 .llms-link,
