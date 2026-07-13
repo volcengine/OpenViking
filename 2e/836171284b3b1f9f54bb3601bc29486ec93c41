@@ -1,0 +1,21 @@
+openviking/utils/model_retry.py
+  s_b4975ba268f0a7::t_f254cd53fbe4ca 134,137-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2e836171284b3b1f9f54bb3601bc29486ec93c41",
+  "prompts": {},
+  "sessions": {
+    "s_b4975ba268f0a7": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4117-ee8f-7832-9eb8-0cb77dd4e4bd",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
