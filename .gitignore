@@ -226,6 +226,3 @@ tests/integration/.tmp_*/
 
 # all node_modules folders
 node_modules/
-
-# Local git worktrees
-.worktrees/
