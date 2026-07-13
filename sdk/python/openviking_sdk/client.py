@@ -882,19 +882,25 @@ class AsyncHTTPClient:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
+        params: Dict[str, Any] = {
+            "uri": VikingURI.normalize(uri),
+            "simple": simple,
+            "recursive": recursive,
+            "output": output,
+            "abs_limit": abs_limit,
+            "show_all_hidden": show_all_hidden,
+            "node_limit": node_limit,
+        }
+        if sort_by is not None:
+            params["sort_by"] = sort_by
+            params["sort_order"] = sort_order
         response = await self._request(
             "GET",
             "/api/v1/fs/ls",
-            params={
-                "uri": VikingURI.normalize(uri),
-                "simple": simple,
-                "recursive": recursive,
-                "output": output,
-                "abs_limit": abs_limit,
-                "show_all_hidden": show_all_hidden,
-                "node_limit": node_limit,
-            },
+            params=params,
         )
         return self._handle_response(response)
 
@@ -1859,6 +1865,8 @@ class SyncHTTPClient:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         return run_async(
             self._async_client.ls(
@@ -1869,6 +1877,8 @@ class SyncHTTPClient:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
             )
         )
 

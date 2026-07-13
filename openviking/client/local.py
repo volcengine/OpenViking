@@ -536,6 +536,9 @@ class LocalClient(BaseClient):
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         """List directory contents."""
         return await self._service.fs.ls(
@@ -546,6 +549,9 @@ class LocalClient(BaseClient):
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
     async def tree(
