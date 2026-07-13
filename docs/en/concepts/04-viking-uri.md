@@ -88,7 +88,7 @@ viking://user/resources/                      # Current user's resources
 viking://user/resources/docs/                 # Current user's resource directory
 ```
 
-`viking://resources/...` is shared by default inside the current account, while `viking://user/{user}/resources/...` belongs to that user by default. Both resource scopes support per-directory or per-file grants through [Resource Access Control (ACL)](./15-acl.md).
+`viking://resources/...` is the shared scope for the current account and supports per-directory or per-file [ACLs](./15-acl.md). `viking://user/{user}/resources/...` is private; move a resource into the shared scope to share it.
 
 ### User Skills and Peer Content
 

@@ -901,20 +901,10 @@ class VikingFS:
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
-        if acl_manager:
-            old_acl_scope = new_acl_scope = True
-            try:
-                acl_ancestors(canonicalize_uri(old_uri, self._ctx_or_default(ctx)))
-            except InvalidArgumentError:
-                old_acl_scope = False
-            try:
-                acl_ancestors(canonicalize_uri(new_uri, self._ctx_or_default(ctx)))
-            except InvalidArgumentError:
-                new_acl_scope = False
-            if old_acl_scope != new_acl_scope:
-                raise InvalidArgumentError(
-                    "ACL-controlled resources must move within resource scopes"
-                )
+        canonical_new_uri = canonicalize_uri(new_uri, self._ctx_or_default(ctx))
+        new_acl_scope = acl_manager is not None and uri_parts(canonical_new_uri)[:1] == [
+            "resources"
+        ]
 
         # Verify source exists and determine type before locking.
         try:
@@ -1012,9 +1002,9 @@ class VikingFS:
                 vector_mappings = await self._update_vector_store_uris(
                     uris_to_move, old_uri, new_uri, ctx=ctx
                 )
-                if acl_manager and old_acl_scope:
+                if acl_manager and new_acl_scope:
                     await acl_manager.refresh_context_subtree(
-                        canonicalize_uri(new_uri, self._ctx_or_default(ctx)),
+                        canonical_new_uri,
                         self._ctx_or_default(ctx),
                     )
             except Exception:

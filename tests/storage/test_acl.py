@@ -91,23 +91,18 @@ def test_acl_rule_model():
         "viking://resources/a/b",
         "viking://resources/a/b/c.md",
     ]
-    assert acl_ancestors("viking://user/alice/resources/a/b.md") == [
-        "viking://user/alice/resources",
-        "viking://user/alice/resources/a",
+    for private_uri in (
         "viking://user/alice/resources/a/b.md",
-    ]
-    with pytest.raises(InvalidArgumentError):
-        acl_ancestors("viking://upload/private.md")
+        "viking://upload/private.md",
+    ):
+        with pytest.raises(InvalidArgumentError, match="viking://resources"):
+            acl_ancestors(private_uri)
 
     assert is_implicit_manager(_ctx("admin", Role.ADMIN), "viking://resources/a")
     assert not is_implicit_manager(_ctx("root", Role.ROOT), "viking://resources/a")
     assert not is_implicit_manager(_ctx("alice"), "viking://resources/a")
-    assert is_implicit_manager(_ctx("alice"), "viking://user/alice/resources/project/file.md")
     assert not is_implicit_manager(
-        _ctx("root", Role.ROOT), "viking://user/alice/resources/project/file.md"
-    )
-    assert not is_implicit_manager(
-        _ctx("bob", Role.ADMIN), "viking://user/alice/resources/project/file.md"
+        _ctx("alice"), "viking://user/alice/resources/project/file.md"
     )
 
     inherited = entries_to_direct(
@@ -145,6 +140,8 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path):
     new_parent = "viking://resources/destination"
     new_root = f"{new_parent}/source"
     new_file = f"{new_root}/doc.md"
+    private_file = "viking://user/alice/resources/private.md"
+    shared_private_file = f"{new_parent}/private.md"
 
     try:
         assert await context_store.create_collection(
@@ -239,6 +236,55 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path):
             "user:alice",
         ]
         assert new_context[0]["acl_inherited_write_principal_ids"] == ["user:alice"]
+
+        stale_private_acl = EffectiveAcl(
+            True,
+            direct=entries_to_direct([AclEntry("group:grp_readers", "viewer")]),
+            inherited=entries_to_direct([]),
+        )
+        await context_store.upsert(
+            {
+                "id": "private-l2",
+                "uri": private_file,
+                "account_id": admin.account_id,
+                "context_type": "resource",
+                "level": 2,
+                "content": "private",
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                **stale_private_acl.context_fields(),
+            },
+            ctx=admin,
+            _acl_materialized=True,
+        )
+        assert (
+            await context_store.search_in_tenant(
+                ctx=bob,
+                query_vector=[1.0, 0.0, 0.0, 0.0],
+                target_directories=[private_file],
+                level=[2],
+            )
+            == []
+        )
+
+        assert await context_store.update_uri_mapping(
+            ctx=admin, uri=private_file, new_uri=shared_private_file
+        )
+        shared_record = (
+            await context_store.filter(
+                filter=In("uri", [shared_private_file]), limit=1, ctx=admin
+            )
+        )[0]
+        assert shared_record["acl_direct_read_principal_ids"] == []
+        assert shared_record["acl_inherited_read_principal_ids"] == ["user:alice"]
+        assert await context_store.update_uri_mapping(
+            ctx=admin, uri=shared_private_file, new_uri=private_file
+        )
+        private_record = (
+            await context_store.filter(filter=In("uri", [private_file]), limit=1, ctx=admin)
+        )[0]
+        assert private_record["acl_enabled"] is False
+        assert private_record["acl_direct_read_principal_ids"] == []
+        assert private_record["acl_inherited_read_principal_ids"] == []
     finally:
         await context_store.close()
 

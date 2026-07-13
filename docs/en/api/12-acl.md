@@ -1,6 +1,6 @@
 # ACL API
 
-The ACL API manages direct grants on resource nodes and reports their inherited effective permissions. Every ACL is limited to the current account.
+The ACL API manages direct grants on shared `viking://resources/...` nodes and reports their inherited effective permissions. Private resources do not accept ACLs and must be moved into the shared scope to be shared.
 
 Read [Resource Access Control (ACL)](../concepts/15-acl.md) for the permission and inheritance model.
 
@@ -14,7 +14,7 @@ Read [Resource Access Control (ACL)](../concepts/15-acl.md) for the permission a
 | POST | `/api/v1/acl/grant` | Set one principal's direct level |
 | POST | `/api/v1/acl/revoke` | Remove one principal's direct grant |
 
-Every endpoint requires `manage` on the target node. Account `ADMIN`s implicitly manage public resources, and the user named in a user-resource URI implicitly manages that resource tree.
+Every endpoint requires `manage` on the target node. Account `ADMIN`s implicitly manage shared resources.
 
 ## Data Structures
 
@@ -245,6 +245,7 @@ The API checks manage permission before confirming existence to an authorized ca
 
 | Scenario | Error |
 |----------|-------|
+| URI is outside `viking://resources/...` | `INVALID_ARGUMENT` |
 | Caller lacks manage | `PERMISSION_DENIED` |
 | Authorized caller targets a URI that does not exist | `NOT_FOUND` |
 | ACL mutation targets a URI without a context record | `INVALID_ARGUMENT`; index it first |

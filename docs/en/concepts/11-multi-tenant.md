@@ -74,7 +74,7 @@ If `auth_mode = "api_key"` and `root_api_key` is not configured, the server runs
 | Data type | Shared across accounts | Shared inside one account | Default isolation boundary |
 |-----------|------------------------|---------------------------|----------------------------|
 | Shared resources (`viking://resources`) | No | Shared by default; ACL can restrict | account / ACL |
-| User resources (`viking://user/{user_id}/resources`) | No | Isolated by default; ACL can share | user / ACL |
+| User resources (`viking://user/{user_id}/resources`) | No | No | user |
 | Peer resources (`viking://user/{user_id}/peers/{peer_id}/resources`) | No | No | user / peer |
 | Memories | No | No | user / peer |
 | Skills | No | No | user |
@@ -108,7 +108,7 @@ Filesystem operations and semantic retrieval are tenant-aware:
 
 - Non-ROOT requests are automatically filtered by `account_id`
 - `resources` includes account-shared resources by default and uses effective ACLs when configured
-- User resources default to the current user space and can be shared with users in the same account through resource ACLs
+- User resources remain isolated to the current user space; move them to `viking://resources` to share them
 - `memory` and `skill` remain filtered by the current user space
 - An actor peer filters `viking://user/{user}/peers` to one peer for filesystem and retrieval operations
 

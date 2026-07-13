@@ -1,22 +1,21 @@
 # 资源访问控制（ACL）
 
-OpenViking ACL 用于在同一个 account 内，把资源目录或文件授权给用户或用户组。ACL 不改变 account 隔离：任何授权都只在当前 account 内生效。
+OpenViking ACL 用于在同一个 account 内，把共享资源目录或文件授权给用户或用户组。ACL 不改变 account 隔离：任何授权都只在当前 account 内生效。
 
 ACL 采用协作文档式的继承模型。目录授权持续作用于所有后代，子目录和文件可以继续增加直接授权；祖先授权不会被子节点覆盖。
 
 ## 适用 URI
 
-ACL 作用于两类资源：
+ACL 只作用于共享资源：
 
 ```text
 viking://resources/...
-viking://user/{user_id}/resources/...
 ```
 
 - `viking://resources/...` 的 account `ADMIN` 是隐式管理者。
-- `viking://user/{user_id}/resources/...` 中的 `{user_id}` 是隐式管理者。
+- `viking://user/{user_id}/resources/...` 是个人私有区，不接受 ACL。需要分享时，将资源移动到有权写入的共享目录，并继承该目录的 ACL。
 
-隐式管理权不会写入 ACL 条目，也不能被 ACL 删除。它保证公共资源和用户资源始终有人能够首次设置或恢复权限。
+隐式管理权不会写入 ACL 条目，也不能被 ACL 删除。它保证共享资源始终有人能够首次设置或恢复权限。
 
 ## Principal 与权限级别
 
@@ -87,7 +86,7 @@ acl_enabled = true
 
 目录上的 ACL 授权会被所有后代继承。`list`、`tree` 和批量结果仍逐个检查有效 ACL，因为未设置 ACL 的目录可能按原有 URI 规则可见，而某个后代已经通过自己的 ACL 进入控制域。
 
-移动文件或目录时，节点自己的直接 ACL 随节点移动；旧祖先的继承权限不随对象移动，新祖先的 ACL 会重新参与计算。ACL 资源只能在受支持的资源范围之间移动。
+共享区内部移动时，节点自己的直接 ACL 随节点移动，继承权限按新祖先重新计算。个人资源移入共享区时不携带 ACL，只继承目标目录权限；共享资源移回个人区时清空 ACL。
 
 递归修改 tags、删除或移动目录会先校验完整目标子树。任一节点缺少所需能力，或子树扫描不完整，操作都会整体中止。
 
@@ -109,11 +108,11 @@ acl_inherited_manage_principal_ids
 
 `acl_direct_*` 是当前节点直接 ACL，`acl_inherited_*` 是所有祖先直接 ACL 的并集。有效权限是两组列表的并集，不维护独立 ACL collection。
 
-请求的可用 principal 为 `user:{ctx.user_id}`、`user:*` 和所有 `group:{ctx.group_ids}`。`find/search` 直接在向量库中按 `account_id`、URI scope、`acl_direct_read_principal_ids` 和 `acl_inherited_read_principal_ids` 做原生 `list<string>` 过滤。旧记录缺少 ACL 字段时按 `acl_enabled=false` 处理，无需全量回填。
+请求的可用 principal 为 `user:{ctx.user_id}`、`user:*` 和所有 `group:{ctx.group_ids}`。`find/search` 只在 `viking://resources` scope 内按 `acl_direct_read_principal_ids` 和 `acl_inherited_read_principal_ids` 做原生 `list<string>` 过滤；个人资源始终按 URI owner 隔离。旧记录缺少 ACL 字段时按 `acl_enabled=false` 处理，无需全量回填。
 
 检索 target URI 只是搜索范围，不要求调用者能够读取 target 节点本身。用户即使不能读取中间目录，也可以检索到深层单独授权给自己的文件。
 
-所有 context 写入入口都会保留同 URI 已有 direct ACL，并为新节点从父节点生成 inherited ACL。重新向量化和普通覆盖写不会把受控记录恢复为默认可见，也不能通过普通 context 字段直接改 ACL。
+共享区 context 写入会保留同 URI 已有 direct ACL，并为新节点从父节点生成 inherited ACL。重新向量化和普通覆盖写不会把受控记录恢复为默认可见，也不能通过普通 context 字段直接改 ACL。
 
 ## 示例
 

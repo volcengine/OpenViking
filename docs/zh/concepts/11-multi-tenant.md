@@ -74,7 +74,7 @@ OpenViking Server 支持两种多租户相关认证模式：
 | 数据类型 | 是否跨 account 共享 | account 内是否共享 | 默认隔离边界 |
 |----------|---------------------|-------------------|--------------|
 | 共享资源 (`viking://resources`) | 否 | 默认共享，可用 ACL 限制 | account / ACL |
-| 用户资源 (`viking://user/{user_id}/resources`) | 否 | 默认隔离，可用 ACL 授权 | user / ACL |
+| 用户资源 (`viking://user/{user_id}/resources`) | 否 | 否 | user |
 | Peer 资源 (`viking://user/{user_id}/peers/{peer_id}/resources`) | 否 | 否 | user / peer |
 | 记忆 | 否 | 否 | user / peer |
 | 技能 | 否 | 否 | user |
@@ -108,7 +108,7 @@ viking://user/alice/peers/web-visitor-alice/resources/
 
 - 非 ROOT 请求会自动按 `account_id` 过滤
 - `resources` 默认允许检索 account 内共享资源；设置 ACL 后按有效 ACL 过滤
-- 用户资源默认按当前 `user space` 过滤，也可以通过资源 ACL 授权给同 account 用户
+- 用户资源始终按当前 `user space` 隔离；需要共享时移动到 `viking://resources`
 - `memory` 和 `skill` 继续按当前 `user space` 过滤
 - Actor peer 会把 `viking://user/{user}/peers` 过滤到一个 peer，并作用于文件系统和检索操作
 

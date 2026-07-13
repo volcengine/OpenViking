@@ -1,22 +1,21 @@
 # Resource Access Control (ACL)
 
-OpenViking ACL shares resource directories or files with users or groups inside one account. ACL never changes the account boundary: every grant is limited to the current account.
+OpenViking ACL shares directories or files from the shared resource scope with users or groups inside one account. ACL never changes the account boundary: every grant is limited to the current account.
 
 ACL uses a collaborative-document inheritance model. A directory grant continuously applies to its descendants, while child directories and files can add direct grants. A child ACL does not replace grants inherited from ancestors.
 
 ## Supported URIs
 
-ACL applies to these resource scopes:
+ACL applies only to shared resources:
 
 ```text
 viking://resources/...
-viking://user/{user_id}/resources/...
 ```
 
 - An account `ADMIN` is an implicit manager of `viking://resources/...`.
-- The `{user_id}` in `viking://user/{user_id}/resources/...` is an implicit manager of that user resource tree.
+- `viking://user/{user_id}/resources/...` is private and does not accept ACLs. To share it, move the resource into a writable shared directory and inherit that directory's ACL.
 
-Implicit management is not stored as an ACL entry and cannot be removed by ACL changes. It ensures that public and user resources always have an identity that can establish or recover permissions.
+Implicit management is not stored as an ACL entry and cannot be removed by ACL changes. It ensures that shared resources always have an identity that can establish or recover permissions.
 
 ## Principals and Levels
 
@@ -87,7 +86,7 @@ All filesystem APIs use the same permission mapping:
 
 An ACL grant on a directory is inherited by every descendant. `list`, `tree`, and other batch results still check every returned node because an ACL-free directory may be visible under legacy URI rules while one of its descendants has entered the ACL-controlled domain through its own ACL.
 
-When a file or directory moves, its direct ACL moves with it. Permissions inherited from the old ancestors do not move, and ACLs on the new ancestors are recalculated into the effective permissions. ACL-controlled resources can move only between supported resource scopes.
+Within the shared scope, a moved node keeps its direct ACL and recalculates inherited permissions from its new ancestors. A private resource moved into the shared scope carries no ACL and inherits the destination directory; a shared resource moved back to a private area has its ACL cleared.
 
 Recursive tag updates, directory deletion, and directory moves validate the complete affected subtree first. The operation stops if any node lacks the required capability or the subtree cannot be scanned completely.
 
@@ -109,11 +108,11 @@ acl_inherited_manage_principal_ids
 
 `acl_direct_*` is the ACL assigned to the current node. `acl_inherited_*` is the union of all ancestor direct ACLs. Effective permission is their union; there is no separate ACL collection.
 
-The request principals are `user:{ctx.user_id}`, `user:*`, and every `group:{ctx.group_ids}`. `find/search` uses native `list<string>` filters directly in the vector database over `account_id`, URI scope, `acl_direct_read_principal_ids`, and `acl_inherited_read_principal_ids`. Legacy records without ACL fields are treated as `acl_enabled=false`, so they do not require a full data backfill.
+The request principals are `user:{ctx.user_id}`, `user:*`, and every `group:{ctx.group_ids}`. Within the `viking://resources` scope, `find/search` uses native `list<string>` filters over `acl_direct_read_principal_ids` and `acl_inherited_read_principal_ids`; private resources remain isolated by URI owner. Legacy records without ACL fields are treated as `acl_enabled=false`, so they do not require a full data backfill.
 
 A retrieval target URI is only a search scope; the caller does not need to read the target node itself. A user can discover a deeply shared file even when intermediate directories are not readable.
 
-Every context write preserves an existing direct ACL for the same URI and derives inherited ACL fields for new nodes from their parent. Re-embedding and ordinary replacement writes cannot reset controlled records to default visibility or modify ACLs through regular context fields.
+Shared-scope context writes preserve an existing direct ACL for the same URI and derive inherited ACL fields for new nodes from their parent. Re-embedding and ordinary replacement writes cannot reset controlled records to default visibility or modify ACLs through regular context fields.
 
 ## Example
 

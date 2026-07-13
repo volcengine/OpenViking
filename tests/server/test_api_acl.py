@@ -6,7 +6,7 @@ import pytest
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -20,16 +20,18 @@ async def test_acl_http_crud_and_operation_levels(
     app,
     service,
 ):
-    owner = _ctx("test_user")
+    owner = _ctx("test_user", Role.ADMIN)
     bob = _ctx("bob")
     root = _ctx("root", Role.ROOT)
-    directory = "viking://user/test_user/resources/acl-project"
+    private_directory = "viking://user/test_user/resources/acl-project"
+    private_file_uri = f"{private_directory}/notes.md"
+    directory = "viking://resources/acl-project"
     file_uri = f"{directory}/notes.md"
-    await service.viking_fs.mkdir(directory, ctx=owner)
-    await service.viking_fs.write_file(file_uri, "initial", ctx=owner)
+    await service.viking_fs.mkdir(private_directory, ctx=owner)
+    await service.viking_fs.write_file(private_file_uri, "initial", ctx=owner)
     for record_id, uri, level in (
-        ("acl-project-l0", directory, 0),
-        ("acl-notes-l2", file_uri, 2),
+        ("acl-project-l0", private_directory, 0),
+        ("acl-notes-l2", private_file_uri, 2),
     ):
         await service.vikingdb_manager.upsert(
             {
@@ -42,8 +44,9 @@ async def test_acl_http_crud_and_operation_levels(
             },
             ctx=owner,
         )
-    with pytest.raises(PermissionDeniedError):
-        await service.viking_fs.read_file(file_uri, ctx=root)
+    with pytest.raises(InvalidArgumentError, match="viking://resources"):
+        await service.viking_fs.get_acl(private_directory, ctx=owner)
+    await service.viking_fs.mv(private_directory, directory, ctx=owner)
     app.dependency_overrides[get_request_context] = lambda: owner
 
     try:

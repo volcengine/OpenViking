@@ -1,6 +1,6 @@
 # ACL API
 
-ACL API 管理资源节点的直接授权，并返回节点继承后的有效权限。ACL 只在当前 account 内生效。
+ACL API 管理 `viking://resources/...` 共享资源的直接授权，并返回节点继承后的有效权限。个人资源不接受 ACL，需要分享时应移动到共享区。
 
 权限模型和继承规则请先阅读 [资源访问控制（ACL）](../concepts/15-acl.md)。
 
@@ -14,7 +14,7 @@ ACL API 管理资源节点的直接授权，并返回节点继承后的有效权
 | POST | `/api/v1/acl/grant` | 设置一个 principal 的直接权限级别 |
 | POST | `/api/v1/acl/revoke` | 删除一个 principal 的直接授权 |
 
-所有接口都要求调用者对目标节点拥有 `manage`。公共资源由 account `ADMIN` 隐式管理；用户资源由 URI 中的所属用户隐式管理。
+所有接口都要求调用者对目标节点拥有 `manage`。共享资源由 account `ADMIN` 隐式管理。
 
 ## 数据结构
 
@@ -245,6 +245,7 @@ ov acl rm viking://resources/project-a
 
 | 场景 | 错误 |
 |------|------|
+| URI 不在 `viking://resources/...` | `INVALID_ARGUMENT` |
 | 调用者没有 manage | `PERMISSION_DENIED` |
 | 已授权调用者访问不存在的 URI | `NOT_FOUND` |
 | 修改 ACL 时 URI 尚无 context 记录 | `INVALID_ARGUMENT`，需先完成索引 |

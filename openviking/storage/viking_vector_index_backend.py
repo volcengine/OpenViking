@@ -176,9 +176,6 @@ class _SingleAccountBackend:
 
         return result
 
-    def _prepare_upsert_payloads(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return [self._prepare_upsert_payload(item) for item in data]
-
     @staticmethod
     def _is_not_found_error(exc: Exception) -> bool:
         message = str(exc).lower()
@@ -326,10 +323,9 @@ class _SingleAccountBackend:
             context_type = payload.get("context_type")
             if context_type and context_type not in VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES:
                 raise ValueError(f"Invalid context_type: {context_type}")
-            payloads.append(payload)
+            payloads.append(await self._async_adapter.run(self._prepare_upsert_payload, payload))
         if not payloads:
             return []
-        payloads = await self._async_adapter.run(self._prepare_upsert_payloads, payloads)
         return await self._async_adapter.call("upsert", payloads)
 
     async def update(self, data: Dict[str, Any]) -> UpdateResult:
@@ -1474,10 +1470,20 @@ class VikingVectorIndexBackend:
             ]
         )
         principals = sorted(acl_principals(ctx))
+        shared_acl_filter = And(
+            [
+                PathScope("uri", "viking://resources", depth=-1),
+                Or(
+                    [
+                        In("acl_direct_read_principal_ids", principals),
+                        In("acl_inherited_read_principal_ids", principals),
+                    ]
+                ),
+            ]
+        )
         access_filters: List[FilterExpr] = [
             legacy_filter,
-            In("acl_direct_read_principal_ids", principals),
-            In("acl_inherited_read_principal_ids", principals),
+            shared_acl_filter,
             PathScope("uri", canonical_user_content_root(ctx, "resource"), depth=-1),
         ]
         if ctx.role == Role.ADMIN:

@@ -164,27 +164,13 @@ def direct_to_entries(acl: DirectAcl) -> list[AclEntry]:
 def acl_ancestors(uri: str) -> list[str]:
     """Return ACL-bearing ancestors from the resource root through *uri*."""
     parts = uri_parts(uri)
-    if parts[:1] == ["resources"]:
-        start = 1
-    elif len(parts) >= 3 and parts[0] == "user" and parts[2] == "resources":
-        start = 3
-    else:
-        raise InvalidArgumentError(
-            "ACL is only supported for viking://resources and viking://user/{user}/resources"
-        )
-    return [f"viking://{'/'.join(parts[:depth])}" for depth in range(start, len(parts) + 1)]
+    if parts[:1] != ["resources"]:
+        raise InvalidArgumentError("ACL is only supported for viking://resources")
+    return [f"viking://{'/'.join(parts[:depth])}" for depth in range(1, len(parts) + 1)]
 
 
 def is_implicit_manager(ctx: RequestContext, uri: str) -> bool:
-    parts = uri_parts(uri)
-    if parts[:1] == ["resources"]:
-        return ctx.role == Role.ADMIN
-    return (
-        len(parts) >= 3
-        and parts[0] == "user"
-        and parts[2] == "resources"
-        and parts[1] == ctx.user.user_id
-    )
+    return uri_parts(uri)[:1] == ["resources"] and ctx.role == Role.ADMIN
 
 
 def acl_allows(acl: EffectiveAcl, ctx: RequestContext, action: AclAction) -> bool:
@@ -367,10 +353,17 @@ class AclManager:
     async def materialize_moved_record(
         self, record: Mapping[str, Any], new_uri: str, ctx: RequestContext
     ) -> dict[str, Any]:
+        if uri_parts(new_uri)[:1] != ["resources"]:
+            return EffectiveAcl(False, DirectAcl(), DirectAcl()).context_fields()
         ancestors = acl_ancestors(new_uri)
         parent = ancestors[-2] if len(ancestors) > 1 else None
         inherited = (await self.resolve(parent, ctx)).permissions if parent else DirectAcl()
-        direct = DirectAcl.from_context_fields(record, "acl_direct")
+        source_uri = str(record.get("uri") or "")
+        direct = (
+            DirectAcl.from_context_fields(record, "acl_direct")
+            if uri_parts(source_uri)[:1] == ["resources"]
+            else DirectAcl()
+        )
         return EffectiveAcl(
             enabled=not direct.empty or not inherited.empty,
             direct=direct,
