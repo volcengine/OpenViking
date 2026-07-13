@@ -952,6 +952,7 @@ def test_single_account_backend_filters_parent_uri_against_current_schema():
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -998,6 +999,7 @@ async def test_single_account_backend_upsert_drops_legacy_parent_uri_before_writ
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -1051,7 +1053,8 @@ async def test_single_account_backend_truncates_content_only_at_vector_write():
             }
 
     class _Adapter:
-        mode = "local"
+        mode = "volcengine"
+        USE_CONTENT_FIELD = True
 
         def get_collection(self):
             return _Collection()
@@ -1061,7 +1064,12 @@ async def test_single_account_backend_truncates_content_only_at_vector_write():
             return [data["id"]]
 
     backend = _SingleAccountBackend(
-        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        config=VectorDBBackendConfig(
+            backend="volcengine",
+            name="context",
+            dimension=2,
+            volcengine=VolcengineConfig(ak="ak", sk="sk", region="cn-beijing"),
+        ),
         bound_account_id="acc1",
         shared_adapter=_Adapter(),
     )
@@ -1081,6 +1089,63 @@ async def test_single_account_backend_truncates_content_only_at_vector_write():
     assert captured["data"]["content"] == full_content[:VIKINGDB_CONTENT_MAX_SIZE]
 
 
+@pytest.mark.asyncio
+async def test_single_account_backend_drops_content_for_non_vikingdb_backend():
+    """Non-VikingDB backends (USE_CONTENT_FIELD=False) must not receive ``content``.
+
+    The schema still declares ``content`` for cross-backend compatibility, but only
+    VikingDB uses it. For every other backend the (potentially huge) content payload is
+    dropped on write, and the schema-required text field is not re-added as an empty
+    placeholder either.
+    """
+    captured = {}
+    full_content = "x" * (1024 * 1024 + 17)
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id"},
+                    {"FieldName": "uri"},
+                    {"FieldName": "abstract", "FieldType": "text"},
+                    {"FieldName": "content", "FieldType": "text"},
+                    {"FieldName": "account_id"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+        USE_CONTENT_FIELD = False
+
+        def get_collection(self):
+            return _Collection()
+
+        def upsert(self, data):
+            captured["data"] = dict(data)
+            return [data["id"]]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    record_id = await backend.upsert(
+        {
+            "id": "rec-1",
+            "uri": "viking://resources/large.txt",
+            "content": full_content,
+            "account_id": "acc1",
+        }
+    )
+
+    assert record_id == "rec-1"
+    # ``content`` is neither written nor re-added as an empty placeholder.
+    assert "content" not in captured["data"]
+    # Other schema-required text fields (e.g. abstract) are still backfilled empty.
+    assert captured["data"]["abstract"] == ""
+
+
 def test_vikingdb_text_field_byte_limit_is_one_mb_and_utf8_safe():
     text = "a" * (1024 * 1024) + "😀"
 
@@ -1097,6 +1162,7 @@ async def test_single_account_backend_collection_exists_runs_in_threadpool(monke
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def collection_exists(self):
             return True
@@ -1141,6 +1207,7 @@ async def test_single_account_backend_upsert_runs_adapter_in_threadpool(monkeypa
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -1201,6 +1268,7 @@ async def test_single_account_backend_update_runs_adapter_in_threadpool(monkeypa
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -1395,6 +1463,7 @@ async def test_single_account_backend_update_injects_bound_account_id(monkeypatc
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -1430,6 +1499,7 @@ async def test_single_account_backend_update_requires_id_before_adapter_call():
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -1469,6 +1539,7 @@ async def test_single_account_backend_update_rejects_invalid_context_type_withou
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -1513,6 +1584,7 @@ async def test_single_account_backend_update_returns_structured_error_when_adapt
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -1550,6 +1622,7 @@ async def test_single_account_backend_update_returns_not_found_when_adapter_repo
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -1590,6 +1663,7 @@ async def test_single_account_backend_upsert_partial_update_reads_then_upserts_e
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -1655,6 +1729,7 @@ async def test_single_account_backend_upsert_partial_update_creates_when_record_
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()
@@ -1703,6 +1778,7 @@ async def test_single_account_backend_upsert_partial_update_creates_when_record_
 async def test_single_account_backend_upsert_partial_update_returns_empty_when_get_fails():
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get(self, ids):
             del ids
@@ -1731,6 +1807,7 @@ async def test_single_account_backend_upsert_without_partial_update_keeps_legacy
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def upsert(self, data):
             calls.append(data)
@@ -1825,6 +1902,7 @@ async def test_qdrant_backend_upsert_partial_update_reads_then_upserts_existing_
 
     class _Adapter:
         mode = "qdrant"
+        USE_CONTENT_FIELD = False
 
         def get(self, ids):
             calls.append(("get", ids))
@@ -1895,6 +1973,7 @@ async def test_qdrant_backend_upsert_partial_update_creates_when_record_does_not
 
     class _Adapter:
         mode = "qdrant"
+        USE_CONTENT_FIELD = False
 
         def get(self, ids):
             calls.append(("get", ids))
@@ -1953,6 +2032,7 @@ async def test_volcengine_backend_upsert_partial_update_reads_then_upserts_exist
 
     class _Adapter:
         mode = "volcengine"
+        USE_CONTENT_FIELD = True
 
         def get(self, ids):
             calls.append(("get", ids))
@@ -2023,6 +2103,7 @@ async def test_volcengine_backend_upsert_partial_update_creates_when_record_does
 
     class _Adapter:
         mode = "volcengine"
+        USE_CONTENT_FIELD = True
 
         def get(self, ids):
             calls.append(("get", ids))
@@ -2341,6 +2422,7 @@ async def test_single_account_backend_mutations_run_adapter_in_threadpool(monkey
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def drop_collection(self):
             return True
@@ -2408,6 +2490,7 @@ async def test_single_account_backend_query_runs_adapter_in_threadpool(monkeypat
 
     class _Adapter:
         mode = "local"
+        USE_CONTENT_FIELD = False
 
         def get_collection(self):
             return _Collection()

@@ -581,8 +581,9 @@ pub(crate) async fn validate_candidate_config_with_role(
         config.actor_peer_id.clone(),
         timeout,
         config.profile,
-        config.extra_headers.clone(),
-    );
+        config.effective_extra_headers(),
+    )
+    .with_gateway_token(config.effective_gateway_token());
 
     let value: Value = client.get("/health", &[]).await?;
     if value
@@ -668,10 +669,15 @@ pub(crate) fn validation_error_copy(kind: ConfigKind, error: &Error) -> String {
             status: Some(401 | 403),
             ..
         } => "API key was rejected. Check your API key.".to_string(),
-        Error::Api { status: Some(404), .. } => {
+        Error::Api {
+            status: Some(404), ..
+        } => {
             "Server responded but the API endpoint was not found. Check the server URL.".to_string()
         }
-        Error::Api { status: Some(status), .. } => {
+        Error::Api {
+            status: Some(status),
+            ..
+        } => {
             format!("Server returned HTTP {status}. Check the server configuration.")
         }
         Error::Api { .. } => {
@@ -698,23 +704,22 @@ pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> Strin
             ConfigKind::OpenVikingService => {
                 "无法连接 OpenViking 服务。请检查网络连接。".to_string()
             }
-            ConfigKind::Custom => {
-                "无法连接服务器。请检查 URL 和网络连接。".to_string()
-            }
+            ConfigKind::Custom => "无法连接服务器。请检查 URL 和网络连接。".to_string(),
         },
         Error::Api {
             status: Some(401 | 403),
             ..
         } => "API Key 被拒绝。请检查 API Key。".to_string(),
-        Error::Api { status: Some(404), .. } => {
-            "服务器响应了，但 API 端点未找到。请检查服务器 URL。".to_string()
-        }
-        Error::Api { status: Some(status), .. } => {
+        Error::Api {
+            status: Some(404), ..
+        } => "服务器响应了，但 API 端点未找到。请检查服务器 URL。".to_string(),
+        Error::Api {
+            status: Some(status),
+            ..
+        } => {
             format!("服务器返回 HTTP {status}。请检查服务器配置。")
         }
-        Error::Api { .. } => {
-            "服务器验证时返回错误。请检查服务器日志。".to_string()
-        }
+        Error::Api { .. } => "服务器验证时返回错误。请检查服务器日志。".to_string(),
         Error::Config(msg) => msg.clone(),
         _ => match kind {
             ConfigKind::OpenVikingService => "验证失败。请检查 API Key 后重试。".to_string(),

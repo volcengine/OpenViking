@@ -3,6 +3,55 @@
 All notable changes to OpenViking will be documented in this file.
 This changelog is automatically generated from [GitHub Releases](https://github.com/volcengine/OpenViking/releases).
 
+## v0.4.9 (2026-07-10)
+
+### Highlights
+
+- **Agent workspace isolation**: Codex, Claude Code, OpenCode, and Pi integrations gain workspace-derived peer identity for per-project memory, together with broader shared installer and hybrid MCP support.
+- **Retrieval and memory correctness**: image search is supported, agent-only and peer-only memory scopes are respected, and nested rendered memory links are avoided.
+- **Storage and security hardening**: local collection loading is serialized, VikingDB content writes are backend-aware, and Git submodule ingestion blocks SSRF targets.
+- **VikingBot and platform fixes**: unified gateway routing and OpenViking authentication were added, with fixes for channel sender metadata, VLM-only configurations, Windows vector backends, and benchmark concurrency.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.8...v0.4.9)
+
+## v0.4.8 (2026-07-08)
+
+### Highlights
+
+- **NVIDIA cuVS vector backend**: opt-in exact and approximate GPU retrieval, plus memory-aware fallback from the local backend.
+- **Recursive web ingestion**: bounded same-site crawling with depth, page, path, and download-link controls, backed by Scrapy and trafilatura.
+- **Memory v3 and training**: v3 extraction is the active pipeline, with streaming patch-merge updates and session train/eval support.
+- **Agent plugin installation**: Codex and Claude Code support remote marketplaces and a stdio MCP proxy that shares `ovcli.conf` credentials with hooks.
+- **Filesystem and RAGFS improvements**: backend-paged glob, stable directory-first ordering, and standard relative-path matching.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.7...v0.4.8)
+
+## v0.4.7 (2026-07-02)
+
+### Highlights
+
+- **MCP local-file flow**: compact tool descriptions reduce context usage, while signed `temp_upload` tokens automatically ingest local uploads.
+- **Filesystem and versioning**: filesystem attrs and account-level `.ovgitignore` rules expand metadata and snapshot controls.
+- **SDK and authentication**: the Go SDK adds skill scoping and grep depth controls; OAuth client scopes are persisted and seeded API keys are supported.
+- **Studio and setup UX**: Connection & Identity was redesigned, assumed accounts are pinned correctly, and initialization gains a TUI-style setup wizard.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.6...v0.4.7)
+
+## v0.4.6 (2026-06-29)
+
+### Highlights
+
+- **VikingFS snapshot versioning**: Git-backed `commit`, `log`, `show`, and `restore` across HTTP, Python SDK, and CLI surfaces.
+- **Whole-site ingestion**: sitemap, sitemap-index, RSS, and Atom imports produce watchable resource trees.
+- **Shared Agent Skills**: `viking://agent/skills` is restored as the account-shared skill root, while user-private skills remain the default.
+- **VikingDB BM25 grep and Studio metrics**: keyword retrieval and user-visible usage dashboards expand search and observability.
+
+### Upgrade Notes
+
+- Deployments upgrading from 0.3.x with legacy agent/session data should migrate and clean up on v0.4.5 before upgrading to v0.4.6 or later.
+
+[Full Changelog](https://github.com/volcengine/OpenViking/compare/v0.4.5...v0.4.6)
+
 ## v0.4.5 (2026-06-24)
 
 ### Highlights

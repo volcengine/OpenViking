@@ -118,8 +118,16 @@ class _FakeVikingFS:
         self.persist_calls.append((temp_uri, target_uri))
         self.agfs.write(self._uri_to_path(target_uri, ctx=ctx), b"content")
 
+    async def glob(self, pattern, uri=None, ctx=None):
+        return {"matches": []}
+
     def _uri_to_path(self, uri, ctx=None):
         return f"/mock/{uri.replace('viking://', '')}"
+
+
+def _patch_viking_fs(monkeypatch, fake_fs):
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr("openviking.parse.image_rewrite.get_viking_fs", lambda: fake_fs)
 
 
 @pytest.mark.asyncio
@@ -134,7 +142,7 @@ async def test_resource_processor_first_add_summarizes_from_committed_uri(monkey
         "openviking.utils.resource_processor.get_current_telemetry",
         lambda: _DummyTelemetry(),
     )
-    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fake_fs)
+    _patch_viking_fs(monkeypatch, fake_fs)
     monkeypatch.setattr(
         "openviking.storage.transaction.get_lock_manager",
         lambda: fake_lock_manager,
@@ -186,7 +194,7 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
         "openviking.utils.resource_processor.get_current_telemetry",
         lambda: _DummyTelemetry(),
     )
-    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fake_fs)
+    _patch_viking_fs(monkeypatch, fake_fs)
     monkeypatch.setattr(
         "openviking.storage.transaction.get_lock_manager",
         lambda: fake_lock_manager,
@@ -237,7 +245,7 @@ async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeyp
         "openviking.utils.resource_processor.get_current_telemetry",
         lambda: _DummyTelemetry(),
     )
-    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fake_fs)
+    _patch_viking_fs(monkeypatch, fake_fs)
     monkeypatch.setattr(
         "openviking.storage.transaction.get_lock_manager",
         lambda: fake_lock_manager,

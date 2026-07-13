@@ -36,6 +36,7 @@ import {
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { readJsonState, writeJsonState } from "./lib/state.mjs";
+import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -391,12 +392,11 @@ function sanitizePartsForSend(parts) {
   return out;
 }
 
-async function pushTurnsToOv(ovSessionId, turns) {
+async function pushTurnsToOv(ovSessionId, turns, peerId = "") {
   let ok = 0;
   let queued = 0;
   let failed = 0;
   let enqueueFailed = 0;
-  const peerId = cfg.peerId || null;
   for (const turn of turns) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
@@ -414,10 +414,9 @@ async function pushTurnsToOv(ovSessionId, turns) {
   return { ok, queued, failed, enqueueFailed };
 }
 
-async function enqueueTurnsToPending(ovSessionId, turns) {
+async function enqueueTurnsToPending(ovSessionId, turns, peerId = "") {
   let queued = 0;
   let failed = 0;
-  const peerId = cfg.peerId || null;
   for (const turn of turns) {
     const parts = sanitizePartsForSend(turn.parts);
     if (parts.length === 0) continue;
@@ -458,7 +457,8 @@ async function main() {
   const sessionId = input.session_id || "unknown";
   const cwd = input.cwd;
   const ovSessionId = sessionId !== "unknown" ? deriveOvSessionId(sessionId) : null;
-  log("start", { sessionId, ovSessionId, transcriptPath });
+  const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
+  log("start", { sessionId, ovSessionId, transcriptPath, peerSource: effectivePeer.source });
 
   if (isBypassed(cfg, { sessionId, cwd })) {
     log("skip", { reason: "bypass_session_pattern" });
@@ -564,10 +564,10 @@ async function main() {
   const health = await fetchJSON("/health");
   let result;
   if (health.ok) {
-    result = await pushTurnsToOv(ovSessionId, captureTurns);
+    result = await pushTurnsToOv(ovSessionId, captureTurns, effectivePeer.peerId);
   } else if (isRetryableFailure(health)) {
     logError("health_check", "server unreachable or unhealthy; enqueuing capture");
-    result = await enqueueTurnsToPending(ovSessionId, captureTurns);
+    result = await enqueueTurnsToPending(ovSessionId, captureTurns, effectivePeer.peerId);
     log("push_turns", {
       ovSessionId,
       ok: result.ok,

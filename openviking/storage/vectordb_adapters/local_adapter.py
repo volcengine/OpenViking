@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -30,6 +31,7 @@ class LocalCollectionAdapter(CollectionAdapter):
         self.mode = "local"
         self._project_path = project_path
         self._collection_config = dict(collection_config or {})
+        self._load_lock = threading.RLock()
 
     @classmethod
     def from_config(cls, config: Any):
@@ -58,16 +60,17 @@ class LocalCollectionAdapter(CollectionAdapter):
         return str(Path(self._project_path) / self._collection_name)
 
     def _load_existing_collection_if_needed(self) -> None:
-        if self._collection is not None:
-            return
-        collection_path = self._collection_path()
-        if not collection_path:
-            return
-        meta_path = os.path.join(collection_path, "collection_meta.json")
-        if os.path.exists(meta_path):
-            self._collection = get_or_create_local_collection(
-                path=collection_path, config=self._collection_config
-            )
+        with self._load_lock:
+            if self._collection is not None:
+                return
+            collection_path = self._collection_path()
+            if not collection_path:
+                return
+            meta_path = os.path.join(collection_path, "collection_meta.json")
+            if os.path.exists(meta_path):
+                self._collection = get_or_create_local_collection(
+                    path=collection_path, config=self._collection_config
+                )
 
     def _create_backend_collection(self, meta: Dict[str, Any]) -> Collection:
         collection_path = self._collection_path()

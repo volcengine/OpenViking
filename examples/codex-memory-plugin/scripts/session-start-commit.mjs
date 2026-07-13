@@ -35,10 +35,12 @@
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
-import { clearState, deriveOvSessionId, listStates, loadState } from "./session-state.mjs";
+import { clearState, deriveOvSessionId, listStates, loadState, saveState } from "./session-state.mjs";
+import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 const cfg = loadConfig();
 const { log, logError } = createLogger("session-start");
+let activePeerId = cfg.peerId || "";
 
 const ACTIVE_WINDOW_MS = (() => {
   const v = Number(process.env.OPENVIKING_CODEX_ACTIVE_WINDOW_MS);
@@ -87,7 +89,7 @@ async function fetchJSON(path, init = {}) {
     }
     if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
     if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    if (cfg.peerId) headers["X-OpenViking-Actor-Peer"] = cfg.peerId;
+    if (activePeerId) headers["X-OpenViking-Actor-Peer"] = activePeerId;
     const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     const body = await res.json().catch(() => null);
     if (!body) return null;
@@ -235,7 +237,22 @@ async function main() {
 
   const source = input.source || "unknown";
   const newSessionId = input.session_id || "unknown";
-  log("start", { source, newSessionId, activeWindowMs: ACTIVE_WINDOW_MS, idleTtlMs: IDLE_TTL_MS });
+  const effectivePeer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
+  activePeerId = effectivePeer.peerId;
+  if (newSessionId !== "unknown") {
+    const state = await loadState(newSessionId);
+    await saveState({
+      ...state,
+      workspacePeerId: effectivePeer.source === "workspace" ? effectivePeer.peerId : "",
+    });
+  }
+  log("start", {
+    source,
+    newSessionId,
+    activeWindowMs: ACTIVE_WINDOW_MS,
+    idleTtlMs: IDLE_TTL_MS,
+    peerSource: effectivePeer.source,
+  });
 
   try {
     await detectRecallCompressorProfile(cfg, { log, logError });

@@ -107,6 +107,94 @@ def test_cagra_itopk_sweep_preserves_shared_search_params():
     ]
 
 
+def test_validate_args_accepts_float16_backend_variants():
+    parser = benchmark.build_parser()
+    args = parser.parse_args(
+        ["--backends", "cuvs_brute_force,cuvs_brute_force_fp16,cuvs_cagra_fp16"]
+    )
+
+    assert benchmark.validate_args(parser, args) == [
+        "cuvs_brute_force",
+        "cuvs_brute_force_fp16",
+        "cuvs_cagra_fp16",
+    ]
+
+
+@pytest.mark.parametrize(
+    "backends",
+    [
+        ["cuvs_brute_force_fp16"],
+        ["cuvs_cagra"],
+        ["cuvs_cagra_fp16"],
+        ["cuvs_brute_force_fp16", "cuvs_cagra"],
+    ],
+)
+def test_lossy_or_approximate_backend_requires_exact_reference(backends):
+    parser = benchmark.build_parser()
+
+    with pytest.raises(SystemExit) as exc_info:
+        benchmark.validate_reference_requirement(
+            parser,
+            backends,
+            has_supplied_ground_truth=False,
+        )
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "backends",
+    [
+        ["native"],
+        ["cuvs_brute_force"],
+        ["native", "cuvs_brute_force"],
+        ["native", "cuvs_cagra"],
+        ["cuvs_brute_force", "cuvs_brute_force_fp16"],
+    ],
+)
+def test_reference_validation_accepts_exact_backend_combinations(backends):
+    parser = benchmark.build_parser()
+
+    benchmark.validate_reference_requirement(
+        parser,
+        backends,
+        has_supplied_ground_truth=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "backend",
+    ["cuvs_brute_force_fp16", "cuvs_cagra", "cuvs_cagra_fp16"],
+)
+def test_reference_validation_accepts_supplied_ground_truth(backend):
+    parser = benchmark.build_parser()
+
+    benchmark.validate_reference_requirement(
+        parser,
+        [backend],
+        has_supplied_ground_truth=True,
+    )
+
+
+def test_print_summary_does_not_invent_missing_recall(capsys):
+    benchmark.print_summary(
+        [
+            {
+                "backend": "cuvs_brute_force_fp16",
+                "build_seconds": 1.0,
+                "first_search_per_query_ms": 2.0,
+                "search": {
+                    "per_query_latency_ms": {"p50": 3.0, "p95": 4.0},
+                    "qps": 5.0,
+                },
+            }
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert "N/A" in output
+    assert "1.0000" not in output
+
+
 def test_cagra_itopk_and_search_width_sweeps_form_cartesian_product():
     parser = benchmark.build_parser()
     args = parser.parse_args(

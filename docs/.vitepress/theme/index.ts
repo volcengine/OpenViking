@@ -4,6 +4,8 @@ import type { EnhanceAppContext } from 'vitepress'
 import CopyMarkdownButton from './CopyMarkdownButton.vue'
 import LlmsTxtLink from './LlmsTxtLink.vue'
 import OpenVikingSearch from './OpenVikingSearch.vue'
+import ApiExampleTabsEnhancer from './ApiExampleTabsEnhancer.vue'
+import VikingBotAssistant from './VikingBotAssistant.vue'
 import { trackPageView } from './track'
 import './custom.css'
 
@@ -302,9 +304,12 @@ export default {
   extends: DefaultTheme,
   Layout() {
     return h(DefaultTheme.Layout, null, {
-      'doc-before': () => h(CopyMarkdownButton),
-      'doc-footer-before': () => h(LlmsTxtLink),
-      'nav-bar-content-before': () => h(OpenVikingSearch)
+      'doc-before': () => h('div', { class: 'doc-page-actions' }, [
+        h(LlmsTxtLink),
+        h(CopyMarkdownButton)
+      ]),
+      'doc-after': () => h(ApiExampleTabsEnhancer),
+      'nav-bar-content-before': () => [h(OpenVikingSearch), h(VikingBotAssistant)]
     })
   },
   enhanceApp({ router }: EnhanceAppContext) {

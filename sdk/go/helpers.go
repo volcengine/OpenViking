@@ -1,9 +1,14 @@
 package openviking
 
 import (
+	"encoding/base64"
 	"fmt"
+	"mime"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 func setString(m map[string]any, key, value string) {
@@ -104,4 +109,32 @@ func normalizeTarget(target any) any {
 	default:
 		return v
 	}
+}
+
+func normalizeImageInput(image string) (string, error) {
+	if image == "" || strings.HasPrefix(image, "data:image/") ||
+		strings.HasPrefix(image, "http://") ||
+		strings.HasPrefix(image, "https://") ||
+		strings.HasPrefix(image, "viking://") {
+		return image, nil
+	}
+	info, err := os.Stat(image)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return image, nil
+		}
+		return "", err
+	}
+	if info.IsDir() {
+		return image, nil
+	}
+	data, err := os.ReadFile(image)
+	if err != nil {
+		return "", err
+	}
+	mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(image)))
+	if mimeType == "" || !strings.HasPrefix(mimeType, "image/") {
+		mimeType = "image/png"
+	}
+	return fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(data)), nil
 }

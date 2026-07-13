@@ -8,6 +8,8 @@ import threading
 import time
 from typing import Awaitable, Callable, TypeVar
 
+from openviking.utils.exceptions import AllCredentialsFailedError
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -147,7 +149,19 @@ def classify_api_error(error: Exception) -> str:
     - ``quota_exceeded`` is checked before ``transient`` because quota errors
       typically include "429" / "TooManyRequests" which would otherwise match
       the transient category.
+    - an aggregated ``AllCredentialsFailedError`` is classified from its
+      per-credential classes, not its concatenated message.
     """
+    if isinstance(error, AllCredentialsFailedError):
+        classes = [ec for (_cid, ec, _exc, _idx) in error.errors if ec]
+        if ERROR_CLASS_TRANSIENT in classes:
+            return ERROR_CLASS_TRANSIENT
+        if ERROR_CLASS_QUOTA_EXCEEDED in classes:
+            return ERROR_CLASS_QUOTA_EXCEEDED
+        if classes and all(ec == ERROR_CLASS_AUTH for ec in classes):
+            return ERROR_CLASS_AUTH
+        return ERROR_CLASS_UNKNOWN
+
     for exc in (error, getattr(error, "__cause__", None)):
         if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
             return ERROR_CLASS_PERMANENT

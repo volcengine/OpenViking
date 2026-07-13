@@ -13,6 +13,7 @@ from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.retrieve.type_quota_recall import (
     DEFAULT_MAX_CHARS,
     DEFAULT_MIN_SCORE,
+    DEFAULT_OTHER_PEER_PENALTIES,
     DEFAULT_QUOTAS,
     search_type_quota_recall,
 )
@@ -96,7 +97,8 @@ class FindRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = ""
+    image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     agent_id: Optional[str] = None
@@ -119,7 +121,8 @@ class SearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = ""
+    image_url: Optional[str] = None
     target_uri: Union[str, List[str]] = ""
     context_type: Optional[Union[str, List[str]]] = None
     agent_id: Optional[str] = None
@@ -148,6 +151,8 @@ class RecallRequest(BaseModel):
     quotas: Dict[str, int] = DEFAULT_QUOTAS.copy()
     max_chars: int = DEFAULT_MAX_CHARS
     min_score: float = DEFAULT_MIN_SCORE
+    peer_scope: Literal["actor", "all"] = "all"
+    other_peer_penalty: Optional[Union[float, Dict[str, float]]] = None
     render: bool = True
     telemetry: TelemetryRequest = False
 
@@ -199,6 +204,7 @@ async def find(
             score_threshold=request.score_threshold,
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
+            image_url=request.image_url,
         ),
     )
     result = execution.result
@@ -244,6 +250,7 @@ async def search(
             score_threshold=request.score_threshold,
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
+            image_url=request.image_url,
         )
 
     execution = await run_operation(
@@ -280,6 +287,10 @@ async def recall(
             max_chars=max(1, int(request.max_chars)),
             min_score=request.min_score,
             render=request.render,
+            peer_scope=request.peer_scope,
+            other_peer_penalty=request.other_peer_penalty
+            if request.other_peer_penalty is not None
+            else DEFAULT_OTHER_PEER_PENALTIES,
         ),
     )
     return Response(

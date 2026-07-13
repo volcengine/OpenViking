@@ -42,6 +42,11 @@ ACCESS_TOKEN_PREFIX = "ovat_"
 REFRESH_TOKEN_PREFIX = "ovrt_"
 AUTH_CODE_PREFIX = "ovac_"
 
+# The only scope OpenViking defines. Single source for the three places that
+# must agree on it: the RFC 9728 PRM document (router.py), the DCR default
+# (app.py ClientRegistrationOptions), and the missing-scope fallback below.
+MCP_SCOPE = "mcp"
+
 # Primary authorize page: a /studio SPA route that runs in the same tab as
 # the user's Studio session, so it can read the session-stored API key.
 DEFAULT_AUTHORIZE_PAGE = "/studio/oauth/consent"
@@ -120,7 +125,13 @@ class OpenVikingOAuthProvider(
             token_endpoint_auth_method=record["token_endpoint_auth_method"],
             grant_types=record["grant_types"],
             response_types=record["response_types"],
-            scope=record.get("scope"),
+            # Clients registered without a scope (ChatGPT's DCR omits the
+            # field; rows predating #2921's scope column are NULL) would fail
+            # /authorize with invalid_scope as soon as they request the "mcp"
+            # scope our PRM document advertises — the SDK's validate_scope
+            # treats a scope-less client as "nothing authorized". Fall back to
+            # the default grant instead.
+            scope=record.get("scope") or MCP_SCOPE,
             client_name=record.get("client_name"),
             client_id_issued_at=record["created_at"],
         )

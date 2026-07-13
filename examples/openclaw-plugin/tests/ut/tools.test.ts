@@ -455,7 +455,7 @@ describe("Tool: memory_store (behavioral)", () => {
     expect(store!.description).toContain("threshold/commit dependent");
   });
 
-  it("uses requesterSenderId to populate role_id for user writes", async () => {
+  it("uses requesterSenderId to populate peer_id for user writes", async () => {
     const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
         return okResponse({ user: "default" });
@@ -494,7 +494,8 @@ describe("Tool: memory_store (behavioral)", () => {
     const [, init] = messageCall as [string, RequestInit];
     const body = JSON.parse(String(init.body));
     expect(body.role).toBe("user");
-    expect(body.role_id).toBe("wx_user-01_abc");
+    expect(body.peer_id).toBe("wx_user-01_abc");
+    expect(body).not.toHaveProperty("role_id");
   });
 
   it("uses a temporary session by default instead of the current tool session", async () => {

@@ -148,6 +148,8 @@ type ListOptions struct {
 	AbsLimit      int
 	ShowAllHidden bool
 	NodeLimit     int
+	SortBy        string
+	SortOrder     string
 }
 
 // TreeOptions controls Tree.
@@ -189,6 +191,7 @@ type ReindexOptions struct {
 // FindOptions controls Find.
 type FindOptions struct {
 	TargetURI      any
+	Image          string
 	Limit          int
 	NodeLimit      *int
 	ScoreThreshold *float64
@@ -204,6 +207,7 @@ type FindOptions struct {
 // SearchOptions controls Search.
 type SearchOptions struct {
 	TargetURI      any
+	Image          string
 	SessionID      string
 	Limit          int
 	NodeLimit      *int

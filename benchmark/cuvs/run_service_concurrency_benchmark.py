@@ -41,7 +41,7 @@ from openviking_cli.utils.config.vectordb_config import (  # noqa: E402
     VectorDBBackendConfig,
 )
 
-SUPPORTED_BACKENDS = ("native", "cuvs_brute_force")
+SUPPORTED_BACKENDS = ("native", "cuvs_brute_force", "auto_cuvs_background")
 ACCOUNT_ID = "benchmark"
 
 
@@ -76,6 +76,7 @@ def make_config(
     collection_name: str,
     dimension: int,
     filter_cache_size: int,
+    auto_rebuild_debounce_ms: int,
 ) -> VectorDBBackendConfig:
     common = {
         "name": collection_name,
@@ -97,7 +98,32 @@ def make_config(
             ),
             **common,
         )
+    if backend == "auto_cuvs_background":
+        return VectorDBBackendConfig(
+            backend="local",
+            cuvs=CuVSConfig(
+                algorithm="brute_force",
+                auto_enable=True,
+                auto_background_rebuild=True,
+                auto_rebuild_debounce_ms=auto_rebuild_debounce_ms,
+                filter_cache_size=filter_cache_size,
+            ),
+            **common,
+        )
     raise ValueError(f"Unsupported backend: {backend}")
+
+
+async def wait_for_background_rebuild(manager: VikingVectorIndexBackend, timeout: float) -> float:
+    index = manager._shared_adapter.get_collection().get_index("default")
+    wait = getattr(index, "wait_for_background_rebuild", None)
+    if wait is None:
+        raise RuntimeError("auto background benchmark could not access the local index worker")
+    started = time.perf_counter()
+    completed = await asyncio.to_thread(wait, timeout)
+    elapsed = time.perf_counter() - started
+    if not completed:
+        raise RuntimeError(f"auto background rebuild did not complete within {timeout}s")
+    return elapsed
 
 
 def concurrent_summary(
@@ -312,9 +338,16 @@ async def run_post_mutation_scenario(
     *,
     concurrency_levels: Sequence[int],
     k: int,
+    wait_for_background: bool,
+    background_timeout: float,
 ) -> dict[str, Any]:
     results = []
     for matrix_index, concurrency in enumerate(concurrency_levels):
+        background_wait_seconds = 0.0
+        if wait_for_background:
+            background_wait_seconds = await wait_for_background_rebuild(
+                manager, background_timeout
+            )
         row_index = matrix_index % dataset.shape[0]
         record = make_record(row_index, queries[matrix_index % len(queries)].tolist())
         write_started = time.perf_counter()
@@ -333,6 +366,7 @@ async def run_post_mutation_scenario(
         )
         result["concurrency"] = concurrency
         result["write_ms"] = write_ms
+        result["pre_write_background_wait_seconds"] = background_wait_seconds
         results.append(result)
     return {
         "name": "post_mutation_burst",
@@ -349,6 +383,8 @@ async def run_backend(
     run_root: Path,
     ingest_batch_size: int,
     filter_cache_size: int,
+    auto_rebuild_debounce_ms: int,
+    background_timeout: float,
     concurrency_levels: Sequence[int],
     cached_request_count: int,
     unique_request_count: int,
@@ -361,6 +397,7 @@ async def run_backend(
         collection_name=collection_name,
         dimension=dataset.shape[1],
         filter_cache_size=filter_cache_size,
+        auto_rebuild_debounce_ms=auto_rebuild_debounce_ms,
     )
     manager = VikingVectorIndexBackend(config)
     ctx = RequestContext(user=UserIdentifier(ACCOUNT_ID, "user"), role=Role.USER)
@@ -376,6 +413,13 @@ async def run_backend(
         if record_count != dataset.shape[0]:
             raise RuntimeError(
                 f"Collection count mismatch for {backend}: {record_count} != {dataset.shape[0]}"
+            )
+
+        initial_background_wait_seconds = 0.0
+        background_enabled = backend == "auto_cuvs_background"
+        if background_enabled:
+            initial_background_wait_seconds = await wait_for_background_rebuild(
+                manager, background_timeout
             )
 
         scenarios = [
@@ -415,12 +459,15 @@ async def run_backend(
                 queries,
                 concurrency_levels=concurrency_levels,
                 k=k,
+                wait_for_background=background_enabled,
+                background_timeout=background_timeout,
             ),
         ]
         return {
             "backend": backend,
             "ingest": ingest,
             "record_count": record_count,
+            "initial_background_wait_seconds": initial_background_wait_seconds,
             "scenarios": scenarios,
         }
     finally:
@@ -457,6 +504,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--ingest-batch-size", type=int, default=256)
     parser.add_argument("--filter-cache-size", type=int, default=16)
+    parser.add_argument("--auto-rebuild-debounce-ms", type=int, default=500)
+    parser.add_argument("--background-timeout", type=float, default=120.0)
     parser.add_argument(
         "--concurrency",
         type=lambda value: parse_positive_int_list(value, "--concurrency"),
@@ -486,6 +535,10 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--k cannot exceed --vector-count")
     if args.filter_cache_size < 0:
         parser.error("--filter-cache-size cannot be negative")
+    if args.auto_rebuild_debounce_ms < 0:
+        parser.error("--auto-rebuild-debounce-ms cannot be negative")
+    if args.background_timeout <= 0:
+        parser.error("--background-timeout must be positive")
     backends = [item.strip() for item in args.backends.split(",") if item.strip()]
     if not backends:
         parser.error("--backends cannot be empty")
@@ -525,6 +578,8 @@ async def async_main(args: argparse.Namespace, backends: Sequence[str]) -> dict[
                     run_root=run_root,
                     ingest_batch_size=args.ingest_batch_size,
                     filter_cache_size=args.filter_cache_size,
+                    auto_rebuild_debounce_ms=args.auto_rebuild_debounce_ms,
+                    background_timeout=args.background_timeout,
                     concurrency_levels=args.concurrency,
                     cached_request_count=args.cached_request_count,
                     unique_request_count=args.unique_request_count,
@@ -548,6 +603,8 @@ async def async_main(args: argparse.Namespace, backends: Sequence[str]) -> dict[
                 "k": args.k,
                 "ingest_batch_size": args.ingest_batch_size,
                 "filter_cache_size": args.filter_cache_size,
+                "auto_rebuild_debounce_ms": args.auto_rebuild_debounce_ms,
+                "background_timeout": args.background_timeout,
                 "concurrency": args.concurrency,
                 "cached_request_count": args.cached_request_count,
                 "unique_request_count": args.unique_request_count,

@@ -24,10 +24,10 @@ OpenViking 在 VikingFS 之上提供了一套基于 Git 的多版本管理能力
 
 ## API 实现介绍
 
-- HTTP 路由：[snapshot.py](file:///cloudide/workspace/OpenViking/openviking/server/routers/snapshot.py)，前缀 `/api/v1/snapshot`。
-- 命名空间（SDK）：[snapshot_namespace.py](file:///cloudide/workspace/OpenViking/openviking/snapshot_namespace.py)，暴露为 `client.snapshot.*`。
-- 底层语义实现：[viking_fs.py](file:///cloudide/workspace/OpenViking/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log`。
-- CLI 命令：[main.rs](file:///cloudide/workspace/OpenViking/crates/ov_cli/src/main.rs) 的 `SnapshotCmd`，子命令 [snapshot.rs](file:///cloudide/workspace/OpenViking/crates/ov_cli/src/commands/snapshot.rs)。
+- HTTP 路由：[snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py)，前缀 `/api/v1/snapshot`。
+- 命名空间（SDK）：[snapshot_namespace.py](https://github.com/volcengine/OpenViking/blob/main/openviking/snapshot_namespace.py)，暴露为 `client.snapshot.*`。
+- 底层语义实现：[viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log`。
+- CLI 命令：[main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs) 的 `SnapshotCmd`，子命令 [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs)。
 
 ## API 参考
 
@@ -53,6 +53,12 @@ result = client.snapshot.commit(
     paths=["viking://resources/my_md.md"],
 )
 print(result["commit_oid"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitCommit({ message: "Update docs", paths: ["resources/docs"] }));
 ```
 
 **HTTP API**
@@ -127,6 +133,12 @@ for commit in history:
     print(commit["oid"], commit["message"])
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitLog("main", 20));
+```
+
 **HTTP API**
 
 ```
@@ -198,6 +210,12 @@ print(meta["message"], meta["parents"])
 
 # 读取该提交中某个文件的内容
 blob = client.snapshot.show("3f2a1b9c", path="viking://resources/my_project/guide.md")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitShow("main", "viking://resources/docs/api.md"));
 ```
 
 > 注意：带 `path` 读取文件内容时，**Embedded（本地）客户端**直接返回原始 `bytes`；**HTTP 客户端**返回 `{"oid": str, "size": int, "bytes": bytes}` 字典。
@@ -296,6 +314,15 @@ plan = client.snapshot.restore(
     dry_run=True,
 )
 print(plan["diff"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitRestore({
+  projectDir: "viking://resources/docs",
+  sourceCommit: "3f2a1b9c",
+}));
 ```
 
 **HTTP API**
@@ -404,6 +431,12 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project --dry-run -o json
 content = client.snapshot.get_gitignore()
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitGetIgnore());
+```
+
 **HTTP API**
 
 ```
@@ -448,6 +481,12 @@ ov snapshot ignore-get -o json
 client.snapshot.set_gitignore(content="*.log\n")
 ```
 
+**TypeScript SDK**
+
+```typescript
+await client.gitSetIgnore("*.tmp\n.cache/\n");
+```
+
 **HTTP API**
 
 ```
@@ -486,6 +525,12 @@ ov snapshot ignore-set --file ./my-rules -o json
 
 ```python
 client.snapshot.delete_gitignore()
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.gitDeleteIgnore();
 ```
 
 **HTTP API**
@@ -544,7 +589,7 @@ client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], messag
 client.close()
 ```
 
-更多端到端示例参见仓库中的 [examples/snapshot/](file:///cloudide/workspace/OpenViking/examples/snapshot) 目录，涵盖 SDK、HTTP、CLI 三种调用方式。
+更多端到端示例参见仓库中的 [examples/snapshot/](https://github.com/volcengine/OpenViking/tree/main/examples/snapshot) 目录，涵盖 SDK、HTTP、CLI 三种调用方式。
 
 ## 错误处理
 

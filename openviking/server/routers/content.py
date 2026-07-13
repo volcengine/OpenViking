@@ -8,6 +8,12 @@ from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict
 
+from openviking.core.namespace import (
+    canonicalize_uri,
+    is_hidden_by_actor_peer_view,
+    may_include_hidden_actor_peers,
+    resolve_uri,
+)
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
@@ -21,7 +27,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -68,6 +74,26 @@ def _validate_reindex_uri(uri: str) -> str:
     if raw_uri.startswith("viking://"):
         return raw_uri
     return validate_viking_uri(raw_uri)
+
+
+def _authorize_reindex_uri(uri: str, ctx: RequestContext) -> str:
+    """Allow users to reindex only their own private namespace."""
+    if ctx.role != Role.USER:
+        return uri
+
+    canonical_uri = canonicalize_uri(uri, ctx)
+    target = resolve_uri(canonical_uri, ctx=ctx, require_canonical=True)
+    if (
+        target.scope != "user"
+        or target.owner_user_id != ctx.user.user_id
+        or is_hidden_by_actor_peer_view(canonical_uri, ctx)
+        or may_include_hidden_actor_peers(canonical_uri, ctx)
+    ):
+        raise PermissionDeniedError(
+            "USER can only reindex their own user namespace.",
+            resource=canonical_uri,
+        )
+    return canonical_uri
 
 
 @router.get("/read")
@@ -239,11 +265,12 @@ async def set_tags(
 @router.post("/reindex")
 async def reindex(
     body: ReindexRequest = Body(...),
-    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
     uri = resolve_path_variables(body.uri)
     uri = _validate_reindex_uri(uri)
+    uri = _authorize_reindex_uri(uri, ctx)
     service = get_service()
     result = await service.reindex(
         uri=uri,

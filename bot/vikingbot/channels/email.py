@@ -89,6 +89,7 @@ class EmailChannel(BaseChannel):
 
                     await self._handle_message(
                         sender_id=sender,
+                        sender_name=sender,
                         chat_id=sender,
                         content=item["content"],
                         metadata=item.get("metadata", {}),

@@ -58,9 +58,12 @@ curl http://localhost:1933/api/v1/observer/system \
     "is_healthy": true,
     "errors": [],
     "components": {
-      "queue": {"name": "queue", "is_healthy": true, "has_errors": false},
-      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false},
-      "vlm": {"name": "vlm", "is_healthy": true, "has_errors": false}
+      "queue": {"name": "queue", "is_healthy": true, "has_errors": false, "status": "..."},
+      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false, "status": "..."},
+      "models": {"name": "models", "is_healthy": true, "has_errors": false, "status": "..."},
+      "lock": {"name": "lock", "is_healthy": true, "has_errors": false, "status": "..."},
+      "retrieval": {"name": "retrieval", "is_healthy": true, "has_errors": false, "status": "..."},
+      "filesystem": {"name": "filesystem", "is_healthy": true, "has_errors": false, "status": "..."}
     }
   }
 }
@@ -72,7 +75,10 @@ curl http://localhost:1933/api/v1/observer/system \
 | --- | --- | --- |
 | `GET /api/v1/observer/queue` | Queue | 处理队列状态 |
 | `GET /api/v1/observer/vikingdb` | VikingDB | 向量数据库状态 |
-| `GET /api/v1/observer/vlm` | VLM | 视觉语言模型状态 |
+| `GET /api/v1/observer/models` | Models | VLM、Embedding 和 Rerank 模型状态 |
+| `GET /api/v1/observer/lock` | Lock | 锁和事务状态 |
+| `GET /api/v1/observer/retrieval` | Retrieval | 检索质量指标 |
+| `GET /api/v1/observer/filesystem` | Filesystem | 文件系统操作指标 |
 
 例如：
 

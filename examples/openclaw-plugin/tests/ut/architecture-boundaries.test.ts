@@ -515,7 +515,7 @@ describe("architecture boundaries", () => {
   it("keeps canonical namespace client tests on the injected transport seam", () => {
     const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
     const start = clientTestSource.indexOf('describe("OpenVikingClient canonical namespace policy"');
-    const end = clientTestSource.indexOf('  it("includes role_id when addSessionMessage receives one"', start);
+    const end = clientTestSource.indexOf('  it("includes peer_id when addSessionMessage receives one"', start);
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
@@ -527,7 +527,7 @@ describe("architecture boundaries", () => {
 
   it("keeps addSessionMessage client tests on the injected transport seam", () => {
     const clientTestSource = readFileSync(join(rootDir, "tests/ut/client.test.ts"), "utf8");
-    const start = clientTestSource.indexOf('it("includes role_id when addSessionMessage receives one"');
+    const start = clientTestSource.indexOf('it("includes peer_id when addSessionMessage receives one"');
     const end = clientTestSource.indexOf('\n});', start);
 
     expect(start).toBeGreaterThanOrEqual(0);

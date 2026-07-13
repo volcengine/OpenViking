@@ -38,6 +38,7 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
             {
                 "url": "http://config-host:1933",
                 "api_key": "config-key",
+                "gateway_token": "gateway-secret",
                 "account": "config-account",
                 "user": "config-user",
                 "actor_peer_id": "config-actor",
@@ -52,6 +53,8 @@ def test_async_http_client_loads_missing_fields_from_ovcli_config(tmp_path, monk
 
     assert client._url == "http://explicit-host:1933"
     assert client._api_key == "config-key"
+    assert client._gateway_token == "gateway-secret"
+    assert client._extra_headers["X-Gateway-Token"] == "gateway-secret"
     assert client._account == "config-account"
     assert client._user_id == "config-user"
     assert client._actor_peer_id == "config-actor"
@@ -386,9 +389,6 @@ async def test_async_http_client_find_does_not_send_peer_id(tmp_path, monkeypatc
                 "query": "invoice",
                 "target_uri": "viking://user/memories",
                 "limit": 10,
-                "score_threshold": None,
-                "filter": None,
-                "context_type": None,
                 "telemetry": False,
             },
         )
@@ -442,9 +442,6 @@ async def test_async_http_client_search_does_not_send_peer_id(tmp_path, monkeypa
                 "target_uri": "viking://user/memories",
                 "session_id": "session-1",
                 "limit": 10,
-                "score_threshold": None,
-                "filter": None,
-                "context_type": None,
                 "telemetry": False,
             },
         )
@@ -532,8 +529,6 @@ async def test_async_http_client_find_sends_context_type(tmp_path, monkeypatch):
                 "query": "invoice",
                 "target_uri": "",
                 "limit": 10,
-                "score_threshold": None,
-                "filter": None,
                 "context_type": ["memory", "resource"],
                 "telemetry": False,
             },
@@ -562,10 +557,7 @@ async def test_async_http_client_search_sends_context_type(tmp_path, monkeypatch
             {
                 "query": "invoice",
                 "target_uri": "",
-                "session_id": None,
                 "limit": 10,
-                "score_threshold": None,
-                "filter": None,
                 "context_type": "skill",
                 "telemetry": False,
             },

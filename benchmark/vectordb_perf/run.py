@@ -29,6 +29,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence
 
+from benchmark.vectordb_perf.async_utils import map_bounded_as_completed
+
 from openviking.storage.expr import PathScope
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.collection_schemas import CollectionSchemas
@@ -787,9 +789,9 @@ async def run_search_phase(
             event, rows = await one_query(query)
             return query, event, rows
 
-        pending = [asyncio.create_task(tagged_query(query)) for query in queries]
-        for future in asyncio.as_completed(pending):
-            query, event, rows = await future
+        async for query, event, rows in map_bounded_as_completed(
+            queries, tagged_query, workers
+        ):
             events.append(event)
             results.append((query, rows or []))
             done += 1

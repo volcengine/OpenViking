@@ -1024,7 +1024,7 @@ mod tests {
             .expect("test server should bind");
         let addr = listener.local_addr().expect("test server should have addr");
         tokio::spawn(async move {
-            for _ in 0..6 {
+            for _ in 0..12 {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     return;
                 };

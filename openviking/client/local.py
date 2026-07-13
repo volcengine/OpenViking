@@ -12,7 +12,6 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.skills import (
     _list_skill_files,
     _list_skills_from_root,
-    _merge_skills,
     _require_skill,
     _restore_skill_privacy,
     _skill_summary_from_hit,
@@ -25,6 +24,7 @@ from openviking.telemetry.execution import (
     attach_telemetry_payload,
     run_with_telemetry,
 )
+from openviking.utils.image_search import normalize_client_image_input
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.client.base import BaseClient
@@ -290,11 +290,11 @@ class LocalClient(BaseClient):
     ) -> Dict[str, Any]:
         """Get a skill by name."""
         from openviking.server.routers.skills import (
+            SOURCE_METADATA_FILENAME,
             _parse_abstract_meta,
             _relative_skill_path,
             _skill_file_kind,
             _skill_summary_from_meta,
-            SOURCE_METADATA_FILENAME,
         )
         from openviking.server.skill_source_metadata import read_skill_source_metadata
 
@@ -476,7 +476,7 @@ class LocalClient(BaseClient):
         service = self._service
         ctx = self._ctx
         root_uri = await _require_skill(service, ctx, skill_name, target_uri)
-        result = await service.fs.rm(root_uri, ctx=ctx, recursive=True)
+        await service.fs.rm(root_uri, ctx=ctx, recursive=True)
         return {"name": skill_name, "uri": root_uri, "root_uri": root_uri, "deleted": True}
 
     async def validate_skill(
@@ -536,6 +536,9 @@ class LocalClient(BaseClient):
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         """List directory contents."""
         return await self._service.fs.ls(
@@ -546,6 +549,9 @@ class LocalClient(BaseClient):
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
     async def tree(
@@ -689,7 +695,7 @@ class LocalClient(BaseClient):
 
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -701,11 +707,13 @@ class LocalClient(BaseClient):
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search without session context."""
         resolved_filter = _resolve_search_filter(
             filter, context_type, since, until, time_field, tags
         )
+        image_url = normalize_client_image_input(image)
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -717,6 +725,7 @@ class LocalClient(BaseClient):
                 score_threshold=score_threshold,
                 filter=resolved_filter,
                 level=level,
+                image_url=image_url,
             ),
         )
         return attach_telemetry_payload(
@@ -726,7 +735,7 @@ class LocalClient(BaseClient):
 
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -739,11 +748,13 @@ class LocalClient(BaseClient):
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        image: Optional[Any] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         resolved_filter = _resolve_search_filter(
             filter, context_type, since, until, time_field, tags
         )
+        image_url = normalize_client_image_input(image)
 
         async def _search():
             session = None
@@ -759,6 +770,7 @@ class LocalClient(BaseClient):
                 score_threshold=score_threshold,
                 filter=resolved_filter,
                 level=level,
+                image_url=image_url,
             )
 
         execution = await run_with_telemetry(

@@ -176,6 +176,18 @@
             "openclaw": {"enabled": false, "mode": "both", "user_field": "sender"},
         },
     },
+    "bot": {
+        "gateway": {
+            "host": "127.0.0.1",
+            "port": 18790,
+            "token": null,
+        },
+        "ov_server": {
+            "server_url": null,
+            "api_key_type": "user",
+            "api_key": null,
+        },
+    },
     "log": {
         "level": "INFO",
         "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",

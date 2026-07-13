@@ -9,7 +9,7 @@ For HTTP mode, use AsyncHTTPClient or SyncHTTPClient.
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
@@ -20,6 +20,10 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+if TYPE_CHECKING:
+    from openviking.snapshot_namespace import AsyncSnapshotNamespace
 
 
 class AsyncOpenViking:
@@ -510,7 +514,7 @@ class AsyncOpenViking:
 
     async def search(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         session: Optional[Union["Session", Any]] = None,
         session_id: Optional[str] = None,
@@ -524,6 +528,7 @@ class AsyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        image: Optional[Any] = None,
     ):
         """
         Complex search with session context.
@@ -555,11 +560,12 @@ class AsyncOpenViking:
             until=until,
             time_field=time_field,
             level=level,
+            image=image,
         )
 
     async def find(
         self,
-        query: str,
+        query: str = "",
         target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -571,6 +577,7 @@ class AsyncOpenViking:
         until: Optional[str] = None,
         time_field: Optional[str] = None,
         level: Optional[List[int]] = None,
+        image: Optional[Any] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -587,6 +594,7 @@ class AsyncOpenViking:
             until=until,
             time_field=time_field,
             level=level,
+            image=image,
         )
 
     # ============= FS methods =============
@@ -680,6 +688,9 @@ class AsyncOpenViking:
             uri: Viking URI
             simple: Return only relative path list (bool, default: False)
             recursive: List all subdirectories recursively (bool, default: False)
+            node_limit: Maximum number of entries to return (int, default: 1000)
+            sort_by: Optional sort field, "name" or "mtime"
+            sort_order: Sort direction, "asc" or "desc"
         """
         await self._ensure_initialized()
         recursive = kwargs.get("recursive", False)
@@ -687,6 +698,9 @@ class AsyncOpenViking:
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 256)
         show_all_hidden = kwargs.get("show_all_hidden", True)
+        node_limit = kwargs.get("node_limit", 1000)
+        sort_by = kwargs.get("sort_by")
+        sort_order = kwargs.get("sort_order", "asc")
         return await self._client.ls(
             uri,
             recursive=recursive,
@@ -694,6 +708,9 @@ class AsyncOpenViking:
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
     async def rm(

@@ -102,6 +102,65 @@ test("captures initialize session id and forwards SSE JSON-RPC response", async 
   });
 });
 
+test("never forwards the client's un-negotiated protocol version header", async () => {
+  await withServer((_req, res, entry) => {
+    // Strict upstreams 400 on unsupported MCP-Protocol-Version before
+    // negotiation runs, so the header must stay on a proxy-known version
+    // even when the client asks for a newer spec (Trae sends 2025-11-25).
+    assert.equal(entry.headers["mcp-protocol-version"], "2025-06-18");
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "mcp-session-id": "sid-np",
+    });
+    if (entry.body.method === "initialize") {
+      res.end(JSON.stringify(jsonRpc(entry.body.id, { protocolVersion: "2025-06-18" })));
+      return;
+    }
+    res.end(JSON.stringify(jsonRpc(entry.body.id, { tools: [] })));
+  }, async ({ url, requests }) => {
+    const { proxy } = makeProxy({ url });
+    await proxy.handleMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-11-25" },
+    });
+    await proxy.handleMessage({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    assert.equal(requests.length, 2);
+    // The initialize body still carries the client's ask end-to-end; only the
+    // transport header is pinned until the server negotiates.
+    assert.equal(requests[0].body.params.protocolVersion, "2025-11-25");
+  });
+});
+
+test("adopts the server-negotiated protocol version for subsequent requests", async () => {
+  await withServer((_req, res, entry) => {
+    if (entry.body.method === "initialize") {
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "mcp-session-id": "sid-nv",
+      });
+      res.end(JSON.stringify(jsonRpc(entry.body.id, { protocolVersion: "2025-03-26" })));
+      return;
+    }
+    assert.equal(entry.headers["mcp-protocol-version"], "2025-03-26");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(jsonRpc(entry.body.id, { tools: [] })));
+  }, async ({ url, requests }) => {
+    const { proxy } = makeProxy({ url });
+    // Client asks 2025-06-18 but the server negotiates down: follow-up
+    // requests must carry the response's version, not the request's.
+    await proxy.handleMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18" },
+    });
+    await proxy.handleMessage({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    assert.equal(requests.length, 2);
+  });
+});
+
 test("forwards notifications and writes no stdout for HTTP 202", async () => {
   await withServer((_req, res, entry) => {
     assert.equal(entry.body.method, "notifications/initialized");

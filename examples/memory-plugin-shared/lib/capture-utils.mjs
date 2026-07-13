@@ -71,6 +71,17 @@ function stringifyCompact(value, maxChars) {
   }
 }
 
+function parseMaybeJson(value) {
+  if (value == null || typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
 function blockText(block) {
   if (!block || typeof block !== "object") return "";
   if (typeof block.text === "string") return block.text;
@@ -112,6 +123,51 @@ function toolPayload(block, kind) {
     block.content ??
     block.text ??
     "";
+}
+
+function toolId(block) {
+  return oneLine(
+    block?.id ||
+    block?.call_id ||
+    block?.callId ||
+    block?.tool_call_id ||
+    block?.toolCallId ||
+    block?.tool_use_id ||
+    block?.toolUseId ||
+    block?.function_call_id ||
+    block?.functionCallId ||
+    "",
+  );
+}
+
+function toolStatus(block, kind) {
+  if (kind === "call") return "running";
+  if (block?.is_error || block?.error) return "error";
+  const status = oneLine(block?.status || "");
+  return status || "completed";
+}
+
+function buildToolPart(block, kind, { toolMaxChars = 2000, toolNameById = {} } = {}) {
+  const id = toolId(block);
+  const name = toolName(block) || (id ? toolNameById[id] : "");
+  const payload = toolPayload(block, kind);
+  const part = {
+    type: "tool",
+    tool_id: id || undefined,
+    tool_name: name || undefined,
+    tool_status: toolStatus(block, kind),
+  };
+  if (kind === "call") {
+    const input = parseMaybeJson(payload);
+    if (input !== "" && input != null) {
+      part.tool_input = typeof input === "object" && !Array.isArray(input)
+        ? input
+        : { value: input };
+    }
+  } else {
+    part.tool_output = stringifyCompact(payload, toolMaxChars);
+  }
+  return part;
 }
 
 function formatToolBlock(block, kind, maxChars) {
@@ -190,6 +246,121 @@ export function extractTextFromPayload(payload, options = {}) {
   }
 
   return chunks.join("\n\n");
+}
+
+function collectToolNamesByIdFromEntries(entries) {
+  const map = {};
+  for (const entry of entries || []) {
+    const payload = entry?.payload && typeof entry.payload === "object" ? entry.payload : entry;
+    collectToolNamesByIdFromPayload(payload, map);
+  }
+  return map;
+}
+
+function collectToolNamesByIdFromPayload(payload, out) {
+  if (!payload || typeof payload !== "object") return;
+  if (payload.message && typeof payload.message === "object") {
+    collectToolNamesByIdFromPayload(payload.message, out);
+  }
+  const candidates = [];
+  if (Array.isArray(payload.content)) candidates.push(...payload.content);
+  for (const key of ["tool_calls", "toolCalls", "function_call", "functionCall", "tool_call", "toolCall"]) {
+    const value = payload[key];
+    if (!value) continue;
+    if (Array.isArray(value)) candidates.push(...value);
+    else candidates.push(value);
+  }
+  if (isToolCallBlock(payload)) candidates.push(payload);
+  for (const block of candidates) {
+    if (!block || typeof block !== "object") continue;
+    if (!isToolCallBlock(block)) continue;
+    const id = toolId(block);
+    const name = toolName(block);
+    if (id && name) out[id] = name;
+  }
+}
+
+function extractPartsFromContent(content, options = {}) {
+  const opts = { toolMaxChars: 2000, toolNameById: {}, ...options };
+  const parts = [];
+  if (!content) return parts;
+  if (typeof content === "string") {
+    if (content.trim()) parts.push({ type: "text", text: content });
+    return parts;
+  }
+  if (!Array.isArray(content)) {
+    const text = blockToText(content, opts);
+    if (text.trim()) parts.push({ type: "text", text });
+    return parts;
+  }
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    if (isToolCallBlock(block)) {
+      parts.push(buildToolPart(block, "call", opts));
+    } else if (isToolResultBlock(block)) {
+      parts.push(buildToolPart(block, "result", opts));
+    } else {
+      const text = blockToText(block, opts);
+      if (text.trim()) parts.push({ type: "text", text });
+    }
+  }
+  return parts;
+}
+
+export function extractPartsFromPayload(payload, options = {}) {
+  if (!payload || typeof payload !== "object") return [];
+  const opts = { toolMaxChars: 2000, toolNameById: {}, ...options };
+  if (payload.message && typeof payload.message === "object") {
+    return extractPartsFromPayload(payload.message, opts);
+  }
+
+  const directType = normalizeType(payload.type || payload.kind || payload.role);
+  if (TOOL_CALL_TYPES.has(directType) || isToolCallBlock(payload)) {
+    return [buildToolPart(payload, "call", opts)];
+  }
+  if (TOOL_RESULT_TYPES.has(directType) || directType === "tool" || directType === "function") {
+    return [buildToolPart(payload, "result", opts)];
+  }
+
+  const parts = [];
+  if (payload.content !== undefined) {
+    parts.push(...extractPartsFromContent(payload.content, opts));
+  }
+  for (const key of ["tool_calls", "toolCalls", "function_call", "functionCall", "tool_call", "toolCall"]) {
+    const value = payload[key];
+    if (!value) continue;
+    if (Array.isArray(value)) {
+      for (const block of value) parts.push(...extractPartsFromPayload(block, opts));
+    } else {
+      parts.push(...extractPartsFromPayload(value, opts));
+    }
+  }
+  return parts;
+}
+
+export function extractCaptureTurns(rolloutEntries, cfg = {}) {
+  const toolNameById = collectToolNamesByIdFromEntries(rolloutEntries);
+  const turns = [];
+  for (const entry of rolloutEntries || []) {
+    if (!entry || typeof entry !== "object") continue;
+    const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
+    const message = payload.message && typeof payload.message === "object" ? payload.message : null;
+    const rawRole = message?.role || payload.role || payload.type || payload.kind;
+    const role = normalizeCaptureRole(rawRole);
+    if (!role) continue;
+    if (isAssistantSideCaptureRole(rawRole) && !cfg.captureAssistantTurns) continue;
+
+    const rawText = extractTextFromPayload(payload, { toolMaxChars: cfg.captureToolMaxChars });
+    const parts = extractPartsFromPayload(payload, {
+      toolMaxChars: cfg.captureToolMaxChars,
+      toolNameById,
+    });
+    const decision = shouldCaptureText(rawText, role, cfg);
+    if (!decision.shouldCapture && parts.length === 0) continue;
+    const text = decision.shouldCapture ? decision.text : "";
+    turns.push({ role, text, parts });
+  }
+  return turns;
 }
 
 export function normalizeCaptureRole(role) {

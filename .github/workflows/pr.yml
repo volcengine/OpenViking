@@ -25,7 +25,8 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          # 24+: the pi extension tests import .ts glue directly via native type stripping.
+          node-version: '24'
 
       - name: Run memory plugin tests
         run: |
@@ -38,8 +39,20 @@ jobs:
             examples/codex-memory-plugin/scripts/auto-recall.test.mjs \
             examples/claude-code-memory-plugin/scripts/marketplace.test.mjs \
             examples/claude-code-memory-plugin/scripts/skill-experience.test.mjs \
+            examples/claude-code-memory-plugin/scripts/uri-guard.test.mjs \
             examples/claude-code-memory-plugin/scripts/lib/pending-queue.test.mjs \
-            examples/memory-plugin-shared/sync.test.mjs
+            examples/cursor-memory-plugin/scripts/cursor-plugin.test.mjs \
+            examples/trae-memory-hooks/scripts/trae-hooks.test.mjs \
+            examples/memory-plugin-shared/install-agent-hooks.test.mjs \
+            examples/memory-plugin-shared/install-opencode-jsonc.test.mjs \
+            examples/memory-plugin-shared/install-tui.test.mjs \
+            examples/memory-plugin-shared/sync.test.mjs \
+            examples/memory-plugin-shared/recall-core.test.mjs \
+            examples/memory-plugin-shared/workspace-peer.test.mjs \
+            examples/memory-plugin-shared/uri-guard.test.mjs \
+            examples/opencode-plugin/tests/*.test.mjs \
+            examples/opencode-plugin/servers/mcp-proxy.test.mjs \
+            examples/pi-coding-agent-extension/tests/*.test.mjs
 
       - name: Check installer scripts parse
         run: |

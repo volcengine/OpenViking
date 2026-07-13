@@ -154,6 +154,9 @@ class SessionManager:
     def _get_session_path(self, session_key: SessionKey) -> Path:
         return self.sessions_dir / f"{session_key.safe_name()}.jsonl"
 
+    def has_persisted(self, session_key: SessionKey) -> bool:
+        return self._get_session_path(session_key).exists()
+
     def get_or_create(self, key: SessionKey, skip_heartbeat: bool = False) -> Session:
         """
         Get an existing session or create a new one.

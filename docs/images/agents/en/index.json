@@ -75,17 +75,17 @@
     {
       "id": "cursor",
       "name": "Cursor",
-      "tags": ["MCP"],
+      "tags": ["Plugin", "Memory"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Cursor.png",
-      "summary": "Connect Cursor through MCP to provide coding and agent-development context management.",
+      "summary": "One command installs Cursor lifecycle hooks, MCP tools, rules, and skills for automatic memory recall and capture.",
       "detailPath": "https://docs.openviking.net/agents/en/cursor.md"
     },
     {
       "id": "trae",
       "name": "TRAE",
-      "tags": ["MCP"],
+      "tags": ["Hook", "MCP"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Trae.png",
-      "summary": "Connect TRAE through MCP and use OpenViking for coding context, memory, and resource management.",
+      "summary": "Add automatic prompt recall and turn capture to TRAE and TRAE CN through native hooks plus MCP tools.",
       "detailPath": "https://docs.openviking.net/agents/en/trae.md"
     },
     {

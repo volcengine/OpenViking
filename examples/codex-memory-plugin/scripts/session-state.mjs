@@ -47,6 +47,7 @@ function defaultState(codexSessionId) {
   return {
     codexSessionId,
     ovSessionId: null,
+    workspacePeerId: "",
     capturedTurnCount: 0,
     createdAt: now,
     lastUpdatedAt: now,

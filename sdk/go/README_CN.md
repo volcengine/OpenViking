@@ -33,6 +33,34 @@ Go SDK 发送的身份请求头与 Python HTTP client 一致：
 
 Go SDK 仅支持 HTTP 模式，不支持 Python embedded 模式，也不保留旧 `agent_id` 兼容路径。
 
+## 图片检索示例
+
+`FindOptions.Image` 和 `SearchOptions.Image` 支持本地路径、`viking://`、`http(s)://` 或 `data:image` URI；本地图片会在 SDK 内转成 base64 data URI，HTTP 请求体仍发送服务端字段 `image_url`。
+
+```go
+// 本地图片以图搜图
+imageResults, err := client.Find(ctx, "", &openviking.FindOptions{
+    TargetURI: "viking://resources/images",
+    Image:     "./query.png",
+    Limit:     5,
+})
+
+// 已入库图片作为查询图
+storedImageResults, err := client.Find(ctx, "", &openviking.FindOptions{
+    TargetURI: "viking://resources/images",
+    Image:     "viking://resources/images/cat.png",
+    Limit:     5,
+})
+
+// 图文联合检索
+similarPosters, err := client.Search(ctx, "红色海报风格", &openviking.SearchOptions{
+    TargetURI: "viking://resources/images",
+    Image:     "./poster.png",
+    Limit:     5,
+})
+_, _, _ = imageResults, storedImageResults, similarPosters
+```
+
 ## 已实现接口
 
 | 模块 | Go 方法 |

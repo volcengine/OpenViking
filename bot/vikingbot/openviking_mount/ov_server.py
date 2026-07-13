@@ -2,7 +2,7 @@ import base64
 import json
 import re
 import uuid
-from typing import Any, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
 from loguru import logger
 
@@ -10,6 +10,9 @@ import openviking as ov
 from openviking.core.namespace import uri_parts
 from openviking.core.peer_id import normalize_peer_id
 from vikingbot.config.loader import load_config
+
+if TYPE_CHECKING:
+    from vikingbot.config.schema import Config
 
 viking_resource_prefix = "viking://resources/"
 
@@ -43,15 +46,19 @@ class VikingClient:
         agent_id: Optional[str] = None,
         connection: Optional[Mapping[str, Any]] = None,
         actor_peer_id: Optional[str] = None,
+        config: "Config | None" = None,
     ):
         if agent_id is None:
             agent_id = workspace_id
         if agent_id and "#" in agent_id:
             agent_id = agent_id.split("#", 1)[0]
 
-        config = load_config()
+        config = config or load_config()
+        self.config = config
         openviking_config = config.ov_server
         self.openviking_config = openviking_config
+        if not str(getattr(openviking_config, "server_url", "") or "").strip():
+            raise RuntimeError("OpenViking is unavailable in VikingBot standalone mode")
         self.workspace_id = agent_id
         self.agent_id = agent_id
         self.ov_path = config.ov_data_path
@@ -182,8 +189,8 @@ class VikingClient:
         self.auth_mode = "trusted" if self.api_key_type == "root" else "api_key"
         self.agent_id = connection.get("agent_id") or agent_id
         self.workspace_id = self.agent_id
-        self.account_id = connection.get("account_id") or self.openviking_config.account_id
-        self.admin_user_id = connection.get("user_id") or self.openviking_config.admin_user_id
+        self.account_id = connection.get("account_id")
+        self.admin_user_id = connection.get("user_id")
 
         policy = connection.get("namespace_policy")
         if isinstance(policy, dict):
@@ -191,14 +198,14 @@ class VikingClient:
             self._namespace_policy_loaded = True
 
         remote_client_kwargs = {
-            "url": connection.get("server_url") or self.openviking_config.server_url,
+            "url": self.openviking_config.server_url,
             "profile_enabled": False,
         }
         if connection.get("api_key"):
             remote_client_kwargs["api_key"] = connection["api_key"]
-        if self.api_key_type == "root" and self.account_id:
+        if self.account_id:
             remote_client_kwargs["account"] = self.account_id
-        if self.api_key_type == "root" and self.admin_user_id:
+        if self.admin_user_id:
             remote_client_kwargs["user"] = self.admin_user_id
 
         self._apply_actor_peer_scope(remote_client_kwargs)
@@ -217,6 +224,7 @@ class VikingClient:
         agent_id: Optional[str] = None,
         connection: Optional[Mapping[str, Any]] = None,
         actor_peer_id: Optional[str] = None,
+        config: "Config | None" = None,
     ):
         """Factory method to create and initialize a VikingClient instance."""
         instance = cls(
@@ -224,6 +232,7 @@ class VikingClient:
             agent_id=agent_id,
             connection=connection,
             actor_peer_id=actor_peer_id,
+            config=config,
         )
         await instance._initialize()
         return instance
@@ -235,9 +244,7 @@ class VikingClient:
             return {
                 "uri": str(matched_context.get("uri", "") or ""),
                 "context_type": str(
-                    matched_context.get("context_type")
-                    or matched_context.get("type")
-                    or ""
+                    matched_context.get("context_type") or matched_context.get("type") or ""
                 ),
                 "is_leaf": bool(matched_context.get("is_leaf", False)),
                 "abstract": str(matched_context.get("abstract", "") or ""),
@@ -245,9 +252,9 @@ class VikingClient:
                 "category": str(matched_context.get("category", "") or ""),
                 "score": matched_context.get("score", 0.0),
                 "match_reason": str(matched_context.get("match_reason", "") or ""),
-                "relations": [
-                    self._relation_to_dict(r) for r in relations if r is not None
-                ] if isinstance(relations, list) else [],
+                "relations": [self._relation_to_dict(r) for r in relations if r is not None]
+                if isinstance(relations, list)
+                else [],
             }
         return {
             "uri": getattr(matched_context, "uri", ""),

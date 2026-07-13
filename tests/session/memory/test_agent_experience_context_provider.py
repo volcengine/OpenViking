@@ -13,6 +13,8 @@ from openviking.session.memory.agent_experience_context_provider import (
 from openviking.session.memory.agent_trajectory_context_provider import (
     AgentTrajectoryContextProvider,
 )
+from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -48,6 +50,33 @@ def test_user_memory_provider_splits_but_trajectory_provider_keeps_messages_whol
     assert len(user_provider.get_extract_context().messages) > 1
     assert len(trajectory_provider.get_extract_context().messages) == 1
     assert trajectory_provider.get_extract_context().messages[0] is messages[0]
+
+
+def test_agent_only_schemas_are_excluded_from_peer_user_memory_extraction():
+    messages = [
+        Message(
+            id="1",
+            role="user",
+            parts=[TextPart(text="帮我导出 B 站投稿数据")],
+            peer_id="case_demo_peer",
+        )
+    ]
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acc", user_id="default"),
+        role=Role.USER,
+    )
+    provider = SessionExtractContextProvider(messages=messages)
+    provider._isolation_handler = MemoryIsolationHandler(
+        ctx,
+        ExtractContext(messages),
+        allow_self=False,
+        allowed_peer_ids={"case_demo_peer"},
+    )
+
+    schema_types = {schema.memory_type for schema in provider.get_memory_schemas(ctx)}
+
+    assert "experiences" not in schema_types
+    assert "trajectories" not in schema_types
 
 
 @pytest.mark.asyncio

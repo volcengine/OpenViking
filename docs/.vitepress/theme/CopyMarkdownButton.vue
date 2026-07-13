@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useData, withBase } from 'vitepress'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { hasPageLlmsTxt } from './llms-txt'
 
 const { frontmatter, page } = useData()
 
@@ -58,7 +59,7 @@ function onOutsideClick(e: MouseEvent) {
 onMounted(() => document.addEventListener('click', onOutsideClick))
 onBeforeUnmount(() => document.removeEventListener('click', onOutsideClick))
 
-const isDoc = computed(() => page.value.relativePath !== 'index.md')
+const isDoc = computed(() => hasPageLlmsTxt(page.value.relativePath))
 </script>
 
 <template>

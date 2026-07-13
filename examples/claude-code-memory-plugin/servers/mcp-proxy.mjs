@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "../scripts/config.mjs";
 import { createLogger } from "../scripts/debug-log.mjs";
 import { createOpenVikingMcpProxy } from "../scripts/shared/mcp-proxy-core.mjs";
+import { resolveEffectivePeerId } from "../scripts/shared/workspace-peer.mjs";
 
 const DEFAULT_TIMEOUT_MS = 15000;
 
@@ -36,12 +37,13 @@ function uniq(values) {
 
 function readProxyConfig() {
   const cfg = loadConfig();
+  const effectivePeer = resolveEffectivePeerId({ cfg, cwd: process.cwd() });
   return {
     mcpUrl: `${trimSlash(cfg.baseUrl)}/mcp`,
     apiKey: cfg.apiKey || "",
     account: cfg.accountId || "",
     user: cfg.userId || "",
-    peerId: cfg.peerId || "",
+    peerId: effectivePeer.peerId,
     timeoutMs: Math.max(1000, Number(cfg.timeoutMs) || DEFAULT_TIMEOUT_MS),
     debug: cfg.debug === true,
     debugLogPath: cfg.debugLogPath,

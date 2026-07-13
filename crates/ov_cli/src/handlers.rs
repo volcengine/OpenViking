@@ -89,8 +89,9 @@ pub async fn handle_add_resource(
         ctx.config.effective_actor_peer_id(),
         effective_timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
-        ctx.config.extra_headers.clone(),
-    );
+        ctx.config.effective_extra_headers(),
+    )
+    .with_gateway_token(ctx.config.effective_gateway_token());
     commands::resources::add_resource(
         &client,
         &path,
@@ -1325,8 +1326,9 @@ pub async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Res
 }
 
 pub async fn handle_find(
-    query: String,
+    query: Option<String>,
     uri: String,
+    image: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
     after: Option<String>,
@@ -1336,7 +1338,16 @@ pub async fn handle_find(
     tags: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
+    let query = query.unwrap_or_default();
+    if query.trim().is_empty() && image.is_none() {
+        return Err(Error::Client(
+            "Search query or --image must not be empty.".to_string(),
+        ));
+    }
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(ref img) = image {
+        params.push(format!("--image {}", img));
+    }
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
@@ -1363,6 +1374,7 @@ pub async fn handle_find(
         &client,
         &query,
         &uri,
+        image,
         node_limit,
         threshold,
         after.as_deref(),
@@ -1378,8 +1390,9 @@ pub async fn handle_find(
 }
 
 pub async fn handle_search(
-    query: String,
+    query: Option<String>,
     uri: String,
+    image: Option<String>,
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
@@ -1390,7 +1403,16 @@ pub async fn handle_search(
     tags: Option<Vec<String>>,
     ctx: CliContext,
 ) -> Result<()> {
+    let query = query.unwrap_or_default();
+    if query.trim().is_empty() && image.is_none() {
+        return Err(Error::Client(
+            "Search query or --image must not be empty.".to_string(),
+        ));
+    }
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(ref img) = image {
+        params.push(format!("--image {}", img));
+    }
     if let Some(s) = &session_id {
         params.push(format!("--session-id {}", s));
     }
@@ -1420,6 +1442,7 @@ pub async fn handle_search(
         &client,
         &query,
         &uri,
+        image,
         session_id,
         node_limit,
         threshold,

@@ -1,10 +1,10 @@
-name: ClawHub release (OpenViking plugin)
+name: OpenViking OpenClaw plugin release
 
-# Publishes examples/openclaw-plugin to ClawHub. The publish branch
-# intentionally does not commit dist/; this workflow builds and npm-packs the
-# plugin into a generated package branch, then lets ClawHub's official reusable
-# workflow perform trusted publishing from that package source while preserving
-# the original workflow commit as source metadata.
+# Publishes examples/openclaw-plugin as @openviking/openclaw-plugin. The
+# publish branch intentionally does not commit dist/; this workflow builds the
+# plugin once, publishes a legacy zip artifact to ClawHub for old OpenClaw
+# compatibility, and publishes the npm-packed tarball to npm. Keep these split
+# until ClawHub legacy /download hashes are compatible with npm-pack releases.
 
 on:
   workflow_dispatch:
@@ -21,12 +21,27 @@ on:
           - auto
           - dev
           - latest
+      package_ref:
+        description: "Git ref to package. Use main to publish the current main branch plugin while running this workflow from another branch."
+        required: false
+        default: "main"
       changelog:
         description: "Changelog text for this release."
         required: false
-        default: "OpenViking plugin release via OIDC trusted publishing."
+        default: "OpenViking plugin release via GitHub Actions."
+      publish_clawhub:
+        description: "Publish to ClawHub."
+        required: false
+        type: boolean
+        default: true
+      publish_npm:
+        description: "Publish to npm as @openviking/openclaw-plugin."
+        required: false
+        type: boolean
+        default: true
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -194,22 +209,56 @@ jobs:
           echo "resolved_version=${{ steps.resolve.outputs.version }}"
           echo "channel=${{ github.event.inputs.channel || 'auto' }}"
           echo "resolved_tags=${{ steps.resolve.outputs.tags }}"
-          echo "changelog=${{ github.event.inputs.changelog || 'OpenViking plugin release via OIDC trusted publishing.' }}"
+          echo "package_ref=${{ inputs.package_ref || 'main' }}"
+          echo "publish_clawhub=${{ inputs.publish_clawhub }}"
+          echo "publish_npm=${{ inputs.publish_npm }}"
+          echo "changelog=${{ github.event.inputs.changelog || 'OpenViking plugin release via GitHub Actions.' }}"
 
   prepare-package-source:
-    name: Prepare ClawHub package source
+    name: Prepare plugin package artifacts
     needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: write
     outputs:
       package_branch: ${{ steps.package_branch.outputs.branch }}
       source_url: ${{ steps.package_branch.outputs.source_url }}
+      tarball_name: ${{ steps.pack.outputs.tarball_name }}
+      source_commit: ${{ steps.package_source.outputs.commit }}
+      source_ref: ${{ steps.package_source.outputs.ref }}
+      package_ref: ${{ steps.package_source.outputs.package_ref }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.package_ref || 'main' }}
+
+      - name: Resolve package source metadata
+        id: package_source
+        shell: bash
+        env:
+          PACKAGE_REF: ${{ inputs.package_ref || 'main' }}
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse --verify HEAD^{commit})"
+          source_ref="$PACKAGE_REF"
+
+          if [[ "$PACKAGE_REF" == refs/* ]]; then
+            source_ref="$PACKAGE_REF"
+          elif git ls-remote --exit-code --heads origin "$PACKAGE_REF" >/dev/null 2>&1; then
+            source_ref="refs/heads/$PACKAGE_REF"
+          elif git ls-remote --exit-code --tags origin "$PACKAGE_REF" >/dev/null 2>&1; then
+            source_ref="refs/tags/$PACKAGE_REF"
+          fi
+
+          echo "package_ref=$PACKAGE_REF" >> "$GITHUB_OUTPUT"
+          echo "commit=$source_commit" >> "$GITHUB_OUTPUT"
+          echo "ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "Packaging source:"
+          echo "  package_ref=$PACKAGE_REF"
+          echo "  source_ref=$source_ref"
+          echo "  source_commit=$source_commit"
 
       - uses: actions/setup-node@v6
         with:
@@ -235,9 +284,18 @@ jobs:
             echo "::error title=Pack failed::npm pack did not produce a tgz file."
             exit 1
           fi
+          echo "tarball_path=$tarball" >> "$GITHUB_OUTPUT"
+          echo "tarball_name=$(basename "$tarball")" >> "$GITHUB_OUTPUT"
           tar -xzf "$tarball" -C "$package_dir"
           echo "package_dir=$package_dir/package" >> "$GITHUB_OUTPUT"
           find "$package_dir/package" -maxdepth 3 -type f | sort
+
+      - name: Upload npm package tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: openviking-plugin-tarball
+          path: ${{ steps.pack.outputs.tarball_path }}
+          if-no-files-found: error
 
       - name: Push generated package branch
         id: package_branch
@@ -245,37 +303,280 @@ jobs:
           PACKAGE_DIR: ${{ steps.pack.outputs.package_dir }}
           VERSION: ${{ needs.guard.outputs.version }}
           BRANCH: clawhub-package-${{ github.run_id }}
+          SOURCE_REF: ${{ steps.package_source.outputs.ref }}
+          SOURCE_COMMIT: ${{ steps.package_source.outputs.commit }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch --orphan "$BRANCH"
+          git switch --discard-changes --orphan "$BRANCH"
           git rm -r --cached . || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp -a "$PACKAGE_DIR"/. .
           git add .
-          git commit -m "chore(clawhub): package openviking plugin $VERSION"
+          git commit \
+            -m "chore(clawhub): package openviking plugin $VERSION" \
+            -m "Source ref: $SOURCE_REF" \
+            -m "Source commit: $SOURCE_COMMIT"
           git push --force origin "HEAD:$BRANCH"
           source_url="${GITHUB_REPOSITORY}@${BRANCH}"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           echo "source_url=$source_url" >> "$GITHUB_OUTPUT"
           echo "source_url=$source_url"
 
-  publish:
-    name: Publish to ClawHub (official trusted workflow)
+  publish-clawhub:
+    name: Publish to ClawHub
+    if: ${{ inputs.publish_clawhub }}
     needs:
       - guard
       - prepare-package-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
+      actions: read
       contents: read
       id-token: write
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.23.1
-    with:
-      source: ${{ needs.prepare-package-source.outputs.source_url }}
-      dry_run: false
-      json: true
-      version: ${{ needs.guard.outputs.version }}
-      tags: ${{ needs.guard.outputs.tags }}
-      source_repo: ${{ github.repository }}
-      source_commit: ${{ github.sha }}
-      source_ref: ${{ github.ref }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare-package-source.outputs.package_ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: examples/openclaw-plugin/package-lock.json
+
+      - name: Prepare ClawHub legacy package folder
+        id: clawhub_package
+        working-directory: examples/openclaw-plugin
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm version --no-git-tag-version --allow-same-version "$VERSION"
+          npm ci
+          pack_dir="$RUNNER_TEMP/openviking-clawhub-pack"
+          package_dir="$RUNNER_TEMP/openviking-clawhub-package"
+          mkdir -p "$pack_dir" "$package_dir"
+          npm pack --pack-destination "$pack_dir"
+          tarball="$(find "$pack_dir" -maxdepth 1 -name '*.tgz' -print -quit)"
+          if [ -z "$tarball" ]; then
+            echo "::error title=Pack failed::npm pack did not produce a tgz file for ClawHub."
+            exit 1
+          fi
+          tar -xzf "$tarball" -C "$package_dir"
+          echo "package_dir=$package_dir/package" >> "$GITHUB_OUTPUT"
+
+      - name: Install legacy ClawHub CLI for zip publishing
+        run: |
+          set -euo pipefail
+          npm install -g clawhub@0.9.0
+
+          # clawhub@0.9.0 uses the legacy folder upload path that ClawHub stores
+          # as a zip artifact, but it predates manualOverrideReason. Patch only
+          # the runner-local installed CLI so trusted-publisher packages can
+          # still be released manually from this workflow.
+          clawhub_root="$(npm root -g)/clawhub"
+          export CLAWHUB_ROOT="$clawhub_root"
+          echo "CLAWHUB_BIN=$clawhub_root/bin/clawdhub.js" >> "$GITHUB_ENV"
+          node <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+
+          const packageRoot = process.env.CLAWHUB_ROOT;
+          if (!packageRoot || !fs.existsSync(packageRoot)) {
+            throw new Error(`Could not locate global clawhub install at ${packageRoot}`);
+          }
+
+          const cliPath = path.join(packageRoot, "dist", "cli.js");
+          const packagesPath = path.join(packageRoot, "dist", "cli", "commands", "packages.js");
+
+          let cli = fs.readFileSync(cliPath, "utf8");
+          if (!cli.includes("--manual-override-reason <reason>")) {
+            if (!cli.includes('.option("--changelog <text>", "Changelog text")')) {
+              throw new Error(`Could not find publish command changelog option in ${cliPath}`);
+            }
+            cli = cli.replaceAll(
+              '.option("--changelog <text>", "Changelog text")',
+              '.option("--changelog <text>", "Changelog text")\n    .option("--manual-override-reason <reason>", "Manual publish reason when trusted publisher config exists")'
+            );
+            fs.writeFileSync(cliPath, cli);
+          }
+
+          let packages = fs.readFileSync(packagesPath, "utf8");
+          if (!packages.includes("manualOverrideReason: options.manualOverrideReason")) {
+            if (!packages.includes("            tags,\n            ...(source ? { source } : {}),")) {
+              throw new Error(`Could not find publish payload tags block in ${packagesPath}`);
+            }
+            packages = packages.replace(
+              "            tags,\n            ...(source ? { source } : {}),",
+              "            tags,\n            manualOverrideReason: options.manualOverrideReason?.trim() || undefined,\n            ...(source ? { source } : {}),"
+            );
+            fs.writeFileSync(packagesPath, packages);
+          }
+          NODE
+          node "$clawhub_root/bin/clawdhub.js" package publish --help | grep -F -- "--manual-override-reason"
+
+      - name: Write ClawHub token config
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLAWHUB_TOKEN:-}" ]; then
+            echo "::error title=Missing CLAWHUB_TOKEN::Add a repository secret named CLAWHUB_TOKEN or re-enable ClawHub trusted publishing."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "clawhub-config.json"
+          path.write_text(
+              json.dumps(
+                  {
+                      "registry": "https://clawhub.ai",
+                      "token": os.environ["CLAWHUB_TOKEN"],
+                  },
+                  indent=2,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          PY
+          echo "CLAWHUB_CONFIG_PATH=$RUNNER_TEMP/clawhub-config.json" >> "$GITHUB_ENV"
+
+      - name: Publish package to ClawHub
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          TAGS: ${{ needs.guard.outputs.tags }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ needs.prepare-package-source.outputs.source_commit }}
+          SOURCE_REF: ${{ needs.prepare-package-source.outputs.source_ref }}
+          PACKAGE_DIR: ${{ steps.clawhub_package.outputs.package_dir }}
+        run: |
+          set -euo pipefail
+          package_dir="$PACKAGE_DIR"
+          if [ ! -f "$package_dir/package.json" ]; then
+            package_json="$(find "$package_dir" -mindepth 1 -maxdepth 3 -name package.json -print -quit)"
+            if [ -z "$package_json" ]; then
+              echo "::error title=Missing ClawHub package::The openviking-clawhub-legacy-package artifact did not contain package.json."
+              exit 1
+            fi
+            package_dir="$(dirname "$package_json")"
+          fi
+
+          echo "Publishing ClawHub source metadata:"
+          echo "  source_repo=$SOURCE_REPO"
+          echo "  source_ref=$SOURCE_REF"
+          echo "  source_commit=$SOURCE_COMMIT"
+          echo "  package_dir=$package_dir"
+          node "$CLAWHUB_BIN" package publish "$package_dir" \
+            --family code-plugin \
+            --version "$VERSION" \
+            --tags "$TAGS" \
+            --source-repo "$SOURCE_REPO" \
+            --source-commit "$SOURCE_COMMIT" \
+            --source-ref "$SOURCE_REF" \
+            --source-path examples/openclaw-plugin \
+            --manual-override-reason "GitHub Actions publish via CLAWHUB_TOKEN" \
+            2>&1 | tee "$RUNNER_TEMP/clawhub-package-publish.log"
+
+      - name: Verify ClawHub legacy zip artifact
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          node "$CLAWHUB_BIN" package inspect "@openviking/openclaw-plugin" \
+            --version "$VERSION" \
+            --json | tee "$RUNNER_TEMP/clawhub-package-inspect.json"
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          data = json.loads((Path(os.environ["RUNNER_TEMP"]) / "clawhub-package-inspect.json").read_text(encoding="utf-8"))
+          package = data.get("package") or {}
+          version = data.get("version") or {}
+          artifact = version.get("artifact") or package.get("artifact") or {}
+          kind = artifact.get("kind")
+          fmt = artifact.get("format")
+          if kind != "legacy-zip" or fmt != "zip":
+            raise SystemExit(f"Expected ClawHub legacy zip artifact, got kind={kind!r}, format={fmt!r}")
+          print(f"Verified ClawHub artifact: kind={kind}, format={fmt}")
+          PY
+
+      - name: Upload ClawHub publish log artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clawhub-package-publish-log
+          path: |
+            ${{ runner.temp }}/clawhub-package-publish.log
+            ${{ runner.temp }}/clawhub-package-inspect.json
+          if-no-files-found: error
+
+  publish-npm:
+    name: Publish to npm
+    if: ${{ inputs.publish_npm }}
+    needs:
+      - guard
+      - prepare-package-source
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@openviking/openclaw-plugin
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install npm CLI with trusted publishing support
+        run: |
+          set -euo pipefail
+          npm_cli_version="11.14.1"
+          curl -fsSL "https://registry.npmjs.org/npm/-/npm-${npm_cli_version}.tgz" -o "$RUNNER_TEMP/npm.tgz"
+          mkdir -p "$RUNNER_TEMP/npm-cli"
+          tar -xzf "$RUNNER_TEMP/npm.tgz" -C "$RUNNER_TEMP/npm-cli" --strip-components=1
+          echo "NPM_CLI=$RUNNER_TEMP/npm-cli/bin/npm-cli.js" >> "$GITHUB_ENV"
+          node "$RUNNER_TEMP/npm-cli/bin/npm-cli.js" --version
+
+      - name: Download npm package tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: openviking-plugin-tarball
+          path: ${{ runner.temp }}/openviking-plugin-tarball
+
+      - name: Publish package to npm
+        working-directory: ${{ runner.temp }}/openviking-plugin-tarball
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ needs.guard.outputs.tags }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball="$(find . -maxdepth 1 -name '*.tgz' -print -quit)"
+          if [ -z "$tarball" ]; then
+            echo "::error title=Missing tarball::The openviking-plugin-tarball artifact did not contain a .tgz file."
+            exit 1
+          fi
+
+          if npm view "@openviking/openclaw-plugin@$VERSION" version >/dev/null 2>&1; then
+            echo "::error title=npm version already exists::@openviking/openclaw-plugin@$VERSION is already published."
+            exit 1
+          fi
+
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
+            echo "Publishing with NPM_TOKEN."
+          else
+            echo "Publishing with npm trusted publishing (GitHub OIDC)."
+          fi
+
+          node "$NPM_CLI" publish "$tarball" --access public --tag "$NPM_TAG" --provenance --registry https://registry.npmjs.org

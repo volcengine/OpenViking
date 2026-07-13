@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { deriveOvSessionId, isBypassed } from "./lib/ov-session.mjs";
+import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -63,6 +64,7 @@ async function main() {
   const subagentId = input.agent_id;
   const agentType = input.agent_type || "subagent";
   const cwd = input.cwd;
+  const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
 
   if (!sessionId || !subagentId) {
     log("skip", { reason: "missing session_id or agent_id" });
@@ -89,6 +91,8 @@ async function main() {
         subagentId,
         agentType,
         ovSessionId,
+        peerId: effectivePeer.peerId,
+        peerSource: effectivePeer.source,
         startedAt: Date.now(),
       }),
     );
@@ -96,7 +100,7 @@ async function main() {
     logError("state_write", err);
   }
 
-  log("start", { subagentId, agentType, ovSessionId });
+  log("start", { subagentId, agentType, ovSessionId, peerSource: effectivePeer.source });
   approve();
 }
 

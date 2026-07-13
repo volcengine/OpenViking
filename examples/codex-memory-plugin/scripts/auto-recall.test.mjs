@@ -290,8 +290,12 @@ test("auto-recall expands configured user in memory search target", async () => 
       );
     });
 
-    assert.equal(requests[0].body.target_uri, "viking://user/zeus/memories");
-    assert.equal(requests[0].body.session_id, "cx-codex_456");
+    // Memory and skill searches run in parallel; arrival order is not guaranteed.
+    const memorySearch = requests.find(
+      (request) => request.body.target_uri === "viking://user/zeus/memories",
+    );
+    assert.ok(memorySearch, "expected a memories search request");
+    assert.equal(memorySearch.body.session_id, "cx-codex_456");
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
@@ -363,8 +367,12 @@ test("auto-recall preserves explicit default user memory target", async () => {
       );
     });
 
-    assert.equal(requests[0].body.target_uri, "viking://user/default/memories");
-    assert.equal(requests[0].body.session_id, "cx-codex_789");
+    // Memory and skill searches run in parallel; arrival order is not guaranteed.
+    const memorySearch = requests.find(
+      (request) => request.body.target_uri === "viking://user/default/memories",
+    );
+    assert.ok(memorySearch, "expected a memories search request");
+    assert.equal(memorySearch.body.session_id, "cx-codex_789");
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

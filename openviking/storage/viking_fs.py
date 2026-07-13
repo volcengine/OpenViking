@@ -73,6 +73,7 @@ from openviking.storage.internal_names import (
     STORAGE_INTERNAL_ENTRY_NAMES,
 )
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_utils import format_iso8601, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -104,9 +105,9 @@ LS_ALL_NODES = 2**31 - 1
 _T = TypeVar("_T")
 
 
-def _ensure_non_empty_search_query(query: str) -> None:
-    if not query.strip():
-        raise InvalidArgumentError("Search query must not be empty.")
+def _ensure_non_empty_search_query(query: str, image_url: Optional[str] = None) -> None:
+    if not query.strip() and not image_url:
+        raise InvalidArgumentError("Search query or image_url must not be empty.")
 
 
 def _is_directory_not_empty_error(message: str) -> bool:
@@ -932,6 +933,10 @@ class VikingFS:
                         details={"from_uri": old_uri, "to_uri": new_uri},
                     )
 
+        real_ctx = self._ctx_or_default(ctx)
+        old_uri = canonicalize_uri(old_uri, real_ctx)
+        new_uri = canonicalize_uri(new_uri, real_ctx)
+
         lock_context = (
             LockContext(
                 get_lock_manager(),
@@ -1149,6 +1154,10 @@ class VikingFS:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
+        real_ctx = self._ctx_or_default(ctx)
+        uri = canonicalize_uri(uri, real_ctx)
+        if exclude_uri:
+            exclude_uri = canonicalize_uri(exclude_uri, real_ctx)
         await self._ensure_access(uri, ctx)
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.
@@ -1198,6 +1207,8 @@ class VikingFS:
             return "fs"
 
         backend_type = getattr(vector_store, "_backend_type", "unknown")
+        # Keep this set consistent with ``CollectionAdapter.USE_CONTENT_FIELD``:
+        # only these backends store the ``content`` field required for full-text grep.
         if backend_type not in ("volcengine", "vikingdb"):
             return "fs"
 
@@ -1322,7 +1333,7 @@ class VikingFS:
         filter_expr = PathScope("uri", uri, depth=level_limit)
         excluded_prefix = None
         if exclude_uri:
-            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            excluded_prefix = exclude_uri.rstrip("/")
             await self._ensure_access(excluded_prefix, ctx)
             filter_expr = And(
                 [
@@ -1468,7 +1479,7 @@ class VikingFS:
 
         excluded_path = None
         if exclude_uri:
-            normalized_excluded_uri = self._normalize_uri(exclude_uri).rstrip("/")
+            normalized_excluded_uri = exclude_uri.rstrip("/")
             await self._ensure_access(normalized_excluded_uri, ctx)
             excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
 
@@ -1566,7 +1577,7 @@ class VikingFS:
         compiled_pattern = re.compile(pattern, flags)
         excluded_prefix = None
         if exclude_uri:
-            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            excluded_prefix = exclude_uri.rstrip("/")
             await self._ensure_access(excluded_prefix, ctx)
         file_uris = await self._collect_grep_files(
             uri,
@@ -1601,7 +1612,7 @@ class VikingFS:
             if current_depth > level_limit:
                 return
 
-            normalized_current_uri = self._normalize_uri(current_uri)
+            normalized_current_uri = current_uri
             if excluded_prefix and (
                 normalized_current_uri == excluded_prefix
                 or normalized_current_uri.startswith(excluded_prefix + "/")
@@ -1627,7 +1638,7 @@ class VikingFS:
                 else:
                     file_uris.append(entry_uri)
 
-        normalized_uri = self._normalize_uri(uri)
+        normalized_uri = uri
         if excluded_prefix and (
             normalized_uri == excluded_prefix or normalized_uri.startswith(excluded_prefix + "/")
         ):
@@ -2228,6 +2239,7 @@ class VikingFS:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
+        image_url: Optional[str] = None,
     ):
         """Semantic search.
 
@@ -2241,7 +2253,7 @@ class VikingFS:
         Returns:
             FindResult
         """
-        _ensure_non_empty_search_query(query)
+        _ensure_non_empty_search_query(query, image_url)
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking_cli.retrieve import (
@@ -2276,6 +2288,10 @@ class VikingFS:
             context_type=None,
             intent="",
             target_directories=retrieval_targets.target_directories,
+            embedding_input=(
+                build_multimodal_embedding_input(query, image_url) if image_url else None
+            ),
+            image_query=bool(image_url),
         )
 
         logger.debug(
@@ -2320,6 +2336,7 @@ class VikingFS:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
+        image_url: Optional[str] = None,
     ):
         """Complex search with session context.
 
@@ -2333,7 +2350,7 @@ class VikingFS:
         Returns:
             FindResult
         """
-        _ensure_non_empty_search_query(query)
+        _ensure_non_empty_search_query(query, image_url)
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
@@ -2367,7 +2384,19 @@ class VikingFS:
                 target_abstract = ""
 
         # With session context: intent analysis
-        if session_summary or current_messages:
+        if image_url:
+            typed_queries = [
+                TypedQuery(
+                    query=query,
+                    context_type=None,
+                    intent="",
+                    priority=1,
+                    target_directories=retrieval_targets.target_directories,
+                    embedding_input=build_multimodal_embedding_input(query, image_url),
+                    image_query=True,
+                )
+            ]
+        elif session_summary or current_messages:
             analyzer = IntentAnalyzer(max_recent_messages=5)
             with telemetry.measure("search.intent_analysis"):
                 query_plan = await analyzer.analyze(
@@ -3195,7 +3224,6 @@ class VikingFS:
         old_base: str,
         new_base: str,
         ctx: Optional[RequestContext] = None,
-        levels: Optional[List[int]] = None,
     ) -> List[tuple[str, str]]:
         """Update URIs in vector store (when moving files).
 
@@ -3205,25 +3233,22 @@ class VikingFS:
         if not vector_store:
             return []
 
-        old_base_uri = self._path_to_uri(old_base, ctx=ctx)
-        new_base_uri = self._path_to_uri(new_base, ctx=ctx)
         real_ctx = self._ctx_or_default(ctx)
         mappings: List[tuple[str, str]] = []
 
         try:
             for uri in uris:
-                new_uri = uri.replace(old_base_uri, new_base_uri, 1)
+                new_uri = new_base + uri[len(old_base) :]
                 updated = await vector_store.update_uri_mapping(
                     ctx=real_ctx,
                     uri=uri,
                     new_uri=new_uri,
-                    levels=levels,
                 )
                 if updated:
                     mappings.append((uri, new_uri))
                     logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
         except Exception:
-            await self._restore_vector_store_uris(mappings, ctx=real_ctx, levels=levels)
+            await self._restore_vector_store_uris(mappings, ctx=real_ctx)
             raise
         return mappings
 
@@ -3231,7 +3256,6 @@ class VikingFS:
         self,
         mappings: Sequence[tuple[str, str]],
         ctx: Optional[RequestContext] = None,
-        levels: Optional[List[int]] = None,
     ) -> None:
         vector_store = self._get_vector_store()
         if not vector_store:
@@ -3243,7 +3267,6 @@ class VikingFS:
                     ctx=real_ctx,
                     uri=new_uri,
                     new_uri=old_uri,
-                    levels=levels,
                 )
                 if not restored:
                     logger.warning(
@@ -3257,67 +3280,6 @@ class VikingFS:
                     new_uri,
                     old_uri,
                 )
-
-    async def _mv_vector_store_l0_l1(
-        self,
-        old_uri: str,
-        new_uri: str,
-        ctx: Optional[RequestContext] = None,
-        lock_handle: Optional["LockHandle"] = None,
-    ) -> None:
-        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-        from openviking.storage.transaction import LockContext, get_lock_manager
-
-        await self._ensure_access(old_uri, ctx)
-        await self._ensure_access(new_uri, ctx)
-
-        real_ctx = self._ctx_or_default(ctx)
-        old_dir = VikingURI.normalize(old_uri).rstrip("/")
-        new_dir = VikingURI.normalize(new_uri).rstrip("/")
-        if old_dir == new_dir:
-            return
-
-        for uri in (old_dir, new_dir):
-            if uri.endswith(("/.abstract.md", "/.overview.md")):
-                raise ValueError(f"mv_vector_store expects directory URIs, got: {uri}")
-
-        try:
-            old_stat = await self.stat(old_dir, ctx=real_ctx)
-        except Exception as e:
-            raise FileNotFoundError(f"mv_vector_store old_uri not found: {old_dir}") from e
-        try:
-            new_stat = await self.stat(new_dir, ctx=real_ctx)
-        except Exception as e:
-            raise FileNotFoundError(f"mv_vector_store new_uri not found: {new_dir}") from e
-
-        if not (isinstance(old_stat, dict) and old_stat.get("isDir", False)):
-            raise ValueError(f"mv_vector_store expects old_uri to be a directory: {old_dir}")
-        if not (isinstance(new_stat, dict) and new_stat.get("isDir", False)):
-            raise ValueError(f"mv_vector_store expects new_uri to be a directory: {new_dir}")
-
-        old_path = self._uri_to_path(old_dir, ctx=real_ctx)
-        new_path = self._uri_to_path(new_dir, ctx=real_ctx)
-
-        try:
-            async with LockContext(
-                get_lock_manager(),
-                [old_path],
-                lock_mode="mv",
-                mv_dst_path=new_path,
-                src_is_dir=True,
-                handle=lock_handle,
-            ):
-                await self._update_vector_store_uris(
-                    uris=[old_dir],
-                    old_base=old_dir,
-                    new_base=new_dir,
-                    ctx=real_ctx,
-                    levels=[0, 1],
-                )
-
-        except LockAcquisitionError:
-            raise ResourceBusyError(f"Resource is being processed: {old_dir}", uri=old_dir)
-
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""
         return self.vector_store
@@ -3599,6 +3561,8 @@ class VikingFS:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -3610,6 +3574,8 @@ class VikingFS:
             abs_limit: int = 256
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
+            sort_by: Optional sort field, "name" or "mtime"
+            sort_order: Sort direction, "asc" or "desc"
 
         output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': None}, 'uri': 'viking://resources/.abstract.md'}]
@@ -3618,12 +3584,90 @@ class VikingFS:
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11T08:52:16.256Z', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
         """
         await self._ensure_access(uri, ctx)
+        if sort_by not in {None, "name", "mtime"}:
+            raise ValueError("sort_by must be 'name' or 'mtime'")
+        if sort_order not in {"asc", "desc"}:
+            raise ValueError("sort_order must be 'asc' or 'desc'")
         if output == "original":
-            return await self._ls_original(uri, show_all_hidden, node_limit, ctx=ctx)
+            return await self._ls_original(
+                uri,
+                show_all_hidden,
+                node_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                ctx=ctx,
+            )
         elif output == "agent":
-            return await self._ls_agent(uri, abs_limit, show_all_hidden, node_limit, ctx=ctx)
+            return await self._ls_agent(
+                uri,
+                abs_limit,
+                show_all_hidden,
+                node_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                ctx=ctx,
+            )
         else:
             raise ValueError(f"Invalid output format: {output}")
+
+    @staticmethod
+    def _ls_entry_mtime(entry: Dict[str, Any]) -> Optional[float]:
+        raw_time = entry.get("modTime")
+        if isinstance(raw_time, (int, float)):
+            return float(raw_time)
+        if isinstance(raw_time, str) and raw_time:
+            try:
+                return parse_iso_datetime(raw_time).timestamp()
+            except (TypeError, ValueError, OverflowError):
+                return None
+
+        legacy_time = entry.get("mtime")
+        if isinstance(legacy_time, (int, float)):
+            return float(legacy_time)
+        return None
+
+    @classmethod
+    def _sort_ls_entry_items(
+        cls,
+        entry_items: List[tuple[Dict[str, Any], str]],
+        sort_by: Optional[str],
+        sort_order: str,
+    ) -> List[tuple[Dict[str, Any], str]]:
+        if sort_by is None:
+            return entry_items
+
+        descending = sort_order == "desc"
+        directories = [item for item in entry_items if item[0].get("isDir", False)]
+        files = [item for item in entry_items if not item[0].get("isDir", False)]
+
+        if sort_by == "name":
+
+            def name_key(item: tuple[Dict[str, Any], str]) -> tuple[str, str]:
+                name = str(item[0].get("name", ""))
+                return name.lower(), name
+
+            directories.sort(key=name_key, reverse=descending)
+            files.sort(key=name_key, reverse=descending)
+            return directories + files
+
+        def sort_by_mtime(
+            items: List[tuple[Dict[str, Any], str]],
+        ) -> List[tuple[Dict[str, Any], str]]:
+            timestamped = []
+            missing = []
+            for item in items:
+                timestamp = cls._ls_entry_mtime(item[0])
+                if timestamp is None:
+                    missing.append(item)
+                else:
+                    timestamped.append((timestamp, item))
+            timestamped.sort(
+                key=lambda pair: pair[0],
+                reverse=descending,
+            )
+            return [item for _, item in timestamped] + missing
+
+        return sort_by_mtime(directories) + sort_by_mtime(files)
 
     async def _ls_agent(
         self,
@@ -3631,10 +3675,13 @@ class VikingFS:
         abs_limit: int,
         show_all_hidden: bool,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
         entry_items = await self._list_read_path_items(uri, ctx=ctx)
+        entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)
         # basic info
         fallback_time = datetime.now(timezone.utc)
         all_entries = []
@@ -3676,11 +3723,14 @@ class VikingFS:
         uri: str,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
         try:
             entry_items = await self._list_read_path_items(uri, ctx=ctx)
+            entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)
             # AGFS returns read-only structure, need to create new dict
             all_entries = []
             for entry, entry_uri in entry_items:

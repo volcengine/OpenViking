@@ -6,7 +6,7 @@ import platform
 import time as _time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -15,6 +15,9 @@ from vikingbot.agent.skills import SkillsLoader
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox import SandboxManager
 from vikingbot.utils.helpers import ensure_non_empty_assistant_content
+
+if TYPE_CHECKING:
+    from vikingbot.config.schema import Config
 
 
 class ContextBuilder:
@@ -33,11 +36,13 @@ class ContextBuilder:
         workspace: Path,
         sandbox_manager: SandboxManager | None = None,
         sender_id: str = None,
+        actor_peer_id: str = None,
         sender_name: str = None,
         is_group_chat: bool = False,
         eval: bool = False,
         openviking_connection: dict[str, Any] | None = None,
         enable_subagents: bool = True,
+        config: "Config | None" = None,
     ):
         self.workspace = workspace
         self._templates_ensured = False
@@ -45,18 +50,20 @@ class ContextBuilder:
         self._memory = None
         self._skills = None
         self._sender_id = sender_id
+        self._actor_peer_id = actor_peer_id or sender_id
         self._sender_name = sender_name
         self._is_group_chat = is_group_chat
         self._eval = eval
         self._openviking_connection = openviking_connection
         self._enable_subagents = enable_subagents
+        self._config = config
         self.latest_relevant_memories: str | None = None
 
     @property
     def memory(self):
         """Lazy-load MemoryStore when first needed."""
         if self._memory is None:
-            self._memory = MemoryStore(self.workspace)
+            self._memory = MemoryStore(self.workspace, config=self._config)
         return self._memory
 
     @property
@@ -165,13 +172,13 @@ Skills with available="false" need dependencies installed first - you can try in
         # OpenViking identity model, the bot API key owns the User, and the
         # message sender is represented as a peer under that User.
         if ov_tools_enable:
-            # Fetch current sender's peer profile
+            # Fetch the authenticated actor's peer profile.
             start = _time.time()
             profile = await self.memory.get_viking_peer_profile(
                 workspace_id=workspace_id,
-                peer_id=self._sender_id,
+                peer_id=self._actor_peer_id,
                 openviking_connection=self._openviking_connection,
-                actor_peer_id=self._sender_id,
+                actor_peer_id=self._actor_peer_id,
             )
             cost = round(_time.time() - start, 2)
             logger.info(
@@ -185,14 +192,14 @@ Skills with available="false" need dependencies installed first - you can try in
             # is retained for compatibility with older deployments.
             additional_peer_ids = self._dedupe_ids(
                 [*(profile_user_list or []), *(memory_peer_ids or [])],
-                exclude={self._sender_id} if self._sender_id else set(),
+                exclude={self._actor_peer_id} if self._actor_peer_id else set(),
             )
             if additional_peer_ids:
                 profiles = await self.memory.get_viking_peer_profiles(
                     workspace_id=workspace_id,
                     peer_ids=additional_peer_ids,
                     openviking_connection=self._openviking_connection,
-                    use_peer_actor_scope=bool(self._sender_id),
+                    use_peer_actor_scope=bool(self._actor_peer_id),
                 )
                 if profiles:
                     parts.append(profiles)
@@ -240,7 +247,7 @@ Skills with available="false" need dependencies installed first - you can try in
         if ov_tools_enable:
             start = _time.time()
             # Default recall runs under the configured/request OpenViking user.
-            # sender_id is passed separately as peer identity.
+            # actor_peer_id is passed separately as peer identity.
             search_peer_ids = memory_peer_ids if memory_peer_ids else None
             viking_memory = await self.memory.get_viking_memory_context(
                 current_message=current_message,
@@ -268,8 +275,6 @@ Skills with available="false" need dependencies installed first - you can try in
                 "- Injected memory entries use three types: full means the full memory content is already shown; summary means only a summary is shown and the URI has more detail; uri means only the URI is shown and it may still point to key facts.\n"
                 "- For relevant summary or uri entries, use openviking_multi_read on their URIs to fetch full details to help you to resolve the query. "
             )
-
-
 
         parts.append(
             "Reply in the same language as the user's query, ignoring the language of the reference materials. User's query:"
@@ -423,7 +428,7 @@ IMPORTANT:
         user_info = await self._build_user_memory(
             session_key,
             current_message,
-            self._sender_id,
+            self._actor_peer_id,
             memory_peer_ids,
             memory_owner_user_ids,
             ov_tools_enable=ov_tools_enable,

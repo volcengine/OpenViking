@@ -66,6 +66,12 @@ healthy = client.health()
 print(f"Healthy: {healthy}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.health());
+```
+
 **Go SDK**
 
 ```go
@@ -202,6 +208,12 @@ status = client.get_status()
 print(status)
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getStatus());
+```
+
 **CLI**
 
 ```bash
@@ -264,6 +276,12 @@ curl -X POST http://localhost:1933/api/v1/system/consistency \
 report = client.check_consistency("viking://resources/my-project")
 print(report["ok"])
 print(report["missing_records"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.checkConsistency("viking://resources/"));
 ```
 
 **Go SDK**
@@ -351,6 +369,12 @@ client.add_resource("./docs/")
 # 等待所有处理完成
 status = client.wait_processed(timeout=60.0)
 print(f"Processing complete: {status}")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.waitProcessed(60));
 ```
 
 **Go SDK**
@@ -460,6 +484,12 @@ result = client.reindex(
     wait=False,
 )
 print(result["status"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.reindex("viking://resources/docs/"));
 ```
 
 **Go SDK**
@@ -605,7 +635,6 @@ Observer API 提供详细的组件级监控。
 - `openviking/server/routers/observer.py:observer_queue` - HTTP 路由
 - `openviking/service/debug_service.py:ObserverService.queue` - 核心实现
 - `openviking/storage/observers/queue_observer.py` - 队列观察者
-- `crates/ov_cli/src/commands/observer.rs` - CLI 命令
 
 #### 2. 接口和参数说明
 
@@ -634,6 +663,12 @@ print(client.observer.queue)
 # Embedding             0        0            10         0       10
 # Semantic              0        0            10         0       10
 # TOTAL                 0        0            20         0       20
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.queueStatus());
 ```
 
 **Go SDK**
@@ -713,6 +748,12 @@ print(client.observer.vikingdb().is_healthy)  # True
 print(client.observer.vikingdb().status)      # 状态表字符串
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.vikingDBStatus());
+```
+
 **Go SDK**
 
 ```go
@@ -787,6 +828,12 @@ print(client.observer.models)
 # vlm                    yes      ...
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.modelsStatus());
+```
+
 **Go SDK**
 
 ```go
@@ -855,11 +902,7 @@ curl -X GET http://localhost:1933/api/v1/observer/lock \
 print(client.observer.lock)
 ```
 
-**CLI**
-
-```bash
-ov observer transaction
-```
+CLI 目前没有单独的 lock observer 子命令。请使用 HTTP API 或 Python SDK 查询该组件；`ov observer system` 会在汇总状态中包含它。
 
 **响应示例**
 
