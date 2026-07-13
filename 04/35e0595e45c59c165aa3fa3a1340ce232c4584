@@ -1,0 +1,26 @@
+openviking/storage/viking_fs.py
+  s_77d338fd50fb18::t_fcbf6fc7cdacdd 1475-1493,1495-1510,1512-1515
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0435e0595e45c59c165aa3fa3a1340ce232c4584",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_77d338fd50fb18": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fca-8901-7a41-a062-eae93e1509a8",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

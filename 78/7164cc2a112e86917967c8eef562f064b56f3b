@@ -1,0 +1,23 @@
+docs/.vitepress/theme/LlmsTxtLink.vue
+  s_62dfa863fa4c7f::t_f04105c1aa31fa 109
+docs/.vitepress/theme/custom.css
+  s_62dfa863fa4c7f::t_c3c299977d2e51 644-650,940,947,951-954
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "787164cc2a112e86917967c8eef562f064b56f3b",
+  "prompts": {},
+  "sessions": {
+    "s_62dfa863fa4c7f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5994-520b-77f1-a64a-92f2cde81cb9",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

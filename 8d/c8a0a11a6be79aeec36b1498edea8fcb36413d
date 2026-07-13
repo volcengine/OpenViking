@@ -1,0 +1,116 @@
+crates/ov_cli/src/client.rs
+  s_77d338fd50fb18::t_9d00115df2605c 285-318
+crates/ov_cli/src/commands/acl.rs
+  s_77d338fd50fb18::t_65bf211d718ecd 1-75
+crates/ov_cli/src/commands/mod.rs
+  s_77d338fd50fb18::t_37c8b32815b3e2 1
+crates/ov_cli/src/handlers.rs
+  s_77d338fd50fb18::t_3df50e0f4fc4ce 1520-1552
+crates/ov_cli/src/help_ui.rs
+  s_77d338fd50fb18::t_84108ea4092258 74-76,351-368,2320,2564-2572
+crates/ov_cli/src/main.rs
+  s_77d338fd50fb18::t_8b72560d1291e1 265-291,525-529,3037,3221-3226,3257-3289
+docs/en/api/01-overview.md
+  s_77d338fd50fb18::t_48fc011d86104c 440-449,593
+docs/en/api/12-acl.md
+  s_77d338fd50fb18::t_80c97bec0676bd 1-256
+docs/en/concepts/04-viking-uri.md
+  s_77d338fd50fb18::t_0f2934ff912343 91-92
+docs/en/concepts/11-multi-tenant.md
+  s_77d338fd50fb18::t_e96f15218ea61e 16,76-77,110-112,224,265,321-322
+docs/en/concepts/15-acl.md
+  s_77d338fd50fb18::t_fd819fb8e45748 1-136
+docs/en/guides/01-configuration.md
+  s_77d338fd50fb18::t_60875af5da1ca0 1257-1270
+docs/en/guides/04-authentication.md
+  s_77d338fd50fb18::t_ffe1fc41f0a331 345-346,373
+docs/zh/api/01-overview.md
+  s_77d338fd50fb18::t_9132689debe0b2 436-445,588
+docs/zh/api/12-acl.md
+  s_77d338fd50fb18::t_9b35d9a68087d9 1-256
+docs/zh/concepts/04-viking-uri.md
+  s_77d338fd50fb18::t_229eab471227a6 89-90
+docs/zh/concepts/11-multi-tenant.md
+  s_77d338fd50fb18::t_5ac7e7358a77c4 16,76-77,110-112,224,264,319-320
+docs/zh/concepts/15-acl.md
+  s_77d338fd50fb18::t_a01bfbbe012dc4 1-136
+docs/zh/guides/01-configuration.md
+  s_77d338fd50fb18::t_b8b24bf12526db 1229-1242
+docs/zh/guides/04-authentication.md
+  s_77d338fd50fb18::t_ea2ab557197aef 343-344,371
+openviking/async_client.py
+  s_77d338fd50fb18::t_a4a8d62afc3bab 655-674
+openviking/client/local.py
+  s_77d338fd50fb18::t_618964d63df2fc 673-687
+openviking/retrieve/hierarchical_retriever.py
+  s_77d338fd50fb18::t_d68d6ad76c2ac8 209-235,277
+openviking/server/app.py
+  s_77d338fd50fb18::t_14bd1e2892696b 31,526
+openviking/server/routers/__init__.py
+  s_77d338fd50fb18::t_384b1c36104a75 5,31
+openviking/service/core.py
+  s_77d338fd50fb18::t_30c7cb87844482 27,166,327
+openviking/service/fs_service.py
+  s_77d338fd50fb18::t_670166d93e81b0 612-638
+openviking/storage/acl.py
+  s_77d338fd50fb18::t_9d0776f28d74c4 1-445
+openviking/storage/collection_schemas.py
+  s_77d338fd50fb18::t_15ffc9de6ae6a1 21,117-147,166-172,320,326-339,353-369,388,393,404,420,448
+openviking/storage/content_write.py
+  s_77d338fd50fb18::t_781bea8a49b370 32,71,133,185-192,721-724
+openviking/storage/viking_fs.py
+  s_77d338fd50fb18::t_7e8d8a62fc53ab 25-37,44,61-69,89,193,219,293,304,415-477,480,483-494,497-510,522,525-526,538-635,695,732,748,783,840-845,847,887-888,894-895,899-912,966-971,973,1005,1008-1013,1015-1022,1040,1052,1169,1343,1489,1499-1503,1530-1534,1539-1545,1588,1752,1793-1801,1840,1868,1885-1890,1892-1893,1984,2098,2124,2171,2229,2231-2232,2236,2275,2376,2473,2475,2496-2497,2530,2578-2581,2658,2670-2686,3162-3167,3186-3187,3254-3255,3412,3442,3491,3527,3545,3603,3650-3653,3679-3680,3691-3692,3718-3719,3732,3751-3753,3797
+openviking/storage/viking_vector_index_backend.py
+  s_77d338fd50fb18::t_2bdfa135324a9d 11,13,93-108,272-277,327-342,404-409,707,802-809,815-820,832-834,845-866,869,885-887,1110-1121,1135,1374-1377,1389,1434,1458,1460-1482
+openviking/sync_client.py
+  s_77d338fd50fb18::t_b7f2c2bc11b7c7 496-510
+openviking_cli/client/base.py
+  s_77d338fd50fb18::t_f7fa21d9d67b0d 251-265
+sdk/go/acl.go
+  s_77d338fd50fb18::t_472508924dacf9 1-60
+sdk/python/openviking_sdk/client.py
+  s_77d338fd50fb18::t_343f219165455f 878-912,1827-1841
+tests/misc/test_vikingfs_find_without_rerank.py
+  s_77d338fd50fb18::t_e8de44a2fce928 6,28
+tests/misc/test_vikingfs_uri_guard.py
+  s_77d338fd50fb18::t_fdc2be14fa6198 243,260,286
+tests/retrieve/test_hierarchical_retriever_rerank.py
+  s_77d338fd50fb18::t_2eccfba58d0580 9,296-314
+tests/server/test_api_acl.py
+  s_77d338fd50fb18::t_6faa80e1fceeda 1-150
+tests/server/test_content_write_service.py
+  s_77d338fd50fb18::t_75d9c823e6e48e 338,341-343,698
+tests/server/test_watch_task_acl.py
+  s_77d338fd50fb18::t_64d1343b889c1f 7,19,48-50,54-56,65-93
+tests/storage/test_acl.py
+  s_77d338fd50fb18::t_078f39e8286aad 1-281
+tests/storage/test_collection_schemas.py
+  s_77d338fd50fb18::t_0d600b2787cd4f 21,25-26,180,182,199-202,212,903,911-912,935-953
+tests/storage/test_viking_fs_glob.py
+  s_77d338fd50fb18::t_1a6139c4dafed0 169,182-211
+tests/storage/test_viking_fs_grep.py
+  s_77d338fd50fb18::t_83b2db9b1099da 155-159,194-198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8dc8a0a11a6be79aeec36b1498edea8fcb36413d",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_77d338fd50fb18": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fca-8901-7a41-a062-eae93e1509a8",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

@@ -1,0 +1,45 @@
+openviking/parse/accessors/http_accessor.py
+  s_e8a98519027dee::t_f5627b16fdf165 729-730
+openviking/parse/accessors/mime_types.py
+  s_e8a98519027dee::t_cf30b9185eb14c 271
+openviking/parse/parsers/media/audio.py
+  s_e8a98519027dee::t_a24acc314ea5a2 24,120
+openviking/parse/parsers/media/constants.py
+  s_e8a98519027dee::t_66606aac0f5ac9 9
+tests/parse/test_url_filename_preservation.py
+  s_e8a98519027dee::t_5cca77999480cd 13,116-131,173-193,319
+tests/parse/test_multimodal_file_matrix_integration.py
+  h_52359942dff0d1 1-316
+  s_3fbdb76d2f6513::t_a4efed3b1126e8 317-394
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "50fde060a14a108acc9698b96f6ca1fc1c741ae7",
+  "prompts": {},
+  "humans": {
+    "h_52359942dff0d1": {
+      "author": "zhanghaoyu <zhanghaoyu.la@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_3fbdb76d2f6513": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5aef-e546-7603-a90c-bd3ea375464c",
+        "model": "unknown"
+      },
+      "human_author": "zhanghaoyu <zhanghaoyu.la@bytedance.com>"
+    },
+    "s_e8a98519027dee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a59-0609-7141-acf6-ef7c3b712c74",
+        "model": "unknown"
+      },
+      "human_author": "zhanghaoyu <zhanghaoyu.la@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
