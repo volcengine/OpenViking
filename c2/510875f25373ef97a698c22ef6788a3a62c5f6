@@ -1,0 +1,35 @@
+sdk/typescript/README.md
+  s_e183408b893d84::t_31a26b8733c337 23,29-41
+sdk/typescript/README_CN.md
+  s_e183408b893d84::t_b336428802ad5f 23,29-41
+sdk/typescript/src/client.ts
+  s_e183408b893d84::t_2377490389d8ea 2-8,14-16,46,50-51,54,57,59,65-66,80-97,337,382-412,660-673,675-687,695,719,770-777,801-880
+sdk/typescript/src/node-files.ts
+  s_e183408b893d84::t_2ec61f39073494 1-130
+sdk/typescript/src/transport.ts
+  s_e183408b893d84::t_22b06c83a09344 1-141
+sdk/typescript/src/types.ts
+  s_e183408b893d84::t_42102c7398eff2 10-13,34-60
+sdk/typescript/tests/client.test.ts
+  s_e183408b893d84::t_991d61b48dd69b 2,50-65,252-457
+sdk/typescript/tests/node-consumer/index.ts
+  s_e183408b893d84::t_d8e16b8893f9d5 13-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c2510875f25373ef97a698c22ef6788a3a62c5f6",
+  "prompts": {},
+  "sessions": {
+    "s_e183408b893d84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4f2d-c961-7e63-82bc-e3db763a0474",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

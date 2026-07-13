@@ -1,0 +1,36 @@
+tests/retrieve/test_hierarchical_retriever_image.py
+  s_4537a39f346db9::t_0b988537ff9595 1-117
+openviking/utils/image_search.py
+  s_4537a39f346db9::t_badd7faa6a08a5 1-70
+tests/unit/test_image_search.py
+  s_4537a39f346db9::t_9b2a7ad33801d4 1-41
+tests/service/test_search_service_image.py
+  s_4537a39f346db9::t_a0dcf69d5cc37c 1-34
+docs/en/api/06-retrieval.md
+  s_4537a39f346db9::t_7bfa569e8aba2b 57-58,76-80,149-160,190-192,283-294,363-364,379,411-423,472-477,512-514
+docs/zh/api/06-retrieval.md
+  s_4537a39f346db9::t_53b4e286cbf6fa 57-58,77-81,150-161,191-193,284-295,364-365,381,413-425,474-479,514-516
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a36ab7805e965baa276b8ec7f70f53e88199969f",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_4537a39f346db9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fc5-20a5-78c1-ae5b-7f497f47a9fa",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

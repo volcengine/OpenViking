@@ -1,0 +1,21 @@
+openviking/storage/vectordb_adapters/local_adapter.py
+  s_9e2256c4faadc3::t_de49c7e0d17ac2 8,34,63-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3b9e485136a434409a5ee8b693646d40ba50dea7",
+  "prompts": {},
+  "sessions": {
+    "s_9e2256c4faadc3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f40d6-1e5f-76c0-94e5-303e2552475c",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

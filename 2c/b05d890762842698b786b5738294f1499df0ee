@@ -1,0 +1,41 @@
+docs/en/agent-integrations/04-codex.md
+  s_fc57356f120c42::t_d438f6d34deff1 3
+docs/en/agent-integrations/06-mcp-clients.md
+  s_fc57356f120c42::t_92f76b22f3900e 78
+docs/en/api/11-snapshot.md
+  s_fc57356f120c42::t_1d3aef0502c31b 27-30,547
+docs/en/guides/15-snapshot.md
+  s_fc57356f120c42::t_52c27c1581a0a8 97
+docs/zh/agent-integrations/06-mcp-clients.md
+  s_fc57356f120c42::t_78dbebe255bf5d 78
+docs/zh/api/11-snapshot.md
+  s_fc57356f120c42::t_f4ec4395d15d54 27-30,547
+docs/zh/guides/15-snapshot.md
+  s_fc57356f120c42::t_d3fbcc6482a80b 97
+examples/claude-code-memory-plugin/README.md
+  s_fc57356f120c42::t_893d76bc6a1dfc 321,355-357
+examples/claude-code-memory-plugin/README_CN.md
+  s_fc57356f120c42::t_3014cced0d939b 317,351-353
+examples/codex-memory-plugin/README.md
+  s_fc57356f120c42::t_88c0def4a2c063 162-164
+examples/codex-memory-plugin/scripts/marketplace.test.mjs
+  s_fc57356f120c42::t_86fa34630ecaf6 24,27-31,122,124,126,160-165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2cb05d890762842698b786b5738294f1499df0ee",
+  "prompts": {},
+  "sessions": {
+    "s_fc57356f120c42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4f34-5c5b-7133-8a69-0411a64c2b5b",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

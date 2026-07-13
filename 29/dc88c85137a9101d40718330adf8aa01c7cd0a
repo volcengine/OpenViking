@@ -1,0 +1,33 @@
+docs/images/agents/en/trae.md
+  s_5e17b6c73ed8ec::t_2d1042b1cff7ae 16-17
+docs/images/agents/zh/trae.md
+  s_5e17b6c73ed8ec::t_14c432ec38cb7c 16-17
+examples/cursor-memory-plugin/skills/openviking-memory/SKILL.md
+  s_5e17b6c73ed8ec::t_8c215f356b6527 3,12
+examples/memory-plugin-shared/install.sh
+  s_5e17b6c73ed8ec::t_376af32bc233a0 1724-1726,1858-1877,2512,2557,2561-2562,2567-2570,2576,2581,2590,2594,2596-2599,2603,2608,2617,2621,2623-2626,2630,2635,2691,2695-2697
+examples/memory-plugin-shared/lib/agent-uri-guard.mjs
+  s_5e17b6c73ed8ec::t_36325bab43d1f2 1-46
+examples/trae-memory-hooks/hooks/hooks.json
+  s_5e17b6c73ed8ec::t_f2b0944142f4ec 27-38
+examples/trae-memory-hooks/scripts/trae-hooks.test.mjs
+  s_5e17b6c73ed8ec::t_16400bd0383788 11,24,31-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "29dc88c85137a9101d40718330adf8aa01c7cd0a",
+  "prompts": {},
+  "sessions": {
+    "s_5e17b6c73ed8ec": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f49b4-d234-7ae0-a95d-b3a3014392cd",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
