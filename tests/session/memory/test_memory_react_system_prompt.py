@@ -5,7 +5,10 @@ Test that provider instruction correctly instructs LLM.
 """
 
 from openviking.message import ImagePart, Message, TextPart, ToolPart
-from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
+from openviking.session.memory.session_extract_context_provider import (
+    _EXTRACTION_PROMPT_OMISSION_MARKER,
+    SessionExtractContextProvider,
+)
 from openviking.session.memory.vision_message_normalizer import IMAGE_DESCRIPTION_PROMPT
 
 
@@ -87,6 +90,39 @@ class TestProviderInstruction:
 
 
 class TestSessionConversationToolFiltering:
+    def test_extraction_prompt_omits_older_messages_within_configured_budget(self):
+        messages = [
+            Message(id="m0", role="user", parts=[TextPart("old-" + "a" * 700)]),
+            Message(id="m1", role="assistant", parts=[TextPart("middle-" + "b" * 700)]),
+            Message(id="m2", role="user", parts=[TextPart("latest-" + "c" * 700)]),
+        ]
+        provider = SessionExtractContextProvider(messages=messages)
+        provider._extraction_prompt_max_chars = 1200
+
+        prompt = provider._build_conversation_message()["content"]
+
+        assert len(prompt) <= 1200
+        assert _EXTRACTION_PROMPT_OMISSION_MARKER in prompt
+        assert "[2][user][user]: latest-" in prompt
+        assert "[0][user][user]: old-" not in prompt
+        assert "[1][assistant][assistant]: middle-" not in prompt
+
+    def test_extraction_prompt_truncates_one_oversized_message_and_keeps_range_header(self):
+        message = Message(
+            id="m0",
+            role="user",
+            parts=[TextPart("begin-" + "x" * 4000 + "-end")],
+        )
+        provider = SessionExtractContextProvider(messages=[message])
+        provider._extraction_prompt_max_chars = 1200
+
+        prompt = provider._build_conversation_message()["content"]
+
+        assert len(prompt) <= 1200
+        assert "[0][user][user]: begin-" in prompt
+        assert "-end" in prompt
+        assert _EXTRACTION_PROMPT_OMISSION_MARKER in prompt
+
     def test_session_conversation_omits_skill_tool_call(self):
         messages = [
             Message(
@@ -232,8 +268,6 @@ class TestSessionConversationToolFiltering:
 
         assert provider._detect_language() == "zh-CN"
 
-
-
     async def test_prepare_extraction_messages_replaces_image_part_with_vlm_description(self):
         class FakeVisionVLM:
             def __init__(self):
@@ -340,6 +374,7 @@ class TestSessionConversationToolFiltering:
         assert len(messages) == 1
         assert any(isinstance(part, ImagePart) for part in messages[0].parts)
         assert provider.messages is not messages
+
 
 def test_session_provider_empty_messages_still_uses_environment_fallback(monkeypatch):
     monkeypatch.setenv("TZ", "Asia/Shanghai")

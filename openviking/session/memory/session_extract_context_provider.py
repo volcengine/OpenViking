@@ -48,6 +48,10 @@ _PREFETCH_SEARCH_QUERY_MAX_CHARS = 5000
 _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS = 1000
 _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS = 500
 _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
+_DEFAULT_EXTRACTION_PROMPT_MAX_CHARS = 60000
+_EXTRACTION_PROMPT_OMISSION_MARKER = (
+    "...[conversation content omitted to fit memory.extraction_prompt_max_chars]..."
+)
 _RESOURCE_REASON_LANGUAGE_RE = re.compile(
     r"(?im)^\s*(?:User reason|用户说明|用户原因|用户理由)[:：]\s*(.+?)\s*$"
 )
@@ -80,6 +84,11 @@ class SessionExtractContextProvider(ExtractContextProvider):
         config = get_openviking_config()
         self._eager_prefetch = config.memory.eager_prefetch if config.memory else False
         self._prefetch_search_topn = config.memory.prefetch_search_topn if config.memory else 5
+        self._extraction_prompt_max_chars = (
+            config.memory.extraction_prompt_max_chars
+            if config.memory
+            else _DEFAULT_EXTRACTION_PROMPT_MAX_CHARS
+        )
         self._ctx = ctx
         self._viking_fs = viking_fs
         self._transaction_handle = transaction_handle
@@ -267,21 +276,72 @@ from neighboring messages.
         else:
             time_display = session_time_str
 
-        extract_context = self.get_extract_context()
-        conversation = self._assemble_conversation(extract_context.messages)
-
-        return {
-            "role": "user",
-            "content": f"""## Conversation History
+        prefix = f"""## Conversation History
 **Session Time:** {time_display} ({day_of_week})
 Relative times (e.g., 'last week', 'next month') are based on Session Time, not today.
 
-{conversation}
+"""
+        suffix = """
 
-After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together.""",
-        }
+After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together."""
+        extract_context = self.get_extract_context()
+        conversation_budget = max(
+            1,
+            self._extraction_prompt_max_chars - len(prefix) - len(suffix),
+        )
+        conversation = self._assemble_conversation(
+            extract_context.messages,
+            max_chars=conversation_budget,
+        )
+        content = f"{prefix}{conversation}{suffix}"
+        return {"role": "user", "content": content}
 
-    def _assemble_conversation(self, messages: Any) -> str:
+    @staticmethod
+    def _truncate_formatted_message(message: str, max_chars: int) -> str:
+        if len(message) <= max_chars:
+            return message
+        marker = f"\n{_EXTRACTION_PROMPT_OMISSION_MARKER}\n"
+        if max_chars <= len(marker):
+            return message[:max_chars]
+        retained_chars = max_chars - len(marker)
+        head_chars = max(retained_chars // 2, min(len(message), message.find(": ") + 2))
+        head_chars = min(head_chars, retained_chars)
+        tail_chars = retained_chars - head_chars
+        tail = message[-tail_chars:] if tail_chars else ""
+        return f"{message[:head_chars]}{marker}{tail}"
+
+    @classmethod
+    def _bound_formatted_messages(cls, messages: List[str], max_chars: int) -> str:
+        conversation = "\n".join(messages)
+        if len(conversation) <= max_chars:
+            return conversation
+        if not messages:
+            return ""
+
+        # A single oversized latest message still keeps its stable range header and
+        # both ends of the content. For multi-message histories, prefer complete
+        # recent messages so any emitted range index still maps to the original
+        # ExtractContext entry.
+        if len(messages[-1]) > max_chars:
+            return cls._truncate_formatted_message(messages[-1], max_chars)
+
+        marker = _EXTRACTION_PROMPT_OMISSION_MARKER
+        available = max_chars - len(marker) - 1
+        selected: List[str] = []
+        selected_chars = 0
+        for message in reversed(messages):
+            separator_chars = 1 if selected else 0
+            if selected_chars + separator_chars + len(message) > available:
+                break
+            selected.insert(0, message)
+            selected_chars += separator_chars + len(message)
+
+        if not selected:
+            return cls._truncate_formatted_message(messages[-1], max_chars)
+        selected_text = "\n".join(selected)
+        return f"{marker}\n{selected_text}"
+
+    def _assemble_conversation(self, messages: Any, *, max_chars: Optional[int] = None) -> str:
         """Assemble conversation string from messages.
 
         Args:
@@ -303,8 +363,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             user utterances and can leak environment/database state into user
             memories. Agent-scope providers enable tool evidence explicitly.
             """
-            from openviking.message.part import ToolPart
-
             parts = getattr(msg, "parts", [])
             formatted_parts: List[str] = []
             for part in parts:
@@ -338,7 +396,18 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             for idx, msg in enumerate(messages)
             if (formatted := format_message_header(msg, idx)) is not None
         ]
-        conversation_sections.append("\n".join(formatted_messages))
+        if max_chars is not None:
+            bounded = self._bound_formatted_messages(formatted_messages, max_chars)
+            if len("\n".join(formatted_messages)) > len(bounded):
+                logger.warning(
+                    "Memory extraction conversation exceeded the configured prompt budget; "
+                    "keeping bounded recent context (%d -> %d chars)",
+                    len("\n".join(formatted_messages)),
+                    len(bounded),
+                )
+            conversation_sections.append(bounded)
+        else:
+            conversation_sections.append("\n".join(formatted_messages))
 
         return "\n\n".join(section for section in conversation_sections if section)
 

@@ -160,6 +160,7 @@
     "memory": {
         "version": "v2",
         "extraction_enabled": true,
+        "extraction_prompt_max_chars": 60000,
         "session_skill_extraction_enabled": false,
     },
     "ingest": {

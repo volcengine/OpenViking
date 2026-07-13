@@ -36,6 +36,16 @@ class MemoryConfig(BaseModel):
             "0 means unlimited retries."
         ),
     )
+    extraction_prompt_max_chars: int = Field(
+        default=60000,
+        ge=1000,
+        description=(
+            "Maximum characters in the conversation-history user message sent for one "
+            "memory extraction request. System/schema and tool follow-up messages are not "
+            "included in this limit. Older messages are omitted first while original range "
+            "indices are preserved."
+        ),
+    )
     experimental_memory_switch: bool = Field(
         default=False,
         description=(

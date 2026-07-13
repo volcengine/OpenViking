@@ -1364,6 +1364,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `version` | Deprecated and ignored. OpenViking always uses the v3 memory extraction pipeline; existing configs that set this field still load without error. | `"v3"` |
 | `custom_templates_dir` | Custom memory templates directory. If set, templates from this directory are loaded in addition to built-in templates. | `""` |
 | `extraction_enabled` | Whether session commit runs long-term memory extraction. | `true` |
+| `extraction_prompt_max_chars` | Maximum characters in the conversation-history user message sent to one memory-extraction VLM request. Older messages are omitted first while stable range indices are preserved. System/schema and follow-up tool messages are outside this budget. | `60000` |
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
 
