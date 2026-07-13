@@ -243,6 +243,41 @@ async def test_reindex_memory_supports_semantic_and_vectors(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reindex_semantic_processor_uses_configured_vlm_concurrency(monkeypatch):
+    from types import SimpleNamespace
+
+    import openviking.service.reindex_executor as reindex_mod
+
+    seen = {}
+
+    class FakeSemanticProcessor:
+        def __init__(self, max_concurrent_llm=64):
+            seen["max_concurrent_llm"] = max_concurrent_llm
+
+        async def on_dequeue(self, data, lock=None):
+            seen["data"] = data
+
+    monkeypatch.setattr(reindex_mod, "SemanticProcessor", FakeSemanticProcessor)
+    monkeypatch.setattr(
+        reindex_mod,
+        "get_openviking_config",
+        lambda: SimpleNamespace(vlm=SimpleNamespace(max_concurrent=2)),
+    )
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+    await reindex_mod.ReindexExecutor()._run_semantic_processor(
+        uri="viking://resources/demo",
+        context_type="resource",
+        ctx=ctx,
+    )
+
+    assert seen["max_concurrent_llm"] == 2
+
+
+@pytest.mark.asyncio
 async def test_reindex_memory_semantic_and_vectors_rebuilds_full_subtree(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
 
