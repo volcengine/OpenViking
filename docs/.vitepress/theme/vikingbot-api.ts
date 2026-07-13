@@ -11,22 +11,33 @@ type ApiResponse<T> = {
   result: T
 }
 
+export type VikingBotApiErrorCode =
+  | 'api_error'
+  | 'empty_query'
+  | 'http_error'
+  | 'invalid_response'
+  | 'network_error'
+  | 'query_too_long'
+  | 'request_timeout'
+
 export type VikingBotChatResult = {
   text: string
 }
 
 export class VikingBotApiError extends Error {
-  readonly code: string
+  readonly code: VikingBotApiErrorCode
+  readonly apiCode: string
   readonly httpStatus?: number
 
   constructor(
-    message: string,
-    code = '',
+    code: VikingBotApiErrorCode,
+    apiCode = '',
     httpStatus?: number
   ) {
-    super(message)
+    super(code)
     this.name = 'VikingBotApiError'
     this.code = code
+    this.apiCode = apiCode
     this.httpStatus = httpStatus
   }
 }
@@ -49,13 +60,12 @@ export function normalizeVikingBotQuery(query: string) {
 
 export async function chatWithVikingBot(query: string): Promise<VikingBotChatResult> {
   const normalizedQuery = normalizeVikingBotQuery(query)
-  const apiBaseUrl = import.meta.env.VITE_VIKINGBOT_API_BASE_URL || DEFAULT_API_BASE_URL
 
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
   try {
-    const response = await fetch(`${apiBaseUrl}/bot/chat`, {
+    const response = await fetch(`${DEFAULT_API_BASE_URL}/bot/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -73,7 +83,7 @@ export async function chatWithVikingBot(query: string): Promise<VikingBotChatRes
       data = (await response.json()) as ApiResponse<VikingBotChatResult>
     } catch {
       throw new VikingBotApiError(
-        response.ok ? 'invalid_response' : `HTTP ${response.status}`,
+        response.ok ? 'invalid_response' : 'http_error',
         '',
         response.status
       )
@@ -81,7 +91,7 @@ export async function chatWithVikingBot(query: string): Promise<VikingBotChatRes
 
     if (!response.ok) {
       throw new VikingBotApiError(
-        data.err_msg || `HTTP ${response.status}`,
+        'http_error',
         data.err_code,
         response.status
       )
@@ -89,7 +99,7 @@ export async function chatWithVikingBot(query: string): Promise<VikingBotChatRes
 
     if (data.status !== 'ok') {
       throw new VikingBotApiError(
-        data.err_msg || data.err_code || 'api_error',
+        'api_error',
         data.err_code,
         response.status
       )
@@ -104,7 +114,8 @@ export async function chatWithVikingBot(query: string): Promise<VikingBotChatRes
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new VikingBotApiError('request_timeout')
     }
-    throw error
+    if (error instanceof VikingBotApiError) throw error
+    throw new VikingBotApiError('network_error')
   } finally {
     window.clearTimeout(timeout)
   }

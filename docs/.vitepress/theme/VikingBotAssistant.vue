@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useData, withBase } from 'vitepress'
-import MarkdownIt from 'markdown-it'
 import { chatWithVikingBot, VikingBotApiError } from './vikingbot-api'
+import { renderVikingBotMarkdown } from './vikingbot-markdown'
 
 type ChatMessage = {
   id: string
@@ -18,27 +18,18 @@ const messages = ref<ChatMessage[]>([])
 const copiedMessageId = ref('')
 const scrollArea = ref<HTMLElement>()
 const inputArea = ref<HTMLTextAreaElement>()
+const triggerArea = ref<HTMLButtonElement>()
 const logoUrl = withBase('/ov-logo.png')
 const panelWidth = ref(368)
+const preferredPanelWidth = ref(368)
+const panelMaxWidth = ref(640)
 const isResizing = ref(false)
 const PANEL_WIDTH_KEY = 'openviking-vikingbot-panel-width'
 const MIN_PANEL_WIDTH = 320
 const MAX_PANEL_WIDTH = 640
-const markdown = new MarkdownIt({
-  html: false,
-  breaks: true,
-  linkify: true,
-  typographer: true
-})
-
-const defaultLinkOpen = markdown.renderer.rules.link_open
-markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
-  tokens[index].attrSet('target', '_blank')
-  tokens[index].attrSet('rel', 'noopener noreferrer')
-  return defaultLinkOpen
-    ? defaultLinkOpen(tokens, index, options, env, self)
-    : self.renderToken(tokens, index, options)
-}
+const MIN_COMPACT_DOC_WIDTH = 400
+const MIN_FULL_DOC_WIDTH = 760
+const RESIZE_STEP = 16
 
 const isZh = computed(() => lang.value.startsWith('zh'))
 const copy = computed(() => isZh.value ? {
@@ -57,7 +48,8 @@ const copy = computed(() => isZh.value ? {
   tooLong: '问题不能超过 500 个字符',
   timeout: '请求超时，请稍后重试。',
   invalid: 'VikingBot 返回了无法识别的响应。',
-  failed: '暂时无法连接 VikingBot，请稍后重试。'
+  failed: '暂时无法连接 VikingBot，请稍后重试。',
+  resize: '调整 VikingBot 面板宽度'
 } : {
   trigger: 'Ask VikingBot',
   title: 'VikingBot',
@@ -74,7 +66,8 @@ const copy = computed(() => isZh.value ? {
   tooLong: 'Questions cannot exceed 500 characters',
   timeout: 'The request timed out. Please try again.',
   invalid: 'VikingBot returned an invalid response.',
-  failed: 'VikingBot is unavailable right now. Please try again later.'
+  failed: 'VikingBot is unavailable right now. Please try again later.',
+  resize: 'Resize VikingBot panel'
 })
 
 function openPanel() {
@@ -83,16 +76,21 @@ function openPanel() {
 }
 
 function closePanel() {
+  const shouldRestoreFocus = isOpen.value
   isOpen.value = false
+  if (shouldRestoreFocus) nextTick(() => triggerArea.value?.focus())
 }
 
-function clampPanelWidth(width: number) {
-  const viewportLimit = Math.max(MIN_PANEL_WIDTH, window.innerWidth - 480)
-  return Math.min(Math.max(width, MIN_PANEL_WIDTH), Math.min(MAX_PANEL_WIDTH, viewportLimit))
+function maxPanelWidthForViewport() {
+  if (window.innerWidth < 768) return MAX_PANEL_WIDTH
+  const reservedWidth = window.innerWidth < 1280 ? MIN_COMPACT_DOC_WIDTH : MIN_FULL_DOC_WIDTH
+  return Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, window.innerWidth - reservedWidth))
 }
 
-function applyPanelWidth(width: number) {
-  panelWidth.value = clampPanelWidth(width)
+function applyPanelWidth(width: number, remember = true) {
+  panelMaxWidth.value = maxPanelWidthForViewport()
+  panelWidth.value = Math.min(Math.max(width, MIN_PANEL_WIDTH), panelMaxWidth.value)
+  if (remember) preferredPanelWidth.value = panelWidth.value
   document.documentElement.style.setProperty('--vikingbot-panel-width', `${panelWidth.value}px`)
 }
 
@@ -108,7 +106,7 @@ function stopResize() {
   window.removeEventListener('pointermove', onResizeMove)
   window.removeEventListener('pointercancel', stopResize)
   window.removeEventListener('blur', stopResize)
-  localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth.value))
+  localStorage.setItem(PANEL_WIDTH_KEY, String(preferredPanelWidth.value))
 }
 
 function startResize(event: PointerEvent) {
@@ -122,21 +120,30 @@ function startResize(event: PointerEvent) {
   window.addEventListener('blur', stopResize, { once: true })
 }
 
+function onResizeKeydown(event: KeyboardEvent) {
+  let nextWidth: number | undefined
+  if (event.key === 'ArrowLeft') nextWidth = panelWidth.value + RESIZE_STEP
+  if (event.key === 'ArrowRight') nextWidth = panelWidth.value - RESIZE_STEP
+  if (event.key === 'Home') nextWidth = MIN_PANEL_WIDTH
+  if (event.key === 'End') nextWidth = panelMaxWidth.value
+  if (nextWidth === undefined) return
+
+  event.preventDefault()
+  applyPanelWidth(nextWidth)
+  localStorage.setItem(PANEL_WIDTH_KEY, String(preferredPanelWidth.value))
+}
+
 function onWindowResize() {
-  if (window.innerWidth >= 768) applyPanelWidth(panelWidth.value)
+  if (window.innerWidth >= 768) applyPanelWidth(preferredPanelWidth.value, false)
 }
 
 function errorMessage(error: unknown) {
   if (!(error instanceof VikingBotApiError)) return copy.value.failed
-  if (error.message === 'empty_query') return copy.value.empty
-  if (error.message === 'query_too_long') return copy.value.tooLong
-  if (error.message === 'request_timeout') return copy.value.timeout
-  if (error.message === 'invalid_response') return copy.value.invalid
-  return error.message && !error.message.startsWith('HTTP ') ? error.message : copy.value.failed
-}
-
-function renderMarkdown(content: string) {
-  return markdown.render(content)
+  if (error.code === 'empty_query') return copy.value.empty
+  if (error.code === 'query_too_long') return copy.value.tooLong
+  if (error.code === 'request_timeout') return copy.value.timeout
+  if (error.code === 'invalid_response') return copy.value.invalid
+  return copy.value.failed
 }
 
 async function copyAnswer(message: ChatMessage) {
@@ -206,7 +213,9 @@ function onInputKeydown(event: KeyboardEvent) {
 }
 
 function onEscape(event: KeyboardEvent) {
-  if (event.key === 'Escape' && isOpen.value) closePanel()
+  if (event.key !== 'Escape' || event.defaultPrevented || !isOpen.value) return
+  event.preventDefault()
+  closePanel()
 }
 
 watch(isOpen, (open) => {
@@ -215,7 +224,8 @@ watch(isOpen, (open) => {
 
 onMounted(() => {
   const storedWidth = Number(localStorage.getItem(PANEL_WIDTH_KEY))
-  applyPanelWidth(Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : 368)
+  preferredPanelWidth.value = Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : 368
+  applyPanelWidth(preferredPanelWidth.value, false)
   window.addEventListener('keydown', onEscape)
   window.addEventListener('resize', onWindowResize)
 })
@@ -235,8 +245,10 @@ onBeforeUnmount(() => {
 
 <template>
   <button
+    ref="triggerArea"
     class="vikingbot-trigger"
     type="button"
+    :aria-label="copy.trigger"
     :aria-expanded="isOpen"
     aria-controls="vikingbot-assistant-panel"
     @click="isOpen ? closePanel() : openPanel()"
@@ -253,10 +265,16 @@ onBeforeUnmount(() => {
         class="vikingbot-panel"
         aria-label="VikingBot"
       >
-        <button
+        <div
           class="vikingbot-resize-handle"
-          type="button"
-          aria-label="Resize VikingBot panel"
+          role="separator"
+          tabindex="0"
+          aria-orientation="vertical"
+          :aria-label="copy.resize"
+          :aria-valuemin="MIN_PANEL_WIDTH"
+          :aria-valuemax="panelMaxWidth"
+          :aria-valuenow="panelWidth"
+          @keydown="onResizeKeydown"
           @pointerdown="startResize"
         />
         <header class="vikingbot-panel-header">
@@ -279,7 +297,7 @@ onBeforeUnmount(() => {
             <span class="vikingbot-message-mark" aria-hidden="true">
               <img :src="logoUrl" alt="" />
             </span>
-            <div class="vikingbot-markdown" v-html="renderMarkdown(copy.welcome)" />
+            <div class="vikingbot-markdown" v-html="renderVikingBotMarkdown(copy.welcome)" />
           </div>
           <div
             v-for="message in messages"
@@ -294,7 +312,7 @@ onBeforeUnmount(() => {
             <div v-else class="vikingbot-answer">
               <div
                 class="vikingbot-markdown"
-                v-html="renderMarkdown(message.content)"
+                v-html="renderVikingBotMarkdown(message.content)"
               />
               <button
                 class="vikingbot-copy-answer"

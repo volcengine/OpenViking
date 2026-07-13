@@ -188,9 +188,14 @@
 }
 
 .vikingbot-resize-handle:hover::before,
+.vikingbot-resize-handle:focus-visible::before,
 .vikingbot-assistant-resizing .vikingbot-resize-handle::before {
   width: 2px;
   background: color-mix(in srgb, var(--vp-c-brand-1) 72%, var(--vp-c-divider));
+}
+
+.vikingbot-resize-handle:focus-visible {
+  outline: 0;
 }
 
 html.vikingbot-assistant-resizing,
@@ -555,7 +560,7 @@ html.vikingbot-assistant-resizing * {
   30% { opacity: 1; transform: translateY(-2px); }
 }
 
-@media (min-width: 1280px) {
+@media (min-width: 768px) {
   html.vikingbot-assistant-open {
     --vp-layout-max-width: 100vw;
   }
@@ -592,11 +597,6 @@ html.vikingbot-assistant-resizing * {
     object-fit: cover;
   }
 
-  html.vikingbot-assistant-open .VPSidebar {
-    width: var(--vp-sidebar-width);
-    padding-left: 60px;
-  }
-
   html.vikingbot-assistant-open .VPContent .VPDoc {
     padding-right: 60px;
     padding-left: 60px;
@@ -607,15 +607,57 @@ html.vikingbot-assistant-resizing * {
     padding-left: 0;
   }
 
-  html.vikingbot-assistant-open .VPContent .VPDoc > .container > .aside {
-    max-width: 240px;
-    padding-left: 16px;
-  }
-
   html.vikingbot-assistant-open .Layout,
   html.vikingbot-assistant-open .VPNav,
   html.vikingbot-assistant-open .VPSidebar {
     transition: padding-right 0.24s ease, right 0.24s ease;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1279px) {
+  html.vikingbot-assistant-open .VPSidebar {
+    display: none;
+  }
+
+  html.vikingbot-assistant-open .VPContent.has-sidebar {
+    padding-left: 0;
+  }
+
+  html.vikingbot-assistant-open .VPContent .VPDoc > .container > .aside,
+  html.vikingbot-assistant-open .VPNavBar .menu,
+  html.vikingbot-assistant-open .VPNavBar .translations,
+  html.vikingbot-assistant-open .VPNavBar .appearance,
+  html.vikingbot-assistant-open .VPNavBar .social-links,
+  html.vikingbot-assistant-open .VPNavBar .extra {
+    display: none !important;
+  }
+
+  html.vikingbot-assistant-open .ov-docs-search-trigger {
+    width: 40px;
+    min-width: 40px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  html.vikingbot-assistant-open .ov-docs-search-trigger-label,
+  html.vikingbot-assistant-open .ov-docs-search-trigger kbd {
+    display: none;
+  }
+
+  html.vikingbot-assistant-open .ov-docs-search-trigger-compact {
+    display: block;
+  }
+}
+
+@media (min-width: 1280px) {
+  html.vikingbot-assistant-open .VPSidebar {
+    width: var(--vp-sidebar-width);
+    padding-left: 60px;
+  }
+
+  html.vikingbot-assistant-open .VPContent .VPDoc > .container > .aside {
+    max-width: 240px;
+    padding-left: 16px;
   }
 }
 

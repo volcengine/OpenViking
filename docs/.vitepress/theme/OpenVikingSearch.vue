@@ -126,11 +126,13 @@ function shouldIgnoreShortcut(event: KeyboardEvent) {
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && isModeMenuOpen.value) {
+    event.preventDefault()
     isModeMenuOpen.value = false
     return
   }
 
   if (event.key === 'Escape' && isOpen.value) {
+    event.preventDefault()
     closeSearch()
     return
   }

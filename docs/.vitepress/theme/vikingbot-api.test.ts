@@ -7,11 +7,11 @@ test('normalizes VikingBot queries and enforces the UI limit', () => {
 
   assert.throws(
     () => normalizeVikingBotQuery('   '),
-    (error) => error instanceof VikingBotApiError && error.message === 'empty_query'
+    (error) => error instanceof VikingBotApiError && error.code === 'empty_query'
   )
   assert.throws(
     () => normalizeVikingBotQuery('x'.repeat(501)),
-    (error) => error instanceof VikingBotApiError && error.message === 'query_too_long'
+    (error) => error instanceof VikingBotApiError && error.code === 'query_too_long'
   )
 })
 
