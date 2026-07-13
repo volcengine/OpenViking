@@ -29,6 +29,7 @@ from openviking_cli.exceptions import (
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
 )
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
@@ -67,7 +68,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(str(exc)) from exc
         self._validate_mode(mode)
         self._validate_target_uri(normalized_uri)
-        self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
+        await self._ensure_mutable_target(normalized_uri, ctx)
 
         if mode == "create":
             return await self._create_and_write(
@@ -129,6 +130,7 @@ class ContentWriteCoordinator:
 
         self._validate_tag_mode(mode)
         normalized_tags = normalize_search_tags(tags)
+        await self._ensure_mutable_target(normalized_uri, ctx)
         stat = await self._safe_stat(normalized_uri, ctx=ctx)
         if stat.get("isDir"):
             return await self._set_directory_tags(
@@ -179,6 +181,14 @@ class ContentWriteCoordinator:
         if overview_status is not None:
             result["overview_status"] = overview_status
         return result
+
+    async def _ensure_mutable_target(self, uri: str, ctx: RequestContext) -> None:
+        try:
+            await self._viking_fs._ensure_mutable_access(uri, ctx)
+        except PermissionDeniedError as exc:
+            if not await self._viking_fs._can_access(uri, ctx, "read"):
+                raise NotFoundError(uri, "file") from exc
+            raise
 
     def _build_tags_result(
         self,
@@ -707,6 +717,10 @@ class ContentWriteCoordinator:
 
         if not updated_targets:
             raise NotFoundError(uri, "semantic file")
+
+        await self._viking_fs._ensure_access_many(
+            [str(target["uri"]) for target in updated_targets], ctx, "write"
+        )
 
         applied_uris: list[str] = []
         skipped_count = 0

@@ -166,7 +166,7 @@ async def test_glob_rejects_empty_pattern(fs):
 async def test_glob_checks_access_before_listing(monkeypatch, fs):
     called = False
 
-    def fake_ensure_access(uri, ctx):
+    async def fake_ensure_access(uri, ctx):
         nonlocal called
         called = True
         raise PermissionError(f"denied: {uri}")
@@ -177,6 +177,36 @@ async def test_glob_checks_access_before_listing(monkeypatch, fs):
         await fs.glob("**/*.md", uri="viking://resources", ctx=_default_ctx())
 
     assert called is True
+
+
+@pytest.mark.asyncio
+async def test_glob_filters_each_result_with_acl(monkeypatch, fs):
+    async def fake_glob_directory(*_args, **_kwargs):
+        return {
+            "entries": [
+                {
+                    "path": "/local/test_account/resources/hidden.md",
+                    "name": "hidden.md",
+                },
+                {
+                    "path": "/local/test_account/resources/visible.md",
+                    "name": "visible.md",
+                },
+            ],
+            "next_token": None,
+        }
+
+    async def fake_can_access_many(uris, _ctx, _action="read"):
+        return {
+            uri: uri == "viking://resources" or uri.endswith("/visible.md") for uri in uris
+        }
+
+    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
+    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
+
+    result = await fs.glob("**/*.md", uri="viking://resources", ctx=_default_ctx())
+
+    assert result == {"matches": ["viking://resources/visible.md"], "count": 1}
 
 
 @pytest.mark.asyncio

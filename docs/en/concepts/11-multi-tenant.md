@@ -13,7 +13,7 @@ With multi-tenancy enabled, you can:
 
 - Serve multiple teams, customers, or applications from one OpenViking Server
 - Isolate different teams with `account`
-- Share `resources` within the same `account`
+- Share `resources` within the same `account`, with ACLs for per-directory or per-file grants
 - Isolate user memories and sessions with `user`
 - Manage permissions with ROOT / ADMIN / USER roles
 - Support different integration patterns such as OpenClaw plugin, Vikingbot, CLI, and HTTP SDKs
@@ -73,8 +73,8 @@ If `auth_mode = "api_key"` and `root_api_key` is not configured, the server runs
 
 | Data type | Shared across accounts | Shared inside one account | Default isolation boundary |
 |-----------|------------------------|---------------------------|----------------------------|
-| Shared resources (`viking://resources`) | No | Yes | account |
-| User resources (`viking://user/{user_id}/resources`) | No | No | user |
+| Shared resources (`viking://resources`) | No | Shared by default; ACL can restrict | account / ACL |
+| User resources (`viking://user/{user_id}/resources`) | No | Isolated by default; ACL can share | user / ACL |
 | Peer resources (`viking://user/{user_id}/peers/{peer_id}/resources`) | No | No | user / peer |
 | Memories | No | No | user / peer |
 | Skills | No | No | user |
@@ -107,8 +107,9 @@ So multi-tenant isolation does not rely on a special public URI format. It relie
 Filesystem operations and semantic retrieval are tenant-aware:
 
 - Non-ROOT requests are automatically filtered by `account_id`
-- `resources` can include account-shared resources
-- `memory`, user resources, and `skill` are further filtered by the current user space
+- `resources` includes account-shared resources by default and uses effective ACLs when configured
+- User resources default to the current user space and can be shared with users in the same account through resource ACLs
+- `memory` and `skill` remain filtered by the current user space
 - An actor peer filters `viking://user/{user}/peers` to one peer for filesystem and retrieval operations
 
 This keeps "what you can search" aligned with "what you can read."
@@ -220,7 +221,7 @@ Characteristics of this model:
 - Simple integration, because the plugin does not manage account/user lifecycle
 - Best for "one OpenClaw instance maps to one OpenViking user identity"
 - `peer_prefix` distinguishes OpenClaw runtime identities when building peer/session metadata
-- `resources` can be shared inside the same account, while user memory stays user-scoped
+- `resources` are shared by default inside the same account and can be restricted with ACLs, while user memory stays user-scoped
 
 ### Why the OpenClaw plugin usually does not set `account` / `user`
 
@@ -261,7 +262,7 @@ Example config:
 Characteristics of this model:
 
 - Good for one bot service serving many chat users
-- All users inside the same account share `resources`
+- `resources` are shared by default inside the same account; ACLs can refine access to individual directories or files
 - User memories are isolated through auto-managed user identities
 - The bot takes on more tenant lifecycle management logic than the OpenClaw plugin
 
@@ -317,6 +318,8 @@ That is only dev mode:
 - [Configuration](../guides/01-configuration.md) - `root_api_key` and `auth_mode`
 - [Admin API](../api/08-admin.md) - Admin API reference
 - [API Overview](../api/01-overview.md) - CLI and HTTP connection patterns
+- [Resource Access Control (ACL)](./15-acl.md) - In-account resource grants, inheritance, and retrieval filtering
+- [ACL API](../api/12-acl.md) - HTTP, SDK, and CLI interfaces
 - [Data Encryption](./10-encryption.md) - At-rest encryption in multi-tenant deployments
 - [Multi-tenant Example](https://github.com/volcengine/OpenViking/blob/main/examples/multi_tenant/README.md) - End-to-end management workflow
 - [OpenClaw Plugin](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/README.md) - OpenClaw integration

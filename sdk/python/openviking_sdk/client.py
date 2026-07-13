@@ -875,6 +875,41 @@ class AsyncHTTPClient:
         )
         return self._handle_response_data(response).get("result", {})
 
+    async def acl_get(self, uri: str) -> Dict[str, Any]:
+        response = await self._http.get(
+            "/api/v1/acl", params={"uri": VikingURI.normalize(uri)}
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def acl_set(
+        self, uri: str, entries: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        response = await self._http.put(
+            "/api/v1/acl",
+            json={"uri": VikingURI.normalize(uri), "entries": entries},
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def acl_grant(self, uri: str, user_id: str, level: str) -> Dict[str, Any]:
+        response = await self._http.post(
+            "/api/v1/acl/grant",
+            json={"uri": VikingURI.normalize(uri), "user_id": user_id, "level": level},
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def acl_revoke(self, uri: str, user_id: str) -> Dict[str, Any]:
+        response = await self._http.post(
+            "/api/v1/acl/revoke",
+            json={"uri": VikingURI.normalize(uri), "user_id": user_id},
+        )
+        return self._handle_response_data(response).get("result", {})
+
+    async def acl_delete(self, uri: str) -> Dict[str, Any]:
+        response = await self._http.request(
+            "DELETE", "/api/v1/acl", params={"uri": VikingURI.normalize(uri)}
+        )
+        return self._handle_response_data(response).get("result", {})
+
     async def find(
         self,
         query: str,
@@ -1788,6 +1823,21 @@ class SyncHTTPClient:
                 telemetry=telemetry,
             )
         )
+
+    def acl_get(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_get(uri))
+
+    def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_set(uri, entries))
+
+    def acl_grant(self, uri: str, user_id: str, level: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_grant(uri, user_id, level))
+
+    def acl_revoke(self, uri: str, user_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_revoke(uri, user_id))
+
+    def acl_delete(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_delete(uri))
 
     def find(
         self,

@@ -18,16 +18,16 @@ from openviking.storage.collection_schemas import (
     _build_embedding_metadata,
     init_context_collection,
 )
-from openviking.storage.errors import EmbeddingRebuildRequiredError
+from openviking.storage.errors import EmbeddingConfigurationError, EmbeddingRebuildRequiredError
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.vectordb import engine as vectordb_engine
+from openviking.storage.vectordb.collection.result import UpsertDataResult
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
     VolcengineApiKeyCollection,
 )
-from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
-from openviking.storage.vectordb.collection.result import UpsertDataResult
 from openviking.storage.vectordb_adapters.base import (
     VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
     _truncate_text_field,
@@ -177,8 +177,9 @@ async def test_init_context_collection_writes_embedding_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_init_context_collection_backfills_metadata_for_empty_legacy_collection(monkeypatch):
+async def test_init_context_collection_migrates_local_legacy_schema(monkeypatch):
     updates = []
+    schema_updates = []
 
     class _FakeStorage:
         async def create_collection(self, name, schema):
@@ -195,7 +196,10 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
             updates.append(description)
             return True
 
-    config = _DummyConfig(_DummyEmbedder())
+        async def update_collection_schema(self, fields, scalar_index):
+            schema_updates.append((fields, scalar_index))
+
+    config = _DummyConfig(_DummyEmbedder(), backend="local")
     monkeypatch.setattr(
         "openviking_cli.utils.config.get_openviking_config",
         lambda: config,
@@ -205,6 +209,7 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
 
     assert created is False
     assert len(updates) == 1
+    assert len(schema_updates) == 1
     assert '"provider": "local"' in updates[0]
 
 
@@ -895,7 +900,7 @@ async def test_init_context_collection_excludes_parent_uri_for_local_backend(mon
 
 
 @pytest.mark.asyncio
-async def test_init_context_collection_skips_bootstrap_for_api_key_auth_mode_on_volcengine(
+async def test_init_context_collection_validates_api_key_data_plane_schema(
     monkeypatch,
 ):
     class _Storage:
@@ -903,8 +908,8 @@ async def test_init_context_collection_skips_bootstrap_for_api_key_auth_mode_on_
             del name, schema
             raise AssertionError("create_collection should not be called for data-plane backend")
 
-        async def get_collection_meta(self):  # pragma: no cover
-            raise AssertionError("get_collection_meta should not be called for data-plane backend")
+        async def get_collection_meta(self):
+            return CollectionSchemas.context_collection("context", 2)
 
         async def update_collection_description(self, description):  # pragma: no cover
             del description
@@ -925,6 +930,25 @@ async def test_init_context_collection_skips_bootstrap_for_api_key_auth_mode_on_
     created = await init_context_collection(_Storage())
 
     assert created is False
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_does_not_migrate_remote_acl_schema(monkeypatch):
+    class _Storage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {"Description": "Unified context collection", "Fields": []}
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(_DummyEmbedder(), backend="volcengine"),
+    )
+
+    with pytest.raises(EmbeddingConfigurationError, match="Add them to the remote collection"):
+        await init_context_collection(_Storage())
 
 
 def test_single_account_backend_filters_parent_uri_against_current_schema():

@@ -282,6 +282,40 @@ impl HttpClient {
         self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
+    pub async fn acl_get(&self, uri: &str) -> Result<Value> {
+        self.get("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
+            .await
+    }
+
+    pub async fn acl_set(&self, uri: &str, entries: Vec<Value>) -> Result<Value> {
+        self.put(
+            "/api/v1/acl",
+            &serde_json::json!({"uri": uri, "entries": entries}),
+        )
+        .await
+    }
+
+    pub async fn acl_grant(&self, uri: &str, user_id: &str, level: &str) -> Result<Value> {
+        self.post(
+            "/api/v1/acl/grant",
+            &serde_json::json!({"uri": uri, "user_id": user_id, "level": level}),
+        )
+        .await
+    }
+
+    pub async fn acl_revoke(&self, uri: &str, user_id: &str) -> Result<Value> {
+        self.post(
+            "/api/v1/acl/revoke",
+            &serde_json::json!({"uri": uri, "user_id": user_id}),
+        )
+        .await
+    }
+
+    pub async fn acl_delete(&self, uri: &str) -> Result<Value> {
+        self.delete("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
+            .await
+    }
+
     fn build_write_body(
         uri: &str,
         content: &str,

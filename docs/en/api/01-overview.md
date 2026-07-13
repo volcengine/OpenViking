@@ -437,6 +437,16 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | DELETE | `/api/v1/fs` | Delete resource |
 | POST | `/api/v1/fs/mv` | Move/rename resource |
 
+### ACL
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/acl` | Get direct, inherited, and effective ACLs |
+| PUT | `/api/v1/acl` | Replace a resource's direct ACL |
+| DELETE | `/api/v1/acl` | Clear a resource's direct ACL |
+| POST | `/api/v1/acl/grant` | Set one user's direct level |
+| POST | `/api/v1/acl/revoke` | Remove one user's direct grant |
+
 ### Snapshots (Multi-Version Management)
 
 | Method | Path | Description |
@@ -580,6 +590,7 @@ Subsequent API documentation is organized by functional module as follows:
 | [Resources](02-resources.md) - Resource management API | Adding, importing, exporting resources and skills |
 | [Retrieval](06-retrieval.md) - Search API | Search, relations, context acquisition |
 | [File System](03-filesystem.md) - File system operations | Directory operations, content reading and writing |
+| [ACL](12-acl.md) - Resource access control | Resource grants, inheritance, and ACL management |
 | [Snapshots](11-snapshot.md) - Multi-version management | Snapshot commit, history walk, version restore |
 | [Sessions](05-sessions.md) - Session management | Session creation, message management, memory extraction |
 | [Skills](04-skills.md) - Skill management API | Skill management |

@@ -433,6 +433,16 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/fs` | 删除资源 |
 | POST | `/api/v1/fs/mv` | 移动/重命名资源 |
 
+### ACL 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/acl` | 获取资源的直接、继承和有效 ACL |
+| PUT | `/api/v1/acl` | 替换资源的直接 ACL |
+| DELETE | `/api/v1/acl` | 清空资源的直接 ACL |
+| POST | `/api/v1/acl/grant` | 设置一个用户的直接权限级别 |
+| POST | `/api/v1/acl/revoke` | 删除一个用户的直接授权 |
+
 ### 快照端点（多版本管理）
 
 | 方法 | 路径 | 说明 |
@@ -575,6 +585,7 @@ VikingBot API 需要服务器启动时指定 `--with-bot` 选项：
 |------|------|
 | [资源管理](02-resources.md) | 资源和技能的添加、导入、导出 |
 | [文件系统](03-filesystem.md) | 目录操作、内容读写 |
+| [ACL](12-acl.md) | 资源授权、继承权限和 ACL 管理 |
 | [多版本管理](11-snapshot.md) | 快照提交、历史回溯、版本恢复 |
 | [技能](04-skills.md) | 技能管理 API |
 | [会话管理](05-sessions.md) | 会话创建、消息管理、记忆提取 |

@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import ACL_CONTEXT_FIELDS
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
@@ -113,6 +114,37 @@ class CollectionSchemas:
                 {"FieldName": "content", "FieldType": "text"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
+                {"FieldName": "acl_enabled", "FieldType": "bool", "DefaultValue": False},
+                {
+                    "FieldName": "acl_direct_read_user_ids",
+                    "FieldType": "list<string>",
+                    "DefaultValue": [],
+                },
+                {
+                    "FieldName": "acl_direct_write_user_ids",
+                    "FieldType": "list<string>",
+                    "DefaultValue": [],
+                },
+                {
+                    "FieldName": "acl_direct_manage_user_ids",
+                    "FieldType": "list<string>",
+                    "DefaultValue": [],
+                },
+                {
+                    "FieldName": "acl_inherited_read_user_ids",
+                    "FieldType": "list<string>",
+                    "DefaultValue": [],
+                },
+                {
+                    "FieldName": "acl_inherited_write_user_ids",
+                    "FieldType": "list<string>",
+                    "DefaultValue": [],
+                },
+                {
+                    "FieldName": "acl_inherited_manage_user_ids",
+                    "FieldType": "list<string>",
+                    "DefaultValue": [],
+                },
             ]
         )
         scalar_index = [
@@ -131,6 +163,13 @@ class CollectionSchemas:
                 "search_tags",
                 "account_id",
                 "owner_user_id",
+                "acl_enabled",
+                "acl_direct_read_user_ids",
+                "acl_direct_write_user_ids",
+                "acl_direct_manage_user_ids",
+                "acl_inherited_read_user_ids",
+                "acl_inherited_write_user_ids",
+                "acl_inherited_manage_user_ids",
             ]
         )
         return {
@@ -278,17 +317,26 @@ async def init_context_collection(storage) -> bool:
         vectordb_cfg.backend == "volcengine"
         and getattr(getattr(vectordb_cfg, "volcengine", None), "api_key", None)
     )
-    if uses_volcengine_data_plane:
-        logger.info(
-            "Skip collection bootstrap for volcengine data-plane backend; "
-            "collection/index/schema must be pre-created out of band"
-        )
-        return False
+    required_acl_fields = ACL_CONTEXT_FIELDS
     schema = CollectionSchemas.context_collection(
         collection_name,
         vector_dim,
         description=_encode_collection_description("Unified context collection", embedding_meta),
     )
+    if uses_volcengine_data_plane:
+        existing_meta = await storage.get_collection_meta()
+        if not existing_meta:
+            raise EmbeddingConfigurationError(
+                "Context collection must be pre-created for volcengine data-plane mode"
+            )
+        existing_fields = {field.get("FieldName") for field in existing_meta.get("Fields", [])}
+        missing = sorted(required_acl_fields - existing_fields)
+        if missing:
+            raise EmbeddingConfigurationError(
+                f"Context collection is missing ACL fields: {missing}"
+            )
+        return False
+
     created = await storage.create_collection(collection_name, schema)
     if created:
         return True
@@ -301,6 +349,23 @@ async def init_context_collection(storage) -> bool:
         raise EmbeddingConfigurationError(
             "Existing collection metadata is unavailable; cannot validate embedding compatibility"
         )
+
+    existing_fields = {field.get("FieldName") for field in existing_meta.get("Fields", [])}
+    missing_acl_fields = sorted(required_acl_fields - existing_fields)
+
+    async def _migrate_acl_schema() -> None:
+        if not missing_acl_fields:
+            return
+        if vectordb_cfg.backend not in {"local", "cuvs"}:
+            raise EmbeddingConfigurationError(
+                f"Context collection is missing ACL fields: {missing_acl_fields}. "
+                "Add them to the remote collection before starting OpenViking."
+            )
+        if not hasattr(storage, "update_collection_schema"):
+            raise EmbeddingConfigurationError(
+                "Local context collection does not support automatic schema migration"
+            )
+        await storage.update_collection_schema(schema["Fields"], schema["ScalarIndex"])
 
     base_description, existing_embedding_meta = _decode_collection_description(
         existing_meta.get("Description")
@@ -320,10 +385,12 @@ async def init_context_collection(storage) -> bool:
         )
 
     if _embedding_metadata_compatible(existing_embedding_meta, embedding_meta):
+        await _migrate_acl_schema()
         return False
 
     existing_count = await storage.count() if hasattr(storage, "count") else 0
     if existing_embedding_meta is None and existing_count == 0:
+        await _migrate_acl_schema()
         if hasattr(storage, "update_collection_description"):
             await storage.update_collection_description(
                 _encode_collection_description(
@@ -334,6 +401,7 @@ async def init_context_collection(storage) -> bool:
             return False
 
     if existing_embedding_meta is None:
+        await _migrate_acl_schema()
         logger.warning(
             "Existing collection has %d vector(s) but no embedding metadata "
             "(created by an older version). Backfilling with current config and continuing.",
@@ -349,6 +417,7 @@ async def init_context_collection(storage) -> bool:
         return False
 
     if existing_count == 0 and hasattr(storage, "update_collection_description"):
+        await _migrate_acl_schema()
         await storage.update_collection_description(
             _encode_collection_description(
                 base_description or "Unified context collection",
@@ -376,6 +445,7 @@ async def init_context_collection(storage) -> bool:
         and not dimension_changed
         and hasattr(storage, "update_collection_description")
     ):
+        await _migrate_acl_schema()
         logger.warning(
             "Embedding metadata changed (provider/model) but dimension is "
             "unchanged; embedding.allow_metadata_override=true, so the existing "

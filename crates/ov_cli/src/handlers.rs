@@ -1517,6 +1517,39 @@ pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> 
     .await
 }
 
+pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    match action {
+        crate::AclCommands::Get { uri } => {
+            commands::acl::get(&client, &uri, ctx.output_format, ctx.compact).await
+        }
+        crate::AclCommands::Set { uri, entries } => {
+            commands::acl::set(&client, &uri, entries, ctx.output_format, ctx.compact).await
+        }
+        crate::AclCommands::Grant {
+            uri,
+            user_id,
+            level,
+        } => {
+            commands::acl::grant(
+                &client,
+                &uri,
+                &user_id,
+                &level,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        crate::AclCommands::Revoke { uri, user_id } => {
+            commands::acl::revoke(&client, &uri, &user_id, ctx.output_format, ctx.compact).await
+        }
+        crate::AclCommands::Rm { uri } => {
+            commands::acl::remove(&client, &uri, ctx.output_format, ctx.compact).await
+        }
+    }
+}
+
 pub async fn handle_grep(
     uri: String,
     exclude_uri: Option<String>,

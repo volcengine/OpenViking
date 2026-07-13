@@ -22,13 +22,26 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    TypeVar,
+    Union,
+)
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
     canonicalize_uri,
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
+    uri_parts,
 )
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
@@ -45,6 +58,15 @@ from openviking.pyagfs.exceptions import (
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import (
+    AclAction,
+    AclEntry,
+    acl_allows,
+    acl_ancestors,
+    direct_to_entries,
+    is_implicit_manager,
+    normalize_acl_user_id,
+)
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import (
     MULTIWRITE_PATH_LOCK_FILE,
@@ -64,6 +86,7 @@ from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
+    from openviking.storage.acl import AclManager
     from openviking.storage.transaction.lock_handle import LockHandle
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
@@ -167,6 +190,7 @@ def init_viking_fs(
     query_embedder: Optional[Any] = None,
     rerank_config: Optional["RerankConfig"] = None,
     vector_store: Optional["VikingVectorIndexBackend"] = None,
+    acl_manager: Optional["AclManager"] = None,
     retrieval_config: Optional["RetrievalConfig"] = None,
     grep_config: Optional["GrepConfig"] = None,
     timeout: int = 10,
@@ -192,6 +216,7 @@ def init_viking_fs(
         query_embedder=query_embedder,
         rerank_config=rerank_config,
         vector_store=vector_store,
+        acl_manager=acl_manager,
         retrieval_config=retrieval_config,
         grep_config=grep_config,
         encryptor=encryptor,
@@ -265,6 +290,7 @@ class VikingFS:
         query_embedder: Optional[Any] = None,
         rerank_config: Optional["RerankConfig"] = None,
         vector_store: Optional["VikingVectorIndexBackend"] = None,
+        acl_manager: Optional["AclManager"] = None,
         retrieval_config: Optional["RetrievalConfig"] = None,
         grep_config: Optional["GrepConfig"] = None,
         timeout: int = 10,
@@ -275,6 +301,7 @@ class VikingFS:
         self.query_embedder = query_embedder
         self.rerank_config = rerank_config
         self.vector_store = vector_store
+        self.acl_manager = acl_manager
         self.retrieval_config = retrieval_config
         self.grep_config = grep_config
         self._encryptor = encryptor
@@ -385,16 +412,102 @@ class VikingFS:
         ):
             return await operation()
 
-    def _ensure_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
+    async def _can_access(
+        self, uri: str, ctx: Optional[RequestContext], action: AclAction = "read"
+    ) -> bool:
+        return (await self._can_access_many([uri], ctx, action)).get(uri, False)
+
+    def _legacy_resource_access(self, uri: str, ctx: RequestContext) -> bool:
+        parts = uri_parts(uri)
+        if len(parts) >= 3 and parts[0] == "user" and parts[2] == "resources":
+            return parts[1] == ctx.user.user_id
+        return self._is_accessible(uri, ctx)
+
+    async def _can_access_many(
+        self,
+        uris: List[str],
+        ctx: Optional[RequestContext],
+        action: AclAction = "read",
+    ) -> Dict[str, bool]:
+        real_ctx = self._ctx_or_default(ctx)
+        normalized: Dict[str, Optional[str]] = {}
+        for uri in uris:
+            normalized_uri = self._normalized_uri_parts(uri)[0]
+            try:
+                normalized[uri] = canonicalize_uri(normalized_uri, real_ctx)
+            except ValueError:
+                normalized[uri] = None
+        acl_manager = getattr(self, "acl_manager", None)
+        if acl_manager is None:
+            return {
+                uri: normalized_uri is not None
+                and self._is_accessible(normalized_uri, real_ctx)
+                for uri, normalized_uri in normalized.items()
+            }
+
+        result: Dict[str, bool] = {}
+        pending: Dict[str, str] = {}
+        for original, normalized_uri in normalized.items():
+            if normalized_uri is None:
+                result[original] = False
+                continue
+            try:
+                acl_ancestors(normalized_uri)
+            except InvalidArgumentError:
+                result[original] = self._is_accessible(normalized_uri, real_ctx)
+                continue
+            if is_hidden_by_actor_peer_view(normalized_uri, real_ctx):
+                result[original] = False
+            elif is_watch_task_control_uri(normalized_uri):
+                result[original] = real_ctx.role == Role.ROOT
+            elif is_implicit_manager(real_ctx, normalized_uri):
+                result[original] = True
+            else:
+                pending[original] = normalized_uri
+
+        effective = await acl_manager.resolve_many(pending.values(), real_ctx) if pending else {}
+        for original, normalized_uri in pending.items():
+            acl = effective[normalized_uri]
+            if not acl.enabled:
+                result[original] = self._legacy_resource_access(normalized_uri, real_ctx)
+            else:
+                result[original] = acl_allows(acl, real_ctx.user.user_id, action)
+        return result
+
+    async def _ensure_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
-        if not self._is_accessible(normalized_uri, real_ctx):
+        if not await self._can_access(normalized_uri, real_ctx, "read"):
             raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
 
-    def _ensure_mutable_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
-        self._ensure_access(uri, ctx)
+    async def _ensure_access_many(
+        self,
+        uris: List[str],
+        ctx: Optional[RequestContext],
+        action: AclAction,
+    ) -> None:
+        access = await self._can_access_many(uris, ctx, action)
+        denied = next((uri for uri in uris if not access.get(uri, False)), None)
+        if denied is not None:
+            raise PermissionDeniedError(f"Access denied for {denied}", resource=denied)
+
+    async def _ensure_retrieval_scope(self, uri: str, ctx: Optional[RequestContext]) -> None:
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
+        canonical_uri = canonicalize_uri(normalized_uri, real_ctx)
+        if getattr(self, "acl_manager", None) is not None:
+            try:
+                acl_ancestors(canonical_uri)
+                return
+            except InvalidArgumentError:
+                pass
+        await self._ensure_access(canonical_uri, real_ctx)
+
+    async def _ensure_mutable_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
+        real_ctx = self._ctx_or_default(ctx)
+        normalized_uri, _ = self._normalized_uri_parts(uri)
+        if not await self._can_access(normalized_uri, real_ctx, "write"):
+            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
         if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
             normalized_uri, real_ctx
         ):
@@ -406,10 +519,11 @@ class VikingFS:
                 resource=normalized_uri,
             )
 
-    def _ensure_delete_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
-        self._ensure_access(uri, ctx)
+    async def _ensure_delete_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         real_ctx = self._ctx_or_default(ctx)
         normalized_uri, _ = self._normalized_uri_parts(uri)
+        if not await self._can_access(normalized_uri, real_ctx, "manage"):
+            raise PermissionDeniedError(f"Access denied for {uri}", resource=normalized_uri)
         if is_hidden_by_actor_peer_view(normalized_uri, real_ctx) or may_include_hidden_actor_peers(
             normalized_uri, real_ctx
         ):
@@ -420,6 +534,104 @@ class VikingFS:
                 "Temp root is read-only for non-root users",
                 resource=normalized_uri,
             )
+
+    async def _ensure_acl_manage(
+        self, uri: str, ctx: Optional[RequestContext]
+    ) -> tuple[str, RequestContext]:
+        if self.acl_manager is None:
+            raise RuntimeError("ACL is not initialized")
+        real_ctx = self._ctx_or_default(ctx)
+        normalized_uri = canonicalize_uri(uri, real_ctx)
+        acl_ancestors(normalized_uri)
+        if is_implicit_manager(real_ctx, normalized_uri):
+            return normalized_uri, real_ctx
+        effective = await self.acl_manager.resolve(normalized_uri, real_ctx)
+        if effective.enabled and acl_allows(effective, real_ctx.user.user_id, "manage"):
+            return normalized_uri, real_ctx
+        raise PermissionDeniedError(f"ACL management denied for {uri}", resource=normalized_uri)
+
+    async def _acl_target_stat(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        try:
+            return await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
+        except Exception as exc:
+            if is_not_found_error(exc):
+                raise NotFoundError(uri, "resource") from exc
+            raise
+
+    async def get_acl(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
+        normalized_uri, real_ctx = await self._ensure_acl_manage(uri, ctx)
+        await self._acl_target_stat(normalized_uri, real_ctx)
+        return await self.acl_manager.report(normalized_uri, real_ctx)
+
+    async def _set_acl_locked(
+        self,
+        uri: str,
+        entries: Sequence[AclEntry | Mapping[str, Any]],
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        path = self._uri_to_path(uri, ctx=ctx)
+        async with LockContext(get_lock_manager(), [path], lock_mode="tree"):
+            await self._ensure_acl_manage(uri, ctx)
+            await self._acl_target_stat(uri, ctx)
+            await self.acl_manager.set_direct(uri, entries, ctx)
+        return await self.acl_manager.report(uri, ctx)
+
+    async def set_acl(
+        self,
+        uri: str,
+        entries: Sequence[AclEntry | Mapping[str, Any]],
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        normalized_uri, real_ctx = await self._ensure_acl_manage(uri, ctx)
+        return await self._set_acl_locked(normalized_uri, entries, real_ctx)
+
+    async def grant_acl(
+        self,
+        uri: str,
+        user_id: str,
+        level: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        normalized_uri, real_ctx = await self._ensure_acl_manage(uri, ctx)
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        path = self._uri_to_path(normalized_uri, ctx=real_ctx)
+        async with LockContext(get_lock_manager(), [path], lock_mode="tree"):
+            await self._ensure_acl_manage(normalized_uri, real_ctx)
+            await self._acl_target_stat(normalized_uri, real_ctx)
+            direct = await self.acl_manager.get_direct(normalized_uri, real_ctx)
+            entries = {entry.user_id: entry.level for entry in direct_to_entries(direct)}
+            entries[user_id] = level
+            await self.acl_manager.set_direct(
+                normalized_uri,
+                [AclEntry(principal, value) for principal, value in entries.items()],
+                real_ctx,
+            )
+        return await self.acl_manager.report(normalized_uri, real_ctx)
+
+    async def revoke_acl(
+        self,
+        uri: str,
+        user_id: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        user_id = normalize_acl_user_id(user_id)
+        normalized_uri, real_ctx = await self._ensure_acl_manage(uri, ctx)
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        path = self._uri_to_path(normalized_uri, ctx=real_ctx)
+        async with LockContext(get_lock_manager(), [path], lock_mode="tree"):
+            await self._ensure_acl_manage(normalized_uri, real_ctx)
+            await self._acl_target_stat(normalized_uri, real_ctx)
+            direct = await self.acl_manager.get_direct(normalized_uri, real_ctx)
+            entries = [entry for entry in direct_to_entries(direct) if entry.user_id != user_id]
+            await self.acl_manager.set_direct(normalized_uri, entries, real_ctx)
+        return await self.acl_manager.report(normalized_uri, real_ctx)
+
+    async def delete_acl(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
+        return await self.set_acl(uri, [], ctx=ctx)
 
     def _ensure_supported_delete_namespace(self, normalized_uri: str) -> None:
         parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]
@@ -480,7 +692,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> bytes:
         """Read file"""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
 
@@ -517,7 +729,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> str:
         """Write file"""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         if isinstance(data, str):
             data = data.encode("utf-8")
@@ -533,7 +745,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Create directory."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         # Always ensure parent directories exist before creating this directory
         await self._ensure_parent_dirs(path, ctx=ctx)
@@ -568,7 +780,7 @@ class VikingFS:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_delete_access(uri, ctx)
+        await self._ensure_delete_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
 
@@ -625,8 +837,14 @@ class VikingFS:
                 lock_mode=lock_mode,
                 handle=lock_handle,
             ):
-                uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
+                uris_to_delete = await self._collect_uris(
+                    path,
+                    recursive,
+                    ctx=ctx,
+                    strict=is_dir and getattr(self, "acl_manager", None) is not None,
+                )
                 uris_to_delete.append(target_uri)
+                await self._ensure_access_many(uris_to_delete, ctx, "manage")
                 real_ctx = self._ctx_or_default(ctx)
                 estimated_count = await _estimate_deleted_count(path, real_ctx)
                 await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
@@ -666,17 +884,32 @@ class VikingFS:
         """
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_mutable_access(old_uri, ctx)
+        acl_manager = getattr(self, "acl_manager", None)
+        await self._ensure_mutable_access(old_uri, ctx)
         # mv is implemented as copy + recursive rm of the source (see the
         # ``rm(old_path, recursive=is_dir)`` below), so the source must also clear
         # the delete guard. Without this, a protected account root such as
         # ``viking://`` — which rm() rejects up front (#2873) — could still be
         # destroyed via mv, since the write guard alone permits the bare root.
-        self._ensure_delete_access(old_uri, ctx)
-        self._ensure_mutable_access(new_uri, ctx)
+        await self._ensure_delete_access(old_uri, ctx)
+        await self._ensure_mutable_access(new_uri, ctx)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
+        if acl_manager:
+            old_acl_scope = new_acl_scope = True
+            try:
+                acl_ancestors(canonicalize_uri(old_uri, self._ctx_or_default(ctx)))
+            except InvalidArgumentError:
+                old_acl_scope = False
+            try:
+                acl_ancestors(canonicalize_uri(new_uri, self._ctx_or_default(ctx)))
+            except InvalidArgumentError:
+                new_acl_scope = False
+            if old_acl_scope != new_acl_scope:
+                raise InvalidArgumentError(
+                    "ACL-controlled resources must move within resource scopes"
+                )
 
         # Verify source exists and determine type before locking.
         try:
@@ -730,8 +963,14 @@ class VikingFS:
         )
 
         async with lock_context as active_lock_handle:
-            uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
+            uris_to_move = await self._collect_uris(
+                old_path,
+                recursive=True,
+                ctx=ctx,
+                strict=is_dir and acl_manager is not None,
+            )
             uris_to_move.append(target_uri)
+            await self._ensure_access_many(uris_to_move, ctx, "manage")
 
             # Check if it's temp directory (files already encrypted)
             is_temp = old_uri.startswith("viking://temp/")
@@ -763,9 +1002,24 @@ class VikingFS:
                     pass
 
             # Update VectorDB URIs (on failure, clean up the copy)
+            vector_moved = False
             try:
                 await self._update_vector_store_uris(uris_to_move, old_uri, new_uri, ctx=ctx)
+                vector_moved = True
+                if acl_manager and old_acl_scope:
+                    await acl_manager.refresh_context_subtree(
+                        canonicalize_uri(new_uri, self._ctx_or_default(ctx)),
+                        self._ctx_or_default(ctx),
+                    )
             except Exception:
+                if vector_moved:
+                    moved_uris = [
+                        new_uri.rstrip("/") + moved_uri[len(old_uri.rstrip("/")) :]
+                        for moved_uri in uris_to_move
+                        if moved_uri == old_uri.rstrip("/")
+                        or moved_uri.startswith(old_uri.rstrip("/") + "/")
+                    ]
+                    await self._update_vector_store_uris(moved_uris, new_uri, old_uri, ctx=ctx)
                 try:
                     if is_dir:
                         await self._async_agfs.rm(new_path, recursive=True)
@@ -783,7 +1037,7 @@ class VikingFS:
         self, uri: str, ctx: Optional[RequestContext] = None
     ) -> Dict[str, Any]:
         """Return multi-write sync status for one Viking URI subtree."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         return await self._async_agfs.system_sync_status(
@@ -795,7 +1049,7 @@ class VikingFS:
         self, uri: str, ctx: Optional[RequestContext] = None
     ) -> Dict[str, Any]:
         """Retry multi-write sync for one Viking URI subtree."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_mutable_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         return await self._async_agfs.system_sync_retry(
@@ -912,7 +1166,7 @@ class VikingFS:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.
         await self.stat(uri, ctx=ctx, skip_count=True)
@@ -1086,7 +1340,7 @@ class VikingFS:
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
-            self._ensure_access(excluded_prefix, ctx)
+            await self._ensure_access(excluded_prefix, ctx)
             filter_expr = And(
                 [
                     filter_expr,
@@ -1232,7 +1486,7 @@ class VikingFS:
         excluded_path = None
         if exclude_uri:
             normalized_excluded_uri = self._normalize_uri(exclude_uri).rstrip("/")
-            self._ensure_access(normalized_excluded_uri, ctx)
+            await self._ensure_access(normalized_excluded_uri, ctx)
             excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
 
         try:
@@ -1242,7 +1496,11 @@ class VikingFS:
                 recursive=True,
                 case_insensitive=case_insensitive,
                 stream=False,
-                node_limit=node_limit,
+                node_limit=(
+                    node_limit * 4
+                    if node_limit and getattr(self, "acl_manager", None) is not None
+                    else node_limit
+                ),
                 exclude_path=excluded_path,
                 level_limit=level_limit,
             )
@@ -1253,9 +1511,6 @@ class VikingFS:
 
         matches = result.get("matches", [])
         results = []
-        files_scanned_set = set()
-        real_ctx = self._ctx_or_default(ctx)
-
         for match in matches:
             match_file = match.get("file", "")
             if not match_file:
@@ -1264,11 +1519,6 @@ class VikingFS:
             agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
 
             file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
-            if not self._is_accessible(file_uri, real_ctx):
-                continue
-
-            files_scanned_set.add(file_uri)
-
             results.append(
                 {
                     "line": match.get("line", match.get("line_number", 0)),
@@ -1277,16 +1527,22 @@ class VikingFS:
                 }
             )
 
-            if node_limit and len(results) >= node_limit:
-                break
+        access = await self._can_access_many([item["uri"] for item in results], ctx)
+        results = [item for item in results if access.get(item["uri"], False)]
+        if node_limit:
+            results = results[:node_limit]
+        files_scanned_set = {item["uri"] for item in results}
 
         # Prefer backend-provided scanned file count if available; otherwise fall back to
         # counting files that produced at least one match (best-effort).
         backend_files_scanned = result.get("files_scanned")
-        if isinstance(backend_files_scanned, int) and backend_files_scanned >= 0:
-            files_scanned = (
-                len(files_scanned_set) if real_ctx.actor_peer_id else backend_files_scanned
-            )
+        if (
+            getattr(self, "acl_manager", None) is not None
+            or self._ctx_or_default(ctx).actor_peer_id
+        ):
+            files_scanned = len(files_scanned_set)
+        elif isinstance(backend_files_scanned, int) and backend_files_scanned >= 0:
+            files_scanned = backend_files_scanned
         else:
             files_scanned = len(files_scanned_set)
 
@@ -1329,7 +1585,7 @@ class VikingFS:
         excluded_prefix = None
         if exclude_uri:
             excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
-            self._ensure_access(excluded_prefix, ctx)
+            await self._ensure_access(excluded_prefix, ctx)
         file_uris = await self._collect_grep_files(
             uri,
             excluded_prefix=excluded_prefix,
@@ -1493,7 +1749,7 @@ class VikingFS:
                 Use this when the count field is not needed (e.g. in grep) to avoid
                 an extra VikingDB API call.
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path = primary_path
@@ -1534,10 +1790,15 @@ class VikingFS:
                         )
                         if not may_include_hidden_actor_peers(target_canonical_uri, real_ctx):
                             filter_expr = PathScope("uri", target_canonical_uri, depth=-1)
-                            result["count"] = await vector_store.count(
-                                filter=filter_expr,
-                                ctx=real_ctx,
-                            )
+                            if getattr(self, "acl_manager", None) is not None:
+                                result["count"] = await vector_store.count_in_tenant(
+                                    real_ctx, filter=filter_expr
+                                )
+                            else:
+                                result["count"] = await vector_store.count(
+                                    filter=filter_expr,
+                                    ctx=real_ctx,
+                                )
                 except Exception as e:
                     logger.warning(f"[VikingFS] Failed to count nodes for directory stat: {e}")
         return result
@@ -1576,7 +1837,7 @@ class VikingFS:
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive."""
         _ensure_non_empty_search_query(pattern)
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path: Optional[str] = None
@@ -1604,9 +1865,8 @@ class VikingFS:
                 continuation_token=continuation_token,
             )
 
+            page_matches = []
             for entry in page.get("entries", []):
-                if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
-                    return {"matches": matches, "count": len(matches)}
                 if not self._is_path_entry_visible(
                     entry["path"],
                     entry.get("name") or entry["path"].rsplit("/", 1)[-1],
@@ -1622,7 +1882,15 @@ class VikingFS:
                     entry_path=entry["path"],
                     ctx=ctx,
                 )
+                page_matches.append(entry_uri)
+
+            access = await self._can_access_many(page_matches, real_ctx)
+            for entry_uri in page_matches:
+                if not access.get(entry_uri, False):
+                    continue
                 matches.append(entry_uri)
+                if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
+                    return {"matches": matches, "count": len(matches)}
 
             if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
                 return {"matches": matches, "count": len(matches)}
@@ -1713,7 +1981,7 @@ class VikingFS:
         output="agent"
         [{'uri': 'viking://resources...', 'size': 100, 'isDir': False, 'modTime': '2026-02-11T08:52:16.256Z', 'rel_path': '.abstract.md', 'abstract': "..."}]
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         if output == "original":
             return await self._tree_original(uri, show_all_hidden, node_limit, level_limit, ctx=ctx)
         elif output == "agent":
@@ -1827,7 +2095,7 @@ class VikingFS:
         Bypasses stat() and isDir check. Caller (i.e. _batch_fetch_abstracts)
         must guarantee that the URI points to a directory.
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         for path in self._read_paths(uri, ctx=ctx):
@@ -1853,7 +2121,7 @@ class VikingFS:
         If the caller points to a file, its parent directory is used instead so
         the endpoint remains usable for both file and directory URIs.
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path = primary_path
@@ -1900,7 +2168,7 @@ class VikingFS:
         If the caller points to a file, its parent directory is used instead so
         the endpoint remains usable for both file and directory URIs.
         """
-        self._ensure_access(uri, ctx=ctx)
+        await self._ensure_access(uri, ctx=ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         path = primary_path
@@ -1958,12 +2226,14 @@ class VikingFS:
 
         Returns: [{"uri": "...", "reason": "..."}, ...]
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         entries = await self.get_relation_table(uri, ctx=ctx)
+        related = [related_uri for entry in entries for related_uri in entry.uris]
+        access = await self._can_access_many(related, ctx)
         result = []
         for entry in entries:
             for u in entry.uris:
-                if self._is_accessible(u, self._ctx_or_default(ctx)):
+                if access.get(u, False):
                     result.append({"uri": u, "reason": entry.reason})
         return result
 
@@ -2002,7 +2272,7 @@ class VikingFS:
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
 
         for target_dir in retrieval_targets.target_directories:
-            self._ensure_access(target_dir, ctx)
+            await self._ensure_retrieval_scope(target_dir, ctx)
 
         storage = self._get_vector_store()
         if not storage:
@@ -2103,7 +2373,7 @@ class VikingFS:
 
         query_plan: Optional[QueryPlan] = None
         for target_dir in retrieval_targets.target_directories:
-            self._ensure_access(target_dir, ctx)
+            await self._ensure_retrieval_scope(target_dir, ctx)
 
         # When target_uri exists, read its abstract as optional query-planning context.
         target_abstract = ""
@@ -2200,9 +2470,9 @@ class VikingFS:
         """Create relation (maintained in .relations.json)."""
         if isinstance(uris, str):
             uris = [uris]
-        self._ensure_mutable_access(from_uri, ctx)
+        await self._ensure_mutable_access(from_uri, ctx)
         for uri in uris:
-            self._ensure_access(uri, ctx)
+            await self._ensure_access(uri, ctx)
 
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
@@ -2223,8 +2493,8 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Delete relation."""
-        self._ensure_mutable_access(from_uri, ctx)
-        self._ensure_access(uri, ctx)
+        await self._ensure_mutable_access(from_uri, ctx)
+        await self._ensure_access(uri, ctx)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         try:
@@ -2257,7 +2527,7 @@ class VikingFS:
         self, uri: str, ctx: Optional[RequestContext] = None
     ) -> List[RelationEntry]:
         """Get relation table."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         return await self._read_relation_table(path, ctx=ctx)
 
@@ -2305,9 +2575,10 @@ class VikingFS:
             if not self._is_name_visible_at_path(name, parent_path):
                 return False
 
-        uri = self._path_to_uri(entry_path, ctx=ctx)
-        if not self._is_accessible(uri, ctx):
-            return False
+        if getattr(self, "acl_manager", None) is None:
+            uri = self._path_to_uri(entry_path, ctx=ctx)
+            if not self._is_accessible(uri, ctx):
+                return False
 
         return True
 
@@ -2384,10 +2655,8 @@ class VikingFS:
                 level_limit=level_limit,
             )
 
-            visible: List[tuple] = []
+            candidates: List[tuple] = []
             for entry in raw_entries:
-                if node_limit is not None and len(visible) >= node_limit:
-                    break
                 if not self._is_tree_entry_visible(entry, path, real_ctx):
                     continue
                 if not await self._read_path_visible(uri, entry["path"], primary_path, real_ctx):
@@ -2398,7 +2667,23 @@ class VikingFS:
                     entry_path=entry["path"],
                     ctx=ctx,
                 )
-                visible.append((entry, entry_uri))
+                candidates.append((entry, entry_uri))
+                if (
+                    getattr(self, "acl_manager", None) is None
+                    and node_limit is not None
+                    and len(candidates) >= node_limit
+                ):
+                    break
+
+            if getattr(self, "acl_manager", None) is None:
+                visible = candidates
+            else:
+                access = await self._can_access_many(
+                    [entry_uri for _, entry_uri in candidates], real_ctx
+                )
+                visible = [item for item in candidates if access.get(item[1], False)]
+            if node_limit is not None:
+                visible = visible[:node_limit]
 
             # If we still lack enough visible entries but Rust returned a full
             # page (raw_limit reached), more raw nodes may exist — re-fetch with
@@ -2874,7 +3159,12 @@ class VikingFS:
     # ========== Vector Sync Helper Methods ==========
 
     async def _collect_uris(
-        self, path: str, recursive: bool, ctx: Optional[RequestContext] = None
+        self,
+        path: str,
+        recursive: bool,
+        ctx: Optional[RequestContext] = None,
+        *,
+        strict: bool = False,
     ) -> List[str]:
         """Recursively collect all URIs (for rm/mv), including directories."""
         uris = []
@@ -2893,7 +3183,8 @@ class VikingFS:
                     else:
                         uris.append(self._path_to_uri(full_path, ctx=ctx))
             except Exception:
-                pass
+                if strict:
+                    raise
 
         await _collect(path)
         return uris
@@ -2960,8 +3251,8 @@ class VikingFS:
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
-        self._ensure_access(old_uri, ctx)
-        self._ensure_access(new_uri, ctx)
+        await self._ensure_access(old_uri, ctx)
+        await self._ensure_access(new_uri, ctx)
 
         real_ctx = self._ctx_or_default(ctx)
         old_dir = VikingURI.normalize(old_uri).rstrip("/")
@@ -3118,7 +3409,7 @@ class VikingFS:
         lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Write file directly."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx)
 
@@ -3148,7 +3439,7 @@ class VikingFS:
         Raises:
             FileNotFoundError: If the file does not exist.
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         # Verify the file exists before reading, because AGFS read returns
@@ -3197,7 +3488,7 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> bytes:
         """Read single binary file."""
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
         primary_path = self._uri_to_path(uri, ctx=ctx)
         last_not_found: Optional[Exception] = None
@@ -3233,7 +3524,7 @@ class VikingFS:
         lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Write single binary file."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx)
 
@@ -3251,7 +3542,7 @@ class VikingFS:
         lock_handle: Optional["LockHandle"] = None,
     ) -> None:
         """Append content to file."""
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
@@ -3309,7 +3600,7 @@ class VikingFS:
         output="agent"
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11T08:52:16.256Z', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
         """
-        self._ensure_access(uri, ctx)
+        await self._ensure_access(uri, ctx)
         if output == "original":
             return await self._ls_original(uri, show_all_hidden, node_limit, ctx=ctx)
         elif output == "agent":
@@ -3326,14 +3617,11 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
-        real_ctx = self._ctx_or_default(ctx)
         entry_items = await self._list_read_path_items(uri, ctx=ctx)
         # basic info
         fallback_time = datetime.now(timezone.utc)
         all_entries = []
         for entry, entry_uri in entry_items:
-            if len(all_entries) >= node_limit:
-                break
             name = entry.get("name", "")
             raw_time = entry.get("modTime", "")
             parsed_time = fallback_time
@@ -3353,14 +3641,16 @@ class VikingFS:
                 "isDir": is_dir,
                 "modTime": format_iso8601(parsed_time),
             }
-            if not self._is_accessible(new_entry["uri"], real_ctx):
-                continue
             if is_dir:
                 all_entries.append(new_entry)
             elif not name.startswith("."):
                 all_entries.append(new_entry)
             elif show_all_hidden:
                 all_entries.append(new_entry)
+        access = await self._can_access_many([entry["uri"] for entry in all_entries], ctx)
+        all_entries = [entry for entry in all_entries if access.get(entry["uri"], False)][
+            :node_limit
+        ]
         await self._batch_fetch_abstracts(all_entries, abs_limit, ctx=ctx)
         return all_entries
 
@@ -3372,26 +3662,22 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
-        real_ctx = self._ctx_or_default(ctx)
         try:
             entry_items = await self._list_read_path_items(uri, ctx=ctx)
             # AGFS returns read-only structure, need to create new dict
             all_entries = []
             for entry, entry_uri in entry_items:
-                if len(all_entries) >= node_limit:
-                    break
                 name = entry.get("name", "")
                 new_entry = dict(entry)  # Copy original data
                 new_entry["uri"] = entry_uri
-                if not self._is_accessible(new_entry["uri"], real_ctx):
-                    continue
                 if entry.get("isDir"):
                     all_entries.append(new_entry)
                 elif not name.startswith("."):
                     all_entries.append(new_entry)
                 elif show_all_hidden:
                     all_entries.append(new_entry)
-            return all_entries
+            access = await self._can_access_many([entry["uri"] for entry in all_entries], ctx)
+            return [entry for entry in all_entries if access.get(entry["uri"], False)][:node_limit]
         except Exception:
             raise NotFoundError(uri, "directory")
 
@@ -3402,8 +3688,8 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Move file."""
-        self._ensure_mutable_access(from_uri, ctx)
-        self._ensure_mutable_access(to_uri, ctx)
+        await self._ensure_mutable_access(from_uri, ctx)
+        await self._ensure_mutable_access(to_uri, ctx)
         from_path = self._uri_to_path(from_uri, ctx=ctx)
 
         await self._copy_file_through_vikingfs(from_uri, to_uri, ctx=ctx)
@@ -3429,8 +3715,8 @@ class VikingFS:
         ctx: Optional[RequestContext] = None,
     ) -> None:
         """Persist an already-encrypted temp tree without rewriting file bytes."""
-        self._ensure_access(temp_uri, ctx)
-        self._ensure_mutable_access(target_uri, ctx)
+        await self._ensure_access(temp_uri, ctx)
+        await self._ensure_mutable_access(target_uri, ctx)
         src_path = self._uri_to_path(temp_uri, ctx=ctx)
         dst_path = self._uri_to_path(target_uri, ctx=ctx)
         await self._ensure_parent_dirs(dst_path, ctx=ctx)
@@ -3443,7 +3729,7 @@ class VikingFS:
 
     async def delete_temp(self, temp_uri: str, ctx: Optional[RequestContext] = None) -> None:
         """Delete temp directory and its contents."""
-        self._ensure_mutable_access(temp_uri, ctx)
+        await self._ensure_mutable_access(temp_uri, ctx)
         path = self._uri_to_path(temp_uri, ctx=ctx)
         try:
             for entry in await self._ls_entries(path, ctx=ctx):
@@ -3462,13 +3748,9 @@ class VikingFS:
     async def get_relations(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
         """Get all related URIs (backward compatible)."""
         entries = await self.get_relation_table(uri, ctx=ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        all_uris = []
-        for entry in entries:
-            for related in entry.uris:
-                if self._is_accessible(related, real_ctx):
-                    all_uris.append(related)
-        return all_uris
+        all_uris = [related for entry in entries for related in entry.uris]
+        access = await self._can_access_many(all_uris, ctx)
+        return [related for related in all_uris if access.get(related, False)]
 
     async def get_relations_with_content(
         self,
@@ -3512,7 +3794,7 @@ class VikingFS:
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
 
-        self._ensure_mutable_access(uri, ctx)
+        await self._ensure_mutable_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:

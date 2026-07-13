@@ -340,6 +340,8 @@ client = ov.SyncHTTPClient(
 | ADMIN | 所属 account | 常规操作 + 管理所属 account 的用户 |
 | USER | 所属 account | 常规操作（ls、read、find、sessions 等） |
 
+表中的常规资源操作仍受资源 ACL 约束。account 角色决定身份管理和公共资源的隐式管理权，具体目录或文件的 `viewer/editor/manager` 权限由 [资源访问控制（ACL）](../concepts/15-acl.md) 决定。
+
 在 `trusted` 模式下，普通租户请求默认会解析为 `USER`；如果该 account/user 已注册更高角色，则使用注册角色。对于 Admin 路由，在没有显式身份时还支持 trusted ROOT 回退。
 
 ## 无需认证的端点
@@ -366,6 +368,7 @@ curl http://localhost:1933/health
 ## 相关文档
 
 - [多租户](../concepts/11-multi-tenant.md) - 多租户能力、共享边界与接入实践
+- [资源访问控制（ACL）](../concepts/15-acl.md) - account 内资源权限
 - [配置](01-configuration.md) - 配置文件说明
 - [服务部署](03-deployment.md) - 服务部署
 - [API 概览](../api/01-overview.md) - API 参考

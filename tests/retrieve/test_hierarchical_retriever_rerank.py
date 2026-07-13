@@ -6,6 +6,7 @@
 import asyncio
 import threading
 import time
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -290,6 +291,25 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_returns_none(mon
         "viking://resources/file-a",
     ]
     assert fake_client.calls
+
+
+@pytest.mark.asyncio
+async def test_thinking_mode_globally_recalls_deep_acl_shared_files():
+    storage = QuickSearchStorage(
+        [_result("viking://resources/a/b/deep.md", 0.9, abstract="deep shared")]
+    )
+    storage.acl_manager = object()
+    storage.search_children_in_tenant = AsyncMock(return_value=[])
+    retriever = HierarchicalRetriever(
+        storage=storage,
+        embedder=DummyEmbedder(),
+        rerank_config=None,
+    )
+
+    result = await retriever.retrieve(_query(), ctx=_ctx(), limit=1, mode=RetrieverMode.THINKING)
+
+    assert [item.uri for item in result.matched_contexts] == ["viking://resources/a/b/deep.md"]
+    assert [call["level"] for call in storage.search_calls] == [[0, 1], [2]]
 
 
 @pytest.mark.asyncio

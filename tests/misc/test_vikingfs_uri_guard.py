@@ -240,7 +240,7 @@ class TestVikingFSURITraversalGuard:
     async def test_grep_propagates_agfs_errors_instead_of_falling_back(self) -> None:
         fs = _make_viking_fs()
         fs._encryptor = None
-        fs._ensure_access = MagicMock()
+        fs._ensure_access = AsyncMock()
         fs._grep_with_agfs = AsyncMock(side_effect=AGFSInvalidOperationError("invalid regex"))
         fs._grep_encrypted = AsyncMock(
             return_value={"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
@@ -257,7 +257,7 @@ class TestVikingFSURITraversalGuard:
         """Query-root-relative grep matches should be reconstructed into the final Viking URI."""
         fs = _make_viking_fs()
         fs._encryptor = None
-        fs._ensure_access = MagicMock()
+        fs._ensure_access = AsyncMock()
         fs.agfs.grep = AsyncMock(
             return_value={
                 "matches": [
@@ -283,7 +283,7 @@ class TestVikingFSURITraversalGuard:
         """A '.' grep match should resolve back to the queried Viking URI itself."""
         fs = _make_viking_fs()
         fs._encryptor = None
-        fs._ensure_access = MagicMock()
+        fs._ensure_access = AsyncMock()
         fs.agfs.grep = AsyncMock(
             return_value={
                 "matches": [

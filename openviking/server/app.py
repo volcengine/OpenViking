@@ -28,6 +28,7 @@ from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.profile_middleware import create_profile_http_middleware
 from openviking.server.routers import (
+    acl_router,
     admin_router,
     bot_router,
     code_router,
@@ -522,6 +523,7 @@ def create_app(
 
     # Register routers
     app.include_router(system_router)
+    app.include_router(acl_router)
     app.include_router(admin_router)
     app.include_router(resources_router)
     app.include_router(filesystem_router)

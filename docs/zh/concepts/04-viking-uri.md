@@ -86,6 +86,8 @@ viking://user/resources/                      # 当前用户资源
 viking://user/resources/docs/                 # 当前用户资源目录
 ```
 
+`viking://resources/...` 默认在当前 account 内共享，`viking://user/{user}/resources/...` 默认属于对应用户。两类资源都可以通过 [资源访问控制（ACL）](./15-acl.md) 对目录或文件设置同 account 用户权限。
+
 ### 用户技能和 peer 内容
 
 ```

@@ -335,8 +335,11 @@ class _FakeVikingFS:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    def _ensure_mutable_access(self, uri: str, ctx):
+    async def _ensure_mutable_access(self, uri: str, ctx):
         del uri, ctx
+
+    async def _ensure_access_many(self, uris, ctx, action):
+        del uris, ctx, action
 
     async def delete_temp(self, temp_uri: str, ctx=None):
         del ctx
@@ -692,7 +695,7 @@ class _FakeVikingFSForCreate:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    def _ensure_mutable_access(self, uri: str, ctx):
+    async def _ensure_mutable_access(self, uri: str, ctx):
         del uri, ctx
 
     async def delete_temp(self, temp_uri: str, ctx=None):

@@ -262,6 +262,33 @@ enum AttrsCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum AclCommands {
+    Get {
+        uri: String,
+    },
+    Set {
+        uri: String,
+        #[arg(long = "entry", required = true)]
+        entries: Vec<String>,
+    },
+    Grant {
+        uri: String,
+        #[arg(long = "user-id")]
+        user_id: String,
+        #[arg(long)]
+        level: String,
+    },
+    Revoke {
+        uri: String,
+        #[arg(long = "user-id")]
+        user_id: String,
+    },
+    Rm {
+        uri: String,
+    },
+}
+
 // Commands are organized with category tags in their doc comments.
 //
 // # Command Tagging System
@@ -494,6 +521,11 @@ enum Commands {
     Attrs {
         #[command(subcommand)]
         action: AttrsCommands,
+    },
+    /// [Data] Manage resource ACL
+    Acl {
+        #[command(subcommand)]
+        action: AclCommands,
     },
     /// [Data] Read file content (Level 2)
     Read {
@@ -3002,6 +3034,7 @@ async fn main() {
                 recursive,
             } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
         },
+        Commands::Acl { action } => handlers::handle_acl(action, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
@@ -3185,11 +3218,12 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index, first_command_token,
-        is_language_command_request, language_command_can_run_picker, language_gate_action,
-        language_required_message, legacy_upload_option_error, plain_help_misuse,
-        pre_parse_requires_cli_config_file, preprocess_cli_args, preprocess_privacy_args,
+        AclCommands, Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands,
+        LanguageGateAction, PrivacyCommands, SkillCommands, UploadCliOptions, find_command_index,
+        first_command_token, is_language_command_request, language_command_can_run_picker,
+        language_gate_action, language_required_message, legacy_upload_option_error,
+        plain_help_misuse, pre_parse_requires_cli_config_file, preprocess_cli_args,
+        preprocess_privacy_args,
     };
     use crate::config::{Config, DEFAULT_CUSTOM_URL};
     use crate::output::OutputFormat;
@@ -3218,6 +3252,39 @@ mod tests {
         assert_eq!(cli.account.as_deref(), Some("acme"));
         assert_eq!(cli.user.as_deref(), Some("alice"));
         assert_eq!(cli.actor_peer_id.as_deref(), Some("peer-a"));
+    }
+
+    #[test]
+    fn cli_acl_user_id_does_not_conflict_with_global_user() {
+        Cli::command().debug_assert();
+        let cli = Cli::try_parse_from([
+            "ov",
+            "acl",
+            "grant",
+            "viking://resources/project-a",
+            "--user-id",
+            "bob",
+            "--level",
+            "viewer",
+        ])
+        .expect("acl grant should parse");
+
+        assert!(cli.user.is_none());
+        match cli.command {
+            Commands::Acl {
+                action:
+                    AclCommands::Grant {
+                        uri,
+                        user_id,
+                        level,
+                    },
+            } => {
+                assert_eq!(uri, "viking://resources/project-a");
+                assert_eq!(user_id, "bob");
+                assert_eq!(level, "viewer");
+            }
+            _ => panic!("expected acl grant command"),
+        }
     }
 
     #[test]
