@@ -1,0 +1,23 @@
+docs/en/guides/05-observability.md
+  s_fc57356f120c42::t_38338b2b4ab15c 61-66
+docs/zh/guides/05-observability.md
+  s_fc57356f120c42::t_af96fecf8652b5 61-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "690c41f330e1bc3d602d9bd28a5909032ffdbb98",
+  "prompts": {},
+  "sessions": {
+    "s_fc57356f120c42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4f34-5c5b-7133-8a69-0411a64c2b5b",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

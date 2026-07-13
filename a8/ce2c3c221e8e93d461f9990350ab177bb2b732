@@ -1,0 +1,27 @@
+docs/.vitepress/theme/ApiExampleTabsEnhancer.vue
+  s_4a1d89659be257::t_90a88ef2e7d92a 27-34,69
+docs/en/api/08-admin.md
+  s_4a1d89659be257::t_074961b40abd34 998,1001,1007,1014-1025
+docs/scripts/check-api-reference.mjs
+  s_4a1d89659be257::t_247ca1d1b24109 18-68,73-84,89-103,114-136,141-142,144-157,167
+docs/zh/api/08-admin.md
+  s_4a1d89659be257::t_370f9a921a2684 995,998,1004,1011-1022
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a8ce2c3c221e8e93d461f9990350ab177bb2b732",
+  "prompts": {},
+  "sessions": {
+    "s_4a1d89659be257": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5412-3eb1-7b70-995e-0d6e1b6b2b1d",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

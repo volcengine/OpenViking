@@ -1,0 +1,41 @@
+.github/workflows/_docs.yml
+  s_dd0b1bee01126c::t_475f443da0d072 27-32
+docs/en/api/06-retrieval.md
+  s_dd0b1bee01126c::t_618ba6a00c59a2 194-198,460-462
+docs/zh/api/06-retrieval.md
+  s_dd0b1bee01126c::t_b10acbdafd650c 195-199,462-464
+openviking_cli/client/base.py
+  s_dd0b1bee01126c::t_014768d5374f95 173
+sdk/go/filesystem.go
+  s_dd0b1bee01126c::t_9c00c736a50964 62-64
+sdk/go/resources.go
+  s_dd0b1bee01126c::t_26599e81efadd2 24
+sdk/go/retrieval.go
+  s_dd0b1bee01126c::t_c76f1b83ba4960 40-43,83-86
+sdk/go/system.go
+  s_dd0b1bee01126c::t_e3465cef752c8b 70-76
+sdk/typescript/src/client.ts
+  s_dd0b1bee01126c::t_9e8f21aff240d0 111,344,439,792-795
+sdk/typescript/src/types.ts
+  s_dd0b1bee01126c::t_8ad3b0cf3ad664 77,98,129
+sdk/typescript/tests/client.test.ts
+  s_dd0b1bee01126c::t_41c051356a04d9 102-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "bb124b83600a9638306f7cea3c54340388ba3c0a",
+  "prompts": {},
+  "sessions": {
+    "s_dd0b1bee01126c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f54ae-c30c-75d2-a802-bc808acec085",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

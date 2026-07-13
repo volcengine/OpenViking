@@ -1,0 +1,21 @@
+docs/.vitepress/config.ts
+  s_4a1d89659be257::t_19ba47e8d48af4 57-59,65-66,103-106,108-116,118-119,138-140,147-149,375-376,378-379,395-396,398-399
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a7dbe83474184204ff9498eeaf03a5824e9425f5",
+  "prompts": {},
+  "sessions": {
+    "s_4a1d89659be257": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5412-3eb1-7b70-995e-0d6e1b6b2b1d",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

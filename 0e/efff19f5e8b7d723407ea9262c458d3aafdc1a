@@ -1,0 +1,39 @@
+docs/.vitepress/theme/ApiExampleTabsEnhancer.vue
+  s_8c212ceed82611::t_4c02d519f1ecac 5-11,22,28,51,54-55,66,113-118
+docs/.vitepress/theme/api-example-tabs.test.ts
+  s_8c212ceed82611::t_afda9c4ead264c 1-49
+docs/.vitepress/theme/api-example-tabs.ts
+  s_8c212ceed82611::t_4fc40e0c70c5e3 1-35
+docs/en/api/04-skills.md
+  s_8c212ceed82611::t_2ebd10adf9a7d8 554-558
+docs/en/api/11-snapshot.md
+  s_8c212ceed82611::t_bd3122a25c0c08 218,322-325
+docs/en/api/99-api-doc-writing-guide.md
+  s_8c212ceed82611::t_73220d61373816 50,52-53,56,58,68-77,137,139,141,145-147
+docs/package.json
+  s_8c212ceed82611::t_85b523ca551153 11
+docs/zh/api/04-skills.md
+  s_8c212ceed82611::t_f0eef73167a02b 556-560
+docs/zh/api/11-snapshot.md
+  s_8c212ceed82611::t_291fd8cc7a78ae 218,322-325
+docs/zh/api/99-api-doc-writing-guide.md
+  s_8c212ceed82611::t_00b89e07088b4f 50,52-53,56,58,68-77,136,138,140,144-146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "0eefff19f5e8b7d723407ea9262c458d3aafdc1a",
+  "prompts": {},
+  "sessions": {
+    "s_8c212ceed82611": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5463-4afa-7860-8611-b1c2ec49002a",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
