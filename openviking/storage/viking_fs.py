@@ -711,6 +711,10 @@ class VikingFS:
                         details={"from_uri": old_uri, "to_uri": new_uri},
                     )
 
+        real_ctx = self._ctx_or_default(ctx)
+        old_uri = canonicalize_uri(old_uri, real_ctx)
+        new_uri = canonicalize_uri(new_uri, real_ctx)
+
         lock_context = (
             LockContext(
                 get_lock_manager(),
@@ -912,6 +916,10 @@ class VikingFS:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
+        real_ctx = self._ctx_or_default(ctx)
+        uri = canonicalize_uri(uri, real_ctx)
+        if exclude_uri:
+            exclude_uri = canonicalize_uri(exclude_uri, real_ctx)
         self._ensure_access(uri, ctx)
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.
@@ -1085,7 +1093,7 @@ class VikingFS:
         filter_expr = PathScope("uri", uri, depth=level_limit)
         excluded_prefix = None
         if exclude_uri:
-            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            excluded_prefix = exclude_uri.rstrip("/")
             self._ensure_access(excluded_prefix, ctx)
             filter_expr = And(
                 [
@@ -1231,7 +1239,7 @@ class VikingFS:
 
         excluded_path = None
         if exclude_uri:
-            normalized_excluded_uri = self._normalize_uri(exclude_uri).rstrip("/")
+            normalized_excluded_uri = exclude_uri.rstrip("/")
             self._ensure_access(normalized_excluded_uri, ctx)
             excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
 
@@ -1328,7 +1336,7 @@ class VikingFS:
         compiled_pattern = re.compile(pattern, flags)
         excluded_prefix = None
         if exclude_uri:
-            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            excluded_prefix = exclude_uri.rstrip("/")
             self._ensure_access(excluded_prefix, ctx)
         file_uris = await self._collect_grep_files(
             uri,
@@ -1363,7 +1371,7 @@ class VikingFS:
             if current_depth > level_limit:
                 return
 
-            normalized_current_uri = self._normalize_uri(current_uri)
+            normalized_current_uri = current_uri
             if excluded_prefix and (
                 normalized_current_uri == excluded_prefix
                 or normalized_current_uri.startswith(excluded_prefix + "/")
@@ -1389,7 +1397,7 @@ class VikingFS:
                 else:
                     file_uris.append(entry_uri)
 
-        normalized_uri = self._normalize_uri(uri)
+        normalized_uri = uri
         if excluded_prefix and (
             normalized_uri == excluded_prefix or normalized_uri.startswith(excluded_prefix + "/")
         ):
@@ -2923,7 +2931,6 @@ class VikingFS:
         old_base: str,
         new_base: str,
         ctx: Optional[RequestContext] = None,
-        levels: Optional[List[int]] = None,
     ) -> None:
         """Update URIs in vector store (when moving files).
 
@@ -2933,82 +2940,19 @@ class VikingFS:
         if not vector_store:
             return
 
-        old_base_uri = self._path_to_uri(old_base, ctx=ctx)
-        new_base_uri = self._path_to_uri(new_base, ctx=ctx)
+        real_ctx = self._ctx_or_default(ctx)
 
         for uri in uris:
             try:
-                new_uri = uri.replace(old_base_uri, new_base_uri, 1)
-
-                await vector_store.update_uri_mapping(
-                    ctx=self._ctx_or_default(ctx),
+                new_uri = new_base + uri[len(old_base) :]
+                if await vector_store.update_uri_mapping(
+                    ctx=real_ctx,
                     uri=uri,
                     new_uri=new_uri,
-                    levels=levels,
-                )
-                logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
+                ):
+                    logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
             except Exception as e:
                 logger.warning(f"[VikingFS] Failed to update {uri} in vector store: {e}")
-
-    async def _mv_vector_store_l0_l1(
-        self,
-        old_uri: str,
-        new_uri: str,
-        ctx: Optional[RequestContext] = None,
-        lock_handle: Optional["LockHandle"] = None,
-    ) -> None:
-        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-        from openviking.storage.transaction import LockContext, get_lock_manager
-
-        self._ensure_access(old_uri, ctx)
-        self._ensure_access(new_uri, ctx)
-
-        real_ctx = self._ctx_or_default(ctx)
-        old_dir = VikingURI.normalize(old_uri).rstrip("/")
-        new_dir = VikingURI.normalize(new_uri).rstrip("/")
-        if old_dir == new_dir:
-            return
-
-        for uri in (old_dir, new_dir):
-            if uri.endswith(("/.abstract.md", "/.overview.md")):
-                raise ValueError(f"mv_vector_store expects directory URIs, got: {uri}")
-
-        try:
-            old_stat = await self.stat(old_dir, ctx=real_ctx)
-        except Exception as e:
-            raise FileNotFoundError(f"mv_vector_store old_uri not found: {old_dir}") from e
-        try:
-            new_stat = await self.stat(new_dir, ctx=real_ctx)
-        except Exception as e:
-            raise FileNotFoundError(f"mv_vector_store new_uri not found: {new_dir}") from e
-
-        if not (isinstance(old_stat, dict) and old_stat.get("isDir", False)):
-            raise ValueError(f"mv_vector_store expects old_uri to be a directory: {old_dir}")
-        if not (isinstance(new_stat, dict) and new_stat.get("isDir", False)):
-            raise ValueError(f"mv_vector_store expects new_uri to be a directory: {new_dir}")
-
-        old_path = self._uri_to_path(old_dir, ctx=real_ctx)
-        new_path = self._uri_to_path(new_dir, ctx=real_ctx)
-
-        try:
-            async with LockContext(
-                get_lock_manager(),
-                [old_path],
-                lock_mode="mv",
-                mv_dst_path=new_path,
-                src_is_dir=True,
-                handle=lock_handle,
-            ):
-                await self._update_vector_store_uris(
-                    uris=[old_dir],
-                    old_base=old_dir,
-                    new_base=new_dir,
-                    ctx=real_ctx,
-                    levels=[0, 1],
-                )
-
-        except LockAcquisitionError:
-            raise ResourceBusyError(f"Resource is being processed: {old_dir}", uri=old_dir)
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""
