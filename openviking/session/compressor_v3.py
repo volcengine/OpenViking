@@ -84,6 +84,34 @@ _TRAINING_FAST_PATH_MEMORY_TYPES = frozenset({"cases", "trajectories", "experien
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
 
+async def _commit_experience_snapshot(
+    viking_fs: Any,
+    *,
+    ctx: RequestContext,
+    experience_uris: list[str],
+    archive_uri: str = "",
+) -> None:
+    commit = getattr(viking_fs, "commit", None)
+    if not callable(commit):
+        return
+    paths = [
+        uri
+        for uri in dict.fromkeys(str(uri or "") for uri in experience_uris)
+        if "/memories/experiences/" in uri and uri.endswith(".md")
+    ]
+    if not paths:
+        return
+    archive_name = archive_uri.rstrip("/").rsplit("/", 1)[-1] if archive_uri else "unknown"
+    try:
+        await commit(
+            message=f"Update experience memories from session commit {archive_name}",
+            paths=paths,
+            ctx=ctx,
+        )
+    except Exception as exc:
+        logger.warning("Failed to commit experience snapshot for %s: %s", paths, exc, exc_info=True)
+
+
 class SessionCompressorV3:
     """Session compressor with lock-free patch-merge user memory extraction."""
 
@@ -583,6 +611,7 @@ class SessionCompressorV3:
                 request_context=ctx,
                 strict_extract_errors=strict_extract_errors,
                 include_session_skills=skill_enabled,
+                source_archive_uri=archive_uri or "",
             )
             exp_trainer = await get_streaming_policy_trainer(
                 key=make_streaming_policy_trainer_key(
@@ -685,6 +714,17 @@ class SessionCompressorV3:
                         apply_result=exp_training_result.apply_result,
                         ctx=ctx,
                         viking_fs=viking_fs,
+                    )
+                exp_apply_result = getattr(exp_training_result, "apply_result", None)
+                if exp_apply_result is not None:
+                    await _commit_experience_snapshot(
+                        viking_fs,
+                        ctx=ctx,
+                        experience_uris=[
+                            *list(getattr(exp_apply_result, "written_uris", []) or []),
+                            *list(getattr(exp_apply_result, "deleted_uris", []) or []),
+                        ],
+                        archive_uri=archive_uri,
                     )
                 # Skill path: co-extracted skill gradients go directly to skill trainer
                 if skill_trainer is not None and analysis.gradients:

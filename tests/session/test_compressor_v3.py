@@ -929,9 +929,11 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     case_uri = "viking://user/u/memories/cases/duplicate_booking.md"
     traj_uri = "viking://user/u/memories/trajectories/duplicate_booking.md"
     exp_uri = "viking://user/u/memories/experiences/booking_duplicate_handling.md"
+    deleted_exp_uri = "viking://user/u/memories/experiences/legacy_booking_handling.md"
 
     class FakeFS:
         def __init__(self):
+            self.commits = []
             self.files = {
                 case_uri: MemoryFileUtils.write(
                     MemoryFile(
@@ -997,6 +999,9 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
             del uri, output, ctx
             return []
 
+        async def commit(self, **kwargs):
+            self.commits.append(kwargs)
+
     class FakeTrainer:
         policy_set = ExperienceSet(root_uri="viking://user/u/memories/experiences", policies=[])
 
@@ -1034,6 +1039,7 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
                         policies=[],
                     ),
                     written_uris=[exp_uri],
+                    deleted_uris=[deleted_exp_uri],
                     errors=[],
                 ),
                 metadata={},
@@ -1095,6 +1101,8 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
         case_uri_by_name={"duplicate_booking": case_uri},
         messages=_messages(),
         ctx=_ctx(),
+        session_id="session-1",
+        archive_uri="viking://user/u/sessions/session-1/history/archive_001",
     )
 
     assert result["submitted"] == 1
@@ -1125,3 +1133,10 @@ async def test_v3_training_links_case_to_trajectory_and_experience_via_trajector
     assert any(link["from_uri"] == case_uri for link in traj_file.backlinks)
     exp_file = MemoryFileUtils.read(fs.files[exp_uri], uri=exp_uri)
     assert any(link["from_uri"] == case_uri for link in exp_file.backlinks)
+    assert fs.commits == [
+        {
+            "message": "Update experience memories from session commit archive_001",
+            "paths": [exp_uri, deleted_exp_uri],
+            "ctx": _ctx(),
+        }
+    ]
