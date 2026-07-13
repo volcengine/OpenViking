@@ -9,7 +9,11 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Protocol
 
 from openviking.pyagfs import AsyncAGFSClient
-from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
+from openviking.pyagfs.exceptions import (
+    AGFSAlreadyExistsError,
+    AGFSHTTPError,
+    AGFSNotFoundError,
+)
 
 SYSTEM_TASK_ACCOUNT_ID = "_system"
 SYSTEM_TASK_USER_ID = "root"
@@ -67,6 +71,31 @@ class PersistentTaskStore:
             raw = await self._agfs.read(path)
         except Exception:
             return None
+        return json.loads(_decode_bytes(raw))
+
+    async def get_strict(
+        self,
+        task_id: str,
+        *,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Read a task while distinguishing absence from transient storage failure.
+
+        Deterministic fenced commit scheduling must not interpret a timeout as
+        "task missing" and overwrite a running/completed task.
+        """
+        if not account_id or not user_id:
+            return None
+        path = self._task_path(account_id, user_id, task_id)
+        try:
+            raw = await self._agfs.read(path)
+        except (FileNotFoundError, AGFSNotFoundError):
+            return None
+        except AGFSHTTPError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
         return json.loads(_decode_bytes(raw))
 
     async def list(self, account_id: str, *, user_id: Optional[str] = None) -> List[Dict[str, Any]]:

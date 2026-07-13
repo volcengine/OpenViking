@@ -8,6 +8,7 @@ import time
 from openviking.metrics.collectors.lock import LockCollector
 from openviking.metrics.collectors.observer_health import ObserverHealthCollector
 from openviking.metrics.collectors.queue import QueueCollector
+from openviking.metrics.collectors.session import FencedBacklogCollector
 from openviking.metrics.collectors.task_tracker import TaskTrackerCollector
 from openviking.metrics.collectors.vikingdb import VikingDBCollector
 from openviking.metrics.core.registry import MetricRegistry
@@ -19,6 +20,63 @@ from openviking.metrics.datasources.observer_state import (
 from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
 from openviking.metrics.datasources.task import TaskStateDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
+
+
+def test_fenced_backlog_collector_exports_bounded_states_and_health():
+    class DS:
+        def read_backlog(self):
+            return {
+                "writer_healthy": True,
+                "effect_concurrency": 2,
+                "commit_concurrency": 3,
+                "effect": {
+                    "queued": {"items": 4, "oldest_age_seconds": 12.5},
+                    "running": {"items": 1, "oldest_age_seconds": 2.0},
+                },
+                "commit": {
+                    "pending": {"items": 3, "oldest_age_seconds": 8.0},
+                    "running": {"items": 2, "oldest_age_seconds": 4.0},
+                    "ambiguous": {"items": 1, "oldest_age_seconds": 20.0},
+                },
+            }
+
+    registry = MetricRegistry()
+    FencedBacklogCollector(data_source=DS()).collect(registry)
+    text = PrometheusExporter(registry=registry).render()
+    assert "openviking_fenced_writer_pool_healthy 1.0" in text
+    assert 'openviking_fenced_writer_concurrency{kind="effect"} 2.0' in text
+    assert 'openviking_fenced_effect_outbox_items{state="queued"} 4.0' in text
+    assert (
+        'openviking_fenced_effect_outbox_oldest_age_seconds{state="queued"} 12.5'
+        in text
+    )
+    assert 'openviking_fenced_commit_work_items{state="ambiguous"} 1.0' in text
+    assert (
+        'openviking_fenced_commit_work_oldest_age_seconds{state="ambiguous"} 20.0'
+        in text
+    )
+
+
+def test_fenced_backlog_collection_failure_is_visible(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.metrics.collectors.session.time.time", lambda: 3456.5
+    )
+    class DS:
+        def read_backlog(self):
+            raise RuntimeError("database down")
+
+    registry = MetricRegistry()
+    collector = FencedBacklogCollector(data_source=DS())
+    collector.collect(registry)
+    collector.collect(registry)
+    text = PrometheusExporter(registry=registry).render()
+    assert "openviking_fenced_writer_pool_healthy 0.0" in text
+    assert "openviking_fenced_backlog_collection_errors_total 2" in text
+    assert (
+        "openviking_fenced_backlog_collection_last_error_timestamp_seconds "
+        "3456.5"
+        in text
+    )
 
 
 def test_queue_collector_maps_status(monkeypatch):

@@ -2056,6 +2056,43 @@ class VikingFS:
         await self._write_relation_table(from_path, entries, ctx=ctx)
         logger.debug(f"[VikingFS] Created link: {from_uri} -> {uris}")
 
+    async def link_deterministic(
+        self,
+        from_uri: str,
+        uris: Union[str, List[str]],
+        *,
+        link_id: str,
+        reason: str = "",
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Create an operation-addressed relation that is safe to replay."""
+        if isinstance(uris, str):
+            uris = [uris]
+        normalized_uris = list(dict.fromkeys(uris))
+        if not link_id or len(link_id) > 128:
+            raise ValueError("Deterministic relation link_id is invalid")
+        self._ensure_mutable_access(from_uri, ctx)
+        for uri in normalized_uris:
+            self._ensure_access(uri, ctx)
+
+        from_path = self._uri_to_path(from_uri, ctx=ctx)
+        entries = await self._read_relation_table(from_path, ctx=ctx, strict=True)
+        for entry in entries:
+            if entry.id != link_id:
+                continue
+            if entry.uris != normalized_uris or entry.reason != reason:
+                raise ValueError("Deterministic relation ID content conflict")
+            return
+        entries.append(
+            RelationEntry(id=link_id, uris=normalized_uris, reason=reason)
+        )
+        await self._write_relation_table(from_path, entries, ctx=ctx)
+        logger.debug(
+            "[VikingFS] Created deterministic link: %s -> %s",
+            from_uri,
+            normalized_uris,
+        )
+
     async def unlink(
         self,
         from_uri: str,
@@ -2871,16 +2908,22 @@ class VikingFS:
     # ========== Relation Table Internal Methods ==========
 
     async def _read_relation_table(
-        self, dir_path: str, ctx: Optional[RequestContext] = None
+        self,
+        dir_path: str,
+        ctx: Optional[RequestContext] = None,
+        *,
+        strict: bool = False,
     ) -> List[RelationEntry]:
         """Read .relations.json."""
         table_path = f"{dir_path}/.relations.json"
         try:
             content = self._handle_agfs_read(await self._async_agfs.read(table_path))
             data = json.loads(content.decode("utf-8"))
-        except FileNotFoundError:
-            return []
-        except Exception:
+        except Exception as exc:
+            if is_not_found_error(exc):
+                return []
+            if strict:
+                raise
             # logger.warning(f"[VikingFS] Failed to read relation table {table_path}: {e}")
             return []
 
@@ -3000,8 +3043,13 @@ class VikingFS:
                 raw = b""
 
             text = self._decode_bytes(raw)
-        except Exception:
-            raise NotFoundError(uri, "file")
+        except Exception as exc:
+            # A backend timeout/connection failure after a successful stat is
+            # not absence.  Collapsing it to NotFound lets fencing/task callers
+            # recreate durable state and can duplicate external effects.
+            if is_not_found_error(exc):
+                raise NotFoundError(uri, "file") from exc
+            raise
 
         if offset == 0 and limit == -1:
             return text

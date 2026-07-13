@@ -268,6 +268,60 @@ class TaskTracker:
         )
         return self._copy(task)
 
+    async def get_or_create_deterministic(
+        self,
+        task_id: str,
+        task_type: str,
+        resource_id: Optional[str] = None,
+        *,
+        account_id: str,
+        user_id: str,
+    ) -> tuple[TaskRecord, bool]:
+        """Load or create an operation-addressed task without transient-as-missing.
+
+        Returns ``(task, created)``.  The persistent store is authoritative so
+        this remains idempotent after a process restart.
+        """
+        self._validate_owner(account_id, user_id)
+        if not task_id or len(task_id) > 128:
+            raise ValueError("deterministic task_id must contain 1..128 characters")
+        async with self._async_lock:
+            with self._lock:
+                task = self._tasks.get(task_id)
+            if task is None:
+                strict_get = getattr(self._store, "get_strict", None)
+                if not callable(strict_get):
+                    raise RuntimeError(
+                        "Deterministic task creation requires a fail-closed task store"
+                    )
+                payload = await strict_get(
+                    task_id,
+                    account_id=account_id,
+                    user_id=user_id,
+                )
+                if payload is not None:
+                    task = self._record_from_payload(payload)
+            if task is not None:
+                if not self._matches_owner(task, account_id, user_id):
+                    raise RuntimeError("Deterministic task ID owner mismatch")
+                if task.task_type != task_type or task.resource_id != resource_id:
+                    raise RuntimeError("Deterministic task ID content mismatch")
+                with self._lock:
+                    self._tasks[task.task_id] = task
+                return self._copy(task), False
+
+            task = TaskRecord(
+                task_id=task_id,
+                task_type=task_type,
+                resource_id=resource_id,
+                account_id=account_id,
+                user_id=user_id,
+            )
+            await self._store.create(task)
+            with self._lock:
+                self._tasks[task.task_id] = task
+        return self._copy(task), True
+
     async def create_if_no_running(
         self,
         task_type: str,

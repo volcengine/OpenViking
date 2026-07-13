@@ -8,6 +8,7 @@ from openviking.server.routers.code import router as code_router
 from openviking.server.routers.console import router as console_router
 from openviking.server.routers.content import router as content_router
 from openviking.server.routers.debug import router as debug_router
+from openviking.server.routers.fenced_sessions import router as fenced_sessions_router
 from openviking.server.routers.filesystem import router as filesystem_router
 from openviking.server.routers.metrics import router as metrics_router
 from openviking.server.routers.observer import router as observer_router
@@ -32,6 +33,7 @@ __all__ = [
     "system_router",
     "resources_router",
     "filesystem_router",
+    "fenced_sessions_router",
     "content_router",
     "console_router",
     "search_router",

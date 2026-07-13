@@ -362,6 +362,17 @@ class _SingleAccountBackend:
             logger.error("Error getting records: %s", e)
             return []
 
+    async def get_strict(self, ids: List[str]) -> List[Dict[str, Any]]:
+        """Read records without converting backend failures into an empty set."""
+        records = await self._async_adapter.call("get", ids)
+        if self._bound_account_id:
+            records = [
+                record
+                for record in records
+                if record.get("account_id") == self._bound_account_id
+            ]
+        return records
+
     async def delete(self, ids: List[str]) -> int:
         try:
             if self._bound_account_id:
@@ -445,6 +456,38 @@ class _SingleAccountBackend:
         except Exception as e:
             logger.error("Error querying collection: %s", e, exc_info=True)
             return []
+
+    async def query_strict(
+        self,
+        query_vector: Optional[List[float]] = None,
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        limit: int = 10,
+        offset: int = 0,
+        output_fields: Optional[List[str]] = None,
+        order_by: Optional[str] = None,
+        order_desc: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Query without fail-open empty results."""
+        if self._bound_account_id:
+            account_filter = Eq("account_id", self._bound_account_id)
+            if filter:
+                if isinstance(filter, dict):
+                    filter = RawDSL(filter)
+                filter = And([account_filter, filter])
+            else:
+                filter = account_filter
+        return await self._async_adapter.call(
+            "query",
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            filter=filter,
+            limit=limit,
+            offset=offset,
+            output_fields=output_fields,
+            order_by=order_by,
+            order_desc=order_desc,
+        )
 
     async def search(
         self,
@@ -796,6 +839,27 @@ class VikingVectorIndexBackend:
     async def get(self, ids: List[str], *, ctx: RequestContext) -> List[Dict[str, Any]]:
         backend = self._get_backend_for_context(ctx)
         return await backend.get(ids)
+
+    async def get_strict(
+        self,
+        ids: List[str],
+        *,
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        backend = self._get_backend_for_context(ctx)
+        return await backend.get_strict(ids)
+
+    async def upsert_strict(
+        self,
+        data: Dict[str, Any],
+        *,
+        ctx: RequestContext,
+    ) -> str:
+        backend = self._get_backend_for_context(ctx)
+        result = await backend.upsert(data, partial_update=False)
+        if not result:
+            raise RuntimeError("Strict vector upsert returned no record ID")
+        return result
 
     async def delete(self, ids: List[str], *, ctx: RequestContext) -> int:
         backend = self._get_backend_for_context(ctx)
@@ -1183,6 +1247,29 @@ class VikingVectorIndexBackend:
             output_fields=LOOKUP_OUTPUT_FIELDS,
         )
 
+    async def get_context_by_uri_strict(
+        self,
+        uri: str,
+        owner_space: Optional[str] = None,
+        level: Optional[int] = None,
+        limit: int = 1,
+        *,
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        del owner_space
+        conds: List[FilterExpr] = [
+            PathScope("uri", canonicalize_uri(uri, ctx), depth=0),
+            Eq("account_id", ctx.account_id),
+        ]
+        if level is not None:
+            conds.append(Eq("level", level))
+        backend = self._get_backend_for_context(ctx)
+        return await backend.query_strict(
+            filter=And(conds),
+            limit=limit,
+            output_fields=LOOKUP_OUTPUT_FIELDS,
+        )
+
     async def delete_account_data(self, account_id: str, *, ctx: RequestContext) -> int:
         """删除指定 account 的所有数据（仅限，root 角色操作）"""
         self._check_root_role(ctx)
@@ -1311,6 +1398,86 @@ class VikingVectorIndexBackend:
                 if result:
                     uri_updated = True
             if uri_updated:
+                updated += 1
+        return updated
+
+    async def plan_active_count_targets(
+        self,
+        ctx: RequestContext,
+        uris: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Plan absolute active-count targets before a fenced effect.
+
+        The returned records are persisted in the fenced Phase 2 manifest
+        before any vector upsert.  Recovery can therefore apply ``max(current,
+        target)`` instead of repeating ``+1`` after a lost response.
+        """
+        targets: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for uri in dict.fromkeys(uris):
+            records = await self.get_context_by_uri_strict(
+                uri=uri,
+                limit=100,
+                ctx=ctx,
+            )
+            record_ids = [
+                str(record["id"])
+                for record in records
+                if record.get("id") and str(record["id"]) not in seen_ids
+            ]
+            if not record_ids:
+                continue
+            for record in await self.get_strict(record_ids, ctx=ctx):
+                record_id = str(record.get("id") or "")
+                if not record_id or record_id in seen_ids:
+                    continue
+                seen_ids.add(record_id)
+                targets.append(
+                    {
+                        "id": record_id,
+                        "uri": str(record.get("uri") or uri),
+                        "target": int(record.get("active_count", 0) or 0) + 1,
+                    }
+                )
+        return targets
+
+    async def ensure_active_count_targets(
+        self,
+        ctx: RequestContext,
+        targets: List[Dict[str, Any]],
+    ) -> int:
+        """Idempotently raise active counts to durable absolute targets."""
+        target_by_id: Dict[str, int] = {}
+        for target in targets:
+            record_id = str(target.get("id") or "")
+            if not record_id:
+                continue
+            target_by_id[record_id] = max(
+                target_by_id.get(record_id, 0),
+                max(0, int(target.get("target", 0) or 0)),
+            )
+        if not target_by_id:
+            return 0
+
+        updated = 0
+        records = await self.get_strict(list(target_by_id), ctx=ctx)
+        records_by_id = {
+            str(record.get("id") or ""): record for record in records
+        }
+        missing_ids = set(target_by_id) - set(records_by_id)
+        if missing_ids:
+            raise RuntimeError("Strict active-count target record disappeared")
+        for record_id, record in records_by_id.items():
+            target = target_by_id.get(record_id)
+            if target is None:
+                continue
+            current = int(record.get("active_count", 0) or 0)
+            if current >= target:
+                continue
+            if await self.upsert_strict(
+                record | {"active_count": target},
+                ctx=ctx,
+            ):
                 updated += 1
         return updated
 

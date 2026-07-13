@@ -15,7 +15,7 @@ from .http import HttpRequestLifecycleDataSource
 from .model_usage import EmbeddingEventDataSource, RerankEventDataSource, VLMEventDataSource
 from .resource import ResourceIngestionEventDataSource
 from .retrieval import RetrievalStatsDataSource
-from .session import SessionLifecycleDataSource
+from .session import FencedBacklogDataSource, SessionLifecycleDataSource
 from .telemetry_bridge import TelemetryBridgeEventDataSource
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     "RerankEventDataSource",
     "VLMEventDataSource",
     "SessionLifecycleDataSource",
+    "FencedBacklogDataSource",
     "HttpRequestLifecycleDataSource",
     "CacheEventDataSource",
     "ResourceIngestionEventDataSource",

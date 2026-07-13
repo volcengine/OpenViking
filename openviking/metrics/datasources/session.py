@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from .base import EventMetricDataSource
+from .base import EventMetricDataSource, StateMetricDataSource
 
 
 class SessionLifecycleDataSource(EventMetricDataSource):
@@ -49,3 +49,112 @@ class SessionLifecycleDataSource(EventMetricDataSource):
             "session.archive",
             {"status": str(status)},
         )
+
+    @staticmethod
+    def record_fencing(
+        *, operation: str, outcome: str, latency_seconds: float
+    ) -> None:
+        """Emit one low-cardinality fenced-session write outcome."""
+        EventMetricDataSource._emit(
+            "session.fencing",
+            {
+                "operation": str(operation),
+                "outcome": str(outcome),
+                "latency_seconds": max(0.0, float(latency_seconds)),
+            },
+        )
+
+    @staticmethod
+    def record_fenced_effect(*, operation: str, outcome: str) -> None:
+        """Emit one bounded v2 durable-writer attempt outcome."""
+        EventMetricDataSource._emit(
+            "session.fenced_effect",
+            {"operation": str(operation), "outcome": str(outcome)},
+        )
+
+
+class FencedBacklogDataSource(StateMetricDataSource):
+    """Read the bounded PostgreSQL outbox snapshot used by scrape metrics."""
+
+    def read_backlog(self) -> dict:
+        from openviking.server.fenced_postgres import (
+            _connect,
+            fencing_database_url,
+            fencing_service_token,
+        )
+        from openviking.server.routers.fenced_sessions import (
+            fenced_writer_runtime_status,
+        )
+
+        runtime = fenced_writer_runtime_status()
+        result = {
+            "writer_healthy": bool(runtime["healthy"]),
+            "effect_concurrency": int(runtime["effect_concurrency"]),
+            "commit_concurrency": int(runtime["commit_concurrency"]),
+            "effect": {
+                state: {"items": 0, "oldest_age_seconds": 0.0}
+                for state in ("queued", "running")
+            },
+            "commit": {
+                state: {"items": 0, "oldest_age_seconds": 0.0}
+                for state in ("pending", "running", "ambiguous")
+            },
+        }
+        database_url = fencing_database_url()
+        service_token = fencing_service_token()
+        if not database_url and not service_token:
+            return result
+        if not database_url or not service_token:
+            raise RuntimeError("partial Alice fencing configuration")
+
+        conn = _connect(application_name="openviking-fenced-metrics")
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cursor:
+                # A scrape must never hold a database connection behind slow
+                # application work.  CollectorManager also adds a 1s outer
+                # timeout and a 1s TTL/SWR cache.
+                cursor.execute("SET statement_timeout = 500")
+                cursor.execute(
+                    """
+                    SELECT o.state, count(*),
+                           COALESCE(
+                             EXTRACT(EPOCH FROM (now() - min(r.submitted_at))),
+                             0
+                           )
+                    FROM openviking_fencing.effect_outbox o
+                    JOIN openviking_fencing.operation_receipt r
+                      USING (account_id,user_id,writer,session_scope_id,operation_id)
+                    WHERE o.state IN ('queued','running')
+                    GROUP BY o.state
+                    """
+                )
+                for state, count, oldest in cursor.fetchall():
+                    normalized = str(state)
+                    if normalized in result["effect"]:
+                        result["effect"][normalized] = {
+                            "items": int(count),
+                            "oldest_age_seconds": max(0.0, float(oldest)),
+                        }
+                cursor.execute(
+                    """
+                    SELECT state, count(*),
+                           COALESCE(
+                             EXTRACT(EPOCH FROM (now() - min(created_at))),
+                             0
+                           )
+                    FROM openviking_fencing.commit_work_outbox
+                    WHERE state IN ('pending','running','ambiguous')
+                    GROUP BY state
+                    """
+                )
+                for state, count, oldest in cursor.fetchall():
+                    normalized = str(state)
+                    if normalized in result["commit"]:
+                        result["commit"][normalized] = {
+                            "items": int(count),
+                            "oldest_age_seconds": max(0.0, float(oldest)),
+                        }
+        finally:
+            conn.close()
+        return result
