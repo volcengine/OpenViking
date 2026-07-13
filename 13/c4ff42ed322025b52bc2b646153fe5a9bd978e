@@ -1,0 +1,28 @@
+openviking/storage/viking_fs.py
+  s_f713101195809b::t_170a4768839358 2967-2976
+tests/storage/test_semantic_processor_mv_vector_store.py
+  s_f713101195809b::t_3e2ac710511181 40-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "13c4ff42ed322025b52bc2b646153fe5a9bd978e",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_f713101195809b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4c2c-b292-7d61-913a-8e28d141dab9",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
