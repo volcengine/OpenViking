@@ -1472,59 +1472,47 @@ class VikingFS:
             await self._ensure_access(normalized_excluded_uri, ctx)
             excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
 
-        acl_filtering = self.acl_manager is not None
-        raw_limit = (
-            node_limit * self._TREE_OVERFETCH_FACTOR
-            if node_limit and acl_filtering
-            else node_limit
-        )
-        while True:
-            try:
-                result = await self._async_agfs.grep(
-                    path=path,
-                    pattern=pattern,
-                    recursive=True,
-                    case_insensitive=case_insensitive,
-                    stream=False,
-                    node_limit=raw_limit,
-                    exclude_path=excluded_path,
-                    level_limit=level_limit,
-                )
-            except (AttributeError, AGFSNotSupportedError, NotImplementedError):
-                # Capability missing: let the outer caller use the filesystem fallback.
-                logger.warning("agfs grep unavailable, falling back to VikingFS implementation")
-                raise
+        try:
+            result = await self._async_agfs.grep(
+                path=path,
+                pattern=pattern,
+                recursive=True,
+                case_insensitive=case_insensitive,
+                stream=False,
+                node_limit=(
+                    node_limit * 4
+                    if node_limit and getattr(self, "acl_manager", None) is not None
+                    else node_limit
+                ),
+                exclude_path=excluded_path,
+                level_limit=level_limit,
+            )
+        except (AttributeError, AGFSNotSupportedError, NotImplementedError):
+            # Capability missing: let the outer caller use the filesystem fallback.
+            logger.warning("agfs grep unavailable, falling back to VikingFS implementation")
+            raise
 
-            matches = result.get("matches", [])
-            results = []
-            for match in matches:
-                match_file = match.get("file", "")
-                if not match_file:
-                    continue
-                file_uri = self._path_to_uri(
-                    self._resolve_grep_match_agfs_path(path, match_file), ctx=ctx
-                )
-                results.append(
-                    {
-                        "line": match.get("line", match.get("line_number", 0)),
-                        "uri": file_uri,
-                        "content": match.get("content", ""),
-                    }
-                )
+        matches = result.get("matches", [])
+        results = []
+        for match in matches:
+            match_file = match.get("file", "")
+            if not match_file:
+                continue
+            file_uri = self._path_to_uri(
+                self._resolve_grep_match_agfs_path(path, match_file), ctx=ctx
+            )
+            results.append(
+                {
+                    "line": match.get("line", match.get("line_number", 0)),
+                    "uri": file_uri,
+                    "content": match.get("content", ""),
+                }
+            )
 
-            access = await self._can_access_many([item["uri"] for item in results], ctx)
-            results = [item for item in results if access.get(item["uri"], False)]
-            if node_limit:
-                results = results[:node_limit]
-            if not (
-                acl_filtering
-                and node_limit
-                and len(results) < node_limit
-                and raw_limit is not None
-                and len(matches) >= raw_limit
-            ):
-                break
-            raw_limit *= 2
+        access = await self._can_access_many([item["uri"] for item in results], ctx)
+        results = [item for item in results if access.get(item["uri"], False)]
+        if node_limit:
+            results = results[:node_limit]
         files_scanned_set = {item["uri"] for item in results}
 
         # Prefer backend-provided scanned file count if available; otherwise fall back to

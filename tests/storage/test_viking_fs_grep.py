@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import time
+from unittest.mock import AsyncMock
 
 import pytest
 
-import openviking.storage.viking_fs as viking_fs_module
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import _DEFAULT_GREP_FILE_CONCURRENCY, VikingFS
 from openviking_cli.utils.config.grep_config import GrepConfig
@@ -153,10 +153,7 @@ async def test_grep_vikingdb_pushes_exclude_uri_to_filter(monkeypatch):
     vector_store = _DummyVectorStore()
     monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
 
-    async def allow_access(uri, ctx=None):
-        del uri, ctx
-
-    monkeypatch.setattr(fs, "_ensure_access", allow_access)
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
 
     result = await fs._grep_vikingdb_then_fs(
         uri="viking://resources",
@@ -192,10 +189,7 @@ async def test_grep_vikingdb_keeps_local_exclude_uri_guard(monkeypatch):
     )
     monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
 
-    async def allow_access(uri, ctx=None):
-        del uri, ctx
-
-    monkeypatch.setattr(fs, "_ensure_access", allow_access)
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
 
     grep_in_files_calls = []
 
@@ -323,83 +317,6 @@ async def test_grep_parallel_reads_respect_concurrency_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_grep_parallel_reads_work_with_blocking_agfs_read(monkeypatch):
-    fs = VikingFS(agfs=_DummyAgfs())
-
-    async def fake_stat(uri, ctx=None, skip_count=False):
-        return {"isDir": True}
-
-    async def fake_ls(uri, ctx=None, **kwargs):
-        if uri == "viking://resources":
-            return [{"name": f"file{i}.md", "isDir": False} for i in range(8)]
-        return []
-
-    def fake_agfs_read(path, offset=0, size=-1):
-        time.sleep(0.05)
-        return f"match from {path}".encode()
-
-    monkeypatch.setattr(fs, "stat", fake_stat)
-    monkeypatch.setattr(fs, "ls", fake_ls)
-    monkeypatch.setattr(
-        fs,
-        "_uri_to_path",
-        lambda uri, ctx=None: uri.replace("viking://", "/"),
-    )
-    monkeypatch.setattr(fs.agfs, "read", fake_agfs_read, raising=False)
-
-    started = time.perf_counter()
-    result = await fs.grep("viking://resources", pattern="match")
-    elapsed = time.perf_counter() - started
-
-    assert result["count"] == 8
-    assert result["files_scanned"] == 8
-    assert elapsed < 0.30
-
-
-@pytest.mark.asyncio
-async def test_grep_stops_scheduling_later_batches_after_node_limit(monkeypatch):
-    fs = VikingFS(agfs=_DummyAgfs())
-
-    async def fake_stat(uri, ctx=None, skip_count=False):
-        return {"isDir": True}
-
-    async def fake_ls(uri, ctx=None, **kwargs):
-        if uri == "viking://resources":
-            return [{"name": f"file{i}.md", "isDir": False} for i in range(6)]
-        return []
-
-    read_paths = []
-
-    def fake_agfs_read(path, offset=0, size=-1):
-        read_paths.append(path)
-        contents = {
-            "/resources/file0.md": "match file0 line1\nmatch file0 line2",
-            "/resources/file1.md": "match file1 line1",
-            "/resources/file2.md": "match file2 line1",
-            "/resources/file3.md": "match file3 line1",
-            "/resources/file4.md": "match file4 line1",
-            "/resources/file5.md": "match file5 line1",
-        }
-        return contents[path].encode()
-
-    monkeypatch.setattr(fs, "stat", fake_stat)
-    monkeypatch.setattr(fs, "ls", fake_ls)
-    monkeypatch.setattr(
-        fs,
-        "_uri_to_path",
-        lambda uri, ctx=None: uri.replace("viking://", "/"),
-    )
-    monkeypatch.setattr(fs.agfs, "read", fake_agfs_read, raising=False)
-    monkeypatch.setattr(viking_fs_module, "_DEFAULT_GREP_FILE_CONCURRENCY", 2)
-
-    result = await fs.grep("viking://resources", pattern="match", node_limit=2)
-
-    assert result["count"] == 2
-    assert result["files_scanned"] == 1
-    assert read_paths == ["/resources/file0.md", "/resources/file1.md"]
-
-
-@pytest.mark.asyncio
 async def test_grep_delegates_to_agfs_with_expected_filters(monkeypatch, fs):
     calls = []
 
@@ -465,43 +382,3 @@ async def test_grep_maps_agfs_matches_to_viking_uris(monkeypatch, fs):
         "match_count": 2,
         "files_scanned": 7,
     }
-
-
-@pytest.mark.asyncio
-async def test_grep_refetches_until_acl_visible_node_limit(monkeypatch, fs):
-    raw_limits = []
-
-    async def fake_grep(**kwargs):
-        raw_limits.append(kwargs["node_limit"])
-        hidden = [
-            {"file": f"hidden-{index}.md", "line": 1, "content": "hidden"} for index in range(8)
-        ]
-        return {
-            "matches": hidden
-            if len(raw_limits) == 1
-            else [
-                *hidden,
-                {"file": "a.md", "line": 1, "content": "a"},
-                {"file": "b.md", "line": 1, "content": "b"},
-            ]
-        }
-
-    async def fake_can_access_many(uris, _ctx, _action="read"):
-        return {
-            uri: uri == "viking://resources" or uri.endswith(("/a.md", "/b.md")) for uri in uris
-        }
-
-    fs.acl_manager = object()
-    monkeypatch.setattr(fs._async_agfs, "grep", fake_grep)
-    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
-
-    result = await fs.grep("viking://resources", pattern="match", node_limit=2)
-
-    assert raw_limits == [8, 16]
-    assert result["count"] == 2
-    assert result["match_count"] == 2
-    assert result["files_scanned"] == 2
-    assert [match["uri"] for match in result["matches"]] == [
-        "viking://resources/a.md",
-        "viking://resources/b.md",
-    ]

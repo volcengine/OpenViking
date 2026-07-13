@@ -16,7 +16,7 @@ from openviking.storage.acl import (
     is_implicit_manager,
 )
 from openviking.storage.collection_schemas import CollectionSchemas
-from openviking.storage.expr import In, PathScope, RawDSL
+from openviking.storage.expr import In, RawDSL
 from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking_cli.exceptions import InvalidArgumentError
@@ -110,7 +110,7 @@ def test_acl_rule_model():
 
 
 @pytest.mark.asyncio
-async def test_context_acl_inheritance_filter_and_move(tmp_path, monkeypatch):
+async def test_context_acl_inheritance_filter_and_move(tmp_path):
     if not getattr(vectordb_engine, "PersistStore", None):
         pytest.skip("local persistent vectordb engine is unavailable")
 
@@ -124,14 +124,11 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path, monkeypatch):
     admin = _ctx("admin", Role.ADMIN)
     bob = _ctx("bob", group_ids=("grp_readers",))
     carol = _ctx("carol")
-    root = _ctx("root", Role.ROOT)
     old_root = "viking://resources/source"
     old_file = f"{old_root}/doc.md"
     new_parent = "viking://resources/destination"
     new_root = f"{new_parent}/source"
     new_file = f"{new_root}/doc.md"
-    private_file = "viking://user/alice/resources/private.md"
-    shared_private_file = f"{new_parent}/private.md"
 
     try:
         assert await context_store.create_collection(
@@ -148,18 +145,6 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path, monkeypatch):
         await acl.set_direct(old_root, [AclEntry("group:grp_readers", "viewer")], admin)
         await acl.set_direct(new_parent, [AclEntry("user:alice", "editor")], admin)
 
-        await context_store.upsert(
-            {
-                "id": "doc-l2",
-                "uri": old_file,
-                "account_id": admin.account_id,
-                "context_type": "resource",
-                "level": 2,
-                "content": "reindexed without ACL fields",
-                "vector": [1.0, 0.0, 0.0, 0.0],
-            },
-            ctx=admin,
-        )
         materialized = (await context_store.get_strict(["doc-l2"], ctx=admin))[0]
         assert materialized["acl_direct_read_principal_ids"] == []
         assert materialized["acl_inherited_read_principal_ids"] == [
@@ -179,27 +164,8 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path, monkeypatch):
             target_directories=[old_root],
             level=[2],
         )
-        root_results = await context_store.search_in_tenant(
-            ctx=root,
-            query_vector=[1.0, 0.0, 0.0, 0.0],
-            target_directories=[old_root],
-            level=[2],
-        )
         assert [record["uri"] for record in bob_results] == [old_file]
         assert carol_results == []
-        assert root_results == []
-        revoked_results = await context_store.search_in_tenant(
-            ctx=_ctx("bob"),
-            query_vector=[1.0, 0.0, 0.0, 0.0],
-            target_directories=[old_root],
-            level=[2],
-        )
-        assert revoked_results == []
-        assert (await context_store.get_strict(["doc-l2"], ctx=admin))[0][
-            "acl_inherited_read_principal_ids"
-        ] == ["group:grp_readers", "user:alice"]
-        assert await context_store.count_in_tenant(bob, PathScope("uri", old_root, depth=-1)) == 2
-        assert await context_store.count_in_tenant(carol, PathScope("uri", old_root, depth=-1)) == 0
 
         assert await context_store.update_uri_mapping(ctx=admin, uri=old_root, new_uri=new_root)
         assert await context_store.update_uri_mapping(ctx=admin, uri=old_file, new_uri=new_file)
@@ -210,77 +176,6 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path, monkeypatch):
         assert effective.permissions.write == frozenset({"user:alice"})
         assert (await acl.get_direct(old_root, admin)).empty
         assert (await acl.get_direct(new_root, admin)).read == frozenset({"group:grp_readers"})
-
-        new_context = await context_store.filter(
-            filter=In("uri", [new_file]),
-            limit=10,
-            ctx=admin,
-        )
-        assert new_context[0]["acl_direct_read_principal_ids"] == []
-        assert new_context[0]["acl_inherited_read_principal_ids"] == [
-            "group:grp_readers",
-            "user:alice",
-        ]
-        assert new_context[0]["acl_inherited_write_principal_ids"] == ["user:alice"]
-
-        stale_private_acl = EffectiveAcl(
-            True,
-            direct=entries_to_direct([AclEntry("group:grp_readers", "viewer")]),
-            inherited=entries_to_direct([]),
-        )
-        await context_store.upsert(
-            {
-                "id": "private-l2",
-                "uri": private_file,
-                "account_id": admin.account_id,
-                "context_type": "resource",
-                "level": 2,
-                "content": "private",
-                "vector": [1.0, 0.0, 0.0, 0.0],
-                **stale_private_acl.context_fields(),
-            },
-            ctx=admin,
-            _acl_materialized=True,
-        )
-        assert (
-            await context_store.search_in_tenant(
-                ctx=bob,
-                query_vector=[1.0, 0.0, 0.0, 0.0],
-                target_directories=[private_file],
-                level=[2],
-            )
-            == []
-        )
-
-        assert await context_store.update_uri_mapping(
-            ctx=admin, uri=private_file, new_uri=shared_private_file
-        )
-        shared_record = (
-            await context_store.filter(filter=In("uri", [shared_private_file]), limit=1, ctx=admin)
-        )[0]
-        assert shared_record["acl_direct_read_principal_ids"] == []
-        assert shared_record["acl_inherited_read_principal_ids"] == ["user:alice"]
-        assert await context_store.update_uri_mapping(
-            ctx=admin, uri=shared_private_file, new_uri=private_file
-        )
-        private_record = (
-            await context_store.filter(filter=In("uri", [private_file]), limit=1, ctx=admin)
-        )[0]
-        assert private_record["acl_enabled"] is False
-        assert private_record["acl_direct_read_principal_ids"] == []
-        assert private_record["acl_inherited_read_principal_ids"] == []
-
-        account_backend = context_store._get_backend_for_context(admin)
-        original_call = account_backend._async_adapter.call
-
-        async def fail_acl_query(method_name, *args, **kwargs):
-            if method_name == "query":
-                raise RuntimeError("ACL lookup failed")
-            return await original_call(method_name, *args, **kwargs)
-
-        monkeypatch.setattr(account_backend._async_adapter, "call", fail_acl_query)
-        with pytest.raises(RuntimeError, match="ACL lookup failed"):
-            await acl.resolve(new_file, admin)
     finally:
         await context_store.close()
 

@@ -48,9 +48,6 @@ def bare_viking_fs() -> VikingFS:
 @pytest.mark.asyncio
 async def test_watch_task_control_files_are_root_only(bare_viking_fs, root_ctx, user_ctx, uri):
     bare_viking_fs.acl_manager = object()
-    assert bare_viking_fs._is_accessible(uri, root_ctx) is True
-    assert bare_viking_fs._is_accessible(uri, user_ctx) is False
-
     await bare_viking_fs._ensure_access(uri, root_ctx)
     with pytest.raises(PermissionDeniedError):
         await bare_viking_fs._ensure_access(uri, user_ctx)

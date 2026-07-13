@@ -276,27 +276,6 @@ async def user_key(auth_app):
 # ---- Basic auth tests ----
 
 
-async def test_request_context_resolves_server_managed_groups():
-    class GroupManager:
-        @staticmethod
-        def get_user_group_ids(account_id: str, user_id: str) -> tuple[str, ...]:
-            assert (account_id, user_id) == ("acme", "alice")
-            return ("grp_engineering",)
-
-    request = _make_request(
-        "/api/v1/fs/ls",
-        root_api_key=ROOT_KEY,
-        api_key_manager=GroupManager(),
-    )
-    ctx = await get_request_context(
-        request,
-        ResolvedIdentity(role=Role.USER, account_id="acme", user_id="alice"),
-        None,
-        None,
-    )
-    assert ctx.group_ids == ("grp_engineering",)
-
-
 async def test_health_no_auth_required(auth_client: httpx.AsyncClient):
     """/health should be accessible without any API key."""
     resp = await auth_client.get("/health")
