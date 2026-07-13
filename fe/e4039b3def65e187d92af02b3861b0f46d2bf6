@@ -1,0 +1,33 @@
+docs/.env.example
+  s_62dfa863fa4c7f::t_119bc64c502b7f 1-2
+docs/.vitepress/theme/VikingBotAssistant.vue
+  s_62dfa863fa4c7f::t_4efa0ceaa721da 1-342
+docs/.vitepress/theme/index.ts
+  s_62dfa863fa4c7f::t_219f58feb82263 8,312
+docs/.vitepress/theme/vikingbot-api.test.ts
+  s_62dfa863fa4c7f::t_ee32cd6f2ceb83 1-31
+docs/.vitepress/theme/vikingbot-api.ts
+  s_62dfa863fa4c7f::t_e21d1af2ee9e4d 1-111
+docs/package-lock.json
+  s_62dfa863fa4c7f::t_35406740330224 11,1590-1596,1858-1877,1895-1925,1948-1954,2159-2168,2350-2356
+docs/package.json
+  s_62dfa863fa4c7f::t_20528d6f094a7e 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "fee4039b3def65e187d92af02b3861b0f46d2bf6",
+  "prompts": {},
+  "sessions": {
+    "s_62dfa863fa4c7f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5994-520b-77f1-a64a-92f2cde81cb9",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
