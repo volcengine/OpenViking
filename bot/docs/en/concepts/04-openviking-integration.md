@@ -30,7 +30,7 @@ VikingBot resolves its OpenViking connection from the same `ov.conf` and support
 | **Explicit** | `bot.ov_server.server_url` | The Bot connects to another OpenViking Server |
 | **Standalone** | No available Server URL | Basic chat remains available, while OpenViking capabilities are degraded |
 
-With `openviking-server --with-bot`, the Server passes managed connection information to VikingBot. For an explicit remote connection, configure the target URL and credentials under `bot.ov_server`.
+`openviking-server --with-bot` uses **Inherited** mode: the Server starts a managed VikingBot Gateway and passes its own connection information to the Bot. The configuration example below is also Inherited mode: the root-level `server` defines the current OpenViking Server, while `bot.ov_server` supplies only the credentials used by the Bot and does not set `server_url`. To use **Explicit** mode with another OpenViking Server, configure both its target URL and credentials under `bot.ov_server`.
 
 Example:
 
