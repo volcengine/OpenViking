@@ -3312,6 +3312,8 @@ class VikingFS:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -3323,6 +3325,8 @@ class VikingFS:
             abs_limit: int = 256
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int = 1000 (maximum number of nodes to list)
+            sort_by: Optional sort field, "name" or "mtime"
+            sort_order: Sort direction, "asc" or "desc"
 
         output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': None}, 'uri': 'viking://resources/.abstract.md'}]
@@ -3331,12 +3335,90 @@ class VikingFS:
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11T08:52:16.256Z', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
         """
         self._ensure_access(uri, ctx)
+        if sort_by not in {None, "name", "mtime"}:
+            raise ValueError("sort_by must be 'name' or 'mtime'")
+        if sort_order not in {"asc", "desc"}:
+            raise ValueError("sort_order must be 'asc' or 'desc'")
         if output == "original":
-            return await self._ls_original(uri, show_all_hidden, node_limit, ctx=ctx)
+            return await self._ls_original(
+                uri,
+                show_all_hidden,
+                node_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                ctx=ctx,
+            )
         elif output == "agent":
-            return await self._ls_agent(uri, abs_limit, show_all_hidden, node_limit, ctx=ctx)
+            return await self._ls_agent(
+                uri,
+                abs_limit,
+                show_all_hidden,
+                node_limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                ctx=ctx,
+            )
         else:
             raise ValueError(f"Invalid output format: {output}")
+
+    @staticmethod
+    def _ls_entry_mtime(entry: Dict[str, Any]) -> Optional[float]:
+        raw_time = entry.get("modTime")
+        if isinstance(raw_time, (int, float)):
+            return float(raw_time)
+        if isinstance(raw_time, str) and raw_time:
+            try:
+                return parse_iso_datetime(raw_time).timestamp()
+            except (TypeError, ValueError, OverflowError):
+                return None
+
+        legacy_time = entry.get("mtime")
+        if isinstance(legacy_time, (int, float)):
+            return float(legacy_time)
+        return None
+
+    @classmethod
+    def _sort_ls_entry_items(
+        cls,
+        entry_items: List[tuple[Dict[str, Any], str]],
+        sort_by: Optional[str],
+        sort_order: str,
+    ) -> List[tuple[Dict[str, Any], str]]:
+        if sort_by is None:
+            return entry_items
+
+        descending = sort_order == "desc"
+        directories = [item for item in entry_items if item[0].get("isDir", False)]
+        files = [item for item in entry_items if not item[0].get("isDir", False)]
+
+        if sort_by == "name":
+
+            def name_key(item: tuple[Dict[str, Any], str]) -> tuple[str, str]:
+                name = str(item[0].get("name", ""))
+                return name.lower(), name
+
+            directories.sort(key=name_key, reverse=descending)
+            files.sort(key=name_key, reverse=descending)
+            return directories + files
+
+        def sort_by_mtime(
+            items: List[tuple[Dict[str, Any], str]],
+        ) -> List[tuple[Dict[str, Any], str]]:
+            timestamped = []
+            missing = []
+            for item in items:
+                timestamp = cls._ls_entry_mtime(item[0])
+                if timestamp is None:
+                    missing.append(item)
+                else:
+                    timestamped.append((timestamp, item))
+            timestamped.sort(
+                key=lambda pair: pair[0],
+                reverse=descending,
+            )
+            return [item for _, item in timestamped] + missing
+
+        return sort_by_mtime(directories) + sort_by_mtime(files)
 
     async def _ls_agent(
         self,
@@ -3344,11 +3426,14 @@ class VikingFS:
         abs_limit: int,
         show_all_hidden: bool,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
         real_ctx = self._ctx_or_default(ctx)
         entry_items = await self._list_read_path_items(uri, ctx=ctx)
+        entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)
         # basic info
         fallback_time = datetime.now(timezone.utc)
         all_entries = []
@@ -3390,12 +3475,15 @@ class VikingFS:
         uri: str,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
         real_ctx = self._ctx_or_default(ctx)
         try:
             entry_items = await self._list_read_path_items(uri, ctx=ctx)
+            entry_items = self._sort_ls_entry_items(entry_items, sort_by, sort_order)
             # AGFS returns read-only structure, need to create new dict
             all_entries = []
             for entry, entry_uri in entry_items:

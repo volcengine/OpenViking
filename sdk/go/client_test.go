@@ -166,6 +166,34 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 	}
 }
 
+func TestListSendsOrderingOptions(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/fs/ls" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("node_limit"); got != "200" {
+			t.Fatalf("node_limit = %q", got)
+		}
+		if got := r.URL.Query().Get("sort_by"); got != "mtime" {
+			t.Fatalf("sort_by = %q", got)
+		}
+		if got := r.URL.Query().Get("sort_order"); got != "desc" {
+			t.Fatalf("sort_order = %q", got)
+		}
+		writeOK(t, w, []any{})
+	}))
+	defer closeServer()
+
+	_, err := client.List(context.Background(), "viking://session", &ListOptions{
+		NodeLimit: 200,
+		SortBy:    "mtime",
+		SortOrder: "desc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFindSendsImageQuery(t *testing.T) {
 	imagePath := filepath.Join(t.TempDir(), "query.png")
 	if err := os.WriteFile(imagePath, []byte("\x89PNG\r\n\x1a\n"), 0o600); err != nil {

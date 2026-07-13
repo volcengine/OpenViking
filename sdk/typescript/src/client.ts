@@ -422,6 +422,8 @@ export class OpenVikingClient {
         abs_limit: options.absLimit ?? 256,
         show_all_hidden: options.showAllHidden ?? false,
         node_limit: options.nodeLimit ?? 1000,
+        sort_by: options.sortBy,
+        sort_order: options.sortOrder,
       },
     });
   }

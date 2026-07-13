@@ -117,6 +117,8 @@ export interface ListOptions {
   absLimit?: number;
   showAllHidden?: boolean;
   nodeLimit?: number;
+  sortBy?: "name" | "mtime";
+  sortOrder?: "asc" | "desc";
 }
 /** Directory tree options. */
 export interface TreeOptions {

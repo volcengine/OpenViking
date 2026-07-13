@@ -557,6 +557,8 @@ async def test_ls_passes_full_query_params():
         abs_limit=32,
         show_all_hidden=True,
         node_limit=44,
+        sort_by="mtime",
+        sort_order="desc",
     )
 
     fake_http.get.assert_awaited_once_with(
@@ -569,6 +571,8 @@ async def test_ls_passes_full_query_params():
             "abs_limit": 32,
             "show_all_hidden": True,
             "node_limit": 44,
+            "sort_by": "mtime",
+            "sort_order": "desc",
         },
     )
 
