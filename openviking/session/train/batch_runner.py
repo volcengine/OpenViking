@@ -87,6 +87,7 @@ class BatchTrainEvalConfig:
     trials: int = 8
     train_trials: int = 1
     reuse_train_rollout_cache: bool = False
+    continue_on_rollout_failure: bool = False
     clean_result: bool = True
     keep_recent_results: int = 5
     events_path: str | None = None
@@ -801,6 +802,7 @@ def _build_pipeline(
     rollout_executor: Any = RemoteRolloutExecutor(
         service_url=_require_benchmark_service_url(config),
         concurrency=config.concurrency,
+        continue_on_rollout_failure=config.continue_on_rollout_failure,
         show_progress=True,
         progress_label="rollout",
         options=rollout_options,

@@ -176,6 +176,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--continue-on-rollout-failure",
+        action="store_true",
+        help=(
+            "Treat failed remote rollouts as 0-score eval results instead of "
+            "aborting the batch."
+        ),
+    )
+    parser.add_argument(
         "--keep-recent-results",
         type=int,
         default=5,
@@ -270,6 +278,7 @@ async def main_async() -> int:
             trials=args.trials,
             train_trials=args.train_trials,
             reuse_train_rollout_cache=args.reuse_train_rollout_cache,
+            continue_on_rollout_failure=args.continue_on_rollout_failure,
             clean_result=args.clean_result,
             keep_recent_results=args.keep_recent_results,
         )

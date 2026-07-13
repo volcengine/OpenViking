@@ -19,6 +19,8 @@ from openviking.session.train.domain import (
     RolloutAnalysis,
 )
 
+_MEMORY_TOOL_NAMES = frozenset({"memsearch", "memread", "memsubmit"})
+
 
 @dataclass(slots=True)
 class PipelineReportBuilder:
@@ -266,8 +268,8 @@ class PipelineReportBuilder:
         for tool_info in tools_used:
             if not isinstance(tool_info, dict):
                 continue
-            tool_name = str(tool_info.get("tool_name") or "")
-            if tool_name.startswith(self.memory_tool_name_prefix):
+            tool_name = str(tool_info.get("tool_name") or "").strip().lower()
+            if self._is_memory_tool_name(tool_name):
                 count += 1
         return count
 
@@ -283,6 +285,16 @@ class PipelineReportBuilder:
                 if "<experience_reminder>" in text and "</experience_reminder>" in text:
                     reminders.add(text)
         return len(reminders)
+
+    def _is_memory_tool_name(self, tool_name: str) -> bool:
+        if not tool_name:
+            return False
+        prefix = self.memory_tool_name_prefix.strip().lower()
+        if prefix and tool_name.startswith(prefix):
+            return True
+        if tool_name in _MEMORY_TOOL_NAMES:
+            return True
+        return any(tool_name.endswith(f"_{name}") for name in _MEMORY_TOOL_NAMES)
 
     def accuracy_delta(
         self,
