@@ -417,12 +417,6 @@ class VikingFS:
     ) -> bool:
         return (await self._can_access_many([uri], ctx, action)).get(uri, False)
 
-    def _legacy_resource_access(self, uri: str, ctx: RequestContext) -> bool:
-        parts = uri_parts(uri)
-        if len(parts) >= 3 and parts[0] == "user" and parts[2] == "resources":
-            return parts[1] == ctx.user.user_id
-        return self._is_accessible(uri, ctx)
-
     async def _can_access_many(
         self,
         uris: List[str],
@@ -440,8 +434,7 @@ class VikingFS:
         acl_manager = getattr(self, "acl_manager", None)
         if acl_manager is None:
             return {
-                uri: normalized_uri is not None
-                and self._is_accessible(normalized_uri, real_ctx)
+                uri: normalized_uri is not None and self._is_accessible(normalized_uri, real_ctx)
                 for uri, normalized_uri in normalized.items()
             }
 
@@ -469,7 +462,7 @@ class VikingFS:
         for original, normalized_uri in pending.items():
             acl = effective[normalized_uri]
             if not acl.enabled:
-                result[original] = self._legacy_resource_access(normalized_uri, real_ctx)
+                result[original] = self._is_accessible(normalized_uri, real_ctx)
             else:
                 result[original] = acl_allows(acl, real_ctx, action)
         return result
@@ -1479,48 +1472,59 @@ class VikingFS:
             await self._ensure_access(normalized_excluded_uri, ctx)
             excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
 
-        try:
-            result = await self._async_agfs.grep(
-                path=path,
-                pattern=pattern,
-                recursive=True,
-                case_insensitive=case_insensitive,
-                stream=False,
-                node_limit=(
-                    node_limit * 4
-                    if node_limit and getattr(self, "acl_manager", None) is not None
-                    else node_limit
-                ),
-                exclude_path=excluded_path,
-                level_limit=level_limit,
-            )
-        except (AttributeError, AGFSNotSupportedError, NotImplementedError):
-            # Capability missing: let the outer caller fall back to the VikingFS implementation.
-            logger.warning("agfs grep unavailable, falling back to VikingFS implementation")
-            raise
+        acl_filtering = self.acl_manager is not None
+        raw_limit = (
+            node_limit * self._TREE_OVERFETCH_FACTOR
+            if node_limit and acl_filtering
+            else node_limit
+        )
+        while True:
+            try:
+                result = await self._async_agfs.grep(
+                    path=path,
+                    pattern=pattern,
+                    recursive=True,
+                    case_insensitive=case_insensitive,
+                    stream=False,
+                    node_limit=raw_limit,
+                    exclude_path=excluded_path,
+                    level_limit=level_limit,
+                )
+            except (AttributeError, AGFSNotSupportedError, NotImplementedError):
+                # Capability missing: let the outer caller use the filesystem fallback.
+                logger.warning("agfs grep unavailable, falling back to VikingFS implementation")
+                raise
 
-        matches = result.get("matches", [])
-        results = []
-        for match in matches:
-            match_file = match.get("file", "")
-            if not match_file:
-                continue
+            matches = result.get("matches", [])
+            results = []
+            for match in matches:
+                match_file = match.get("file", "")
+                if not match_file:
+                    continue
+                file_uri = self._path_to_uri(
+                    self._resolve_grep_match_agfs_path(path, match_file), ctx=ctx
+                )
+                results.append(
+                    {
+                        "line": match.get("line", match.get("line_number", 0)),
+                        "uri": file_uri,
+                        "content": match.get("content", ""),
+                    }
+                )
 
-            agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
-
-            file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
-            results.append(
-                {
-                    "line": match.get("line", match.get("line_number", 0)),
-                    "uri": file_uri,
-                    "content": match.get("content", ""),
-                }
-            )
-
-        access = await self._can_access_many([item["uri"] for item in results], ctx)
-        results = [item for item in results if access.get(item["uri"], False)]
-        if node_limit:
-            results = results[:node_limit]
+            access = await self._can_access_many([item["uri"] for item in results], ctx)
+            results = [item for item in results if access.get(item["uri"], False)]
+            if node_limit:
+                results = results[:node_limit]
+            if not (
+                acl_filtering
+                and node_limit
+                and len(results) < node_limit
+                and raw_limit is not None
+                and len(matches) >= raw_limit
+            ):
+                break
+            raw_limit *= 2
         files_scanned_set = {item["uri"] for item in results}
 
         # Prefer backend-provided scanned file count if available; otherwise fall back to
@@ -2581,9 +2585,8 @@ class VikingFS:
         name = entry_info.get("name") or entry_path.rstrip("/").rsplit("/", 1)[-1]
         return self._is_path_entry_visible(entry_path, name, base_path, ctx)
 
-    # Over-fetch multiplier for bounded tree traversal. When a node_limit is
-    # set, we push down node_limit * this factor as the raw-node limit to Rust,
-    # leaving headroom for ACL/internal-name filtering before re-fetching.
+    # Initial headroom before ACL filtering; bounded operations retry with a
+    # larger raw limit when the visible result limit has not been reached.
     _TREE_OVERFETCH_FACTOR = 4
     _GLOB_PAGE_SIZE_DEFAULT = 1024
 
@@ -2603,7 +2606,7 @@ class VikingFS:
     ):
         """Shared generator: fetch raw TreeEntry list from Rust, yield (entry, uri) tuples.
 
-        node_limit counts ACL-visible entries (see design §6.5), so the user's
+        node_limit counts ACL-visible entries, so the user's
         node_limit cannot be pushed directly to Rust — doing so would truncate
         before filtering and drop entries that should be visible.
 

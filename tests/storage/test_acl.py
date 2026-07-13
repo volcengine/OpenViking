@@ -24,12 +24,8 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
-def _ctx(
-    user_id: str, role: str = Role.USER, group_ids: tuple[str, ...] = ()
-) -> RequestContext:
-    return RequestContext(
-        user=UserIdentifier("account-1", user_id), role=role, group_ids=group_ids
-    )
+def _ctx(user_id: str, role: str = Role.USER, group_ids: tuple[str, ...] = ()) -> RequestContext:
+    return RequestContext(user=UserIdentifier("account-1", user_id), role=role, group_ids=group_ids)
 
 
 async def _upsert_context(
@@ -64,9 +60,7 @@ def test_acl_rule_model():
         ]
     )
 
-    assert acl.read == frozenset(
-        {"user:*", "user:alice", "user:bob", "group:grp_engineering"}
-    )
+    assert acl.read == frozenset({"user:*", "user:alice", "user:bob", "group:grp_engineering"})
     assert acl.write == frozenset({"user:alice", "user:bob"})
     assert acl.manage == frozenset({"user:bob"})
     assert [entry.to_dict() for entry in direct_to_entries(acl)] == [
@@ -101,9 +95,7 @@ def test_acl_rule_model():
     assert is_implicit_manager(_ctx("admin", Role.ADMIN), "viking://resources/a")
     assert not is_implicit_manager(_ctx("root", Role.ROOT), "viking://resources/a")
     assert not is_implicit_manager(_ctx("alice"), "viking://resources/a")
-    assert not is_implicit_manager(
-        _ctx("alice"), "viking://user/alice/resources/project/file.md"
-    )
+    assert not is_implicit_manager(_ctx("alice"), "viking://user/alice/resources/project/file.md")
 
     inherited = entries_to_direct(
         [AclEntry("user:bob", "viewer"), AclEntry("user:alice", "editor")]
@@ -111,16 +103,14 @@ def test_acl_rule_model():
     direct = entries_to_direct([AclEntry("group:grp_ops", "manager")])
     effective = EffectiveAcl(True, direct=direct, inherited=inherited)
 
-    assert effective.permissions.read == frozenset(
-        {"user:alice", "user:bob", "group:grp_ops"}
-    )
+    assert effective.permissions.read == frozenset({"user:alice", "user:bob", "group:grp_ops"})
     assert acl_allows(effective, _ctx("alice"), "write")
     assert acl_allows(effective, _ctx("carol", group_ids=("grp_ops",)), "manage")
     assert not acl_allows(effective, _ctx("bob"), "write")
 
 
 @pytest.mark.asyncio
-async def test_context_acl_inheritance_filter_and_move(tmp_path):
+async def test_context_acl_inheritance_filter_and_move(tmp_path, monkeypatch):
     if not getattr(vectordb_engine, "PersistStore", None):
         pytest.skip("local persistent vectordb engine is unavailable")
 
@@ -216,14 +206,10 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path):
         await acl.refresh_context_subtree(new_root, admin)
 
         effective = await acl.resolve(new_file, admin)
-        assert effective.permissions.read == frozenset(
-            {"group:grp_readers", "user:alice"}
-        )
+        assert effective.permissions.read == frozenset({"group:grp_readers", "user:alice"})
         assert effective.permissions.write == frozenset({"user:alice"})
         assert (await acl.get_direct(old_root, admin)).empty
-        assert (await acl.get_direct(new_root, admin)).read == frozenset(
-            {"group:grp_readers"}
-        )
+        assert (await acl.get_direct(new_root, admin)).read == frozenset({"group:grp_readers"})
 
         new_context = await context_store.filter(
             filter=In("uri", [new_file]),
@@ -270,9 +256,7 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path):
             ctx=admin, uri=private_file, new_uri=shared_private_file
         )
         shared_record = (
-            await context_store.filter(
-                filter=In("uri", [shared_private_file]), limit=1, ctx=admin
-            )
+            await context_store.filter(filter=In("uri", [shared_private_file]), limit=1, ctx=admin)
         )[0]
         assert shared_record["acl_direct_read_principal_ids"] == []
         assert shared_record["acl_inherited_read_principal_ids"] == ["user:alice"]
@@ -285,6 +269,18 @@ async def test_context_acl_inheritance_filter_and_move(tmp_path):
         assert private_record["acl_enabled"] is False
         assert private_record["acl_direct_read_principal_ids"] == []
         assert private_record["acl_inherited_read_principal_ids"] == []
+
+        account_backend = context_store._get_backend_for_context(admin)
+        original_call = account_backend._async_adapter.call
+
+        async def fail_acl_query(method_name, *args, **kwargs):
+            if method_name == "query":
+                raise RuntimeError("ACL lookup failed")
+            return await original_call(method_name, *args, **kwargs)
+
+        monkeypatch.setattr(account_backend._async_adapter, "call", fail_acl_query)
+        with pytest.raises(RuntimeError, match="ACL lookup failed"):
+            await acl.resolve(new_file, admin)
     finally:
         await context_store.close()
 
@@ -335,9 +331,7 @@ async def test_local_acl_schema_migration_requires_no_record_backfill(tmp_path):
         assert [record["id"] for record in visible] == ["legacy-1"]
 
         acl = AclManager(backend)
-        await acl.set_direct(
-            "viking://resources/legacy.md", [AclEntry("user:bob", "viewer")], ctx
-        )
+        await acl.set_direct("viking://resources/legacy.md", [AclEntry("user:bob", "viewer")], ctx)
         stored = (await backend.get_strict(["legacy-1"], ctx=ctx))[0]
         assert stored["acl_enabled"] is True
         assert stored["acl_direct_read_principal_ids"] == ["user:bob"]

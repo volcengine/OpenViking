@@ -444,8 +444,8 @@ Below are all HTTP API endpoints provided by OpenViking, grouped by functional m
 | GET | `/api/v1/acl` | Get direct, inherited, and effective ACLs |
 | PUT | `/api/v1/acl` | Replace a resource's direct ACL |
 | DELETE | `/api/v1/acl` | Clear a resource's direct ACL |
-| POST | `/api/v1/acl/grant` | Set one user's direct level |
-| POST | `/api/v1/acl/revoke` | Remove one user's direct grant |
+| POST | `/api/v1/acl/grant` | Set one principal's direct level |
+| POST | `/api/v1/acl/revoke` | Remove one principal's direct grant |
 
 ### Snapshots (Multi-Version Management)
 

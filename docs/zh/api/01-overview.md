@@ -440,8 +440,8 @@ JSON 输出 - 错误：
 | GET | `/api/v1/acl` | 获取资源的直接、继承和有效 ACL |
 | PUT | `/api/v1/acl` | 替换资源的直接 ACL |
 | DELETE | `/api/v1/acl` | 清空资源的直接 ACL |
-| POST | `/api/v1/acl/grant` | 设置一个用户的直接权限级别 |
-| POST | `/api/v1/acl/revoke` | 删除一个用户的直接授权 |
+| POST | `/api/v1/acl/grant` | 设置一个 principal 的直接权限级别 |
+| POST | `/api/v1/acl/revoke` | 删除一个 principal 的直接授权 |
 
 ### 快照端点（多版本管理）
 

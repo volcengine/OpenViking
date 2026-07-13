@@ -108,7 +108,7 @@ acl_inherited_manage_principal_ids
 
 `acl_direct_*` 是当前节点直接 ACL，`acl_inherited_*` 是所有祖先直接 ACL 的并集。有效权限是两组列表的并集，不维护独立 ACL collection。
 
-请求的可用 principal 为 `user:{ctx.user_id}`、`user:*` 和所有 `group:{ctx.group_ids}`。`find/search` 只在 `viking://resources` scope 内按 `acl_direct_read_principal_ids` 和 `acl_inherited_read_principal_ids` 做原生 `list<string>` 过滤；个人资源始终按 URI owner 隔离。旧记录缺少 ACL 字段时按 `acl_enabled=false` 处理，无需全量回填。
+请求的可用 principal 为 `user:{ctx.user_id}`、`user:*`，以及 `ctx.group_ids` 中每个 ID 对应的 `group:{group_id}`。`find/search` 只在 `viking://resources` scope 内按 `acl_direct_read_principal_ids` 和 `acl_inherited_read_principal_ids` 做原生 `list<string>` 过滤；个人资源始终按 URI owner 隔离。旧记录缺少 ACL 字段时按 `acl_enabled=false` 处理，无需全量回填。
 
 检索 target URI 只是搜索范围，不要求调用者能够读取 target 节点本身。用户即使不能读取中间目录，也可以检索到深层单独授权给自己的文件。
 

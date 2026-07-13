@@ -562,9 +562,17 @@ class _SingleAccountBackend:
         cursor: Optional[str] = None,
         output_fields: Optional[List[str]] = None,
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
+        """Scroll records without converting backend failures into an empty page."""
+        if isinstance(filter, dict):
+            filter = RawDSL(filter)
+        if self._bound_account_id:
+            account_filter = Eq("account_id", self._bound_account_id)
+            filter = And([account_filter, filter]) if filter else account_filter
+
         offset = int(cursor) if cursor else 0
-        records = await self.filter(
-            filter=filter or {},
+        records = await self._async_adapter.call(
+            "query",
+            filter=filter,
             limit=limit,
             offset=offset,
             output_fields=output_fields,

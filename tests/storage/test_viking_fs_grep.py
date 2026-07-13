@@ -468,20 +468,36 @@ async def test_grep_maps_agfs_matches_to_viking_uris(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
-async def test_grep_applies_node_limit_to_backend_results(monkeypatch, fs):
+async def test_grep_refetches_until_acl_visible_node_limit(monkeypatch, fs):
+    raw_limits = []
+
     async def fake_grep(**kwargs):
+        raw_limits.append(kwargs["node_limit"])
+        hidden = [
+            {"file": f"hidden-{index}.md", "line": 1, "content": "hidden"} for index in range(8)
+        ]
         return {
-            "matches": [
+            "matches": hidden
+            if len(raw_limits) == 1
+            else [
+                *hidden,
                 {"file": "a.md", "line": 1, "content": "a"},
                 {"file": "b.md", "line": 1, "content": "b"},
-                {"file": "c.md", "line": 1, "content": "c"},
             ]
         }
 
+    async def fake_can_access_many(uris, _ctx, _action="read"):
+        return {
+            uri: uri == "viking://resources" or uri.endswith(("/a.md", "/b.md")) for uri in uris
+        }
+
+    fs.acl_manager = object()
     monkeypatch.setattr(fs._async_agfs, "grep", fake_grep)
+    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
 
     result = await fs.grep("viking://resources", pattern="match", node_limit=2)
 
+    assert raw_limits == [8, 16]
     assert result["count"] == 2
     assert result["match_count"] == 2
     assert result["files_scanned"] == 2

@@ -108,7 +108,7 @@ acl_inherited_manage_principal_ids
 
 `acl_direct_*` is the ACL assigned to the current node. `acl_inherited_*` is the union of all ancestor direct ACLs. Effective permission is their union; there is no separate ACL collection.
 
-The request principals are `user:{ctx.user_id}`, `user:*`, and every `group:{ctx.group_ids}`. Within the `viking://resources` scope, `find/search` uses native `list<string>` filters over `acl_direct_read_principal_ids` and `acl_inherited_read_principal_ids`; private resources remain isolated by URI owner. Legacy records without ACL fields are treated as `acl_enabled=false`, so they do not require a full data backfill.
+The request principals are `user:{ctx.user_id}`, `user:*`, and one `group:{group_id}` for each ID in `ctx.group_ids`. Within the `viking://resources` scope, `find/search` uses native `list<string>` filters over `acl_direct_read_principal_ids` and `acl_inherited_read_principal_ids`; private resources remain isolated by URI owner. Legacy records without ACL fields are treated as `acl_enabled=false`, so they do not require a full data backfill.
 
 A retrieval target URI is only a search scope; the caller does not need to read the target node itself. A user can discover a deeply shared file even when intermediate directories are not readable.
 
