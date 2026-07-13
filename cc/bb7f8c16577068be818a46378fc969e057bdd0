@@ -1,0 +1,28 @@
+tests/parse/test_multimodal_file_matrix_integration.py
+  s_3fbdb76d2f6513::t_a4efed3b1126e8 314-317,322-323,334-335,339-340,346,349-350,361,364-367,369-370
+  h_52359942dff0d1 1-313,318-321,324-333,336-338,341-345,347-348,351-360,362-363,368,371-387
+  s_3fbdb76d2f6513::t_56acc327a6a511 388-415
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ccbb7f8c16577068be818a46378fc969e057bdd0",
+  "prompts": {},
+  "humans": {
+    "h_52359942dff0d1": {
+      "author": "zhanghaoyu <zhanghaoyu.la@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_3fbdb76d2f6513": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5aef-e546-7603-a90c-bd3ea375464c",
+        "model": "unknown"
+      },
+      "human_author": "zhanghaoyu <zhanghaoyu.la@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
