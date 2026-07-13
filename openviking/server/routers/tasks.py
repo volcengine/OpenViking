@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from openviking.server.auth import get_request_context
+from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
@@ -49,6 +50,26 @@ async def get_task(
             details={"resource": task_id, "type": "task"},
         )
     return Response(status="ok", result=task.to_dict())
+
+
+@router.post("/tasks/{task_id}/trigger")
+async def trigger_task(
+    task_id: str,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Trigger a staged resource ingestion task."""
+    result = await get_service().resources.trigger_staged_resource(task_id, ctx=_ctx)
+    return Response(status="ok", result=result)
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_task(
+    task_id: str,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Cancel a staged resource ingestion task before processing starts."""
+    result = await get_service().resources.cancel_staged_resource(task_id, ctx=_ctx)
+    return Response(status="ok", result=result)
 
 
 @router.get("/tasks")

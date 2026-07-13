@@ -352,6 +352,23 @@ class TaskTracker:
                 with self._lock:
                     self._tasks[task.task_id] = task
 
+    async def update_result(
+        self,
+        task_id: str,
+        result: Optional[Dict[str, Any]],
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> None:
+        """Update task result metadata without changing lifecycle status."""
+        async with self._async_lock:
+            task = await self._load_for_update(task_id, account_id, user_id)
+            if task:
+                task.result = result
+                task.updated_at = time.time()
+                await self._store.update(task)
+                with self._lock:
+                    self._tasks[task.task_id] = task
+
     async def complete(
         self,
         task_id: str,

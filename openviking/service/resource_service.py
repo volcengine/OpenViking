@@ -8,8 +8,10 @@ Provides resource management operations: add_resource, add_skill, wait_processed
 
 import asyncio
 import contextlib
+import hashlib
 import inspect
 import json
+import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,7 +26,7 @@ from openviking.resource.feishu_watch_auth import (
     create_feishu_auth_state,
     load_feishu_app_credentials,
 )
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
     require_remote_resource_source,
@@ -56,6 +58,7 @@ from openviking_cli.exceptions import (
     DeadlineExceededError,
     InvalidArgumentError,
     NotInitializedError,
+    OpenVikingError,
 )
 from openviking_cli.utils import get_logger
 
@@ -113,6 +116,16 @@ class _NormalizedAddResourceArgs:
     watch_auth_state: Optional[Dict[str, Any]] = None
 
 
+@dataclass
+class _StagedAddResourceTask:
+    ctx: RequestContext
+    add_kwargs: Dict[str, Any]
+    resource_lock: LockLease
+    cleanup_paths: List[str]
+    trigger_task: Optional[asyncio.Task[Any]] = None
+    started: bool = False
+
+
 class ResourceService:
     """Resource management service."""
 
@@ -132,6 +145,8 @@ class ResourceService:
         self._watch_scheduler = watch_scheduler
         self._resource_memory_link_service = resource_memory_link_service
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._staged_add_resource_tasks: Dict[str, _StagedAddResourceTask] = {}
+        self._staged_task_lock = asyncio.Lock()
 
     def set_dependencies(
         self,
@@ -230,12 +245,16 @@ class ResourceService:
                 except ConflictError:
                     raise
                 except Exception as e:
-                    logger.warning(f"[ResourceService] Failed to create watch task for {watch_to}: {e}")
+                    logger.warning(
+                        f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
+                    )
             elif target.to:
                 try:
                     await self._handle_watch_task_cancellation(to_uri=target.to, ctx=ctx)
                 except Exception as e:
-                    logger.warning(f"[ResourceService] Failed to cancel watch task for {target.to}: {e}")
+                    logger.warning(
+                        f"[ResourceService] Failed to cancel watch task for {target.to}: {e}"
+                    )
 
     def _normalize_add_resource_args(
         self,
@@ -305,13 +324,396 @@ class ResourceService:
 
     async def close_background_tasks(self) -> None:
         """Cancel in-flight background resource ingestion tasks during service shutdown."""
-        if not self._background_tasks:
-            return
-        tasks = list(self._background_tasks)
+        if self._background_tasks:
+            tasks = list(self._background_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._background_tasks.clear()
+
+        staged_tasks = list(self._staged_add_resource_tasks.values())
+        self._staged_add_resource_tasks.clear()
+        for staged in staged_tasks:
+            if staged.trigger_task is not None:
+                staged.trigger_task.cancel()
+            await staged.resource_lock.close()
+            self._cleanup_staged_paths(staged.cleanup_paths)
+
+    def _resource_staging_delay_seconds(self) -> float:
+        try:
+            from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+            pipeline = getattr(get_openviking_config(), "pipeline", None)
+            return float(getattr(pipeline, "auto_trigger_seconds", 0) or 0)
+        except FileNotFoundError:
+            return 0.0
+        except Exception as exc:
+            logger.debug("[ResourceService] Resource staging config unavailable: %s", exc)
+            return 0.0
+
+    @staticmethod
+    def _hash_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _resource_source_fingerprint(
+        self,
+        *,
+        path: str,
+        target: ContentTargetSpec,
+        source_name: Optional[str],
+        allow_local_path_resolution: bool,
+    ) -> str:
+        source_path = Path(path)
+        if allow_local_path_resolution and source_path.is_file():
+            stat = source_path.stat()
+            source: Dict[str, Any] = {
+                "kind": "file",
+                "name": source_name or source_path.name,
+                "size": stat.st_size,
+                "sha256": self._hash_file(source_path),
+            }
+        else:
+            source = {
+                "kind": "source",
+                "path": str(path).strip(),
+                "name": source_name or "",
+            }
+
+        payload = {
+            "scope": "resources",
+            "source": source,
+            "to": target.to or "",
+            "parent": target.parent or "",
+            "create_parent": bool(target.create_parent),
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _copy_local_source_for_staging(
+        *,
+        path: str,
+        task_id: str,
+        allow_local_path_resolution: bool,
+    ) -> tuple[str, List[str]]:
+        source_path = Path(path)
+        if not allow_local_path_resolution or not source_path.is_file():
+            return path, []
+
+        from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+        staged_dir = get_openviking_config().storage.get_upload_temp_dir() / "staged_resources"
+        staged_dir.mkdir(parents=True, exist_ok=True)
+        suffix = source_path.suffix or ".tmp"
+        staged_path = staged_dir / f"{task_id}{suffix}"
+        shutil.copy2(source_path, staged_path)
+        return str(staged_path), [str(staged_path)]
+
+    @staticmethod
+    def _cleanup_staged_paths(paths: List[str]) -> None:
+        for path in paths:
+            with contextlib.suppress(FileNotFoundError):
+                Path(path).unlink()
+
+    async def _active_resource_task_for_fingerprint(
+        self,
+        *,
+        fingerprint: str,
+        ctx: RequestContext,
+    ) -> Optional[Dict[str, Any]]:
+        from openviking.service.task_tracker import TaskStatus, get_task_tracker
+
+        task_tracker = get_task_tracker()
+        tasks = await task_tracker.list_tasks(
+            task_type="add_resource",
+            limit=200,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
         for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        self._background_tasks.clear()
+            if task.status not in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                continue
+            result = task.result if isinstance(task.result, dict) else {}
+            if result.get("source_fingerprint") != fingerprint:
+                continue
+            return {
+                "status": "success",
+                "root_uri": result.get("root_uri") or task.resource_id,
+                "task_id": task.task_id,
+                "stage": task.stage,
+                "staged": task.stage == "staged",
+                "idempotent": True,
+            }
+        return None
+
+    async def _stage_add_resource_if_configured(
+        self,
+        *,
+        path: str,
+        ctx: RequestContext,
+        target: ContentTargetSpec,
+        reason: str,
+        instruction: str,
+        timeout: Optional[float],
+        build_index: bool,
+        summarize: bool,
+        watch_interval: float,
+        skip_watch_management: bool,
+        allow_local_path_resolution: bool,
+        enforce_public_remote_targets: bool,
+        wait: bool,
+        resource_lock: Optional[LockLease],
+        kwargs: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        delay = self._resource_staging_delay_seconds()
+        if wait or resource_lock is not None or delay <= 0:
+            return None
+
+        async with self._staged_task_lock:
+            if enforce_public_remote_targets and is_remote_resource_source(path):
+                path = require_remote_resource_source(path)
+                kwargs.setdefault("request_validator", ensure_public_remote_target)
+
+            source_name = kwargs.get("source_name")
+            fingerprint = self._resource_source_fingerprint(
+                path=path,
+                target=target,
+                source_name=source_name,
+                allow_local_path_resolution=allow_local_path_resolution,
+            )
+            existing = await self._active_resource_task_for_fingerprint(
+                fingerprint=fingerprint,
+                ctx=ctx,
+            )
+            if existing is not None:
+                return existing
+
+            if is_git_repo_url(path):
+                source_info = await self._preflight_git_source(path)
+                source_name = source_name or source_info.source_name
+                if source_name:
+                    kwargs["source_name"] = source_name
+            else:
+                source_info = _ResourceSourceInfo(
+                    source_name=source_name,
+                    source_path=path,
+                    source_format="file" if allow_local_path_resolution else None,
+                )
+
+            from openviking.service.task_tracker import get_task_tracker
+
+            task_tracker = get_task_tracker()
+            resource_lock_to_stage: LockLease = NO_LOCK
+            task = None
+            cleanup_paths: List[str] = []
+            try:
+                root_uri, resource_lock_to_stage = await self._plan_resource_target(
+                    path=path,
+                    ctx=ctx,
+                    target=target,
+                    source_name=source_name,
+                    source_info=source_info,
+                )
+                task = await task_tracker.create(
+                    "add_resource",
+                    resource_id=root_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                staged_path, cleanup_paths = self._copy_local_source_for_staging(
+                    path=path,
+                    task_id=task.task_id,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                )
+                add_kwargs = dict(
+                    kwargs,
+                    path=staged_path,
+                    ctx=ctx,
+                    to=root_uri,
+                    parent=None,
+                    reason=reason,
+                    instruction=instruction,
+                    timeout=timeout,
+                    build_index=build_index,
+                    summarize=summarize,
+                    watch_interval=watch_interval,
+                    skip_watch_management=skip_watch_management,
+                    allow_local_path_resolution=bool(cleanup_paths) or allow_local_path_resolution,
+                    enforce_public_remote_targets=enforce_public_remote_targets,
+                )
+                staged_until = time.time() + delay
+                result = {
+                    "root_uri": root_uri,
+                    "source_fingerprint": fingerprint,
+                    "auto_trigger_seconds": delay,
+                    "staged_until": staged_until,
+                }
+                await task_tracker.update_stage(
+                    task.task_id,
+                    "staged",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+                await task_tracker.update_result(
+                    task.task_id,
+                    result,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+
+                staged = _StagedAddResourceTask(
+                    ctx=ctx,
+                    add_kwargs=add_kwargs,
+                    resource_lock=resource_lock_to_stage,
+                    cleanup_paths=cleanup_paths,
+                )
+                staged.trigger_task = asyncio.create_task(
+                    self._auto_trigger_staged_resource(task.task_id, delay)
+                )
+                self._background_tasks.add(staged.trigger_task)
+                staged.trigger_task.add_done_callback(self._background_tasks.discard)
+                self._staged_add_resource_tasks[task.task_id] = staged
+                resource_lock_to_stage = NO_LOCK
+                cleanup_paths = []
+                return {
+                    "status": "success",
+                    "root_uri": root_uri,
+                    "task_id": task.task_id,
+                    "stage": "staged",
+                    "staged": True,
+                    "auto_trigger_seconds": delay,
+                    "staged_until": staged_until,
+                }
+            except Exception as exc:
+                self._cleanup_staged_paths(cleanup_paths)
+                await resource_lock_to_stage.close()
+                if task is not None:
+                    with contextlib.suppress(Exception):
+                        await task_tracker.fail(
+                            task.task_id,
+                            str(exc),
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                        )
+                raise
+
+    async def _auto_trigger_staged_resource(self, task_id: str, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+            staged = self._staged_add_resource_tasks.get(task_id)
+            if staged is None:
+                return
+            await self.trigger_staged_resource(task_id, ctx=staged.ctx)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "[ResourceService] Failed to auto-trigger staged resource %s: %s", task_id, exc
+            )
+
+    @staticmethod
+    def _can_control_staged_task(ctx: RequestContext, owner_ctx: RequestContext) -> bool:
+        if ctx.role == Role.ROOT:
+            return True
+        return ctx.account_id == owner_ctx.account_id and ctx.user.user_id == owner_ctx.user.user_id
+
+    async def trigger_staged_resource(
+        self,
+        task_id: str,
+        *,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Start a staged add_resource task."""
+        async with self._staged_task_lock:
+            staged = self._staged_add_resource_tasks.get(task_id)
+            if staged is None:
+                raise OpenVikingError(
+                    "Staged resource task is not available",
+                    code="NOT_FOUND",
+                    details={"resource": task_id, "type": "task"},
+                )
+            if not self._can_control_staged_task(ctx, staged.ctx):
+                raise OpenVikingError("Permission denied", code="PERMISSION_DENIED")
+            if staged.started:
+                return {
+                    "status": "success",
+                    "task_id": task_id,
+                    "root_uri": staged.add_kwargs.get("to"),
+                    "stage": "processing",
+                }
+
+            staged.started = True
+            self._staged_add_resource_tasks.pop(task_id, None)
+            current_task = asyncio.current_task()
+            if staged.trigger_task is not None and staged.trigger_task is not current_task:
+                staged.trigger_task.cancel()
+
+            background = asyncio.create_task(
+                self._run_add_resource_task(
+                    task_id,
+                    ctx=staged.ctx,
+                    add_kwargs=staged.add_kwargs,
+                    resource_lock=staged.resource_lock,
+                    cleanup_paths=staged.cleanup_paths,
+                )
+            )
+            self._background_tasks.add(background)
+            background.add_done_callback(self._background_tasks.discard)
+            return {
+                "status": "success",
+                "task_id": task_id,
+                "root_uri": staged.add_kwargs.get("to"),
+                "stage": "processing",
+            }
+
+    async def cancel_staged_resource(
+        self,
+        task_id: str,
+        *,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Cancel a staged add_resource task before processing starts."""
+        from openviking.service.task_tracker import get_task_tracker
+
+        async with self._staged_task_lock:
+            staged = self._staged_add_resource_tasks.get(task_id)
+            if staged is None:
+                raise OpenVikingError(
+                    "Staged resource task is not available",
+                    code="NOT_FOUND",
+                    details={"resource": task_id, "type": "task"},
+                )
+            if not self._can_control_staged_task(ctx, staged.ctx):
+                raise OpenVikingError("Permission denied", code="PERMISSION_DENIED")
+            if staged.started:
+                raise OpenVikingError(
+                    "Task is already processing and cannot be cancelled from staging",
+                    code="FAILED_PRECONDITION",
+                    details={"resource": task_id, "type": "task"},
+                )
+
+            self._staged_add_resource_tasks.pop(task_id, None)
+            if staged.trigger_task is not None:
+                staged.trigger_task.cancel()
+            await staged.resource_lock.close()
+            self._cleanup_staged_paths(staged.cleanup_paths)
+
+        task_tracker = get_task_tracker()
+        await task_tracker.fail(
+            task_id,
+            "staged resource cancelled",
+            account_id=staged.ctx.account_id,
+            user_id=staged.ctx.user.user_id,
+        )
+        return {
+            "status": "success",
+            "task_id": task_id,
+            "stage": "cancelled",
+        }
 
     async def enqueue_git_add_resource(
         self,
@@ -421,6 +823,7 @@ class ResourceService:
         ctx: RequestContext,
         add_kwargs: Dict[str, Any],
         resource_lock: LockLease,
+        cleanup_paths: Optional[List[str]] = None,
     ) -> None:
         from openviking.service.task_tracker import get_task_tracker
 
@@ -439,7 +842,7 @@ class ResourceService:
                 task_id,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
-                stage="queued",
+                stage="processing",
             )
             result = await self.add_resource(
                 wait=True,
@@ -488,6 +891,8 @@ class ResourceService:
             )
         finally:
             await resource_lock.close()
+            if cleanup_paths:
+                self._cleanup_staged_paths(cleanup_paths)
 
     async def _plan_resource_target(
         self,
@@ -654,6 +1059,34 @@ class ResourceService:
             if default_parent:
                 parent = default_parent
                 kwargs["create_parent"] = True
+
+        target = ContentTargetSpec.from_fields(
+            ctx=ctx,
+            kind="resource",
+            to=to,
+            parent=parent,
+            create_parent=bool(kwargs.get("create_parent", False)),
+        )
+        staged_result = await self._stage_add_resource_if_configured(
+            path=path,
+            ctx=ctx,
+            target=target,
+            reason=reason,
+            instruction=instruction,
+            timeout=timeout,
+            build_index=build_index,
+            summarize=summarize,
+            watch_interval=watch_interval,
+            skip_watch_management=skip_watch_management,
+            allow_local_path_resolution=allow_local_path_resolution,
+            enforce_public_remote_targets=enforce_public_remote_targets,
+            wait=wait,
+            resource_lock=resource_lock,
+            kwargs=kwargs,
+        )
+        if staged_result is not None:
+            return staged_result
+
         if not wait and is_git_repo_url(path):
             return await self.enqueue_git_add_resource(
                 path=path,
@@ -688,13 +1121,6 @@ class ResourceService:
         telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
-            target = ContentTargetSpec.from_fields(
-                ctx=ctx,
-                kind="resource",
-                to=to,
-                parent=parent,
-                create_parent=bool(kwargs.get("create_parent", False)),
-            )
             if enforce_public_remote_targets and is_remote_resource_source(path):
                 path = require_remote_resource_source(path)
                 kwargs.setdefault("request_validator", ensure_public_remote_target)
@@ -722,7 +1148,10 @@ class ResourceService:
                 )
                 doc_name = self._target_doc_name(path, source_name, source_info)
                 source_path = source_info.source_path or source_name or path
-                root_uri, candidate_uri = await self._resource_processor.tree_builder.resolve_target_uri(
+                (
+                    root_uri,
+                    candidate_uri,
+                ) = await self._resource_processor.tree_builder.resolve_target_uri(
                     ctx=ctx,
                     doc_name=doc_name,
                     scope="resources",
@@ -743,7 +1172,9 @@ class ResourceService:
                 async def _reserve_tree(uri: str) -> LockLease:
                     dst_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
                     try:
-                        return await OwnedLockLease.acquire_tree(lock_manager, dst_path, timeout=0.0)
+                        return await OwnedLockLease.acquire_tree(
+                            lock_manager, dst_path, timeout=0.0
+                        )
                     except LockAcquisitionError as exc:
                         raise ResourceBusyError(
                             f"Resource is busy: {uri}",
@@ -756,7 +1187,9 @@ class ResourceService:
                     max_attempts = 100
                     reserved = False
                     for attempt in range(max_attempts + 1):
-                        attempt_uri = candidate_uri if attempt == 0 else f"{candidate_uri}_{attempt}"
+                        attempt_uri = (
+                            candidate_uri if attempt == 0 else f"{candidate_uri}_{attempt}"
+                        )
                         if await self._viking_fs.exists(attempt_uri, ctx=ctx):
                             continue
                         try:
