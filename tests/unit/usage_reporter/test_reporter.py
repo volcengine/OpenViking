@@ -1,0 +1,60 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
+from openviking.usage_reporter import UsageContext, UsageEvent, UsageReporter
+
+
+def _context() -> UsageContext:
+    return UsageContext(
+        account_id="new",
+        user_id="test",
+        session_id="session-1",
+        archive_uri="viking://user/test/sessions/session-1/history/archive_001",
+        task_id="task-1",
+    )
+
+
+def _event() -> UsageEvent:
+    context = _context()
+    return UsageEvent(
+        event_type="memory.injected",
+        memory_uri="viking://user/test/memories/experiences/a.md",
+        memory_type="experience",
+        account_id=context.account_id,
+        user_id=context.user_id,
+        session_id=context.session_id,
+        archive_uri=context.archive_uri,
+        task_id=context.task_id,
+        occurred_at="2026-07-10T12:00:00Z",
+    )
+
+
+async def test_extractor_failure_is_ignored():
+    class FailingExtractor:
+        name = "failing"
+
+        async def extract(self, *, messages, context):
+            raise RuntimeError("extract failed")
+
+    reporter = UsageReporter(extractors=[FailingExtractor()])
+
+    assert await reporter.extract(messages=[], context=_context()) == []
+
+
+async def test_sink_failure_does_not_stop_later_sinks():
+    writes = []
+
+    class FailingSink:
+        async def write(self, *, events, context):
+            raise RuntimeError("sink failed")
+
+    class RecordingSink:
+        async def write(self, *, events, context):
+            writes.extend(events)
+
+    event = _event()
+    reporter = UsageReporter(sinks=[FailingSink(), RecordingSink()])
+
+    await reporter.report(events=[event], context=_context())
+
+    assert writes == [event]

@@ -217,14 +217,20 @@ def create_app(
 
     validate_server_config(config)
 
-    def _configure_session_tool_outputs(service_obj) -> None:  # noqa: ANN001
+    def _configure_session_runtime(service_obj) -> None:  # noqa: ANN001
         sessions = getattr(service_obj, "sessions", None)
-        setter = getattr(sessions, "set_tool_output_externalization_config", None)
-        if callable(setter):
-            setter(config.tool_output_externalization)
+        tool_output_setter = getattr(sessions, "set_tool_output_externalization_config", None)
+        if callable(tool_output_setter):
+            tool_output_setter(config.tool_output_externalization)
+
+        usage_reporter_setter = getattr(sessions, "set_usage_reporter", None)
+        if callable(usage_reporter_setter):
+            from openviking.usage_reporter.config import build_usage_reporter
+
+            usage_reporter_setter(build_usage_reporter(config.usage_reporter))
 
     if service is not None:
-        _configure_session_tool_outputs(service)
+        _configure_session_runtime(service)
 
     async def _deferred_init(service, app, config):
         """Retained for tests that validate deferred-init callback behavior."""
@@ -239,7 +245,7 @@ def create_app(
             service = OpenVikingService()
 
         assert service is not None
-        _configure_session_tool_outputs(service)
+        _configure_session_runtime(service)
         set_service(service)
 
         from openviking.metrics.global_api import (

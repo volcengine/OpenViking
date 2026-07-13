@@ -1,0 +1,119 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
+import json
+
+import pytest
+
+from openviking.message import Message, TextPart, ToolPart
+from openviking.usage_reporter import (
+    FileJsonlUsageSink,
+    MemoryUsageExtractor,
+    UsageContext,
+)
+
+
+def _context() -> UsageContext:
+    return UsageContext(
+        account_id="new",
+        user_id="test",
+        session_id="session-1",
+        archive_uri="viking://user/test/sessions/session-1/history/archive_001",
+        task_id="task-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_usage_extractor_emits_recall_and_injection_events():
+    experience_uri = "viking://user/default/memories/experiences/no-order-exchange.md"
+    messages = [
+        Message(
+            id="msg-1",
+            role="user",
+            parts=[
+                TextPart("我要处理无订单号换货"),
+                ToolPart(
+                    tool_id="call-search",
+                    tool_name="search_experience",
+                    tool_status="completed",
+                    tool_input={"query": "无订单号换货"},
+                    tool_output=json.dumps(
+                        {"results": [{"uri": experience_uri}, {"uri": "viking://other"}]},
+                        ensure_ascii=False,
+                    ),
+                ),
+            ],
+        ),
+        Message(
+            id="msg-2",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="call-read",
+                    tool_name="read_experience",
+                    tool_status="completed",
+                    tool_input={"uri": experience_uri},
+                    tool_output="## Situation\n用户未提供订单号但要求换货。",
+                )
+            ],
+        ),
+        Message(
+            id="msg-3",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="call-pending",
+                    tool_name="read_experience",
+                    tool_status="running",
+                    tool_input={"uri": experience_uri},
+                )
+            ],
+        ),
+    ]
+
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
+
+    assert [event.event_type for event in events] == ["memory.recalled", "memory.injected"]
+    assert [event.memory_uri for event in events] == [experience_uri, experience_uri]
+    assert events[0].source["tool_name"] == "search_experience"
+    assert events[0].evidence == {
+        "message_index": 0,
+        "message_id": "msg-1",
+        "part_index": 1,
+        "tool_call_id": "call-search",
+    }
+    assert events[1].source["tool_name"] == "read_experience"
+    assert events[1].evidence["part_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_file_jsonl_usage_sink_writes_events(tmp_path):
+    path = tmp_path / "usage-events.jsonl"
+    event = (
+        await MemoryUsageExtractor().extract(
+            messages=[
+                Message(
+                    id="msg-1",
+                    role="user",
+                    parts=[
+                        ToolPart(
+                            tool_id="call-read",
+                            tool_name="read_experience",
+                            tool_status="completed",
+                            tool_input={"uri": "viking://user/default/memories/experiences/a.md"},
+                        )
+                    ],
+                )
+            ],
+            context=_context(),
+        )
+    )[0]
+
+    await FileJsonlUsageSink(path=str(path)).write(events=[event], context=_context())
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["event_type"] == "memory.injected"
+    assert payload["memory_uri"] == "viking://user/default/memories/experiences/a.md"
+    assert payload["session_id"] == "session-1"
