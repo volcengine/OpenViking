@@ -917,6 +917,10 @@ class VikingFS:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
+        real_ctx = self._ctx_or_default(ctx)
+        uri = canonicalize_uri(uri, real_ctx)
+        if exclude_uri:
+            exclude_uri = canonicalize_uri(exclude_uri, real_ctx)
         self._ensure_access(uri, ctx)
         # Skip vector_store.count() — the count field is not needed for grep,
         # and avoiding it saves one VikingDB API call.
@@ -1092,7 +1096,7 @@ class VikingFS:
         filter_expr = PathScope("uri", uri, depth=level_limit)
         excluded_prefix = None
         if exclude_uri:
-            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            excluded_prefix = exclude_uri.rstrip("/")
             self._ensure_access(excluded_prefix, ctx)
             filter_expr = And(
                 [
@@ -1238,7 +1242,7 @@ class VikingFS:
 
         excluded_path = None
         if exclude_uri:
-            normalized_excluded_uri = self._normalize_uri(exclude_uri).rstrip("/")
+            normalized_excluded_uri = exclude_uri.rstrip("/")
             self._ensure_access(normalized_excluded_uri, ctx)
             excluded_path = self._uri_to_path(normalized_excluded_uri, ctx=ctx)
 
@@ -1335,7 +1339,7 @@ class VikingFS:
         compiled_pattern = re.compile(pattern, flags)
         excluded_prefix = None
         if exclude_uri:
-            excluded_prefix = self._normalize_uri(exclude_uri).rstrip("/")
+            excluded_prefix = exclude_uri.rstrip("/")
             self._ensure_access(excluded_prefix, ctx)
         file_uris = await self._collect_grep_files(
             uri,
@@ -1370,7 +1374,7 @@ class VikingFS:
             if current_depth > level_limit:
                 return
 
-            normalized_current_uri = self._normalize_uri(current_uri)
+            normalized_current_uri = current_uri
             if excluded_prefix and (
                 normalized_current_uri == excluded_prefix
                 or normalized_current_uri.startswith(excluded_prefix + "/")
@@ -1396,7 +1400,7 @@ class VikingFS:
                 else:
                     file_uris.append(entry_uri)
 
-        normalized_uri = self._normalize_uri(uri)
+        normalized_uri = uri
         if excluded_prefix and (
             normalized_uri == excluded_prefix or normalized_uri.startswith(excluded_prefix + "/")
         ):
