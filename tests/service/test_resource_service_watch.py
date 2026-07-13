@@ -57,7 +57,11 @@ class MockVikingDB:
 
 
 class NoopTaskTracker:
+    def __init__(self):
+        self._count = 0
+
     async def create(self, *_args, **_kwargs):
+        self._count += 1
         return SimpleNamespace(task_id="test-task")
 
     async def start(self, *_args, **_kwargs):
@@ -66,12 +70,25 @@ class NoopTaskTracker:
     async def complete(self, *_args, **_kwargs):
         pass
 
+    def count(self):
+        return self._count
+
 
 def disable_task_tracker(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "openviking.service.task_tracker.get_task_tracker",
         lambda: NoopTaskTracker(),
     )
+
+
+@pytest.fixture(autouse=True)
+def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    task_tracker = NoopTaskTracker()
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: task_tracker,
+    )
+    monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
 
 
 @pytest_asyncio.fixture
