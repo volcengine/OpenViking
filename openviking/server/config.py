@@ -125,7 +125,7 @@ class OTelExporterConfig(BaseModel):
     service_name: str = "openviking-server"
     export_interval_ms: int = 10000
     headers: Dict[str, str] = Field(default_factory=dict)
-    local_path: str = "~/.openviking/data/traces/offline-traces.jsonl"
+    local_path: str = "~/.openviking/logs/traces.jsonl"
     local_rotation_mb: int = Field(default=40, gt=0)
     local_backup_count: int = Field(default=2, ge=0)
 

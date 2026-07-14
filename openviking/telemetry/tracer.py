@@ -308,7 +308,7 @@ def init_tracer(
     insecure: bool = False,
     headers: Optional[dict[str, str]] = None,
     enabled: bool = True,
-    local_path: str = "~/.openviking/data/traces/offline-traces.jsonl",
+    local_path: str = "~/.openviking/logs/traces.jsonl",
     local_rotation_mb: int = 40,
     local_backup_count: int = 2,
 ) -> Any:

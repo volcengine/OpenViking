@@ -11,7 +11,7 @@ remote OTel trace exporter (protocol "grpc" or "http"). The script reads the
 remote endpoint, headers, TLS settings, and service_name from that ov.conf.
 
 Usage:
-    python tests/upload_offline_trace.py --file offline-traces.jsonl
+    python tests/upload_offline_trace.py --file traces.jsonl
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def _iter_input_files(path: Path, include_rotated: bool) -> list[Path]:
             rotated.append((int(suffix), candidate))
 
     # Larger suffixes are older with RotatingFile-style naming:
-    # offline-traces.jsonl.2 -> offline-traces.jsonl.1 -> offline-traces.jsonl
+    # traces.jsonl.2 -> traces.jsonl.1 -> traces.jsonl
     ordered = [candidate for _, candidate in sorted(rotated, key=lambda item: item[0], reverse=True)]
     ordered.append(path)
     return ordered
@@ -244,7 +244,7 @@ def main() -> int:
     parser.add_argument(
         "--file",
         required=True,
-        help="Path to offline-traces.jsonl copied from the customer/local environment.",
+        help="Path to traces.jsonl copied from the customer/local environment.",
     )
     parser.add_argument(
         "--config",
