@@ -104,6 +104,10 @@ def test_agents_config_enables_subagents_by_default():
     assert AgentsConfig().subagent_enabled is True
 
 
+def test_agents_config_keeps_ten_recent_openviking_messages_by_default():
+    assert AgentsConfig().commit_keep_recent_count == 10
+
+
 def test_agent_loop_omits_spawn_tool_when_subagents_disabled(temp_dir: Path, monkeypatch):
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
     monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
@@ -582,6 +586,68 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
     history = await loop._build_prompt_history(session)
 
     assert [message["content"] for message in history] == ["OV user turn"]
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_tool_outputs(
+    temp_dir: Path, monkeypatch
+):
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    tool_output = "x" * 10_000
+    fake_ov_client = _FakeOVClient(
+        context_payload={
+            "messages": [
+                {"role": "user", "parts": [{"type": "text", "text": "original query"}]},
+                *[
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {"type": "text", "text": f"turn {index}"},
+                            {"type": "tool", "tool_output": tool_output},
+                        ],
+                    }
+                    for index in range(10)
+                ],
+                {"role": "assistant", "parts": [{"type": "text", "text": "final answer"}]},
+            ]
+        }
+    )
+
+    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
+        del self, session_key, openviking_connection, actor_peer_id
+        return fake_ov_client
+
+    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FakeProvider(),
+        workspace=temp_dir / "workspace",
+        config=Config(
+            storage_workspace=str(temp_dir),
+            ov_server={"server_url": "http://127.0.0.1:1933"},
+            agents={"session_context_enabled": True, "session_context_token_budget": 3000},
+        ),
+    )
+    session = loop.sessions.get_or_create(
+        SessionKey(type="cli", channel_id="default", chat_id="session-large-tools"),
+        skip_heartbeat=True,
+    )
+    session.metadata["openviking"] = {
+        "session_id": "ov-session-large-tools",
+        "last_synced_local_index": -1,
+    }
+
+    history = await loop._build_prompt_history(session)
+
+    assert fake_ov_client.context_calls == [("ov-session-large-tools", 3000)]
+    assert sum(loop._history_message_tokens(message) for message in history) <= 3000
+    assert history[-1]["content"] == "final answer"
+    assert sum(str(message.get("content", "")).count("x") for message in history) < 100_000
+    assert any("History truncated" in str(message.get("content", "")) for message in history)
 
 
 @pytest.mark.asyncio

@@ -488,6 +488,102 @@ class AgentLoop:
             provider_name=provider_name,
         )
 
+    @staticmethod
+    def _history_message_tokens(message: dict[str, Any]) -> int:
+        """Estimate prompt tokens for one formatted history message."""
+        content = message.get("content", "")
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False, default=str)
+        # Reserve a small amount for the role and provider message framing.
+        return cal_str_tokens(content, text_type="mixed") + 4
+
+    @classmethod
+    def _truncate_history_message(
+        cls,
+        message: dict[str, Any],
+        token_budget: int,
+    ) -> dict[str, Any] | None:
+        """Return a prompt-only copy of a message clipped to ``token_budget``."""
+        if token_budget <= 4:
+            return None
+
+        content = message.get("content", "")
+        if not isinstance(content, str) or not content:
+            return None
+
+        content_budget = token_budget - 4
+        marker = "\n[History truncated to fit session context token budget]"
+
+        def fits(value: str) -> bool:
+            return cal_str_tokens(value, text_type="mixed") <= content_budget
+
+        low = 0
+        high = len(content)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = content[:mid] + (marker if mid < len(content) else "")
+            if fits(candidate):
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+
+        # Very small budgets may not fit the marker. Preserve as much raw text
+        # as possible while still honoring the hard limit.
+        if not best:
+            low = 0
+            high = len(content)
+            while low <= high:
+                mid = (low + high) // 2
+                candidate = content[:mid]
+                if candidate and fits(candidate):
+                    best = candidate
+                    low = mid + 1
+                else:
+                    high = mid - 1
+
+        if not best:
+            return None
+
+        clipped = dict(message)
+        clipped["content"] = best
+        # Reasoning is not part of OV session messages. Drop any provider-only
+        # reasoning field from a clipped local fallback message so it cannot
+        # silently exceed the session-history budget.
+        clipped.pop("reasoning_content", None)
+        return clipped
+
+    @classmethod
+    def _trim_history_to_token_budget(
+        cls,
+        messages: list[dict[str, Any]],
+        token_budget: int,
+    ) -> list[dict[str, Any]]:
+        """Keep the newest contiguous history tail within a hard token budget."""
+        if token_budget <= 0 or not messages:
+            return []
+
+        total_tokens = sum(cls._history_message_tokens(message) for message in messages)
+        if total_tokens <= token_budget:
+            return messages
+
+        remaining = token_budget
+        retained_reversed: list[dict[str, Any]] = []
+        for message in reversed(messages):
+            message_tokens = cls._history_message_tokens(message)
+            if message_tokens <= remaining:
+                retained_reversed.append(message)
+                remaining -= message_tokens
+                continue
+
+            clipped = cls._truncate_history_message(message, remaining)
+            if clipped is not None:
+                retained_reversed.append(clipped)
+            break
+
+        return list(reversed(retained_reversed))
+
     async def _build_prompt_history(
         self,
         session: Session,
@@ -525,7 +621,25 @@ class AgentLoop:
                 get_unsynced_messages(session),
                 provider_name=provider_name,
             )
-            return ov_history + local_tail
+            combined_history = ov_history + local_tail
+            trimmed_history = self._trim_history_to_token_budget(
+                combined_history,
+                token_budget,
+            )
+            if len(trimmed_history) != len(combined_history) or any(
+                before.get("content") != after.get("content")
+                for before, after in zip(
+                    combined_history[-len(trimmed_history) :],
+                    trimmed_history,
+                    strict=False,
+                )
+            ):
+                logger.info(
+                    f"Trimmed OpenViking session history for {session_id} to "
+                    f"token_budget={token_budget}: messages={len(combined_history)}"
+                    f"->{len(trimmed_history)}"
+                )
+            return trimmed_history
         except Exception as e:
             logger.warning(
                 f"Failed to load OpenViking session context for {session_id}: {e}. "
