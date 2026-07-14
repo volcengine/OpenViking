@@ -1,0 +1,57 @@
+.github/workflows/release-tos.yml
+  s_5e17b6c73ed8ec::t_e735bcb6c014bb 98-102,111-113
+examples/claude-code-memory-plugin/hooks/hooks.json
+  s_5e17b6c73ed8ec::t_25611e8074def8 8,20,32,44,56,68,80,91,103
+examples/claude-code-memory-plugin/scripts/marketplace.test.mjs
+  s_5e17b6c73ed8ec::t_5b9bf717a88764 4,66,79
+examples/cursor-memory-plugin/hooks/hooks.json
+  s_5e17b6c73ed8ec::t_a6bbdfc079fe17 6,12,18,24,30
+examples/cursor-memory-plugin/scripts/auto-capture.mjs
+  s_5e17b6c73ed8ec::t_7541eda88702c1 3-4
+examples/cursor-memory-plugin/scripts/auto-recall.mjs
+  s_5e17b6c73ed8ec::t_fa40bf844ed04b 1-4
+examples/cursor-memory-plugin/scripts/cursor-hook.mjs
+  s_5e17b6c73ed8ec::t_a7a898509f539d 28
+examples/cursor-memory-plugin/scripts/cursor-plugin.test.mjs
+  s_5e17b6c73ed8ec::t_9ec5e83ebbf3d8 15-21,23,47-51
+examples/cursor-memory-plugin/scripts/pre-compact.mjs
+  s_5e17b6c73ed8ec::t_92ebf2386319bd 1-4
+examples/cursor-memory-plugin/scripts/session-end.mjs
+  s_5e17b6c73ed8ec::t_488d59e79dba9a 1-4
+examples/cursor-memory-plugin/scripts/session-start.mjs
+  s_5e17b6c73ed8ec::t_2633015ebbc7ea 1-4
+examples/memory-plugin-shared/install-agent-hooks.test.mjs
+  s_5e17b6c73ed8ec::t_a398880cf9306c 77,86,114-116,118,139
+examples/memory-plugin-shared/install.sh
+  s_5e17b6c73ed8ec::t_34d58c1ade4571 1776-1780,1921-1925,2537-2539,2549,2564-2566,2573,2586-2588,2595
+examples/trae-memory-hooks/hooks/hooks.json
+  s_5e17b6c73ed8ec::t_0078ee81ad8aa3 9,21,32
+examples/trae-memory-hooks/scripts/auto-capture.mjs
+  s_5e17b6c73ed8ec::t_0fb7e1a4df3f38 1-5
+examples/trae-memory-hooks/scripts/auto-recall.mjs
+  s_5e17b6c73ed8ec::t_23fe546571dbac 1-5
+examples/trae-memory-hooks/scripts/session-start.mjs
+  s_5e17b6c73ed8ec::t_bbc16684b16653 1-5
+examples/trae-memory-hooks/scripts/trae-hook.mjs
+  s_5e17b6c73ed8ec::t_9ad8d4c42235d3 24-26
+examples/trae-memory-hooks/scripts/trae-hooks.test.mjs
+  s_5e17b6c73ed8ec::t_65e9ef1bb9db91 15-23,33-37,39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "22fc9bda5e0068afec998734e64ada995bafb74d",
+  "prompts": {},
+  "sessions": {
+    "s_5e17b6c73ed8ec": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f49b4-d234-7ae0-a95d-b3a3014392cd",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

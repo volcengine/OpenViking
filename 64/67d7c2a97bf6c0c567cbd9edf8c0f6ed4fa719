@@ -1,0 +1,58 @@
+docs/en/api/12-acl.md
+  s_16e7f0991347b6::t_5373df0cd57cd4 3,17,248
+docs/en/concepts/04-viking-uri.md
+  s_77d338fd50fb18::t_72cd02554a252f 91
+docs/en/concepts/11-multi-tenant.md
+  s_77d338fd50fb18::t_60791e185bbc04 77,111
+docs/en/concepts/15-acl.md
+  s_16e7f0991347b6::t_85ad3d441a0879 3,9,16,18,89,111,115
+docs/zh/api/12-acl.md
+  s_16e7f0991347b6::t_33b0d91c37d3cb 3,17,248
+docs/zh/concepts/04-viking-uri.md
+  s_77d338fd50fb18::t_478e4c0ec47411 89
+docs/zh/concepts/11-multi-tenant.md
+  s_77d338fd50fb18::t_e0e5f4e56fde31 77,111
+docs/zh/concepts/15-acl.md
+  s_16e7f0991347b6::t_15104cad31c836 3,9,16,18,89,111,115
+openviking/storage/acl.py
+  s_77d338fd50fb18::t_8d60377654cbe7 167-169,173,356-357,361-366
+openviking/storage/viking_fs.py
+  s_77d338fd50fb18::t_3caedb10665aba 904-907,1005,1007
+openviking/storage/viking_vector_index_backend.py
+  s_77d338fd50fb18::t_aa3435a89e223a 326,1473-1483,1486
+tests/server/test_api_acl.py
+  s_77d338fd50fb18::t_9eac35e13c2929 9,23,26-28,30-31,33-34,47-49
+tests/storage/test_acl.py
+  s_77d338fd50fb18::t_bd23c8edf49530 94,96-99,105,143-144,239-287
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6467d7c2a97bf6c0c567cbd9edf8c0f6ed4fa719",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_16e7f0991347b6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5ab4-f8c0-7f30-b31f-8724c5129390",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_77d338fd50fb18": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fca-8901-7a41-a062-eae93e1509a8",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

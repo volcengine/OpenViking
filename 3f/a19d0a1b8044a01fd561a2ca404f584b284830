@@ -1,0 +1,21 @@
+docs/superpowers/specs/2026-07-13-multimodal-file-matrix-integration-design.md
+  s_3fbdb76d2f6513::t_9fa349a14c0965 1-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3fa19d0a1b8044a01fd561a2ca404f584b284830",
+  "prompts": {},
+  "sessions": {
+    "s_3fbdb76d2f6513": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5aef-e546-7603-a90c-bd3ea375464c",
+        "model": "unknown"
+      },
+      "human_author": "zhanghaoyu <zhanghaoyu.la@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

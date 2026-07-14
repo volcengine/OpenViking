@@ -1,0 +1,28 @@
+openviking/utils/embedding_utils.py
+  s_4239946b7692d9::t_e42c704b51c643 205-206
+tests/unit/test_vectorize_file_strategy.py
+  s_4239946b7692d9::t_0d911c3d7b1880 5,67-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "629f52c105a62b308f808d40a1bd95ab37276e09",
+  "prompts": {},
+  "humans": {
+    "h_52359942dff0d1": {
+      "author": "zhanghaoyu <zhanghaoyu.la@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_4239946b7692d9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5e9e-5aa9-77b1-bc73-fcac2b09f604",
+        "model": "unknown"
+      },
+      "human_author": "zhanghaoyu <zhanghaoyu.la@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

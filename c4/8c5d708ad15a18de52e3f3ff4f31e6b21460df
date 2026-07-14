@@ -1,0 +1,37 @@
+docs/.vitepress/theme/OpenVikingSearch.vue
+  s_62dfa863fa4c7f::t_77dd39da48c767 129,135
+docs/.vitepress/theme/VikingBotAssistant.vue
+  s_62dfa863fa4c7f::t_93384e337e64b8 5,21,24-25,30-32,51-52,69-70,79,81,84-87,90-93,109,123-135,137,142-146,216-218,227-228,248,251,268,270-277,300,315
+docs/.vitepress/theme/custom.css
+  s_62dfa863fa4c7f::t_56ec0428eef31e 191,197-200,563,617-663
+docs/.vitepress/theme/vikingbot-api.test.ts
+  s_62dfa863fa4c7f::t_2dab1ff51e62a9 10,14
+docs/.vitepress/theme/vikingbot-api.ts
+  s_62dfa863fa4c7f::t_f752d39c5a1503 14-22,28-29,33-34,37,40,68,86,94,102,117-118
+docs/.vitepress/theme/vikingbot-markdown.test.ts
+  s_62dfa863fa4c7f::t_3b2e0a4452281c 1-24
+docs/.vitepress/theme/vikingbot-markdown.ts
+  s_62dfa863fa4c7f::t_77a18b478f300a 1-50
+docs/package-lock.json
+  s_62dfa863fa4c7f::t_f91a1c37e66ef0 11-13,1652-1658,1675-1681,1911-1913,1915-1924,1928-1929,2609-2625
+docs/package.json
+  s_62dfa863fa4c7f::t_1ca77d045a0710 15-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c48c5d708ad15a18de52e3f3ff4f31e6b21460df",
+  "prompts": {},
+  "sessions": {
+    "s_62dfa863fa4c7f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5994-520b-77f1-a64a-92f2cde81cb9",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
