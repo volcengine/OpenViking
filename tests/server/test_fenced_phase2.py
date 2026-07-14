@@ -18,6 +18,10 @@ from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
 
 
+class _SimulatedProcessLoss(BaseException):
+    """Model process loss without Python 3.11 Task's SystemExit re-raise."""
+
+
 class _AbsoluteActiveCount:
     def __init__(self) -> None:
         self.value = 0
@@ -232,7 +236,7 @@ async def test_phase2_started_without_receipt_is_ambiguous_and_not_replayed(
     async def lost_after_effect(**_kwargs: Any) -> dict[str, Any]:
         nonlocal calls
         calls += 1
-        raise SystemExit(94)
+        raise _SimulatedProcessLoss("after-effect receipt loss")
 
     compressor = service.sessions._session_compressor
     monkeypatch.setattr(
@@ -250,7 +254,7 @@ async def test_phase2_started_without_receipt_is_ambiguous_and_not_replayed(
         operation_id="ambiguous-operation",
         operation_sequence_id=2,
     )
-    with pytest.raises(SystemExit, match="94"):
+    with pytest.raises(_SimulatedProcessLoss, match="after-effect receipt loss"):
         await service.sessions.run_fenced_commit_work(
             session_id,
             _ctx(),
@@ -258,6 +262,14 @@ async def test_phase2_started_without_receipt_is_ambiguous_and_not_replayed(
             task_id=phase1["task_id"],
             archive_uri=phase1["archive_uri"],
         )
+    manifest_uri = (
+        f"{session.uri}/.fenced-commits/"
+        f"{hashlib.sha256(b'ambiguous-operation').hexdigest()}.json"
+    )
+    started_manifest = json.loads(
+        await service.viking_fs.read_file(manifest_uri, ctx=_ctx())
+    )
+    assert started_manifest["phase2"]["steps"]["long_term"]["state"] == "started"
     with pytest.raises(FailedPreconditionError) as ambiguous:
         await service.sessions.run_fenced_commit_work(
             session_id,
