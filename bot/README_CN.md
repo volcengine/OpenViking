@@ -287,7 +287,7 @@ VikingBot 使用 OpenViking 完成：
 - 浏览、搜索和读取 Resource；
 - 增量同步并提交 Session，提取长期记忆与经验。
 
-详细调用链见 [VikingBot 与 OpenViking 集成](docs/cn/concepts/04-openviking-integration.md)。Gateway 入口与鉴权边界来自 [RFC #3042](https://github.com/volcengine/OpenViking/discussions/3042)。
+详细调用链见 [VikingBot 与 OpenViking 集成](docs/zh/concepts/04-openviking-integration.md)。Gateway 入口与鉴权边界来自 [RFC #3042](https://github.com/volcengine/OpenViking/discussions/3042)。
 
 ## 配置说明
 
@@ -328,6 +328,67 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.ov_server.exp_recall_limit` | `5` | Experience 召回条数 |
 | `bot.ov_server.exp_recall_max_chars` | `10000` | Experience 注入字符预算 |
 | `bot.ov_server.exp_write_tools` | `write_file`,`edit_file` | 写操作前触发经验召回的工具 |
+
+## Workspace 与 Agent 定制
+
+Workspace 是 VikingBot 的本地工作目录。它保存 Agent 启动指令、Skill、Heartbeat 任务以及文件和 Shell 工具操作的内容；OpenViking Workspace 则通过 `openviking_*` 工具访问 Resource、Memory 和 Skill，两者不是同一个目录。
+
+### 找到当前 Workspace
+
+Workspace 根目录由 `storage.workspace` 决定：
+
+```text
+<storage.workspace>/bot/workspace
+```
+
+未配置 `storage.workspace` 时，默认为 `~/.openviking/data/bot/workspace`。可以运行以下命令确认：
+
+```bash
+vikingbot status
+```
+
+Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
+
+| 模式 | 活动 Workspace |
+|------|----------------|
+| `shared`（默认） | `<workspace>/shared` |
+| `per-session` | `<workspace>/<session-key>` |
+| `per-channel` | `<workspace>/<channel-key>` |
+
+例如，默认配置下应修改 `~/.openviking/data/bot/workspace/shared/SOUL.md`。
+
+### 定制 Agent
+
+首次使用某个活动 Workspace 时，VikingBot 会从内置 `bot/workspace` 模板复制初始文件。常用定制入口如下：
+
+| 文件或目录 | 作用 | 加载方式 |
+|------------|------|----------|
+| `SOUL.md` | 人格、价值观和表达风格 | 每轮自动加入系统提示 |
+| `AGENTS.md` | 全局工作规则和任务约束；可按需创建 | 每轮自动加入系统提示 |
+| `IDENTITY.md` | Agent 名称、角色和身份背景；可按需创建 | 每轮自动加入系统提示 |
+| `TOOLS.md` | 工具选择、调用边界和安全规则 | 每轮自动加入系统提示 |
+| `skills/<name>/SKILL.md` | 某类任务的操作流程和配套资源 | 先注入摘要，需要时渐进加载全文 |
+| `HEARTBEAT.md` | 周期检查的任务清单 | 仅由 Heartbeat 读取 |
+
+例如，可以修改活动 Workspace 中的 `SOUL.md`：
+
+```markdown
+# Soul
+
+你是团队的研发助手。
+
+- 默认使用中文回答
+- 先给结论，再补充必要细节
+- 修改代码前先确认现状，修改后运行相关验证
+- 不确定时明确说明假设，不编造结果
+```
+
+保存后通常会在下一轮 Agent 对话中生效，无需重启 Gateway。`SOUL.md` 只能改变提示行为，不能绕过 Channel 权限、工具可见性或 Sandbox 限制。
+
+> [!NOTE]
+> 请修改活动 Workspace 中的文件。仓库或安装包中的 `bot/workspace` 是初始化模板，不会覆盖已经存在的 Workspace。不要在启动文件中保存 API Key 等秘密。
+
+完整加载顺序、文件职责和定制边界见 [Agent 能力体系](docs/zh/concepts/02-agent-capabilities.md#workspace-与-agent-定制)。
 
 ## Agent 工具
 

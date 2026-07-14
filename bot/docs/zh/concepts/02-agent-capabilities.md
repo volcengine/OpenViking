@@ -71,7 +71,54 @@ MCP 参数 Schema 会先做兼容转换，再交给模型和 ToolRegistry。
 
 子 Agent 完成后把结果通知主会话，由主 Agent 负责身份相关操作和最终交付。
 
-## 沙箱与工作区
+## Workspace 与 Agent 定制
+
+Workspace 同时承担两个职责：一是保存构成 Agent 系统提示的启动文件和 Skill，二是作为文件与命令工具的本地工作目录。它与通过 `openviking_*` 工具访问的 OpenViking Workspace 相互独立。
+
+### 路径与隔离范围
+
+Workspace 根目录是 `<storage.workspace>/bot/workspace`；未配置 `storage.workspace` 时，默认为 `~/.openviking/data/bot/workspace`。`vikingbot status` 会显示解析后的根目录。
+
+ContextBuilder 实际读取按 `sandbox.mode` 选择的活动 Workspace：
+
+| 模式 | 活动目录 |
+|------|----------|
+| `shared` | `<workspace>/shared` |
+| `per-session` | `<workspace>/<session-key>` |
+| `per-channel` | `<workspace>/<channel-key>` |
+
+因此，默认 `shared` 模式下，应定制 `<workspace>/shared` 中的文件，而不是直接修改 Workspace 根目录。
+
+### 启动文件
+
+ContextBuilder 在每轮构建系统提示时，按 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md` 的顺序读取存在且非空的文件：
+
+| 文件 | 适合定义的内容 |
+|------|----------------|
+| `AGENTS.md` | 全局工作方式、任务流程、输出约束和必须遵守的项目规则 |
+| `SOUL.md` | 人格、价值观、语气、回答风格和默认行为偏好 |
+| `TOOLS.md` | 工具选择原则、调用顺序、副作用确认和安全边界 |
+| `IDENTITY.md` | Agent 名称、角色、职责范围和身份背景 |
+
+这些文件补充 VikingBot 内置身份和运行环境提示，不会改变真实工具 Schema、Channel 鉴权或 Sandbox 权限。例如，在 `SOUL.md` 中要求“始终执行 Shell”并不能让不可见的 `exec` 工具出现，也不能绕过沙箱策略。
+
+初始模板中还包含 `USER.md`，但当前 ContextBuilder 不会把它自动加入系统提示。长期用户资料应优先保存在 OpenViking Peer Profile 和 Memory 中；需要静态行为规则时，应写入 `AGENTS.md` 或 `SOUL.md`。
+
+### Skill、Heartbeat 与本地记忆
+
+- `skills/<name>/SKILL.md` 定义某类任务的流程。Workspace Skill 优先于同名内置 Skill，并采用摘要注入、按需读取全文的渐进加载方式。
+- `HEARTBEAT.md` 不属于普通系统提示，只由 HeartbeatService 周期读取。
+- `memory/MEMORY.md` 和 `memory/HISTORY.md` 是本地记忆文件；只有启用 `bot.use_local_memory` 时，旧会话整理结果才会写回本地文件。默认长期上下文由 OpenViking 管理。
+
+### 初始化与生效时机
+
+首次使用活动 Workspace 时，VikingBot 从安装包中的 `bot/workspace` 复制启动文件、内置 Skill 模板和辅助目录。模板初始化不会覆盖已有的启动文件定制。
+
+应直接修改活动 Workspace。ContextBuilder 每轮重新读取启动文件，因此保存 `SOUL.md`、`AGENTS.md`、`TOOLS.md` 或 `IDENTITY.md` 后，通常下一轮对话即可生效，无需重启 Gateway。修改安装包或仓库中的 `bot/workspace` 只影响以后创建的新 Workspace。
+
+启动文件等同于系统级提示的一部分，应限制写权限，并且不要存放 API Key、Token 或其他秘密。
+
+## 沙箱与 Workspace 隔离
 
 SandboxManager 根据 SessionKey 和 `sandbox.mode` 选择工作区：
 
@@ -91,8 +138,6 @@ SandboxManager 根据 SessionKey 和 `sandbox.mode` 选择工作区：
 | `aiosandbox` | 通过 AIO Sandbox 服务执行命令和文件操作 |
 
 Direct 模式的 `restrict_to_workspace=false` 时，文件和命令可能访问工作区外内容。面向不可信用户开放服务时，应选择隔离后端并显式设置网络与文件策略。
-
-首次使用工作区时，SandboxManager 会复制 AGENTS、SOUL、USER、TOOLS、IDENTITY 等启动文件以及启用的 Skill。
 
 ## 多模态
 
@@ -130,6 +175,7 @@ HookManager 提供运行时扩展点。当前内置 Hook 主要用于：
 
 | 内容 | 路径 |
 |------|------|
+| Workspace 模板 | `bot/workspace/` |
 | 上下文与 Skill | `vikingbot/agent/context.py`、`skills.py` |
 | 工具系统 | `vikingbot/agent/tools/` |
 | 子 Agent | `vikingbot/agent/subagent.py` |
