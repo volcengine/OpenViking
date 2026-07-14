@@ -4,9 +4,17 @@
 Test that provider instruction correctly instructs LLM.
 """
 
+import pytest
+
 from openviking.message import ImagePart, Message, TextPart, ToolPart
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.vision_message_normalizer import IMAGE_DESCRIPTION_PROMPT
+
+
+@pytest.fixture(autouse=True)
+def _drain_background_tasks():
+    """These pure unit tests do not need the session integration client."""
+    yield
 
 
 class TestProviderInstruction:
@@ -40,6 +48,15 @@ class TestProviderInstruction:
         # Check that output language instruction is present
         assert "Target Output Language" in instruction
         assert "All memory content MUST be written in" in instruction
+
+    def test_instruction_requires_concise_distillation(self):
+        provider = SessionExtractContextProvider(messages=[])
+
+        instruction = provider.instruction()
+
+        assert "Store atomic, durable facts rather than raw source material" in instruction
+        assert "Do NOT copy skill definitions" in instruction
+        assert "near 2000 characters or fewer" in instruction
 
     def test_instruction_explains_peer_memory_routing(self):
         provider = SessionExtractContextProvider(messages=[])
@@ -232,8 +249,6 @@ class TestSessionConversationToolFiltering:
 
         assert provider._detect_language() == "zh-CN"
 
-
-
     async def test_prepare_extraction_messages_replaces_image_part_with_vlm_description(self):
         class FakeVisionVLM:
             def __init__(self):
@@ -340,6 +355,7 @@ class TestSessionConversationToolFiltering:
         assert len(messages) == 1
         assert any(isinstance(part, ImagePart) for part in messages[0].parts)
         assert provider.messages is not messages
+
 
 def test_session_provider_empty_messages_still_uses_environment_fallback(monkeypatch):
     monkeypatch.setenv("TZ", "Asia/Shanghai")

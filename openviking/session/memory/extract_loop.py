@@ -46,6 +46,10 @@ _CANNED_REFUSAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+_MEMORY_FIELD_TARGET_CHARS = 2_000
+_MEMORY_FIELD_HARD_MAX_CHARS = 4_000
+_VERBATIM_COPY_MIN_CHARS = 1_000
+
 
 def _looks_like_canned_refusal(content: str) -> bool:
     """Return whether a non-JSON LLM response looks like a generic refusal."""
@@ -77,6 +81,27 @@ def _preview_text(content: str, *, limit: int = 240) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _iter_string_fields(value: Any, prefix: str = ""):
+    """Yield nested string fields without exposing their contents."""
+
+    if isinstance(value, str):
+        yield prefix or "value", value
+        return
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            yield from _iter_string_fields(child, child_prefix)
+        return
+    if isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            child_prefix = f"{prefix}[{index}]" if prefix else f"[{index}]"
+            yield from _iter_string_fields(child, child_prefix)
+
+
+def _normalize_copy_text(value: str) -> str:
+    return " ".join(str(value or "").split())
 
 
 class ExtractLoop:
@@ -142,6 +167,80 @@ class ExtractLoop:
 
         self._tool_ctx = None
 
+    def _source_conversation_texts(self) -> List[str]:
+        """Return normalized source text used only for verbatim-copy detection."""
+
+        texts: List[str] = []
+        for message in getattr(self.context_provider, "messages", []) or []:
+            content = getattr(message, "content", None)
+            if content:
+                texts.append(_normalize_copy_text(content))
+            for part in getattr(message, "parts", []) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    texts.append(_normalize_copy_text(text))
+        if texts:
+            return [text for text in texts if text]
+
+        get_conversation_text = getattr(self.context_provider, "get_conversation_text", None)
+        if callable(get_conversation_text):
+            text = _normalize_copy_text(get_conversation_text())
+            return [text] if text else []
+
+        extract_context = getattr(self, "_extract_context", None)
+        for message in getattr(extract_context, "messages", []) or []:
+            content = getattr(message, "content", None)
+            if content:
+                texts.append(_normalize_copy_text(content))
+            for part in getattr(message, "parts", []) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    texts.append(_normalize_copy_text(text))
+        return [text for text in texts if text]
+
+    def _find_undistilled_operations(self, operations: ResolvedOperations) -> Dict[int, List[str]]:
+        """Find memory fields that are too large or copy source text verbatim."""
+
+        source_texts = self._source_conversation_texts()
+        invalid: Dict[int, List[str]] = {}
+        for index, operation in enumerate(operations.upsert_operations):
+            field_errors: List[str] = []
+            for field_name, value in _iter_string_fields(operation.memory_fields):
+                normalized = _normalize_copy_text(value)
+                if len(value) > _MEMORY_FIELD_HARD_MAX_CHARS:
+                    field_errors.append(
+                        f"{field_name}: {len(value)} chars exceeds {_MEMORY_FIELD_HARD_MAX_CHARS}"
+                    )
+                    continue
+                if len(normalized) < _VERBATIM_COPY_MIN_CHARS:
+                    continue
+                if any(
+                    normalized in source
+                    or (len(source) >= _VERBATIM_COPY_MIN_CHARS and source in normalized)
+                    for source in source_texts
+                ):
+                    field_errors.append(f"{field_name}: contains a large verbatim source span")
+            if field_errors:
+                invalid[index] = field_errors
+        return invalid
+
+    @staticmethod
+    def _build_distillation_repair_instruction(
+        operations: ResolvedOperations, invalid: Dict[int, List[str]]
+    ) -> str:
+        details = []
+        for index, errors in invalid.items():
+            memory_type = operations.upsert_operations[index].memory_type
+            details.append(f"- operation {index} ({memory_type}): {', '.join(errors)}")
+        return (
+            "Your proposed memory operations contain undistilled content:\n"
+            + "\n".join(details)
+            + "\nRewrite those memory items as atomic, durable facts. Do not copy skill definitions, "
+            "documents, transcripts, tool output, or templates verbatim. Keep each text field "
+            f"near {_MEMORY_FIELD_TARGET_CHARS} characters or fewer. Return the complete JSON "
+            "object again, including any already-valid operations."
+        )
+
     async def run(self) -> Tuple[Optional[Any], List[Dict[str, Any]]]:
         """
         Run the simplified ReAct loop for memory updates.
@@ -157,6 +256,7 @@ class ExtractLoop:
         # Reset format retry counter for each run
         self._format_retry_count = 0
         patch_repair_count = 0
+        distillation_repair_count = 0
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -283,6 +383,35 @@ The final output of the model must strictly follow the JSON Schema format shown 
             # If model returned final operations, check if refetch is needed
             if operations is not None:
                 final_operations, raw_links = await self.resolve_operations(operations)
+                undistilled = self._find_undistilled_operations(final_operations)
+                if undistilled and distillation_repair_count == 0:
+                    distillation_repair_count += 1
+                    max_iterations += 1
+                    self._disable_tools_for_iteration = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._build_distillation_repair_instruction(
+                                final_operations, undistilled
+                            ),
+                        }
+                    )
+                    tracer.info(
+                        f"Extended max_iterations to {max_iterations} for memory distillation repair",
+                        console=True,
+                    )
+                    continue
+                if undistilled:
+                    rejected = set(undistilled)
+                    final_operations.upsert_operations = [
+                        op
+                        for index, op in enumerate(final_operations.upsert_operations)
+                        if index not in rejected
+                    ]
+                    final_operations.errors.append(
+                        "Skipped undistilled memory operations after one repair attempt: "
+                        + ", ".join(str(index) for index in sorted(rejected))
+                    )
                 # Check if any write_uris target existing files that weren't read
                 refetch_uris = await self._check_unread_existing_files(final_operations)
                 if refetch_uris:
@@ -324,9 +453,7 @@ The final output of the model must strictly follow the JSON Schema format shown 
             if self._format_retry_count == 0:
                 self._format_retry_count += 1
                 max_iterations += 1
-                retry_reason = (
-                    "refusal_text" if failure_kind == "refusal_text" else "format_retry"
-                )
+                retry_reason = "refusal_text" if failure_kind == "refusal_text" else "format_retry"
                 tracer.info(f"Extended max_iterations to {max_iterations} for {retry_reason}")
                 self._add_format_error_message(messages)
 
@@ -485,7 +612,6 @@ The final output of the model must strictly follow the JSON Schema format shown 
                     break
 
         return resolved, raw_links
-
 
     def _normalize_delete_ids(self, raw_delete_ids: List[Any]) -> List[DeleteId]:
         delete_ids: List[DeleteId] = []

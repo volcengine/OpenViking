@@ -10,11 +10,19 @@ import pytest
 
 from openviking.session.memory.dataclass import (
     MemoryTypeSchema,
+    ResolvedOperation,
+    ResolvedOperations,
 )
 from openviking.session.memory.extract_loop import (
     ExtractLoop,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+
+
+@pytest.fixture(autouse=True)
+def _drain_background_tasks():
+    """These pure unit tests do not need the session integration client."""
+    yield
 
 
 class TestPreFetchFileFiltering:
@@ -265,3 +273,63 @@ class TestExtractLoopFinalJsonRetry:
         assert final_prompts
         assert '"delete_ids": []' in final_prompts[-1]
         assert '"preferences": []' in final_prompts[-1]
+
+
+class TestMemoryDistillationGuard:
+    @staticmethod
+    def _loop(source_text: str) -> ExtractLoop:
+        loop = object.__new__(ExtractLoop)
+        loop.context_provider = MagicMock()
+        loop.context_provider.get_conversation_text.return_value = source_text
+        return loop
+
+    @staticmethod
+    def _operations(content: str) -> ResolvedOperations:
+        return ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_fields={"content": content},
+                    memory_type="experiences",
+                    uris=["viking://user/test/memories/experiences/example.md"],
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+        )
+
+    def test_flags_memory_field_over_hard_limit(self):
+        loop = self._loop("")
+
+        invalid = loop._find_undistilled_operations(self._operations("x" * 4_001))
+
+        assert invalid == {0: ["content: 4001 chars exceeds 4000"]}
+
+    def test_flags_large_verbatim_copy_below_hard_limit(self):
+        source = "durable source sentence " * 60
+        loop = self._loop(source)
+
+        invalid = loop._find_undistilled_operations(self._operations(source))
+
+        assert invalid == {0: ["content: contains a large verbatim source span"]}
+
+    def test_allows_concise_distilled_fact(self):
+        source = "raw transcript " * 500
+        loop = self._loop(source)
+
+        invalid = loop._find_undistilled_operations(
+            self._operations("The user prefers concise technical summaries.")
+        )
+
+        assert invalid == {}
+
+    def test_repair_instruction_does_not_echo_raw_memory_content(self):
+        raw = "sensitive raw source " * 250
+        operations = self._operations(raw)
+
+        instruction = ExtractLoop._build_distillation_repair_instruction(
+            operations, {0: ["content: 5250 chars exceeds 4000"]}
+        )
+
+        assert raw not in instruction
+        assert "operation 0 (experiences)" in instruction
+        assert "Do not copy skill definitions" in instruction

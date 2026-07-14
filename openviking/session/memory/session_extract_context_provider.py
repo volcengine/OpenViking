@@ -10,7 +10,7 @@ import os
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from openviking.message.part import TextPart, ToolPart
+from openviking.message.part import TextPart
 from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
@@ -221,6 +221,11 @@ class SessionExtractContextProvider(ExtractContextProvider):
 - ONLY read and search tools are available - DO NOT use write tool
 - Before editing ANY existing memory file, you MUST first read its complete content
 - ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls{resource_deletion_read_source}
+
+## Distillation
+- Store atomic, durable facts rather than raw source material.
+- Do NOT copy skill definitions, documents, transcripts, tool output, or templates verbatim.
+- Keep each text field near 2000 characters or fewer. Split independent facts into separate memory items.
 
 ## Target Output Language
 All memory content MUST be written in {output_language}.
