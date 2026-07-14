@@ -61,6 +61,7 @@ class ParserApiConfig(BaseModel):
     extensions: List[str] = Field(default_factory=list)
     host: str = ""
     api_key: str = ""
+    enable_feishu_url: bool = False
     enable_resumable_upload: bool = False
     upload_simple_max_bytes: int = 512 * 1024 * 1024
     upload_part_size_bytes: int = 8 * 1024 * 1024

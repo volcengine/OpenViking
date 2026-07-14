@@ -96,6 +96,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "create_parent",
         "telemetry",
         "request_validator",
+        "_understanding_response_id",
     }
 )
 
@@ -538,6 +539,15 @@ class ResourceService:
         return self._get_parser_router().should_use_understanding_api(path)
 
     @staticmethod
+    def _is_feishu_url(path: str) -> bool:
+        try:
+            from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+            return FeishuAccessor._is_feishu_url(path)
+        except Exception:
+            return False
+
+    @staticmethod
     def _target_doc_name(
         path: str,
         source_name: Optional[str],
@@ -739,6 +749,12 @@ class ResourceService:
                     source_format=source_info.source_format,
                     create_parent=target.create_parent,
                 )
+                defer_target_resolution = bool(
+                    candidate_uri
+                    and not source_name
+                    and not watch_enabled
+                    and self._is_feishu_url(path)
+                )
                 if self._viking_fs is None:
                     raise NotInitializedError("VikingFS")
                 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
@@ -761,12 +777,12 @@ class ResourceService:
                             retryable=True,
                         ) from exc
 
-                if candidate_uri:
+                if candidate_uri and not defer_target_resolution:
                     root_uri, lock_lease = await self._resource_processor.reserve_unique_candidate(
                         candidate_uri=candidate_uri,
                         ctx=ctx,
                     )
-                else:
+                elif not defer_target_resolution:
                     lock_lease = await _reserve_tree(root_uri)
 
                 task_tracker = get_task_tracker()
@@ -784,6 +800,17 @@ class ResourceService:
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
                     )
+
+                    queued_args = dict(normalized_args.processor_kwargs)
+                    feishu_access_token = queued_args.pop(FEISHU_ACCESS_TOKEN_ARG, None)
+                    if self._is_feishu_url(path) and feishu_access_token:
+                        from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
+
+                        response_id = await self._get_parser_router().submit_url(
+                            path,
+                            feishu_access_token=feishu_access_token,
+                        )
+                        queued_args[PREPARED_RESPONSE_ID_ARG] = response_id
 
                     lock_handoff = lock_lease.to_handoff()
                     msg = UnderstandingParseMsg(
@@ -806,9 +833,14 @@ class ResourceService:
                         directly_upload_media=bool(kwargs.get("directly_upload_media", True)),
                         allow_local_path_resolution=allow_local_path_resolution,
                         enforce_public_remote_targets=enforce_public_remote_targets,
-                        args=normalized_args.processor_kwargs,
+                        args=queued_args,
                         source_name=source_name,
                         lock_handoff=lock_handoff.to_dict() if lock_handoff else None,
+                        defer_target_resolution=defer_target_resolution,
+                        parent_uri=(target.parent or target.to)
+                        if defer_target_resolution
+                        else None,
+                        create_parent=target.create_parent,
                     )
                     qm = get_queue_manager()
                     await qm.enqueue(QueueManager.EXTERNAL_PARSE, msg.to_dict())

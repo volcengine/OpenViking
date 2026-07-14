@@ -176,6 +176,9 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                         enforce_public_remote_targets=msg.enforce_public_remote_targets,
                         args=new_args,
                         source_name=msg.source_name,
+                        defer_target_resolution=msg.defer_target_resolution,
+                        parent_uri=msg.parent_uri,
+                        create_parent=msg.create_parent,
                     )
                     await qm.enqueue(QueueManager.EXTERNAL_PARSE, retry_msg.to_dict())
                     self.report_requeue()
@@ -233,14 +236,16 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     from openviking.utils.network_guard import ensure_public_remote_target
 
                     kwargs.setdefault("request_validator", ensure_public_remote_target)
+                processor_args = dict(msg.args or {})
+                processor_args.update(kwargs)
                 result = await resource_processor.process_resource(
                     path=msg.path,
                     ctx=ctx,
                     reason=msg.reason,
                     instruction=msg.instruction,
                     scope="resources",
-                    to=msg.root_uri,
-                    parent=None,
+                    to=None if msg.defer_target_resolution else msg.root_uri,
+                    parent=msg.parent_uri if msg.defer_target_resolution else None,
                     build_index=msg.build_index,
                     summarize=msg.summarize,
                     allow_local_path_resolution=msg.allow_local_path_resolution,
@@ -251,10 +256,10 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                     include=msg.include,
                     exclude=msg.exclude,
                     directly_upload_media=msg.directly_upload_media,
-                    args=msg.args,
                     skip_watch_management=True,
                     watch_interval=0,
-                    **kwargs,
+                    create_parent=msg.create_parent,
+                    **processor_args,
                 )
 
                 if result.get("status") == "error":

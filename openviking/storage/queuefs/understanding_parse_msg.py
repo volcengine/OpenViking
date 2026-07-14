@@ -36,6 +36,9 @@ class UnderstandingParseMsg:
     enforce_public_remote_targets: bool = False
     args: Dict[str, Any] = field(default_factory=dict)
     source_name: Optional[str] = None
+    defer_target_resolution: bool = False
+    parent_uri: Optional[str] = None
+    create_parent: bool = False
 
     def __init__(
         self,
@@ -62,6 +65,9 @@ class UnderstandingParseMsg:
         enforce_public_remote_targets: bool = False,
         args: Optional[Dict[str, Any]] = None,
         source_name: Optional[str] = None,
+        defer_target_resolution: bool = False,
+        parent_uri: Optional[str] = None,
+        create_parent: bool = False,
     ):
         self.id = str(uuid4())
         self.task_id = task_id
@@ -86,6 +92,9 @@ class UnderstandingParseMsg:
         self.enforce_public_remote_targets = enforce_public_remote_targets
         self.args = args or {}
         self.source_name = source_name
+        self.defer_target_resolution = defer_target_resolution
+        self.parent_uri = parent_uri
+        self.create_parent = create_parent
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -137,6 +146,9 @@ class UnderstandingParseMsg:
             enforce_public_remote_targets=bool(data.get("enforce_public_remote_targets", False)),
             args=data.get("args") if isinstance(data.get("args"), dict) else {},
             source_name=data.get("source_name"),
+            defer_target_resolution=bool(data.get("defer_target_resolution", False)),
+            parent_uri=data.get("parent_uri"),
+            create_parent=bool(data.get("create_parent", False)),
         )
         if data.get("id"):
             obj.id = str(data["id"])

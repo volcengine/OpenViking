@@ -49,6 +49,15 @@ class ParserRouter:
         if not parser_api or not getattr(parser_api, "enable", False):
             return False
 
+        if getattr(parser_api, "enable_feishu_url", False):
+            try:
+                from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+                if FeishuAccessor._is_feishu_url(str(source_path)):
+                    return True
+            except Exception:
+                pass
+
         ext = self._extract_extension(source_path)
         extensions = getattr(parser_api, "extensions", None) or []
         return ext in extensions
@@ -84,6 +93,11 @@ class ParserRouter:
                 display = "<path>"
             logger.info(f"[ParserRouter] Using internal ParserRegistry for {display}")
             return await self._parser_registry.parse(source_path, **kwargs)
+
+    async def submit_url(self, source: str, **kwargs) -> str:
+        if not self.should_use_understanding_api(source):
+            raise ValueError("source is not routed to UnderstandingAPI")
+        return await self._get_understanding_api().submit_url(source, **kwargs)
 
     def _extract_source_path(self, source: Union[str, Path, "LocalResource"]) -> Union[str, Path]:
         """Extract a filesystem path from the source."""
