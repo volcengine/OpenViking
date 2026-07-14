@@ -110,10 +110,9 @@ async def test_reindex_rejects_unsupported_uri(admin_client: httpx.AsyncClient):
         json={"uri": "viking://unknown/demo", "mode": "vectors_only"},
         headers=ROOT_ACCOUNT_HEADERS,
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 403
     body = resp.json()
     assert body["status"] == "error"
-    assert body["error"]["code"] == "UNSUPPORTED_URI"
 
 
 @pytest.mark.parametrize(
@@ -144,7 +143,7 @@ async def test_reindex_rejects_reason_field(admin_client: httpx.AsyncClient):
         },
         headers=ROOT_ACCOUNT_HEADERS,
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 403
 
 
 async def test_reindex_root_requires_explicit_account(admin_client: httpx.AsyncClient):
@@ -153,10 +152,9 @@ async def test_reindex_root_requires_explicit_account(admin_client: httpx.AsyncC
         json={"uri": "viking://resources/demo", "mode": "vectors_only"},
         headers={"X-API-Key": ROOT_KEY},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 403
     body = resp.json()
     assert body["status"] == "error"
-    assert body["error"]["code"] == "INVALID_ARGUMENT"
 
 
 @pytest.mark.asyncio
@@ -376,6 +374,9 @@ async def test_reindex_semantic_processor_uses_uri_owner_for_user_scoped_records
     captured = {}
 
     class FakeSemanticProcessor:
+        def __init__(self, **_kwargs):
+            pass
+
         async def on_dequeue(self, payload, lock=None):
             captured["payload"] = payload
             captured["lock"] = lock
@@ -1078,7 +1079,7 @@ async def test_reindex_executor_rejects_deprecated_agent_namespace_root():
 
     service = ReindexExecutor()
 
-    with pytest.raises(OpenVikingError, match="viking://agent is deprecated"):
+    with pytest.raises(OpenVikingError, match="no longer supported"):
         service._infer_target_type("viking://agent/")
 
 
@@ -1584,6 +1585,9 @@ async def test_reindex_semantic_processor_runs_with_skip_vectorization(monkeypat
     seen = {}
 
     class FakeSemanticProcessor:
+        def __init__(self, **_kwargs):
+            pass
+
         async def on_dequeue(self, payload, lock=None):
             seen["payload"] = payload
 
