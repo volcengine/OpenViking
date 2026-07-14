@@ -1,0 +1,21 @@
+tests/server/test_admin_api.py
+  s_6fe15e66a05bf5::t_a5c62ddc3b2ccd 984-989,1006-1010,1013-1014
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "f084183a1e38bf823d13538e0fe5daffda74935b",
+  "prompts": {},
+  "sessions": {
+    "s_6fe15e66a05bf5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4aa1-02af-7ff2-8876-044dd610c7a1",
+        "model": "unknown"
+      },
+      "human_author": "huangruiteng <huangruiteng@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
