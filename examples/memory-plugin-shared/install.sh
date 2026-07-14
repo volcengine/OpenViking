@@ -41,7 +41,7 @@
 #
 # Targets bash 3.2+ (macOS /bin/bash) and Linux.
 
-set -euo pipefail
+set -Eeuo pipefail
 
 OV_HOME="${OPENVIKING_HOME:-$HOME/.openviking}"
 REPO_URL="${OPENVIKING_REPO_URL:-https://github.com/volcengine/OpenViking.git}"
@@ -113,6 +113,25 @@ heading() { printf '\n%s%s%s\n' "$BOLD" "$*" "$RESET"; }
 
 # t <english> <chinese> — pick the UI language variant.
 t() { if [ "$UI_LANG" = "zh" ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+
+report_unexpected_error() { # report_unexpected_error <status> <line> <command>
+  local status="$1" line="$2" command="$3"
+  # Avoid duplicate reports while the same failure unwinds through nested
+  # functions. EXIT traps still run afterwards and restore any active TUI.
+  trap - ERR
+  if [ "${BASH_SUBSHELL:-0}" -gt 0 ]; then
+    return "$status"
+  fi
+  printf '\033[?25h' >/dev/tty 2>/dev/null || true
+  printf '\n' >&2
+  err "$(t 'OpenViking installer stopped unexpectedly.' 'OpenViking 安装程序意外退出。')"
+  printf '    %s: %s\n' "$(t 'Exit status' '状态码')" "$status" >&2
+  printf '    %s: %s\n' "$(t 'Script line' '脚本行号')" "$line" >&2
+  printf '    %s: %s\n' "$(t 'Command' '失败命令')" "$command" >&2
+  return "$status"
+}
+
+trap 'report_unexpected_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 # Pure-bash substring test. Never pipe `claude/codex plugin list` into
 # `grep -q`: with pipefail, grep exiting early SIGPIPEs the producer and the
@@ -763,6 +782,7 @@ tui_finish_selection() {
   [ "$SEL_CURSOR_APP" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cursor"
   [ "$SEL_TRAE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae"
   [ "$SEL_TRAE_CN" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae-cn"
+  return 0
 }
 
 tui_select_harnesses() {

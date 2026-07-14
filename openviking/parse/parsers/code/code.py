@@ -17,7 +17,7 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Set, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import (
@@ -170,7 +170,14 @@ class CodeRepositoryParser(BaseParser):
             logger.info(f"Uploading to VikingFS: {target_root_uri}")
 
             # 4. Upload to VikingFS (filtering on the fly)
-            file_count = await self._upload_directory(local_dir, target_root_uri, viking_fs)
+            file_count = await self._upload_directory(
+                local_dir,
+                target_root_uri,
+                viking_fs,
+                ignore_dirs=kwargs.get("ignore_dirs"),
+                include=kwargs.get("include"),
+                exclude=kwargs.get("exclude"),
+            )
 
             logger.info(f"Uploaded {file_count} files to {target_root_uri}")
 
@@ -572,7 +579,23 @@ class CodeRepositoryParser(BaseParser):
 
         return name
 
-    async def _upload_directory(self, local_dir: Path, viking_uri_base: str, viking_fs: Any) -> int:
+    async def _upload_directory(
+        self,
+        local_dir: Path,
+        viking_uri_base: str,
+        viking_fs: Any,
+        *,
+        ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
+        include: Optional[str] = None,
+        exclude: Optional[str] = None,
+    ) -> int:
         """Recursively upload directory to VikingFS using shared upload utilities."""
-        count, _ = await upload_directory(local_dir, viking_uri_base, viking_fs)
+        count, _ = await upload_directory(
+            local_dir,
+            viking_uri_base,
+            viking_fs,
+            ignore_dirs=ignore_dirs,
+            include=include,
+            exclude=exclude,
+        )
         return count

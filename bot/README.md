@@ -1,251 +1,350 @@
-# Vikingbot
+# VikingBot
 
-**Vikingbot**, built on the [Nanobot](https://github.com/HKUDS/nanobot) project, is designed to deliver an OpenClaw-like bot integrated with OpenViking.
+VikingBot is the multi-channel AI agent built into OpenViking. You can use it directly from the command line or run it as a long-lived Gateway connected to Feishu, Slack, Telegram, and other platforms. When connected to OpenViking, it also gains resource retrieval, user memory, experience memory, and session consolidation.
 
-## ✨ Core Features of OpenViking
+## Key Capabilities
 
-Vikingbot is deeply integrated with OpenViking, providing powerful knowledge management and memory retrieval capabilities:
+- **Multiple chat entry points**: `vikingbot chat`, `ov chat`, HTTP APIs, and multiple chat platforms.
+- **Agent tools**: built-in file, shell, web, image generation, scheduled task, and OpenViking tools.
+- **Skills and subagents**: load Skills on demand and delegate independent work to background subagents.
+- **Long-term context**: recall Resources, Peer Memories, and Experiences from OpenViking, and commit sessions automatically.
+- **Safer execution**: Direct, SRT, OpenSandbox, and AIO Sandbox backends.
+- **Service deployment**: the Gateway provides synchronous chat, SSE streaming, feedback, and an OpenViking API proxy.
 
-- **Dual local/remote modes**: Supports local storage (`~/.openviking/data/`) and remote server mode
-- **7 dedicated Agent tools**: Resource management, semantic search, regex search, glob search, memory search
-- **Three-level content access**: L0 (summary), L1 (overview), L2 (full content)
-- **Automatic session memory submission**: Conversation history is automatically saved to OpenViking
-- **Model configuration**: Read from OpenViking configuration (`vlm` section), no need to set provider separately in bot configuration
+## Installation
 
-## 📦 Install
+### Install from PyPI
 
-### Option 1: Install from PyPI (Simplest)**
 ```bash
 pip install "openviking[bot]"
 ```
 
-### Option 2: Install from source (for development)**
+### Install from Source
 
-**Prerequisites**
-
-First, install [uv](https://github.com/astral-sh/uv) (an extremely fast Python package installer):
+Python 3.11 or later is required. We recommend using [uv](https://github.com/astral-sh/uv):
 
 ```bash
-# macOS/Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Windows
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-**Install from source** (latest features, recommended for development)
-
-```bash
-git clone https://github.com/volcengine/OpenViking
+git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking
-
-# Create a virtual environment using Python 3.11 or higher
 uv venv --python 3.11
-
-# Activate environment
-source .venv/bin/activate  # macOS/Linux
-# .venv\Scripts\activate   # Windows
-
-# Install (all features included)
+source .venv/bin/activate
 uv pip install -e ".[bot]"
 ```
 
-## 🚀 Quick Start
+On Windows, activate the virtual environment with:
 
-> [!TIP]
-> Configure vikingbot through the configuration file `~/.openviking/ov.conf`!
-> Get API keys: [OpenRouter](https://openrouter.ai/keys) (Global) · [Brave Search](https://brave.com/search/api/) (optional, for web search)
+```powershell
+.venv\Scripts\activate
+```
 
-**1. Initialize configuration**
+## Quick Start: Choose Your Scenario
+
+VikingBot supports three primary usage scenarios. They are different entry points for different needs rather than mutually exclusive modes.
+
+| Scenario | Best for | Start command | OpenViking |
+|----------|----------|---------------|------------|
+| **A. OpenViking + Bot together** | A complete local experience with resources, memory, and the Agent | `openviking-server --with-bot` | The Bot uses the OpenViking Server started by this command |
+| **B. Debug the Agent locally** | Quickly testing the Bot or developing Tools and Skills | `vikingbot chat` | Optional; without it, the Bot cannot use OpenViking features |
+| **C. Unified Gateway entry point** | Starting the Bot separately and connecting it to an existing OpenViking Server | `vikingbot gateway` | May be configured explicitly or omitted |
+
+### Scenario A: Start OpenViking and the Bot Together
+
+Use this for the complete local experience. OpenViking Server and VikingBot Gateway start together. `ov chat` first calls OpenViking Server, whose `/bot/v1` route forwards the request to VikingBot.
+
+```text
+ov chat → OpenViking Server → VikingBot Gateway → Agent
+```
+
+#### 1. Prepare the configuration
+
+Follow the [OpenViking quickstart](../docs/en/getting-started/03-quickstart-server.md) to configure the models and storage required by OpenViking. By default, the Bot inherits the root-level `vlm` configuration as its Agent model. Configure `bot.agents` only if the Bot should use a separate model.
+
+In this combined mode, the Bot always uses the OpenViking Server started by the same command and ignores `bot.ov_server` settings that point to another service. OpenViking Server injects an authenticated request-scoped identity into every Chat request sent to the Bot.
+
+#### 2. Start both services
 
 ```bash
 openviking-server --with-bot
 ```
 
-This will automatically:
-- Create a default config at `~/.openviking/ov.conf`
-- Create bot startup files in the OpenViking workspace, default path is `~/.openviking/data/bot/`
-- Start the OpenViking server with bot integration
+This command starts the current OpenViking Server and a managed VikingBot Gateway. The Bot uses this Server and does not connect to the service named by `bot.ov_server.server_url`.
 
-**2. Configure via ov.conf**
+#### 3. Configure and use the `ov` CLI
 
-Edit `~/.openviking/ov.conf` to add your provider API keys (OpenRouter, OpenAI, etc.) and save the config.
-
-**3. Chat**
+Run the interactive configuration manager:
 
 ```bash
-# Send a single message directly
-ov chat -m "What is 2+2?"
+ov config
+```
 
-# Enter interactive chat mode (supports multi-turn conversations)
+Point the active CLI configuration to OpenViking Server, for example `http://127.0.0.1:1933`. If the Server requires authentication, also enter the caller's User/Admin API Key. Then run:
+
+```bash
 ov chat
-
-# Show plain-text replies (no Markdown rendering)
-ov chat --no-format
+ov chat -m "Remember that I prefer concise answers"
+ov find "my response preferences"
 ```
 
-That's it! You have a working AI assistant in 2 minutes.
+The identity flow is:
 
-Talk to your vikingbot through Telegram, Discord, WhatsApp, Feishu, Mochat, DingTalk, Slack, Email, or QQ — anytime, anywhere.
+- `ovcli.conf.api_key` represents the current caller.
+- OpenViking Server validates the identity and passes a request-scoped connection to the Bot.
+- The request identity takes priority over any process-level default identity, preventing multiple callers from sharing one Bot user.
 
-For detailed configuration, please refer to [CHANNEL.md](bot/docs/CHANNEL.md).
+### Scenario B: Debug the Agent Locally
 
-## 🌐 Agent Social Network
+Use this to try VikingBot quickly or develop Agents, Tools, and Skills. `vikingbot chat` starts the Agent in the current process. It does not require a running Gateway and does not use `ovcli.conf` as the Bot configuration.
 
-🐈 vikingbot is capable of linking to the agent social network (agent community). **Just send one message and your vikingbot joins automatically!**
+#### 1. Configure a model
 
-| Platform | How to Join (send this message to your bot) |
-|----------|-------------|
-| [**Moltbook**](https://www.moltbook.com/) | `Read https://moltbook.com/skill.md and follow the instructions to join Moltbook` |
-| [**ClawdChat**](https://clawdchat.ai/) | `Read https://clawdchat.ai/skill.md and follow the instructions to join ClawdChat` |
-
-Simply send the command above to your vikingbot (via CLI or any chat channel), and it will handle the rest.
-
-## ⚙️ Configuration
-
-Config file: `~/.openviking/ov.conf` (custom path can be set via environment variable `OPENVIKING_CONFIG_FILE`)
-
-> [!TIP]
-> Vikingbot shares the same configuration file with OpenViking. Configuration items are located under the `bot` field of the file, and will automatically merge global configurations such as `vlm`, `storage`, `server`, etc. No need to maintain a separate configuration file.
-
-> [!IMPORTANT]
-> After modifying the configuration (by editing the file directly),
-> you need to restart the gateway service for changes to take effect.
-
-### OpenViking Server Configuration
-The bot will connect to the remote OpenViking server. Please start the OpenViking Server before use. By default, the OpenViking server information configured in `ov.conf` is used
-- OpenViking default startup address is 127.0.0.1:1933
-- Vikingbot follows OpenViking `server.auth_mode`: `api_key` mode uses an OpenViking User API key; `trusted` mode uses `server.root_api_key` plus trusted identity headers; `dev` mode is local-only.
-- OpenViking Server configuration example
-```json
-{
-  "server": {
-    "auth_mode": "api_key",
-    "host": "127.0.0.1",
-    "port": 1933,
-    "root_api_key": "<your-openviking-root-api-key>"
-  },
-  "bot": {
-    "ov_server": {
-      "api_key": "<your-openviking-user-api-key>"
-    }
-  }
-}
-```
-
-### Bot Configuration
-All configurations are under the `bot` field in `ov.conf`, with default values for configuration items. The optional manual configuration items are described as follows:
-- `agents`: Agent configuration
-  - `model`: LLM model name used by the bot. When `provider` is set, use the provider-native model name (for example `doubao-seed-2-0-pro-260215`).
-  - `temperature`: Sampling temperature for LLM requests. Defaults to `0.7`.
-  - `thinking`: Enable provider reasoning/thinking mode for bot LLM requests when the selected provider protocol supports an explicit thinking parameter. Defaults to `true`; set to `false` to disable (for example to reduce latency/cost or for models where reasoning params are unsupported). Applied per provider — VolcEngine `thinking={"type": "enabled"}`, DashScope `extra_body.enable_thinking=true`, and OpenAI reasoning models `reasoning_effort`.
-  - `timeout`: Per-request timeout in seconds for fetching chat results from the model provider. Inherits `vlm.timeout` when omitted (default `60.0`).
-  - `provider`: Optional model provider name. When set, vikingbot uses OpenViking's `VLMFactory` + adapter path to create the backend directly (for example `volcengine`, `openai`, `deepseek`).
-  - `api_key`: Optional API key for the agent model provider. Can be configured here directly when you want bot-specific credentials.
-  - `api_base`: Optional API base for the agent model provider. Useful for provider gateways or custom endpoints such as VolcEngine Ark.
-  - `extra_headers`: Optional extra HTTP headers passed to the model provider.
-  - `max_tool_iterations`: Maximum number of cycles for a single round of conversation tasks, returns results directly if exceeded
-  - `memory_window`: Upper limit of conversation rounds for automatically submitting sessions to OpenViking
-  - `subagent_enabled`: Enable the `spawn` tool so the main agent can start background subagents. Defaults to `true`; set to `false` to disable subagents.
-  - `gen_image_model`: Model for generating images
-- `gateway`: Gateway configuration
-  - `host`: Gateway listening address, default value is `0.0.0.0`
-  - `port`: Gateway listening port, default value is `18790`
-  - `token`: Gateway authentication token. Required when `host` is non-localhost (such as the default `0.0.0.0`) — the gateway refuses to start without it (`SECURITY: bot.gateway.token is required when gateway.host is non-localhost`). Set a random secret; clients then send it in the `X-Gateway-Token` header.
-- `sandbox`: Sandbox configuration
-  - `mode`: Sandbox mode, optional values are `shared` (all sessions share workspace) or `private` (private, workspace isolated by Channel and session). Default value is `shared`.
-- `ov_server`: OpenViking Server configuration.
-  - If not configured, the OpenViking server information configured in `ov.conf` is used by default
-  - If you use a remote OpenViking Server, configure the target service URL and API key here
-    - `server_url`: OpenViking server base URL, for example `https://api.vikingdb.cn-beijing.volces.com/openviking` or `http://localhost:1933`.
-    - `api_key`: API key used by the bot when calling the OpenViking server. In `api_key` mode, this must be an OpenViking User key; in trusted mode with `api_key_type: "root"`, this is the OpenViking root key.
-    - `root_api_key`: Deprecated compatibility field. Do not use it for new configs; use `api_key` with `api_key_type: "root"` for trusted mode.
-    - `account_id`: Defaults to `default`, which is the OpenViking account ID. All users under the same OpenViking account share resources.
-    - `api_key_type`: Defaults from the OpenViking `server.auth_mode` in the same `ov.conf`: `user` for `api_key`/`dev`, `root` for `trusted`. Manual configuration is usually unnecessary.
-      If `bot.ov_server` points to another OpenViking server and that server uses trusted auth, set `api_key_type: "root"` and provide its root key in `api_key`.
-    - exp_write_tools: Optional list of tool names that trigger experience-memory injection before the call (self-evolving agent memory loop, see #2007). Defaults to `["write_file", "edit_file"]`. This only controls the bot-side injection trigger; stored experience generation is governed by OpenViking memory extraction and the active session `memory_policy.memory_types` whitelist.
-    - `recall_exp_first_round_only`: Optional. When `true`, `ContextBuilder._build_user_memory` skips per-turn user/agent experience recall and injects experiences only once on the first user turn. Defaults to `false`.
-    - Per-turn user/peer memory recall uses type-quota search by default. `profile.md` is injected through the profile path and does not occupy auto-search candidates.
-    - `memory_recall_events_limit`: Optional. Number of `events/` memories retrieved per turn. Defaults to `10`.
-    - `memory_recall_entities_limit`: Optional. Number of `entities/` memories retrieved per turn. Defaults to `10`.
-    - `memory_recall_preferences_limit`: Optional. Number of `preferences/` memories retrieved per turn. Defaults to `3`.
-    - `memory_recall_max_chars`: Optional. Character budget for injected user/peer full memories. Defaults to `4000`.
-    - `exp_recall_limit`: Optional. Number of experiences to retrieve per task during recall. Defaults to `5`.
-    - `exp_recall_max_chars`: Optional. Character budget for the formatted experience block injected into context. Defaults to `2000`.
-- `channels`: Message platform configuration, see [Message Platform Configuration](bot/docs/CHANNEL.md) for details
+Edit `~/.openviking/ov.conf`:
 
 ```json
 {
   "bot": {
     "agents": {
-      "model": "doubao-seed-2-0-pro-260215",
-      "api_key": "<your-ark-api-key>",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-      "provider": "volcengine",
-      "temperature": 0.7,
-      "thinking": true,
-      "timeout": 60.0,
-      "max_tool_iterations": 50,
-      "memory_window": 50,
-      "subagent_enabled": true
+      "provider": "openai",
+      "model": "gpt-4o-mini",
+      "api_key": "<your-model-api-key>"
+    }
+  }
+}
+```
+
+Alternatively, configure only the root-level `vlm` section. VikingBot inherits its model, provider, API key, API base, and timeout settings.
+
+#### 2. Start chatting
+
+```bash
+# Send one message
+vikingbot chat -m "Summarize the structure of the current project"
+
+# Start an interactive multi-turn conversation
+vikingbot chat
+
+# Use a specific session
+vikingbot chat --session my-session
+```
+
+If no OpenViking Server is available, VikingBot runs in standalone mode. File, shell, web, and Skill capabilities remain available, but OpenViking memory and file tools are disabled.
+
+To connect local debugging to OpenViking, configure `server` in the same `ov.conf`, or set `bot.ov_server.server_url` explicitly. See [Connect to OpenViking](#connect-to-openviking).
+
+### Scenario C: Use the Gateway as the Unified Entry Point
+
+Use this for long-running deployments, remote access, and multiple chat channels. `ovcli.conf.url` can point directly to VikingBot Gateway:
+
+```text
+ov chat                  → Gateway /bot/v1/chat
+ov ls/find/session/...   → Gateway /api/v1/* → OpenViking Server
+```
+
+The Gateway has three OpenViking connection states:
+
+| State | Condition | Behavior |
+|-------|-----------|----------|
+| **Explicit** | `bot.ov_server.server_url` is configured | Connects to the specified OpenViking service; startup fails if it is unreachable |
+| **Inherited** | No explicit URL, but the same `ov.conf` contains `server` | Connects to that OpenViking service; falls back to standalone if it is unreachable |
+| **Standalone** | No OpenViking service is available | Chat works; OpenViking tools are disabled and `/api/v1/*` returns 503 |
+
+#### 1. Configure the Gateway and OpenViking
+
+The following example connects explicitly to a remote OpenViking service:
+
+```json
+{
+  "bot": {
+    "agents": {
+      "provider": "openai",
+      "model": "gpt-4o-mini",
+      "api_key": "<your-model-api-key>"
     },
+    "gateway": {
+      "host": "127.0.0.1",
+      "port": 18790
+    },
+    "ov_server": {
+      "server_url": "https://openviking.example.com",
+      "api_key": "<bot-openviking-user-api-key>"
+    }
+  }
+}
+```
+
+If the remote OpenViking service uses `trusted` mode, set `api_key_type` to `"root"` and provide the Root Key in `api_key`.
+
+#### 2. Start the Gateway
+
+```bash
+vikingbot gateway
+```
+
+The startup log reports the effective state, such as `openviking_explicit`, `openviking_inherited`, or `standalone_local`.
+
+#### 3. Point the `ov` CLI to the Gateway
+
+Use `ov config`, or edit `~/.openviking/ovcli.conf`:
+
+```json
+{
+  "url": "http://127.0.0.1:18790",
+  "api_key": "<caller-openviking-user-or-admin-api-key>",
+  "actor_peer_id": "cli"
+}
+```
+
+Chat and other OpenViking commands now use the same entry point:
+
+```bash
+ov chat -m "Search the project resources and give me a conclusion"
+ov ls viking://resources/
+ov find "project release process"
+```
+
+#### 4. Configure a Gateway Token for public listeners
+
+By default, the Gateway listens only on `127.0.0.1`. If you change the host to `0.0.0.0` or another non-localhost address, you must configure a token or the Gateway will refuse to start:
+
+```json
+{
+  "bot": {
     "gateway": {
       "host": "0.0.0.0",
       "port": 18790,
-      "token": "<set-a-random-gateway-token>"
-    },
-    "sandbox": {
-      "mode": "shared"
-    },
-    "ov_server": {
-      "server_url": "https://api.vikingdb.cn-beijing.volces.com/openviking",
-      "api_key": "<your-openviking-user-api-key>",
-      "account_id": "default"
-    },
+      "token": "<strong-random-token>"
+    }
+  }
+}
+```
+
+Add the token to `ovcli.conf` on the client:
+
+```json
+{
+  "url": "https://bot.example.com",
+  "api_key": "<caller-openviking-user-or-admin-api-key>",
+  "gateway_token": "<strong-random-token>",
+  "actor_peer_id": "cli"
+}
+```
+
+The Gateway Token protects only the Gateway entry point. The OpenViking API Key represents the caller identity. They cannot replace one another, and the Gateway Token is never forwarded to OpenViking.
+
+## Connect Chat Platforms
+
+To use Feishu, Slack, Telegram, Discord, WhatsApp, DingTalk, QQ, Email, or MoChat, configure `bot.channels` on top of Scenario C and start the Gateway.
+
+For example, to configure Feishu:
+
+```json
+{
+  "bot": {
     "channels": [
       {
         "type": "feishu",
         "enabled": true,
-        "ov_tools_enable": true,
-        "appId": "<your-feishu-app-id>",
-        "appSecret": "<your-feishu-app-secret>",
-        "allowFrom": []
+        "app_id": "<feishu-app-id>",
+        "app_secret": "<feishu-app-secret>",
+        "allow_from": [],
+        "ov_tools_enable": true
       }
     ]
   }
 }
 ```
 
-If you only want to try the bot through `vikingbot gateway` or `vikingbot chat`, you can set `channels` to an empty list (`[]`).
-
-With the configuration above, you can try the bot directly, or configure Feishu at the same time:
-
 ```bash
-# Start the HTTP gateway
 vikingbot gateway
-
-# Or chat with the bot directly in CLI
-vikingbot chat
-vikingbot chat -m "Hello"
+vikingbot channels status
 ```
 
-### OpenViking Agent Tools
+You can configure multiple instances of the same channel type. VikingBot uses `type + channel_id + chat_id` to isolate sessions and route replies. See [Channel Configuration](docs/en/concepts/05-channel.md) for credentials, event subscriptions, and permissions for each platform.
 
-Vikingbot provides 7 dedicated OpenViking tools:
+## Connect to OpenViking
 
-| Tool Name | Description |
-|----------|------|
-| `openviking_read` | Read OpenViking resources (supports three levels: abstract/overview/read) |
-| `openviking_list` | List OpenViking resources |
-| `openviking_search` | Semantic search OpenViking resources |
-| `openviking_add_resource` | Add local files as OpenViking resources |
-| `openviking_grep` | Search OpenViking resources using regular expressions |
-| `openviking_glob` | Match OpenViking resources using glob patterns |
-| `openviking_memory_commit` | Commit session to ov |
+VikingBot and OpenViking share `~/.openviking/ov.conf`. Connections are resolved as follows:
 
-### External MCP Servers
+1. A managed Bot started by `openviking-server --with-bot` uses the current Server.
+2. A normal `vikingbot gateway/chat` process first uses an explicit `bot.ov_server.server_url`.
+3. Without an explicit URL, it derives the address from `ov.conf.server` in the same file.
+4. Without an available address, it runs in standalone mode.
 
-Vikingbot can also consume tools from third-party [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) servers (filesystem, GitHub, browsers, databases, etc.). Configure servers under `tools.mcp_servers` in `ov.conf`; each server's tools are registered when the agent starts and appear as `mcp_<server>_<tool>`.
+Authentication requirements:
+
+| OpenViking `auth_mode` | Bot credential | Gateway request |
+|------------------------|----------------|-----------------|
+| `dev` | Local use | The Gateway must listen on localhost |
+| `api_key` | `bot.ov_server.api_key` must be a User/Admin Key | The Chat caller must also provide a valid User/Admin Key; Root Keys cannot access data APIs |
+| `trusted` | Explicit connections use a Root Key; inherited connections may read `server.root_api_key` | Non-local entry points must also pass the Gateway Token first |
+
+The Gateway validates the upstream service and Bot credential at startup, then checks the current OpenViking authentication mode on every request. If the mode changes at runtime, it fails closed and asks you to fix the configuration or restart the Gateway.
+
+VikingBot uses OpenViking to:
+
+- read the current Peer Profile;
+- recall events, entities, and preferences by type;
+- retrieve Agent Experiences;
+- browse, search, and read Resources;
+- incrementally synchronize and commit Sessions to extract long-term memories and experiences.
+
+See [VikingBot and OpenViking Integration](docs/en/concepts/04-openviking-integration.md) for the complete call flow. The Gateway entry points and authentication boundaries follow [RFC #3042](https://github.com/volcengine/OpenViking/discussions/3042).
+
+## Configuration
+
+The default configuration file is `~/.openviking/ov.conf`. Use an environment variable to select another file:
+
+```bash
+export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
+```
+
+Restart `vikingbot gateway` after changing the configuration.
+
+### Common Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `bot.agents.temperature` | `0.7` | Model sampling temperature |
+| `bot.agents.thinking` | `true` | Enable reasoning/thinking when supported by the Provider |
+| `bot.agents.timeout` | Inherits `vlm.timeout` | Timeout for one model request |
+| `bot.agents.max_tool_iterations` | `50` | Maximum tool iterations in one turn |
+| `bot.agents.memory_window` | `50` | Local history window and session commit message threshold |
+| `bot.agents.subagent_enabled` | `true` | Whether to expose the `spawn` tool |
+| `bot.gateway.host` | `127.0.0.1` | Gateway listen address |
+| `bot.gateway.port` | `18790` | Gateway listen port |
+| `bot.sandbox.backend` | `direct` | Execution backend |
+| `bot.sandbox.mode` | `shared` | Workspace isolation mode |
+| `bot.heartbeat.enabled` | `true` | Whether to check `HEARTBEAT.md` periodically |
+| `bot.heartbeat.interval_seconds` | `600` | Heartbeat interval |
+| `bot.mode` | `normal` | One of `normal`, `readonly`, or `debug` |
+
+### OpenViking Recall Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `bot.ov_server.memory_recall_events_limit` | `10` | Event memories recalled per turn |
+| `bot.ov_server.memory_recall_entities_limit` | `10` | Entity memories recalled per turn |
+| `bot.ov_server.memory_recall_preferences_limit` | `3` | Preference memories recalled per turn |
+| `bot.ov_server.memory_recall_max_chars` | `4000` | Character budget for injected Peer Memories |
+| `bot.ov_server.exp_recall_limit` | `5` | Number of Experiences recalled |
+| `bot.ov_server.exp_recall_max_chars` | `10000` | Character budget for injected Experiences |
+| `bot.ov_server.exp_write_tools` | `write_file`,`edit_file` | Tools that trigger experience recall before writes |
+
+## Agent Tools
+
+### Built-in Tools
+
+| Category | Tools |
+|----------|-------|
+| Files and commands | `read_file`, `write_file`, `edit_file`, `list_dir`, `exec` |
+| Web | `web_search`, `web_fetch` |
+| OpenViking | `openviking_list`, `openviking_search`, `openviking_grep`, `openviking_glob`, `openviking_multi_read`, `openviking_add_resource`, `openviking_memory_commit` |
+| Other | `message`, `generate_image`, `cron`, `spawn` |
+
+`readonly` mode does not register `openviking_add_resource`. When a channel sets `ov_tools_enable: false`, it does not expose OpenViking tools or inject Profiles, Memories, and Experiences.
+
+### MCP Tools
+
+Configure third-party MCP Servers under `bot.tools.mcp_servers`:
 
 ```json
 {
@@ -253,17 +352,17 @@ Vikingbot can also consume tools from third-party [MCP (Model Context Protocol)]
     "tools": {
       "mcp_servers": {
         "filesystem": {
+          "type": "stdio",
           "command": "npx",
           "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-          "env": {},
           "tool_timeout": 30,
           "enabled_tools": ["*"]
         },
-        "github": {
+        "remote": {
           "type": "streamableHttp",
-          "url": "https://api.githubcopilot.com/mcp/",
-          "headers": {"Authorization": "Bearer $GITHUB_TOKEN"},
-          "enabled_tools": ["search_repositories", "create_issue"]
+          "url": "https://example.com/mcp",
+          "headers": {"Authorization": "Bearer $MCP_TOKEN"},
+          "enabled_tools": ["search"]
         }
       }
     }
@@ -271,200 +370,25 @@ Vikingbot can also consume tools from third-party [MCP (Model Context Protocol)]
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `type` | Transport: `stdio` / `sse` / `streamableHttp`. Auto-detected when omitted (`stdio` if `command` is set, otherwise HTTP from `url`). |
-| `command` | (stdio) Command to launch the server process (e.g. `npx`, `uvx`). |
-| `args` | (stdio) Command arguments. |
-| `env` | (stdio) Extra environment variables for the spawned server. |
-| `url` | (sse / streamableHttp) Endpoint URL. |
-| `headers` | (sse / streamableHttp) Custom request headers (e.g. `Authorization`). |
-| `tool_timeout` | Per-call timeout in seconds (default `30`). |
-| `enabled_tools` | Tool allowlist. Accepts raw MCP names or wrapped `mcp_<server>_<tool>` names; `["*"]` exposes every tool. |
+Supported transports are `stdio`, `sse`, and `streamableHttp`. Tool names use the form `mcp_<server>_<tool>`. A failed MCP connection does not block other Agent capabilities.
 
-> MCP servers are connected when the agent loop starts and closed automatically on shutdown. If a server has neither `command` nor `url`, it is skipped with a warning. Connection failures are logged and the bot continues without that server's tools.
+## Sandbox
 
-### OpenViking Hooks
+| Backend | Description |
+|---------|-------------|
+| `direct` | Default; executes directly on the Bot host and is not a strong isolation boundary |
+| `srt` | Supports file and network allow/deny policies |
+| `opensandbox` | Connects to OpenSandbox Server |
+| `aiosandbox` | Connects to an AIO Sandbox service |
 
-Vikingbot enables OpenViking hooks by default:
+Workspace modes:
 
-```json
-{
-  "hooks": ["vikingbot.hooks.builtins.openviking_hooks.hooks"]
-}
-```
+- `shared`: all sessions share one workspace;
+- `per-session`: every Session has an independent workspace;
+- `per-channel`: sessions on the same channel instance share a workspace.
 
-| Hook | Function |
-|------|------|
-| `OpenVikingCompactHook` | Automatically submit session messages to OpenViking |
-| `OpenVikingPostCallHook` | Post tool call hook (for testing purposes) |
+DirectBackend defaults to `restrict_to_workspace: false`. For a Gateway exposed to untrusted users, choose an isolated backend and configure channel allowlists and network/file policies.
 
-### Manual Configuration (Advanced)
-
-Edit the config file directly:
-
-```json
-{
-  "bot": {
-    "agents": {
-      "model": "openai/doubao-seed-2-0-pro-260215"
-    }
-  }
-}
-```
-
-Provider configuration is read from OpenViking config (`vlm` section in `ov.conf`).
-
-### Providers
-
-> [!TIP]
-> - **Groq** provides free voice transcription via Whisper. If configured, Telegram voice messages will be automatically transcribed.
-> - **Zhipu Coding Plan**: If you're on Zhipu's coding plan, set `"apiBase": "https://open.bigmodel.cn/api/coding/paas/v4"` in your zhipu provider config.
-> - **MiniMax (Mainland China)**: If your API key is from MiniMax's mainland China platform (minimaxi.com), set `"apiBase": "https://api.minimaxi.com/v1"` in your minimax provider config.
-> - **MiniMax Recommended Models**: `MiniMax-M3` (flagship, default), `MiniMax-M2.7` (peak performance) and `MiniMax-M2.7-highspeed` (faster, more agile). Configure with `"model": "MiniMax-M3"` in your agent config.
-
-| Provider | Purpose | Get API Key |
-|----------|---------|-------------|
-| `openrouter` | LLM (recommended, access to all models) | [openrouter.ai](https://openrouter.ai) |
-| `anthropic` | LLM (Claude direct) | [console.anthropic.com](https://console.anthropic.com) |
-| `openai` | LLM (GPT direct) | [platform.openai.com](https://platform.openai.com) |
-| `deepseek` | LLM (DeepSeek direct) | [platform.deepseek.com](https://platform.deepseek.com) |
-| `groq` | LLM + **Voice transcription** (Whisper) | [console.groq.com](https://console.groq.com) |
-| `gemini` | LLM (Gemini direct) | [aistudio.google.com](https://aistudio.google.com) |
-| `minimax` | LLM (MiniMax direct) | [platform.minimax.io](https://platform.minimax.io) |
-| `aihubmix` | LLM (API gateway, access to all models) | [aihubmix.com](https://aihubmix.com) |
-| `dashscope` | LLM (Qwen) | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com) |
-| `moonshot` | LLM (Moonshot/Kimi) | [platform.moonshot.cn](https://platform.moonshot.cn) |
-| `zhipu` | LLM (Zhipu GLM) | [open.bigmodel.cn](https://open.bigmodel.cn) |
-| `vllm` | LLM (local, any OpenAI-compatible server) | — |
-
-<details>
-<summary><b>Adding a New Provider (Developer Guide)</b></summary>
-
-vikingbot uses a **Provider Registry** (`vikingbot/providers/registry.py`) as the single source of truth.
-Adding a new provider only takes **2 steps** — no if-elif chains to touch.
-
-**Step 1.** Add a `ProviderSpec` entry to `PROVIDERS` in `vikingbot/providers/registry.py`:
-
-```python
-ProviderSpec(
-    name="myprovider",                   # config field name
-    keywords=("myprovider", "mymodel"),  # model-name keywords for auto-matching
-    env_key="MYPROVIDER_API_KEY",        # env var for LiteLLM
-    display_name="My Provider",          # shown in `vikingbot status`
-    litellm_prefix="myprovider",         # auto-prefix: model → myprovider/model
-    skip_prefixes=("myprovider/",),      # don't double-prefix
-)
-```
-
-**Step 2.** Add a field to `ProvidersConfig` in `vikingbot/config/schema.py`:
-
-```python
-class ProvidersConfig(BaseModel):
-    ...
-    myprovider: ProviderConfig = ProviderConfig()
-```
-
-That's it! Environment variables, model prefixing, config matching, and `vikingbot status` display will all work automatically.
-
-**Common `ProviderSpec` options:**
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `litellm_prefix` | Auto-prefix model names for LiteLLM | `"dashscope"` → `dashscope/qwen-max` |
-| `skip_prefixes` | Don't prefix if model already starts with these | `("dashscope/", "openrouter/")` |
-| `env_extras` | Additional env vars to set | `(("ZHIPUAI_API_KEY", "{api_key}"),)` |
-| `model_overrides` | Per-model parameter overrides | `(("kimi-k2.5", {"temperature": 1.0}),)` |
-| `is_gateway` | Can route any model (like OpenRouter) | `True` |
-| `detect_by_key_prefix` | Detect gateway by API key prefix | `"sk-or-"` |
-| `detect_by_base_keyword` | Detect gateway by API base URL | `"openrouter"` |
-| `strip_model_prefix` | Strip existing prefix before re-prefixing | `True` (for AiHubMix) |
-
-</details>
-
-
-### Security
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `tools.restrictToWorkspace` | `true` | When `true`, restricts **all** agent tools (shell, file read/write/edit, list) to the workspace directory. Prevents path traversal and out-of-scope access. |
-| `channels.*.allowFrom` | `[]` (allow all) | Whitelist of user IDs. Empty = allow everyone; non-empty = only listed users can interact. |
-| `channels.*.ov_tools_enable` | `true` | When `false`, disables OpenViking tools (`openviking_*`) and skips memory / user-profile context injection for this channel. Useful for lightweight channels that should not pull from OV memory. See [#1352](https://github.com/volcengine/OpenViking/pull/1352). |
-
-### Observability (Optional)
-
-**Langfuse** integration for LLM observability and tracing.
-
-<details>
-<summary><b>Langfuse Configuration</b></summary>
-
-**Option 1: Local Deployment (Recommended for testing)**
-
-Deploy Langfuse locally using Docker:
-
-```bash
-# Navigate to the deployment script
-cd deploy/docker
-
-# Run the deployment script
-./deploy_langfuse.sh
-```
-
-This will start Langfuse locally at `http://localhost:3000` with pre-configured credentials.
-
-**Option 2: Langfuse Cloud**
-
-1. Sign up at [langfuse.com](https://langfuse.com)
-2. Create a new project
-3. Copy the **Secret Key** and **Public Key** from project settings
-
-**Configuration**
-
-Add to `~/.openviking/ov.conf`:
-
-```json
-{
-  "bot": {
-    "langfuse": {
-      "enabled": true,
-      "secret_key": "sk-lf-vikingbot-secret-key-2026",
-      "public_key": "pk-lf-vikingbot-public-key-2026",
-      "base_url": "http://localhost:3000"
-    }
-  }
-}
-```
-
-For Langfuse Cloud, use `https://cloud.langfuse.com` as the `base_url`.
-
-**Restart vikingbot:**
-```bash
-vikingbot gateway
-```
-
-**Features enabled:**
-- Automatic trace creation for each conversation
-- Session and user tracking
-- LLM call monitoring
-- Token usage tracking
-- Feedback observability design: `bot/docs/vikingbot-feedback-observability-design.md`
-
-</details>
-
-### Sandbox
-
-vikingbot supports sandboxed execution for enhanced security.
-
-**By default, no sandbox configuration is needed in `ov.conf`:**
-- Default backend: `direct` (runs code directly on host)
-- Default mode: `shared` (single sandbox shared across all sessions)
-
-You only need to add sandbox configuration when you want to change these defaults.
-
-<details>
-<summary><b>Sandbox Configuration Options</b></summary>
-
-**To use a different backend or mode:**
 ```json
 {
   "bot": {
@@ -476,137 +400,62 @@ You only need to add sandbox configuration when you want to change these default
 }
 ```
 
-**Available Backends:**
-| Backend | Description |
-|---------|-------------|
-| `direct` | (Default) Runs code directly on the host |
-| `srt` | Uses Anthropic's SRT sandbox runtime |
+## HTTP API
 
-**Available Modes:**
-| Mode | Description |
-|------|-------------|
-| `shared` | (Default) Single sandbox shared across all sessions |
-| `per-session` | Separate sandbox instance for each session |
+The Gateway Bot API uses the `/bot/v1` prefix:
 
-**Backend-specific Configuration (only needed when using that backend):**
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/bot/v1/chat` | Synchronous chat |
+| POST | `/bot/v1/chat/stream` | SSE streaming chat |
+| POST | `/bot/v1/feedback` | Submit response feedback |
+| GET/POST | `/bot/v1/sessions` | List or create API Sessions |
+| GET/DELETE | `/bot/v1/sessions/{id}` | Retrieve or delete a Session |
 
-**Direct Backend:**
+When an OpenViking upstream is configured, `/api/v1/*` is proxied to OpenViking Server.
+
+## Operations Commands
+
+| Command | Purpose |
+|---------|---------|
+| `vikingbot status` | Show model and configuration status |
+| `vikingbot channels status` | Show configured channels |
+| `vikingbot channels login` | Log in to the WhatsApp bridge |
+| `vikingbot cron list` | List scheduled jobs |
+| `vikingbot cron add` | Add a scheduled job |
+| `vikingbot cron run` | Run a job manually |
+| `vikingbot feedback-stats` | Aggregate response feedback and outcome metrics |
+
+Enable Langfuse with:
+
 ```json
 {
   "bot": {
-    "sandbox": {
-      "backends": {
-        "direct": {
-          "restrictToWorkspace": false
-        }
-      }
+    "langfuse": {
+      "enabled": true,
+      "secret_key": "<langfuse-secret-key>",
+      "public_key": "<langfuse-public-key>",
+      "base_url": "http://localhost:3000"
     }
   }
 }
 ```
 
-**SRT Backend:**
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backend": "srt",
-      "backends": {
-        "srt": {
-          "nodePath": "node",
-          "network": {
-            "allowedDomains": [],
-            "deniedDomains": [],
-            "allowLocalBinding": false
-          },
-          "filesystem": {
-            "denyRead": [],
-            "allowWrite": [],
-            "denyWrite": []
-          },
-          "runtime": {
-            "cleanupOnExit": true,
-            "timeout": 300
-          }
-        }
-      }
-    }
-  }
-}
-```
+The repository includes `deploy/docker/deploy_langfuse.sh` for local deployment.
 
+## Security Notes
 
-**SRT Backend Setup:**
+- Never commit model API Keys, OpenViking API Keys, or Gateway Tokens to the repository.
+- A non-localhost Gateway requires a strong random Token and should be protected with HTTPS at the network layer.
+- `X-Gateway-Token` protects only the Gateway; it does not replace an OpenViking user identity.
+- `allow_from: []` allows every sender. Configure an explicit allowlist for public deployments.
+- The `direct` backend executes files and shell commands with the Bot process user's permissions and is not suitable for untrusted callers.
+- `openviking_connection` may come only from a trusted Server proxy or a trusted local path. Do not accept identity claims directly from a public request body.
 
-The SRT backend uses `@anthropic-ai/sandbox-runtime`.
+## More Documentation
 
-**System Dependencies:**
-
-The SRT backend also requires these system packages to be installed:
-- `ripgrep` (rg) - for text search
-- `bubblewrap` (bwrap) - for sandbox isolation
-- `socat` - for network proxy
-
-**Install on macOS:**
-```bash
-brew install ripgrep bubblewrap socat
-```
-
-**Install on Ubuntu/Debian:**
-```bash
-sudo apt-get install -y ripgrep bubblewrap socat
-```
-
-**Install on Fedora/CentOS:**
-```bash
-sudo dnf install -y ripgrep bubblewrap socat
-```
-
-To verify installation:
-
-```bash
-npm list -g @anthropic-ai/sandbox-runtime
-```
-
-If not installed, install it manually:
-
-```bash
-npm install -g @anthropic-ai/sandbox-runtime
-```
-
-**Node.js Path Configuration:**
-
-If `node` command is not found in PATH, specify the full path in your config:
-
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backends": {
-        "srt": {
-          "nodePath": "/usr/local/bin/node"
-        }
-      }
-    }
-  }
-}
-```
-
-To find your Node.js path:
-
-```bash
-which node
-# or
-which nodejs
-```
-
-</details>
-
-
-## CLI Reference
-
-| Command | Description |
-|---------|-------------|
-| `ov chat -m "..."` | Send a single message to the agent |
-| `ov chat` | Interactive chat mode |
-| `ov chat --no-format` | Show plain-text replies (no Markdown) |
+- [VikingBot Architecture](docs/en/concepts/01-architecture.md)
+- [Agent Capabilities](docs/en/concepts/02-agent-capabilities.md)
+- [Channels, Gateway, and Operations](docs/en/concepts/03-channels-and-gateway.md)
+- [VikingBot and OpenViking Integration](docs/en/concepts/04-openviking-integration.md)
+- [Channel Configuration](docs/en/concepts/05-channel.md)

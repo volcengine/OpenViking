@@ -37,9 +37,13 @@ Add `--scope user` to make the config global across all projects.
 
 > For auto-recall and auto-capture without manual tool calls, use the [Claude Code Memory Plugin](./02-claude-code.md) instead.
 
-### Trae / Cursor / ChatGPT / Codex
+### Trae / Cursor / ChatGPT
 
 Standard `mcpServers` config as shown above — all verified with API key auth.
+
+### Codex
+
+For Codex, use the [Codex Memory Plugin](./04-codex.md). It supplies a stdio MCP proxy through the plugin manifest and keeps MCP credentials aligned with the lifecycle hooks.
 
 ### OpenCode
 
@@ -71,26 +75,7 @@ See the [OAuth 2.1 Guide](../guides/11-oauth.md) and [Public Access Guide](../gu
 
 ## Available tools
 
-Once connected, OpenViking exposes 14 tools:
-
-| Tool | Description |
-|------|-------------|
-| `search` | Semantic search across memories, resources, and skills |
-| `read` | Read one or more `viking://` URIs |
-| `list` | List entries under a `viking://` directory |
-| `store` | Store messages into long-term memory |
-| `add_resource` | Add a local file or URL as a resource |
-| `grep` | Regex content search across `viking://` files |
-| `glob` | Find files matching a glob pattern |
-| `forget` | Delete a `viking://` URI |
-| `code_outline` | Show a file's symbol structure |
-| `code_search` | Search symbol names across a directory |
-| `code_expand` | Return the full source of a single named symbol |
-| `health` | Check OpenViking service health |
-| `list_watches` | List auto-refresh subscriptions |
-| `cancel_watch` | Cancel a watch task |
-
-For tool parameters, progressive file upload, and advanced configuration, see the [MCP Integration Guide](../guides/06-mcp-integration.md).
+Once connected, OpenViking exposes retrieval, memory, resource, watch, filesystem, and code-navigation tools. See the [MCP Integration Guide](../guides/06-mcp-integration.md#available-mcp-tools) for the canonical tool list, parameters, progressive file upload, and advanced configuration.
 
 ## Troubleshooting
 

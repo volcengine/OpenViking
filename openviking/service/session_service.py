@@ -194,7 +194,12 @@ class SessionService:
         sessions_by_id: Dict[str, Dict[str, Any]] = {}
 
         try:
-            entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
+            entries = await self._viking_fs.ls(
+                session_base_uri,
+                sort_by="mtime",
+                sort_order="desc",
+                ctx=ctx,
+            )
             for entry in entries:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
@@ -209,7 +214,12 @@ class SessionService:
             logger.debug("Failed to list sessions", exc_info=True)
 
         try:
-            entries = await self._viking_fs.ls("viking://session", ctx=ctx)
+            entries = await self._viking_fs.ls(
+                "viking://session",
+                sort_by="mtime",
+                sort_order="desc",
+                ctx=ctx,
+            )
             for entry in entries:
                 name = entry.get("name", "")
                 if name in [".", ".."] or name in sessions_by_id:

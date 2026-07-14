@@ -120,6 +120,15 @@ async def test_search_respects_min_score(service):
     assert isinstance(result, str)
 
 
+async def test_search_tools_expose_only_context_type_parameter():
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+
+    for tool_name in ("find", "search"):
+        properties = tools[tool_name].inputSchema["properties"]
+        assert "context_type" in properties
+        assert "filter" not in properties
+
+
 async def test_find_tool_calls_lightweight_find(service, monkeypatch):
     captured = {}
 
@@ -134,6 +143,7 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
         target_uri="viking://resources",
         limit=2,
         min_score=0.2,
+        context_type=["memory", "resource"],
     )
 
     assert result == "No matching context found."
@@ -142,6 +152,11 @@ async def test_find_tool_calls_lightweight_find(service, monkeypatch):
     assert captured["target_uri"] == "viking://resources"
     assert captured["limit"] == 2
     assert captured["score_threshold"] == 0.2
+    assert captured["filter"] == {
+        "op": "must",
+        "field": "context_type",
+        "conds": ["memory", "resource"],
+    }
 
 
 async def test_search_tool_calls_context_aware_search_with_session(service, monkeypatch):
@@ -175,6 +190,7 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
         session_id="session-1",
         limit=4,
         min_score=0.1,
+        context_type="skill",
     )
 
     assert result == "No matching context found."
@@ -187,6 +203,11 @@ async def test_search_tool_calls_context_aware_search_with_session(service, monk
     assert captured["session"] == session
     assert captured["limit"] == 4
     assert captured["score_threshold"] == 0.1
+    assert captured["filter"] == {
+        "op": "must",
+        "field": "context_type",
+        "conds": ["skill"],
+    }
 
 
 async def test_recall_tool_returns_type_quota_memory_groups(service, monkeypatch):

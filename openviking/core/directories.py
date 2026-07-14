@@ -7,7 +7,7 @@ OpenViking uses a virtual filesystem where all directories are data records.
 This module defines the preset directory structure that is created on initialization.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from openviking.core.context import Context, Vectorize
@@ -193,6 +193,12 @@ class DirectoryInitializer:
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_space_root = canonical_user_root(ctx)
+        # Preset initialization is a server-controlled write to the current
+        # user's own root and first-level directories.  Actor-peer view must
+        # still protect peer subtrees during normal filesystem mutations, but
+        # it must not prevent a fresh user from creating the container that
+        # owns those subtrees in the first place.
+        initialization_ctx = replace(ctx, actor_peer_id=None, legacy_agent_id=None)
         user_tree = PRESET_DIRECTORIES["user"]
         parent_uri = "viking://user"
         count = 0
@@ -201,7 +207,7 @@ class DirectoryInitializer:
             parent_uri=parent_uri,
             defn=user_tree,
             scope="user",
-            ctx=ctx,
+            ctx=initialization_ctx,
         ):
             count += 1
 
@@ -212,7 +218,7 @@ class DirectoryInitializer:
                 parent_uri=user_space_root,
                 defn=child,
                 scope="user",
-                ctx=ctx,
+                ctx=initialization_ctx,
             ):
                 count += 1
 

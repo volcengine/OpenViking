@@ -242,6 +242,12 @@ results = client.find(
 )
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.find("authentication", { targetUri: "viking://resources/docs/" }));
+```
+
 **Go SDK**
 
 ```go
@@ -477,6 +483,12 @@ for ctx in results.resources:
 results = client.search("similar poster", image="/path/to/poster.png")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.search("authentication", { targetUri: "viking://resources/docs/" }));
+```
+
 **Go SDK**
 
 ```go
@@ -633,6 +645,12 @@ for match in results['matches']:
     print(f"    {match['content']}")
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.grep("viking://resources/docs/", "authentication"));
+```
+
 **Go SDK**
 
 ```go
@@ -745,6 +763,12 @@ for uri in results['matches']:
 # 查找所有 Python 文件，并显式放宽返回上限
 results = client.glob("**/*.py", "viking://resources", node_limit=1024)
 print(f"Found {results['count']} Python files")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.glob("**/*.md", "viking://resources/docs/"));
 ```
 
 **Go SDK**

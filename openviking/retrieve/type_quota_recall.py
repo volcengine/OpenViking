@@ -9,6 +9,7 @@ block that degrades from full content to summary to URI-only entries.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
@@ -303,17 +304,12 @@ async def search_type_quota_recall(
     user_root = canonical_user_root(ctx)
     roots = memory_target_roots(ctx)
     open_ctx = replace(ctx, actor_peer_id=None, legacy_agent_id=None)
-    raw_by_type: dict[str, list[Any]] = {}
+    raw_by_type: dict[str, list[Any]] = {memory_type: [] for memory_type in TYPE_ORDER}
     selected: list[tuple[str, Any, int, str, RequestContext]] = []
 
-    for memory_type in TYPE_ORDER:
-        quota = normalized_quotas.get(memory_type, 0)
-        if quota <= 0:
-            raw_by_type[memory_type] = []
-            continue
-        found: list[Any] = []
-        for root in roots:
-            result = await service.search.find(
+    async def search_type(memory_type: str, quota: int) -> list[Any]:
+        searches = [
+            service.search.find(
                 query=query,
                 ctx=ctx,
                 target_uri=_type_target(root, memory_type),
@@ -321,22 +317,42 @@ async def search_type_quota_recall(
                 score_threshold=min_score,
                 level=None,
             )
-            found.extend(_extract_memories(result))
+            for root in roots
+        ]
         if peer_scope == "all":
-            result = await service.search.find(
-                query=query,
-                ctx=open_ctx,
-                target_uri=f"{user_root}/peers",
-                limit=max(quota * OTHER_PEER_OVERFETCH, quota),
-                score_threshold=min_score,
-                level=None,
+            searches.append(
+                service.search.find(
+                    query=query,
+                    ctx=open_ctx,
+                    target_uri=f"{user_root}/peers",
+                    limit=max(quota * OTHER_PEER_OVERFETCH, quota),
+                    score_threshold=min_score,
+                    level=None,
+                )
             )
+
+        results = await asyncio.gather(*searches)
+        found = [item for result in results[: len(roots)] for item in _extract_memories(result)]
+        if peer_scope == "all":
             found.extend(
                 item
-                for item in _extract_memories(result)
+                for item in _extract_memories(results[-1])
                 if f"/memories/{memory_type}/" in _uri(item)
                 and _origin_for_uri(_uri(item), ctx.actor_peer_id, user_root) == "other_peer"
             )
+        return found
+
+    active_types = [
+        (memory_type, normalized_quotas[memory_type])
+        for memory_type in TYPE_ORDER
+        if normalized_quotas[memory_type] > 0
+    ]
+    found_by_type = await asyncio.gather(
+        *(search_type(memory_type, quota) for memory_type, quota in active_types)
+    )
+
+    for (memory_type, quota), found in zip(active_types, found_by_type, strict=True):
+        if peer_scope == "all":
             found = _dedupe(found)
             raw_by_type[memory_type] = found
             ranked = _limit_with_peer_penalties(

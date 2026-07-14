@@ -268,6 +268,7 @@ IANA_MEDIA_TYPE_TO_EXTENSION: Dict[str, List[str]] = {
     "audio/webm": [".webm"],
     "audio/flac": [".flac"],
     "audio/aac": [".aac"],
+    "audio/ac3": [".ac3"],
     "audio/x-wav": [".wav"],
     # === Video types ===
     "video/mp4": [".mp4"],

@@ -1,4 +1,4 @@
-Add persistent, cross-session memory to [Codex](https://developers.openai.com/codex). Install it once, and the plugin will automatically recall memories before every user prompt, capture updates after each turn, and commit changes before compaction. It also connects Codex to OpenViking's `/mcp` endpoint, allowing the model to directly invoke tools like search and store.
+Add persistent, cross-session memory to [Codex](https://developers.openai.com/codex). Install it once, and the plugin will automatically recall memories before every user prompt, capture updates after each turn, and commit changes before compaction. It also connects Codex to OpenViking's `/mcp` endpoint, allowing the model to directly invoke tools such as find, search, recall, and remember.
 
 Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [Blog: motivation and demo](https://blog.openviking.ai/post/openviking-coding-agent/)
 

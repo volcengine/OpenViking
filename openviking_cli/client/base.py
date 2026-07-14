@@ -158,6 +158,8 @@ class BaseClient(ABC):
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ) -> List[Any]:
         """List directory contents."""
         ...

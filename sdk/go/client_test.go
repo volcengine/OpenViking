@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -161,6 +162,34 @@ func TestFindOmitsSearchFiltersWhenUnset(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Find(context.Background(), "auth", &FindOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListSendsOrderingOptions(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/fs/ls" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("node_limit"); got != "200" {
+			t.Fatalf("node_limit = %q", got)
+		}
+		if got := r.URL.Query().Get("sort_by"); got != "mtime" {
+			t.Fatalf("sort_by = %q", got)
+		}
+		if got := r.URL.Query().Get("sort_order"); got != "desc" {
+			t.Fatalf("sort_order = %q", got)
+		}
+		writeOK(t, w, []any{})
+	}))
+	defer closeServer()
+
+	_, err := client.List(context.Background(), "viking://session", &ListOptions{
+		NodeLimit: 200,
+		SortBy:    "mtime",
+		SortOrder: "desc",
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 }
@@ -942,7 +971,12 @@ func TestExportOVPackWritesFile(t *testing.T) {
 	}))
 	defer closeServer()
 
-	outPath, err := client.ExportOVPack(context.Background(), "resources/docs", t.TempDir(), nil)
+	directory := t.TempDir()
+	existingPath := filepath.Join(directory, "docs.ovpack")
+	if err := os.WriteFile(existingPath, []byte("old-backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outPath, err := client.ExportOVPack(context.Background(), "resources/docs", directory, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -952,6 +986,49 @@ func TestExportOVPackWritesFile(t *testing.T) {
 	}
 	if string(content) != "OVPACK" {
 		t.Fatalf("content = %q", string(content))
+	}
+	if matches, err := filepath.Glob(filepath.Join(directory, ".docs.ovpack-*.tmp")); err != nil || len(matches) != 0 {
+		t.Fatalf("temporary files = %v, err = %v", matches, err)
+	}
+}
+
+func TestBackupOVPackDoesNotPublishInterruptedDownload(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", "20")
+		if _, err := w.Write([]byte("partial")); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	defer closeServer()
+
+	for _, existingOutput := range []bool{true, false} {
+		t.Run(fmt.Sprintf("existing=%t", existingOutput), func(t *testing.T) {
+			directory := t.TempDir()
+			outPath := filepath.Join(directory, "backup.ovpack")
+			if existingOutput {
+				if err := os.WriteFile(outPath, []byte("known-good-backup"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := client.BackupOVPack(context.Background(), outPath, nil); err == nil {
+				t.Fatal("expected interrupted download to fail")
+			}
+			content, err := os.ReadFile(outPath)
+			if existingOutput {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(content) != "known-good-backup" {
+					t.Fatalf("content = %q", string(content))
+				}
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("expected no final file, err = %v", err)
+			}
+			if matches, err := filepath.Glob(filepath.Join(directory, ".backup.ovpack-*.tmp")); err != nil || len(matches) != 0 {
+				t.Fatalf("temporary files = %v, err = %v", matches, err)
+			}
+		})
 	}
 }
 

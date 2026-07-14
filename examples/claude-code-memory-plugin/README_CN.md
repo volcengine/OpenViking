@@ -314,7 +314,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
      │                               │           │     │  (Python)    │
      │                  ┌────────────▼───────────▼───►│              │
      │                  │  MCP tools (stdio proxy→/mcp)              │
-     │                  │  search / read / store / …  │              │
+     │                  │ find/search/recall/remember/… │              │
      └─────────────────►│                             │              │
         OV session      └─────────────────────────────►              │
         context inject                                └──────────────┘
@@ -348,21 +348,9 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 
 ### 服务器暴露的 MCP 工具
 
-插件的 `.mcp.json` 启动本地 stdio 代理，代理再连到 OpenViking 服务器原生 HTTP MCP endpoint `/mcp`。服务器暴露 9 个 Claude 可按需调用的工具：
+插件的 `.mcp.json` 启动本地 stdio 代理，代理再连到 OpenViking 服务器原生 HTTP MCP endpoint `/mcp`。Claude 可按需调用服务器提供的检索、记忆、资源、watch、文件系统和代码导航工具。
 
-| 工具           | 说明                                                |
-|----------------|----------------------------------------------------|
-| `search`       | 跨 memories / resources / skills 的语义搜索        |
-| `read`         | 读一个或多个 `viking://` URI 的内容                |
-| `list`         | 列出 `viking://` 目录下条目                        |
-| `store`        | 把消息存到长期记忆（触发抽取）                     |
-| `add_resource` | 把本地文件 / URL 加为资源                           |
-| `grep`         | 在 `viking://` 文件里做正则内容搜索                |
-| `glob`         | 按 glob 模式匹配文件                               |
-| `forget`       | 删除任意 `viking://` URI                           |
-| `health`       | 检查 OpenViking 服务健康                           |
-
-工具参数详见 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
+完整工具清单和参数详见 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
 
 ### 插件结构
 

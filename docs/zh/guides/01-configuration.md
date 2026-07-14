@@ -492,6 +492,19 @@ openviking-server doctor
 }
 ```
 
+Sparse 输出是 embedding provider 的能力，不会因为设置
+`storage.vectordb.sparse_weight` 就自动出现。OpenViking 当前只为
+`volcengine` 和 `vikingdb` 实现了 `sparse` / `hybrid` embedding provider；
+OpenAI 兼容接口、Ollama 和内置 `local` provider 目前都只支持 dense。
+因此，自托管的 `/v1/embeddings` 不会被自动当成 sparse 接口，OpenViking
+也不会额外探测 `/v1/embeddings/sparse` 路由。
+
+当 provider 只返回 dense vector 时，OpenViking 不会自动补充 BM25 或其他
+sparse-vector 兜底。若要启用混合检索，需要配置受支持的 sparse/hybrid
+provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的内存需求
+取决于具体 provider 和模型，不由 OpenViking 控制；生产启用前请按模型文档
+评估资源占用。
+
 #### Hybrid Embedding
 
 支持两种方式：
@@ -1271,6 +1284,22 @@ OpenViking 使用两个配置文件：
 | `ovcli.conf` | HTTP 客户端和 CLI 连接远程服务端 | `~/.openviking/ovcli.conf` |
 
 配置文件放在默认路径时，OpenViking 自动加载，无需额外设置。
+
+> **Root key 双文件规则：** `ov.conf` 中的 `server.root_api_key` 是服务端
+> 接受的凭据；`ovcli.conf` 中的 `root_api_key` 是 `ov --sudo` 使用的客户端
+> 副本。如果该 CLI 用于管理这个服务端，两处值必须一致，并在轮换时同时更新。
+> 普通租户数据使用的 `api_key` 仍是另一把 user/admin 凭据。
+
+### 配置重载边界
+
+服务端只在进程启动时读取 `ov.conf`，不会监听文件变化。修改 `embedding`、
+`vlm`、`rerank`、`retrieval`、`storage` 或 `server` 配置后，需要重启
+OpenViking 服务。已经运行中的队列任务不会自动迁移到新配置；请使用部署环境
+原有的服务管理方式重启，并在服务恢复后运行 `openviking-server doctor` 验证。
+
+`ovcli.conf` 属于客户端配置。新的 `ov` 命令或新建的 HTTP client 会读取当前
+文件；已经运行中的 client 或插件可能继续使用构造时加载的连接与凭据，修改后
+应重启对应客户端或插件。
 
 如果配置文件在其他位置，有两种指定方式：
 

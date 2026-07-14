@@ -148,6 +148,8 @@ type ListOptions struct {
 	AbsLimit      int
 	ShowAllHidden bool
 	NodeLimit     int
+	SortBy        string
+	SortOrder     string
 }
 
 // TreeOptions controls Tree.

@@ -24,10 +24,10 @@ In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/
 
 ## Implementation
 
-- HTTP routes: [snapshot.py](file:///cloudide/workspace/OpenViking/openviking/server/routers/snapshot.py), prefix `/api/v1/snapshot`.
-- SDK namespace: [snapshot_namespace.py](file:///cloudide/workspace/OpenViking/openviking/snapshot_namespace.py), exposed as `client.snapshot.*`.
-- Underlying semantics: `commit` / `restore` / `show` / `log` in [viking_fs.py](file:///cloudide/workspace/OpenViking/openviking/storage/viking_fs.py).
-- CLI: the `SnapshotCmd` in [main.rs](file:///cloudide/workspace/OpenViking/crates/ov_cli/src/main.rs), subcommands in [snapshot.rs](file:///cloudide/workspace/OpenViking/crates/ov_cli/src/commands/snapshot.rs).
+- HTTP routes: [snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py), prefix `/api/v1/snapshot`.
+- SDK namespace: [snapshot_namespace.py](https://github.com/volcengine/OpenViking/blob/main/openviking/snapshot_namespace.py), exposed as `client.snapshot.*`.
+- Underlying semantics: `commit` / `restore` / `show` / `log` in [viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py).
+- CLI: the `SnapshotCmd` in [main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs), subcommands in [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs).
 
 ## API Reference
 
@@ -53,6 +53,12 @@ result = client.snapshot.commit(
     paths=["viking://resources/my_md.md"],
 )
 print(result["commit_oid"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitCommit({ message: "Update docs", paths: ["resources/docs"] }));
 ```
 
 **HTTP API**
@@ -127,6 +133,12 @@ for commit in history:
     print(commit["oid"], commit["message"])
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitLog("main", 20));
+```
+
 **HTTP API**
 
 ```
@@ -198,6 +210,12 @@ print(meta["message"], meta["parents"])
 
 # Read a file's content from the commit
 blob = client.snapshot.show("3f2a1b9c", path="viking://resources/my_project/guide.md")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitShow("main", "viking://resources/docs/api.md"));
 ```
 
 > Note: when reading a file (`path` given), the **Embedded (local) client** returns raw `bytes`, while the **HTTP client** returns a `{"oid": str, "size": int, "bytes": bytes}` dict.
@@ -296,6 +314,15 @@ plan = client.snapshot.restore(
     dry_run=True,
 )
 print(plan["diff"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitRestore({
+  projectDir: "viking://resources/docs",
+  sourceCommit: "3f2a1b9c",
+}));
 ```
 
 **HTTP API**
@@ -404,6 +431,12 @@ Reads the account `.ovgitignore` content; returns an empty string when the file 
 content = client.snapshot.get_gitignore()
 ```
 
+**TypeScript SDK**
+
+```typescript
+console.log(await client.gitGetIgnore());
+```
+
 **HTTP API**
 
 ```
@@ -448,6 +481,12 @@ Writes the account `.ovgitignore` content (overwrites). The size limit (64 KiB) 
 client.snapshot.set_gitignore(content="*.log\n")
 ```
 
+**TypeScript SDK**
+
+```typescript
+await client.gitSetIgnore("*.tmp\n.cache/\n");
+```
+
 **HTTP API**
 
 ```
@@ -486,6 +525,12 @@ Deletes the account `.ovgitignore`. Missing is success (idempotent).
 
 ```python
 client.snapshot.delete_gitignore()
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.gitDeleteIgnore();
 ```
 
 **HTTP API**
@@ -544,7 +589,7 @@ client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], messag
 client.close()
 ```
 
-For more end-to-end examples, see the [examples/snapshot/](file:///cloudide/workspace/OpenViking/examples/snapshot) directory in the repository, covering the SDK, HTTP, and CLI surfaces.
+For more end-to-end examples, see the [examples/snapshot/](https://github.com/volcengine/OpenViking/tree/main/examples/snapshot) directory in the repository, covering the SDK, HTTP, and CLI surfaces.
 
 ## Error Handling
 

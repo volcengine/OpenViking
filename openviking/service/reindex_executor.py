@@ -572,7 +572,9 @@ class ReindexExecutor:
         ctx: RequestContext,
         lock: LockLease = NO_LOCK,
     ) -> None:
-        processor = SemanticProcessor()
+        processor = SemanticProcessor(
+            max_concurrent_llm=get_openviking_config().vlm.max_concurrent,
+        )
         msg = SemanticMsg(
             uri=uri,
             context_type=context_type,

@@ -230,12 +230,16 @@ class ResourceService:
                 except ConflictError:
                     raise
                 except Exception as e:
-                    logger.warning(f"[ResourceService] Failed to create watch task for {watch_to}: {e}")
+                    logger.warning(
+                        f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
+                    )
             elif target.to:
                 try:
                     await self._handle_watch_task_cancellation(to_uri=target.to, ctx=ctx)
                 except Exception as e:
-                    logger.warning(f"[ResourceService] Failed to cancel watch task for {target.to}: {e}")
+                    logger.warning(
+                        f"[ResourceService] Failed to cancel watch task for {target.to}: {e}"
+                    )
 
     def _normalize_add_resource_args(
         self,
@@ -722,7 +726,10 @@ class ResourceService:
                 )
                 doc_name = self._target_doc_name(path, source_name, source_info)
                 source_path = source_info.source_path or source_name or path
-                root_uri, candidate_uri = await self._resource_processor.tree_builder.resolve_target_uri(
+                (
+                    root_uri,
+                    candidate_uri,
+                ) = await self._resource_processor.tree_builder.resolve_target_uri(
                     ctx=ctx,
                     doc_name=doc_name,
                     scope="resources",
@@ -743,7 +750,9 @@ class ResourceService:
                 async def _reserve_tree(uri: str) -> LockLease:
                     dst_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
                     try:
-                        return await OwnedLockLease.acquire_tree(lock_manager, dst_path, timeout=0.0)
+                        return await OwnedLockLease.acquire_tree(
+                            lock_manager, dst_path, timeout=0.0
+                        )
                     except LockAcquisitionError as exc:
                         raise ResourceBusyError(
                             f"Resource is busy: {uri}",
@@ -753,23 +762,10 @@ class ResourceService:
                         ) from exc
 
                 if candidate_uri:
-                    max_attempts = 100
-                    reserved = False
-                    for attempt in range(max_attempts + 1):
-                        attempt_uri = candidate_uri if attempt == 0 else f"{candidate_uri}_{attempt}"
-                        if await self._viking_fs.exists(attempt_uri, ctx=ctx):
-                            continue
-                        try:
-                            lock_lease = await _reserve_tree(attempt_uri)
-                            root_uri = attempt_uri
-                            reserved = True
-                            break
-                        except ResourceBusyError:
-                            continue
-                    if not reserved:
-                        raise FileExistsError(
-                            f"Cannot resolve unique name for {candidate_uri} after {max_attempts} attempts"
-                        )
+                    root_uri, lock_lease = await self._resource_processor.reserve_unique_candidate(
+                        candidate_uri=candidate_uri,
+                        ctx=ctx,
+                    )
                 else:
                     lock_lease = await _reserve_tree(root_uri)
 

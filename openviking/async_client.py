@@ -668,6 +668,9 @@ class AsyncOpenViking:
             uri: Viking URI
             simple: Return only relative path list (bool, default: False)
             recursive: List all subdirectories recursively (bool, default: False)
+            node_limit: Maximum number of entries to return (int, default: 1000)
+            sort_by: Optional sort field, "name" or "mtime"
+            sort_order: Sort direction, "asc" or "desc"
         """
         await self._ensure_initialized()
         recursive = kwargs.get("recursive", False)
@@ -675,6 +678,9 @@ class AsyncOpenViking:
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 256)
         show_all_hidden = kwargs.get("show_all_hidden", True)
+        node_limit = kwargs.get("node_limit", 1000)
+        sort_by = kwargs.get("sort_by")
+        sort_order = kwargs.get("sort_order", "asc")
         return await self._client.ls(
             uri,
             recursive=recursive,
@@ -682,6 +688,9 @@ class AsyncOpenViking:
             output=output,
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
 
     async def rm(

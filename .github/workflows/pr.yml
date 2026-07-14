@@ -45,6 +45,7 @@ jobs:
             examples/trae-memory-hooks/scripts/trae-hooks.test.mjs \
             examples/memory-plugin-shared/install-agent-hooks.test.mjs \
             examples/memory-plugin-shared/install-opencode-jsonc.test.mjs \
+            examples/memory-plugin-shared/install-tui.test.mjs \
             examples/memory-plugin-shared/sync.test.mjs \
             examples/memory-plugin-shared/recall-core.test.mjs \
             examples/memory-plugin-shared/workspace-peer.test.mjs \

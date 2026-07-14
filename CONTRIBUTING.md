@@ -200,17 +200,6 @@ We use the following tools to maintain code consistency:
 | **Ruff** | Linting, Formatting, Import sorting | `pyproject.toml` |
 | **mypy** | Type checking | `pyproject.toml` |
 
-### Automated Checks (Recommended)
-
-We use [pre-commit](https://pre-commit.com/) to automatically run these checks before every commit. This ensures your code always meets the standards without manual effort.
-
-1. **Install the git hooks**:
-   ```bash
-   uvx pre-commit install
-   ```
-
-Now, `ruff` (check & format) will run automatically when you run `git commit`. If any check fails, it may automatically fix the file. You just need to add the changes and commit again.
-
 ### Running Checks
 
 ```bash
@@ -506,8 +495,6 @@ Maintainers can manually trigger the following workflows from the "Actions" tab 
 
 #### A. Lint Checks (`11. _Lint Checks`)
 Runs code style checks (Ruff) and type checks (Mypy). No arguments required.
-
-> **Tip**: It is recommended to install [pre-commit](https://pre-commit.com/) locally to run these checks automatically before committing (see [Automated Checks](#automated-checks-recommended) section above).
 
 #### B. Test Suite (Lite) (`12. _Test Suite (Lite)`)
 Runs fast integration tests, supports custom matrix configuration.
