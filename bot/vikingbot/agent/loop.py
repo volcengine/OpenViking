@@ -712,6 +712,7 @@ class AgentLoop:
         stop_tool_names: list[str] | None = None,
         on_plain_text: Any | None = None,
         channel_metadata: dict[str, Any] | None = None,
+        captured_turns: list[dict[str, Any]] | None = None,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -735,6 +736,9 @@ class AgentLoop:
                 None, plain text is treated as the final assistant reply (default chatbot
                 semantics).
             channel_metadata: Channel-specific metadata for tools that publish outbound messages
+            captured_turns: Optional mutable list populated with each intermediate assistant
+                turn and the tool calls/results produced by that same model response. Reasoning
+                content is intentionally excluded.
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -888,6 +892,7 @@ class AgentLoop:
                 results = await asyncio.gather(*tool_tasks)
 
                 # Stage 3: Process results sequentially in original order
+                turn_tools: list[dict[str, Any]] = []
                 for _idx, tool_call, result, tool_execute_duration in results:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
@@ -906,6 +911,7 @@ class AgentLoop:
                     )
 
                     tool_used_dict = {
+                        "tool_call_id": tool_call.id,
                         "tool_name": tool_call.name,
                         "args": args_str,
                         "result": result,
@@ -915,6 +921,17 @@ class AgentLoop:
                         "output_token": cal_str_tokens(result, text_type="mixed"),
                     }
                     tools_used.append(tool_used_dict)
+                    turn_tools.append(tool_used_dict)
+
+                if captured_turns is not None:
+                    captured_turns.append(
+                        {
+                            "role": "assistant",
+                            "content": response.content or "",
+                            "tool_calls": turn_tools,
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
 
                 if any(
                     tool_call.name in stop_tools for _idx, tool_call, _result, _duration in results
@@ -953,6 +970,15 @@ class AgentLoop:
                     if isinstance(route, _PlainTextDelivered):
                         messages = route.messages
                         tools_used.extend(route.tools_used)
+                        if captured_turns is not None:
+                            captured_turns.append(
+                                {
+                                    "role": "assistant",
+                                    "content": text,
+                                    "tool_calls": list(route.tools_used),
+                                    "timestamp": datetime.now().isoformat(),
+                                }
+                            )
                         if route.user_terminates:
                             final_content = ""
                             break
@@ -1318,6 +1344,7 @@ class AgentLoop:
 
             # Run agent loop within a stable response identity for tracing/tool spans.
             response_id = uuid.uuid4().hex
+            agent_turns: list[dict[str, Any]] = []
             with set_response_id(response_id):
                 (
                     final_content,
@@ -1337,6 +1364,7 @@ class AgentLoop:
                     disabled_tools=disabled_tools,
                     openviking_connection=openviking_connection,
                     channel_metadata=msg.metadata,
+                    captured_turns=agent_turns,
                 )
 
             if auto_memory_tool:
@@ -1377,6 +1405,7 @@ class AgentLoop:
                     token_usage=token_usage,
                     sender_id=msg.sender_id,
                     reasoning_content=final_reasoning_content,
+                    agent_turns=agent_turns if agent_turns else None,
                 )
                 session.metadata.setdefault("response_facts", {})[response_id] = response_completed
                 await self.sessions.save(session)
@@ -1616,6 +1645,7 @@ class AgentLoop:
         )
 
         # Run agent loop (no events published)
+        agent_turns: list[dict[str, Any]] = []
         (
             final_content,
             final_reasoning_content,
@@ -1632,6 +1662,7 @@ class AgentLoop:
             memory_peer_ids=None,
             openviking_connection=msg.openviking_connection,
             channel_metadata=msg.metadata,
+            captured_turns=agent_turns,
         )
 
         if final_content is None or (isinstance(final_content, str) and not final_content.strip()):
@@ -1644,6 +1675,7 @@ class AgentLoop:
             final_content,
             tools_used=tools_used if tools_used else None,
             reasoning_content=final_reasoning_content,
+            agent_turns=agent_turns if agent_turns else None,
         )
         await self.sessions.save(session)
 

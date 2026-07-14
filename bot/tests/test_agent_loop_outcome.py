@@ -206,14 +206,26 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
             )
             if len(self.calls) == 1:
                 return LLMResponse(
-                    content=None,
+                    content="Let me check these sources.",
                     tool_calls=[
                         ToolCallRequest(
                             id="call-1",
                             name="lookup_fact",
-                            arguments={"query": "current facts"},
+                            arguments={"query": "current facts 1"},
                             tokens=3,
-                        )
+                        ),
+                        ToolCallRequest(
+                            id="call-2",
+                            name="lookup_fact",
+                            arguments={"query": "current facts 2"},
+                            tokens=3,
+                        ),
+                        ToolCallRequest(
+                            id="call-3",
+                            name="lookup_fact",
+                            arguments={"query": "current facts 3"},
+                            tokens=3,
+                        ),
                     ],
                     usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
                 )
@@ -259,10 +271,12 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
     loop.tools = tools
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-limit")
+    captured_turns = []
     final_content, _reasoning, tools_used, token_usage, iteration = await loop._run_agent_loop(
         messages=[{"role": "user", "content": "please answer with lookup"}],
         session_key=session_key,
         publish_events=False,
+        captured_turns=captured_turns,
     )
 
     assert final_content == "final answer from gathered tool results"
@@ -277,9 +291,25 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
         message.get("content") == "tool result: useful context"
         for message in provider.calls[1]["messages"]
     )
-    assert len(tools.execute_calls) == 1
-    assert tools.execute_calls[0][:2] == ("lookup_fact", {"query": "current facts"})
-    assert [tool["tool_name"] for tool in tools_used] == ["lookup_fact"]
+    assert len(tools.execute_calls) == 3
+    assert tools.execute_calls[0][:2] == ("lookup_fact", {"query": "current facts 1"})
+    assert [tool["tool_name"] for tool in tools_used] == [
+        "lookup_fact",
+        "lookup_fact",
+        "lookup_fact",
+    ]
+    assert len(captured_turns) == 1
+    assert captured_turns[0]["content"] == "Let me check these sources."
+    assert [tool["tool_call_id"] for tool in captured_turns[0]["tool_calls"]] == [
+        "call-1",
+        "call-2",
+        "call-3",
+    ]
+    assert [tool["result"] for tool in captured_turns[0]["tool_calls"]] == [
+        "tool result: useful context",
+        "tool result: useful context",
+        "tool result: useful context",
+    ]
     assert token_usage == {"prompt_tokens": 17, "completion_tokens": 7, "total_tokens": 24}
 
 
@@ -996,10 +1026,32 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
     )
 
     async def fake_run_agent_loop(self, **kwargs):
+        turn_tools = [
+            {
+                "tool_call_id": "call-search",
+                "tool_name": "search_docs",
+                "args": '{"query": "docs"}',
+                "result": "search result",
+            },
+            {
+                "tool_call_id": "call-fetch",
+                "tool_name": "fetch_page",
+                "args": '{"url": "https://example.com"}',
+                "result": "page result",
+            },
+        ]
+        kwargs["captured_turns"].append(
+            {
+                "role": "assistant",
+                "content": "I will check the docs.",
+                "tool_calls": turn_tools,
+                "timestamp": "2026-04-30T00:05:01",
+            }
+        )
         return (
             "final answer",
             None,
-            [{"tool_name": "search_docs"}, {"tool_name": "fetch_page"}],
+            turn_tools,
             {"prompt_tokens": 12, "completion_tokens": 8},
             3,
         )
@@ -1062,8 +1114,32 @@ async def test_agent_loop_emits_normalized_response_completed_payload(temp_dir: 
     assert fake_langfuse.calls == [(response.response_id, payload)]
 
     session_path = temp_dir / "bot" / "sessions" / "cli__default__session-1.jsonl"
-    metadata = json.loads(session_path.read_text().splitlines()[0])
+    session_lines = session_path.read_text().splitlines()
+    metadata = json.loads(session_lines[0])
     assert metadata["metadata"]["response_facts"][response.response_id] == payload
+    persisted_assistant = json.loads(session_lines[-1])
+    assert persisted_assistant["content"] == "final answer"
+    assert persisted_assistant["agent_turns"] == [
+        {
+            "role": "assistant",
+            "content": "I will check the docs.",
+            "tool_calls": [
+                {
+                    "tool_call_id": "call-search",
+                    "tool_name": "search_docs",
+                    "args": '{"query": "docs"}',
+                    "result": "search result",
+                },
+                {
+                    "tool_call_id": "call-fetch",
+                    "tool_name": "fetch_page",
+                    "args": '{"url": "https://example.com"}',
+                    "result": "page result",
+                },
+            ],
+            "timestamp": "2026-04-30T00:05:01",
+        }
+    ]
 
 
 @pytest.mark.asyncio
