@@ -1386,6 +1386,23 @@ async def test_trusted_mode_admin_api_with_partial_identity_still_requires_full_
         )
 
 
+async def test_trusted_mode_root_key_can_target_account_without_caller_identity():
+    """A verified Root key should not treat a target account as partial caller identity."""
+    request = _make_request(
+        "/api/v1/admin/accounts/acme/users",
+        headers={"X-API-Key": ROOT_KEY},
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+    )
+    request.scope["path_params"] = {"account_id": "acme"}
+
+    identity = await resolve_identity(request, x_api_key=ROOT_KEY)
+
+    assert identity.role == Role.ROOT
+    assert identity.account_id == "acme"
+    assert identity.user_id == "trusted"
+
+
 async def test_trusted_mode_get_request_context_exempts_admin_paths():
     """get_request_context should exempt admin paths from identity checks in trusted mode."""
     # Admin path with ROOT identity from default

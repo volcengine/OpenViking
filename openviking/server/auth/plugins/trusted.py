@@ -127,20 +127,22 @@ class TrustedAuthPlugin(AuthPlugin):
         effective_account_id = explicit_account_id or x_openviking_account
         effective_user_id = explicit_user_id or x_openviking_user
 
-        # Admin paths may omit identity completely, but partial identity is rejected.
+        # A verified Root key is the caller identity for admin routes. Path
+        # parameters such as ``account_id`` identify the managed resource, so
+        # they must not be mistaken for a partial caller identity.
         is_admin_path = request.url.path.startswith(_TRUSTED_RELAXED_IDENTITY_PREFIXES)
         if is_admin_path:
-            if bool(effective_account_id) != bool(effective_user_id):
-                raise InvalidArgumentError(
-                    "Trusted mode requests must include "
-                    "X-OpenViking-Account or explicit account_id in the URL and "
-                    "X-OpenViking-User or explicit user_id in the URL."
-                )
             if configured_root_api_key:
                 return ResolvedIdentity(
                     role=Role.ROOT,
                     account_id=effective_account_id or "trusted",
                     user_id=effective_user_id or "trusted",
+                )
+            if bool(effective_account_id) != bool(effective_user_id):
+                raise InvalidArgumentError(
+                    "Trusted mode requests must include "
+                    "X-OpenViking-Account or explicit account_id in the URL and "
+                    "X-OpenViking-User or explicit user_id in the URL."
                 )
             if not effective_account_id and not effective_user_id:
                 return ResolvedIdentity(
