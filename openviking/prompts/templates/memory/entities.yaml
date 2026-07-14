@@ -1,60 +1,63 @@
 memory_type: entities
-description: |
-  Third-party entity memory: stable cards for real people, organizations, places,
+description: 'Third-party entity memory: stable cards for real people, organizations,
+  places,
+
   works, media, products, animals/pets, programs, activities, and concepts the
+
   user mentions. Store what the entity is and its durable relations.
-directory: "viking://user/{{ user_space }}/memories/entities"
-filename_template: "{{ category }}/{{ name }}.md"
+
+  '
+directory: viking://user/{{ user_space }}/memories/entities
+filename_template: '{{ category }}/{{ name }}.md'
 enabled: true
-embedding_template: |-
-  {{ category }}
+embedding_template: '{{ summary }}'
+overview_template: '# Entities Overview
 
-  {{ name }}
+  {% if items %}**Category:** {{ items[0].file_content.category|default(directory_name,
+  true) }}{% endif %}
 
-  {{ content }}
-
-overview_template: |-
-  # Entities Overview
-  {% if items %}**Category:** {{ items[0].file_content.category|default(directory_name, true) }}{% endif %}
   {% for item in items %}
-  - [{{ item.file_content.name|default(item.file_name, true) }}](./{{ item.file_name }})
-  {% endfor %}
 
+  - [{{ item.file_content.name|default(item.file_name, true) }}](./{{ item.file_name
+  }})
+
+  {% endfor %}'
 fields:
-  - name: category
-    type: string
-    description: |
-      Category written in {{ language }}.
-      {% if language == 'en' %}Use lowercase with underscores, max 3 words.{% else %}Keep it concise and natural in {{ language }}.{% endif %}
-    merge_op: immutable
+- name: category
+  type: string
+  description: 'Category written in {{ language }}.
 
-  - name: name
-    type: string
-    description: |
-      - Entity name in Chinese or English. If English, use lowercase with underscores, max 3 words.
-    merge_op: immutable
+    {% if language == ''en'' %}Use lowercase with underscores, max 3 words.{% else
+    %}Keep it concise and natural in {{ language }}.{% endif %}
 
-  - name: content
-    type: string
-    description: |
-      Compact Markdown card for a third-party entity.
+    '
+  merge_op: immutable
+- name: name
+  type: string
+  description: '- Entity name in Chinese or English. If English, use lowercase with
+    underscores, max 3 words.
 
-      Required shape: one H1 display name, then one plain sentence on the next line; 
-      it must not start with "-", "*", or "1.". 
-      Then 2-4 H2 sections, every H2 body must be a bullet list, 1-5 bullets per section; 
-      do not write paragraph bodies under H2. Pick natural headings
-      such as Description, Purpose, Role, Significance, Values, or Relations.
-
-      Include compact but answerable entity facts. Prefer stable facts, but preserve
-      exact user-stated facts that may be asked later: identity, origin, relationship
-      or family status, counts, roles, skills, hobbies, favorite works/artists,
-      important possessions, and notable dated facts tied to this entity.
-
-      For people, include a Key Facts section when useful. Do not drop exact names,
-      counts, dates, places, titles, family relations, or recurring hobbies just to
-      generalize. Keep one-off facts only when they are concrete and likely useful
-      for future who/what/when/where/how-long questions.
-
-      Keep it readable: usually 6-14 bullets total / about 1200 chars. When updating,
-      merge and deduplicate; preserve existing atomic facts unless contradicted.
-    merge_op: patch
+    '
+  merge_op: immutable
+- name: content
+  type: string
+  description: "Compact Markdown card for a third-party entity.\n\nRequired shape:\
+    \ one H1 display name, then one plain sentence on the next line; \nit must not\
+    \ start with \"-\", \"*\", or \"1.\". \nThen 2-4 H2 sections, every H2 body must\
+    \ be a bullet list, 1-5 bullets per section; \ndo not write paragraph bodies under\
+    \ H2. Pick natural headings\nsuch as Description, Purpose, Role, Significance,\
+    \ Values, or Relations.\n\nInclude compact but answerable entity facts. Prefer\
+    \ stable facts, but preserve\nexact user-stated facts that may be asked later:\
+    \ identity, origin, relationship\nor family status, counts, roles, skills, hobbies,\
+    \ favorite works/artists,\nimportant possessions, and notable dated facts tied\
+    \ to this entity.\n\nFor people, include a Key Facts section when useful. Do not\
+    \ drop exact names,\ncounts, dates, places, titles, family relations, or recurring\
+    \ hobbies just to\ngeneralize. Keep one-off facts only when they are concrete\
+    \ and likely useful\nfor future who/what/when/where/how-long questions.\n\nKeep\
+    \ it readable: usually 6-14 bullets total / about 1200 chars. When updating,\n\
+    merge and deduplicate; preserve existing atomic facts unless contradicted.\n"
+  merge_op: patch
+- name: summary
+  type: string
+  description: A concise summary of this entity's key facts. Keep within 500 characters.
+    Focus on the most important attributes and relationships.
