@@ -1576,3 +1576,93 @@ async def test_openviking_service_reindex_uses_default_root_context(monkeypatch)
     assert seen["ctx"].role == Role.ROOT
     assert seen["ctx"].user.account_id == "acct"
     assert seen["ctx"].user.user_id == "alice"
+
+
+@pytest.mark.asyncio
+async def test_reindex_resource_vectors_directory_with_only_overview_md_reports_skipped(
+    monkeypatch,
+):
+    """Issue #1706: a dir whose only file is .overview.md must report skipped_files>=1."""
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
+        async def stat(self, uri, ctx=None):
+            return {"isDir": True}
+
+        async def tree(
+            self,
+            uri,
+            output="original",
+            show_all_hidden=True,
+            node_limit=None,
+            level_limit=None,
+            ctx=None,
+        ):
+            return [
+                {"uri": "viking://resources/demo/.overview.md", "isDir": False},
+            ]
+
+    async def fake_read_directory_abstract(self, uri, *, ctx):
+        return ""
+
+    async def fake_read_directory_overview(self, uri, *, ctx):
+        return ""
+
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
+    monkeypatch.setattr(ReindexExecutor, "_read_directory_abstract", fake_read_directory_abstract)
+    monkeypatch.setattr(ReindexExecutor, "_read_directory_overview", fake_read_directory_overview)
+
+    service = ReindexExecutor()
+    counters = _ReindexCounters()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+
+    await service._reindex_resource_vectors(
+        uri="viking://resources/demo",
+        counters=counters,
+        ctx=ctx,
+    )
+
+    assert counters.indexed_files == 0
+    assert counters.skipped_files == 1
+    assert counters.rebuilt_records == 0
+
+
+@pytest.mark.asyncio
+async def test_reindex_response_includes_indexed_and_skipped_file_counts(monkeypatch):
+    """Issue #1706: top-level reindex response surfaces indexed_files / skipped_files."""
+    from openviking.server.routers.content import ReindexRequest, reindex
+
+    class FakeService:
+        async def reindex(self, *, uri, mode, wait, ctx):
+            return {
+                "status": "completed",
+                "uri": uri,
+                "object_type": "resource",
+                "mode": mode,
+                "rebuilt_records": 0,
+                "scanned_records": 1,
+                "unsupported_records": 0,
+                "failed_records": 0,
+                "indexed_files": 0,
+                "skipped_files": 1,
+                "duration_ms": 7,
+                "warnings": [],
+            }
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+    request = ReindexRequest(uri="viking://resources/demo", mode="vectors_only", wait=True)
+
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
+    response = await reindex(body=request, ctx=ctx)
+
+    assert response.result["indexed_files"] == 0
+    assert response.result["skipped_files"] == 1
