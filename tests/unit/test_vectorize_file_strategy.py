@@ -2,7 +2,7 @@ import types
 
 import pytest
 
-from openviking.core.context import Context
+from openviking.core.context import Context, ResourceContentType
 from openviking.utils import embedding_utils
 
 
@@ -62,6 +62,31 @@ class DummyReq:
     def __init__(self):
         self.user = DummyUser()
         self.account_id = "default"
+
+
+@pytest.mark.parametrize("extension", [".ogg", ".m4a", ".opus", ".ac3"])
+def test_get_resource_content_type_recognizes_supported_audio_extensions(extension):
+    assert (
+        embedding_utils.get_resource_content_type(f"recording{extension}")
+        == ResourceContentType.AUDIO
+    )
+
+
+@pytest.mark.parametrize("extension", [".mkv", ".webm"])
+def test_get_resource_content_type_recognizes_supported_video_extensions(extension):
+    assert (
+        embedding_utils.get_resource_content_type(f"recording{extension}")
+        == ResourceContentType.VIDEO
+    )
+
+
+def test_get_resource_content_type_media_extensions_are_case_insensitive():
+    assert embedding_utils.get_resource_content_type("RECORDING.OPUS") == ResourceContentType.AUDIO
+    assert embedding_utils.get_resource_content_type("RECORDING.WEBM") == ResourceContentType.VIDEO
+
+
+def test_get_resource_content_type_keeps_ts_as_text():
+    assert embedding_utils.get_resource_content_type("source.ts") == ResourceContentType.TEXT
 
 
 @pytest.mark.asyncio
