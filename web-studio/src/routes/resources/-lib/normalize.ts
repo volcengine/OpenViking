@@ -361,6 +361,8 @@ export function normalizeFsEntry(
       item.contentLength,
     ])
     const modRaw = pickFirstNonEmpty([
+      item.activityTime,
+      item.activity_time,
       item.modTime,
       item.mod_time,
       item.modified_at,

@@ -35,4 +35,29 @@ describe('fetchFsList', () => {
       }),
     })
   })
+
+  it('prefers logical session activity over directory mtime', async () => {
+    getFsLsMock.mockResolvedValue({
+      data: {
+        status: 'ok',
+        result: [
+          {
+            name: 'session-a',
+            uri: 'viking://user/default/sessions/session-a',
+            isDir: true,
+            modTime: '2026-07-12T01:00:00Z',
+            activityTime: '2026-07-14T01:00:00Z',
+          },
+        ],
+      },
+      headers: {},
+      status: 200,
+    })
+
+    const result = await fetchFsList('viking://user/default/sessions')
+
+    expect(result.entries[0]?.modTimestamp).toBe(
+      Date.parse('2026-07-14T01:00:00Z'),
+    )
+  })
 })

@@ -151,6 +151,28 @@ async def test_list_sessions(client: httpx.AsyncClient):
     assert isinstance(body["result"], list)
 
 
+async def test_adding_message_moves_existing_session_to_front(client: httpx.AsyncClient):
+    await client.post("/api/v1/sessions", json={"session_id": "older-session"})
+    await asyncio.sleep(0.01)
+    await client.post("/api/v1/sessions", json={"session_id": "newer-session"})
+    await asyncio.sleep(0.01)
+
+    add_response = await client.post(
+        "/api/v1/sessions/older-session/messages",
+        json=_message_request("user", content="new activity"),
+    )
+    assert add_response.status_code == 200
+
+    response = await client.get("/api/v1/sessions")
+
+    assert response.status_code == 200
+    sessions = response.json()["result"]
+    assert [session["session_id"] for session in sessions[:2]] == [
+        "older-session",
+        "newer-session",
+    ]
+
+
 async def test_get_session(client: httpx.AsyncClient):
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]

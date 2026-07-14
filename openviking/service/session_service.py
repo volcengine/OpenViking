@@ -11,12 +11,18 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
+from openviking.service.session_activity import (
+    SESSION_LIST_LIMIT,
+    project_session_activity,
+    session_activity_value,
+    sort_session_entries_by_activity,
+)
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage import VikingDBManager
-from openviking.storage.viking_fs import VikingFS
+from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     NotFoundError,
@@ -196,8 +202,13 @@ class SessionService:
         try:
             entries = await self._viking_fs.ls(
                 session_base_uri,
-                sort_by="mtime",
-                sort_order="desc",
+                node_limit=LS_ALL_NODES,
+                ctx=ctx,
+            )
+            entries = await project_session_activity(
+                entries,
+                root_uri=session_base_uri,
+                viking_fs=self._viking_fs,
                 ctx=ctx,
             )
             for entry in entries:
@@ -208,7 +219,7 @@ class SessionService:
                     "session_id": name,
                     "uri": f"{session_base_uri}/{name}",
                     "is_dir": entry.get("isDir", False),
-                    "mod_time": entry.get("modTime", ""),
+                    "mod_time": session_activity_value(entry),
                 }
         except Exception:
             logger.debug("Failed to list sessions", exc_info=True)
@@ -216,8 +227,13 @@ class SessionService:
         try:
             entries = await self._viking_fs.ls(
                 "viking://session",
-                sort_by="mtime",
-                sort_order="desc",
+                node_limit=LS_ALL_NODES,
+                ctx=ctx,
+            )
+            entries = await project_session_activity(
+                entries,
+                root_uri="viking://session",
+                viking_fs=self._viking_fs,
                 ctx=ctx,
             )
             for entry in entries:
@@ -228,11 +244,11 @@ class SessionService:
                     "session_id": name,
                     "uri": entry.get("uri", f"viking://session/{name}"),
                     "is_dir": entry.get("isDir", False),
-                    "mod_time": entry.get("modTime", ""),
+                    "mod_time": session_activity_value(entry),
                 }
         except Exception:
             logger.debug("Failed to list legacy sessions", exc_info=True)
-        return list(sessions_by_id.values())
+        return sort_session_entries_by_activity(sessions_by_id.values())[:SESSION_LIST_LIMIT]
 
     async def delete(self, session_id: str, ctx: RequestContext) -> bool:
         """Delete a session.

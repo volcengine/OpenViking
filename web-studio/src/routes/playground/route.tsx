@@ -494,7 +494,10 @@ function PlaygroundWorkbench() {
             onOpenProcessingTasks={handleOpenProcessingTasks}
             onOpenSearch={handleOpenSearch}
             onRefresh={() => {
-              void invalidateList(currentUri)
+              // Expanded directories use independent list-query keys. Refresh
+              // all active lists so a session's new activity order is not
+              // hidden by a still-fresh expanded subtree cache.
+              void invalidateList()
               void listQuery.refetch()
             }}
           />

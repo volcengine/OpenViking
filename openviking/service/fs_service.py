@@ -17,11 +17,17 @@ from openviking.privacy import (
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
+from openviking.service.session_activity import (
+    is_session_root_uri,
+    project_session_activity,
+    session_activity_value,
+    sort_session_entries_by_activity,
+)
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
-from openviking.storage.viking_fs import VikingFS
+from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
@@ -110,6 +116,7 @@ class FSService:
         """
         viking_fs = self._ensure_initialized()
         uri = validate_viking_uri(uri)
+        project_activity = not recursive and not simple and is_session_root_uri(uri, ctx)
 
         if simple:
             # Only return URIs — skip expensive abstract fetching to save tokens
@@ -134,6 +141,44 @@ class FSService:
                 )
             return [e.get("uri", "") for e in entries]
 
+        if project_activity and sort_by == "mtime":
+            # Session activity lives in each child metadata file, so storage
+            # cannot sort correctly before applying its node limit. Enumerate
+            # raw entries first and avoid fetching directory abstracts that the
+            # session tree does not use.
+            entries = await viking_fs.ls(
+                uri,
+                ctx=ctx,
+                output="original",
+                show_all_hidden=show_all_hidden,
+                node_limit=LS_ALL_NODES,
+            )
+            entries = await project_session_activity(
+                entries,
+                root_uri=uri,
+                viking_fs=viking_fs,
+                ctx=ctx,
+            )
+            entries = sort_session_entries_by_activity(
+                entries,
+                descending=sort_order == "desc",
+            )[:node_limit]
+            if output == "original":
+                return entries
+            if output == "agent":
+                return [
+                    {
+                        "uri": entry.get("uri", ""),
+                        "size": 0 if entry.get("isDir") else entry.get("size", 0),
+                        "isDir": entry.get("isDir", False),
+                        "modTime": entry.get("modTime", ""),
+                        "activityTime": session_activity_value(entry),
+                        "abstract": "",
+                    }
+                    for entry in entries
+                ]
+            raise ValueError(f"Invalid output format: {output}")
+
         if recursive:
             entries = await viking_fs.tree(
                 uri,
@@ -154,6 +199,13 @@ class FSService:
                 node_limit=node_limit,
                 sort_by=sort_by,
                 sort_order=sort_order,
+            )
+        if project_activity:
+            entries = await project_session_activity(
+                entries,
+                root_uri=uri,
+                viking_fs=viking_fs,
+                ctx=ctx,
             )
         return entries
 

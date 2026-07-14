@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -9,6 +10,7 @@ import openviking.service.session_service as session_service_module
 from openviking.metrics.datasources.session import SessionLifecycleDataSource
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
+from openviking.storage.viking_fs import LS_ALL_NODES
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -91,7 +93,7 @@ async def test_sessions_merges_canonical_and_legacy_session_scope():
     ctx = _make_ctx()
 
     async def _ls(uri, ctx, **kwargs):
-        assert kwargs == {"sort_by": "mtime", "sort_order": "desc"}
+        assert kwargs == {"node_limit": LS_ALL_NODES}
         if uri == "viking://user/alice/sessions":
             return [
                 {"name": "duplicate", "isDir": True, "modTime": "2026-07-13T01:00:00Z"},
@@ -115,21 +117,22 @@ async def test_sessions_merges_canonical_and_legacy_session_scope():
         raise AssertionError(uri)
 
     service._viking_fs.ls = AsyncMock(side_effect=_ls)
+    service._viking_fs.read_file = AsyncMock(return_value=None)
 
     result = await service.sessions(ctx)
 
     assert result == [
         {
-            "session_id": "duplicate",
-            "uri": "viking://user/alice/sessions/duplicate",
-            "is_dir": True,
-            "mod_time": "2026-07-13T01:00:00Z",
-        },
-        {
             "session_id": "new-session",
             "uri": "viking://user/alice/sessions/new-session",
             "is_dir": True,
             "mod_time": "2026-07-13T02:00:00Z",
+        },
+        {
+            "session_id": "duplicate",
+            "uri": "viking://user/alice/sessions/duplicate",
+            "is_dir": True,
+            "mod_time": "2026-07-13T01:00:00Z",
         },
         {
             "session_id": "legacy-session",
@@ -138,3 +141,46 @@ async def test_sessions_merges_canonical_and_legacy_session_scope():
             "mod_time": "2026-07-12T01:00:00Z",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_sessions_orders_by_meta_activity_instead_of_directory_mtime():
+    service = SessionService(viking_fs=Mock())
+    ctx = _make_ctx()
+
+    async def _ls(uri, ctx, **kwargs):
+        assert kwargs == {"node_limit": LS_ALL_NODES}
+        if uri == "viking://user/alice/sessions":
+            return [
+                {
+                    "name": "recently-active",
+                    "isDir": True,
+                    "modTime": "2026-07-12T01:00:00Z",
+                },
+                {
+                    "name": "newer-directory",
+                    "isDir": True,
+                    "modTime": "2026-07-13T01:00:00Z",
+                },
+            ]
+        if uri == "viking://session":
+            return []
+        raise AssertionError(uri)
+
+    async def _read_file(uri, ctx):
+        updated_at = {
+            "viking://user/alice/sessions/recently-active/.meta.json": ("2026-07-14T01:00:00Z"),
+            "viking://user/alice/sessions/newer-directory/.meta.json": ("2026-07-13T01:00:00Z"),
+        }[uri]
+        return json.dumps({"updated_at": updated_at})
+
+    service._viking_fs.ls = AsyncMock(side_effect=_ls)
+    service._viking_fs.read_file = AsyncMock(side_effect=_read_file)
+
+    result = await service.sessions(ctx)
+
+    assert [item["session_id"] for item in result] == [
+        "recently-active",
+        "newer-directory",
+    ]
+    assert result[0]["mod_time"] == "2026-07-14T01:00:00Z"
