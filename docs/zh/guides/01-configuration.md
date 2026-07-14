@@ -633,6 +633,26 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 - **自定义代理**: 添加认证头或追踪头
 - **API 网关**: 添加版本或路由标识
 
+`extra_headers` 也支持从当前 OpenViking HTTP 请求中透传任意请求头。将值完整写成 `@request.header.<请求头名>` 即可声明动态来源；读取请求头时不区分大小写：
+
+```json
+{
+  "vlm": {
+    "provider": "openai",
+    "api_key": "fallback-api-key",
+    "model": "gpt-4o",
+    "api_base": "https://llm-proxy.example.com/v1",
+    "extra_headers": {
+      "Authorization": "@request.header.Authorization",
+      "X-Tenant-ID": "@request.header.X-OpenViking-Tenant",
+      "X-Proxy-Route": "primary"
+    }
+  }
+}
+```
+
+该语法适用于支持 `extra_headers` 的 VLM/query planner、embedding 和 rerank provider。`"primary"` 这类普通字符串始终按固定值发送。处理 HTTP 请求时，每个动态项都从当前请求独立解析；如果来源请求头不存在，则对应的出站请求头以空值发送。没有 HTTP 请求上下文时，动态项会被省略，继续沿用现有 `api_key` 和固定请求头行为。
+
 **自定义请求 Body**
 
 对于接受 provider 专有 JSON body 字段的 OpenAI 兼容 provider，可以通过 `extra_request_body` 配置。OpenViking 会把这些字段合并到 OpenAI SDK 或 LiteLLM 发送的 `extra_body` 中：

@@ -15,6 +15,10 @@ from openviking.models.embedder.base import (
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
+from openviking.utils.request_headers import (
+    get_static_extra_headers,
+    resolve_dynamic_extra_headers,
+)
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -128,7 +132,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.encoding_format = encoding_format
         self._provider = provider.lower()
         self.provider = (configured_provider or provider).lower()
+        self.extra_headers = dict(extra_headers or {})
         self._client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
+        static_extra_headers = get_static_extra_headers(self.extra_headers)
 
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:
@@ -139,14 +145,14 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 raise ValueError("api_base (Azure endpoint) is required for Azure provider")
             self._client_kwargs["azure_endpoint"] = self.api_base
             self._client_kwargs["api_version"] = self.api_version or DEFAULT_AZURE_API_VERSION
-            if extra_headers:
-                self._client_kwargs["default_headers"] = extra_headers
+            if static_extra_headers:
+                self._client_kwargs["default_headers"] = static_extra_headers
             self.client = openai.AzureOpenAI(**self._client_kwargs)
         else:
             if self.api_base:
                 self._client_kwargs["base_url"] = self.api_base
-            if extra_headers:
-                self._client_kwargs["default_headers"] = extra_headers
+            if static_extra_headers:
+                self._client_kwargs["default_headers"] = static_extra_headers
             self.client = openai.OpenAI(**self._client_kwargs)
         self._async_client_cache = LoopScopedAsyncClientCache()
 
@@ -266,6 +272,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
     def _build_kwargs(self, text_input: str | List[str], is_query: bool = False) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"input": text_input, "model": self.model_name}
+        dynamic_extra_headers = resolve_dynamic_extra_headers(self.extra_headers)
+        if dynamic_extra_headers:
+            kwargs["extra_headers"] = dynamic_extra_headers
         if self.dimension and self._should_send_dimensions():
             kwargs["dimensions"] = self.dimension
         if self.encoding_format is not None:

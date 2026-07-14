@@ -665,6 +665,26 @@ Common use cases:
 - **Custom proxies**: Add authentication or tracing headers
 - **API gateways**: Add version or routing identifiers
 
+`extra_headers` also supports forwarding arbitrary headers from the current OpenViking HTTP request. Use an exact `@request.header.<header-name>` value to declare the source header; header lookup is case-insensitive:
+
+```json
+{
+  "vlm": {
+    "provider": "openai",
+    "api_key": "fallback-api-key",
+    "model": "gpt-4o",
+    "api_base": "https://llm-proxy.example.com/v1",
+    "extra_headers": {
+      "Authorization": "@request.header.Authorization",
+      "X-Tenant-ID": "@request.header.X-OpenViking-Tenant",
+      "X-Proxy-Route": "primary"
+    }
+  }
+}
+```
+
+This syntax is available to VLM/query planner, embedding, and rerank providers that support `extra_headers`. A literal value such as `"primary"` is always sent as configured. During an HTTP request, a dynamic entry is resolved independently for that request; if its source header is absent, the outbound header is sent with an empty value. Without an HTTP request context, the dynamic entry is omitted and the existing `api_key` and fixed-header behavior remains unchanged.
+
 **Custom Request Body**
 
 For OpenAI-compatible providers that accept provider-specific JSON body fields, add them via `extra_request_body`. OpenViking merges these fields into the `extra_body` sent by the OpenAI SDK or LiteLLM:

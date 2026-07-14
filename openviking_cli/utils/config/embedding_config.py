@@ -886,6 +886,7 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     "configured_provider": "ollama",
                     "config": dict(runtime_config),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
             ("voyage", "dense"): (

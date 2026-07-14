@@ -17,6 +17,7 @@ from litellm import acompletion, completion
 
 from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.request_headers import resolve_extra_headers
 from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMBase, VLMResponse
@@ -292,8 +293,9 @@ class LiteLLMVLMProvider(VLMBase):
             is_google_endpoint = _is_google_generate_language_endpoint(self.api_base)
             if not is_google_endpoint:
                 kwargs["api_base"] = self.api_base
-        if self._extra_headers:
-            kwargs["extra_headers"] = self._extra_headers
+        resolved_extra_headers = resolve_extra_headers(self._extra_headers)
+        if resolved_extra_headers:
+            kwargs["extra_headers"] = resolved_extra_headers
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -446,7 +448,12 @@ class LiteLLMVLMProvider(VLMBase):
         """Get text completion asynchronously."""
         kwargs = self._build_text_kwargs(prompt, thinking, tools, tool_choice, messages)
         # 用 tracer.info 打印请求
-        tracer.info(f"request: {json.dumps(kwargs, ensure_ascii=False, indent=2)}")
+        trace_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key not in {"api_key", "extra_headers"}
+        }
+        tracer.info(f"request: {json.dumps(trace_kwargs, ensure_ascii=False, indent=2)}")
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

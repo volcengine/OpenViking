@@ -11,6 +11,10 @@ from urllib.parse import urlparse
 
 from openviking.telemetry import tracer
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
+from openviking.utils.request_headers import (
+    get_static_extra_headers,
+    resolve_dynamic_extra_headers,
+)
 from openviking_cli.utils import get_logger
 
 try:
@@ -69,8 +73,9 @@ def _build_openai_client_kwargs(
     kwargs["timeout"] = timeout
     # OpenViking owns provider retry/backoff via retry_sync/retry_async.
     kwargs["max_retries"] = 0
-    if extra_headers:
-        kwargs["default_headers"] = extra_headers
+    static_extra_headers = get_static_extra_headers(extra_headers)
+    if static_extra_headers:
+        kwargs["default_headers"] = static_extra_headers
     return kwargs
 
 
@@ -148,6 +153,11 @@ class OpenAIVLM(VLMBase):
             extra_body["enable_thinking"] = bool(thinking)
         if extra_body:
             kwargs["extra_body"] = extra_body
+
+    def _apply_dynamic_extra_headers(self, kwargs: Dict[str, Any]) -> None:
+        dynamic_extra_headers = resolve_dynamic_extra_headers(self.extra_headers)
+        if dynamic_extra_headers:
+            kwargs["extra_headers"] = dynamic_extra_headers
 
     def _update_token_usage_from_response(
         self,
@@ -233,6 +243,7 @@ class OpenAIVLM(VLMBase):
         else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, effective_thinking)
+        self._apply_dynamic_extra_headers(kwargs)
         if self.max_tokens is not None:
             kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
         if tools:
@@ -271,6 +282,7 @@ class OpenAIVLM(VLMBase):
         else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, effective_thinking)
+        self._apply_dynamic_extra_headers(kwargs)
         if self.max_tokens is not None:
             kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
         if tools:
@@ -341,7 +353,8 @@ class OpenAIVLM(VLMBase):
             return await self._extract_completion_content_async(response, elapsed)
 
         # 用 tracer.info 打印请求
-        tracer.info(f"messages={json.dumps(kwargs, ensure_ascii=False, indent=2)}")
+        trace_kwargs = {key: value for key, value in kwargs.items() if key != "extra_headers"}
+        tracer.info(f"messages={json.dumps(trace_kwargs, ensure_ascii=False, indent=2)}")
 
         return await retry_async(
             _call,

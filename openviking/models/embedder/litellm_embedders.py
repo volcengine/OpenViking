@@ -13,6 +13,7 @@ import litellm
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.request_headers import resolve_extra_headers
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -77,7 +78,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         self.dimension = dimension
         self.query_param = query_param
         self.document_param = document_param
-        self.extra_headers = extra_headers
+        self.extra_headers = dict(extra_headers or {})
 
         if dimension is None:
             raise ValueError(
@@ -107,8 +108,9 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
             kwargs["api_key"] = self.api_key
         if self.api_base:
             kwargs["api_base"] = self.api_base
-        if self.extra_headers:
-            kwargs["extra_headers"] = self.extra_headers
+        extra_headers = resolve_extra_headers(self.extra_headers)
+        if extra_headers:
+            kwargs["extra_headers"] = extra_headers
         # Don't pass dimensions parameter to API - some models don't support it
         # (e.g., Qwen3-Embedding-4B doesn't support matryoshka representation)
         # Instead, we'll truncate the result vector if needed

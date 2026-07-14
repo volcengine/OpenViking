@@ -6,9 +6,10 @@ LiteLLM Rerank API Client.
 
 # For logging, use Python's built-in logging
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from openviking.models.rerank.base import RerankBase
+from openviking.utils.request_headers import resolve_extra_headers
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -19,7 +20,13 @@ class LiteLLMRerankClient(RerankBase):
     LiteLLM rerank API client.
     """
 
-    def __init__(self, api_key: Optional[str], api_base: Optional[str], model_name: str):
+    def __init__(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        model_name: str,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ):
         """
         Initialize LiteLLM rerank client.
 
@@ -27,11 +34,13 @@ class LiteLLMRerankClient(RerankBase):
             api_key: API key for LiteLLM providers (optional, can come from env)
             api_base: API base for LiteLLM providers (optional, can come from env)
             model_name: Model name to use for reranking
+            extra_headers: Extra HTTP headers for rerank requests
         """
         super().__init__()
         self.api_key = api_key
         self.api_base = api_base
         self.model_name = model_name
+        self.extra_headers = dict(extra_headers or {})
         self.provider = "litellm"
 
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
@@ -53,13 +62,17 @@ class LiteLLMRerankClient(RerankBase):
             import litellm
 
             started = time.monotonic()
-            response = litellm.rerank(
-                model=self.model_name,
-                query=query,
-                documents=[{"text": d} for d in documents],
-                api_key=self.api_key,
-                api_base=self.api_base,
-            )
+            kwargs = {
+                "model": self.model_name,
+                "query": query,
+                "documents": [{"text": d} for d in documents],
+                "api_key": self.api_key,
+                "api_base": self.api_base,
+            }
+            extra_headers = resolve_extra_headers(self.extra_headers)
+            if extra_headers:
+                kwargs["headers"] = extra_headers
+            response = litellm.rerank(**kwargs)
 
             # Update token usage tracking (estimate from response or input)
             response_dict = (
@@ -121,4 +134,5 @@ class LiteLLMRerankClient(RerankBase):
             api_key=config.api_key,
             api_base=config.api_base,
             model_name=config.model,
+            extra_headers=config.extra_headers,
         )

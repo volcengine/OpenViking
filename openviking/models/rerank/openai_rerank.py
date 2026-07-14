@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 import requests
 
 from openviking.models.rerank.base import RerankBase
+from openviking.utils.request_headers import resolve_extra_headers
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -48,7 +49,7 @@ class OpenAIRerankClient(RerankBase):
         self.api_key = api_key
         self.api_base = api_base
         self.model_name = model_name
-        self.extra_headers = extra_headers or {}
+        self.extra_headers = dict(extra_headers or {})
         self.timeout = timeout
         self.provider = "openai"
 
@@ -78,8 +79,7 @@ class OpenAIRerankClient(RerankBase):
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             }
-            if self.extra_headers:
-                headers.update(self.extra_headers)
+            headers.update(resolve_extra_headers(self.extra_headers))
 
             response = requests.post(
                 url=self.api_base,

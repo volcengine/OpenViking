@@ -11,6 +11,7 @@ from urllib3.util.retry import Retry
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
+from openviking.utils.request_headers import get_static_extra_headers, resolve_extra_headers
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -65,15 +66,8 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         self._dimension = dimension
 
         # Get group_id from extra_headers if present, since MiniMax API may require it
-        self.group_id = None
-        self.extra_headers = {}
-        if extra_headers:
-            self.extra_headers = extra_headers
-            # Case-insensitive extraction of GroupId
-            for k, v in extra_headers.items():
-                if k.lower() == "groupid" or k.lower() == "group_id":
-                    self.group_id = v
-                    break
+        self.extra_headers = dict(extra_headers or {})
+        self.group_id = self._extract_group_id(get_static_extra_headers(self.extra_headers))
 
         if not self.api_key:
             raise ValueError("api_key is required for MiniMax embedder")
@@ -111,8 +105,9 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
     def _call_api(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
         """Call MiniMax API"""
-        headers = self._build_headers()
-        params = self._build_params()
+        extra_headers = resolve_extra_headers(self.extra_headers)
+        headers = self._build_headers(extra_headers)
+        params = self._build_params(extra_headers)
         payload = self._build_payload(texts, is_query=is_query)
 
         try:
@@ -142,21 +137,35 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"MiniMax embedding failed: {str(e)}") from e
 
-    def _build_headers(self) -> Dict[str, str]:
+    @staticmethod
+    def _extract_group_id(extra_headers: Dict[str, str]) -> Optional[str]:
+        for key, value in extra_headers.items():
+            if key.lower() in {"groupid", "group_id"}:
+                return value
+        return None
+
+    def _build_headers(self, extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        if self.extra_headers:
-            for k, v in self.extra_headers.items():
-                if k.lower() not in ["authorization", "content-type", "groupid", "group_id"]:
+        resolved_headers = (
+            resolve_extra_headers(self.extra_headers) if extra_headers is None else extra_headers
+        )
+        if resolved_headers:
+            for k, v in resolved_headers.items():
+                if k.lower() not in {"groupid", "group_id"}:
                     headers[k] = v
         return headers
 
-    def _build_params(self) -> Dict[str, str]:
+    def _build_params(self, extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         params: Dict[str, str] = {}
-        if self.group_id:
-            params["GroupId"] = self.group_id
+        resolved_headers = (
+            resolve_extra_headers(self.extra_headers) if extra_headers is None else extra_headers
+        )
+        group_id = self._extract_group_id(resolved_headers)
+        if group_id:
+            params["GroupId"] = group_id
         return params
 
     def _build_payload(self, texts: List[str], is_query: bool = False) -> Dict[str, Any]:
@@ -173,12 +182,13 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
     async def _call_api_async(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
         client = self._async_client_cache.get(lambda: httpx.AsyncClient(timeout=60.0))
+        extra_headers = resolve_extra_headers(self.extra_headers)
 
         try:
             response = await client.post(
                 self.api_base,
-                headers=self._build_headers(),
-                params=self._build_params(),
+                headers=self._build_headers(extra_headers),
+                params=self._build_params(extra_headers),
                 json=self._build_payload(texts, is_query=is_query),
             )
             response.raise_for_status()
