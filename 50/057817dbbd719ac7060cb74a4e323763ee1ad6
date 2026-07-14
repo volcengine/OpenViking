@@ -1,0 +1,66 @@
+crates/ov_cli/src/main.rs
+  s_77d338fd50fb18::t_3b2ba667ad246c 3271-3275
+docs/en/concepts/15-acl.md
+  s_77d338fd50fb18::t_c2af37f6631482 30
+docs/zh/concepts/15-acl.md
+  s_77d338fd50fb18::t_d091fbc9cfe165 30
+openviking/server/routers/acl.py
+  s_77d338fd50fb18::t_061068de05f6dd 11,16,20-22,25,30,33,36
+openviking/service/fs_service.py
+  s_77d338fd50fb18::t_3494e99e3759aa 347
+openviking/service/reindex_executor.py
+  s_77d338fd50fb18::t_598f30accbe4fb 582
+openviking/service/resource_service.py
+  s_77d338fd50fb18::t_8a9211d8e5536f 800
+openviking/storage/acl.py
+  s_77d338fd50fb18::t_f7bc249286c5dc 22-25,27-28,264,387,401,412,416,419,421,426,444-446,451,453-454,456,466-469
+openviking/storage/collection_schemas.py
+  s_77d338fd50fb18::t_d7ea5431bd24b9 21,118-125,145
+openviking/storage/content_write.py
+  s_77d338fd50fb18::t_6ab23dea427471 506
+openviking/storage/queuefs/semantic_msg.py
+  s_77d338fd50fb18::t_f79efd3a8cb239 6,8,49,72,91,135
+openviking/storage/queuefs/semantic_processor.py
+  s_77d338fd50fb18::t_73387a7422accd 178,292
+openviking/storage/queuefs/understanding_parse_msg.py
+  s_77d338fd50fb18::t_d89e90fe46d300 8,24,49,75,122
+openviking/storage/queuefs/understanding_parse_processor.py
+  s_77d338fd50fb18::t_087884c7dce1ad 7,41,122,163,217
+openviking/storage/viking_fs.py
+  s_77d338fd50fb18::t_f0ea63e3e40ad6 578-579,597,604-612,623-636,1010,1012-1014,1021-1022,3218,3225,3229-3230,3232-3233,3235-3236,3241-3278
+openviking/storage/viking_vector_index_backend.py
+  s_77d338fd50fb18::t_389819881269f8 13,179-181,329,332,699,1314,1346,1381-1396,1401
+openviking/utils/summarizer.py
+  s_77d338fd50fb18::t_4b9542fed23ac2 120
+tests/storage/test_acl.py
+  s_77d338fd50fb18::t_0042ea6c7fa632 56,79,84-86
+tests/storage/test_collection_schemas.py
+  s_77d338fd50fb18::t_beb6444f3f9f70 907-908,914,932-933,936-938
+tests/storage/test_semantic_processor_identity.py
+  s_77d338fd50fb18::t_faecb7a176f493 15,23
+tests/storage/test_semantic_processor_mv_vector_store.py
+  s_77d338fd50fb18::t_9b62b648bc10d1 179,199-233,258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "50057817dbbd719ac7060cb74a4e323763ee1ad6",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_77d338fd50fb18": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fca-8901-7a41-a062-eae93e1509a8",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

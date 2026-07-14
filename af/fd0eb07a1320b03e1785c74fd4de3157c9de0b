@@ -1,0 +1,45 @@
+docs/.vitepress/config.ts
+  s_7bcf1fea0f6a0c::t_861f5bad45952e 57-59,65-66,103-115,118-119,138-140,147-149,375-379,395-399
+docs/.vitepress/theme/ApiExampleTabsEnhancer.vue
+  s_81a365c147ae59::t_87be2ef7d989a9 60-68,86,142
+docs/.vitepress/theme/custom.css
+  s_7bcf1fea0f6a0c::t_4a1ea975f19004 2,17-37
+openviking/async_client.py
+  s_81a365c147ae59::t_4e006241eca73a 678,734,736
+openviking/server/routers/search.py
+  s_81a365c147ae59::t_c219b2116dfbf5 104-105,128-129
+sdk/python/openviking_sdk/client.py
+  s_81a365c147ae59::t_9b56de42b284db 560,1117,1159,1791,2166,2207
+sdk/python/tests/test_async_client_behaviors.py
+  s_81a365c147ae59::t_c471181336f65b 1,12-23
+tests/client/test_filesystem.py
+  s_81a365c147ae59::t_ed1f4f40b311ef 178,184,191
+tests/server/test_peer_id_compat.py
+  s_81a365c147ae59::t_2274e883be745a 15-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "affd0eb07a1320b03e1785c74fd4de3157c9de0b",
+  "prompts": {},
+  "sessions": {
+    "s_7bcf1fea0f6a0c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f555f-71e9-7342-9b43-175c57289f29",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    },
+    "s_81a365c147ae59": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f555c-8677-7553-a1e7-47bf4defbfd0",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

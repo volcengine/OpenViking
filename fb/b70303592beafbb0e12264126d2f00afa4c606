@@ -1,0 +1,136 @@
+crates/ov_cli/src/commands/acl.rs
+  s_40bba954ac6a75::t_f8e8bed6e30cd5 29,31,34,42,48,57,62
+crates/ov_cli/src/commands/admin.rs
+  s_77d338fd50fb18::t_22ad301880aa54 132-227
+crates/ov_cli/src/handlers.rs
+  s_77d338fd50fb18::t_65196aadf6c051 568-636,1600,1606,1613-1614
+crates/ov_cli/src/help_ui.rs
+  s_40bba954ac6a75::t_e3234d5f7b012b 360
+docs/en/api/08-admin.md
+  s_33802978d175b4::t_a0e3359be69caf 3,24,59-84
+docs/en/api/12-acl.md
+  s_0e887ec7da5100::t_88ec91f1305c08 14-15,25,32,35-36,44,47,50-51,102-103,117-118,129-130,145-146,154-155,158,167,180,188,194,206,213,217,251
+docs/en/concepts/15-acl.md
+  s_77d338fd50fb18::t_b4d5a28fa62bc2 3,23-29,50-52,58,61,101-106,111,122,128,134
+docs/en/guides/01-configuration.md
+  s_77d338fd50fb18::t_4e029751c6ba53 1262-1264
+docs/en/guides/04-authentication.md
+  s_6760f4efbad538::t_cbe18909c285e8 125-126,242-243
+docs/zh/api/08-admin.md
+  s_0a266f620b1a46::t_8798169588dc8d 3,24,59-84
+docs/zh/api/12-acl.md
+  s_0e887ec7da5100::t_86b632413682d6 14-15,25,32,35-36,44,47,50-51,102-103,117-118,129-130,145-146,154-155,158,167,180,188,194,197,206,213,217,251
+docs/zh/concepts/15-acl.md
+  s_77d338fd50fb18::t_a426b0942c2022 3,23-29,50-52,58,61,101-106,111,122,128,134
+docs/zh/guides/01-configuration.md
+  s_77d338fd50fb18::t_c01ccde5bd9fb5 1234-1236
+docs/zh/guides/04-authentication.md
+  s_6760f4efbad538::t_25a41aff7c8bf4 124-125,242-243
+openviking/async_client.py
+  s_77d338fd50fb18::t_63ead9f52f2262 663,665,667,669
+openviking/client/local.py
+  s_77d338fd50fb18::t_c148ca3ba3cc8f 679-680,682-683
+openviking/server/api_keys/models.py
+  s_77d338fd50fb18::t_5be1977ff809be 28
+openviking/server/api_keys/new.py
+  s_77d338fd50fb18::t_dee10d796b2b98 220,239,425-447,499-501
+openviking/server/auth/__init__.py
+  s_77d338fd50fb18::t_1131b1f96050b1 113-121,158-159,161,163,208
+openviking/server/identity.py
+  s_40bba954ac6a75::t_91d0c4c72d009d 97-99
+openviking/server/mcp_endpoint.py
+  s_77d338fd50fb18::t_648776dfcf783d 47,188-189,191,193
+openviking/server/routers/acl.py
+  s_77d338fd50fb18::t_64d1cc81be13ea 20,35,43,84,97
+openviking/server/routers/admin.py
+  s_77d338fd50fb18::t_7ecf9447dba282 65-68,414-499
+openviking/service/fs_service.py
+  s_77d338fd50fb18::t_f1ab0a33bee1b0 623,626,630,633
+openviking/storage/acl.py
+  s_77d338fd50fb18::t_6b1125b7988247 8,25,35,39,61-63,68-70,92-107,113-122,127,129,131,134,136-137,145,147,149,155-156,158,162,192,194
+openviking/storage/collection_schemas.py
+  s_77d338fd50fb18::t_bf2027f727d02f 119,124,129,134,139,144,167-172
+openviking/storage/viking_fs.py
+  s_77d338fd50fb18::t_4dc269b28f689e 68,474,549,593,605-606,617,620,629-631
+openviking/storage/viking_vector_index_backend.py
+  s_77d338fd50fb18::t_12f499a8b8e533 13,1474,1477-1478
+openviking/sync_client.py
+  s_77d338fd50fb18::t_b11809c85e11d4 502-503,505-506
+openviking_cli/client/base.py
+  s_77d338fd50fb18::t_4875fc273bb1fc 257,260
+sdk/go/acl.go
+  s_77d338fd50fb18::t_76eef951f780b2 9,11-12,36-37,40,45-46,49
+sdk/go/admin.go
+  s_77d338fd50fb18::t_804f6a478c5afd 109-150
+sdk/python/openviking_sdk/client.py
+  s_77d338fd50fb18::t_583f249315160a 893,896-900,904,907,1351-1391,1878-1879,1881-1882,2185-2210
+tests/server/test_api_acl.py
+  s_77d338fd50fb18::t_3a8e85d627c2b5 54,59,74,89,93-97,103,108,146-148
+tests/server/test_auth.py
+  s_77d338fd50fb18::t_3171c095051c56 279-299
+tests/storage/test_acl.py
+  s_77d338fd50fb18::t_f7c2c0e2052590 27-32,59-63,67-71,73-76,83-86,124-127,130-135,151,171-173,188-192,215-224,233-236,238-240,247-252,292-293,303-305,308,310
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "fbb70303592beafbb0e12264126d2f00afa4c606",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_0a266f620b1a46": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a4e-b81b-77c3-933c-1de766748623",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_0e887ec7da5100": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a9b-1623-7ff1-9ee9-e6a0e8856f5b",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_33802978d175b4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a9b-15b1-75a1-9648-58a65b8a7e8f",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_40bba954ac6a75": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a8f-ad02-7f82-bceb-4f5d39cace1a",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_6760f4efbad538": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a4e-b8dd-7672-9618-4e517f305baf",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    },
+    "s_77d338fd50fb18": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fca-8901-7a41-a062-eae93e1509a8",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

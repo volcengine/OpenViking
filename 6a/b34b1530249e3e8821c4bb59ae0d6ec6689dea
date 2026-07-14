@@ -1,0 +1,32 @@
+.github/ISSUE_TEMPLATE/bug_report.yml
+  s_cf3a74dc5cee73::t_cba554a4a3c3d4 11-21
+.github/ISSUE_TEMPLATE/feature_request.yml
+  s_cf3a74dc5cee73::t_c7e0a8fd761139 11-21
+.github/ISSUE_TEMPLATE/question.yml
+  s_cf3a74dc5cee73::t_113016a68de9c3 11-21
+.github/PULL_REQUEST_TEMPLATE.md
+  s_cf3a74dc5cee73::t_0539fc8dc78269 5-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6ab34b1530249e3e8821c4bb59ae0d6ec6689dea",
+  "prompts": {},
+  "humans": {
+    "h_7bbfeebef9ffd2": {
+      "author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_cf3a74dc5cee73": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5a2e-0ce6-71b3-983c-004d680e2ad1",
+        "model": "unknown"
+      },
+      "human_author": "qin-ctx <qinhaojie.exe@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

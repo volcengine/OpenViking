@@ -1,0 +1,25 @@
+sdk/typescript/src/client.ts
+  s_e183408b893d84::t_c59123f0e47f8d 695,719
+sdk/typescript/src/node-files.ts
+  s_e183408b893d84::t_67e8757ae42609 4-24,34-35,37,41-43,53-60,66,70-75,79-80,83,91,100-101,111,113-117,120,133
+sdk/typescript/tests/client.test.ts
+  s_e183408b893d84::t_42ee0289e933c4 122-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ae8ac24fc64db7d84748e6c3dfbabe89026922bc",
+  "prompts": {},
+  "sessions": {
+    "s_e183408b893d84": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4f2d-c961-7e63-82bc-e3db763a0474",
+        "model": "unknown"
+      },
+      "human_author": "yufeng <ahwulv@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
