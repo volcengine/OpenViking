@@ -1,13 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import json
-
 import pytest
 
 from openviking.message import Message, TextPart, ToolPart
 from openviking.usage_reporter import (
-    FileJsonlUsageSink,
     MemoryUsageExtractor,
     UsageContext,
 )
@@ -37,10 +34,7 @@ async def test_memory_usage_extractor_emits_recall_and_injection_events():
                     tool_name="search_experience",
                     tool_status="completed",
                     tool_input={"query": "无订单号换货"},
-                    tool_output=json.dumps(
-                        {"results": [{"uri": experience_uri}, {"uri": "viking://other"}]},
-                        ensure_ascii=False,
-                    ),
+                    tool_output={"results": [{"uri": experience_uri}, {"uri": "viking://other"}]},
                 ),
             ],
         ),
@@ -87,33 +81,33 @@ async def test_memory_usage_extractor_emits_recall_and_injection_events():
 
 
 @pytest.mark.asyncio
-async def test_file_jsonl_usage_sink_writes_events(tmp_path):
-    path = tmp_path / "usage-events.jsonl"
-    event = (
-        await MemoryUsageExtractor().extract(
-            messages=[
-                Message(
-                    id="msg-1",
-                    role="user",
-                    parts=[
-                        ToolPart(
-                            tool_id="call-read",
-                            tool_name="read_experience",
-                            tool_status="completed",
-                            tool_input={"uri": "viking://user/default/memories/experiences/a.md"},
-                        )
-                    ],
-                )
+async def test_memory_usage_extractor_ignores_non_experience_memory_uris():
+    messages = [
+        Message(
+            id="msg-1",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="call-search",
+                    tool_name="search_experience",
+                    tool_status="completed",
+                    tool_output={
+                        "results": [
+                            {"uri": "viking://user/default/memories/trajectories/a.md"},
+                            {"uri": "viking://user/default/memories/preferences/a.md"},
+                        ]
+                    },
+                ),
+                ToolPart(
+                    tool_id="call-read",
+                    tool_name="read_experience",
+                    tool_status="completed",
+                    tool_input={"uri": "viking://user/default/memories/trajectories/a.md"},
+                ),
             ],
-            context=_context(),
         )
-    )[0]
+    ]
 
-    await FileJsonlUsageSink(path=str(path)).write(events=[event], context=_context())
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
 
-    lines = path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    payload = json.loads(lines[0])
-    assert payload["event_type"] == "memory.injected"
-    assert payload["memory_uri"] == "viking://user/default/memories/experiences/a.md"
-    assert payload["session_id"] == "session-1"
+    assert events == []

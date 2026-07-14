@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -20,6 +22,7 @@ logger = get_logger(__name__)
 class UsageReporter:
     extractors: list[UsageExtractor] = field(default_factory=list)
     sinks: list[UsageSink] = field(default_factory=list)
+    sink_timeout_seconds: float = 5.0
 
     async def extract(
         self,
@@ -46,7 +49,16 @@ class UsageReporter:
             return
         for sink in self.sinks:
             try:
-                await sink.write(events=event_list, context=context)
+                await asyncio.wait_for(
+                    sink.write(events=event_list, context=context),
+                    timeout=self.sink_timeout_seconds,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Usage sink timed out after %.1fs: %s",
+                    self.sink_timeout_seconds,
+                    type(sink).__name__,
+                )
             except Exception:
                 logger.exception("Usage sink failed: %s", type(sink).__name__)
 
@@ -54,3 +66,21 @@ class UsageReporter:
         events = await self.extract(messages=messages, context=context)
         await self.report(events=events, context=context)
         return events
+
+    async def close(self) -> None:
+        for sink in self.sinks:
+            close = getattr(sink, "close", None)
+            if not callable(close):
+                continue
+            try:
+                result = close()
+                if inspect.isawaitable(result):
+                    await asyncio.wait_for(result, timeout=self.sink_timeout_seconds)
+            except TimeoutError:
+                logger.warning(
+                    "Usage sink close timed out after %.1fs: %s",
+                    self.sink_timeout_seconds,
+                    type(sink).__name__,
+                )
+            except Exception:
+                logger.exception("Usage sink close failed: %s", type(sink).__name__)

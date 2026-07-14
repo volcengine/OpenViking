@@ -100,18 +100,12 @@ UsageEvent 是 OpenViking 内核和外部 Sink 之间的稳定协议。
 
 ## 6. UsageSink 机制
 
-OpenViking 开源包定义 Sink 抽象，并提供一个轻量本地 JSONL sink 作为本地调试和测试工具：
+OpenViking 开源包只定义 Sink 抽象：
 
 ```python
 class UsageSink:
     async def write(self, events: list[UsageEvent], context: UsageContext) -> None:
         ...
-```
-
-开源内置 Sink：
-
-```text
-file_jsonl
 ```
 
 可扩展 Sink：
@@ -150,18 +144,9 @@ def load_class(class_path: str):
 
 只有配置了该 Sink 时才 import 对应模块。开源版本不会 import Kafka，也不会安装 Kafka 依赖。
 
+每个 Sink 的 `write()` 调用最多等待 5 秒。超时或异常只记录日志，不影响其他 Sink。Reporter 在应用生命周期内只创建一次，应用退出时调用 Sink 可选的 `close()` 方法。
+
 ## 7. 配置设计
-
-开源本地调试：
-
-```yaml
-usage_reporter:
-  enabled: true
-  sinks:
-    - type: file_jsonl
-      config:
-        path: ./data/usage-events.jsonl
-```
 
 默认关闭：
 
@@ -219,7 +204,7 @@ archive session success
 
 4. 新增 reporter/sink 模块
 
-新增通用扩展点和内置 `file_jsonl` sink。
+新增通用扩展点和 custom sink 动态加载能力。
 
 不侵入的地方：
 
@@ -230,7 +215,7 @@ archive session success
 - 不强制写 MEMORY_FIELDS。
 - 不强制写 search_tags。
 - 不影响 snapshot。
-- Sink 失败不阻塞 commit。
+- Sink 调用具有 5 秒超时边界，失败不会中断 phase2。
 
 整体侵入属于低到中等，核心主链路只增加一个旁路 hook。
 
@@ -409,23 +394,7 @@ OpenViking 不需要知道目标系统细节。
 
 ### 10.6 开源版本默认能力
 
-开源版默认关闭 usage reporting；需要本地验证时可配置 `file_jsonl` sink。
-
-```text
-file_jsonl sink
-```
-
-`file_jsonl` 输出示例：
-
-```json
-{"schema_version":"v1","event_type":"memory.injected","memory_uri":"viking://user/default/memories/experiences/xxx.md","session_id":"...","archive_uri":"...","occurred_at":"..."}
-```
-
-这能满足本地验证和调试：
-
-```text
-commit session 后，看 usage-events.jsonl 是否出现 memory.recalled / memory.injected
-```
+开源版默认关闭 usage reporting，不内置具体 Sink。部署方通过 custom sink 接入自己的目标系统。
 
 ## 11. 当前需求不在内核里做的事
 
@@ -448,11 +417,10 @@ commit session 后，看 usage-events.jsonl 是否出现 memory.recalled / memor
 3. 新增 `UsageExtractor` 抽象。
 4. 实现 `MemoryUsageExtractor`。
 5. 新增 `UsageSink` 抽象。
-6. 实现 `NoopUsageSink`。
-7. 实现 `FileJsonlUsageSink`。
-8. 实现 custom sink 动态加载。
-9. 在 session archive 成功后挂接 UsageReporter。
-10. 增加 best-effort 失败处理、日志和 metrics。
-11. 增加单测：tool parts -> UsageEvent。
-12. 增加集成测试：commit session -> file_jsonl sink 写出事件。
-13. 增加文档：开源 file sink、商业化 Kafka custom sink、私有化 custom sink 接入方式。
+6. 实现 custom sink 动态加载。
+7. 在 session archive 成功后挂接 UsageReporter。
+8. 增加 Sink 超时、best-effort 失败处理和日志。
+9. 增加 Reporter/Sink 生命周期关闭处理。
+10. 增加单测：tool parts -> UsageEvent。
+11. 增加集成测试：commit session -> custom test sink 写出事件。
+12. 增加文档：商业化和私有化 custom sink 接入方式。

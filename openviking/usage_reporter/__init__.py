@@ -5,10 +5,9 @@
 from .extractors import MemoryUsageExtractor, UsageExtractor
 from .models import UsageContext, UsageEvent
 from .reporter import UsageReporter
-from .sinks import FileJsonlUsageSink, UsageSink
+from .sinks import UsageSink
 
 __all__ = [
-    "FileJsonlUsageSink",
     "MemoryUsageExtractor",
     "UsageContext",
     "UsageEvent",

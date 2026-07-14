@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
+
 from openviking.usage_reporter import UsageContext, UsageEvent, UsageReporter
 
 
@@ -58,3 +60,42 @@ async def test_sink_failure_does_not_stop_later_sinks():
     await reporter.report(events=[event], context=_context())
 
     assert writes == [event]
+
+
+async def test_sink_timeout_does_not_stop_later_sinks():
+    writes = []
+
+    class HangingSink:
+        async def write(self, *, events, context):
+            await asyncio.sleep(1)
+
+    class RecordingSink:
+        async def write(self, *, events, context):
+            writes.extend(events)
+
+    event = _event()
+    reporter = UsageReporter(
+        sinks=[HangingSink(), RecordingSink()],
+        sink_timeout_seconds=0.01,
+    )
+
+    await reporter.report(events=[event], context=_context())
+
+    assert writes == [event]
+
+
+async def test_close_calls_optional_sink_close():
+    closed = []
+
+    class ClosableSink:
+        async def write(self, *, events, context):
+            return None
+
+        async def close(self):
+            closed.append(True)
+
+    reporter = UsageReporter(sinks=[ClosableSink()])
+
+    await reporter.close()
+
+    assert closed == [True]

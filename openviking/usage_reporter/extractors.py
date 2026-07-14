@@ -35,16 +35,8 @@ def _load_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _memory_type_from_uri(uri: str) -> str:
-    if "/experiences/" in uri:
-        return "experience"
-    if "/trajectories/" in uri:
-        return "trajectory"
-    return "memory"
-
-
-def _is_memory_uri(uri: str) -> bool:
-    return uri.startswith("viking://") and "/memories/" in uri
+def _is_experience_uri(uri: str) -> bool:
+    return uri.startswith("viking://") and "/memories/experiences/" in uri
 
 
 class MemoryUsageExtractor:
@@ -106,7 +98,7 @@ class MemoryUsageExtractor:
             if not isinstance(result, dict):
                 continue
             uri = str(result.get("uri") or "").strip()
-            if not uri or not _is_memory_uri(uri):
+            if not uri or not _is_experience_uri(uri):
                 continue
             events.append(
                 self._build_event(
@@ -133,7 +125,7 @@ class MemoryUsageExtractor:
         tool_input = part.tool_input if isinstance(part.tool_input, dict) else {}
         output = _load_mapping(part.tool_output)
         uri = str(tool_input.get("uri") or output.get("uri") or "").strip()
-        if not uri or not _is_memory_uri(uri):
+        if not uri or not _is_experience_uri(uri):
             return None
         return self._build_event(
             event_type="memory.injected",
@@ -159,7 +151,7 @@ class MemoryUsageExtractor:
         return UsageEvent(
             event_type=event_type,
             memory_uri=memory_uri,
-            memory_type=_memory_type_from_uri(memory_uri),
+            memory_type="experience",
             account_id=context.account_id,
             user_id=context.user_id,
             session_id=context.session_id,

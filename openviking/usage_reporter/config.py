@@ -11,7 +11,7 @@ from openviking.server.config import UsageReporterConfig, UsageReporterSinkConfi
 
 from .extractors import MemoryUsageExtractor
 from .reporter import UsageReporter
-from .sinks import FileJsonlUsageSink, UsageSink
+from .sinks import UsageSink
 
 
 def _load_class(class_path: str) -> type:
@@ -24,12 +24,6 @@ def _load_class(class_path: str) -> type:
 
 
 def _build_sink(config: UsageReporterSinkConfig) -> UsageSink:
-    if config.type == "file_jsonl":
-        path = config.config.get("path")
-        if not isinstance(path, str) or not path.strip():
-            raise ValueError("file_jsonl usage sink requires config.path")
-        return FileJsonlUsageSink(path=path)
-
     if config.type == "custom":
         if not config.class_path:
             raise ValueError("custom usage sink requires class_path")

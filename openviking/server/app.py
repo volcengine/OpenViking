@@ -217,6 +217,17 @@ def create_app(
 
     validate_server_config(config)
 
+    usage_reporter_unset = object()
+    usage_reporter = usage_reporter_unset
+
+    def _get_usage_reporter():  # noqa: ANN202
+        nonlocal usage_reporter
+        if usage_reporter is usage_reporter_unset:
+            from openviking.usage_reporter.config import build_usage_reporter
+
+            usage_reporter = build_usage_reporter(config.usage_reporter)
+        return usage_reporter
+
     def _configure_session_runtime(service_obj) -> None:  # noqa: ANN001
         sessions = getattr(service_obj, "sessions", None)
         tool_output_setter = getattr(sessions, "set_tool_output_externalization_config", None)
@@ -225,9 +236,7 @@ def create_app(
 
         usage_reporter_setter = getattr(sessions, "set_usage_reporter", None)
         if callable(usage_reporter_setter):
-            from openviking.usage_reporter.config import build_usage_reporter
-
-            usage_reporter_setter(build_usage_reporter(config.usage_reporter))
+            usage_reporter_setter(_get_usage_reporter())
 
     if service is not None:
         _configure_session_runtime(service)
@@ -326,6 +335,8 @@ def create_app(
                 logger.warning(f"OpenVikingService close cancelled during shutdown: {e}")
             except Exception as e:
                 logger.warning(f"OpenVikingService close failed during shutdown: {e}")
+        if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
+            await usage_reporter.close()
 
     app = FastAPI(
         title="OpenViking API",

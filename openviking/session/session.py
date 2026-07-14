@@ -1311,7 +1311,7 @@ class Session:
         request_wait_tracker = get_request_wait_tracker()
 
         memories_extracted: Dict[str, int] = {}
-        usage_events_reported = 0
+        usage_events_extracted = 0
         extracted_skill_results: list[dict] = []
         active_count_updated = 0
         memory_diff_uri: Optional[str] = None
@@ -1359,7 +1359,7 @@ class Session:
                         else ""
                     )
                     extraction_messages = await self._hydrate_tool_outputs_for_extraction(messages)
-                    usage_events_reported = len(
+                    usage_events_extracted = len(
                         await self._run_usage_reporting(
                             task_id=task_id,
                             archive_uri=archive_uri,
@@ -1669,7 +1669,7 @@ class Session:
                     for item in extracted_skill_results
                     if isinstance(item, dict) and (item.get("uri") or item.get("root_uri"))
                 ],
-                "usage_events_reported": usage_events_reported,
+                "usage_events_extracted": usage_events_extracted,
                 "active_count_updated": active_count_updated,
                 "token_usage": {
                     "llm": dict(self._meta.llm_token_usage),

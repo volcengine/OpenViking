@@ -3,10 +3,12 @@
 
 import json
 import sys
+from contextlib import asynccontextmanager
 
 import pytest
 
-from openviking.server.config import UsageReporterConfig
+from openviking.server.app import create_app
+from openviking.server.config import ServerConfig, UsageReporterConfig
 from openviking.usage_reporter import UsageContext, UsageEvent
 from openviking.usage_reporter.config import build_usage_reporter
 
@@ -72,3 +74,64 @@ class CustomUsageSink:
     payload = json.loads(output_path.read_text(encoding="utf-8").splitlines()[0])
     assert payload["event_type"] == "memory.injected"
     assert payload["memory_uri"] == "viking://user/default/memories/experiences/a.md"
+
+
+async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
+    built_reporters = []
+    assigned_reporters = []
+
+    class Reporter:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    reporter = Reporter()
+
+    def build_reporter(config):
+        del config
+        built_reporters.append(reporter)
+        return reporter
+
+    class Sessions:
+        def set_tool_output_externalization_config(self, config):
+            del config
+
+        def set_usage_reporter(self, value):
+            assigned_reporters.append(value)
+
+    class Service:
+        sessions = Sessions()
+
+    class TaskTracker:
+        def start_cleanup_loop(self):
+            return None
+
+        def stop_cleanup_loop(self):
+            return None
+
+    async def initialize_runtime_state(app, service, config):
+        del app, service, config
+
+    @asynccontextmanager
+    async def mcp_lifespan():
+        yield
+
+    monkeypatch.setattr(
+        "openviking.usage_reporter.config.build_usage_reporter",
+        build_reporter,
+    )
+    monkeypatch.setattr(
+        "openviking.server.app._initialize_runtime_state",
+        initialize_runtime_state,
+    )
+    monkeypatch.setattr("openviking.server.app.get_task_tracker", lambda: TaskTracker())
+    monkeypatch.setattr("openviking.server.mcp_endpoint.mcp_lifespan", mcp_lifespan)
+
+    app = create_app(config=ServerConfig(), service=Service())
+    async with app.router.lifespan_context(app):
+        pass
+
+    assert built_reporters == [reporter]
+    assert assigned_reporters == [reporter, reporter]
+    assert reporter.closed is True
