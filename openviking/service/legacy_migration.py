@@ -19,12 +19,15 @@ from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier, validate_user_id
 
-
 # Reserved sub-directories of viking://agent/ that belong to the new public
 # scope layout (skills, endpoints, tools, payments). They must not be treated
 # as legacy ``agent_id`` directories by either the migration planner or the
 # cleanup planner.
 _AGENT_RESERVED_SUBDIRS = frozenset({"skills", "endpoints", "tools", "payments"})
+
+# Legacy ``agent/<agent_id>/user`` trees also contained payload partitions.
+# Their names are valid user IDs, so filter them before identity registration.
+_LEGACY_AGENT_USER_RESERVED_SUBDIRS = frozenset({"resources", "skills", "memories", "instructions"})
 
 
 @dataclass(frozen=True)
@@ -223,9 +226,7 @@ class LegacyDataMigration:
                     if entry["name"] in _AGENT_RESERVED_SUBDIRS:
                         continue
                     legacy_path = f"{agent_path}/{entry['name']}"
-                    plan.targets.append(
-                        self._cleanup_target(account_id, legacy_path, "agent")
-                    )
+                    plan.targets.append(self._cleanup_target(account_id, legacy_path, "agent"))
 
             session_path = f"/local/{account_id}/session"
             if await self._exists(session_path):
@@ -436,6 +437,15 @@ class LegacyDataMigration:
                 if not user_entry["is_dir"]:
                     continue
                 user_id = user_entry["name"]
+                if user_id in _LEGACY_AGENT_USER_RESERVED_SUBDIRS:
+                    plan.skipped.append(
+                        {
+                            "type": "agent_user_partition",
+                            "source": self._path_to_uri(account_id, f"{user_root}/{user_id}"),
+                            "reason": "reserved legacy storage partition",
+                        }
+                    )
+                    continue
                 if not self._ensure_plan_user(account_id, user_id, plan):
                     continue
                 await self._plan_agent_tree(

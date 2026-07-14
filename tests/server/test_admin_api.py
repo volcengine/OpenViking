@@ -981,6 +981,12 @@ async def test_legacy_migration_covers_all_accounts_and_agent_user_layout(
         f"/local/{acct}/agent/review-agent/user/charlie/skills/review/SKILL.md",
         "review skill",
     )
+    for structural_name in ("resources", "skills", "memories", "instructions"):
+        await _agfs_write(
+            admin_service,
+            f"/local/{acct}/agent/review-agent/user/{structural_name}/marker.txt",
+            "legacy structural payload",
+        )
     await _agfs_write(
         admin_service,
         f"/local/{other_acct}/agent/code-agent/memories/facts/other.md",
@@ -997,8 +1003,15 @@ async def test_legacy_migration_covers_all_accounts_and_agent_user_layout(
         item["account_id"] == acct and item["user_id"] == "charlie"
         for item in result["created_users"]
     )
+    assert {
+        item["source"].rsplit("/", 1)[-1]
+        for item in result["skipped"]
+        if item["type"] == "agent_user_partition"
+    } == {"resources", "skills", "memories", "instructions"}
     manager = admin_app.state.api_key_manager
     assert manager.has_user(acct, "charlie")
+    for structural_name in ("resources", "skills", "memories", "instructions"):
+        assert not manager.has_user(acct, structural_name)
     assert (
         await _agfs_read_text(
             admin_service,
