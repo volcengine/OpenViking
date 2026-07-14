@@ -64,6 +64,12 @@ system_prompt: |
   evidence for both request-time and post-action scopes. Also fail when a
   monetary/value repair would keep using the wrong source field even though the
   retrieved record exposes a canonical total/paid/charged/payment amount field.
+  Also fail when the draft conflates action eligibility (whether a write/mutation
+  may be performed) with benefit eligibility (whether a refund/compensation/
+  coverage applies after execution), especially when the user explicitly accepted
+  no refund/benefit. The follow-up should ask the extractor to re-diagnose
+  whether the agent refused an action on benefit-eligibility grounds when the
+  policy permits the action itself.
 
   Return JSON only.
 user_prompt: |
@@ -89,7 +95,7 @@ user_prompt: |
   {
     "pass": false,
     "need_followup": true,
-    "root_cause_quality": "<surface_level|too_late_boundary|wrong_scope|missing_scope_freeze|missing_scope_separation|later_write_scope_substitution|implicit_later_write_exclusion|wrong_source_field|missing_source_binding|missing_causal_link|not_injectable|over_broad|unsafe_runtime_wording|unclear>",
+    "root_cause_quality": "<surface_level|too_late_boundary|wrong_scope|missing_scope_freeze|missing_scope_separation|later_write_scope_substitution|implicit_later_write_exclusion|wrong_source_field|missing_source_binding|missing_causal_link|not_injectable|over_broad|unsafe_runtime_wording|unclear|action_benefit_eligibility_confusion>",
     "reason": "<brief diagnosis of the deepest missing causal link>",
     "followup_message": "<one concise diagnostic follow-up asking the extractor to re-diagnose the missing prevention link>"
   }
@@ -108,6 +114,9 @@ user_prompt: |
   - the draft cannot explain why that changed behavior would make the next
     similar session succeed;
   - the repair is broad, case-literal, or could block correct behavior.
+  - the draft conflates action eligibility with benefit eligibility; the agent
+    refused a write because a refund/compensation was unavailable, but the policy
+    permits the action itself, and the user accepted no refund;
 
   Do not ask for a particular lesson template. Ask for the causal diagnosis that
   would make the next extraction produce a truly preventive experience.

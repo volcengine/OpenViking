@@ -32,6 +32,16 @@ _TRAINING_COMMIT_MEMORY_TYPES = ("cases", "trajectories", "experiences")
 _TRAINING_CASE_SPEC_PROTOCOL = "openviking.batch_train.case_spec.v1"
 _TRAINING_CASE_SPEC_HEADER = "# OpenViking Batch Training CaseSpec v1"
 _SESSION_BATCH_ADD_MESSAGE_LIMIT = 100
+_SESSION_BATCH_ADD_MAX_ATTEMPTS = 3
+_COMMIT_RECOVERY_MAX_ATTEMPTS = 5
+_TRANSIENT_RETRY_BASE_DELAY_SECONDS = 0.5
+
+_RETRYABLE_HTTP_ERRORS = (
+    httpx.ReadError,
+    httpx.ConnectError,
+    httpx.TimeoutException,
+    httpx.RemoteProtocolError,
+)
 
 
 @dataclass(slots=True)
@@ -145,11 +155,7 @@ class SessionCommitPolicyTrainer:
             stage = "batch_add_messages"
             await self._batch_add_messages(session_id, messages)
             stage = "commit_session"
-            commit_result = await self.client.commit_session(
-                session_id,
-                telemetry=True,
-                keep_recent_count=self.keep_recent_count,
-            )
+            commit_result = await self._commit_session_or_recover(session_id)
             task_id = str(commit_result.get("task_id") or "")
             archive_uri = str(commit_result.get("archive_uri") or "")
             trace_id = _commit_trace_id(commit_result)
@@ -169,6 +175,8 @@ class SessionCommitPolicyTrainer:
             )
             stage = "wait_task"
             task = await self._wait_task(task_id) if task_id else None
+            if not archive_uri:
+                archive_uri = _task_archive_uri(task) or archive_uri
             task_error = _task_error(task)
             if task_error:
                 print(
@@ -294,10 +302,86 @@ class SessionCommitPolicyTrainer:
             await result
 
     async def _batch_add_messages(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+        observed_message_count = 0
         for start in range(0, len(messages), _SESSION_BATCH_ADD_MESSAGE_LIMIT):
-            await self.client.batch_add_messages(
-                session_id, messages[start : start + _SESSION_BATCH_ADD_MESSAGE_LIMIT]
+            batch = messages[start : start + _SESSION_BATCH_ADD_MESSAGE_LIMIT]
+            expected_min_count = observed_message_count + len(batch)
+            attempt = 0
+            while True:
+                attempt += 1
+                try:
+                    result = await self.client.batch_add_messages(session_id, batch)
+                    observed_message_count = max(
+                        expected_min_count,
+                        _message_count_from_result(result) or 0,
+                    )
+                    break
+                except _RETRYABLE_HTTP_ERRORS:
+                    recovered_count = await self._session_message_count_with_retry(session_id)
+                    if recovered_count is not None and recovered_count >= expected_min_count:
+                        observed_message_count = recovered_count
+                        break
+                    if attempt >= _SESSION_BATCH_ADD_MAX_ATTEMPTS:
+                        raise
+                    await asyncio.sleep(_retry_delay_seconds(attempt))
+
+    async def _commit_session_or_recover(self, session_id: str) -> dict[str, Any]:
+        try:
+            return await self.client.commit_session(
+                session_id,
+                telemetry=True,
+                keep_recent_count=self.keep_recent_count,
             )
+        except _RETRYABLE_HTTP_ERRORS as exc:
+            # Do not blindly retry the commit POST: the server may have already
+            # archived the session and created the background session_commit task,
+            # while the client only failed to read the response. Recover by
+            # finding that task by resource_id=session_id and continue polling it.
+            recovered = await self._recover_commit_result(session_id)
+            if recovered is None:
+                raise exc
+            return recovered
+
+    async def _recover_commit_result(self, session_id: str) -> dict[str, Any] | None:
+        list_tasks = getattr(self.client, "list_tasks", None)
+        if not callable(list_tasks):
+            return None
+
+        for attempt in range(1, _COMMIT_RECOVERY_MAX_ATTEMPTS + 1):
+            try:
+                tasks = await list_tasks(
+                    task_type="session_commit",
+                    resource_id=session_id,
+                    limit=10,
+                )
+            except _RETRYABLE_HTTP_ERRORS:
+                tasks = []
+
+            task = _first_commit_task(tasks, session_id)
+            if task is not None:
+                return {
+                    "task_id": str(task.get("task_id") or ""),
+                    "archive_uri": _task_archive_uri(task) or "",
+                    "trace_id": None,
+                    "recovered": True,
+                    "recovery_source": "list_tasks",
+                }
+            if attempt < _COMMIT_RECOVERY_MAX_ATTEMPTS:
+                await asyncio.sleep(_retry_delay_seconds(attempt))
+        return None
+
+    async def _session_message_count_with_retry(self, session_id: str) -> int | None:
+        get_session = getattr(self.client, "get_session", None)
+        if not callable(get_session):
+            return None
+        for attempt in range(1, _SESSION_BATCH_ADD_MAX_ATTEMPTS + 1):
+            try:
+                return _message_count_from_result(await get_session(session_id))
+            except _RETRYABLE_HTTP_ERRORS:
+                if attempt >= _SESSION_BATCH_ADD_MAX_ATTEMPTS:
+                    return None
+                await asyncio.sleep(_retry_delay_seconds(attempt))
+        return None
 
     async def _wait_task(self, task_id: str) -> dict[str, Any]:
         deadline = (
@@ -310,12 +394,7 @@ class SessionCommitPolicyTrainer:
             try:
                 task = await self.client.get_task(task_id)
                 transient_errors = 0
-            except (
-                httpx.ReadError,
-                httpx.ConnectError,
-                httpx.TimeoutException,
-                httpx.RemoteProtocolError,
-            ) as exc:
+            except _RETRYABLE_HTTP_ERRORS as exc:
                 transient_errors += 1
                 if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                     return {
@@ -419,6 +498,47 @@ def _rollout_score(rollout: Rollout) -> float:
     if rollout.evaluation is None:
         return 0.0
     return float(rollout.evaluation.score)
+
+
+def _message_count_from_result(result: Any) -> int | None:
+    if not isinstance(result, dict):
+        return None
+    value = result.get("message_count")
+    if value is None and isinstance(result.get("result"), dict):
+        value = result["result"].get("message_count")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_commit_task(tasks: Any, session_id: str) -> dict[str, Any] | None:
+    if not isinstance(tasks, list):
+        return None
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        if task.get("resource_id") != session_id:
+            continue
+        if task.get("task_type") != "session_commit":
+            continue
+        if task.get("task_id"):
+            return task
+    return None
+
+
+def _task_archive_uri(task: dict[str, Any] | None) -> str | None:
+    if not isinstance(task, dict):
+        return None
+    result = task.get("result")
+    if not isinstance(result, dict):
+        return None
+    archive_uri = result.get("archive_uri")
+    return str(archive_uri) if archive_uri else None
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    return min(_TRANSIENT_RETRY_BASE_DELAY_SECONDS * attempt, 2.0)
 
 
 def _task_error(task: dict[str, Any] | None) -> str | None:

@@ -1283,12 +1283,17 @@ class FakeSessionCommitClient:
         self.messages = {}
         self.committed_sessions = []
         self.task_poll_counts = {}
+        self.tasks = []
 
     async def create_session(self, *, session_id, memory_policy=None):
         self.created_sessions.append((session_id, memory_policy))
 
+    async def get_session(self, session_id, *, auto_create=False):
+        return {"session_id": session_id, "message_count": len(self.messages.get(session_id, []))}
+
     async def batch_add_messages(self, session_id, messages):
         self.messages.setdefault(session_id, []).extend(messages)
+        return {"session_id": session_id, "message_count": len(self.messages[session_id])}
 
     async def commit_session(self, session_id, telemetry=False, *, keep_recent_count=0):
         self.committed_sessions.append((session_id, keep_recent_count, telemetry))
@@ -1301,6 +1306,22 @@ class FakeSessionCommitClient:
     async def get_task(self, task_id):
         self.task_poll_counts[task_id] = self.task_poll_counts.get(task_id, 0) + 1
         return {"task_id": task_id, "status": "completed", "result": {}}
+
+    async def list_tasks(
+        self,
+        task_type=None,
+        status=None,
+        resource_id=None,
+        limit=50,
+    ):
+        tasks = list(self.tasks)
+        if task_type is not None:
+            tasks = [task for task in tasks if task.get("task_type") == task_type]
+        if status is not None:
+            tasks = [task for task in tasks if task.get("status") == status]
+        if resource_id is not None:
+            tasks = [task for task in tasks if task.get("resource_id") == resource_id]
+        return tasks[:limit]
 
 
 @pytest.mark.asyncio
@@ -1340,6 +1361,134 @@ async def test_session_commit_policy_trainer_records_commit_trace_id():
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_retries_transient_batch_add_messages():
+    import httpx
+
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    original_batch_add_messages = client.batch_add_messages
+    attempts = []
+
+    async def flaky_batch_add_messages(session_id, messages):
+        attempts.append(session_id)
+        if len(attempts) == 1:
+            raise httpx.ReadError("temporary read failure")
+        return await original_batch_add_messages(session_id, messages)
+
+    client.batch_add_messages = flaky_batch_add_messages
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+        metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    assert commit_result["error"] is None
+    assert len(attempts) == 2
+    assert len(client.messages[commit_result["session_id"]]) == 3
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_recovers_completed_batch_add_response_loss():
+    import httpx
+
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+    attempts = []
+
+    async def response_lost_after_write(session_id, messages):
+        attempts.append(session_id)
+        client.messages.setdefault(session_id, []).extend(messages)
+        raise httpx.ReadError("response lost after write")
+
+    client.batch_add_messages = response_lost_after_write
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        poll_interval_seconds=0.01,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+        metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    assert commit_result["error"] is None
+    assert len(attempts) == 1
+    assert len(client.messages[commit_result["session_id"]]) == 3
+
+
+@pytest.mark.asyncio
+async def test_session_commit_policy_trainer_recovers_commit_read_error_from_task_list():
+    import httpx
+
+    from openviking.session.train import SessionCommitPolicyTrainer
+
+    client = FakeSessionCommitClient()
+
+    async def commit_response_lost(session_id, telemetry=False, *, keep_recent_count=0):
+        client.committed_sessions.append((session_id, keep_recent_count, telemetry))
+        client.tasks = [
+            {
+                "task_id": f"recovered-task-{session_id}",
+                "task_type": "session_commit",
+                "resource_id": session_id,
+                "status": "running",
+            }
+        ]
+        raise httpx.ReadError("response lost after commit accepted")
+
+    async def get_task(task_id):
+        client.task_poll_counts[task_id] = client.task_poll_counts.get(task_id, 0) + 1
+        return {
+            "task_id": task_id,
+            "status": "completed",
+            "result": {"archive_uri": f"viking://archive/{task_id}"},
+        }
+
+    client.commit_session = commit_response_lost
+    client.get_task = get_task
+    trainer = SessionCommitPolicyTrainer(
+        client=client,
+        run_id="run1",
+        keep_recent_count=2,
+        poll_interval_seconds=0.01,
+    )
+    rollout = Rollout(
+        case=_case(),
+        messages=[Message(id="m1", role="user", parts=[TextPart(text="hello")])],
+        policy_snapshot_id="snapshot-1",
+        evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
+        metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
+    )
+
+    result = await trainer.train_rollouts([rollout], _policy_set())
+
+    commit_result = result.apply_result.metadata["commit_results"][0]
+    assert commit_result["task_id"] == f"recovered-task-{commit_result['session_id']}"
+    assert commit_result["archive_uri"] == f"viking://archive/{commit_result['task_id']}"
+    assert commit_result["task_status"] == "completed"
+    assert commit_result["error"] is None
+    assert client.committed_sessions == [(commit_result["session_id"], 2, True)]
 
 
 @pytest.mark.asyncio

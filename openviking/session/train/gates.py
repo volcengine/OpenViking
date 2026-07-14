@@ -1039,6 +1039,11 @@ earlier request-time aggregate, uses temporal non-applicability to avoid skill
 loading, uses a wrong value source field where a canonical total/payment field
 exists, lacks a concrete future behavior change, or would likely harm correct
 behavior.
+Also fail when the proposed experience conflates action eligibility (whether a
+write/mutation may be performed) with benefit eligibility (whether a refund,
+compensation, or coverage applies after execution), especially when the user
+explicitly accepted no refund/benefit. The experience must not exclude an
+action on benefit-eligibility grounds when the policy permits the action itself.
 
 Return JSON only:
 {{
@@ -1056,6 +1061,7 @@ wrong_scope, split_causal_chain, agent_initiated_scope_expansion,
 missing_source_binding, missing_behavior_change, not_injectable,
 over_broad, later_write_scope_substitution, implicit_later_write_exclusion,
 wrong_source_field, temporal_non_applicability, unsafe, unclear.
+action_benefit_eligibility_confusion,
 Set repair_prompt to one concise instruction for rewriting or removing this
 specific experience. Do not ask for any output schema.
 

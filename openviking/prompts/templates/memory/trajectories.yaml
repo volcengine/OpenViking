@@ -99,6 +99,17 @@ fields:
       - uncertainty and competing interpretations.
 
       ## Output Format
+      When a policy or eligibility judgment determined or contributed to the
+      outcome, additionally preserve the distinction between **action
+      eligibility** (whether the agent is permitted to execute a write or
+      mutation) and **benefit eligibility** (whether a refund, compensation, or
+      coverage applies after execution). Record the runtime fields, policy
+      conditions, and user statements that determined each dimension separately.
+      If the user explicitly accepted no refund/benefit, record that acceptance.
+      If the agent conflated the two dimensions (e.g., refused a write because a
+      benefit was unavailable), record which dimension the agent used and which
+      it should have used.
+
       Output exactly ONE markdown record with the labels below. Do not add extra top-level sections.
 
       # <trajectory_name>
@@ -127,7 +138,12 @@ fields:
         - Failure type: <wrong_arguments|wrong_object|wrong_policy_branch|missing_confirmation|missing_communication|premature_write|extra_write|premature_done|tool_error|calculation_error|scope_substitution|wrong_source_field|none|unknown>
         - First observed divergence: <earliest observable boundary where behavior diverged, or none/unknown>
         - Candidate bad behavior: <tool/action/message/calculation shape that appears risky, or none>
-        - What was missing/wrong: <runtime fact, object binding, value, policy gate, confirmation, or communication that differed, or none. If the failure involves a policy or eligibility judgment, include the specific runtime field values and policy conditions from the conversation that determined the expected vs. actual outcome, not just that an action was missing>
+      - What was missing/wrong: <runtime fact, object binding, value, policy gate, confirmation, or communication that differed, or none. If the failure involves a policy or eligibility judgment, include the specific runtime field values and policy conditions from the conversation that determined the expected vs. actual outcome, not just that an action was missing>
+        Distinguish action eligibility (may the agent perform the write?) from
+        benefit eligibility (does a refund/compensation apply after?). Record
+        which dimension the agent used, which it should have used, whether the
+        user explicitly accepted no refund/benefit, which policy conditions were
+        checked vs. skipped, and the specific runtime fields that determined each.
       - Value/Scope Evidence:
         - Requested value/list/summary role: <semantic role, or none>
         - Request boundary/timing: <when the user asked relative to reads/writes/communications, or unknown>
