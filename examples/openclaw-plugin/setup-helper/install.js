@@ -71,6 +71,7 @@ const FALLBACK_CURRENT = {
     "context-engine.ts",
     "auto-recall.ts",
     "client.ts",
+    "preview-url.ts",
     "process-manager.ts",
     "memory-ranking.ts",
     "text-utils.ts",

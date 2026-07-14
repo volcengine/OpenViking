@@ -12,6 +12,7 @@ import {
   resolveRecallSearchPlan,
   type RecallResourceType,
 } from "./registries/recall-resource-types.js";
+import { isPreviewableImageResourceUri, withPreviewUrls } from "./preview-url.js";
 import {
   type RecallTraceEntry,
   type RecallTraceResult,
@@ -99,6 +100,12 @@ export type BuildMemoryLinesOptions = {
 };
 
 function memoryCategory(item: FindResultItem): string {
+  if (item.preview_url && isPreviewableImageResourceUri(item.uri)) {
+    return item.category?.trim() || "resource:image";
+  }
+  if (item.uri.startsWith("viking://resources/")) {
+    return item.category?.trim() || "resource";
+  }
   return item.category?.trim() || "memory";
 }
 
@@ -116,14 +123,18 @@ function formatMemoryLine(
 ): string {
   const category = memoryCategory(item);
   if (!options.includeUri) {
-    return `- [${category}] ${content}`;
+    return [
+      `- [${category}] ${content}`,
+      item.preview_url ? `  <preview_url>${item.preview_url}</preview_url>` : "",
+    ].filter(Boolean).join("\n");
   }
 
   return [
     `- [${category}]`,
     `  <uri>${item.uri}</uri>`,
+    item.preview_url ? `  <preview_url>${item.preview_url}</preview_url>` : "",
     indentContent(content),
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 async function resolveMemoryContent(
@@ -212,13 +223,17 @@ export async function buildMemoryLinesWithBudget(
 }
 
 export function buildRecallContextBlock(memoryLines: string[]): string {
+  const previewInstruction = memoryLines.some((line) => line.includes("<preview_url>"))
+    ? "If you reference an image result, copy its exact <preview_url> into the answer; do not invent or rewrite preview URLs."
+    : "";
   return [
     "<relevant-memories>",
     AUTO_RECALL_SOURCE_MARKER,
     "The following OpenViking memories may be relevant:",
+    previewInstruction,
     ...memoryLines,
     "</relevant-memories>",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function newTraceId(): string {
@@ -482,8 +497,11 @@ export async function buildAutoRecallContext(params: {
         return { memoryCount: 0, estimatedTokens: 0 };
       }
 
+      const memoriesWithPreview = cfg.enableResourcePreviewUrls
+        ? await withPreviewUrls(memories, client, agentId)
+        : memories;
       const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
-        memories,
+        memoriesWithPreview,
         (uri) => client.read(uri, agentId),
         {
           recallPreferAbstract,
@@ -505,10 +523,10 @@ export async function buildAutoRecallContext(params: {
         `openviking: injecting ${memoryLines.length} memories (${block.length} chars, ~${estimatedTokens} tokens, maxInjectedChars=${maxInjectedChars})`,
       );
       verbose?.(
-        `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
+        `openviking: inject-detail ${toJsonLog({ count: memoriesWithPreview.length, memories: summarizeInjectionMemories(memoriesWithPreview) })}`,
       );
 
-      await recordTrace(memories.slice(0, memoryLines.length), memoryLines.length, estimatedTokens);
+      await recordTrace(memoriesWithPreview.slice(0, memoryLines.length), memoryLines.length, estimatedTokens);
       return { block, memoryCount: memoryLines.length, estimatedTokens };
     })(),
     cfg.autoRecallTimeoutMs,

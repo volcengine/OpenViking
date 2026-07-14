@@ -22,6 +22,8 @@ export type MemoryOpenVikingConfig = {
   autoRecall?: boolean;
   /** Outer time budget for the whole auto-recall flow, including search, ranking, and reads. */
   autoRecallTimeoutMs?: number;
+  /** Hidden switch for temporary preview URLs on recalled image resources. Default false. */
+  enableResourcePreviewUrls?: boolean;
   /** Include resources in auto-recall and default memory_recall search. Default false. */
   recallResources?: boolean;
   recallLimit?: number;
@@ -415,6 +417,7 @@ export const memoryOpenVikingConfigSchema = {
         "captureMaxLength",
         "autoRecall",
         "autoRecallTimeoutMs",
+        "enableResourcePreviewUrls",
         "recallResources",
         "recallLimit",
         "recallScoreThreshold",
@@ -525,6 +528,7 @@ export const memoryOpenVikingConfigSchema = {
         1000,
         Math.min(300_000, Math.floor(toNumber(cfg.autoRecallTimeoutMs, DEFAULT_AUTO_RECALL_TIMEOUT_MS))),
       ),
+      enableResourcePreviewUrls: cfg.enableResourcePreviewUrls === true,
       recallResources,
       recallLimit: Math.max(1, Math.floor(toNumber(cfg.recallLimit, DEFAULT_RECALL_LIMIT))),
       recallScoreThreshold: Math.min(
