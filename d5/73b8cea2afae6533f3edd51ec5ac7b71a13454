@@ -1,0 +1,75 @@
+openviking/connector/client.py
+  s_b1ef123960986a::t_180c735f6e11de 1-44,46-47,49-84,90-101,103-110
+  h_35f000fc27e979 45,48,85-89,102
+  s_b1ef123960986a::t_ae0d7d0d1d1789 111
+openviking/server/auth/__init__.py
+  s_b1ef123960986a::t_6617c00c3308e6 139-140,151-152,162
+openviking/server/identity.py
+  h_76fa89855b2583 109
+  s_b1ef123960986a::t_8efb11e0ff3732 108,110
+openviking/service/resource_service.py
+  h_76fa89855b2583 660,669-673,1154-1155,1161,1163,1165,1178,1181-1185,1210,1213,1215,1220-1224,1259-1285,1322
+  s_b1ef123960986a::t_b6b2efd1410a0b 19,58,659,661-668,674-676,1152-1153,1156-1160,1162,1164,1166-1177,1179-1180,1186-1209,1211-1212,1214,1216-1219,1225-1258,1286-1321,1323-1364
+openviking_cli/utils/config/open_viking_config.py
+  h_35f000fc27e979 61-62,74-77,79-80
+  s_b1ef123960986a::t_e4e4e039e3ce28 57-60,63-73,78,81-88,237-241
+openviking/server/local_input_guard.py
+  h_76fa89855b2583 16,48
+tests/service/test_resource_service_connector.py
+  s_b256f923a4bc41::t_666ad54bc34c00 1-138,140-198,200-217,219-222,224-351,354-389,392-414
+  h_76fa89855b2583 139,199,218,223,352-353,390-391
+tests/server/test_api_resources.py
+  s_44b9c7c1610c2d::t_1fa635f304d222 100-143
+tests/unit/test_connector_config.py
+  s_b256f923a4bc41::t_8a7eab09fbf15f 1-90
+openviking/connector/__init__.py
+  s_b1ef123960986a::t_12057cde194a0c 1-2
+tests/connector/test_client.py
+  s_b256f923a4bc41::t_d152ac6c43929f 1-160,163,165,170-175,182
+  s_b256f923a4bc41::t_62c8ff0f55b80b 164
+  s_b256f923a4bc41::t_0c05404bd161bf 166-169
+  s_b256f923a4bc41::t_4d1d228d3f3012 161-162
+  s_b256f923a4bc41::t_7acbd05cd3324f 176-181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d573b8cea2afae6533f3edd51ec5ac7b71a13454",
+  "prompts": {},
+  "humans": {
+    "h_35f000fc27e979": {
+      "author": "李子恒 <ziheng.li@bytedance.com>"
+    },
+    "h_76fa89855b2583": {
+      "author": "ziheng.li <ziheng.li@bytedance.com>"
+    }
+  },
+  "sessions": {
+    "s_44b9c7c1610c2d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f55d5-6594-7b22-8906-89a17b7c15e3",
+        "model": "unknown"
+      },
+      "human_author": "ziheng.li <ziheng.li@bytedance.com>"
+    },
+    "s_b1ef123960986a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1f172121-1318-42b9-b1c1-65050c318504",
+        "model": "unknown"
+      },
+      "human_author": "李子恒 <ziheng.li@bytedance.com>"
+    },
+    "s_b256f923a4bc41": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3fd8-848d-7f11-a49d-be7657e8f8d9",
+        "model": "unknown"
+      },
+      "human_author": "ziheng.li <ziheng.li@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
