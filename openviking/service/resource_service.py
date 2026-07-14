@@ -96,7 +96,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "create_parent",
         "telemetry",
         "request_validator",
-        "_understanding_response_id",
+        "understanding_response_id",
     }
 )
 

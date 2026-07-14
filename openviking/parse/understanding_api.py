@@ -36,7 +36,7 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-PREPARED_RESPONSE_ID_ARG = "_understanding_response_id"
+PREPARED_RESPONSE_ID_ARG = "understanding_response_id"
 
 
 class UnderstandingAPI(BaseParser):
@@ -258,10 +258,7 @@ class UnderstandingAPI(BaseParser):
         return json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
     def _auth_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "x-kb-env": "snake",
-        }
+        headers = {"Authorization": f"Bearer {self._api_key}"}
         if extra:
             headers.update(extra)
         return headers
