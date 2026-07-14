@@ -44,7 +44,7 @@ Input schema:
 {
   "query": "string",
   "limit": 5,
-  "target_uri": "viking://user/default/memories/experiences/"
+  "target_uri": "viking://user/memories/experiences/"
 }
 ```
 
@@ -54,7 +54,7 @@ Output schema:
 {
   "results": [
     {
-      "uri": "viking://user/default/memories/experiences/example.md",
+      "uri": "viking://user/<current_user_id>/memories/experiences/example.md",
       "title": "example",
       "score": 0.82,
       "snippet": "Short summary or matched situation"
@@ -66,8 +66,9 @@ Output schema:
 Implementation:
 
 Call OpenViking `POST /api/v1/search/find` with `target_uri` set to the
-experience directory. Return only experience memory URIs under
-`/memories/experiences/`.
+current-user shorthand `viking://user/memories/experiences/`. OpenViking resolves
+this shorthand against the authenticated request user. Return only canonical
+experience memory URIs for that user; never hardcode `default` or another user ID.
 
 Usage reporting:
 
@@ -83,7 +84,7 @@ Input schema:
 
 ```json
 {
-  "uri": "viking://user/default/memories/experiences/example.md"
+  "uri": "viking://user/<current_user_id>/memories/experiences/example.md"
 }
 ```
 
@@ -91,7 +92,7 @@ Output schema:
 
 ```json
 {
-  "uri": "viking://user/default/memories/experiences/example.md",
+  "uri": "viking://user/<current_user_id>/memories/experiences/example.md",
   "content": "Experience Markdown body"
 }
 ```
@@ -99,8 +100,9 @@ Output schema:
 Implementation:
 
 Call OpenViking `GET /api/v1/content/read?uri=<encoded_uri>` for the selected
-experience URI. The returned content should be inserted into the prompt as
-operational guidance, not as user profile facts.
+experience URI. Always pass the canonical URI returned by `search_experience`;
+do not construct a URI with a hardcoded user ID. The returned content should be
+inserted into the prompt as operational guidance, not as user profile facts.
 
 Usage reporting:
 
@@ -133,7 +135,7 @@ Use a compact and explicit block:
 The following guidance was retrieved from prior task execution experience.
 Use it as operational guidance. Do not treat it as user identity or preference.
 
-<experience uri="viking://user/default/memories/experiences/example.md">
+<experience uri="viking://user/<current_user_id>/memories/experiences/example.md">
 ...experience markdown...
 </experience>
 </openviking-experience-memory>

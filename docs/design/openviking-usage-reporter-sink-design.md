@@ -75,7 +75,7 @@ UsageEvent 是 OpenViking 内核和外部 Sink 之间的稳定协议。
 {
   "schema_version": "v1",
   "event_type": "memory.injected",
-  "memory_uri": "viking://user/default/memories/experiences/xxx.md",
+  "memory_uri": "viking://user/test/memories/experiences/xxx.md",
   "memory_type": "experience",
   "account_id": "new",
   "user_id": "test",
@@ -97,6 +97,9 @@ UsageEvent 是 OpenViking 内核和外部 Sink 之间的稳定协议。
 ```
 
 默认只上报结构化事件，不上报完整 session 内容。
+
+`memory_uri` 必须属于当前 `UsageContext.user_id` 对应的规范 experience
+目录。客户端传入的其他用户 URI 不生成 UsageEvent。
 
 ## 6. UsageSink 机制
 
@@ -315,6 +318,9 @@ search_experience:
 read_experience:
   从 tool_input.uri 或 tool_output.uri 生成 memory.injected
 ```
+
+事件的 `occurred_at` 优先取 tool part 所在 message 的 `created_at`，并统一
+转换为 UTC ISO 8601；消息时间缺失或非法时才使用 commit 解析时间。
 
 不处理：
 

@@ -22,7 +22,7 @@ def _context() -> UsageContext:
 
 @pytest.mark.asyncio
 async def test_memory_usage_extractor_emits_recall_and_injection_events():
-    experience_uri = "viking://user/default/memories/experiences/no-order-exchange.md"
+    experience_uri = "viking://user/test/memories/experiences/no-order-exchange.md"
     messages = [
         Message(
             id="msg-1",
@@ -81,6 +81,30 @@ async def test_memory_usage_extractor_emits_recall_and_injection_events():
 
 
 @pytest.mark.asyncio
+async def test_memory_usage_extractor_uses_message_time_for_event_time():
+    experience_uri = "viking://user/test/memories/experiences/no-order-exchange.md"
+    messages = [
+        Message(
+            id="msg-1",
+            role="user",
+            created_at="2026-07-10T20:30:40.123456+08:00",
+            parts=[
+                ToolPart(
+                    tool_id="call-read",
+                    tool_name="read_experience",
+                    tool_status="completed",
+                    tool_input={"uri": experience_uri},
+                )
+            ],
+        )
+    ]
+
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
+
+    assert events[0].occurred_at == "2026-07-10T12:30:40.123Z"
+
+
+@pytest.mark.asyncio
 async def test_memory_usage_extractor_ignores_non_experience_memory_uris():
     messages = [
         Message(
@@ -111,3 +135,33 @@ async def test_memory_usage_extractor_ignores_non_experience_memory_uris():
     events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
 
     assert events == []
+
+
+@pytest.mark.asyncio
+async def test_memory_usage_extractor_ignores_other_users_experience_uris():
+    own_uri = "viking://user/test/memories/experiences/own.md"
+    other_uri = "viking://user/other/memories/experiences/other.md"
+    messages = [
+        Message(
+            id="msg-1",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="call-search",
+                    tool_name="search_experience",
+                    tool_status="completed",
+                    tool_output={"results": [{"uri": own_uri}, {"uri": other_uri}]},
+                ),
+                ToolPart(
+                    tool_id="call-read",
+                    tool_name="read_experience",
+                    tool_status="completed",
+                    tool_input={"uri": other_uri},
+                ),
+            ],
+        )
+    ]
+
+    events = await MemoryUsageExtractor().extract(messages=messages, context=_context())
+
+    assert [event.memory_uri for event in events] == [own_uri]

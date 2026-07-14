@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Iterable, Protocol
 
 from openviking.message import Message, ToolPart
+from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 from .models import UsageContext, UsageEvent, utc_now_iso
 
@@ -35,8 +37,21 @@ def _load_mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _is_experience_uri(uri: str) -> bool:
-    return uri.startswith("viking://") and "/memories/experiences/" in uri
+def _is_experience_uri(uri: str, context: UsageContext) -> bool:
+    prefix = f"viking://user/{context.user_id}/memories/experiences/"
+    return uri.startswith(prefix) and bool(uri.removeprefix(prefix).strip("/"))
+
+
+def _event_time(message: Message) -> str:
+    value = message.created_at
+    try:
+        if isinstance(value, datetime):
+            return format_iso8601(value)
+        if isinstance(value, str) and value.strip():
+            return format_iso8601(parse_iso_datetime(value.strip()))
+    except (TypeError, ValueError):
+        pass
+    return utc_now_iso()
 
 
 class MemoryUsageExtractor:
@@ -98,7 +113,7 @@ class MemoryUsageExtractor:
             if not isinstance(result, dict):
                 continue
             uri = str(result.get("uri") or "").strip()
-            if not uri or not _is_experience_uri(uri):
+            if not uri or not _is_experience_uri(uri, context):
                 continue
             events.append(
                 self._build_event(
@@ -125,7 +140,7 @@ class MemoryUsageExtractor:
         tool_input = part.tool_input if isinstance(part.tool_input, dict) else {}
         output = _load_mapping(part.tool_output)
         uri = str(tool_input.get("uri") or output.get("uri") or "").strip()
-        if not uri or not _is_experience_uri(uri):
+        if not uri or not _is_experience_uri(uri, context):
             return None
         return self._build_event(
             event_type="memory.injected",
@@ -157,7 +172,7 @@ class MemoryUsageExtractor:
             session_id=context.session_id,
             archive_uri=context.archive_uri,
             task_id=context.task_id,
-            occurred_at=utc_now_iso(),
+            occurred_at=_event_time(message),
             source={"tool_name": part.tool_name, "tool_status": part.tool_status},
             evidence={
                 "message_index": message_index,
