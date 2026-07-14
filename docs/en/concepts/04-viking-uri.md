@@ -88,6 +88,8 @@ viking://user/resources/                      # Current user's resources
 viking://user/resources/docs/                 # Current user's resource directory
 ```
 
+`viking://resources/...` is the shared scope for the current account and supports per-directory or per-file [ACLs](./15-acl.md). `viking://user/{user}/resources/...` is private; move a resource into the shared scope to share it.
+
 ### User Skills and Peer Content
 
 ```

@@ -16,6 +16,7 @@ from openviking.session.memory.utils.resource_refs import (
     RESOURCE_REF_SOURCE_CONTENT_WRITE,
     sync_memory_resource_refs,
 )
+from openviking.storage.acl import AclAction
 from openviking.storage.errors import ResourceBusyError
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
@@ -30,6 +31,7 @@ from openviking_cli.exceptions import (
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
 )
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
@@ -68,7 +70,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(str(exc)) from exc
         self._validate_mode(mode)
         self._validate_target_uri(normalized_uri)
-        self._viking_fs._ensure_mutable_access(normalized_uri, ctx)
+        await self._ensure_mutable_target(normalized_uri, ctx)
 
         if mode == "create":
             return await self._create_and_write(
@@ -130,6 +132,7 @@ class ContentWriteCoordinator:
 
         self._validate_tag_mode(mode)
         normalized_tags = normalize_search_tags(tags)
+        await self._ensure_mutable_target(normalized_uri, ctx)
         stat = await self._safe_stat(normalized_uri, ctx=ctx)
         if stat.get("isDir"):
             return await self._set_directory_tags(
@@ -180,6 +183,14 @@ class ContentWriteCoordinator:
         if overview_status is not None:
             result["overview_status"] = overview_status
         return result
+
+    async def _ensure_mutable_target(self, uri: str, ctx: RequestContext) -> None:
+        try:
+            await self._viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        except PermissionDeniedError as exc:
+            if not await self._viking_fs._can_access(uri, ctx, action=AclAction.READ):
+                raise NotFoundError(uri, "file") from exc
+            raise
 
     def _build_tags_result(
         self,
@@ -497,6 +508,7 @@ class ContentWriteCoordinator:
             recursive=recursive,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
+            group_ids=ctx.group_ids,
             role=str(ctx.role),
             skip_vectorization=False,
             telemetry_id=telemetry.telemetry_id,
@@ -714,6 +726,12 @@ class ContentWriteCoordinator:
 
         if not updated_targets:
             raise NotFoundError(uri, "semantic file")
+
+        await self._viking_fs._ensure_access_many(
+            [str(target["uri"]) for target in updated_targets],
+            ctx,
+            action=AclAction.WRITE,
+        )
 
         applied_uris: list[str] = []
         skipped_count = 0

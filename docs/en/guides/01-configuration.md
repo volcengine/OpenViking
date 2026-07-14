@@ -1269,6 +1269,20 @@ Supports cloud-deployed VikingDB on Volcengine
 ```
 </details>
 
+##### ACL schema
+
+ACL data exists only in the context collection. In addition to `acl_enabled: bool`, add these scalar-indexed `list<string>` fields:
+
+```text
+acl_direct_read_principal_ids       acl_inherited_read_principal_ids
+acl_direct_write_principal_ids      acl_inherited_write_principal_ids
+acl_direct_manage_principal_ids     acl_inherited_manage_principal_ids
+```
+
+Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_enabled=false` and empty lists.
+
+For existing remote collections, including Volcengine VikingDB, provision these fields and scalar indexes before startup; OpenViking validates but does not alter the remote schema. Volcengine API-key data-plane mode also requires the context collection and configured index to exist. See [Resource Access Control (ACL)](../concepts/15-acl.md) for permission semantics.
+
 <details>
 <summary><b>openGauss</b></summary>
 

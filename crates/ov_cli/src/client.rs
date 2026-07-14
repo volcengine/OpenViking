@@ -319,6 +319,40 @@ impl HttpClient {
         self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
+    pub async fn acl_get(&self, uri: &str) -> Result<Value> {
+        self.get("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
+            .await
+    }
+
+    pub async fn acl_set(&self, uri: &str, entries: Vec<Value>) -> Result<Value> {
+        self.put(
+            "/api/v1/acl",
+            &serde_json::json!({"uri": uri, "entries": entries}),
+        )
+        .await
+    }
+
+    pub async fn acl_grant(&self, uri: &str, principal: &str, level: &str) -> Result<Value> {
+        self.post(
+            "/api/v1/acl/grant",
+            &serde_json::json!({"uri": uri, "principal": principal, "level": level}),
+        )
+        .await
+    }
+
+    pub async fn acl_revoke(&self, uri: &str, principal: &str) -> Result<Value> {
+        self.post(
+            "/api/v1/acl/revoke",
+            &serde_json::json!({"uri": uri, "principal": principal}),
+        )
+        .await
+    }
+
+    pub async fn acl_delete(&self, uri: &str) -> Result<Value> {
+        self.delete("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
+            .await
+    }
+
     fn build_write_body(
         uri: &str,
         content: &str,
@@ -1400,6 +1434,59 @@ impl HttpClient {
             None => serde_json::json!({}),
         };
         self.post(&path, &body).await
+    }
+
+    pub async fn admin_create_group(&self, account_id: &str, name: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/groups", account_id);
+        self.post(&path, &serde_json::json!({"name": name})).await
+    }
+
+    pub async fn admin_list_groups(&self, account_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/groups", account_id);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn admin_delete_group(&self, account_id: &str, group_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/groups/{}", account_id, group_id);
+        self.delete(&path, &[]).await
+    }
+
+    pub async fn admin_list_group_members(
+        &self,
+        account_id: &str,
+        group_id: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/groups/{}/members",
+            account_id, group_id
+        );
+        self.get(&path, &[]).await
+    }
+
+    pub async fn admin_add_group_member(
+        &self,
+        account_id: &str,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/groups/{}/members/{}",
+            account_id, group_id, user_id
+        );
+        self.put(&path, &serde_json::json!({})).await
+    }
+
+    pub async fn admin_remove_group_member(
+        &self,
+        account_id: &str,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/groups/{}/members/{}",
+            account_id, group_id, user_id
+        );
+        self.delete(&path, &[]).await
     }
 
     pub async fn admin_migrate(&self, cleanup: bool) -> Result<Value> {

@@ -5,7 +5,7 @@
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
 
 
@@ -21,6 +21,7 @@ class UnderstandingParseMsg:
     timestamp: int = int(datetime.now().timestamp())
     account_id: str = "default"
     user_id: str = "default"
+    group_ids: List[str] = field(default_factory=list)
     role: str = "root"
     actor_peer_id: Optional[str] = None
     reason: str = ""
@@ -45,6 +46,7 @@ class UnderstandingParseMsg:
         root_uri: str,
         account_id: str,
         user_id: str,
+        group_ids: Optional[Sequence[str]] = None,
         role: str,
         actor_peer_id: Optional[str] = None,
         telemetry_id: Optional[str] = None,
@@ -70,6 +72,7 @@ class UnderstandingParseMsg:
         self.root_uri = root_uri
         self.account_id = account_id
         self.user_id = user_id
+        self.group_ids = list(group_ids or [])
         self.role = role
         self.actor_peer_id = actor_peer_id
         self.lock_handoff = lock_handoff
@@ -116,6 +119,7 @@ class UnderstandingParseMsg:
             root_uri=str(root_uri),
             account_id=str(data.get("account_id", "default")),
             user_id=str(data.get("user_id", "default")),
+            group_ids=data.get("group_ids") if isinstance(data.get("group_ids"), list) else None,
             role=str(data.get("role", "root")),
             actor_peer_id=data.get("actor_peer_id"),
             telemetry_id=str(data.get("telemetry_id"))

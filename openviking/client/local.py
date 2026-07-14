@@ -676,6 +676,21 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
+    async def acl_get(self, uri: str) -> Dict[str, Any]:
+        return await self._service.fs.get_acl(uri, ctx=self._ctx)
+
+    async def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
+        return await self._service.fs.set_acl(uri, entries, ctx=self._ctx)
+
+    async def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
+        return await self._service.fs.grant_acl(uri, principal, level, ctx=self._ctx)
+
+    async def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
+        return await self._service.fs.revoke_acl(uri, principal, ctx=self._ctx)
+
+    async def acl_delete(self, uri: str) -> Dict[str, Any]:
+        return await self._service.fs.delete_acl(uri, ctx=self._ctx)
+
     # ============= Search =============
 
     async def find(

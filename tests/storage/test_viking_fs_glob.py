@@ -166,7 +166,7 @@ async def test_glob_rejects_empty_pattern(fs):
 async def test_glob_checks_access_before_listing(monkeypatch, fs):
     called = False
 
-    def fake_ensure_access(uri, ctx):
+    async def fake_ensure_access(uri, ctx):
         nonlocal called
         called = True
         raise PermissionError(f"denied: {uri}")

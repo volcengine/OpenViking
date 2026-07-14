@@ -121,6 +121,8 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 # 返回: {"result": {"account_id": "acme", "user_id": "bob", "user_key": "..."}}
 ```
 
+ACL 用户组是例外：组和成员通过 [Admin API](../api/08-admin.md#用户组) 维护，成员必须是当前 account 已注册的用户。客户端不能通过 header 或 token claim 声明组；服务端认证用户后查询组注册表，并把结果写入本次请求的 `RequestContext.group_ids`。
+
 受信部署也可以通过受信网关调用 Admin API，目前支持两种方式：
 
 - 携带受信部署自身的 `root_api_key`。对于 `/api/v1/admin/*`，服务端校验该 key 后会将请求视为 ROOT。
@@ -237,6 +239,8 @@ ov --sudo system status
 `ADMIN` key；`ADMIN` key 会以它自己的 user 身份访问数据，不能通过
 `X-OpenViking-Account` / `X-OpenViking-User` 切换身份。
 
+ACL 检查还会使用服务端解析的 account 内用户组。成员变更从下一次请求生效，不需要签发新 API Key，也不会修改资源 ACL。
+
 `ROOT` key 没有绑定租户 user，因此在 `api_key` 模式下不能访问租户级数据 API。
 如果部署需要由上游网关断言 `account` / `user`，请使用 `trusted` 模式，而不是在
 root key 请求上携带身份 header。
@@ -340,6 +344,8 @@ client = ov.SyncHTTPClient(
 | ADMIN | 所属 account | 常规操作 + 管理所属 account 的用户 |
 | USER | 所属 account | 常规操作（ls、read、find、sessions 等） |
 
+表中的常规资源操作仍受资源 ACL 约束。account 角色决定身份管理和公共资源的隐式管理权，具体目录或文件的 `viewer/editor/manager` 权限由 [资源访问控制（ACL）](../concepts/15-acl.md) 决定。
+
 在 `trusted` 模式下，普通租户请求默认会解析为 `USER`；如果该 account/user 已注册更高角色，则使用注册角色。对于 Admin 路由，在没有显式身份时还支持 trusted ROOT 回退。
 
 ## 无需认证的端点
@@ -366,6 +372,7 @@ curl http://localhost:1933/health
 ## 相关文档
 
 - [多租户](../concepts/11-multi-tenant.md) - 多租户能力、共享边界与接入实践
+- [资源访问控制（ACL）](../concepts/15-acl.md) - account 内资源权限
 - [配置](01-configuration.md) - 配置文件说明
 - [服务部署](03-deployment.md) - 服务部署
 - [API 概览](../api/01-overview.md) - API 参考

@@ -175,6 +175,7 @@ class SemanticProcessor(DequeueHandlerBase):
         return RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=role,
+            group_ids=tuple(msg.group_ids),
         )
 
     def _detect_file_type(self, file_name: str) -> str:
@@ -288,6 +289,7 @@ class SemanticProcessor(DequeueHandlerBase):
             recursive=False,
             account_id=msg.account_id,
             user_id=msg.user_id,
+            group_ids=msg.group_ids,
             peer_id=msg.peer_id,
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,

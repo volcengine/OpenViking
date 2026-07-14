@@ -1,0 +1,94 @@
+"""ACL endpoints."""
+
+from fastapi import APIRouter, Body, Depends, Query
+from pydantic import BaseModel, ConfigDict
+
+from openviking.core.path_variables import resolve_path_variables
+from openviking.server.auth import get_request_context
+from openviking.server.dependencies import get_service
+from openviking.server.identity import RequestContext
+from openviking.server.models import Response
+from openviking.storage.acl import AclLevel
+
+router = APIRouter(prefix="/api/v1/acl", tags=["acl"])
+
+
+class _AclRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class AclEntryRequest(_AclRequest):
+    principal: str
+    level: AclLevel
+
+
+class SetAclRequest(_AclRequest):
+    uri: str
+    entries: list[AclEntryRequest]
+
+
+class GrantAclRequest(_AclRequest):
+    uri: str
+    principal: str
+    level: AclLevel
+
+
+class RevokeAclRequest(_AclRequest):
+    uri: str
+    principal: str
+
+
+@router.get("")
+async def get_acl(
+    uri: str = Query(..., description="Viking URI"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    result = await get_service().fs.get_acl(resolve_path_variables(uri), ctx=_ctx)
+    return Response(status="ok", result=result)
+
+
+@router.put("")
+async def set_acl(
+    request: SetAclRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    result = await get_service().fs.set_acl(
+        resolve_path_variables(request.uri),
+        [entry.model_dump() for entry in request.entries],
+        ctx=_ctx,
+    )
+    return Response(status="ok", result=result)
+
+
+@router.delete("")
+async def delete_acl(
+    uri: str = Query(..., description="Viking URI"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    result = await get_service().fs.delete_acl(resolve_path_variables(uri), ctx=_ctx)
+    return Response(status="ok", result=result)
+
+
+@router.post("/grant")
+async def grant_acl(
+    request: GrantAclRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    result = await get_service().fs.grant_acl(
+        resolve_path_variables(request.uri),
+        request.principal,
+        request.level,
+        ctx=_ctx,
+    )
+    return Response(status="ok", result=result)
+
+
+@router.post("/revoke")
+async def revoke_acl(
+    request: RevokeAclRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    result = await get_service().fs.revoke_acl(
+        resolve_path_variables(request.uri), request.principal, ctx=_ctx
+    )
+    return Response(status="ok", result=result)

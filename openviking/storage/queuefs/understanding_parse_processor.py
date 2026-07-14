@@ -120,6 +120,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
             role=Role(msg.role),
+            group_ids=tuple(msg.group_ids),
             actor_peer_id=msg.actor_peer_id,
         )
 
@@ -160,6 +161,7 @@ class UnderstandingParseProcessor(DequeueHandlerBase):
                         root_uri=msg.root_uri,
                         account_id=msg.account_id,
                         user_id=msg.user_id,
+                        group_ids=msg.group_ids,
                         role=msg.role,
                         actor_peer_id=msg.actor_peer_id,
                         lock_handoff=msg.lock_handoff,

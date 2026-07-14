@@ -432,9 +432,11 @@ Reindex semantic and/or vector artifacts for existing content already stored in 
 
 This API operates on existing `viking://...` content. It does not import new files. For normal ingestion, use [Resources](02-resources.md).
 
-**Authentication**
+**Authentication and authorization**
 
-- HTTP endpoint: requires admin/root role when authentication is enabled. In `api_key` mode, use an admin key for tenant content; a raw root key cannot access tenant-scoped data.
+- The HTTP endpoint accepts an authenticated USER, ADMIN, or ROOT identity. The target URI must pass the same `write` authorization as an ordinary write.
+- Private scopes use owner rules. ACL-controlled shared resources require `editor` or `manager`; account-wide maintenance targets such as `viking://` require an administrator.
+- In `api_key` mode, a raw root key still cannot select tenant-scoped data directly.
 - Python embedded mode: uses the current service context
 - Python HTTP client / CLI: sends the current authenticated identity
 
@@ -458,6 +460,8 @@ The HTTP request body rejects unknown fields. `uri` may use OpenViking path vari
 - `viking://user/<user_id>/memories/...`
 - `viking://user/<user_id>/skills`
 - `viking://user/<user_id>/skills/<skill_name>`
+
+This list describes target types supported by the executor; it does not grant access. Every request still performs `write` authorization on its target URI.
 
 Session namespaces are not supported by `reindex()`. Requests for
 `viking://session/...` or `viking://user/<user_id>/sessions/...` are rejected;

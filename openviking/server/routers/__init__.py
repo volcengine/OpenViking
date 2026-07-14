@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """OpenViking HTTP Server routers."""
 
+from openviking.server.routers.acl import router as acl_router
 from openviking.server.routers.admin import router as admin_router
 from openviking.server.routers.bot import router as bot_router
 from openviking.server.routers.code import router as code_router
@@ -27,6 +28,7 @@ from openviking.server.routers.watches import router as watches_router
 from openviking.server.routers.webdav import router as webdav_router
 
 __all__ = [
+    "acl_router",
     "admin_router",
     "bot_router",
     "code_router",

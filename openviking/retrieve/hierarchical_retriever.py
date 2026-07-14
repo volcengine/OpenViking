@@ -224,6 +224,33 @@ class HierarchicalRetriever:
             telemetry.count("vector.scored", len(global_results))
             telemetry.count("vector.scanned", len(global_results))
 
+            leaf_results: List[Dict[str, Any]] = []
+            if getattr(self.vector_store, "acl_manager", None) is not None and (
+                level is None or 2 in level
+            ):
+                leaf_results = await vector_proxy.search_in_tenant(
+                    query_vector=query_vector,
+                    sparse_query_vector=sparse_query_vector,
+                    context_type=context_type,
+                    target_directories=target_dirs,
+                    extra_filter=scope_dsl,
+                    level=[2],
+                    limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+                )
+                telemetry.count("vector.searches", 1)
+                telemetry.count("vector.scored", len(leaf_results))
+                telemetry.count("vector.scanned", len(leaf_results))
+                if self._rerank_client and leaf_results:
+                    leaf_scores = await self._rerank_scores(
+                        query.query,
+                        [str(result.get("abstract", "")) for result in leaf_results],
+                        [self._finite_score(result.get("_score", 0.0)) for result in leaf_results],
+                    )
+                    leaf_results = [
+                        {**result, "_score": score}
+                        for result, score in zip(leaf_results, leaf_scores, strict=True)
+                    ]
+
             # Debug: Print all URIs in global_results
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"[retrieve] target_dirs: {target_dirs}")
@@ -265,7 +292,7 @@ class HierarchicalRetriever:
                     seen_starting_uris.add(uri)
 
             # Add directory hits to the result pool only when explicitly requested.
-            initial_candidates = []
+            initial_candidates = list(leaf_results)
             if level is not None:
                 for result, score in zip(global_results, directory_scores, strict=True):
                     if result.get("level", 2) not in level:

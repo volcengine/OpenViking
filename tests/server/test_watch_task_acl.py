@@ -4,6 +4,7 @@
 """Regression tests for watch-task control file access boundaries."""
 
 import contextvars
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -15,7 +16,7 @@ from openviking.resource.watch_storage import (
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -44,12 +45,12 @@ def bare_viking_fs() -> VikingFS:
         WATCH_TASK_STORAGE_TMP_URI,
     ],
 )
-def test_watch_task_control_files_are_root_only(bare_viking_fs, root_ctx, user_ctx, uri):
-    assert bare_viking_fs._is_accessible(uri, root_ctx) is True
-    assert bare_viking_fs._is_accessible(uri, user_ctx) is False
-
-    with pytest.raises(PermissionError):
-        bare_viking_fs._ensure_access(uri, user_ctx)
+@pytest.mark.asyncio
+async def test_watch_task_control_files_are_root_only(bare_viking_fs, root_ctx, user_ctx, uri):
+    bare_viking_fs.acl_manager = object()
+    await bare_viking_fs._ensure_access(uri, root_ctx)
+    with pytest.raises(PermissionDeniedError):
+        await bare_viking_fs._ensure_access(uri, user_ctx)
 
 
 @pytest.mark.asyncio
@@ -58,27 +59,35 @@ async def test_hidden_listing_filters_watch_task_control_files_for_non_root(
 ):
     bare_viking_fs._uri_to_path = lambda uri, ctx=None: "/fake/resources"
     bare_viking_fs._ctx_or_default = lambda ctx=None: ctx
-    bare_viking_fs._ls_entries = lambda path: [
-        {
-            "name": ".watch_tasks.json",
-            "isDir": False,
-            "size": 10,
-            "modTime": "2026-01-01T00:00:00+00:00",
-        },
-        {
-            "name": ".watch_tasks.json.bak",
-            "isDir": False,
-            "size": 10,
-            "modTime": "2026-01-01T00:00:00+00:00",
-        },
-        {
-            "name": ".watch_tasks.json.tmp",
-            "isDir": False,
-            "size": 10,
-            "modTime": "2026-01-01T00:00:00+00:00",
-        },
-        {"name": "public.txt", "isDir": False, "size": 5, "modTime": "2026-01-01T00:00:00+00:00"},
-    ]
+
+    bare_viking_fs._ls_entries = AsyncMock(
+        return_value=[
+            {
+                "name": ".watch_tasks.json",
+                "isDir": False,
+                "size": 10,
+                "modTime": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "name": ".watch_tasks.json.bak",
+                "isDir": False,
+                "size": 10,
+                "modTime": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "name": ".watch_tasks.json.tmp",
+                "isDir": False,
+                "size": 10,
+                "modTime": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "name": "public.txt",
+                "isDir": False,
+                "size": 5,
+                "modTime": "2026-01-01T00:00:00+00:00",
+            },
+        ]
+    )
     bare_viking_fs._path_to_uri = lambda path, ctx=None: f"viking://resources/{path.split('/')[-1]}"
 
     root_entries = await bare_viking_fs._ls_original(

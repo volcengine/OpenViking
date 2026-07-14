@@ -94,6 +94,9 @@ class RequestContext:
 
     user: UserIdentifier
     role: Role
+    # Account-scoped groups resolved by the server for this request. Callers do
+    # not supply these values through headers or ACL payloads.
+    group_ids: tuple[str, ...] = ()
     # Request-level view filter for the current user's peers collection. This does
     # not change tenant/user identity or session ownership.
     actor_peer_id: Optional[str] = None

@@ -13,7 +13,7 @@ OpenViking 的多租户不是“为每个团队部署一套独立服务”，而
 
 - 用一个 OpenViking Server 服务多个团队、客户或应用
 - 用 `account` 隔离不同团队的数据
-- 在同一个 `account` 内共享 `resources`
+- 在同一个 `account` 内共享 `resources`，并用 ACL 对目录或文件细化授权
 - 用 `user` 隔离用户级记忆和会话
 - 用 ROOT / ADMIN / USER 角色分层管理权限
 - 支持 OpenClaw 插件、Vikingbot、CLI、HTTP SDK 等不同接入方式
@@ -73,7 +73,7 @@ OpenViking Server 支持两种多租户相关认证模式：
 
 | 数据类型 | 是否跨 account 共享 | account 内是否共享 | 默认隔离边界 |
 |----------|---------------------|-------------------|--------------|
-| 共享资源 (`viking://resources`) | 否 | 是 | account |
+| 共享资源 (`viking://resources`) | 否 | 默认共享，可用 ACL 限制 | account / ACL |
 | 用户资源 (`viking://user/{user_id}/resources`) | 否 | 否 | user |
 | Peer 资源 (`viking://user/{user_id}/peers/{peer_id}/resources`) | 否 | 否 | user / peer |
 | 记忆 | 否 | 否 | user / peer |
@@ -107,8 +107,9 @@ viking://user/alice/peers/web-visitor-alice/resources/
 文件系统操作和语义检索都受租户约束：
 
 - 非 ROOT 请求会自动按 `account_id` 过滤
-- `resources` 会允许检索 account 内共享资源
-- `memory`、用户资源和 `skill` 会进一步按当前 `user space` 过滤
+- `resources` 默认允许检索 account 内共享资源；设置 ACL 后按有效 ACL 过滤
+- 用户资源始终按当前 `user space` 隔离；需要共享时移动到 `viking://resources`
+- `memory` 和 `skill` 继续按当前 `user space` 过滤
 - Actor peer 会把 `viking://user/{user}/peers` 过滤到一个 peer，并作用于文件系统和检索操作
 
 这意味着“能搜到什么”与“能读到什么”保持一致，不会因为向量召回而越权。
@@ -220,7 +221,7 @@ openclaw config set plugins.entries.openviking.config.peer_prefix "<peer-prefix>
 - 接入简单，插件不需要管理 account/user 生命周期
 - 最适合“一个 OpenClaw 实例对应一个 OpenViking 用户”的场景
 - `peer_prefix` 用于区分 OpenClaw 运行时身份，参与 peer/session 元数据
-- 同一 account 内的 `resources` 可共享，memory 按 user scope 隔离
+- 同一 account 内的 `resources` 默认共享，也可以通过 ACL 限制到指定用户；memory 按 user scope 隔离
 
 ### OpenClaw 插件为何通常不配 `account` / `user`
 
@@ -260,7 +261,7 @@ Vikingbot 当前的实践与 OpenClaw 插件不同，它更接近“平台代理
 这种模式的特点：
 
 - 适合一个 bot 服务承载多个聊天用户
-- 同一 account 下所有用户共享 `resources`
+- 同一 account 下的 `resources` 默认共享，ACL 可以对具体目录或文件细化权限
 - 用户记忆通过自动注册的 user 身份隔离
 - bot 侧需要承担更多租户生命周期管理逻辑
 
@@ -315,6 +316,8 @@ peer 集合过滤选择当前用户内的 peer 内容子空间，例如
 - [配置](../guides/01-configuration.md) - `root_api_key` 和 `auth_mode`
 - [管理员（多租户）](../api/08-admin.md) - Admin API 参考
 - [API 概览](../api/01-overview.md) - CLI / HTTP 连接方式
+- [资源访问控制（ACL）](./15-acl.md) - account 内资源授权、继承和检索过滤
+- [ACL API](../api/12-acl.md) - HTTP、SDK 和 CLI 接口
 - [数据加密](./10-encryption.md) - 多租户下的静态数据加密
 - [多租户示例](https://github.com/volcengine/OpenViking/blob/main/examples/multi_tenant/README.md) - 完整管理流程示例
 - [OpenClaw 插件](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/README_CN.md) - OpenClaw 的接入方式

@@ -10,6 +10,7 @@ import os
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
+from openviking.core.namespace import canonicalize_uri
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
@@ -24,6 +25,7 @@ from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import set_task_tracker
 from openviking.session import create_session_compressor
 from openviking.storage import VikingDBManager
+from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
@@ -162,6 +164,7 @@ class OpenVikingService:
         self._vikingdb_manager = VikingDBManager(
             vectordb_config=config.vectordb, queue_manager=self._queue_manager
         )
+        AclManager(self._vikingdb_manager)
 
         # Configure queues if QueueManager is available.
         # Workers are NOT started here — start() is called after VikingFS is initialized
@@ -312,7 +315,6 @@ class OpenVikingService:
         if self._vikingdb_manager is None:
             raise RuntimeError("VikingDBManager not initialized")
         await init_context_collection(self._vikingdb_manager)
-
         if self._agfs_client is None:
             raise RuntimeError("AGFS client not initialized")
         if self._embedder is None:
@@ -323,6 +325,7 @@ class OpenVikingService:
             query_embedder=self._embedder,
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
+            acl_manager=self._vikingdb_manager.acl_manager,
             retrieval_config=config.retrieval,
             grep_config=config.grep,
             enable_recorder=enable_recorder,
@@ -491,6 +494,7 @@ class OpenVikingService:
             await self.initialize()
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        uri = canonicalize_uri(uri, effective_ctx)
         from openviking.service.reindex_executor import get_reindex_executor
 
         return await get_reindex_executor().execute(

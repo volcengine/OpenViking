@@ -793,6 +793,7 @@ class ResourceService:
                         root_uri=root_uri,
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
+                        group_ids=ctx.group_ids,
                         role=str(ctx.role),
                         actor_peer_id=ctx.actor_peer_id,
                         reason=reason,

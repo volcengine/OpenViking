@@ -660,6 +660,26 @@ class AsyncOpenViking:
             telemetry=telemetry,
         )
 
+    async def acl_get(self, uri: str) -> Dict[str, Any]:
+        await self._ensure_initialized()
+        return await self._client.acl_get(uri)
+
+    async def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
+        await self._ensure_initialized()
+        return await self._client.acl_set(uri, entries)
+
+    async def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
+        await self._ensure_initialized()
+        return await self._client.acl_grant(uri, principal, level)
+
+    async def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
+        await self._ensure_initialized()
+        return await self._client.acl_revoke(uri, principal)
+
+    async def acl_delete(self, uri: str) -> Dict[str, Any]:
+        await self._ensure_initialized()
+        return await self._client.acl_delete(uri)
+
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.

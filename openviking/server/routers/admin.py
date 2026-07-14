@@ -62,6 +62,10 @@ class RegenerateKeyRequest(BaseModel):
     seed: str | None = None
 
 
+class CreateGroupRequest(BaseModel):
+    name: str
+
+
 class MigrateLegacyDataRequest(BaseModel):
     action: str = "migrate"
 
@@ -90,7 +94,7 @@ def _has_add_targets(user_config: UserConfig | None) -> bool:
     )
 
 
-def _validate_initial_user_config(
+async def _validate_initial_user_config(
     service,
     user_ctx: RequestContext,
     user_config: UserConfig | None,
@@ -99,7 +103,7 @@ def _validate_initial_user_config(
         return
     if service.viking_fs is None:
         raise FailedPreconditionError("OpenViking service is not initialized.")
-    validate_add_targets(
+    await validate_add_targets(
         user_config.add_targets,
         ctx=user_ctx,
         viking_fs=service.viking_fs,
@@ -171,7 +175,7 @@ async def create_account(
         user=UserIdentifier(body.account_id, body.admin_user_id),
         role=Role.ADMIN,
     )
-    _validate_initial_user_config(service, account_ctx, body.user_config)
+    await _validate_initial_user_config(service, account_ctx, body.user_config)
     manager = _get_api_key_manager(request)
     user_key = await manager.create_account(
         body.account_id,
@@ -313,7 +317,7 @@ async def register_user(
         user=UserIdentifier(account_id, body.user_id),
         role=resolved_role,
     )
-    _validate_initial_user_config(service, user_ctx, body.user_config)
+    await _validate_initial_user_config(service, user_ctx, body.user_config)
     manager = _get_api_key_manager(request)
     user_key = await manager.register_user(
         account_id,
@@ -407,3 +411,89 @@ async def regenerate_key(
         seed=body.seed if body is not None else None,
     )
     return Response(status="ok", result={"user_key": new_key})
+
+
+# ---- Group endpoints ----
+
+
+@router.post("/accounts/{account_id}/groups")
+@require_auth_root_or_admin
+async def create_group(
+    body: CreateGroupRequest,
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    _check_account_access(ctx, account_id)
+    result = await _get_api_key_manager(request).create_group(account_id, body.name)
+    return Response(status="ok", result=result)
+
+
+@router.get("/accounts/{account_id}/groups")
+@require_auth_root_or_admin
+async def list_groups(
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    _check_account_access(ctx, account_id)
+    result = _get_api_key_manager(request).get_groups(account_id)
+    return Response(status="ok", result=result)
+
+
+@router.delete("/accounts/{account_id}/groups/{group_id}")
+@require_auth_root_or_admin
+async def delete_group(
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    group_id: str = Path(..., description="Group ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    _check_account_access(ctx, account_id)
+    await _get_api_key_manager(request).delete_group(account_id, group_id)
+    return Response(status="ok", result={"deleted": True})
+
+
+@router.get("/accounts/{account_id}/groups/{group_id}/members")
+@require_auth_root_or_admin
+async def list_group_members(
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    group_id: str = Path(..., description="Group ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    _check_account_access(ctx, account_id)
+    members = _get_api_key_manager(request).get_group_members(account_id, group_id)
+    return Response(status="ok", result={"group_id": group_id, "members": members})
+
+
+@router.put("/accounts/{account_id}/groups/{group_id}/members/{user_id}")
+@require_auth_root_or_admin
+async def add_group_member(
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    group_id: str = Path(..., description="Group ID"),
+    user_id: str = Path(..., description="User ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    _check_account_access(ctx, account_id)
+    added = await _get_api_key_manager(request).add_group_member(
+        account_id, group_id, user_id
+    )
+    return Response(status="ok", result={"added": added})
+
+
+@router.delete("/accounts/{account_id}/groups/{group_id}/members/{user_id}")
+@require_auth_root_or_admin
+async def remove_group_member(
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    group_id: str = Path(..., description="Group ID"),
+    user_id: str = Path(..., description="User ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    _check_account_access(ctx, account_id)
+    removed = await _get_api_key_manager(request).remove_group_member(
+        account_id, group_id, user_id
+    )
+    return Response(status="ok", result={"removed": removed})

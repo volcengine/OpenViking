@@ -566,6 +566,75 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             )
             .await
         }
+        AdminCommands::CreateGroup { account_id, name } => {
+            commands::admin::create_group(
+                &client,
+                &account_id,
+                &name,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::ListGroups { account_id } => {
+            commands::admin::list_groups(&client, &account_id, ctx.output_format, ctx.compact).await
+        }
+        AdminCommands::ListGroupMembers {
+            account_id,
+            group_id,
+        } => {
+            commands::admin::list_group_members(
+                &client,
+                &account_id,
+                &group_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::AddGroupMember {
+            account_id,
+            group_id,
+            user_id,
+        } => {
+            commands::admin::add_group_member(
+                &client,
+                &account_id,
+                &group_id,
+                &user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::RemoveGroupMember {
+            account_id,
+            group_id,
+            user_id,
+        } => {
+            commands::admin::remove_group_member(
+                &client,
+                &account_id,
+                &group_id,
+                &user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::DeleteGroup {
+            account_id,
+            group_id,
+        } => {
+            commands::admin::delete_group(
+                &client,
+                &account_id,
+                &group_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         AdminCommands::RemoveUser {
             account_id,
             user_id,
@@ -1538,6 +1607,39 @@ pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> 
         ctx.compact,
     )
     .await
+}
+
+pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    match action {
+        crate::AclCommands::Get { uri } => {
+            commands::acl::get(&client, &uri, ctx.output_format, ctx.compact).await
+        }
+        crate::AclCommands::Set { uri, entries } => {
+            commands::acl::set(&client, &uri, entries, ctx.output_format, ctx.compact).await
+        }
+        crate::AclCommands::Grant {
+            uri,
+            principal,
+            level,
+        } => {
+            commands::acl::grant(
+                &client,
+                &uri,
+                &principal,
+                &level,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        crate::AclCommands::Revoke { uri, principal } => {
+            commands::acl::revoke(&client, &uri, &principal, ctx.output_format, ctx.compact).await
+        }
+        crate::AclCommands::Rm { uri } => {
+            commands::acl::remove(&client, &uri, ctx.output_format, ctx.compact).await
+        }
+    }
 }
 
 pub async fn handle_grep(

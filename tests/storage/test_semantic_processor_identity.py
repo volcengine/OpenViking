@@ -12,6 +12,7 @@ def test_ctx_from_semantic_msg_preserves_custom_role():
         context_type="resource",
         account_id="acme",
         user_id="alice",
+        group_ids=["grp_reviewers"],
         role="reviewer",
     )
 
@@ -19,6 +20,7 @@ def test_ctx_from_semantic_msg_preserves_custom_role():
 
     assert ctx.account_id == "acme"
     assert ctx.user.user_id == "alice"
+    assert ctx.group_ids == ("grp_reviewers",)
     assert str(ctx.role) == "reviewer"
 
 

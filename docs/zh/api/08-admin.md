@@ -1,6 +1,6 @@
 # 管理员（多租户）
 
-Admin API 用于多租户环境下的账户和用户管理。包括工作区（account）的创建与删除、用户注册与移除、角色变更、API Key 重新生成。
+Admin API 用于多租户环境下的账户、用户和用户组管理。包括工作区（account）的创建与删除、用户注册与移除、用户组成员、角色变更、API Key 重新生成。
 
 该 API 适用于 `api_key` 和 `trusted` 两种模式下的管理链路：
 - 在 `api_key` 模式下，角色始终从 API Key 推导。
@@ -21,6 +21,7 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 | 创建/删除工作区 | Y | N | N |
 | 列出工作区 | Y | N | N |
 | 注册/移除用户 | Y | Y（本 account） | N |
+| 管理用户组和成员 | Y | Y（本 account） | N |
 | 列出 agents（已废弃，返回空列表） | Y | Y（本 account） | N |
 | 重新生成 User Key | Y | Y（本 account） | N |
 | 修改用户角色 | Y | N | N |
@@ -54,6 +55,32 @@ Admin API 用于多租户环境下的账户和用户管理。包括工作区（a
 
 - `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
+
+## 用户组
+
+用户组属于单个 account，用于通过一个 ACL principal 授权多个用户。组名只用于展示；`group_id` 由服务端生成、不可修改且删除后不复用。组内只能加入当前 account 已存在的用户，不支持嵌套组。
+
+成员关系由服务端加入每次请求的 `RequestContext.group_ids`。添加或移除成员从下一次请求开始生效，不重写资源 ACL 或 context 记录。用户被删除时会自动退出所有组；用户组必须为空才能删除。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建空组，请求体为 `{"name":"Engineering"}` |
+| GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出组 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除空组 |
+| GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出成员 |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 添加成员；重复调用返回 `added=false` |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除成员；重复调用返回 `removed=false` |
+
+```bash
+ov --sudo admin create-group acme Engineering
+ov --sudo admin add-group-member acme grp_0123 alice
+ov acl grant viking://resources/project-a \
+  --principal group:grp_0123 --level viewer
+ov --sudo admin remove-group-member acme grp_0123 alice
+ov --sudo admin delete-group acme grp_0123
+```
+
+Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
 
 ## API 参考
 

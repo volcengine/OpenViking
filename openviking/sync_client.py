@@ -498,6 +498,21 @@ class SyncOpenViking:
             )
         )
 
+    def acl_get(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_get(uri))
+
+    def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_set(uri, entries))
+
+    def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_grant(uri, principal, level))
+
+    def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_revoke(uri, principal))
+
+    def acl_delete(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_delete(uri))
+
     def ls(self, uri: str, **kwargs) -> List[Any]:
         """
         List directory contents.
