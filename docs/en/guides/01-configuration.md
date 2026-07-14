@@ -1363,9 +1363,39 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 |-------|-------------|---------|
 | `version` | Deprecated and ignored. OpenViking always uses the v3 memory extraction pipeline; existing configs that set this field still load without error. | `"v3"` |
 | `custom_templates_dir` | Custom memory templates directory. If set, templates from this directory are loaded in addition to built-in templates. | `""` |
+| `workspace_kind` | Semantic meaning of the OpenViking `user` namespace for memory extraction. Built-in kinds: `personal`, `team`, `project`, and `organization`. | `"personal"` |
+| `workspace_kinds_dir` | Optional directory containing custom workspace-kind YAML definitions. | `""` |
 | `extraction_enabled` | Whether session commit runs long-term memory extraction. | `true` |
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
+
+#### Workspace kinds
+
+`workspace_kind` changes the extraction model's interpretation of the OpenViking
+`user` namespace. It does not change URI routing, permissions, or inheritance.
+Routing remains:
+
+- no `peer_id` → the shared `user` workspace;
+- `peer_id` → the actor-specific `user/peers/{peer_id}` workspace;
+- resources → canonical documents and knowledge in the applicable resource scope.
+
+Choose the kind according to what the configured `user` identifier represents:
+
+| Kind | The `user` namespace represents | Use it when | Resource relationship |
+|-------|--------------------------------|-------------|-----------------------|
+| `personal` | One human's personal workspace | A human owns the memory and peers are assistants, devices, or other actors | Personal memory may refer to resources; canonical documents remain resources |
+| `team` | A durable shared team workspace | Multiple agents collaborate on team facts, procedures, infrastructure, ownership, and decisions | Team resources contain team documents; account-level resources remain company-wide |
+| `project` | A bounded project workspace | A project needs shared memory across teams or agents without automatically mixing in a team's operational memory | Project resources contain project documents; there is no implicit inheritance from team or organization users |
+| `organization` | One shared organization workspace | The deployment intentionally uses one user namespace for organization-wide extracted facts | Usually redundant when the account's global resources already hold canonical organization knowledge |
+
+OpenViking users are sibling namespaces, not a hierarchy. A project user does
+not automatically inherit team memory, and a team user does not automatically
+inherit organization memory. Use resources, explicit links, or deliberate
+copying when knowledge must cross those boundaries.
+
+For a multi-agent DevOps deployment, `team` is usually the appropriate kind:
+the configured `user` identifies the team, while each agent gets its own
+`peer_id` for actor-private memory.
 
 ### ovcli.conf
 

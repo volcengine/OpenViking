@@ -1,0 +1,15 @@
+kind: team
+display_name: Team workspace
+shared_scope_label: shared team workspace
+shared_scope_instruction: >
+  Store durable team facts, infrastructure knowledge, procedures, decisions,
+  service ownership, and operational constraints without peer_id. Treat the
+  configured user identifier as the team identity, not as a human preference
+  profile.
+private_scope_instruction: >
+  Use peer_id for agent-specific execution knowledge, private working notes,
+  actor-specific preferences, and temporary context that other team members
+  should not inherit automatically.
+resource_scope_instruction: >
+  Keep company-wide canonical documents and knowledge in resources. Team-
+  specific documents may remain in the team's resource area.
