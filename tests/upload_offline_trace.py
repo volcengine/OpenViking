@@ -94,6 +94,19 @@ def _span_count(request) -> int:
     )
 
 
+def _trace_ids(request) -> list[str]:
+    seen: set[str] = set()
+    trace_ids: list[str] = []
+    for resource_spans in request.resource_spans:
+        for scope_spans in resource_spans.scope_spans:
+            for span in scope_spans.spans:
+                trace_id = bytes(span.trace_id).hex()
+                if trace_id and trace_id not in seen:
+                    seen.add(trace_id)
+                    trace_ids.append(trace_id)
+    return trace_ids
+
+
 def _override_service_name(request, service_name: str) -> None:
     for resource_spans in request.resource_spans:
         attrs = resource_spans.resource.attributes
@@ -196,8 +209,10 @@ def upload_files(files: Iterable[Path], cfg) -> dict:
         "missing_files": [],
         "uploaded_batches": 0,
         "uploaded_spans": 0,
+        "uploaded_trace_ids": [],
         "skipped_invalid_lines": 0,
     }
+    uploaded_trace_id_set: set[str] = set()
 
     try:
         for file_path in files:
@@ -224,10 +239,15 @@ def upload_files(files: Iterable[Path], cfg) -> dict:
                     spans = _span_count(request)
                     if spans == 0:
                         continue
+                    trace_ids = _trace_ids(request)
                     _override_service_name(request, service_name)
                     _upload_with_retries(exporter, protocol, request)
                     summary["uploaded_batches"] += 1
                     summary["uploaded_spans"] += spans
+                    for trace_id in trace_ids:
+                        if trace_id not in uploaded_trace_id_set:
+                            uploaded_trace_id_set.add(trace_id)
+                            summary["uploaded_trace_ids"].append(trace_id)
     finally:
         try:
             exporter.shutdown()
@@ -272,6 +292,9 @@ def main() -> int:
     print("Uploaded:")
     print(f"  batches: {summary['uploaded_batches']}")
     print(f"  spans: {summary['uploaded_spans']}")
+    print(f"  trace_ids: {len(summary['uploaded_trace_ids'])}")
+    for trace_id in summary["uploaded_trace_ids"]:
+        print(f"    {trace_id}")
     print(f"  skipped_invalid_lines: {summary['skipped_invalid_lines']}")
     print(f"  endpoint: {cfg.endpoint}")
     print(f"  protocol: {cfg.protocol}")
