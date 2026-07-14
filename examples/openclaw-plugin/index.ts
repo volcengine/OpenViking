@@ -331,6 +331,7 @@ const contextEnginePlugin = {
       createTempSessionId: createMemoryStoreTempSessionId,
       extractSenderId: extractToolSenderId,
       toRoleId,
+      peerRole: cfg.peer_role,
       resolvePluginSessionRouting,
       isBypassedSession,
       makeBypassedToolResult,

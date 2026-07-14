@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { OpenVikingClient } from "../../client.js";
+import { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
 
@@ -12,12 +12,20 @@ function makeLogger() {
   };
 }
 
+function okResponse(result: unknown): Response {
+  return new Response(JSON.stringify(result), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function makeEngine(opts?: {
   autoCapture?: boolean;
   commitTokenThresholdRatio?: number;
   getSession?: Record<string, unknown>;
   addSessionMessageError?: Error;
   cfgOverrides?: Record<string, unknown>;
+  agentId?: string;
 }) {
   const cfg = memoryOpenVikingConfigSchema.parse({
     mode: "remote",
@@ -55,7 +63,7 @@ function makeEngine(opts?: {
   } as unknown as OpenVikingClient;
 
   const getClient = vi.fn().mockResolvedValue(client);
-  const resolveAgentId = vi.fn((_sid: string) => "test-agent");
+  const resolveAgentId = vi.fn((_sid: string) => opts?.agentId ?? "test-agent");
 
   const engine = createMemoryOpenVikingContextEngine({
     id: "openviking",
@@ -221,7 +229,7 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
-  it("passes sanitized senderId as role_id", async () => {
+  it("uses agentId as peer_id when peer_role defaults to assistant", async () => {
     const { engine, client } = makeEngine();
 
     await engine.afterTurn!({
@@ -233,7 +241,139 @@ describe("context-engine afterTurn()", () => {
     });
 
     expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
+    expect(client.addSessionMessage.mock.calls[0][5]).toBe("test-agent");
+  });
+
+  it("sends peer_id instead of role_id for default assistant afterTurn writes", async () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      mode: "remote",
+      baseUrl: "http://127.0.0.1:1933",
+      autoCapture: true,
+      autoRecall: false,
+      emitStandardDiagnostics: true,
+    });
+    const logger = makeLogger();
+    const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/api/v1/sessions/") && url.includes("/messages")) {
+        return okResponse({ session_id: "s1" });
+      }
+      if (url.includes("/api/v1/sessions/")) {
+        return okResponse({ pending_tokens: 0 });
+      }
+      return okResponse({});
+    });
+    const client = new OpenVikingClient(
+      cfg.baseUrl,
+      cfg.apiKey,
+      cfg.peer_prefix,
+      cfg.timeoutMs,
+      cfg.accountId,
+      cfg.userId,
+      undefined,
+      { transport: openVikingTransport },
+    );
+    const engine = createMemoryOpenVikingContextEngine({
+      id: "openviking",
+      name: "Test Engine",
+      version: "test",
+      cfg,
+      logger,
+      getClient: vi.fn().mockResolvedValue(client),
+      resolveAgentId: vi.fn(() => "test-agent"),
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello world" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    const messageCall = openVikingTransport.mock.calls.find(([url]) =>
+      String(url).includes("/api/v1/sessions/") && String(url).includes("/messages"),
+    );
+    expect(messageCall).toBeDefined();
+    const [, init] = messageCall as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.peer_id).toBe("test-agent");
+    expect(body).not.toHaveProperty("role_id");
+  });
+
+  it("sanitizes assistant agentId before using it as peer_id", async () => {
+    const { engine, client } = makeEngine({ agentId: "agent:main" });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello world" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
+    expect(client.addSessionMessage.mock.calls[0][5]).toBe("agent_main");
+  });
+
+  it("passes sanitized senderId as peer_id when peer_role is person", async () => {
+    const { engine, client } = makeEngine({
+      cfgOverrides: {
+        peer_role: "person",
+      },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello world" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
     expect(client.addSessionMessage.mock.calls[0][5]).toBe("telegram_12345");
+  });
+
+  it("skips person-scoped turn writes when senderId is unavailable", async () => {
+    const { engine, client, logger } = makeEngine({
+      cfgOverrides: {
+        peer_role: "person",
+      },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [
+        { role: "user", content: "hello world" },
+        { role: "assistant", content: "hi there" },
+      ],
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("peer_role=person but senderId was unavailable"),
+    );
+  });
+
+  it("omits peer_id when peer_role is none", async () => {
+    const { engine, client } = makeEngine({
+      cfgOverrides: {
+        peer_role: "none",
+      },
+    });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello world" }],
+      prePromptMessageCount: 0,
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
+    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
   });
 
   it("sanitizes <relevant-memories> from user content but not from assistant", async () => {
