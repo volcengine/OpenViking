@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, Sequence
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
 from openviking.core.identifiers import validate_identifier_part, validate_user_id
 from openviking.core.namespace import canonicalize_uri, uri_parts
@@ -14,15 +15,27 @@ from openviking_cli.exceptions import InvalidArgumentError
 if TYPE_CHECKING:
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 
-AclLevel = Literal["viewer", "editor", "manager"]
-AclAction = Literal["read", "write", "manage"]
 
-_LEVEL_RANK: dict[str, int] = {"viewer": 1, "editor": 2, "manager": 3}
+class AclLevel(str, Enum):
+    VIEWER = "viewer"
+    EDITOR = "editor"
+    MANAGER = "manager"
+
+
+class AclAction(str, Enum):
+    READ = "read"
+    WRITE = "write"
+    MANAGE = "manage"
+
+
+_LEVEL_RANK = {
+    AclLevel.VIEWER: 1,
+    AclLevel.EDITOR: 2,
+    AclLevel.MANAGER: 3,
+}
 _ACL_PREFIXES = ("acl_direct", "acl_inherited")
 ACL_PRINCIPAL_FIELDS = tuple(
-    f"{prefix}_{action}_principal_ids"
-    for prefix in _ACL_PREFIXES
-    for action in ("read", "write", "manage")
+    f"{prefix}_{action.value}_principal_ids" for prefix in _ACL_PREFIXES for action in AclAction
 )
 ACL_CONTEXT_FIELDS = frozenset(("acl_enabled", *ACL_PRINCIPAL_FIELDS))
 _ACL_OUTPUT_FIELDS = ["uri", *sorted(ACL_CONTEXT_FIELDS)]
@@ -34,7 +47,7 @@ class AclEntry:
     level: AclLevel
 
     def to_dict(self) -> dict[str, str]:
-        return {"principal": self.principal, "level": self.level}
+        return {"principal": self.principal, "level": self.level.value}
 
 
 @dataclass(frozen=True)
@@ -53,6 +66,15 @@ class DirectAcl:
             write=self.write | other.write,
             manage=self.manage | other.manage,
         )
+
+    def principals_for(self, action: AclAction) -> frozenset[str]:
+        if action is AclAction.READ:
+            return self.read
+        if action is AclAction.WRITE:
+            return self.write
+        if action is AclAction.MANAGE:
+            return self.manage
+        raise ValueError(f"Unsupported ACL action: {action!r}")
 
     def context_fields(self, prefix: str) -> dict[str, Any]:
         return {
@@ -118,17 +140,25 @@ def acl_principals(ctx: RequestContext) -> frozenset[str]:
     )
 
 
+def normalize_acl_level(value: Any) -> AclLevel:
+    if isinstance(value, AclLevel):
+        return value
+    try:
+        return AclLevel(str(value).strip())
+    except ValueError as exc:
+        raise InvalidArgumentError("ACL level must be viewer, editor, or manager") from exc
+
+
 def _normalize_entries(entries: Iterable[AclEntry | Mapping[str, Any]]) -> list[AclEntry]:
-    highest: dict[str, str] = {}
+    highest: dict[str, AclLevel] = {}
     for raw in entries:
         if isinstance(raw, AclEntry):
-            principal, level = raw.principal, raw.level
+            principal, raw_level = raw.principal, raw.level
         else:
             principal = raw.get("principal")
-            level = str(raw.get("level", "")).strip()
+            raw_level = raw.get("level", "")
         principal = normalize_acl_principal(principal)
-        if level not in _LEVEL_RANK:
-            raise InvalidArgumentError("ACL level must be viewer, editor, or manager")
+        level = normalize_acl_level(raw_level)
         current = highest.get(principal)
         if current is None or _LEVEL_RANK[level] > _LEVEL_RANK[current]:
             highest[principal] = level
@@ -141,9 +171,9 @@ def entries_to_direct(entries: Iterable[AclEntry | Mapping[str, Any]]) -> Direct
     manage: set[str] = set()
     for entry in _normalize_entries(entries):
         read.add(entry.principal)
-        if entry.level in {"editor", "manager"}:
+        if entry.level in {AclLevel.EDITOR, AclLevel.MANAGER}:
             write.add(entry.principal)
-        if entry.level == "manager":
+        if entry.level is AclLevel.MANAGER:
             manage.add(entry.principal)
     return DirectAcl(frozenset(read), frozenset(write), frozenset(manage))
 
@@ -152,11 +182,11 @@ def direct_to_entries(acl: DirectAcl) -> list[AclEntry]:
     entries: list[AclEntry] = []
     for principal in sorted(acl.read | acl.write | acl.manage):
         if principal in acl.manage:
-            level: AclLevel = "manager"
+            level = AclLevel.MANAGER
         elif principal in acl.write:
-            level = "editor"
+            level = AclLevel.EDITOR
         else:
-            level = "viewer"
+            level = AclLevel.VIEWER
         entries.append(AclEntry(principal, level))
     return entries
 
@@ -174,7 +204,7 @@ def is_implicit_manager(ctx: RequestContext, uri: str) -> bool:
 
 
 def acl_allows(acl: EffectiveAcl, ctx: RequestContext, action: AclAction) -> bool:
-    principals = getattr(acl.permissions, action)
+    principals = acl.permissions.principals_for(action)
     return not principals.isdisjoint(acl_principals(ctx))
 
 

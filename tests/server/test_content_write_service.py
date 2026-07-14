@@ -343,10 +343,10 @@ class _FakeVikingFS:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    async def _ensure_access(self, uri: str, ctx, action="read"):
+    async def _ensure_access(self, uri: str, ctx, *, action):
         del uri, ctx, action
 
-    async def _ensure_access_many(self, uris, ctx, action):
+    async def _ensure_access_many(self, uris, ctx, *, action):
         del uris, ctx, action
 
     async def delete_temp(self, temp_uri: str, ctx=None):
@@ -755,7 +755,7 @@ class _FakeVikingFSForCreate:
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
 
-    async def _ensure_access(self, uri: str, ctx, action="read"):
+    async def _ensure_access(self, uri: str, ctx, *, action):
         del uri, ctx, action
 
     async def delete_temp(self, temp_uri: str, ctx=None):

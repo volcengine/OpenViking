@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from openviking.core.namespace import canonical_user_root
 from openviking.core.uri_validation import validate_content_target_uri
 from openviking.server.config import AddTargetsConfig, UserConfig
+from openviking.storage.acl import AclAction
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 if TYPE_CHECKING:
@@ -45,7 +46,7 @@ async def validate_resource_add_target(
     viking_fs: VikingFS,
 ) -> str:
     resolved = validate_content_target_uri(uri, ctx, kind="resource", field_name="resource_uri")
-    await viking_fs._ensure_access(resolved, ctx, "write")
+    await viking_fs._ensure_access(resolved, ctx, action=AclAction.WRITE)
     return resolved
 
 
@@ -65,7 +66,7 @@ async def validate_skill_add_target(
             "skill_uri must be viking://user/skills or viking://agent/skills",
             details={"field": "skill_uri"},
         )
-    await viking_fs._ensure_access(resolved, ctx, "write")
+    await viking_fs._ensure_access(resolved, ctx, action=AclAction.WRITE)
     return resolved
 
 

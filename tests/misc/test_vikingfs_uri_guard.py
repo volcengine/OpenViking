@@ -9,6 +9,7 @@ import pytest
 
 from openviking.pyagfs.exceptions import AGFSInvalidOperationError
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
@@ -172,7 +173,7 @@ class TestVikingFSURITraversalGuard:
         fs = _make_viking_fs()
 
         with pytest.raises(PermissionDeniedError, match="requires an administrator"):
-            await fs._ensure_access("viking://", _user_ctx(), "write")
+            await fs._ensure_access("viking://", _user_ctx(), action=AclAction.WRITE)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

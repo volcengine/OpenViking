@@ -26,6 +26,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.storage.acl import AclAction
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -122,7 +123,7 @@ class ReindexExecutor:
     ) -> dict[str, Any]:
         object_type = self._infer_target_type(uri)
         self._validate_mode(object_type, mode)
-        await get_viking_fs()._ensure_access(uri, ctx, "write")
+        await get_viking_fs()._ensure_access(uri, ctx, action=AclAction.WRITE)
 
         tracker = get_task_tracker()
         if wait:

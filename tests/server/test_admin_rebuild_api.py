@@ -5,6 +5,7 @@ import pytest
 
 from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import AclAction
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.server.test_admin_api import ROOT_KEY
@@ -49,7 +50,7 @@ async def test_reindex_uses_vikingfs_write_authorization(monkeypatch):
     executed = []
 
     class FakeVikingFS:
-        async def _ensure_access(self, uri, request_ctx, action="read"):
+        async def _ensure_access(self, uri, request_ctx, *, action):
             authorized.append((uri, request_ctx, action))
 
     class FakeTracker:
@@ -76,7 +77,7 @@ async def test_reindex_uses_vikingfs_write_authorization(monkeypatch):
     )
 
     canonical_uri = "viking://user/bob/resources"
-    assert authorized == [(canonical_uri, ctx, "write")]
+    assert authorized == [(canonical_uri, ctx, AclAction.WRITE)]
     assert executed == [
         {
             "uri": canonical_uri,

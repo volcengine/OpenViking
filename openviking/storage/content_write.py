@@ -16,6 +16,7 @@ from openviking.session.memory.utils.resource_refs import (
     RESOURCE_REF_SOURCE_CONTENT_WRITE,
     sync_memory_resource_refs,
 )
+from openviking.storage.acl import AclAction
 from openviking.storage.errors import ResourceBusyError
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
@@ -185,9 +186,9 @@ class ContentWriteCoordinator:
 
     async def _ensure_mutable_target(self, uri: str, ctx: RequestContext) -> None:
         try:
-            await self._viking_fs._ensure_access(uri, ctx, "write")
+            await self._viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
         except PermissionDeniedError as exc:
-            if not await self._viking_fs._can_access(uri, ctx, "read"):
+            if not await self._viking_fs._can_access(uri, ctx, action=AclAction.READ):
                 raise NotFoundError(uri, "file") from exc
             raise
 
@@ -727,7 +728,9 @@ class ContentWriteCoordinator:
             raise NotFoundError(uri, "semantic file")
 
         await self._viking_fs._ensure_access_many(
-            [str(target["uri"]) for target in updated_targets], ctx, "write"
+            [str(target["uri"]) for target in updated_targets],
+            ctx,
+            action=AclAction.WRITE,
         )
 
         applied_uris: list[str] = []

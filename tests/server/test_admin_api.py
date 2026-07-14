@@ -80,7 +80,7 @@ class _FakeVikingFS:
             raise FileNotFoundError(uri)
         return self.files[uri]
 
-    async def _ensure_access(self, uri, ctx, action="read"):
+    async def _ensure_access(self, uri, ctx, *, action):
         return None
 
     async def write_file(self, uri, content, **_kwargs):
