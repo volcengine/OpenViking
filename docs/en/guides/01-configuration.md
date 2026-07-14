@@ -1393,6 +1393,30 @@ not automatically inherit team memory, and a team user does not automatically
 inherit organization memory. Use resources, explicit links, or deliberate
 copying when knowledge must cross those boundaries.
 
+For multi-tenant servers, `workspace_kind` can be fixed per user when the
+user is created by ROOT or an account ADMIN. Pass it in the administrative
+user configuration:
+
+```json
+{
+  "user_id": "devops",
+  "user_config": {"workspace_kind": "team"}
+}
+```
+
+```json
+{
+  "user_id": "migration-alpha",
+  "user_config": {"workspace_kind": "project"}
+}
+```
+
+Both users may belong to the same account and therefore use the same
+company-wide `viking://resources/...` namespace. The per-user setting affects
+the extraction prompt's interpretation of the user namespace; it does not
+change account boundaries, resource visibility, peer routing, or URI layout.
+The regular user-settings API does not expose `workspace_kind` for mutation.
+
 For a multi-agent DevOps deployment, `team` is usually the appropriate kind:
 the configured `user` identifies the team, while each agent gets its own
 `peer_id` for actor-private memory.

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,8 @@ from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
 from openviking.session.memory.workspace_kind import load_workspace_kind
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.memory_config import MemoryConfig
 
 
@@ -78,3 +81,35 @@ def test_team_workspace_semantics_are_added_to_extraction_instruction(monkeypatc
     assert "Treat the configured user identifier as the team identity" in instruction
     assert "When a memory belongs to the shared team workspace, omit peer_id." in instruction
     assert "When a memory is private to one actor, set peer_id" in instruction
+
+
+@pytest.mark.asyncio
+async def test_user_workspace_kind_overrides_server_default(monkeypatch):
+    memory = SimpleNamespace(
+        eager_prefetch=False,
+        prefetch_search_topn=5,
+        link_enabled=False,
+        workspace_kind="team",
+        workspace_kinds_dir="",
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: SimpleNamespace(memory=memory),
+    )
+
+    class FakeVikingFS:
+        async def read_file(self, uri, **_kwargs):
+            assert uri.endswith("/settings/user_config.json")
+            return json.dumps({"workspace_kind": "project"})
+
+    ctx = RequestContext(
+        user=UserIdentifier("hikari", "migration-alpha"),
+        role=Role.USER,
+    )
+    provider = SessionExtractContextProvider(messages=[], ctx=ctx, viking_fs=FakeVikingFS())
+
+    await provider.prepare_extraction_messages()
+
+    instruction = provider.instruction()
+    assert "Workspace kind: Project workspace" in instruction
+    assert "shared project workspace" in instruction

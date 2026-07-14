@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from openviking.message.part import TextPart, ToolPart
 from openviking.prompts.manager import PromptManager
 from openviking.server.identity import RequestContext, ToolContext
+from openviking.server.user_config import read_user_config
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_isolation_handler import (
@@ -92,6 +93,18 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._vision_messages_prepared = False
         self._vision_vlm = None
 
+    async def _resolve_workspace_kind(self) -> None:
+        """Apply the administrator-defined kind for the current user."""
+        if not self._ctx or not self._viking_fs:
+            return
+        user_config = await read_user_config(self._viking_fs, self._ctx)
+        if user_config.workspace_kind:
+            config = get_openviking_config()
+            self._workspace_kind = load_workspace_kind(
+                user_config.workspace_kind,
+                config.memory.workspace_kinds_dir if config.memory else "",
+            )
+
     @property
     def read_file_contents(self) -> Dict[str, MemoryFile]:
         return self._read_file_contents
@@ -122,6 +135,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     async def prepare_extraction_messages(self) -> None:
         """Prepare extraction-only messages before ranges and prompts are built."""
+        await self._resolve_workspace_kind()
         if self._vision_messages_prepared:
             return
         if isinstance(self.messages, list):
