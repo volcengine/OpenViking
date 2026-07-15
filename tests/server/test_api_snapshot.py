@@ -2,10 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """End-to-end tests for /api/v1/snapshot/*."""
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 import pytest_asyncio
 
 import httpx
+
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.exceptions import InvalidArgumentError, InvalidURIError
+from openviking_cli.session.user_id import UserIdentifier
 
 pytestmark = pytest.mark.asyncio
 
@@ -56,6 +63,23 @@ async def test_log_empty_repo_returns_404(client_with_no_repo):
     resp = await client.get("/api/v1/snapshot/log", params={"branch": "main", "limit": 5})
     assert resp.status_code == 404
     assert resp.json()["status"] == "error"
+
+
+async def test_log_value_error_is_mapped(monkeypatch):
+    from openviking.server.routers import snapshot
+
+    fake_service = SimpleNamespace(
+        fs=SimpleNamespace(
+            log=AsyncMock(
+                side_effect=ValueError("git tree path cannot be the account root: 'viking://'")
+            )
+        )
+    )
+    monkeypatch.setattr(snapshot, "get_service", lambda: fake_service)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    with pytest.raises((InvalidArgumentError, InvalidURIError)):
+        await snapshot.log(branch="main", limit=5, paths=["viking://"], _ctx=ctx)
 
 
 @pytest_asyncio.fixture(scope="function")

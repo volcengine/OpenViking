@@ -1579,12 +1579,16 @@ class AsyncHTTPClient:
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Walk commit history newest-first."""
+        params: Dict[str, Any] = {"branch": branch, "limit": limit}
+        if paths:
+            params["paths"] = paths
         response = await self._request(
             "GET",
             "/api/v1/snapshot/log",
-            params={"branch": branch, "limit": limit},
+            params=params,
         )
         return self._handle_response(response)
 
@@ -2358,8 +2362,9 @@ class AsyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._client.git_log(branch=branch, limit=limit)
+        return await self._client.git_log(branch=branch, limit=limit, paths=paths)
 
     async def get_gitignore(self) -> str:
         return await self._client.git_get_ignore()
@@ -2435,8 +2440,9 @@ class SyncHTTPSnapshotNamespace:
         *,
         branch: str = "main",
         limit: int = 20,
+        paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        return run_async(self._ns().log(branch=branch, limit=limit))
+        return run_async(self._ns().log(branch=branch, limit=limit, paths=paths))
 
     def get_gitignore(self) -> str:
         return run_async(self._ns().get_gitignore())

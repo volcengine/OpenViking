@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -165,6 +165,23 @@ class AsyncHTTPClient(import_openviking_sdk().AsyncHTTPClient):
 
     def _raise_exception(self, error: Dict[str, Any]) -> None:
         _raise_legacy_exception(error)
+
+    async def git_log(
+        self,
+        *,
+        branch: str = "main",
+        limit: int = 20,
+        paths: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {"branch": branch, "limit": limit}
+        if paths:
+            params["paths"] = paths
+        response = await self._request(
+            "GET",
+            "/api/v1/snapshot/log",
+            params=params,
+        )
+        return self._handle_response(response)
 
 
 class SyncHTTPClient(import_openviking_sdk().SyncHTTPClient):

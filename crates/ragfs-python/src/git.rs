@@ -263,8 +263,8 @@ pub fn new_py_err_pub(py: Python<'_>, name: &str, msg: String) -> PyErr {
 
 use pyo3::types::{PyBytes, PyDict, PyList};
 use ragfs::git::{
-    Actor, CommitRequest, CommitResponse, RestoreDiff, RestoreRequest, RestoreResponse,
-    RestoreWritebackPartial, ShowRequest, ShowResponse,
+    Actor, CommitRequest, CommitResponse, LogEntry, LogRequest, RestoreDiff, RestoreRequest,
+    RestoreResponse, RestoreWritebackPartial, ShowRequest, ShowResponse,
 };
 
 // ---------- request parsers ----------
@@ -292,6 +292,15 @@ fn optional_bool(kwargs: &Bound<PyDict>, key: &str, default: bool) -> PyResult<b
         Some(v) if !v.is_none() => v
             .extract::<bool>()
             .map_err(|_| PyValueError::new_err(format!("kwarg {} must be a bool", key))),
+        _ => Ok(default),
+    }
+}
+
+fn optional_usize(kwargs: &Bound<PyDict>, key: &str, default: usize) -> PyResult<usize> {
+    match kwargs.get_item(key)? {
+        Some(v) if !v.is_none() => v
+            .extract::<usize>()
+            .map_err(|_| PyValueError::new_err(format!("kwarg {} must be a non-negative integer", key))),
         _ => Ok(default),
     }
 }
@@ -335,6 +344,15 @@ pub fn parse_show_request(kwargs: &Bound<PyDict>) -> PyResult<ShowRequest> {
         account: require_str(kwargs, "account")?,
         target_ref: require_str(kwargs, "target_ref")?,
         path: optional_str(kwargs, "path")?,
+    })
+}
+
+pub fn parse_log_request(kwargs: &Bound<PyDict>) -> PyResult<LogRequest> {
+    Ok(LogRequest {
+        account: require_str(kwargs, "account")?,
+        branch: require_str(kwargs, "branch")?,
+        limit: optional_usize(kwargs, "limit", 20)?,
+        paths: optional_string_list(kwargs, "paths")?,
     })
 }
 
@@ -460,6 +478,25 @@ pub fn show_response_to_pydict(py: Python<'_>, resp: ShowResponse) -> PyResult<P
         }
     }
     Ok(d.into_any().unbind())
+}
+
+pub fn log_entries_to_pylist(py: Python<'_>, entries: Vec<LogEntry>) -> PyResult<Py<PyAny>> {
+    let list = PyList::empty(py);
+    for entry in entries {
+        let d = PyDict::new(py);
+        d.set_item("oid", oid_hex(&entry.oid))?;
+        d.set_item("tree", oid_hex(&entry.tree))?;
+        let parents = PyList::empty(py);
+        for parent in &entry.parents {
+            parents.append(oid_hex(parent))?;
+        }
+        d.set_item("parents", parents)?;
+        d.set_item("author", actor_to_dict(py, &entry.author)?)?;
+        d.set_item("committer", actor_to_dict(py, &entry.committer)?)?;
+        d.set_item("message", entry.message)?;
+        list.append(d)?;
+    }
+    Ok(list.into_any().unbind())
 }
 
 #[cfg(test)]
@@ -755,6 +792,28 @@ mod tests {
     }
 
     #[test]
+    fn parse_log_request_with_paths() {
+        pyo3::prepare_freethreaded_python();
+        Python::attach(|py| {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("account", "a").unwrap();
+            kwargs.set_item("branch", "main").unwrap();
+            kwargs.set_item("limit", 10).unwrap();
+            kwargs
+                .set_item("paths", vec!["resources/a.md", "resources/docs"])
+                .unwrap();
+            let req = parse_log_request(&kwargs).expect("parses");
+            assert_eq!(req.account, "a");
+            assert_eq!(req.branch, "main");
+            assert_eq!(req.limit, 10);
+            assert_eq!(
+                req.paths.as_ref().unwrap(),
+                &vec!["resources/a.md".to_string(), "resources/docs".to_string()]
+            );
+        });
+    }
+
+    #[test]
     fn commit_response_created_to_dict() {
         pyo3::prepare_freethreaded_python();
         Python::attach(|py| {
@@ -787,6 +846,43 @@ mod tests {
             assert_eq!(d.get_item("result").unwrap().unwrap().extract::<String>().unwrap(), "noop");
             assert_eq!(d.get_item("commit_oid").unwrap().unwrap().extract::<String>().unwrap(), oid.to_hex().to_string());
             assert_eq!(d.get_item("ignored").unwrap().unwrap().extract::<usize>().unwrap(), 4);
+        });
+    }
+
+    #[test]
+    fn log_entries_to_pylist_includes_commit_metadata() {
+        pyo3::prepare_freethreaded_python();
+        Python::attach(|py| {
+            let oid = gix_hash::ObjectId::null(gix_hash::Kind::Sha1);
+            let actor = ragfs::git::Actor {
+                name: "alice".to_string(),
+                email: "alice@example.com".to_string(),
+                time_seconds: 1,
+                tz_offset_seconds: 0,
+            };
+            let entries = vec![ragfs::git::LogEntry {
+                oid,
+                tree: oid,
+                parents: vec![oid],
+                author: actor.clone(),
+                committer: actor,
+                message: "subject\n\nbody".to_string(),
+            }];
+            let obj = log_entries_to_pylist(py, entries).expect("converts");
+            let list = obj.bind(py).downcast::<PyList>().unwrap();
+            assert_eq!(list.len(), 1);
+            let first = list.get_item(0).unwrap();
+            let d = first.downcast::<PyDict>().unwrap();
+            assert_eq!(
+                d.get_item("oid").unwrap().unwrap().extract::<String>().unwrap(),
+                oid.to_hex().to_string()
+            );
+            assert_eq!(
+                d.get_item("message").unwrap().unwrap().extract::<String>().unwrap(),
+                "subject\n\nbody"
+            );
+            let parents = d.get_item("parents").unwrap().unwrap();
+            assert_eq!(parents.downcast::<PyList>().unwrap().len(), 1);
         });
     }
 

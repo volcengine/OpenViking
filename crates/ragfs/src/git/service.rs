@@ -29,8 +29,8 @@ use crate::git::{
     object_store::ObjectStore,
     ref_store::RefStore,
     types::{
-        CommitRequest, CommitResponse, IndexEntry, RestoreRequest, RestoreResponse, ShowRequest,
-        ShowResponse,
+        CommitRequest, CommitResponse, IndexEntry, LogEntry, LogRequest, RestoreRequest,
+        RestoreResponse, ShowRequest, ShowResponse,
     },
 };
 
@@ -821,6 +821,73 @@ impl GitService {
         }
     }
 
+    /// Walk commit history newest-first, optionally returning only commits
+    /// that changed at least one requested path relative to their first parent.
+    ///
+    /// `limit` counts returned commits, not commits inspected. With `paths`
+    /// set, traversal continues through unrelated commits until `limit`
+    /// matching commits are collected or history ends.
+    pub async fn log(&self, req: LogRequest) -> Result<Vec<LogEntry>, GitError> {
+        validate_account_id(&req.account)?;
+        if req.limit == 0 {
+            return Ok(Vec::new());
+        }
+        if let Some(paths) = &req.paths {
+            for path in paths {
+                validate_relative_path(path)?;
+            }
+        }
+
+        let mut next_oid = Some(
+            resolve_ref(
+                self.ref_store.as_ref(),
+                self.object_store.as_ref(),
+                &req.account,
+                &req.branch,
+            )
+            .await?,
+        );
+        let mut out = Vec::new();
+
+        while let Some(commit_oid) = next_oid {
+            let meta = load_commit_meta(self.object_store.as_ref(), &req.account, &commit_oid)
+                .await?;
+            let parent_oid = meta.parents.first().copied();
+            let include = match &req.paths {
+                None => true,
+                Some(paths) if paths.is_empty() => true,
+                Some(paths) => {
+                    let parent_tree = match parent_oid {
+                        Some(parent) => Some(
+                            load_commit_meta(self.object_store.as_ref(), &req.account, &parent)
+                                .await?
+                                .tree,
+                        ),
+                        None => None,
+                    };
+                    commit_touches_any_path(
+                        self.object_store.as_ref(),
+                        &req.account,
+                        meta.tree,
+                        parent_tree,
+                        paths,
+                    )
+                    .await?
+                }
+            };
+            next_oid = parent_oid;
+
+            if include {
+                out.push(log_entry_from_meta(commit_oid, meta));
+                if out.len() >= req.limit {
+                    break;
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
     /// Restore a subtree at `project_dir` to the state it had in `source_commit`,
     /// producing a new commit whose parent is the **current HEAD** (not
     /// `source_commit`). HEAD always moves forward.
@@ -1305,6 +1372,56 @@ async fn load_commit_meta(
         committer: actor_from_signature_ref(&parsed.committer),
         message: parsed.message.to_string(),
     })
+}
+
+fn log_entry_from_meta(oid: ObjectId, meta: CommitMeta) -> LogEntry {
+    LogEntry {
+        oid,
+        tree: meta.tree,
+        parents: meta.parents,
+        author: meta.author,
+        committer: meta.committer,
+        message: meta.message,
+    }
+}
+
+async fn commit_touches_any_path(
+    store: &dyn ObjectStore,
+    account: &str,
+    current_tree: ObjectId,
+    parent_tree: Option<ObjectId>,
+    paths: &[String],
+) -> Result<bool, GitError> {
+    let mut current_cache = crate::git::tree_builder::TreeLookupCache::new();
+    let mut parent_cache = crate::git::tree_builder::TreeLookupCache::new();
+
+    for path in paths {
+        let current = crate::git::tree_builder::lookup_cached(
+            store,
+            account,
+            current_tree,
+            path,
+            &mut current_cache,
+        )
+        .await?;
+        let parent = match parent_tree {
+            Some(tree) => {
+                crate::git::tree_builder::lookup_cached(
+                    store,
+                    account,
+                    tree,
+                    path,
+                    &mut parent_cache,
+                )
+                .await?
+            }
+            None => None,
+        };
+        if current != parent {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Resolve an abbreviated commit OID (4–39 hex chars) by walking the parent
@@ -2986,7 +3103,75 @@ mod tests {
         }
     }
 
-    // ── 9: show ────────────────────────────────────────────────────────
+    // ── 9: log path filtering ─────────────────────────────────────────
+    #[tokio::test]
+    async fn test_log_with_paths_returns_matching_commits_up_to_limit() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/target.md", b"v1");
+        vfs.put("resources/other.md", b"other-v1");
+        let c1 = make_commit(&svc, "acct", "main", "target root").await;
+
+        vfs.put("resources/other.md", b"other-v2");
+        let _c2 = make_commit(&svc, "acct", "main", "unrelated").await;
+
+        vfs.put("resources/target.md", b"v2");
+        let c3 = make_commit(&svc, "acct", "main", "target edit").await;
+
+        vfs.put("resources/docs/readme.md", b"docs");
+        let c4 = make_commit(&svc, "acct", "main", "docs edit").await;
+
+        let log = svc
+            .log(crate::git::types::LogRequest {
+                account: "acct".to_string(),
+                branch: "main".to_string(),
+                limit: 2,
+                paths: Some(vec![
+                    "resources/target.md".to_string(),
+                    "resources/docs".to_string(),
+                ]),
+            })
+            .await
+            .unwrap();
+
+        let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+        assert_eq!(oids, vec![c4, c3], "limit counts matching commits only");
+
+        let log = svc
+            .log(crate::git::types::LogRequest {
+                account: "acct".to_string(),
+                branch: "main".to_string(),
+                limit: 10,
+                paths: Some(vec!["resources/target.md".to_string()]),
+            })
+            .await
+            .unwrap();
+        let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+        assert_eq!(oids, vec![c3, c1]);
+    }
+
+    #[tokio::test]
+    async fn test_log_with_empty_paths_is_unfiltered() {
+        let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");
+        vfs.put("resources/first.md", b"v1");
+        let c1 = make_commit(&svc, "acct", "main", "first").await;
+        vfs.put("resources/second.md", b"v2");
+        let c2 = make_commit(&svc, "acct", "main", "second").await;
+
+        let log = svc
+            .log(crate::git::types::LogRequest {
+                account: "acct".to_string(),
+                branch: "main".to_string(),
+                limit: 10,
+                paths: Some(Vec::new()),
+            })
+            .await
+            .unwrap();
+
+        let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
+        assert_eq!(oids, vec![c2, c1]);
+    }
+
+    // ── 10: show ───────────────────────────────────────────────────────
     #[tokio::test]
     async fn test_show_commit_meta_by_oid() {
         let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct");

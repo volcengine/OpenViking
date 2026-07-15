@@ -124,11 +124,17 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 |------|------|------|--------|------|
 | branch | str | 否 | `main` | 要回溯的分支 |
 | limit | int | 否 | 20 | 最多返回的提交数量。HTTP 接口限制范围为 1–500 |
+| paths | List[str] | 否 | null | 只返回修改了任一指定 `viking://` URI 的提交；支持文件和目录。HTTP 接口通过重复 `paths` 查询参数传入多个 URI |
+
+过滤发生在限制返回数量之前，因此 `limit=10` 和 `paths=[X]` 表示最多返回 10 条与 X 有关的提交，而不是先取最近 10 条提交再过滤。
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
-history = client.snapshot.log(limit=10)
+history = client.snapshot.log(
+    limit=10,
+    paths=["viking://resources/a.md", "viking://resources/docs"],
+)
 for commit in history:
     print(commit["oid"], commit["message"])
 ```
@@ -136,24 +142,35 @@ for commit in history:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.gitLog("main", 20));
+console.log(
+  await client.gitLog("main", 20, [
+    "viking://resources/a.md",
+    "viking://resources/docs",
+  ]),
+);
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/snapshot/log?branch={branch}&limit={limit}
+GET /api/v1/snapshot/log?branch={branch}&limit={limit}&paths={uri1}&paths={uri2}
 ```
 
 ```bash
-curl -X GET "http://localhost:1933/api/v1/snapshot/log?branch=main&limit=10" \
+curl --get "http://localhost:1933/api/v1/snapshot/log" \
+  --data-urlencode "branch=main" \
+  --data-urlencode "limit=10" \
+  --data-urlencode "paths=viking://resources/a.md" \
+  --data-urlencode "paths=viking://resources/docs" \
   -H "X-API-Key: your-key"
 ```
 
 **CLI**
 
 ```bash
-ov snapshot log --limit 10 -o json
+ov snapshot log --limit 10 \
+  --paths viking://resources/a.md,viking://resources/docs \
+  -o json
 ```
 
 **响应**
