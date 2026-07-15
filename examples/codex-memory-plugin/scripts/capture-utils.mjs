@@ -38,7 +38,10 @@ function normalizeCodexMcpToolEvents(rolloutEntries) {
       },
     };
     const output = mcpResultText(payload.result);
-    const completed = Object.prototype.hasOwnProperty.call(payload.result || {}, "Ok");
+    const completed = (
+      Object.prototype.hasOwnProperty.call(payload.result || {}, "Ok")
+      && payload.result?.Ok?.isError !== true
+    );
     const result = {
       payload: {
         type: "function_call_output",

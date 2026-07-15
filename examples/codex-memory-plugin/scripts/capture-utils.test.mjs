@@ -70,6 +70,41 @@ test("captures Codex mcp_tool_call_end as standard tool parts", () => {
   ]);
 });
 
+test("keeps MCP tool-level errors out of completed Experience tool parts", () => {
+  const uri = "viking://user/test/memories/experiences/a.md";
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "event_msg",
+        payload: {
+          type: "mcp_tool_call_end",
+          call_id: "exec-read-error",
+          invocation: {
+            server: "openviking-memory",
+            tool: "read_experience",
+            arguments: { uri },
+          },
+          result: {
+            Ok: {
+              isError: true,
+              content: [{ type: "text", text: "OpenViking request failed (HTTP 500)" }],
+            },
+          },
+        },
+      },
+    ],
+    {
+      captureAssistantTurns: true,
+      captureToolMaxChars: 2000,
+      captureMaxLength: 24000,
+    },
+  );
+
+  const parts = turns.flatMap((turn) => turn.parts);
+  assert.deepEqual(parts.map((part) => part.tool_status), ["running", "error"]);
+  assert.equal(parts.some((part) => part.tool_status === "completed"), false);
+});
+
 test("preserves Experience usage metadata when Codex truncates a long MCP result", () => {
   const uri = "viking://user/test/memories/experiences/long-experience.md";
   const turns = extractCaptureTurns(
