@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 import { resolveOpenVikingCredentials } from "./credentials.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { enqueue, replayPending } from "./pending-queue.mjs";
+import { createQueueScope, enqueue, replayPending } from "./pending-queue.mjs";
 import { buildProfileBlock } from "./profile-inject.mjs";
 import { buildRecallBlock } from "./recall-core.mjs";
 import { deriveHarnessSessionId, isBypassed } from "./session-model.mjs";
@@ -164,6 +164,13 @@ export async function writeHookState(clientId, nativeSessionId, value) {
 
 export function makeAgentFetchJSON(cfg, cwd = process.cwd()) {
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
+  const queueScope = createQueueScope({
+    producer: cfg.clientId,
+    baseUrl: cfg.baseUrl,
+    account: cfg.account,
+    user: cfg.user,
+    apiKey: cfg.apiKey,
+  });
   const fetchJSON = async (path, init = {}, options = {}) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
@@ -186,6 +193,7 @@ export function makeAgentFetchJSON(cfg, cwd = process.cwd()) {
       clearTimeout(timer);
     }
   };
+  fetchJSON.queueScope = queueScope;
   return { fetchJSON, effectivePeer };
 }
 
@@ -199,7 +207,7 @@ export async function addAgentMessage(fetchJSON, sessionId, payload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  if (!result.ok && retryable(result)) await enqueue("addMessage", sessionId, payload);
+  if (!result.ok && retryable(result)) await enqueue(await fetchJSON.queueScope, "addMessage", sessionId, payload);
   return result;
 }
 
@@ -208,12 +216,12 @@ export async function commitAgentSession(fetchJSON, sessionId) {
     method: "POST",
     body: "{}",
   });
-  if (!result.ok && retryable(result)) await enqueue("commitSession", sessionId, {});
+  if (!result.ok && retryable(result)) await enqueue(await fetchJSON.queueScope, "commitSession", sessionId, {});
   return result;
 }
 
 export async function replayAgentPending(fetchJSON, log = () => {}) {
-  return replayPending(fetchJSON, log);
+  return replayPending(await fetchJSON.queueScope, fetchJSON, log);
 }
 
 export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}) {

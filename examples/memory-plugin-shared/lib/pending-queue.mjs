@@ -1,84 +1,149 @@
 /**
- * Local pending queue for offline resilience.
+ * Durable retry queue for OpenViking plugin writes.
  *
- * When the OpenViking server is temporarily unreachable, write operations
- * (addMessage, commitSession) serialize their payloads to
- * `~/.openviking/pending/` as JSON files. On the next session-start, the
- * queue is replayed in small batches. This is a session-start-triggered retry
- * path with maxRetries/TTL, not a long-running background worker.
+ * Queue data is partitioned by producer and authenticated OpenViking target:
+ *   <base>/<producer>/<target-hmac>/
  *
- * Each file contains: { type, sessionId, payload, createdAt, retries, dedupKey }
- *
- * Config (env vars):
- *   OPENVIKING_PENDING_DIR         pending queue directory
- *                                  (default: ~/.openviking/pending)
- *   OPENVIKING_PENDING_MAX_RETRIES max retry attempts per item (default: 3)
- *   OPENVIKING_PENDING_TTL_DAYS    max age in days before stale cleanup
- *                                  (default: 7)
- *   OPENVIKING_PENDING_REPLAY_LIMIT max items replayed per session-start
- *                                  (default: 50)
+ * The HMAC key is stable in normal user-local operation. Tests may point
+ * OPENVIKING_QUEUE_SCOPE_KEY_FILE at an environment-scoped 0600 file; the
+ * surrounding environment owns deleting that file during cleanup.
  */
 
-import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod } from "node:fs/promises";
-import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { createHmac, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_TTL_DAYS = 7;
 const DEFAULT_REPLAY_LIMIT = 50;
 const PROCESSING_STALE_MS = 10 * 60 * 1000;
-const DEFAULT_PENDING_DIR = () => join(homedir(), ".openviking", "pending");
+const DIR_MODE = 0o700;
+const FILE_MODE = 0o600;
+const SCOPE_MARKER = Symbol("openviking-pending-queue-scope");
 
-// Pending queue files may contain raw memory payload / transcript content.
-// Use restrictive permissions explicitly so we don't depend on umask.
-//   - dir: 0o700  (owner: rwx; group/other: none)
-//   - file: 0o600 (owner: rw;  group/other: none)
-const PENDING_DIR_MODE = 0o700;
-const PENDING_FILE_MODE = 0o600;
+const pendingBaseDir = () =>
+  process.env.OPENVIKING_PENDING_DIR ||
+  join(homedir(), ".openviking", "pending");
+const scopeKeyFile = () =>
+  process.env.OPENVIKING_QUEUE_SCOPE_KEY_FILE ||
+  join(homedir(), ".openviking", "queue-scope.key");
 
-/**
- * Ensure the pending directory exists with 0o700 permissions. If the
- * directory was created by a previous version of this code (or by hand)
- * with looser permissions, best-effort chmod it on first use.
- */
-async function ensurePendingDir(dir) {
-  await mkdir(dir, { recursive: true, mode: PENDING_DIR_MODE });
-  try {
-    await chmod(dir, PENDING_DIR_MODE);
-  } catch {
-    // Best effort: chmod may fail on some platforms (e.g. Windows); not fatal.
-  }
-}
-
-function getPendingDir() {
-  return process.env.OPENVIKING_PENDING_DIR || DEFAULT_PENDING_DIR();
-}
-
-function getMaxRetries() {
-  const v = parseInt(process.env.OPENVIKING_PENDING_MAX_RETRIES || "", 10);
-  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_MAX_RETRIES;
-}
-
-function getTTLDays() {
-  const v = parseInt(process.env.OPENVIKING_PENDING_TTL_DAYS || "", 10);
-  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_TTL_DAYS;
-}
-
-function getReplayLimit() {
-  const v = parseInt(process.env.OPENVIKING_PENDING_REPLAY_LIMIT || "", 10);
-  return Number.isFinite(v) && v > 0 ? v : DEFAULT_REPLAY_LIMIT;
+function envInt(name, fallback, allowZero = true) {
+  const value = Number.parseInt(process.env[name] || "", 10);
+  return Number.isFinite(value) && (allowZero ? value >= 0 : value > 0)
+    ? value
+    : fallback;
 }
 
 function stableStringify(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   const keys = Object.keys(value).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+}
+
+function normalizedTarget({ baseUrl, account = "", user = "", apiKey = "" }) {
+  let endpoint;
+  try {
+    const parsed = new URL(String(baseUrl || "").trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+      throw new Error("unsupported protocol");
+    if (parsed.username || parsed.password || parsed.search || parsed.hash)
+      throw new Error("embedded credentials");
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    endpoint = parsed.toString().replace(/\/$/, "");
+  } catch {
+    throw new Error(
+      "pending queue scope requires an HTTP(S) OpenViking base URL without embedded credentials",
+    );
+  }
+  const identity =
+    account || user
+      ? `identity:${String(account)}\0${String(user)}`
+      : apiKey
+        ? `api-key:${String(apiKey)}`
+        : "anonymous-local";
+  return `${endpoint}\n${identity}`;
+}
+
+async function ensureDir(path) {
+  await mkdir(path, { recursive: true, mode: DIR_MODE });
+  try {
+    const info = await lstat(path);
+    if (!info.isDirectory() || info.isSymbolicLink())
+      throw new Error(`not a private directory: ${path}`);
+    await chmod(path, DIR_MODE);
+  } catch (error) {
+    throw new Error(
+      `pending queue directory is unsafe: ${error?.message || error}`,
+    );
+  }
+}
+
+async function loadOrCreateScopeKey() {
+  const path = scopeKeyFile();
+  await ensureDir(dirname(path));
+  try {
+    await writeFile(path, randomBytes(32), { flag: "wx", mode: FILE_MODE });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+  let info = await lstat(path);
+  if (!info.isFile() || info.isSymbolicLink())
+    throw new Error("pending queue scope key must be a regular file");
+  try {
+    await chmod(path, FILE_MODE);
+  } catch {
+    /* Windows and read-only stores may reject chmod. */
+  }
+  info = await lstat(path);
+  if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
+    throw new Error(
+      "pending queue scope key must not be accessible by group or others",
+    );
+  }
+  const key = await readFile(path);
+  if (key.length < 32) throw new Error("pending queue scope key is too short");
+  return key;
+}
+
+/** Create an opaque queue capability for one producer and authenticated target. */
+export async function createQueueScope(options = {}) {
+  const producer = String(options.producer || "")
+    .trim()
+    .toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(producer)) {
+    throw new Error("pending queue scope requires a safe producer name");
+  }
+  const key = await loadOrCreateScopeKey();
+  const targetHash = createHmac("sha256", key)
+    .update(normalizedTarget(options))
+    .digest("hex");
+  const dir = join(pendingBaseDir(), producer, targetHash);
+  await ensureDir(dir);
+  return Object.freeze({ [SCOPE_MARKER]: true, producer, targetHash, dir });
+}
+
+function scopeDir(scope) {
+  if (!scope || scope[SCOPE_MARKER] !== true || typeof scope.dir !== "string") {
+    throw new Error("pending queue operation requires a queue scope");
+  }
+  return scope.dir;
 }
 
 function makeDedupKey(type, sessionId, payload) {
-  return createHash("sha256")
+  return createHmac("sha256", "openviking-pending-dedup-v1")
     .update(type)
     .update("\n")
     .update(sessionId)
@@ -87,35 +152,53 @@ function makeDedupKey(type, sessionId, payload) {
     .digest("hex");
 }
 
-function pendingFilename(dedupKey, retries = 0) {
-  return `${dedupKey}_${Math.max(0, Number(retries) || 0)}.json`;
-}
+const pendingFilename = (key, retries = 0) =>
+  `${key}_${Math.max(0, Number(retries) || 0)}.json`;
+const processingFilename = (filename) =>
+  filename.replace(/\.json$/, ".processing");
+const pendingFromProcessingFilename = (filename) =>
+  filename.replace(/\.processing$/, ".json");
+const manualFilename = (dedupKey) => `${dedupKey}.manual`;
 
 function retryFilename(filename, retries) {
   const bare = filename.replace(/\.(json|processing)$/, "");
-  const nextBare = /_\d+$/.test(bare)
-    ? bare.replace(/_\d+$/, `_${retries}`)
-    : `${bare}_${retries}`;
-  return `${nextBare}.json`;
+  return `${/_\d+$/.test(bare) ? bare.replace(/_\d+$/, `_${retries}`) : `${bare}_${retries}`}.json`;
 }
 
-function processingFilename(filename) {
-  return filename.replace(/\.json$/, ".processing");
-}
-
-function pendingFromProcessingFilename(filename) {
-  return filename.replace(/\.processing$/, ".json");
-}
-
-function isRetryableReplayFailure(res) {
-  if (!res || res.ok) return false;
-  const status = Number(res.status || 0);
-  return !status || status >= 500 || status === 408 || status === 429;
+function dedupKeyFromFilename(filename) {
+  const match = /^([0-9a-f]{64})_(?:\d+)\.(?:json|processing)$/.exec(filename);
+  return match?.[1] || "";
 }
 
 async function readEntry(dir, filename) {
-  const raw = await readFile(join(dir, filename), "utf-8");
-  return JSON.parse(raw);
+  return JSON.parse(await readFile(join(dir, filename), "utf-8"));
+}
+
+async function hasManualMarker(dir, dedupKey) {
+  try {
+    await stat(join(dir, manualFilename(dedupKey)));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureManualMarker(dir, dedupKey) {
+  try {
+    await writeFile(join(dir, manualFilename(dedupKey)), "manual\n", {
+      flag: "wx",
+      mode: FILE_MODE,
+    });
+    return { ok: true, created: true };
+  } catch (error) {
+    if (error?.code === "EEXIST") return { ok: true, created: false };
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+async function removeManualMarker(dir, dedupKey) {
+  if (dedupKey)
+    await unlink(join(dir, manualFilename(dedupKey))).catch(() => {});
 }
 
 async function findExistingByDedupKey(dir, dedupKey) {
@@ -125,25 +208,18 @@ async function findExistingByDedupKey(dir, dedupKey) {
   } catch {
     return null;
   }
-
-  // Fast path: filenames are `${dedupKey}_${retries}.json` (or
-  // .processing). `dedupKey` is a sha256 hex produced by makeDedupKey
-  // (no underscores), so `${dedupKey}_` is a unique prefix per key.
-  // Filter on prefix BEFORE opening the file to avoid readFile +
-  // JSON.parse on every entry in the directory on every enqueue call —
-  // the previous implementation was O(n²) in queue size. Worst case here
-  // is O(n) readdir entries, but only the (typically single) prefix
-  // match actually gets opened and parsed.
   const prefix = `${dedupKey}_`;
-
-  for (const f of files) {
-    if (!f.startsWith(prefix)) continue;
-    if (!f.endsWith(".json") && !f.endsWith(".processing")) continue;
+  for (const filename of files) {
+    if (
+      !filename.startsWith(prefix) ||
+      (!filename.endsWith(".json") && !filename.endsWith(".processing"))
+    )
+      continue;
     try {
-      const entry = await readEntry(dir, f);
-      if (entry?.dedupKey === dedupKey) return { filename: f, entry };
+      const entry = await readEntry(dir, filename);
+      if (entry?.dedupKey === dedupKey) return { filename, entry };
     } catch {
-      // Corrupted file - ignore for dedup lookup.
+      // Corrupt entries never establish deduplication or cleanup authority.
     }
   }
   return null;
@@ -156,83 +232,81 @@ async function recoverStaleProcessing(dir) {
   } catch {
     return 0;
   }
-
-  const now = Date.now();
   let recovered = 0;
-  for (const f of files) {
-    if (!f.endsWith(".processing")) continue;
-    const from = join(dir, f);
+  for (const filename of files) {
+    if (!filename.endsWith(".processing")) continue;
     try {
-      const s = await stat(from);
-      if (now - s.mtimeMs < PROCESSING_STALE_MS) continue;
-      const to = join(dir, pendingFromProcessingFilename(f));
-      await rename(from, to);
+      if (
+        Date.now() - (await stat(join(dir, filename))).mtimeMs <
+        PROCESSING_STALE_MS
+      )
+        continue;
+      await rename(
+        join(dir, filename),
+        join(dir, pendingFromProcessingFilename(filename)),
+      );
       recovered++;
     } catch {
-      // Best effort. A concurrent process may have already handled it.
+      // Another process may own or have recovered the entry.
     }
   }
   return recovered;
 }
 
-/**
- * Enqueue a failed operation to local disk.
- *
- * @param {string} type - "addMessage" or "commitSession"
- * @param {string} sessionId - OV session ID
- * @param {object} payload - the data that failed to send
- */
-export async function enqueue(type, sessionId, payload) {
-  const dir = getPendingDir();
-  const now = Date.now();
+export async function enqueue(scope, type, sessionId, payload, options = {}) {
+  const dir = scopeDir(scope);
+  const provenance =
+    typeof options.provenance === "string" ? options.provenance : "";
   const dedupKey = makeDedupKey(type, sessionId, payload);
-  const filename = pendingFilename(dedupKey, 0);
+  const filename = pendingFilename(dedupKey);
   const entry = {
     type,
     sessionId,
     payload,
-    createdAt: now,
+    ...(provenance && provenance !== "manual" ? { provenance } : {}),
+    createdAt: Date.now(),
     retries: 0,
     dedupKey,
   };
 
-  try {
-    await ensurePendingDir(dir);
-  } catch (err) {
-    return { ok: false, error: err?.message || String(err), dedupKey };
+  await ensureDir(dir);
+  let markerCreated = false;
+  if (provenance === "manual") {
+    const marker = await ensureManualMarker(dir, dedupKey);
+    if (!marker.ok) return { ok: false, error: marker.error, dedupKey };
+    markerCreated = marker.created;
   }
 
   const existing = await findExistingByDedupKey(dir, dedupKey);
-  if (existing) {
+  if (existing)
     return { ok: true, path: existing.filename, deduped: true, dedupKey };
-  }
 
   try {
     await writeFile(join(dir, filename), JSON.stringify(entry), {
       encoding: "utf-8",
       flag: "wx",
-      mode: PENDING_FILE_MODE,
+      mode: FILE_MODE,
     });
     return { ok: true, path: filename, dedupKey };
-  } catch (err) {
-    if (err?.code !== "EEXIST") {
-      return { ok: false, error: err?.message || String(err), dedupKey };
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      if (markerCreated) await removeManualMarker(dir, dedupKey);
+      return { ok: false, error: error?.message || String(error), dedupKey };
     }
   }
-
   const duplicate = await findExistingByDedupKey(dir, dedupKey);
-  if (duplicate) {
+  if (duplicate)
     return { ok: true, path: duplicate.filename, deduped: true, dedupKey };
-  }
-  return { ok: false, error: `pending file exists but dedup entry was not readable: ${filename}`, dedupKey };
+  if (markerCreated) await removeManualMarker(dir, dedupKey);
+  return {
+    ok: false,
+    error: `pending file exists but is unreadable: ${filename}`,
+    dedupKey,
+  };
 }
 
-/**
- * List all pending queue entries.
- * Returns array of { filename, entry } sorted by createdAt ascending.
- */
-export async function listPending() {
-  const dir = getPendingDir();
+export async function listPending(scope) {
+  const dir = scopeDir(scope);
   let files;
   try {
     await recoverStaleProcessing(dir);
@@ -240,29 +314,25 @@ export async function listPending() {
   } catch {
     return [];
   }
-
   const entries = [];
-  for (const f of files) {
-    if (!f.endsWith(".json")) continue;
+  for (const filename of files) {
+    if (!filename.endsWith(".json")) continue;
     try {
-      const entry = await readEntry(dir, f);
-      entries.push({ filename: f, entry });
+      const entry = await readEntry(dir, filename);
+      if (await hasManualMarker(dir, entry.dedupKey))
+        entry.provenance = "manual";
+      entries.push({ filename, entry });
     } catch {
-      // Corrupted file - skip.
+      // Corrupt entries fail closed and remain available for operator inspection.
     }
   }
-
   entries.sort((a, b) => (a.entry.createdAt || 0) - (b.entry.createdAt || 0));
   return entries;
 }
 
-/**
- * Atomically claim a pending file for replay. Only the process that successfully
- * renames the file may send the HTTP replay.
- */
-export async function claimForReplay(filename) {
+export async function claimForReplay(scope, filename) {
+  const dir = scopeDir(scope);
   if (!filename.endsWith(".json")) return null;
-  const dir = getPendingDir();
   const claimed = processingFilename(filename);
   try {
     await rename(join(dir, filename), join(dir, claimed));
@@ -272,149 +342,151 @@ export async function claimForReplay(filename) {
   }
 }
 
-/**
- * Remove a pending entry after successful replay.
- */
-export async function dequeue(filename) {
-  const dir = getPendingDir();
+export async function dequeue(scope, filename) {
+  const dir = scopeDir(scope);
+  let dedupKey = dedupKeyFromFilename(filename);
+  if (!dedupKey) {
+    try {
+      dedupKey = (await readEntry(dir, filename))?.dedupKey || "";
+    } catch {
+      /* ignore */
+    }
+  }
   try {
     await unlink(join(dir, filename));
+    await removeManualMarker(dir, dedupKey);
     return true;
   } catch {
     return false;
   }
 }
 
-/**
- * Increment retry count on a pending entry. Returns false if max retries exceeded.
- */
-export async function incrementRetry(filename, entry) {
-  const dir = getPendingDir();
-  const maxRetries = getMaxRetries();
+export async function incrementRetry(scope, filename, entry) {
+  const dir = scopeDir(scope);
   entry.retries = (entry.retries || 0) + 1;
-
-  if (entry.retries > maxRetries) {
-    try {
-      await unlink(join(dir, filename));
-    } catch {
-      // Best effort.
-    }
+  if (
+    entry.retries >
+    envInt("OPENVIKING_PENDING_MAX_RETRIES", DEFAULT_MAX_RETRIES)
+  ) {
+    await unlink(join(dir, filename)).catch(() => {});
+    await removeManualMarker(
+      dir,
+      entry.dedupKey || dedupKeyFromFilename(filename),
+    );
     return false;
   }
-
-  const newFilename = retryFilename(filename, entry.retries);
-  // Atomic write: write to a unique temp file in the same directory, then
-  // rename into place. Avoids leaving a half-written JSON if the process
-  // crashes mid-write.
-  const tmpFilename = `${newFilename}.tmp.${process.pid}.${Date.now()}`;
+  const next = retryFilename(filename, entry.retries);
+  const temp = `${next}.tmp.${process.pid}.${Date.now()}`;
   try {
-    await writeFile(join(dir, tmpFilename), JSON.stringify(entry), {
+    await writeFile(join(dir, temp), JSON.stringify(entry), {
       encoding: "utf-8",
       flag: "wx",
-      mode: PENDING_FILE_MODE,
+      mode: FILE_MODE,
     });
-    await rename(join(dir, tmpFilename), join(dir, newFilename));
+    await rename(join(dir, temp), join(dir, next));
     await unlink(join(dir, filename)).catch(() => {});
     return true;
   } catch {
-    await unlink(join(dir, tmpFilename)).catch(() => {});
+    await unlink(join(dir, temp)).catch(() => {});
     return false;
   }
 }
 
-/**
- * Clean up stale entries older than TTL.
- */
-export async function cleanStale() {
-  const ttlMs = getTTLDays() * 24 * 60 * 60 * 1000;
-  const now = Date.now();
-  const pending = await listPending();
+export async function cleanStale(scope) {
+  const ttlMs =
+    envInt("OPENVIKING_PENDING_TTL_DAYS", DEFAULT_TTL_DAYS) *
+    24 *
+    60 *
+    60 *
+    1000;
   let cleaned = 0;
-
-  for (const { filename, entry } of pending) {
-    const age = now - (entry.createdAt || 0);
-    if (age > ttlMs) {
-      await dequeue(filename);
+  for (const { filename, entry } of await listPending(scope)) {
+    if (
+      Date.now() - (entry.createdAt || 0) > ttlMs &&
+      (await dequeue(scope, filename))
+    )
       cleaned++;
-    }
   }
   return cleaned;
 }
 
-/**
- * Replay pending entries. Call this during session-start when the server is
- * healthy. Each run processes at most OPENVIKING_PENDING_REPLAY_LIMIT items so
- * a just-recovered server is not hit with an unbounded replay burst.
- *
- * @param {Function} fetchJSON - the configured fetchJSON from makeFetchJSON
- * @param {Function} log - logger function
- * @returns {{ replayed: number, failed: number, skipped: number, deferred: number }}
- */
-export async function replayPending(fetchJSON, log) {
-  const pending = await listPending();
+function retryable(result) {
+  if (!result || result.ok) return false;
+  const status = Number(result.status || 0);
+  return !status || status >= 500 || status === 408 || status === 429;
+}
 
-  if (pending.length === 0) {
+export async function replayPending(scope, fetchJSON, log, options = {}) {
+  const pending = await listPending(scope);
+  if (pending.length === 0)
     return { replayed: 0, failed: 0, skipped: 0, deferred: 0 };
-  }
-
-  const replayLimit = getReplayLimit();
-  log("pending-queue", { count: pending.length, replayLimit, action: "replay-start" });
-
-  let replayed = 0;
-  let failed = 0;
-  let skipped = 0;
-  let deferred = 0;
-  let processed = 0;
-
+  const limit = envInt(
+    "OPENVIKING_PENDING_REPLAY_LIMIT",
+    DEFAULT_REPLAY_LIMIT,
+    false,
+  );
+  log("pending-queue", {
+    count: pending.length,
+    replayLimit: limit,
+    action: "replay-start",
+  });
+  let replayed = 0,
+    failed = 0,
+    skipped = 0,
+    deferred = 0,
+    processed = 0;
   for (const { filename, entry } of pending) {
-    if (processed >= replayLimit) {
+    if (options.shouldReplay && !options.shouldReplay(entry)) {
       deferred++;
       continue;
     }
-
-    if ((entry.retries || 0) >= getMaxRetries()) {
-      await dequeue(filename);
+    if (processed >= limit) {
+      deferred++;
+      continue;
+    }
+    if (
+      (entry.retries || 0) >=
+      envInt("OPENVIKING_PENDING_MAX_RETRIES", DEFAULT_MAX_RETRIES)
+    ) {
+      await dequeue(scope, filename);
       skipped++;
       continue;
     }
-
-    const claimedFilename = await claimForReplay(filename);
-    if (!claimedFilename) {
+    const claimed = await claimForReplay(scope, filename);
+    if (!claimed) {
       skipped++;
       continue;
     }
     processed++;
-
-    let res;
+    let result;
     try {
-      const encodedSid = encodeURIComponent(entry.sessionId);
+      const sid = encodeURIComponent(entry.sessionId);
       if (entry.type === "addMessage") {
-        res = await fetchJSON(`/api/v1/sessions/${encodedSid}/messages`, {
+        result = await fetchJSON(`/api/v1/sessions/${sid}/messages`, {
           method: "POST",
           body: JSON.stringify(entry.payload),
         });
       } else if (entry.type === "commitSession") {
-        res = await fetchJSON(`/api/v1/sessions/${encodedSid}/commit`, {
+        result = await fetchJSON(`/api/v1/sessions/${sid}/commit`, {
           method: "POST",
           body: JSON.stringify(entry.payload || {}),
         });
       } else {
-        await dequeue(claimedFilename);
+        await dequeue(scope, claimed);
         skipped++;
         continue;
       }
     } catch {
-      res = { ok: false };
+      result = { ok: false };
     }
-
-    if (res?.ok) {
-      await dequeue(claimedFilename);
+    if (result?.ok) {
+      await dequeue(scope, claimed);
       replayed++;
-    } else if (!isRetryableReplayFailure(res)) {
-      await dequeue(claimedFilename);
+    } else if (!retryable(result)) {
+      await dequeue(scope, claimed);
       skipped++;
     } else {
-      await incrementRetry(claimedFilename, entry);
+      await incrementRetry(scope, claimed, entry);
       failed++;
       if (entry.type === "addMessage") {
         deferred += Math.max(0, pending.length - processed);
@@ -422,9 +494,7 @@ export async function replayPending(fetchJSON, log) {
       }
     }
   }
-
-  const cleaned = await cleanStale();
-
+  const cleaned = await cleanStale(scope);
   log("pending-queue", {
     action: "replay-done",
     replayed,
@@ -433,6 +503,5 @@ export async function replayPending(fetchJSON, log) {
     deferred,
     cleaned,
   });
-
   return { replayed, failed, skipped, deferred };
 }

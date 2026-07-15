@@ -4,10 +4,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SyncManager } from "../sync.ts";
-import { enqueue, listPending } from "../shared/pending-queue.mjs";
+import { createQueueScope, enqueue, listPending } from "../shared/pending-queue.mjs";
 
 function config(overrides = {}) {
   return {
+	endpoint: "https://ov.example.test",
+	apiKey: "test-key",
+	account: "",
+	user: "",
     commitTokenThreshold: 20000,
     commitKeepRecentCount: 10,
     captureAssistantTurns: true,
@@ -16,6 +20,13 @@ function config(overrides = {}) {
     takeoverEnabled: true,
     ...overrides,
   };
+}
+
+async function testScope(overrides = {}) {
+	const cfg = config(overrides);
+	return createQueueScope({
+		producer: "pi", baseUrl: cfg.endpoint, account: cfg.account, user: cfg.user, apiKey: cfg.apiKey,
+	});
 }
 
 function client(overrides = {}) {
@@ -31,13 +42,17 @@ function client(overrides = {}) {
 
 async function withPendingDir(fn) {
   const previous = process.env.OPENVIKING_PENDING_DIR;
+	const previousKeyFile = process.env.OPENVIKING_QUEUE_SCOPE_KEY_FILE;
   const dir = await mkdtemp(join(tmpdir(), "ov-pi-pending-"));
   process.env.OPENVIKING_PENDING_DIR = dir;
+	process.env.OPENVIKING_QUEUE_SCOPE_KEY_FILE = join(dir, "queue-scope.key");
   try {
     return await fn(dir);
   } finally {
     if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR;
     else process.env.OPENVIKING_PENDING_DIR = previous;
+	if (previousKeyFile === undefined) delete process.env.OPENVIKING_QUEUE_SCOPE_KEY_FILE;
+	else process.env.OPENVIKING_QUEUE_SCOPE_KEY_FILE = previousKeyFile;
     await rm(dir, { recursive: true, force: true });
   }
 }
@@ -75,12 +90,12 @@ test("queued addMessage makes takeover flush barrier false until replay succeeds
 
     assert.equal(result.added, 1);
     assert.equal(result.allDelivered, false);
-    assert.equal((await listPending()).length, 1);
+	assert.equal((await listPending(await testScope())).length, 1);
     assert.equal(await sync.flushForTakeover(), false);
 
     replayOk = true;
     assert.equal(await sync.flushForTakeover(), true);
-    assert.equal((await listPending()).length, 0);
+	assert.equal((await listPending(await testScope())).length, 0);
   });
 });
 
@@ -96,7 +111,7 @@ test("current-session addMessage 500 remains queued and keeps barrier closed", a
     await sync.addPayload({ role: "user", content: "Queued content with retryable server failure." });
 
     assert.equal(await sync.flushForTakeover(), false);
-    const pending = await listPending();
+	const pending = await listPending(await testScope());
     assert.equal(pending.length, 1);
     assert.equal(pending[0].entry.type, "addMessage");
     assert.equal(pending[0].entry.sessionId, sync.sessionId);
@@ -111,8 +126,9 @@ test("other-session addMessage and commit queue entries do not block takeover ba
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
 
-    await enqueue("addMessage", "different-session", { role: "user", content: "other" });
-    await enqueue("commitSession", sync.sessionId, { keep_recent_count: 1 });
+	const scope = await testScope();
+	await enqueue(scope, "addMessage", "different-session", { role: "user", content: "other" });
+	await enqueue(scope, "commitSession", sync.sessionId, { keep_recent_count: 1 });
 
     assert.equal(await sync.flushForTakeover(), true);
   });

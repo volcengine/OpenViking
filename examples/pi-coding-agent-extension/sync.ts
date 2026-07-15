@@ -1,7 +1,8 @@
 import type { OVClient } from "./client.js";
 import type { OVConfig } from "./config.js";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
-import { enqueue, listPending, replayPending } from "./shared/pending-queue.mjs";
+import { createQueueScope, enqueue, listPending, replayPending } from "./shared/pending-queue.mjs";
+import type { QueueScope } from "./shared/pending-queue.mjs";
 import { extractBranchCapturePayloads } from "./lib/capture-adapter.mjs";
 import { countUndeliveredForSession, estimatePayloadTokens } from "./lib/takeover-core.mjs";
 
@@ -23,10 +24,24 @@ export class SyncManager {
   private config: OVConfig;
   private ovSessionId: string | null = null;
   private syncedEntryCount = 0;
+  private queueScope: Promise<QueueScope> | null = null;
 
   constructor(client: OVClient, config: OVConfig) {
     this.client = client;
     this.config = config;
+  }
+
+  private getQueueScope(): Promise<QueueScope> {
+    if (!this.queueScope) {
+      this.queueScope = createQueueScope({
+        producer: "pi",
+        baseUrl: this.config.endpoint,
+        account: this.config.account,
+        user: this.config.user,
+        apiKey: this.config.apiKey,
+      });
+    }
+    return this.queueScope;
   }
 
   get sessionId(): string | null { return this.ovSessionId; }
@@ -48,6 +63,7 @@ export class SyncManager {
   async replayPending(): Promise<void> {
     if (!this.client.connected) return;
     await replayPending(
+      await this.getQueueScope(),
       (path: string, init?: any) => this.client.fetchJSON(path, init, 10000),
       () => {},
     );
@@ -56,7 +72,7 @@ export class SyncManager {
   async flushForTakeover(): Promise<boolean> {
     if (!this.ovSessionId) return false;
     await this.replayPending();
-    const pending = await listPending();
+    const pending = await listPending(await this.getQueueScope());
     return countUndeliveredForSession(pending, this.ovSessionId) === 0;
   }
 
@@ -88,7 +104,8 @@ export class SyncManager {
     if (!this.ovSessionId) return { accepted: false, delivered: false };
     const ok = await this.client.addMessagePayload(this.ovSessionId, payload);
     if (ok) return { accepted: true, delivered: true };
-    await enqueue("addMessage", this.ovSessionId, payload);
+    const queued = await enqueue(await this.getQueueScope(), "addMessage", this.ovSessionId, payload);
+    if (!queued.ok) return { accepted: false, delivered: false };
     return { accepted: true, delivered: false };
   }
 
@@ -109,9 +126,10 @@ export class SyncManager {
     );
     if (!result) {
       if (opts.queueOnFailure !== false) {
-        await enqueue("commitSession", this.ovSessionId, {
+        const queued = await enqueue(await this.getQueueScope(), "commitSession", this.ovSessionId, {
           keep_recent_count: opts.keepRecentCount ?? this.config.commitKeepRecentCount,
         });
+        if (!queued.ok) return null;
       }
       return null;
     }

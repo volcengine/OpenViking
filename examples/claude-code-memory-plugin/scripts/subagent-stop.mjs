@@ -70,10 +70,14 @@ async function loadState(subagentId) {
 }
 
 function parseTranscript(content) {
-  const lines = content.split("\n").filter(l => l.trim());
+  const lines = content.split("\n").filter((l) => l.trim());
   const out = [];
   for (const line of lines) {
-    try { out.push(JSON.parse(line)); } catch { /* skip */ }
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      /* skip */
+    }
   }
   return out;
 }
@@ -159,11 +163,14 @@ function buildParts(content, toolNameById) {
         tool_id: typeof block.id === "string" ? block.id : undefined,
         tool_name: block.name,
         tool_input:
-          block.input && typeof block.input === "object" ? block.input : undefined,
+          block.input && typeof block.input === "object"
+            ? block.input
+            : undefined,
         tool_status: "running",
       });
     } else if (block.type === "tool_result") {
-      const id = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
+      const id =
+        typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
       out.push({
         type: "tool",
         tool_id: id,
@@ -201,12 +208,19 @@ function extractTurns(messages) {
           if (!block || typeof block !== "object") continue;
           if (block.type === "text" && typeof block.text === "string") {
             parts.push(block.text);
-          } else if (block.type === "tool_use" && typeof block.name === "string") {
+          } else if (
+            block.type === "tool_use" &&
+            typeof block.name === "string"
+          ) {
             toolNames.push(block.name);
-            parts.push(`[tool: ${block.name}]\n${formatToolInput(block.input)}`);
+            parts.push(
+              `[tool: ${block.name}]\n${formatToolInput(block.input)}`,
+            );
           } else if (block.type === "tool_result") {
             const resultText = extractToolResultText(block.content);
-            const truncated = resultText ? truncateToolResult(resultText) : null;
+            const truncated = resultText
+              ? truncateToolResult(resultText)
+              : null;
             if (truncated) {
               parts.push(`[tool result]\n${truncated}`);
             }
@@ -233,7 +247,11 @@ function extractTurns(messages) {
   return turns;
 }
 
-async function pushTurns(ovSessionId, turns, { peerId = null, enqueueOnly = false } = {}) {
+async function pushTurns(
+  ovSessionId,
+  turns,
+  { peerId = null, enqueueOnly = false } = {},
+) {
   const fetchJSON = makeFetchJSON(cfg);
   let ok = 0;
   let queued = 0;
@@ -249,7 +267,12 @@ async function pushTurns(ovSessionId, turns, { peerId = null, enqueueOnly = fals
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;
     const res = enqueueOnly
-      ? await enqueuePendingDirectly("addMessage", ovSessionId, payload)
+      ? await enqueuePendingDirectly(
+          "addMessage",
+          ovSessionId,
+          payload,
+          fetchJSON.queueScope,
+        )
       : await addMessage(fetchJSON, ovSessionId, payload);
     if (enqueueOnly && res.ok) queued++;
     else if (res.ok) ok++;
@@ -263,10 +286,17 @@ async function pushTurns(ovSessionId, turns, { peerId = null, enqueueOnly = fals
   let commitQueued = false;
   if (ok + queued > 0) {
     const commitRes = enqueueOnly
-      ? await enqueuePendingDirectly("commitSession", ovSessionId, {})
+      ? await enqueuePendingDirectly(
+          "commitSession",
+          ovSessionId,
+          {},
+          fetchJSON.queueScope,
+        )
       : await commitSession(fetchJSON, ovSessionId);
     committed = !enqueueOnly && commitRes.ok;
-    commitQueued = enqueueOnly ? Boolean(commitRes.ok) : Boolean(commitRes.pendingQueued);
+    commitQueued = enqueueOnly
+      ? Boolean(commitRes.ok)
+      : Boolean(commitRes.pendingQueued);
     if (enqueueOnly && !commitRes.ok) enqueueFailed++;
     else if (!enqueueOnly && commitRes.pendingEnqueueFailed) enqueueFailed++;
   }
@@ -287,7 +317,9 @@ async function main() {
   let input = {};
   try {
     input = JSON.parse((await readHookStdin()) || "{}");
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
 
   const sessionId = input.session_id;
   const cwd = input.cwd;
@@ -309,7 +341,9 @@ async function main() {
   // Prefer state from SubagentStart (may carry ovSessionId from config snapshot);
   // fall back to live derivation if state file is missing.
   const state = await loadState(subagentId);
-  const ovSessionId = state?.ovSessionId || deriveOvSessionId(sessionId, `subagent:${subagentId}`);
+  const ovSessionId =
+    state?.ovSessionId ||
+    deriveOvSessionId(sessionId, `subagent:${subagentId}`);
 
   let transcript;
   try {
@@ -344,14 +378,20 @@ async function main() {
     logError("health_check", "server unreachable; enqueuing subagent capture");
     result = await pushTurns(ovSessionId, turns, { peerId, enqueueOnly: true });
   } else {
-    logError("health_check", `non-retryable status ${health.status || "unknown"}`);
+    logError(
+      "health_check",
+      `non-retryable status ${health.status || "unknown"}`,
+    );
     approve();
     return;
   }
   log("push_turns", { ovSessionId, ...result });
 
   if (result.enqueueFailed > 0) {
-    logError("pending_enqueue", "some turns failed to enqueue; state file retained");
+    logError(
+      "pending_enqueue",
+      "some turns failed to enqueue; state file retained",
+    );
     approve();
     return;
   }
@@ -360,4 +400,7 @@ async function main() {
   approve();
 }
 
-main().catch((err) => { logError("uncaught", err); approve(); });
+main().catch((err) => {
+  logError("uncaught", err);
+  approve();
+});

@@ -24,6 +24,7 @@ import {
   deriveHarnessSessionId,
   isBypassed,
 } from "../shared/session-model.mjs";
+import { createQueueScope, enqueue } from "../shared/pending-queue.mjs";
 
 /**
  * Check whether a CC session_id or cwd matches any bypass pattern.
@@ -48,7 +49,7 @@ export function deriveOvSessionId(ccSessionId, suffix = "") {
  */
 export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
   const timeoutMs = Math.max(1000, cfg[timeoutKey] || cfg.timeoutMs || 10000);
-  return async function fetchJSON(path, init = {}, options = {}) {
+  const fetchJSON = async function fetchJSON(path, init = {}, options = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -58,10 +59,18 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
       if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
       const actorPeerId = options.actorPeerId ?? "";
       if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
-      const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
+      const res = await fetch(`${cfg.baseUrl}${path}`, {
+        ...init,
+        headers,
+        signal: controller.signal,
+      });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body.status === "error") {
-        return { ok: false, status: res.status, error: body.error || { message: `HTTP ${res.status}` } };
+        return {
+          ok: false,
+          status: res.status,
+          error: body.error || { message: `HTTP ${res.status}` },
+        };
       }
       return { ok: true, result: body.result ?? body };
     } catch (err) {
@@ -70,6 +79,22 @@ export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
       clearTimeout(timer);
     }
   };
+  let queueScope;
+  fetchJSON.queueScope = () => {
+    if (!queueScope) queueScope = queueScopeForConfig(cfg);
+    return queueScope;
+  };
+  return fetchJSON;
+}
+
+export function queueScopeForConfig(cfg) {
+  return createQueueScope({
+    producer: "claude-code",
+    baseUrl: cfg.baseUrl,
+    account: cfg.accountId,
+    user: cfg.userId,
+    apiKey: cfg.apiKey,
+  });
 }
 
 export function isRetryableFailure(res) {
@@ -88,10 +113,16 @@ function warnNonRetryable(operation, res) {
   );
 }
 
-export async function enqueuePendingDirectly(type, sessionId, payload = {}) {
+export async function enqueuePendingDirectly(
+  type,
+  sessionId,
+  payload = {},
+  queueScope,
+) {
   try {
-    const { enqueue } = await import("./pending-queue.mjs");
-    return await enqueue(type, sessionId, payload);
+    if (!queueScope) throw new Error("queue scope is required");
+    const scope = typeof queueScope === "function" ? queueScope() : queueScope;
+    return await enqueue(await scope, type, sessionId, payload);
   } catch {
     return { ok: false };
   }
@@ -106,13 +137,21 @@ export async function enqueuePendingDirectly(type, sessionId, payload = {}) {
  * { role, parts: [...] } (parts-mode, for tier-1 structured capture).
  */
 export async function addMessage(fetchJSON, sessionId, payload) {
-  const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  const res = await fetchJSON(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
   if (!res.ok) {
     if (isRetryableFailure(res)) {
-      const queued = await enqueuePendingDirectly("addMessage", sessionId, payload);
+      const queued = await enqueuePendingDirectly(
+        "addMessage",
+        sessionId,
+        payload,
+        fetchJSON.queueScope,
+      );
       if (queued.ok) res.pendingQueued = true;
       else res.pendingEnqueueFailed = true;
     } else {
@@ -127,13 +166,21 @@ export async function addMessage(fetchJSON, sessionId, payload) {
  * call repeatedly: if there are no pending messages the server is a no-op.
  */
 export async function commitSession(fetchJSON, sessionId, payload = {}) {
-  const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
-    method: "POST",
-    body: JSON.stringify(payload || {}),
-  });
+  const res = await fetchJSON(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload || {}),
+    },
+  );
   if (!res.ok) {
     if (isRetryableFailure(res)) {
-      const queued = await enqueuePendingDirectly("commitSession", sessionId, {});
+      const queued = await enqueuePendingDirectly(
+        "commitSession",
+        sessionId,
+        {},
+        fetchJSON.queueScope,
+      );
       if (queued.ok) res.pendingQueued = true;
       else res.pendingEnqueueFailed = true;
     } else {
@@ -147,7 +194,11 @@ export async function commitSession(fetchJSON, sessionId, payload = {}) {
  * Get assembled session context (includes latest_archive_overview).
  * Returns null when the session does not exist or the request fails.
  */
-export async function getSessionContext(fetchJSON, sessionId, tokenBudget = 128000) {
+export async function getSessionContext(
+  fetchJSON,
+  sessionId,
+  tokenBudget = 128000,
+) {
   const res = await fetchJSON(
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/context?token_budget=${tokenBudget}`,
   );
@@ -158,8 +209,14 @@ export async function getSessionContext(fetchJSON, sessionId, tokenBudget = 1280
  * Fetch session meta. Returns null if the session does not exist (unless
  * autoCreate=true).
  */
-export async function getSession(fetchJSON, sessionId, { autoCreate = false } = {}) {
+export async function getSession(
+  fetchJSON,
+  sessionId,
+  { autoCreate = false } = {},
+) {
   const q = autoCreate ? "?auto_create=true" : "";
-  const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}${q}`);
+  const res = await fetchJSON(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}${q}`,
+  );
   return res.ok ? res.result : null;
 }
